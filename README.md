@@ -102,8 +102,20 @@ pnpm dev:hub
 # 只启动 Edge Server
 pnpm dev:edge
 
-# 运行测试
+# 运行单元测试
 pnpm test
+
+# 运行集成测试
+pnpm test:integration
+
+# 监听模式运行集成测试
+pnpm test:integration:watch
+
+# 使用 UI 界面运行集成测试
+pnpm test:integration:ui
+
+# 测试覆盖率
+pnpm test:coverage
 
 # 代码检查
 pnpm lint
@@ -115,6 +127,41 @@ pnpm type-check
 # 格式化代码
 pnpm format
 ```
+
+## 测试
+
+项目包含完整的单元测试和集成测试：
+
+### 单元测试
+
+每个包都有自己的单元测试：
+
+```bash
+pnpm test                  # 运行所有单元测试
+pnpm test:watch            # 监听模式
+pnpm test:coverage         # 生成覆盖率报告
+```
+
+### 集成测试
+
+集成测试覆盖端到端功能：
+
+```bash
+pnpm test:integration      # 运行所有集成测试
+pnpm test:integration:watch # 监听模式
+pnpm test:integration:ui   # 使用 Vitest UI
+```
+
+**测试套件：**
+- ✅ 认证测试 (10个)
+- ✅ ACL 权限测试 (8个)
+- ✅ 频道管理测试 (11个)
+- ✅ 语音传输测试 (8个)
+- ✅ Hub-Edge 通信测试 (5个)
+
+**总计: 42个集成测试用例**
+
+详细信息请查看 [集成测试指南](tests/integration/INTEGRATION_TESTS.md)。
 
 ## 配置
 

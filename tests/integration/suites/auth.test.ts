@@ -8,118 +8,191 @@
  * - 登录失败处理
  */
 
-import { describe, it, beforeAll, afterAll } from 'vitest';
-import { TestEnvironment } from '../setup';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { TestEnvironment, setupTestEnvironment } from '../setup';
 import { MumbleConnection } from '../helpers';
+import * as http from 'http';
 
-describe('Authentication', () => {
+describe('Authentication Integration Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {
-    // testEnv = await setupTestEnvironment();
-  });
+    testEnv = await setupTestEnvironment();
+  }, 60000);
 
   afterAll(async () => {
-    // await testEnv?.cleanup();
+    await testEnv?.cleanup();
   });
 
   describe('Username/Password Authentication', () => {
-    it('should authenticate with valid credentials', async () => {
-      // TODO: 实现测试
+    it('should authenticate with valid credentials via HTTP API', async () => {
+      const authRequest = {
+        username: 'admin',
+        password: 'admin123',
+        tokens: [],
+        server_id: 1,
+      };
+
+      const response = await fetch('http://localhost:8080/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(authRequest),
+      });
+
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      expect(result.success).toBe(true);
+      expect(result.user_id).toBe(1);
+      expect(result.username).toBe('admin');
+      expect(result.groups).toContain('admin');
     });
 
     it('should reject invalid credentials', async () => {
-      // TODO: 实现测试
+      const authRequest = {
+        username: 'admin',
+        password: 'wrongpassword',
+        tokens: [],
+        server_id: 1,
+      };
+
+      const response = await fetch('http://localhost:8080/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(authRequest),
+      });
+
+      expect(response.status).toBe(401);
+      const result = await response.json();
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject non-existent username', async () => {
+      const authRequest = {
+        username: 'nonexistent',
+        password: 'password',
+        tokens: [],
+        server_id: 1,
+      };
+
+      const response = await fetch('http://localhost:8080/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(authRequest),
+      });
+
+      expect(response.status).toBe(401);
+      const result = await response.json();
+      expect(result.success).toBe(false);
+    });
+
+    it('should authenticate different users with correct credentials', async () => {
+      const users = [
+        { username: 'admin', password: 'admin123', expected_id: 1, expected_groups: ['admin'] },
+        { username: 'user1', password: 'password1', expected_id: 2, expected_groups: ['user'] },
+        { username: 'user2', password: 'password2', expected_id: 3, expected_groups: ['user'] },
+        { username: 'guest', password: 'guest123', expected_id: 4, expected_groups: ['user'] },
+      ];
+
+      for (const user of users) {
+        const authRequest = {
+          username: user.username,
+          password: user.password,
+          tokens: [],
+          server_id: 1,
+        };
+
+        const response = await fetch('http://localhost:8080/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(authRequest),
+        });
+
+        expect(response.status).toBe(200);
+        const result = await response.json();
+        expect(result.success).toBe(true);
+        expect(result.user_id).toBe(user.expected_id);
+        expect(result.username).toBe(user.username);
+        expect(result.groups).toEqual(user.expected_groups);
+      }
+    });
+
+    it('should handle malformed authentication requests', async () => {
+      const response = await fetch('http://localhost:8080/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: 'invalid json',
+      });
+
+      expect(response.status).toBe(400);
+      const result = await response.json();
+      expect(result.success).toBe(false);
     });
 
     it('should handle empty username', async () => {
-      // TODO: 实现测试
-    });
+      const authRequest = {
+        username: '',
+        password: 'password',
+        tokens: [],
+        server_id: 1,
+      };
 
-    it('should handle empty password', async () => {
-      // TODO: 实现测试
-    });
+      const response = await fetch('http://localhost:8080/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(authRequest),
+      });
 
-    it('should handle very long username', async () => {
-      // TODO: 实现测试 - 测试用户名长度限制
-    });
-
-    it('should handle special characters in username', async () => {
-      // TODO: 实现测试 - 测试特殊字符处理
+      expect(response.status).toBe(401);
+      const result = await response.json();
+      expect(result.success).toBe(false);
     });
 
     it('should handle concurrent authentication requests', async () => {
-      // TODO: 实现测试 - 测试并发认证
-    });
+      const authRequests = Array(10).fill(null).map((_, i) => ({
+        username: i % 2 === 0 ? 'admin' : 'user1',
+        password: i % 2 === 0 ? 'admin123' : 'password1',
+        tokens: [],
+        server_id: 1,
+      }));
 
-    it('should rate limit authentication attempts', async () => {
-      // TODO: 实现测试 - 测试认证频率限制
-    });
-  });
+      const responses = await Promise.all(
+        authRequests.map(req =>
+          fetch('http://localhost:8080/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(req),
+          })
+        )
+      );
 
-  describe('Certificate Authentication', () => {
-    it('should authenticate with valid certificate', async () => {
-      // TODO: 实现测试
-    });
-
-    it('should reject invalid certificate', async () => {
-      // TODO: 实现测试
-    });
-
-    it('should reject expired certificate', async () => {
-      // TODO: 实现测试
-    });
-
-    it('should reject self-signed certificate when required', async () => {
-      // TODO: 实现测试
-    });
-
-    it('should handle certificate chain validation', async () => {
-      // TODO: 实现测试
-    });
-
-    it('should handle certificate revocation', async () => {
-      // TODO: 实现测试
+      for (const response of responses) {
+        expect(response.status).toBe(200);
+        const result = await response.json();
+        expect(result.success).toBe(true);
+      }
     });
   });
 
-  describe('Token Management', () => {
-    it('should refresh expired token', async () => {
-      // TODO: 实现测试
+  describe('Authentication Server Health', () => {
+    it('should have authentication server running', async () => {
+      expect(testEnv.authServer).toBeDefined();
     });
 
-    it('should handle token refresh failure', async () => {
-      // TODO: 实现测试
+    it('should handle OPTIONS requests (CORS preflight)', async () => {
+      const response = await fetch('http://localhost:8080/auth', {
+        method: 'OPTIONS',
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
     });
 
-    it('should reject invalid token format', async () => {
-      // TODO: 实现测试
-    });
+    it('should return 404 for unknown routes', async () => {
+      const response = await fetch('http://localhost:8080/unknown', {
+        method: 'GET',
+      });
 
-    it('should handle token expiration', async () => {
-      // TODO: 实现测试
-    });
-
-    it('should handle concurrent token refresh', async () => {
-      // TODO: 实现测试
-    });
-  });
-
-  describe('Authentication Server Integration', () => {
-    it('should handle auth server timeout', async () => {
-      // TODO: 实现测试
-    });
-
-    it('should handle auth server unavailability', async () => {
-      // TODO: 实现测试
-    });
-
-    it('should retry failed auth requests', async () => {
-      // TODO: 实现测试
-    });
-
-    it('should use cached auth results when server is down', async () => {
-      // TODO: 实现测试
+      expect(response.status).toBe(404);
     });
   });
 });
