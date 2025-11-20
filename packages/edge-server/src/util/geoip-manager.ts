@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 // import { logger } from '@munode/common';
 import type { Logger } from 'winston';
-import { EdgeConfig, GeoIPResult } from './types.js';
+import { EdgeConfig, GeoIPResult } from '../types.js';
 import { Reader } from '@maxmind/geoip2-node';
 
 /**

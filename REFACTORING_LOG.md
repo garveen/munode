@@ -189,3 +189,114 @@ handlers/ 目录中的文件已经按功能组织良好，无需进一步重组�
 
 ---
 
+## 阶段十一：工具类迁移 (util/)
+
+### [开始] 2025-11-20 迁移工具类模块
+
+
+完成的操作：
+1. 迁移 `geoip-manager.ts` → `util/geoip-manager.ts`
+2. 迁移 `context-actions.ts` → `handlers/context-action.ts`
+3. 保留以下文件在 src 根目录（有正当理由）：
+   - `cli.ts` - CLI 入口点
+   - `config.ts` - 配置加载器
+   - `index.ts` - 导出索引
+   - `message-handler.ts` - 核心消息路由器
+   - `types.ts` - 类型定义
+4. 更新所有导入路径：
+   - `index.ts` 中的导出语句
+   - `core/edge-server.ts` 中的 geoip-manager 导入
+   - `core/handler-factory.ts` 中的 context-actions 导入
+   - `util/geoip-manager.ts` 中的 types 导入
+   - `handlers/context-action.ts` 中的 types 导入
+5. 验证构建成功
+
+### [结束] 2025-11-20 阶段十一完成
+
+---
+
+## 总结
+
+### 重构完成情况
+
+已成功完成 Edge Server 的模块化重构，按照 EDGE_REFACTORING_PLAN.md 的要求：
+
+**已完成的11个阶段**：
+1. ✅ 准备工作 - 清理废弃代码，创建目录结构
+2. ✅ 网络层重构 (network/)
+3. ✅ 客户端管理 (client/)
+4. ✅ 认证授权 (auth/)
+5. ✅ 状态管理 (state/ + models/)
+6. ✅ 封禁系统 (ban/)
+7. ✅ 集群通信 (cluster/)
+8. ✅ 语音路由 (voice/)
+9. ✅ 消息处理器 (handlers/) - 已组织良好
+10. ✅ 核心服务器 (core/)
+11. ✅ 工具类迁移 (util/)
+
+**最终目录结构**：
+```
+packages/edge-server/src/
+├── cli.ts                    # CLI入口
+├── config.ts                 # 配置加载
+├── index.ts                  # 导出索引
+├── message-handler.ts        # 核心消息路由
+├── types.ts                  # 类型定义
+├── auth/                     # 认证授权模块
+│   ├── auth-handler.ts
+│   ├── auth-manager.ts
+│   └── permission-checker.ts
+├── ban/                      # 封禁系统
+│   └── ban-manager.ts
+├── client/                   # 客户端管理
+│   └── client-manager.ts
+├── cluster/                  # 集群通信
+│   ├── cluster-manager.ts
+│   ├── hub-client.ts
+│   ├── hub-data-sync.ts
+│   ├── hub-message-handler.ts
+│   └── reconnect-manager.ts
+├── core/                     # 核心服务器
+│   ├── edge-server.ts
+│   ├── handler-factory.ts
+│   └── lifecycle-manager.ts
+├── handlers/                 # 消息处理器
+│   ├── admin-handlers.ts
+│   ├── connection-handlers.ts
+│   ├── context-action.ts
+│   ├── message-handlers.ts
+│   ├── protocol-handlers.ts
+│   └── state-handlers.ts
+├── managers/                 # 辅助管理器
+│   ├── ban-handler.ts
+│   ├── event-setup-manager.ts
+│   ├── message-manager.ts
+│   └── voice-manager.ts
+├── models/                   # 数据模型
+│   └── channel.ts
+├── network/                  # 网络层
+│   ├── packet-pool.ts
+│   └── udp-monitor.ts
+├── state/                    # 状态管理
+│   ├── state-manager.ts
+│   └── user-cache.ts
+├── util/                     # 工具类
+│   └── geoip-manager.ts
+└── voice/                    # 语音路由
+    └── voice-router.ts
+```
+
+**删除的废弃文件**：
+- edge-server.original.ts (172KB 旧版本)
+- peer-manager.ts (src根目录)
+- control/peer-manager.ts (废弃的P2P管理器)
+
+**重构收益**：
+1. 清晰的模块职责划分
+2. 更好的代码组织和可维护性
+3. 降低模块间耦合
+4. 便于团队协作和并行开发
+5. 易于测试和调试
+
+**构建验证**：所有阶段完成后，项目构建成功，无错误。
+

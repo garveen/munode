@@ -12,7 +12,7 @@ import { VoiceRouter } from '../voice/voice-router.js';
 import { AuthManager } from '../auth/auth-manager.js';
 import { EdgeControlClient } from '../cluster/hub-client.js';
 import { BanManager } from '../ban/ban-manager.js';
-import { ContextActions } from '../context-actions.js';
+import { ContextActions } from '../handlers/context-action.js';
 import { UserCache } from '../state/user-cache.js';
 import { EdgeStateManager } from '../state/state-manager.js';
 import { PermissionManager, type ACLEntry } from '@munode/protocol';
