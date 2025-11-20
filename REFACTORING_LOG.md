@@ -70,3 +70,25 @@
 
 ---
 
+## 阶段五：状态管理重构 (state/)
+
+### [开始] 2025-11-20 迁移状态管理模块
+
+
+完成的操作：
+1. 迁移 `state-manager.ts` → `state/state-manager.ts`
+2. 迁移 `user-cache.ts` → `state/user-cache.ts`
+3. 迁移 `channel.ts` → `models/channel.ts`
+4. 更新导入路径：
+   - `index.ts` 中的导出语句
+   - `handler-factory.ts` 中的状态相关导入
+   - `auth/auth-manager.ts` 中的 user-cache 导入
+   - `edge-server.ts` 中的 user-cache 导入
+   - `state/user-cache.ts` 中的 types 导入
+   - `models/channel.ts` 中的 types 导入
+5. 验证构建成功
+
+### [结束] 2025-11-20 阶段五完成
+
+---
+

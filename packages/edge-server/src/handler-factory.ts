@@ -6,15 +6,15 @@
 
 import { logger } from '@munode/common';
 import { ClientManager } from './client/client-manager.js';
-import { ChannelManager } from './channel.js';
+import { ChannelManager } from './models/channel.js';
 import { MessageHandler } from './message-handler.js';
 import { VoiceRouter } from './voice-router.js';
 import { AuthManager } from './auth/auth-manager.js';
 import { EdgeControlClient } from './edge-control-client.js';
 import { BanManager } from './ban-manager.js';
 import { ContextActions } from './context-actions.js';
-import { UserCache } from './user-cache.js';
-import { EdgeStateManager } from './state-manager.js';
+import { UserCache } from './state/user-cache.js';
+import { EdgeStateManager } from './state/state-manager.js';
 import { PermissionManager, type ACLEntry } from '@munode/protocol';
 import { EdgeConfig } from './types.js';
 

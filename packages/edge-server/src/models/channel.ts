@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import type { Logger } from 'winston';
-import { EdgeConfig, ChannelInfo } from './types.js';
+import { EdgeConfig, ChannelInfo } from '../types.js';
 
 export type ChannelTreeNode = Omit<ChannelInfo, 'children'> & { children: ChannelTreeNode[] };
 

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 // import { logger } from '@munode/common';
 import type { Logger } from 'winston';
-import { EdgeConfig, CachedUser } from './types.js';
+import { EdgeConfig, CachedUser } from '../types.js';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 
