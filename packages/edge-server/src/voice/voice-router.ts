@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 // import { logger } from '@munode/common';
 import type { Logger } from 'winston';
-import { EdgeConfig, VoicePacket, VoiceBroadcast, ClientInfo } from './types.js';
+import { EdgeConfig, VoicePacket, VoiceBroadcast, ClientInfo } from '../types.js';
 import { OCB2AES128 } from '@munode/common';
 import type { Socket as UDPSocket } from 'dgram';
 

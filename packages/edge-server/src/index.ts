@@ -27,7 +27,7 @@ export { loadEdgeConfig, validateConfig } from './config.js';
 export { ClientManager } from './client/client-manager.js';
 export { ChannelManager } from './models/channel.js';
 export { MessageHandler } from './message-handler.js';
-export { VoiceRouter } from './voice-router.js';
+export { VoiceRouter } from './voice/voice-router.js';
 export { AuthManager } from './auth/auth-manager.js';
 export { EdgeControlClient } from './cluster/hub-client.js';
 export { BanManager } from './ban/ban-manager.js';

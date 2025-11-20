@@ -8,7 +8,7 @@ import { logger } from '@munode/common';
 import { ClientManager } from './client/client-manager.js';
 import { ChannelManager } from './models/channel.js';
 import { MessageHandler } from './message-handler.js';
-import { VoiceRouter } from './voice-router.js';
+import { VoiceRouter } from './voice/voice-router.js';
 import { AuthManager } from './auth/auth-manager.js';
 import { EdgeControlClient } from './cluster/hub-client.js';
 import { BanManager } from './ban/ban-manager.js';

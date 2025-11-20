@@ -135,3 +135,21 @@
 
 ---
 
+## 阶段八：语音路由重构 (voice/)
+
+### [开始] 2025-11-20 迁移语音路由模块
+
+
+完成的操作：
+1. 迁移 `voice-router.ts` → `voice/voice-router.ts`
+2. 保留 `managers/voice-manager.ts` (它是设置/协调器，提供有用的功能)
+3. 更新导入路径：
+   - `index.ts` 中的导出语句
+   - `handler-factory.ts` 中的 VoiceRouter 导入
+   - `voice/voice-router.ts` 中的 types 导入
+4. 验证构建成功
+
+### [结束] 2025-11-20 阶段八完成
+
+---
+
