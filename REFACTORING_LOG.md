@@ -153,3 +153,39 @@
 
 ---
 
+## 阶段九：消息处理器 (handlers/)
+
+### 说明
+
+handlers/ 目录中的文件已经按功能组织良好，无需进一步重组：
+- admin-handlers.ts
+- connection-handlers.ts
+- message-handlers.ts
+- protocol-handlers.ts
+- state-handlers.ts
+
+跳过此阶段。
+
+---
+
+## 阶段十：核心服务器重构 (core/)
+
+### [开始] 2025-11-20 迁移核心服务器模块
+
+
+完成的操作：
+1. 迁移 `edge-server.ts` → `core/edge-server.ts`
+2. 迁移 `handler-factory.ts` → `core/handler-factory.ts`
+3. 迁移 `managers/server-lifecycle-manager.ts` → `core/lifecycle-manager.ts`
+4. 更新所有导入路径：
+   - `index.ts` 中的 EdgeServer 导出
+   - 所有 handlers/, auth/, cluster/, managers/ 文件中的 handler-factory 导入
+   - `core/edge-server.ts` 中的所有导入
+   - `core/handler-factory.ts` 中的所有导入
+   - `core/lifecycle-manager.ts` 中的 handler-factory 和 voice-manager 导入
+5. 验证构建成功
+
+### [结束] 2025-11-20 阶段十完成
+
+---
+

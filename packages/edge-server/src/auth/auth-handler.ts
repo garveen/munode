@@ -13,7 +13,7 @@ import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
 import { MessageType } from '@munode/protocol';
 import { randomFillSync } from 'crypto';
 import type { ClientInfo, AuthResult } from '../types.js';
-import type { HandlerFactory } from '../handler-factory.js';
+import type { HandlerFactory } from '../core/handler-factory.js';
 
 export class AuthHandlers {
   private preConnectUserState: Map<number, {

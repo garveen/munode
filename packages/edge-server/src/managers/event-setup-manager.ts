@@ -1,5 +1,5 @@
 import { logger } from '@munode/common';
-import { HandlerFactory } from '../handler-factory.js';
+import { HandlerFactory } from '../core/handler-factory.js';
 import { EdgeControlClient } from '../cluster/hub-client.js';
 import { VoiceManager } from './voice-manager.js';
 import { HubDataManager } from '../cluster/hub-data-sync.js';

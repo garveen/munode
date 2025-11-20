@@ -1,5 +1,5 @@
 // 主要导出
-export { EdgeServer } from './edge-server.js';
+export { EdgeServer } from './core/edge-server.js';
 
 // 枚举类型
 export { MessageType, UDPMessageType } from '@munode/protocol';

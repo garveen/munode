@@ -2,7 +2,7 @@ import { logger } from '@munode/common';
 import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
 import { MessageType, Permission } from '@munode/protocol';
 import type { ClientInfo, ChannelInfo } from '../types.js';
-import type { HandlerFactory } from '../handler-factory.js';
+import type { HandlerFactory } from '../core/handler-factory.js';
 
 /**
  * 权限处理器 - 处理ACL和权限查询

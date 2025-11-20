@@ -14,7 +14,7 @@
 import { MessageType, mumbleproto, Permission } from '@munode/protocol';
 import { logger } from '@munode/common';
 import type { ChannelInfo, ClientInfo } from '../types.js';
-import type { HandlerFactory } from '../handler-factory.js';
+import type { HandlerFactory } from '../core/handler-factory.js';
 
 /**
  * 管理员处理器

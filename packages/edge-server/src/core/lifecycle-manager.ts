@@ -5,8 +5,8 @@ import { logger } from '@munode/common';
 import { EdgeConfig } from '../types.js';
 import { EdgeClusterManager } from '../cluster/cluster-manager.js';
 import { VoiceUDPTransport } from '@munode/protocol/src/voice/voice-udp-transport.js';
-import { HandlerFactory } from '../handler-factory.js';
-import { VoiceManager } from './voice-manager.js';
+import { HandlerFactory } from './handler-factory.js';
+import { VoiceManager } from '../managers/voice-manager.js';
 
 /**
  * 服务器生命周期管理器

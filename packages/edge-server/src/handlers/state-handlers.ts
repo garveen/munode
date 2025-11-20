@@ -1,6 +1,6 @@
 import { logger } from '@munode/common';
 import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
-import type { HandlerFactory } from '../handler-factory.js';
+import type { HandlerFactory } from '../core/handler-factory.js';
 
 /**
  * 状态处理器 - 处理用户和频道状态变更
