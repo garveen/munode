@@ -92,3 +92,21 @@
 
 ---
 
+## 阶段六：封禁系统重构 (ban/)
+
+### [开始] 2025-11-20 迁移封禁系统模块
+
+
+完成的操作：
+1. 迁移 `ban-manager.ts` → `ban/ban-manager.ts`
+2. 保留 `managers/ban-handler.ts` (它是消息处理器，不是重复代码)
+3. 更新导入路径：
+   - `index.ts` 中的导出语句
+   - `handler-factory.ts` 中的 BanManager 导入
+   - `ban/ban-manager.ts` 中的 types 导入
+4. 验证构建成功
+
+### [结束] 2025-11-20 阶段六完成
+
+---
+

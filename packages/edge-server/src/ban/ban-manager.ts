@@ -2,7 +2,7 @@ import { createLogger } from '@munode/common';
 import { LRUCache } from 'lru-cache';
 import Database from 'sqlite3';
 import * as ipaddr from 'ipaddr.js';
-import type { BanInfo, BanCheckResult } from './types.js';
+import type { BanInfo, BanCheckResult } from '../types.js';
 
 const logger = createLogger({ service: 'ban-manager' });
 

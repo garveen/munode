@@ -11,7 +11,7 @@ import { MessageHandler } from './message-handler.js';
 import { VoiceRouter } from './voice-router.js';
 import { AuthManager } from './auth/auth-manager.js';
 import { EdgeControlClient } from './edge-control-client.js';
-import { BanManager } from './ban-manager.js';
+import { BanManager } from './ban/ban-manager.js';
 import { ContextActions } from './context-actions.js';
 import { UserCache } from './state/user-cache.js';
 import { EdgeStateManager } from './state/state-manager.js';
