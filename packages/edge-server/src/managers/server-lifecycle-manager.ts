@@ -3,7 +3,7 @@ import { createSocket, type Socket as UDPSocket } from 'dgram';
 import { TLSSocket, createServer as createTLSServer, type Server as TLSServer } from 'tls';
 import { logger } from '@munode/common';
 import { EdgeConfig } from '../types.js';
-import { EdgeClusterManager } from '../cluster-manager.js';
+import { EdgeClusterManager } from '../cluster/cluster-manager.js';
 import { VoiceUDPTransport } from '@munode/protocol/src/voice/voice-udp-transport.js';
 import { HandlerFactory } from '../handler-factory.js';
 import { VoiceManager } from './voice-manager.js';

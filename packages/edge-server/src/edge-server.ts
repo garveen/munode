@@ -3,15 +3,15 @@ import { logger } from '@munode/common';
 import { EdgeConfig, ClientInfo, ChannelInfo, ServerStats } from './types.js';
 import { GeoIPManager } from './geoip-manager.js';
 import { UserCache } from './state/user-cache.js';
-import { EdgeClusterManager } from './cluster-manager.js';
+import { EdgeClusterManager } from './cluster/cluster-manager.js';
 import { VoiceUDPTransport } from '@munode/protocol/src/voice/voice-udp-transport.js';
 import { HandlerFactory } from './handler-factory.js';
-import { EdgeControlClient } from './edge-control-client.js';
+import { EdgeControlClient } from './cluster/hub-client.js';
 import { ServerLifecycleManager } from './managers/server-lifecycle-manager.js';
 import { BanHandler } from './managers/ban-handler.js';
 import { MessageManager } from './managers/message-manager.js';
 import { VoiceManager } from './managers/voice-manager.js';
-import { HubDataManager } from './managers/hub-data-manager.js';
+import { HubDataManager } from './cluster/hub-data-sync.js';
 import { EventSetupManager } from './managers/event-setup-manager.js';
 
 

@@ -1,8 +1,8 @@
 import { logger } from '@munode/common';
 import { HandlerFactory } from '../handler-factory.js';
-import { EdgeControlClient } from '../edge-control-client.js';
+import { EdgeControlClient } from '../cluster/hub-client.js';
 import { VoiceManager } from './voice-manager.js';
-import { HubDataManager } from './hub-data-manager.js';
+import { HubDataManager } from '../cluster/hub-data-sync.js';
 import { BanHandler } from './ban-handler.js';
 import { MessageManager } from './message-manager.js';
 

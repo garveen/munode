@@ -10,7 +10,7 @@ import { ChannelManager } from './models/channel.js';
 import { MessageHandler } from './message-handler.js';
 import { VoiceRouter } from './voice-router.js';
 import { AuthManager } from './auth/auth-manager.js';
-import { EdgeControlClient } from './edge-control-client.js';
+import { EdgeControlClient } from './cluster/hub-client.js';
 import { BanManager } from './ban/ban-manager.js';
 import { ContextActions } from './context-actions.js';
 import { UserCache } from './state/user-cache.js';
@@ -19,7 +19,7 @@ import { PermissionManager, type ACLEntry } from '@munode/protocol';
 import { EdgeConfig } from './types.js';
 
 import { ProtocolHandlers } from './handlers/protocol-handlers.js';
-import { HubMessageHandlers } from './handlers/hub-message-handlers.js';
+import { HubMessageHandlers } from './cluster/hub-message-handler.js';
 import { AuthHandlers } from './auth/auth-handler.js';
 import { ConnectionHandlers } from './handlers/connection-handlers.js';
 import { StateHandlers } from './handlers/state-handlers.js';

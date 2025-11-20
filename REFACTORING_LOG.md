@@ -110,3 +110,28 @@
 
 ---
 
+## 阶段七：集群通信重构 (cluster/)
+
+### [开始] 2025-11-20 迁移集群通信模块
+
+
+完成的操作：
+1. 迁移 `cluster-manager.ts` → `cluster/cluster-manager.ts`
+2. 迁移 `edge-control-client.ts` → `cluster/hub-client.ts`
+3. 迁移 `managers/hub-data-manager.ts` → `cluster/hub-data-sync.ts`
+4. 迁移 `handlers/hub-message-handlers.ts` → `cluster/hub-message-handler.ts`
+5. 更新所有导入路径：
+   - `index.ts` 中的导出语句
+   - `handler-factory.ts` 中的集群相关导入
+   - `edge-server.ts` 中的集群和hub相关导入
+   - `managers/server-lifecycle-manager.ts` 中的 cluster-manager 导入
+   - `managers/event-setup-manager.ts` 中的 hub 相关导入
+   - `cluster/cluster-manager.ts` 中的 reconnect-manager 和 types 导入
+   - `cluster/hub-client.ts` 中的 types 导入
+   - `cluster/hub-data-sync.ts` 中的 hub-client 导入
+6. 验证构建成功
+
+### [结束] 2025-11-20 阶段七完成
+
+---
+
