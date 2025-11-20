@@ -1,0 +1,42 @@
+{
+  "serverId": 0,
+  "name": "MuNode Hub Server",
+  "host": "0.0.0.0",
+  "port": 65000,
+  "tls": {
+    "cert": "./certs/hub-cert.pem",
+    "key": "./certs/hub-key.pem",
+    "ca": "./certs/ca.pem",
+    "requireClientCert": true,
+    "rejectUnauthorized": false
+  },
+  "connection": {
+    "type": "smux",
+    "options": {
+      "maxStreamWindowSize": 262144,
+      "maxSessionWindowSize": 524288,
+      "keepaliveInterval": 30
+    }
+  },
+  "database": {
+    "path": "./data/hub.db",
+    "backupDir": "./data/backups",
+    "backupInterval": 86400
+  },
+  "blobStore": {
+    "enabled": true,
+    "path": "./data/blobs"
+  },
+  "registry": {
+    "heartbeatInterval": 30,
+    "timeout": 90,
+    "maxEdges": 100
+  },
+  "webApi": {
+    "enabled": false,
+    "port": 8080,
+    "cors": true
+  },
+  "logLevel": "info",
+  "logFile": "./logs/hub.log"
+}

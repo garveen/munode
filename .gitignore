@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Config files (keep examples)
+config/*.json
+!config/*.example.json
+
+# Data and logs
+data/
+logs/
+*.log
+*.db
+*.db-shm
+*.db-wal
+
+# Certificates (keep example generation)
+certs/*.pem
+certs/*.key
+certs/*.crt
+!certs/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# PM2
+.pm2/
+pm2.log

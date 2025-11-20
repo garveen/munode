@@ -1,0 +1,81 @@
+{
+  "serverId": 1,
+  "name": "MuNode Edge Server #1",
+  "mode": "cluster",
+  "host": "0.0.0.0",
+  "port": 64738,
+  "region": "asia-east",
+  "capacity": 1000,
+  "tls": {
+    "cert": "./certs/edge-cert.pem",
+    "key": "./certs/edge-key.pem",
+    "ca": "./certs/ca.pem",
+    "requireClientCert": false,
+    "rejectUnauthorized": false
+  },
+  "hub": {
+    "enabled": true,
+    "connection": {
+      "type": "smux",
+      "host": "hub.example.com",
+      "port": 65000,
+      "tls": {
+        "cert": "./certs/edge-cert.pem",
+        "key": "./certs/edge-key.pem",
+        "ca": "./certs/ca.pem",
+        "requireClientCert": true,
+        "rejectUnauthorized": false
+      },
+      "options": {
+        "maxStreamWindowSize": 262144,
+        "maxSessionWindowSize": 524288,
+        "keepaliveInterval": 30
+      }
+    },
+    "heartbeatInterval": 30,
+    "reconnectInterval": 5
+  },
+  "auth": {
+    "apiUrl": "https://auth.example.com/api/mumble/authenticate",
+    "apiKey": "your-secret-api-key",
+    "timeout": 5000,
+    "retry": 3,
+    "insecure": false,
+    "cacheTTL": 300,
+    "userCachePath": "./data/users.json",
+    "pullInterval": 3600,
+    "trackSessions": true,
+    "allowCacheFallback": true
+  },
+  "server": {
+    "welcomeText": "欢迎使用 MuNode!",
+    "maxBandwidth": 72000,
+    "maxUsers": 1000,
+    "maxTextMessageLength": 5000,
+    "maxImageMessageLength": 131072,
+    "allowHtml": true,
+    "allowGuest": false,
+    "certRequired": false,
+    "hideCertHashes": false,
+    "defaultChannel": 0
+  },
+  "requiredGroups": [["verified"]],
+  "udp": {
+    "enabled": true,
+    "bufferSize": 1024,
+    "stabilityCheck": {
+      "enabled": true,
+      "checkInterval": 30,
+      "unstableThreshold": 0.3,
+      "pingTimeout": 10,
+      "minSamples": 100
+    }
+  },
+  "ban": {
+    "enabled": true,
+    "dbPath": "./data/bans.db",
+    "cacheTTL": 300
+  },
+  "logLevel": "info",
+  "logFile": "./logs/edge.log"
+}

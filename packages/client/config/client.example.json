@@ -1,0 +1,48 @@
+{
+  "connection": {
+    "host": "localhost",
+    "port": 64738,
+    "autoReconnect": true,
+    "reconnectDelay": 5000,
+    "reconnectMaxDelay": 60000,
+    "connectTimeout": 10000
+  },
+  "auth": {
+    "username": "MuNodeBot",
+    "password": "",
+    "tokens": [],
+    "certificate": "",
+    "key": ""
+  },
+  "audio": {
+    "encoder": {
+      "codec": "opus",
+      "bitrate": 40000,
+      "frameSize": 20,
+      "vbr": true
+    },
+    "decoder": {
+      "codecs": ["opus"],
+      "autoDetect": true
+    },
+    "inputSampleRate": 48000,
+    "outputSampleRate": 48000
+  },
+  "api": {
+    "http": {
+      "enabled": true,
+      "host": "0.0.0.0",
+      "port": 3000,
+      "cors": true
+    },
+    "websocket": {
+      "enabled": true,
+      "path": "/ws"
+    }
+  },
+  "webhooks": [],
+  "logging": {
+    "level": "info",
+    "file": "logs/client.log"
+  }
+}

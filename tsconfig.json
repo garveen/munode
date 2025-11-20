@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.base.json",
+  "files": [],
+  "references": [
+    { "path": "./packages/common" },
+    { "path": "./packages/protocol" },
+    { "path": "./packages/hub-server" },
+    { "path": "./packages/edge-server" },
+    { "path": "./packages/cli" }
+  ]
+}

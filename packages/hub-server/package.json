@@ -1,0 +1,28 @@
+{
+  "name": "@munode/hub-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "hub-server": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx watch src/cli.ts",
+    "start": "node dist/cli.js",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@munode/common": "workspace:*",
+    "@munode/protocol": "workspace:*",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7",
+    "lru-cache": "^10.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.4.5"
+  }
+}
