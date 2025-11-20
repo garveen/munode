@@ -51,3 +51,22 @@
 
 ---
 
+## 阶段四：认证授权重构 (auth/)
+
+### [开始] 2025-11-20 迁移认证授权模块
+
+
+完成的操作：
+1. 迁移 `auth-manager.ts` → `auth/auth-manager.ts`
+2. 迁移 `handlers/auth-handlers.ts` → `auth/auth-handler.ts`
+3. 迁移 `handlers/permission-handlers.ts` → `auth/permission-checker.ts`
+4. 更新导入路径：
+   - `index.ts` 中的导出语句
+   - `handler-factory.ts` 中的认证相关导入
+   - `auth/auth-manager.ts` 中的 types 和 user-cache 导入
+5. 验证构建成功
+
+### [结束] 2025-11-20 阶段四完成
+
+---
+

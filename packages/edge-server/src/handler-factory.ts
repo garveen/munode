@@ -9,7 +9,7 @@ import { ClientManager } from './client/client-manager.js';
 import { ChannelManager } from './channel.js';
 import { MessageHandler } from './message-handler.js';
 import { VoiceRouter } from './voice-router.js';
-import { AuthManager } from './auth-manager.js';
+import { AuthManager } from './auth/auth-manager.js';
 import { EdgeControlClient } from './edge-control-client.js';
 import { BanManager } from './ban-manager.js';
 import { ContextActions } from './context-actions.js';
@@ -20,10 +20,10 @@ import { EdgeConfig } from './types.js';
 
 import { ProtocolHandlers } from './handlers/protocol-handlers.js';
 import { HubMessageHandlers } from './handlers/hub-message-handlers.js';
-import { AuthHandlers } from './handlers/auth-handlers.js';
+import { AuthHandlers } from './auth/auth-handler.js';
 import { ConnectionHandlers } from './handlers/connection-handlers.js';
 import { StateHandlers } from './handlers/state-handlers.js';
-import { PermissionHandlers } from './handlers/permission-handlers.js';
+import { PermissionHandlers } from './auth/permission-checker.js';
 import { MessageHandlers } from './handlers/message-handlers.js';
 import { AdminHandlers } from './handlers/admin-handlers.js';
 

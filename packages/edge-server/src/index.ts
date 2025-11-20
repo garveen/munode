@@ -28,7 +28,7 @@ export { ClientManager } from './client/client-manager.js';
 export { ChannelManager } from './channel.js';
 export { MessageHandler } from './message-handler.js';
 export { VoiceRouter } from './voice-router.js';
-export { AuthManager } from './auth-manager.js';
+export { AuthManager } from './auth/auth-manager.js';
 export { EdgeControlClient } from './edge-control-client.js';
 export { BanManager } from './ban-manager.js';
 export { ContextActions } from './context-actions.js';
