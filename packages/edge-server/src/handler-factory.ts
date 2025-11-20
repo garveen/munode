@@ -5,7 +5,7 @@
  */
 
 import { logger } from '@munode/common';
-import { ClientManager } from './client.js';
+import { ClientManager } from './client/client-manager.js';
 import { ChannelManager } from './channel.js';
 import { MessageHandler } from './message-handler.js';
 import { VoiceRouter } from './voice-router.js';

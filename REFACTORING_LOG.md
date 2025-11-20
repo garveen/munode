@@ -34,3 +34,20 @@
 
 ---
 
+## 阶段三：客户端管理重构 (client/)
+
+### [开始] 2025-11-20 迁移客户端管理模块
+
+
+完成的操作：
+1. 迁移 `client.ts` → `client/client-manager.ts`
+2. 更新导入路径：
+   - `index.ts` 中的导出语句
+   - `handler-factory.ts` 中的 ClientManager 导入
+   - `client/client-manager.ts` 中的 types 导入
+3. 验证构建成功
+
+### [结束] 2025-11-20 阶段三完成
+
+---
+

@@ -24,7 +24,7 @@ export type {
 export { loadEdgeConfig, validateConfig } from './config.js';
 
 // 核心组件
-export { ClientManager } from './client.js';
+export { ClientManager } from './client/client-manager.js';
 export { ChannelManager } from './channel.js';
 export { MessageHandler } from './message-handler.js';
 export { VoiceRouter } from './voice-router.js';
