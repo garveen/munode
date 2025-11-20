@@ -16,3 +16,21 @@
 
 ---
 
+## 阶段二：网络层重构 (network/)
+
+### [开始] 2025-11-20 迁移网络层模块
+
+
+完成的操作：
+1. 迁移 `packet-pool.ts` → `network/packet-pool.ts`
+2. 迁移 `udp-monitor.ts` → `network/udp-monitor.ts`
+3. 更新导入路径：
+   - `index.ts` 中的导出语句
+   - `cluster-manager.ts` 中的 reconnect-manager 导入
+   - `network/packet-pool.ts` 和 `network/udp-monitor.ts` 中的 types 导入
+4. 验证构建成功
+
+### [结束] 2025-11-20 阶段二完成
+
+---
+

@@ -9,7 +9,7 @@
  */
 
 import { ControlChannelClient } from '@munode/protocol';
-import { ReconnectManager } from './control/reconnect-manager.js';
+import { ReconnectManager } from './cluster/reconnect-manager.js';
 import type { EdgeConfig } from './types.js';
 import type { Logger } from 'winston';
 

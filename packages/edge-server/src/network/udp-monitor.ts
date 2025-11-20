@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 // import { logger } from '@munode/common';
 import type { Logger } from 'winston';
-import { EdgeConfig, UDPStats } from './types.js';
+import { EdgeConfig, UDPStats } from '../types.js';
 
 /**
  * UDP 监控器 - 监控UDP连接质量和不稳定性
