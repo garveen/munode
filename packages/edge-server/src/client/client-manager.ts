@@ -3,7 +3,7 @@ import { TLSSocket } from 'tls';
 import { EventEmitter } from 'events';
 // import { logger } from '@munode/common';
 import type { Logger } from 'winston';
-import { EdgeConfig, ClientInfo } from './types.js';
+import { EdgeConfig, ClientInfo } from '../types.js';
 
 /**
  * 客户端管理器 - 管理所有连接的客户端

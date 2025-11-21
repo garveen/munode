@@ -5,27 +5,27 @@
  */
 
 import { logger } from '@munode/common';
-import { ClientManager } from './client.js';
-import { ChannelManager } from './channel.js';
-import { MessageHandler } from './message-handler.js';
-import { VoiceRouter } from './voice-router.js';
-import { AuthManager } from './auth-manager.js';
-import { EdgeControlClient } from './edge-control-client.js';
-import { BanManager } from './ban-manager.js';
-import { ContextActions } from './context-actions.js';
-import { UserCache } from './user-cache.js';
-import { EdgeStateManager } from './state-manager.js';
+import { ClientManager } from '../client/client-manager.js';
+import { ChannelManager } from '../models/channel.js';
+import { MessageHandler } from '../message-handler.js';
+import { VoiceRouter } from '../voice/voice-router.js';
+import { AuthManager } from '../auth/auth-manager.js';
+import { EdgeControlClient } from '../cluster/hub-client.js';
+import { BanManager } from '../ban/ban-manager.js';
+import { ContextActions } from '../handlers/context-action.js';
+import { UserCache } from '../state/user-cache.js';
+import { EdgeStateManager } from '../state/state-manager.js';
 import { PermissionManager, type ACLEntry } from '@munode/protocol';
-import { EdgeConfig } from './types.js';
+import { EdgeConfig } from '../types.js';
 
-import { ProtocolHandlers } from './handlers/protocol-handlers.js';
-import { HubMessageHandlers } from './handlers/hub-message-handlers.js';
-import { AuthHandlers } from './handlers/auth-handlers.js';
-import { ConnectionHandlers } from './handlers/connection-handlers.js';
-import { StateHandlers } from './handlers/state-handlers.js';
-import { PermissionHandlers } from './handlers/permission-handlers.js';
-import { MessageHandlers } from './handlers/message-handlers.js';
-import { AdminHandlers } from './handlers/admin-handlers.js';
+import { ProtocolHandlers } from '../handlers/protocol-handlers.js';
+import { HubMessageHandlers } from '../cluster/hub-message-handler.js';
+import { AuthHandlers } from '../auth/auth-handler.js';
+import { ConnectionHandlers } from '../handlers/connection-handlers.js';
+import { StateHandlers } from '../handlers/state-handlers.js';
+import { PermissionHandlers } from '../auth/permission-checker.js';
+import { MessageHandlers } from '../handlers/message-handlers.js';
+import { AdminHandlers } from '../handlers/admin-handlers.js';
 
 /**
  * 处理器工厂 - 单例模式

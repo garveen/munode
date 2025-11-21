@@ -9,8 +9,8 @@
  */
 
 import { ControlChannelClient } from '@munode/protocol';
-import { ReconnectManager } from './control/reconnect-manager.js';
-import type { EdgeConfig } from './types.js';
+import { ReconnectManager } from './reconnect-manager.js';
+import type { EdgeConfig } from '../types.js';
 import type { Logger } from 'winston';
 
 export interface ClusterIntegration {

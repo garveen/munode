@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { logger } from '@munode/common';
-import { ClientInfo } from './types.js';
+import { ClientInfo } from '../types.js';
 import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
 
 /**

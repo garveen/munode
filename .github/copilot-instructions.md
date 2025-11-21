@@ -173,8 +173,85 @@ describe('AuthManager', () => {
 ```
 
 ### 集成测试
-- 测试文件位于根目录: `test-*.js`, `test-*.ts`
-- 测试 Hub-Edge 通信、ACL 继承、用户状态同步等关键功能
+
+#### 运行集成测试
+```bash
+# 构建项目（必须先构建）
+pnpm build
+
+# 运行所有集成测试
+pnpm test:integration
+
+# 以监视模式运行集成测试
+pnpm test:integration:watch
+
+# 运行集成测试并查看覆盖率
+pnpm test:integration -- --coverage
+
+# 运行特定的测试文件
+pnpm test:integration tests/integration/suites/auth.test.ts
+```
+
+#### 集成测试结构
+- **测试套件位置**: `tests/integration/suites/`
+  - `auth.test.ts` - 认证和授权测试
+  - `acl.test.ts` - ACL 权限系统测试
+  - `channel.test.ts` - 频道管理测试
+  - `voice.test.ts` - 语音传输测试
+  - `hub-edge.test.ts` - Hub-Edge 通信测试
+
+- **旧测试文件位于根目录**: `test-*.js`, `test-*.ts`（可能需要迁移）
+
+#### 集成测试配置
+- 配置文件: `vitest.config.integration.ts`
+- 测试超时: 30秒
+- Hook 超时: 60秒
+- 运行模式: 单进程 (避免端口冲突)
+
+#### 编写集成测试
+```typescript
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+
+describe('Feature Integration Tests', () => {
+  let hubServer;
+  let edgeServer;
+
+  beforeAll(async () => {
+    // 启动 Hub 和 Edge 服务器
+    hubServer = await startHubServer();
+    edgeServer = await startEdgeServer();
+  });
+
+  afterAll(async () => {
+    // 清理资源
+    await edgeServer.stop();
+    await hubServer.stop();
+  });
+
+  it('should handle feature correctly', async () => {
+    // 测试逻辑
+    const result = await testFeature();
+    expect(result).toBe(expected);
+  });
+});
+```
+
+#### 集成测试最佳实践
+1. **测试隔离**: 每个测试套件使用独立的服务器实例和端口
+2. **资源清理**: 在 `afterAll` 中清理所有资源（服务器、连接、文件等）
+3. **超时设置**: 集成测试通常需要较长超时，已配置为 30 秒
+4. **错误处理**: 捕获并记录详细的错误信息以便调试
+5. **测试数据**: 使用临时数据库和配置文件，测试后清理
+
+#### 常见集成测试场景
+- Hub-Edge 连接和断开
+- 用户认证流程（包含外部认证 API）
+- ACL 权限继承和检查
+- 频道创建、移动、删除
+- 用户状态同步（跨 Edge）
+- 语音包路由和转发
+- 文本消息广播
+- 用户组和权限管理
 
 ## Protocol Buffers
 

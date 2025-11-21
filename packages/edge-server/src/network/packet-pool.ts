@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 // import { logger } from '@munode/common';
 import type { Logger } from 'winston';
-import { EdgeConfig, UDPConnection } from './types.js';
+import { EdgeConfig, UDPConnection } from '../types.js';
 import { createSocket } from 'dgram';
 // import { Socket as UDPSocket } from 'dgram';
 

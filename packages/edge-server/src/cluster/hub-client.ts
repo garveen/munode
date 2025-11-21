@@ -11,7 +11,7 @@ import type {
   ChannelData,
   ACLData,
 } from '@munode/protocol/src/hub-edge-types.js';
-import type { EdgeConfig } from './types.js';
+import type { EdgeConfig } from '../types.js';
 
 const logger = createLogger({ service: 'edge-control-client' });
 

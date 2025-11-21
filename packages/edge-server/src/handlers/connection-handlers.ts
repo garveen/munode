@@ -2,7 +2,7 @@ import type { TLSSocket } from 'tls';
 import type { RemoteInfo } from 'dgram';
 import { logger } from '@munode/common';
 import type { ClientInfo } from '../types.js';
-import type { HandlerFactory } from '../handler-factory.js';
+import type { HandlerFactory } from '../core/handler-factory.js';
 
 /**
  * 连接处理器 - 处理TLS连接和UDP消息

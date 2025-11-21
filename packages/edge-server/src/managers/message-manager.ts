@@ -1,5 +1,5 @@
 import { logger } from '@munode/common';
-import { HandlerFactory } from '../handler-factory.js';
+import { HandlerFactory } from '../core/handler-factory.js';
 
 /**
  * 消息管理器

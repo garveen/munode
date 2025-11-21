@@ -15,7 +15,7 @@ import { logger } from '@munode/common';
 import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
 import { MessageType } from '@munode/protocol';
 import type { ClientInfo } from '../types.js';
-import type { HandlerFactory } from '../handler-factory.js';
+import type { HandlerFactory } from '../core/handler-factory.js';
 
 export class HubMessageHandlers {
   constructor(private factory: HandlerFactory) {}

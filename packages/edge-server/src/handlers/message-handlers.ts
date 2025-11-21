@@ -2,7 +2,7 @@ import { logger } from '@munode/common';
 import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
 import { MessageType } from '@munode/protocol';
 import type { ChannelInfo } from '../types.js';
-import type { HandlerFactory } from '../handler-factory.js';
+import type { HandlerFactory } from '../core/handler-factory.js';
 
 /**
  * 消息处理器 - 处理文本消息和频道/用户列表发送
