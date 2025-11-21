@@ -42,6 +42,8 @@ export class ConnectionManager {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private pingTimer: NodeJS.Timeout | null = null;
   private receiveBuffer: Buffer = Buffer.alloc(0);
+  private useTcpVoice: boolean = false; // 是否使用TCP传输语音
+  private udpFailed: boolean = false; // UDP是否失败
 
   constructor(client: MumbleClient) {
     this.client = client;
@@ -107,27 +109,55 @@ export class ConnectionManager {
       throw new Error('UDP socket already exists');
     }
 
-    // 创建 UDP socket
-    const dgram = await import('dgram');
-    this.udpSocket = dgram.createSocket('udp4');
+    try {
+      // 创建 UDP socket
+      const dgram = await import('dgram');
+      this.udpSocket = dgram.createSocket('udp4');
 
-    // 设置消息接收处理器
-    this.udpSocket.on('message', (msg, _rinfo) => {
-      this.handleUDPMessage(msg);
-    });
-
-    this.udpSocket.on('error', (error) => {
-      console.error('UDP socket error:', error);
-    });
-
-    // 绑定到随机本地端口
-    return new Promise((resolve, reject) => {
-      this.udpSocket!.bind(0, () => {
-        resolve();
+      // 设置消息接收处理器
+      this.udpSocket.on('message', (msg, _rinfo) => {
+        this.handleUDPMessage(msg);
+        this.udpFailed = false; // UDP 工作正常
       });
 
-      this.udpSocket!.on('error', reject);
-    });
+      this.udpSocket.on('error', (error) => {
+        console.error('UDP socket error:', error);
+        this.udpFailed = true;
+        // UDP失败时自动降级为TCP语音
+        if (!this.useTcpVoice) {
+          console.log('UDP failed, falling back to TCP voice transmission');
+          this.useTcpVoice = true;
+        }
+      });
+
+      // 绑定到随机本地端口
+      return new Promise((resolve, reject) => {
+        this.udpSocket!.bind(0, () => {
+          resolve();
+        });
+
+        this.udpSocket!.on('error', reject);
+      });
+    } catch (error) {
+      console.error('Failed to create UDP socket:', error);
+      this.udpFailed = true;
+      this.useTcpVoice = true;
+      // 不抛出错误，允许使用TCP语音继续
+    }
+  }
+
+  /**
+   * 设置强制使用TCP语音模式
+   */
+  setForceTcpVoice(force: boolean): void {
+    this.useTcpVoice = force;
+  }
+
+  /**
+   * 检查是否使用TCP语音
+   */
+  isUsingTcpVoice(): boolean {
+    return this.useTcpVoice || this.udpFailed;
   }
 
   /**
@@ -190,12 +220,48 @@ export class ConnectionManager {
     return new Promise((resolve, reject) => {
       this.udpSocket!.send(message, 0, message.length, port, address, (error) => {
         if (error) {
+          // UDP发送失败，标记UDP为不可用
+          this.udpFailed = true;
+          if (!this.useTcpVoice) {
+            console.log('UDP send failed, falling back to TCP voice transmission');
+            this.useTcpVoice = true;
+          }
           reject(error);
         } else {
           resolve();
         }
       });
     });
+  }
+
+  /**
+   * 发送语音包（自动选择UDP或TCP）
+   */
+  async sendVoicePacket(packet: Buffer): Promise<void> {
+    if (this.isUsingTcpVoice()) {
+      // 使用TCP隧道发送语音包
+      return this.sendTCPVoicePacket(packet);
+    } else {
+      try {
+        // 尝试使用UDP发送
+        return await this.sendUDP(packet);
+      } catch (error) {
+        // UDP失败，降级到TCP
+        console.warn('UDP voice send failed, falling back to TCP:', error);
+        this.udpFailed = true;
+        this.useTcpVoice = true;
+        return this.sendTCPVoicePacket(packet);
+      }
+    }
+  }
+
+  /**
+   * 通过TCP隧道发送语音包
+   */
+  async sendTCPVoicePacket(packet: Buffer): Promise<void> {
+    // 使用 UDPTunnel 消息类型 (MessageType = 1)
+    const message = this.wrapMessage(MessageType.UDPTunnel, packet);
+    return this.sendTCP(message);
   }
 
   /**

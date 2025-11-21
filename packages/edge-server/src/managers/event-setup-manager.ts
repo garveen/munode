@@ -175,6 +175,12 @@ export class EventSetupManager {
       this.handlerFactory.protocolHandlers.handleVoiceTarget(session_id, data);
     });
 
+    // UDPTunnel 事件 - TCP语音传输
+    this.handlerFactory.messageHandler.on('udpTunnel', (session_id: number, data: Buffer) => {
+      // 将TCP隧道语音包路由到voiceRouter处理
+      this.handlerFactory.voiceRouter.handleVoiceTunnel(session_id, data);
+    });
+
     // RequestBlob 事件
     this.handlerFactory.messageHandler.on('requestBlob', (session_id: number, data: Buffer) => {
       if (this.handlerFactory.adminHandlers) {
@@ -292,6 +298,12 @@ export class EventSetupManager {
     // 语音事件
     this.handlerFactory.voiceRouter.on('voicePacket', (_packet) => {
       // 这里可以处理语音包事件，如果需要
+    });
+
+    // TCP语音包发送事件
+    this.handlerFactory.voiceRouter.on('sendTCPVoicePacket', (session_id: number, voiceData: Buffer) => {
+      // 通过TCP隧道（UDPTunnel消息）发送语音包
+      this.messageManager!.sendMessageToClient(session_id, 1, voiceData); // MessageType.UDPTunnel = 1
     });
 
     // Hub 事件

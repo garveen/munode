@@ -32,6 +32,9 @@ export interface ConnectOptions {
   
   /** 连接超时 (毫秒) */
   connectTimeout?: number;
+  
+  /** 强制使用TCP传输语音（而非UDP） */
+  forceTcpVoice?: boolean;
 }
 
 /**

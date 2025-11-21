@@ -721,14 +721,24 @@ export class VoiceRouter extends EventEmitter {
    * @param voiceData 语音数据（已序列化，包含发送者session ID）
    */
   sendVoicePacketToClient(client: ClientInfo, voiceData: Buffer): void {
-    if (!this.udpServer) {
-      this.logger.warn('UDP server not set, cannot send voice packet');
-      return;
+    // 检查客户端是否有UDP连接
+    const hasUDP = client.udp && client.udp_ip && client.udp_port;
+    
+    if (hasUDP && this.udpServer) {
+      // 尝试使用UDP发送
+      this.sendVoicePacketViaUDP(client, voiceData);
+    } else {
+      // 使用TCP隧道发送
+      this.sendVoicePacketViaTCP(client, voiceData);
     }
+  }
 
-    // 检查客户端是否有UDP地址
-    if (!client.udp_ip || !client.udp_port) {
-      this.logger.debug(`Client ${client.session} has no UDP address, voice packet not sent`);
+  /**
+   * 通过UDP发送语音包到客户端
+   */
+  private sendVoicePacketViaUDP(client: ClientInfo, voiceData: Buffer): void {
+    if (!this.udpServer) {
+      this.logger.warn('UDP server not set, cannot send voice packet via UDP');
       return;
     }
 
@@ -750,13 +760,43 @@ export class VoiceRouter extends EventEmitter {
 
     // 发送UDP包
     try {
-      this.udpServer.send(encrypted, client.udp_port, client.udp_ip, (err) => {
+      this.udpServer.send(encrypted, client.udp_port!, client.udp_ip!, (err) => {
         if (err) {
-          this.logger.error(`Failed to send voice packet to ${client.username} (${client.session}):`, err);
+          this.logger.error(`Failed to send voice packet via UDP to ${client.username} (${client.session}):`, err);
+          // UDP发送失败，标记客户端UDP为不可用
+          if (this.clientManager) {
+            this.clientManager.updateClient(client.session, { udp: false });
+          }
         }
       });
     } catch (error) {
-      this.logger.error(`Error sending voice packet to ${client.username} (${client.session}):`, error);
+      this.logger.error(`Error sending voice packet via UDP to ${client.username} (${client.session}):`, error);
     }
+  }
+
+  /**
+   * 通过TCP隧道发送语音包到客户端
+   */
+  private sendVoicePacketViaTCP(client: ClientInfo, voiceData: Buffer): void {
+    // 语音数据不需要加密，因为TCP连接本身是TLS加密的
+    // 但我们仍需要对payload进行OCB2加密以保持协议一致性
+    const crypto = this.clientCryptos.get(client.session);
+    if (!crypto) {
+      this.logger.warn(`No crypto for client ${client.session}, voice packet not sent via TCP`);
+      return;
+    }
+
+    // 加密语音数据
+    let encrypted: Buffer;
+    try {
+      encrypted = crypto.encrypt(voiceData);
+    } catch (error) {
+      this.logger.error(`Failed to encrypt voice packet for client ${client.session}:`, error);
+      return;
+    }
+
+    // 通过MessageHandler发送UDPTunnel消息
+    this.emit('sendTCPVoicePacket', client.session, encrypted);
+    this.logger.debug(`Sent voice packet via TCP tunnel to ${client.username} (${client.session})`);
   }
 }

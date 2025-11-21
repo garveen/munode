@@ -249,14 +249,14 @@ export class AudioInputStream {
   }
 
   /**
-   * 发送UDP包
+   * 发送语音包（UDP或TCP）
    */
   private async sendUDPPacket(packet: Buffer): Promise<void> {
     try {
-      await this.client.getConnectionManager().sendUDP(packet);
-      console.debug(`Sent UDP packet, size: ${packet.length}, sequence: ${this.sequenceNumber}`);
+      await this.client.getConnectionManager().sendVoicePacket(packet);
+      console.debug(`Sent voice packet, size: ${packet.length}, sequence: ${this.sequenceNumber}`);
     } catch (error) {
-      console.error('Failed to send UDP packet:', error);
+      console.error('Failed to send voice packet:', error);
     }
   }
 
