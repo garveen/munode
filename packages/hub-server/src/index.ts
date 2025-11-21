@@ -4,3 +4,5 @@ export * from './session-manager.js';
 export * from './voice-target-sync.js';
 export * from './certificate-exchange.js';
 export * from './control-service.js';
+export * from './config-defaults.js';
+export * from './config-validator.js';
