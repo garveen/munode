@@ -1,5 +1,5 @@
 {
-  "serverId": 1,
+  "server_id": 1,
   "name": "MuNode Edge Server #1 (Test)",
   "mode": "cluster",
   "network": {
