@@ -78,6 +78,8 @@ export const CONFIG_DEFAULTS = {
  * 应用配置默认值
  * @param config 用户提供的配置
  * @returns 合并了默认值的完整配置
+ * @note 即使输入的 config 中某些字段（如 autoBan, suggest）是 undefined，
+ *       输出的配置对象也会包含这些字段的默认值，以简化运行时代码
  */
 export function applyConfigDefaults(config: HubConfig): HubConfig {
   return {
