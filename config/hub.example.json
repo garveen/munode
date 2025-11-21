@@ -22,7 +22,8 @@
   "database": {
     "path": "./data/hub.db",
     "backupDir": "./data/backups",
-    "backupInterval": 86400
+    "backupInterval": 86400,
+    "walMode": false
   },
   "blobStore": {
     "enabled": true,
@@ -38,6 +39,28 @@
     "port": 8080,
     "cors": true
   },
+  "timeout": 30,
+  "maxUsers": 1000,
+  "channelNestingLimit": 10,
+  "channelCountLimit": 1000,
+  "bandwidth": 558000,
+  "textMessageLength": 5000,
+  "imageMessageLength": 131072,
+  "messageLimit": 1,
+  "messageBurst": 5,
+  "allowHTML": true,
+  "usernameRegex": "[ -=\\w\\[\\]\\{\\}\\(\\)\\@\\|\\.]+",
+  "channelNameRegex": "[ -=\\w\\#\\[\\]\\{\\}\\(\\)\\@\\|]+",
+  "defaultChannel": 0,
+  "rememberChannel": true,
+  "allowRecording": true,
+  "autoBan": {
+    "attempts": 10,
+    "timeframe": 120,
+    "duration": 300,
+    "banSuccessfulConnections": true
+  },
   "logLevel": "info",
-  "logFile": "./logs/hub.log"
+  "logFile": "./logs/hub.log",
+  "logDays": 31
 }

@@ -12,6 +12,8 @@ import { ACLManager } from './acl-manager.js';
 import { ChannelGroupManager } from './channel-group-manager.js';
 import { BanManager } from './ban-manager.js';
 import { VoiceUDPTransport } from '@munode/protocol';
+import { validateHubConfig } from './config-validator.js';
+import { applyConfigDefaults } from './config-defaults.js';
 
 const logger = createLogger({ service: 'hub-server' });
 
@@ -37,7 +39,13 @@ export class HubServer {
   private started = false;
 
   constructor(config: HubConfig) {
-    this.config = config;
+    // 应用默认值
+    this.config = applyConfigDefaults(config);
+    
+    // 验证配置
+    validateHubConfig(this.config);
+    
+    logger.info('Hub Server configuration validated and initialized');
   }
 
   /**
