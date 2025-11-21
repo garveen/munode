@@ -220,7 +220,7 @@ export class MessageHandler extends EventEmitter {
   /**
    * 处理插件数据传输
    */
-  private handlePluginDataTransmission( session_id: number, data: Buffer): void {
+  private handlePluginDataTransmission(session_id: number, data: Buffer): void {
     this.emit('pluginDataTransmission', session_id, data);
   }
 
