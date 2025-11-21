@@ -476,6 +476,43 @@ export class HubMessageHandlers {
   }
 
   /**
+   * 处理来自Hub的插件数据广播
+   */
+  handlePluginDataBroadcastFromHub(params: any): void {
+    try {
+      const { pluginData, target_sessions } = params;
+
+      logger.debug(
+        `Received PluginData broadcast from Hub: from ${pluginData.senderSession}, targets: ${target_sessions.length}`
+      );
+
+      // 构建PluginDataTransmission消息
+      const pluginDataMsg = new mumbleproto.PluginDataTransmission({
+        senderSession: pluginData.senderSession,
+        dataID: pluginData.dataID || '',
+        data: pluginData.data || Buffer.alloc(0),
+        receiverSessions: target_sessions, // 使用target_sessions作为接收者
+      });
+
+      const pluginDataBuffer = Buffer.from(pluginDataMsg.serialize());
+
+      // 只发送给本Edge上的目标用户
+      let sentCount = 0;
+      for (const targetSession of target_sessions) {
+        const client = this.clientManager.getClient(targetSession);
+        if (client && client.user_id > 0) {
+          this.messageHandler.sendMessage(targetSession, MessageType.PluginDataTransmission, pluginDataBuffer);
+          sentCount++;
+        }
+      }
+
+      logger.debug(`Broadcasted PluginData to ${sentCount} local clients`);
+    } catch (error) {
+      logger.error('Error handling PluginData broadcast from Hub:', error);
+    }
+  }
+
+  /**
    * 处理来自Hub的语音数据
    */
   handleVoiceDataFromHub(data: any, respond: (result?: any, error?: any) => void): void {

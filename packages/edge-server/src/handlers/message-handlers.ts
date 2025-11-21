@@ -71,6 +71,58 @@ export class MessageHandlers {
   }
 
   /**
+   * 处理插件数据传输
+   * 
+   * 架构说明：Edge转发到Hub进行目标解析，Hub广播给所有Edge
+   */
+  handlePluginDataTransmission(session_id: number, data: Buffer): void {
+    try {
+      const pluginData = mumbleproto.PluginDataTransmission.deserialize(data);
+
+      // 获取执行操作的客户端
+      const actor = this.clientManager.getClient(session_id);
+      if (!actor) {
+        logger.warn(`PluginDataTransmission from unauthenticated session: ${session_id}`);
+        return;
+      }
+
+      // 检查客户端是否已认证
+      if (!actor.user_id || actor.user_id <= 0) {
+        logger.warn(`PluginDataTransmission from unauthenticated session: ${session_id}`);
+        return;
+      }
+
+      // 必须在集群模式下运行
+      if (!this.hubClient) {
+        logger.error('PluginDataTransmission rejected: Hub client not available (standalone mode not supported)');
+        return;
+      }
+
+      // 设置发送者
+      pluginData.senderSession = session_id;
+
+      // 转发到Hub处理（Hub会进行目标解析和广播）
+      this.hubClient.notify('hub.handlePluginDataTransmission', {
+        edge_id: this.config.server_id,
+        actor_session: session_id,
+        actor_user_id: actor.user_id,
+        actor_username: actor.username,
+        actor_channel_id: actor.channel_id,
+        pluginData: {
+          senderSession: session_id,
+          dataID: pluginData.dataID || '',
+          data: pluginData.data || Buffer.alloc(0),
+          receiverSessions: pluginData.receiverSessions || [],
+        },
+      });
+
+      logger.debug(`Forwarded PluginDataTransmission from session ${session_id} to Hub`);
+    } catch (error) {
+      logger.error(`Error handling PluginDataTransmission for session ${session_id}:`, error);
+    }
+  }
+
+  /**
    * 获取频道的正确 parent 值（用于发送给客户端）
    * 根据 Mumble 协议规范：
    * - 根频道 (ID=0) 不应该包含 parent 字段（返回 undefined）
