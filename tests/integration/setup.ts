@@ -94,17 +94,34 @@ class TestAuthServer {
 
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
+      const errorHandler = (error: Error) => {
+        reject(error);
+      };
+
+      this.server.once('error', errorHandler);
+      
       this.server.listen(this.port, () => {
+        this.server.removeListener('error', errorHandler);
         console.log(`Test auth server listening on port ${this.port}`);
         resolve();
       });
-      this.server.on('error', reject);
     });
   }
 
   async stop(): Promise<void> {
     return new Promise((resolve) => {
-      this.server.close(() => resolve());
+      if (!this.server.listening) {
+        resolve();
+        return;
+      }
+      this.server.close((err) => {
+        if (err) {
+          console.warn('Error closing auth server:', err.message);
+        }
+        resolve();
+      });
+      // 强制关闭所有连接
+      this.server.closeAllConnections?.();
     });
   }
 
@@ -471,44 +488,48 @@ export async function setupTestEnvironment(
   const cleanup = async () => {
     console.log('Cleaning up test environment...');
 
-    if (edgeProcess2) {
-      edgeProcess2.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        edgeProcess2!.on('exit', () => resolve());
-        setTimeout(() => {
-          edgeProcess2!.kill('SIGKILL');
-          resolve();
-        }, 2000); // 减少清理等待时间
-      });
-    }
-
-    if (edgeProcess) {
-      edgeProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        edgeProcess!.on('exit', () => resolve());
-        setTimeout(() => {
-          edgeProcess!.kill('SIGKILL');
-          resolve();
-        }, 2000); // 减少清理等待时间
-      });
-    }
-
-    if (hubProcess) {
-      hubProcess.kill('SIGTERM');
-      await new Promise<void>((resolve) => {
-        hubProcess!.on('exit', () => resolve());
-        setTimeout(() => {
-          hubProcess!.kill('SIGKILL');
-          resolve();
-        }, 2000); // 减少清理等待时间
-      });
-    }
-
+    // 先关闭认证服务器，它不依赖其他服务
     if (authServer) {
-      await authServer.stop();
+      try {
+        await authServer.stop();
+      } catch (error) {
+        console.warn('Error stopping auth server:', error);
+      }
     }
+
+    // 关闭 Edge 服务器
+    const killProcess = async (process: ChildProcess | undefined, name: string) => {
+      if (!process) return;
+      
+      try {
+        process.kill('SIGTERM');
+        await new Promise<void>((resolve) => {
+          const exitHandler = () => {
+            resolve();
+          };
+          process.once('exit', exitHandler);
+          
+          setTimeout(() => {
+            process.removeListener('exit', exitHandler);
+            try {
+              process.kill('SIGKILL');
+            } catch (e) {
+              // 进程可能已退出
+            }
+            resolve();
+          }, 2000);
+        });
+      } catch (error) {
+        console.warn(`Error killing ${name}:`, error);
+      }
+    };
+
+    await killProcess(edgeProcess2, 'Edge2');
+    await killProcess(edgeProcess, 'Edge');
+    await killProcess(hubProcess, 'Hub');
     
-    await sleep(100); // 减少最终清理等待时间
+    // 等待端口释放
+    await sleep(200);
   };
 
   return { 

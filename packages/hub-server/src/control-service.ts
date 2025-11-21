@@ -1765,7 +1765,8 @@ export class HubControlService {
     // 映射数据库字段到protocol字段
     const channels: ChannelData[] = dbChannels.map((ch) => ({
       id: ch.id,
-      name: ch.name,
+      // 对于 root 频道（id=0），使用 registerName 配置或默认值 "Root"
+      name: ch.id === 0 ? (this.config.registerName || 'Root') : ch.name,
       parent_id: ch.parent_id,
       position: ch.position,
       max_users: ch.max_users,
@@ -1951,12 +1952,12 @@ export class HubControlService {
         
         logger.debug(`Collected ${allGroups.length} total groups`);
 
-        // 构建 ACL 响应
+        // 构建 ACL 响应 - 确保groups字段总是存在
         const aclResponse = new mumbleproto.ACL({
           channel_id,
           inherit_acls: channel.inherit_acl,
-          acls: allACLs,
-          groups: allGroups,
+          acls: allACLs.length > 0 ? allACLs : [],
+          groups: allGroups.length > 0 ? allGroups : [],
           query: false,
         });
 

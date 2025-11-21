@@ -1,6 +1,7 @@
 {
   "serverId": 0,
   "name": "MuNode Hub Server",
+  "registerName": "MuNode Server",
   "host": "0.0.0.0",
   "port": 65000,
   "tls": {

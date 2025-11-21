@@ -6,6 +6,7 @@ export type { ServerStats, EdgeInfo, RegisterRequest, RegisterResponse, Heartbea
 export interface HubConfig {
    server_id: number;
   name: string;
+  registerName?: string; // Root频道的显示名称（默认为"Root"）
   host: string;
   port: number;
   controlPort?: number; // 控制信道端口

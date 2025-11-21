@@ -123,10 +123,12 @@ export class PermissionHandlers {
       );
 
       // 发送权限响应
+      // 注意: flush 不应该设置为 true，否则会导致客户端清空所有权限缓存并重新请求，造成无限循环
+      // flush 只应该在 ACL 变更等需要主动刷新客户端缓存的场景下使用
       const permissionQueryResponse = new mumbleproto.PermissionQuery({
         channel_id: permQuery.channel_id,
         permissions: permissions,
-        flush: true,
+        flush: false,
       });
 
       this.messageHandler.sendMessage(
@@ -143,8 +145,9 @@ export class PermissionHandlers {
 
   /**
    * 频道权限动态刷新
-   * 当 ACL 变更时，自动更新频道内所有用户的 suppress 状态
+   * 当 ACL 变更时，自动更新频道内所有用户的 suppress 状态，并清空客户端的权限缓存
    * 参照 Go 实现：server.go:1774-1793
+   * 参照 Mumble 官方实现：src/murmur/Server.cpp#L2162-2191 (clearACLCache)
    */
   async refreshChannelPermissions(channel_id: number): Promise<void> {
     try {
@@ -155,15 +158,57 @@ export class PermissionHandlers {
         return;
       }
 
-      // 获取频道内的所有用户
-      const clientsInChannel = this.clientManager.getClientsInChannel(channel_id);
+      // 获取所有已认证的客户端，向他们发送 flush PermissionQuery
+      const allClients = this.clientManager.getAllClients();
+      const authenticatedClients = allClients.filter(c => c.user_id && c.user_id > 0);
       
-      if (clientsInChannel.length === 0) {
-        logger.debug(`No users in channel ${channel_id}, skipping permission refresh`);
+      if (authenticatedClients.length === 0) {
+        logger.debug(`No authenticated users, skipping permission refresh`);
         return;
       }
 
-      logger.info(`Refreshing permissions for ${clientsInChannel.length} users in channel ${channel_id}`);
+      logger.info(`Refreshing permissions for ${authenticatedClients.length} users due to ACL change in channel ${channel_id}`);
+
+      // 向所有已认证客户端发送带 flush=true 的 PermissionQuery
+      // 这会清空客户端的权限缓存，客户端会重新请求需要的权限
+      for (const client of authenticatedClients) {
+        const channelTree = this.channelManager.getChannelTree();
+        const currentChannel = this.channelManager.getChannel(client.channel_id);
+        if (!currentChannel) continue;
+
+        // 计算客户端当前所在频道的权限
+        const permissions = this.permissionManager.calculatePermission(
+          currentChannel,
+          client,
+          channelTree,
+          this.aclMap
+        );
+
+        // 发送带 flush=true 的权限响应，通知客户端清空缓存
+        const permissionQueryResponse = new mumbleproto.PermissionQuery({
+          channel_id: client.channel_id,
+          permissions: permissions,
+          flush: true, // 告诉客户端清空所有权限缓存
+        });
+
+        this.messageHandler.sendMessage(
+          client.session,
+          MessageType.PermissionQuery,
+          Buffer.from(permissionQueryResponse.serialize())
+        );
+
+        logger.debug(`Sent flush PermissionQuery to session ${client.session} for channel ${client.channel_id}`);
+      }
+
+      // 获取频道内的所有用户，更新他们的 suppress 状态
+      const clientsInChannel = this.clientManager.getClientsInChannel(channel_id);
+      
+      if (clientsInChannel.length === 0) {
+        logger.debug(`No users in channel ${channel_id}, skipping suppress state update`);
+        return;
+      }
+
+      logger.info(`Updating suppress state for ${clientsInChannel.length} users in channel ${channel_id}`);
 
       // 对每个用户重新计算 suppress 状态
       for (const client of clientsInChannel) {

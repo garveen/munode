@@ -1,9 +1,11 @@
 {
   "serverId": 0,
   "name": "MuNode Hub Server (Test)",
+  "registerName": "MuNode Test",
   "host": "127.0.0.1",
   "port": 9080,
   "controlPort": 11080,
+  "voicePort": 9089,
   "tls": {
     "cert": "./tests/integration/certs/server.pem",
     "key": "./tests/integration/certs/server.key",
@@ -37,6 +39,12 @@
     "enabled": true,
     "port": 8180,
     "cors": true
+  },
+  "channelGroups": {
+    "enabled": true
+  },
+  "acl": {
+    "enabled": true
   },
   "logLevel": "info"
 }
