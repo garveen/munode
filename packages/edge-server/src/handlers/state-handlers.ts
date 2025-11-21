@@ -1,5 +1,5 @@
 import { logger } from '@munode/common';
-import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
+import { mumbleproto } from '@munode/protocol';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
 /**
@@ -29,7 +29,7 @@ export class StateHandlers {
    * 
    * 注意：不再支持独立模式，必须连接到Hub才能工作
    * 
-   * PreConnectUserState: 允许客户端在认证前设置初始状态（自我静音/自我耳聋等）
+   * PreConnectUserState: 允许客户端在认证前设置初始状态（自我静音/自我禁听等）
    * 参照 Go 实现：message.go:583-618
    */
   handleUserState(session_id: number, data: Buffer): void {

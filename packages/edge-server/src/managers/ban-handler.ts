@@ -1,6 +1,6 @@
 import { logger } from '@munode/common';
 import { MessageType } from '@munode/protocol';
-import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
+import { mumbleproto } from '@munode/protocol';
 import { HandlerFactory } from '../core/handler-factory.js';
 import { ClientInfo } from '../types.js';
 

@@ -1,5 +1,5 @@
 import { createLogger } from '@munode/common';
-import type { BanData } from '@munode/protocol/src/hub-edge-types.js';
+import type { BanData } from '@munode/protocol';
 import * as crypto from 'crypto';
 import * as ipaddr from 'ipaddr.js';
 

@@ -167,6 +167,17 @@ export class HubDatabase {
       -- Hub Server 专用表
       -- ====================
 
+      -- Edge服务器信息表（虽然Edge不持久化，但为了外键约束而创建）
+      -- 注意：Edge服务器信息仅存储在内存中，此表主要用于外键约束
+      CREATE TABLE IF NOT EXISTS edges (
+        server_id INTEGER PRIMARY KEY,
+        region TEXT,
+        status TEXT DEFAULT 'offline',
+        last_heartbeat INTEGER,
+        created_at INTEGER,
+        updated_at INTEGER
+      );
+
       -- 注意：Edge服务器信息不持久化，仅存储在内存中（ServiceRegistry）
       -- Edge是临时运行时节点，重启后需要重新注册
 
@@ -488,6 +499,12 @@ export class HubDatabase {
    * 启动定期备份任务
    */
   private startBackupTask(): void {
+    // 在测试环境下跳过备份任务
+    if (process.env.NODE_ENV === 'test') {
+      logger.info('Skipping backup task in test environment');
+      return;
+    }
+
     setInterval(async () => {
       try {
         await this.createBackup();

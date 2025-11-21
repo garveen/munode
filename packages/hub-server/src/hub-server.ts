@@ -11,7 +11,7 @@ import { ChannelManager } from './channel-manager.js';
 import { ACLManager } from './acl-manager.js';
 import { ChannelGroupManager } from './channel-group-manager.js';
 import { BanManager } from './ban-manager.js';
-import { VoiceUDPTransport } from '@munode/protocol/src/voice/voice-udp-transport.js';
+import { VoiceUDPTransport } from '@munode/protocol';
 
 const logger = createLogger({ service: 'hub-server' });
 

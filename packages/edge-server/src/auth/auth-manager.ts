@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import type { Logger } from 'winston';
 import { EdgeConfig, AuthConfig, AuthResult } from '../types.js';
 import { UserCache } from '../state/user-cache.js';
-import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
+import { mumbleproto } from '@munode/protocol';
 
 /**
  * 认证缓存项

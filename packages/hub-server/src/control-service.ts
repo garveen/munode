@@ -12,7 +12,7 @@ import {
   ACLData,
   GlobalSession,
 } from '@munode/protocol';
-import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
+import { mumbleproto } from '@munode/protocol';
 import type { HubConfig } from './types.js';
 import type { ServiceRegistry } from './registry.js';
 import type { GlobalSessionManager } from './session-manager.js';

@@ -5,6 +5,7 @@ import { VoiceManager } from './voice-manager.js';
 import { HubDataManager } from '../cluster/hub-data-sync.js';
 import { BanHandler } from './ban-handler.js';
 import { MessageManager } from './message-manager.js';
+import { mumbleproto, MessageType } from '@munode/protocol';
 
 /**
  * 事件设置管理器
@@ -232,9 +233,9 @@ export class EventSetupManager {
     });
 
     // 客户端事件
-    this.handlerFactory.clientManager.on('clientConnected', (_client) => {
-      // 不要在这里发送版本信息，等待客户端先发送 Version 消息
-      // this.sendServerVersion(client.session);
+    this.handlerFactory.clientManager.on('clientConnected', (client) => {
+      // 根据 Mumble 协议，服务器应该在连接后立即发送版本消息
+      this.sendServerVersion(client.session);
     });
 
     this.handlerFactory.clientManager.on('clientData', (session_id: number, data: Buffer) => {
@@ -399,6 +400,30 @@ export class EventSetupManager {
           this.handlerFactory.hubMessageHandlers.handleACLUpdatedNotification(message.params);
         }
       });
+    }
+  }
+
+  /**
+   * 发送服务器版本信息给客户端
+   */
+  private sendServerVersion(session_id: number): void {
+    try {
+      const version = new mumbleproto.Version({
+        version: 0x010400, // 1.4.0
+        release: 'MuNode Edge Server',
+        os: 'Linux',
+        os_version: process.version,
+      });
+
+      this.messageManager?.sendMessageToClient(
+        session_id,
+        MessageType.Version,
+        Buffer.from(version.serializeBinary())
+      );
+
+      logger.debug(`Sent server version to session ${session_id}`);
+    } catch (error) {
+      logger.error(`Failed to send server version to session ${session_id}:`, error);
     }
   }
 }

@@ -12,7 +12,7 @@
  */
 
 import { logger } from '@munode/common';
-import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
+import { mumbleproto } from '@munode/protocol';
 import { MessageType } from '@munode/protocol';
 import type { ClientInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';

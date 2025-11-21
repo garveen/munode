@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 // import { logger } from '@munode/common';
 import type { Logger } from 'winston';
 import { EdgeConfig } from './types.js';
-import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
+import { mumbleproto } from '@munode/protocol';
 import { MessageType } from '@munode/protocol';
 
 /**

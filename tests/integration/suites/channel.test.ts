@@ -10,14 +10,15 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestEnvironment, setupTestEnvironment } from '../setup';
-import { MumbleConnection } from '../helpers';
-import { TEST_CHANNELS, MessageType } from '../fixtures';
+import { TEST_CHANNELS, MessageType, PermissionFlag } from '../fixtures';
+import { mumbleproto } from '../../../packages/protocol/dist/index.js';
+import { MumbleClient } from '../../../packages/client/dist/index.js';
 
 describe('Channel Management Integration Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {
-    testEnv = await setupTestEnvironment();
+    testEnv = await setupTestEnvironment(8082);
   }, 60000);
 
   afterAll(async () => {
@@ -103,23 +104,119 @@ describe('Channel Management Integration Tests', () => {
     });
   });
 
-  describe('Message Type Enum', () => {
-    it('should have valid message type values', () => {
-      expect(MessageType.Version).toBe(0);
-      expect(MessageType.Authenticate).toBe(2);
-      expect(MessageType.ChannelState).toBe(7);
-      expect(MessageType.UserState).toBe(9);
-      expect(MessageType.TextMessage).toBe(11);
+  describe('Channel Management via Protocol', () => {
+    it('should create and manage channels through protocol', async () => {
+      const client = new MumbleClient();
+      
+      await client.connect({
+        host: 'localhost',
+        port: testEnv.edgePort,
+        username: 'admin',
+        password: 'admin123',
+        rejectUnauthorized: false,
+      });
+
+      // 等待接收初始频道状态
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // 创建临时频道
+      const channelName = 'TestChannel_' + Date.now();
+      const createdChannelId = await client.createChannel(channelName, 0);
+
+      expect(createdChannelId).toBeGreaterThan(0);
+
+      // 验证频道在频道列表中
+      const channels = client.getChannels();
+      const newChannel = channels.find(ch => ch.channel_id === createdChannelId);
+      expect(newChannel).toBeDefined();
+      expect(newChannel?.name).toBe(channelName);
+
+      await client.disconnect();
     });
 
-    it('should have channel-related message types', () => {
-      expect(MessageType.ChannelRemove).toBeDefined();
-      expect(MessageType.ChannelState).toBeDefined();
+    it('should move users between channels and broadcast to all edges', async () => {
+      const client1 = new MumbleClient(); // 移动者 - Edge 1
+      const client2 = new MumbleClient(); // 本 Edge 观察者 - Edge 1
+      const client3 = new MumbleClient(); // 跨 Edge 观察者 - Edge 2
+
+      await client1.connect({
+        host: 'localhost',
+        port: testEnv.edgePort,
+        username: 'user1',
+        password: 'password1',
+        rejectUnauthorized: false,
+      });
+
+      await client2.connect({
+        host: 'localhost',
+        port: testEnv.edgePort,
+        username: 'user2',
+        password: 'password2',
+        rejectUnauthorized: false,
+      });
+
+      await client3.connect({
+        host: 'localhost',
+        port: testEnv.edgePort2, // 连接到第二个 Edge
+        username: 'guest',
+        password: 'guest123',
+        rejectUnauthorized: false,
+      });
+
+      const session1 = client1.getStateManager().getSession()?.session;
+      expect(session1).toBeDefined();
+
+      // 本 Edge 用户监听
+      let moveReceivedLocal = false;
+      const movePromiseLocal = new Promise<void>((resolve) => {
+        client2.on('userState', (state: any) => {
+          if (state.session === session1 && state.channel_id === 1) {
+            moveReceivedLocal = true;
+            resolve();
+          }
+        });
+      });
+
+      // 跨 Edge 用户监听
+      let moveReceivedRemote = false;
+      const movePromiseRemote = new Promise<void>((resolve) => {
+        client3.on('userState', (state: any) => {
+          if (state.session === session1 && state.channel_id === 1) {
+            moveReceivedRemote = true;
+            resolve();
+          }
+        });
+      });
+
+      // 用户1移动到频道1
+      await client1.joinChannel(1);
+
+      // 等待本 Edge 和跨 Edge 用户收到状态更新
+      await Promise.all([
+        Promise.race([movePromiseLocal, new Promise(resolve => setTimeout(resolve, 2000))]),
+        Promise.race([movePromiseRemote, new Promise(resolve => setTimeout(resolve, 2000))])
+      ]);
+
+      expect(moveReceivedLocal).toBe(true);
+      expect(moveReceivedRemote).toBe(true);
+
+      await client1.disconnect();
+      await client2.disconnect();
+      await client3.disconnect();
     });
 
-    it('should have user-related message types', () => {
-      expect(MessageType.UserRemove).toBeDefined();
-      expect(MessageType.UserState).toBeDefined();
+    it('should handle channel permissions', () => {
+      // 测试频道权限检查逻辑
+      const channelPerms = PermissionFlag.Write | PermissionFlag.Traverse;
+      const userPerms = PermissionFlag.Enter | PermissionFlag.Speak;
+      
+      // 检查用户是否有进入频道的权限
+      const canEnter = (channelPerms & PermissionFlag.Traverse) && (userPerms & PermissionFlag.Enter);
+      expect(canEnter).toBeTruthy();
+      
+      // 检查用户是否有在频道说话的权限
+      const canSpeak = userPerms & PermissionFlag.Speak;
+      expect(canSpeak).toBeTruthy();
     });
   });
 });

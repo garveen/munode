@@ -41,6 +41,7 @@ export class ConnectionManager {
   private state: ConnectionState = ConnectionState.Disconnected;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private pingTimer: NodeJS.Timeout | null = null;
+  private receiveBuffer: Buffer = Buffer.alloc(0);
 
   constructor(client: MumbleClient) {
     this.client = client;
@@ -72,7 +73,7 @@ export class ConnectionManager {
 
       this.tcpSocket = tls.connect(tlsOptions);
 
-      this.tcpSocket.on('connect', () => {
+      this.tcpSocket.on('secureConnect', () => {
         this.setState(ConnectionState.Connected);
         resolve();
       });
@@ -93,6 +94,7 @@ export class ConnectionManager {
       this.tcpSocket.on('close', () => {
         this.setState(ConnectionState.Disconnected);
         this.tcpSocket = null;
+        this.receiveBuffer = Buffer.alloc(0); // 清空接收缓冲区
       });
     });
   }
@@ -154,7 +156,7 @@ export class ConnectionManager {
    * 发送 TCP 消息
    */
   async sendTCP(message: Buffer): Promise<void> {
-    if (!this.tcpSocket || this.state !== ConnectionState.Ready) {
+    if (!this.tcpSocket || (this.state !== ConnectionState.Connected && this.state !== ConnectionState.Ready)) {
       throw new Error('Not connected');
     }
     
@@ -200,21 +202,30 @@ export class ConnectionManager {
    * 处理接收到的 TCP 消息
    */
   private handleTCPMessage(data: Buffer): void {
-    if (data.length < 6) {
-      return; // 消息太短
+    // 将新数据追加到接收缓冲区
+    this.receiveBuffer = Buffer.concat([this.receiveBuffer, data]);
+    
+    // 循环处理缓冲区中的所有完整消息
+    while (this.receiveBuffer.length >= 6) {
+      // 读取消息头
+      const type = this.receiveBuffer.readUInt16BE(0);
+      const length = this.receiveBuffer.readUInt32BE(2);
+      
+      // 检查是否有完整的消息
+      if (this.receiveBuffer.length < 6 + length) {
+        // 数据不完整，等待更多数据
+        break;
+      }
+      
+      // 提取消息负载
+      const payload = this.receiveBuffer.subarray(6, 6 + length);
+      
+      // 处理消息
+      this.routeMessage(type, payload);
+      
+      // 从缓冲区移除已处理的消息
+      this.receiveBuffer = this.receiveBuffer.subarray(6 + length);
     }
-    
-    const type = data.readUInt16BE(0);
-    const length = data.readUInt32BE(2);
-    
-    if (data.length < 6 + length) {
-      return; // 数据不完整
-    }
-    
-    const payload = data.subarray(6, 6 + length);
-    
-    // 根据消息类型路由到相应处理器
-    this.routeMessage(type, payload);
   }
 
   /**

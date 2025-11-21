@@ -4,7 +4,7 @@ import { TLSSocket, createServer as createTLSServer, type Server as TLSServer } 
 import { logger } from '@munode/common';
 import { EdgeConfig } from '../types.js';
 import { EdgeClusterManager } from '../cluster/cluster-manager.js';
-import { VoiceUDPTransport } from '@munode/protocol/src/voice/voice-udp-transport.js';
+import { VoiceUDPTransport } from '@munode/protocol';
 import { HandlerFactory } from './handler-factory.js';
 import { VoiceManager } from '../managers/voice-manager.js';
 

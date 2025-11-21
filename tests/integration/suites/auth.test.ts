@@ -17,8 +17,12 @@ describe('Authentication Integration Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {
-    testEnv = await setupTestEnvironment();
-  }, 60000);
+    testEnv = await setupTestEnvironment(8080, { 
+      startHub: false, 
+      startEdge: false, 
+      startAuth: true 
+    });
+  }, 5000); // 减少超时时间
 
   afterAll(async () => {
     await testEnv?.cleanup();

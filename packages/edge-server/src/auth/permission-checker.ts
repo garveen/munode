@@ -1,5 +1,5 @@
 import { logger } from '@munode/common';
-import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
+import { mumbleproto } from '@munode/protocol';
 import { MessageType, Permission } from '@munode/protocol';
 import type { ClientInfo, ChannelInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';

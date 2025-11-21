@@ -4,7 +4,7 @@ import { EdgeConfig, ClientInfo, ChannelInfo, ServerStats } from '../types.js';
 import { GeoIPManager } from '../util/geoip-manager.js';
 import { UserCache } from '../state/user-cache.js';
 import { EdgeClusterManager } from '../cluster/cluster-manager.js';
-import { VoiceUDPTransport } from '@munode/protocol/src/voice/voice-udp-transport.js';
+import { VoiceUDPTransport } from '@munode/protocol';
 import { HandlerFactory } from './handler-factory.js';
 import { EdgeControlClient } from '../cluster/hub-client.js';
 import { ServerLifecycleManager } from './lifecycle-manager.js';

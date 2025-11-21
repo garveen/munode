@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import { logger } from '@munode/common';
 import { ClientInfo } from '../types.js';
-import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
+import { mumbleproto } from '@munode/protocol';
 
 /**
  * 上下文动作管理器 - 实现右键菜单系统 (Context Actions)

@@ -1,5 +1,5 @@
 import { logger } from '@munode/common';
-import { VoiceUDPTransport } from '@munode/protocol/src/voice/voice-udp-transport.js';
+import { VoiceUDPTransport } from '@munode/protocol';
 import { HandlerFactory } from '../core/handler-factory.js';
 import { EdgeConfig } from '../types.js';
 

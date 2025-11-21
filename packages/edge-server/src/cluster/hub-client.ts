@@ -5,12 +5,12 @@ import type {
   RPCParams,
   RPCResult,
   EdgeToHubMethods,
-} from '@munode/protocol/src/rpc/rpc-types.js';
+} from '@munode/protocol';
 import type {
   ServerStats,
   ChannelData,
   ACLData,
-} from '@munode/protocol/src/hub-edge-types.js';
+} from '@munode/protocol';
 import type { EdgeConfig } from '../types.js';
 
 const logger = createLogger({ service: 'edge-control-client' });

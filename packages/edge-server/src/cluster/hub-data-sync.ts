@@ -1,6 +1,6 @@
 import { logger } from '@munode/common';
 import { MessageType } from '@munode/protocol';
-import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
+import { mumbleproto } from '@munode/protocol';
 import { HandlerFactory } from '../core/handler-factory.js';
 import { EdgeControlClient } from './hub-client.js';
 import { ChannelInfo } from '../types.js';
@@ -151,13 +151,7 @@ export class HubDataManager {
 
       logger.info(`User left notification from Hub: ${username || 'unknown'} (session ${session_id}) from Edge ${edge_id}`);
 
-      // 如果是本Edge的用户，Hub的通知只是确认，不需要处理
-      if (edge_id === this.handlerFactory.config.server_id) {
-        logger.debug('Ignoring userLeft notification for local user');
-        return;
-      }
-
-      // 从状态管理器中移除远程用户
+      // 从状态管理器中移除远程用户（即使是本Edge的用户，也需要从远程用户列表中移除）
       if (this.handlerFactory.stateManager) {
         this.handlerFactory.stateManager.removeRemoteUser(session_id);
       }

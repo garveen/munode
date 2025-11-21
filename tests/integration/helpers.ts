@@ -5,6 +5,9 @@
 import * as tls from 'tls';
 import * as fs from 'fs';
 import { join } from 'path';
+import { mumbleproto } from '@munode/protocol';
+import { MessageType } from './fixtures';
+import { MumbleClient } from '../../../packages/client/dist/index.js';
 
 export interface MumbleConnection {
   socket: tls.TLSSocket;
@@ -73,11 +76,12 @@ export async function createMumbleConnection(
  * 读取测试用的证书文件
  */
 export function loadTestCerts(): { cert: Buffer; key: Buffer; ca?: Buffer } {
-  const certsDir = join(__dirname, '../../certs');
+  const certsDir = join(__dirname, 'certs');
   
   return {
-    cert: fs.readFileSync(join(certsDir, 'cert.pem')),
-    key: fs.readFileSync(join(certsDir, 'key.pem')),
+    cert: fs.readFileSync(join(certsDir, 'server.pem')),
+    key: fs.readFileSync(join(certsDir, 'server.key')),
+    ca: fs.readFileSync(join(certsDir, 'ca.pem')),
   };
 }
 
@@ -144,4 +148,82 @@ export function assertPartialMatch<T extends object>(
       );
     }
   }
+}
+
+/**
+ * 使用 MumbleClient 创建连接并认证
+ */
+export async function createAuthenticatedClient(
+  host: string,
+  port: number,
+  username: string,
+  password: string
+): Promise<any> {
+  // 动态导入以避免构建依赖问题
+  const { MumbleClient } = await import('../../../packages/client/dist/index.js');
+  
+  const client = new MumbleClient();
+  
+  await client.connect({
+    host,
+    port,
+    username,
+    password,
+  });
+  
+  // 等待连接和认证完成
+  await new Promise<void>((resolve, reject) => {
+    const onConnected = () => {
+      client.off('connected', onConnected);
+      resolve();
+    };
+    
+    const onError = (error: any) => {
+      client.off('error', onError);
+      reject(error);
+    };
+    
+    client.on('connected', onConnected);
+    client.on('error', onError);
+    
+    // 超时
+    setTimeout(() => {
+      client.off('connected', onConnected);
+      client.off('error', onError);
+      reject(new Error('Connection timeout'));
+    }, 10000);
+  });
+  
+  return client;
+}
+
+/**
+ * 认证 Mumble 连接 (低级 API)
+ */
+export async function authenticateConnection(
+  connection: MumbleConnection,
+  username: string,
+  password: string
+): Promise<number> {
+  // 创建认证消息
+  const auth = mumbleproto.Authenticate.fromObject({
+    username,
+    password,
+    tokens: [],
+    celt_versions: [0x8000000b],
+    opus: true,
+  });
+
+  // 发送认证消息
+  const authData = Buffer.from(auth.serialize());
+  connection.send(MessageType.Authenticate, authData);
+
+  // 等待服务器同步消息
+  const response = await connection.receive();
+  if (response.type !== MessageType.ServerSync) {
+    throw new Error(`Expected ServerSync, got message type ${response.type}`);
+  }
+
+  const serverSync = mumbleproto.ServerSync.deserialize(response.data);
+  return serverSync.session;
 }

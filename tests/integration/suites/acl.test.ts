@@ -17,7 +17,7 @@ describe('ACL and Permissions Integration Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {
-    testEnv = await setupTestEnvironment();
+    testEnv = await setupTestEnvironment(8081);
   }, 60000);
 
   afterAll(async () => {
@@ -88,28 +88,126 @@ describe('ACL and Permissions Integration Tests', () => {
     });
   });
 
-  describe('Permission Validation', () => {
-    it('should validate basic permission checks', () => {
-      const hasPermission = (userPerms: number, required: PermissionFlag): boolean => {
-        return (userPerms & required) !== 0;
-      };
+  describe('ACL Inheritance', () => {
+    it('should collect inherited ACLs correctly', () => {
+      // 模拟频道结构
+      const channels = new Map();
+      channels.set(0, { id: 0, name: 'Root', parent_id: undefined, inherit_acl: true });
+      channels.set(1, { id: 1, name: 'Parent', parent_id: 0, inherit_acl: true });
+      channels.set(2, { id: 2, name: 'Child', parent_id: 1, inherit_acl: true });
+      channels.set(3, { id: 3, name: 'NoInherit', parent_id: 1, inherit_acl: false });
+      channels.set(4, { id: 4, name: 'GrandChild', parent_id: 3, inherit_acl: true });
 
-      const userPerms = PermissionFlag.Enter | PermissionFlag.Speak;
-      
-      expect(hasPermission(userPerms, PermissionFlag.Enter)).toBe(true);
-      expect(hasPermission(userPerms, PermissionFlag.Speak)).toBe(true);
-      expect(hasPermission(userPerms, PermissionFlag.Kick)).toBe(false);
+      // 模拟ACL映射
+      const aclMap = new Map();
+      aclMap.set(0, [
+        { applyHere: true, applySubs: true, userId: 1, allow: 0x1, deny: 0x0 }
+      ]);
+      aclMap.set(1, [
+        { applyHere: true, applySubs: true, group: 'admin', allow: 0xff, deny: 0x0 }
+      ]);
+      aclMap.set(2, [
+        { applyHere: true, applySubs: false, userId: 2, allow: 0x4, deny: 0x0 }
+      ]);
+      aclMap.set(3, [
+        { applyHere: true, applySubs: true, userId: 3, allow: 0x8, deny: 0x0 }
+      ]);
+
+      // 测试函数：构建频道链并收集继承的ACL
+      function collectInheritedACLs(channelId: number) {
+        const channel = channels.get(channelId);
+        if (!channel) return [];
+
+        const channelsInChain = [];
+        let iter = channel;
+        
+        while (iter) {
+          channelsInChain.unshift(iter);
+          
+          if ((iter.id === channel.id || iter.inherit_acl !== false) && 
+              iter.parent_id !== undefined && 
+              iter.parent_id >= 0) {
+            iter = channels.get(iter.parent_id);
+          } else {
+            break;
+          }
+        }
+
+        const allACLs = [];
+        for (const iterChannel of channelsInChain) {
+          const channelACLs = aclMap.get(iterChannel.id) || [];
+          
+          for (const aclEntry of channelACLs) {
+            if (iterChannel.id === channel.id || aclEntry.applySubs) {
+              allACLs.push({
+                applyHere: aclEntry.applyHere,
+                applySubs: aclEntry.applySubs,
+                inherited: iterChannel.id !== channel.id,
+                userId: aclEntry.userId,
+                group: aclEntry.group,
+                grant: aclEntry.allow,
+                deny: aclEntry.deny,
+                fromChannel: iterChannel.name
+              });
+            }
+          }
+        }
+
+        return allACLs;
+      }
+
+      // 测试用例1：查询子频道(ID=2)的ACL，应该包含从Root和Parent继承的ACL
+      const childACLs = collectInheritedACLs(2);
+      expect(childACLs.length).toBe(3);
+      expect(childACLs[0].inherited).toBe(true);
+      expect(childACLs[1].inherited).toBe(true);
+      expect(childACLs[2].inherited).toBe(false);
+
+      // 测试用例2：查询不继承ACL的频道(ID=3)
+      const noInheritACLs = collectInheritedACLs(3);
+      expect(noInheritACLs.length).toBeGreaterThan(0);
+
+      // 测试用例3：查询父频道(ID=1)的ACL
+      const parentACLs = collectInheritedACLs(1);
+      expect(parentACLs.length).toBe(2);
+      expect(parentACLs[0].inherited).toBe(true);
+      expect(parentACLs[1].inherited).toBe(false);
+
+      // 测试用例4：applySubs 为 false 的ACL不应该被子频道继承
+      const childOwnACL = aclMap.get(2)[0];
+      expect(childOwnACL.applySubs).toBe(false);
+
+      // 测试用例5：GrandChild频道
+      const grandChildACLs = collectInheritedACLs(4);
+      expect(grandChildACLs.length).toBe(1);
+      expect(grandChildACLs[0].fromChannel).toBe('NoInherit');
+      expect(grandChildACLs[0].inherited).toBe(true);
     });
 
-    it('should validate multiple required permissions', () => {
-      const hasAllPermissions = (userPerms: number, required: number[]): boolean => {
-        return required.every(perm => (userPerms & perm) !== 0);
-      };
-
-      const userPerms = PermissionFlag.Enter | PermissionFlag.Speak | PermissionFlag.TextMessage;
+    it('should handle permission inheritance with bitwise operations', () => {
+      // 测试权限继承的位运算
+      const parentPerms = PermissionFlag.Write | PermissionFlag.Traverse;
+      const childPerms = PermissionFlag.Enter | PermissionFlag.Speak;
       
-      expect(hasAllPermissions(userPerms, [PermissionFlag.Enter, PermissionFlag.Speak])).toBe(true);
-      expect(hasAllPermissions(userPerms, [PermissionFlag.Enter, PermissionFlag.Kick])).toBe(false);
+      // 子权限应该继承父权限
+      const effectivePerms = parentPerms | childPerms;
+      
+      expect(effectivePerms & PermissionFlag.Write).toBeTruthy();
+      expect(effectivePerms & PermissionFlag.Traverse).toBeTruthy();
+      expect(effectivePerms & PermissionFlag.Enter).toBeTruthy();
+      expect(effectivePerms & PermissionFlag.Speak).toBeTruthy();
+    });
+
+    it('should deny permissions correctly', () => {
+      // 测试权限拒绝
+      const allowPerms = PermissionFlag.Write | PermissionFlag.Traverse | PermissionFlag.Enter;
+      const denyPerms = PermissionFlag.Write; // 拒绝写权限
+      
+      const effectivePerms = allowPerms & ~denyPerms;
+      
+      expect(effectivePerms & PermissionFlag.Write).toBe(0);
+      expect(effectivePerms & PermissionFlag.Traverse).toBeTruthy();
+      expect(effectivePerms & PermissionFlag.Enter).toBeTruthy();
     });
   });
 });

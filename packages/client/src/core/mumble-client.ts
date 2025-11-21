@@ -221,7 +221,7 @@ export class MumbleClient extends EventEmitter {
   }
 
   /**
-   * 设置自我耳聋
+   * 设置自我禁听
    */
   async setSelfDeaf(deaf: boolean): Promise<void> {
     const userStateMessage = mumbleproto.UserState.fromObject({

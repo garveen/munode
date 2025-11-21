@@ -46,7 +46,8 @@ process.env.LOG_LEVEL = logLevel;
 console.log(logLevel);
 
 import { HubServer } from '../../packages/hub-server/src/hub-server.js';
-import { EdgeServer } from '../../packages/edge-server/src/edge-server.js';
+
+import { EdgeServer } from '../../packages/edge-server/src/index.js';
 import type { HubConfig } from '../../packages/hub-server/src/types.js';
 import type { EdgeConfig } from '../../packages/edge-server/src/types.js';
 import { createLogger, setGlobalLogLevel } from '@munode/common';

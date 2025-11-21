@@ -114,6 +114,7 @@ export type {
   RPCResponse,
   ChannelData,
   ACLData,
+  BanData,
   ChannelsResponse,
   ACLsResponse,
   SaveChannelResponse,

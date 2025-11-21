@@ -1,6 +1,6 @@
 import type { Socket as UDPSocket } from 'dgram';
 import type { TLSConfig } from '@munode/common';
-import { mumbleproto } from '@munode/protocol/src/generated/proto/Mumble.js';
+import { mumbleproto } from '@munode/protocol';
 import type { EdgeInfo, ChannelUserMap } from '@munode/protocol';
 
 // 从 protocol 包导入共享类型并重新导出供本地使用
