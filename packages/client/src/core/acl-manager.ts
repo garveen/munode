@@ -67,7 +67,9 @@ export class ACLManager {
     // 发送 ACL 查询消息
     const aclMessage = mumbleproto.ACL.fromObject({
       channel_id: channelId,
-      query: true
+      query: true,
+      groups: [], // 提供空数组避免 fromObject 错误
+      acls: [] // 提供空数组避免 fromObject 错误
     });
 
     const serialized = aclMessage.serialize();
@@ -126,7 +128,22 @@ export class ACLManager {
    * 保存 ACL
    */
   async saveACL(channelId: number, acls: ACLEntry[], groups?: Map<string, ChannelGroup>): Promise<number[]> {
-    // 构建 ACL 消息
+    // 构建组对象数组
+    const groupObjects: any[] = [];
+    if (groups) {
+      for (const [name, group] of groups) {
+        groupObjects.push({
+          name: name,
+          inherited: group.inherited,
+          inheritable: group.inheritable,
+          add: group.add,
+          remove: group.remove,
+          inherited_members: group.inherited_members
+        });
+      }
+    }
+
+    // 构建 ACL 消息 - 确保 groups 和 acls 总是有值
     const aclMessage = mumbleproto.ACL.fromObject({
       channel_id: channelId,
       inherit_acls: true, // 客户端默认继承
@@ -139,24 +156,9 @@ export class ACLManager {
         grant: acl.allow,
         deny: acl.deny
       })),
+      groups: groupObjects, // 总是提供数组（可能为空）
       query: false
     });
-
-    // 添加组信息
-    if (groups) {
-      const groupObjects: any[] = [];
-      for (const [name, group] of groups) {
-        groupObjects.push({
-          name: name,
-          inherited: group.inherited,
-          inheritable: group.inheritable,
-          add: group.add,
-          remove: group.remove,
-          inherited_members: group.inherited_members
-        });
-      }
-      aclMessage.groups = groupObjects;
-    }
 
     const serialized = aclMessage.serialize();
     const wrappedMessage = this.client.getConnectionManager().wrapMessage(MessageType.ACL, serialized);

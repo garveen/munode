@@ -31,8 +31,9 @@ export class GeoIPManager extends EventEmitter {
       this.reader = await Reader.open('./data/GeoLite2-City.mmdb');
       this.logger.info('GeoIP database loaded successfully');
     } catch (error) {
-      this.logger.error('Failed to load GeoIP database:', error);
-      throw error;
+      this.logger.warn('Failed to load GeoIP database (optional feature):', error);
+      // Don't throw error - GeoIP is optional and server can work without it
+      this.logger.info('GeoIPManager will continue without database');
     }
   }
 

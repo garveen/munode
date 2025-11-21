@@ -1,0 +1,70 @@
+{
+  "server_id": 1,
+  "name": "MuNode Edge Server #1 (Test)",
+  "mode": "cluster",
+  "network": {
+    "host": "0.0.0.0",
+    "port": 10080
+  },
+  "server": {
+    "name": "MuNode Edge Server (Test)",
+    "serverId": 1,
+    "welcomeText": "Welcome to MuNode Test Server!",
+    "maxBandwidth": 72000,
+    "maxUsers": 1000,
+    "maxTextMessageLength": 5000,
+    "maxImageMessageLength": 131072,
+    "allowHtml": true,
+    "allowGuest": false,
+    "certRequired": false,
+    "hideCertHashes": false,
+    "defaultChannel": 0
+  },
+  "region": "test",
+  "capacity": 1000,
+  "tls": {
+    "cert": "./tests/integration/certs/server.pem",
+    "key": "./tests/integration/certs/server.key",
+    "ca": "./tests/integration/certs/ca.pem",
+    "requireClientCert": false,
+    "rejectUnauthorized": false
+  },
+  "hubServer": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 9080,
+    "controlPort": 11080,
+    "tls": {
+      "cert": "./tests/integration/certs/server.pem",
+      "key": "./tests/integration/certs/server.key",
+      "ca": "./tests/integration/certs/ca.pem",
+      "requireClientCert": false,
+      "rejectUnauthorized": false
+    },
+    "heartbeatInterval": 10,
+    "reconnectInterval": 5
+  },
+  "auth": {
+    "apiUrl": "http://127.0.0.1:8080/auth",
+    "timeout": 5000,
+    "retry": 3,
+    "insecure": true,
+    "cacheTTL": 300,
+    "userCachePath": "./data/users-test.json",
+    "pullInterval": 3600,
+    "trackSessions": true,
+    "allowCacheFallback": true
+  },
+  "requiredGroups": [],
+  "udp": {
+    "enabled": true,
+    "bufferSize": 1024,
+    "stabilityCheck": {
+      "enabled": false
+    }
+  },
+  "ban": {
+    "enabled": false
+  },
+  "logLevel": "info"
+}

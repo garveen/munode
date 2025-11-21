@@ -126,6 +126,13 @@ export class EventSetupManager {
       }
     });
 
+    // PluginDataTransmission 事件
+    this.handlerFactory.messageHandler.on('pluginDataTransmission', (session_id: number, data: Buffer) => {
+      if (this.handlerFactory.messageHandlers) {
+        this.handlerFactory.messageHandlers.handlePluginDataTransmission(session_id, data);
+      }
+    });
+
     // PermissionQuery 事件
     this.handlerFactory.messageHandler.on('permissionQuery', (session_id: number, data: Buffer) => {
       if (this.handlerFactory.permissionHandlers) {
@@ -395,6 +402,9 @@ export class EventSetupManager {
         } else if (message.method === 'hub.textMessageBroadcast') {
           // TextMessage广播处理
           this.handlerFactory.hubMessageHandlers.handleTextMessageBroadcastFromHub(message.params);
+        } else if (message.method === 'hub.pluginDataBroadcast') {
+          // PluginData广播处理
+          this.handlerFactory.hubMessageHandlers.handlePluginDataBroadcastFromHub(message.params);
         } else if (message.method === 'edge.aclUpdated') {
           // ACL更新通知 - 触发权限刷新
           this.handlerFactory.hubMessageHandlers.handleACLUpdatedNotification(message.params);

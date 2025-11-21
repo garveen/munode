@@ -107,8 +107,7 @@ export class MessageHandler extends EventEmitter {
           this.handleSuggestConfig(session_id, messageData);
           break;
         case MessageType.PluginDataTransmission:
-          // Plugin data transmission - currently not supported
-          this.logger.debug(`PluginDataTransmission received from session ${session_id} - ignoring`);
+          this.handlePluginDataTransmission(session_id, messageData);
           break;
         default:
           this.logger.warn(`Unknown message type: ${messageType}`);
@@ -216,6 +215,13 @@ export class MessageHandler extends EventEmitter {
    */
   private handleTextMessage( session_id: number, data: Buffer): void {
     this.emit('textMessage', session_id, data);
+  }
+
+  /**
+   * 处理插件数据传输
+   */
+  private handlePluginDataTransmission(session_id: number, data: Buffer): void {
+    this.emit('pluginDataTransmission', session_id, data);
   }
 
   /**

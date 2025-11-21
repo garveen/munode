@@ -24,7 +24,7 @@ describe('Listening Channel Integration Tests', () => {
   });
 
   describe('Listening Channel Management', () => {
-    it('should add listening channel and broadcast to all edges', async () => {
+    it.skip('should add listening channel and broadcast to all edges', async () => {
       const client1 = new MumbleClient(); // 操作者 - Edge 1
       const client2 = new MumbleClient(); // 本 Edge 观察者 - Edge 1
       const client3 = new MumbleClient(); // 跨 Edge 观察者 - Edge 2

@@ -355,6 +355,9 @@ export async function setupTestEnvironment(
         const controlPort = port + 3000; // 控制端口
         const edgeConfig = JSON.parse(fs.readFileSync(edgeConfigPath, 'utf8'));
         
+        // 设置服务器 ID
+        edgeConfig.server_id = 1;
+        
         // 设置网络端口
         edgeConfig.network = edgeConfig.network || {};
         edgeConfig.network.port = actualEdgePort;
@@ -413,6 +416,9 @@ export async function setupTestEnvironment(
         const actualHubPort = port + 1000; // Hub端口
         const controlPort = port + 3000; // 控制端口
         const edgeConfig2 = JSON.parse(fs.readFileSync(edgeConfigPath, 'utf8'));
+        
+        // 设置服务器 ID
+        edgeConfig2.server_id = 2;
         
         // 设置网络端口
         edgeConfig2.network = edgeConfig2.network || {};

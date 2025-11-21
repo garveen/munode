@@ -147,6 +147,10 @@ export class HubControlService {
         this.handleTextMessageNotification(params);
         break;
 
+      case 'hub.handlePluginDataTransmission':
+        this.handlePluginDataTransmissionNotification(params);
+        break;
+
       default:
         logger.debug(`Unknown notification method: ${method}`);
     }
@@ -1316,6 +1320,75 @@ export class HubControlService {
       logger.info(`Broadcasted TextMessage from ${actor_username} to ${targetSessions.length} users across ${targetSessionsByEdge.size} edges`);
     } catch (error) {
       logger.error('Error handling TextMessage notification:', error);
+    }
+  }
+
+  private async handlePluginDataTransmissionNotification(params: any): Promise<void> {
+    try {
+      const { edge_id, actor_session, actor_username, pluginData } = params;
+
+      logger.info(`Hub received PluginDataTransmission from Edge ${edge_id}, actor: ${actor_username}(${actor_session})`);
+
+      // 获取actor会话
+      const actorSession = this._sessionManager.getSession(actor_session);
+      if (!actorSession) {
+        logger.warn(`Actor session ${actor_session} not found in Hub`);
+        return;
+      }
+
+      // 目标会话列表
+      const targetSessions: number[] = [];
+      const targetSessionsByEdge = new Map<number, number[]>(); // edge_id -> session_ids
+
+      // 1. 处理直接指定的接收者
+      if (pluginData.receiverSessions && pluginData.receiverSessions.length > 0) {
+        for (const targetSession of pluginData.receiverSessions) {
+          const session = this._sessionManager.getSession(targetSession);
+          if (session) {
+            targetSessions.push(targetSession);
+            // 按Edge分组
+            if (!targetSessionsByEdge.has(session.edge_id)) {
+              targetSessionsByEdge.set(session.edge_id, []);
+            }
+            targetSessionsByEdge.get(session.edge_id)!.push(targetSession);
+          }
+        }
+      } else {
+        // 2. 如果没有指定接收者，广播给所有用户（除了发送者）
+        const allSessions = this._sessionManager.getAllSessions();
+        for (const session of allSessions) {
+          if (session.session_id !== actor_session) {
+            targetSessions.push(session.session_id);
+            // 按Edge分组
+            if (!targetSessionsByEdge.has(session.edge_id)) {
+              targetSessionsByEdge.set(session.edge_id, []);
+            }
+            targetSessionsByEdge.get(session.edge_id)!.push(session.session_id);
+          }
+        }
+      }
+
+      if (targetSessions.length === 0) {
+        logger.warn(`PluginDataTransmission from ${actor_username} has no valid targets`);
+        return;
+      }
+
+      // 按Edge广播（每个Edge只发送其本地用户的session列表）
+      for (const [target_edge_id, sessions] of targetSessionsByEdge.entries()) {
+        this.notify(target_edge_id, 'hub.pluginDataBroadcast', {
+          pluginData: {
+            senderSession: pluginData.senderSession,
+            dataID: pluginData.dataID || '',
+            data: pluginData.data || Buffer.alloc(0),
+            receiverSessions: sessions, // 只发送该Edge需要接收的用户列表
+          },
+          target_sessions: sessions,
+        });
+      }
+
+      logger.info(`Broadcasted PluginDataTransmission from ${actor_username} to ${targetSessions.length} users across ${targetSessionsByEdge.size} edges`);
+    } catch (error) {
+      logger.error('Error handling PluginDataTransmission notification:', error);
     }
   }
 
