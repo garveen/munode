@@ -35,12 +35,15 @@ export default defineConfig({
   resolve: {
     alias: {
       '@munode/protocol': path.resolve(__dirname, 'packages/protocol/dist/index.js'),
+      '@munode/common': path.resolve(__dirname, 'packages/common/dist/index.js'),
+      '@munode/hub-server': path.resolve(__dirname, 'packages/hub-server/dist/index.js'),
+      '@munode/edge-server': path.resolve(__dirname, 'packages/edge-server/dist/index.js'),
     },
   },
   optimizeDeps: {
-    include: ['@munode/protocol'],
+    include: ['@munode/protocol', '@munode/common', '@munode/hub-server', '@munode/edge-server'],
   },
   ssr: {
-    noExternal: ['@munode/protocol'],
+    noExternal: ['@munode/protocol', '@munode/common', '@munode/hub-server', '@munode/edge-server'],
   },
 });

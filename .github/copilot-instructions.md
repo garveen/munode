@@ -159,25 +159,12 @@ async function updateUserState(session: number, state: Partial<UserState>) {
 
 ## 测试指导
 
-### 单元测试
-```typescript
-import { describe, it, expect } from 'vitest';
-
-describe('AuthManager', () => {
-  it('should validate correct credentials', async () => {
-    const authManager = new AuthManager(config);
-    const result = await authManager.authenticate('user', 'pass');
-    expect(result.success).toBe(true);
-  });
-});
-```
+*** 只运行集成测试，本项目暂时不设置单元测试 ***
 
 ### 集成测试
 
 #### 运行集成测试
 ```bash
-# 构建项目（必须先构建）
-pnpm build
 
 # 运行所有集成测试
 pnpm test:integration
@@ -193,20 +180,12 @@ pnpm test:integration tests/integration/suites/auth.test.ts
 ```
 
 #### 集成测试结构
-- **测试套件位置**: `tests/integration/suites/`
-  - `auth.test.ts` - 认证和授权测试
-  - `acl.test.ts` - ACL 权限系统测试
-  - `channel.test.ts` - 频道管理测试
-  - `voice.test.ts` - 语音传输测试
-  - `hub-edge.test.ts` - Hub-Edge 通信测试
+
 
 - **旧测试文件位于根目录**: `test-*.js`, `test-*.ts`（可能需要迁移）
 
 #### 集成测试配置
 - 配置文件: `vitest.config.integration.ts`
-- 测试超时: 30秒
-- Hook 超时: 60秒
-- 运行模式: 单进程 (避免端口冲突)
 
 #### 编写集成测试
 ```typescript
