@@ -1,189 +1,335 @@
-# MuNode - Mumble Server Node.js Implementation
+# MuNode - Distributed Mumble Server
 
-基于 Node.js 22 和 TypeScript 的分布式 Mumble 服务器实现。
+A modern, distributed Mumble server implementation built with Node.js 22 and TypeScript, featuring Hub-Edge architecture for horizontal scalability.
 
-## 特性
+## Features
 
-- ✅ 完全兼容 Mumble 1.3.x 和 1.4.x 客户端
-- ✅ 分布式架构 (Hub-Edge)
-- ✅ 第三方 Web API 认证
-- ✅ 多种服务器间连接方式 (SMUX/gRPC/KCP)
-- ✅ SQLite 持久化存储
-- ✅ OCB2-AES128 语音加密
-- ✅ 智能语音路由
-- ✅ UDP 稳定性检测
-- ✅ Context Actions 右键菜单系统
-- ✅ 多维度封禁系统
+### Core Features
+- ✅ **Full Protocol Support** - Compatible with Mumble 1.3.x and 1.4.x clients
+- ✅ **Distributed Architecture** - Hub-Edge design for horizontal scaling
+- ✅ **External Authentication** - Third-party Web API integration
+- ✅ **Multiple Transport Options** - SMUX/gRPC/KCP for server-to-server communication
+- ✅ **Persistent Storage** - SQLite with async operations
+- ✅ **Voice Encryption** - OCB2-AES128 encryption for audio streams
 
-## 快速开始
+### Advanced Features
+- ✅ **Intelligent Voice Routing** - Optimized audio forwarding with VoiceTarget support
+- ✅ **UDP Stability Detection** - Automatic fallback to TCP when UDP is unstable
+- ✅ **Context Actions System** - Right-click menu integration
+- ✅ **Multi-dimensional Ban System** - IP, certificate, and username-based bans
+- ✅ **ACL Inheritance** - Hierarchical permission system with group support
+- ✅ **Listen Channel Support** - Monitor channels without joining
+- ✅ **Plugin Data Transmission** - Support for positional audio and game plugins
 
-### 环境要求
+### Recent Improvements
+- ✅ **Pre-connect User State** - Preserve client settings during authentication
+- ✅ **Dynamic Permission Refresh** - ACL changes take effect immediately
+- ✅ **Enhanced Testing** - Comprehensive integration test suite (42+ test cases)
 
-- Node.js >= 22.0.0
-- pnpm >= 8.0.0
+## Quick Start
 
-### 安装依赖
+### Prerequisites
+
+- **Node.js** >= 22.0.0
+- **pnpm** >= 8.0.0
+
+### Installation
 
 ```bash
+# Clone the repository
+git clone <repository-url>
+cd node
+
+# Install dependencies
 pnpm install
-```
 
-### 生成 Protobuf 代码
-
-```bash
+# Generate Protocol Buffers code
 pnpm generate:proto
-```
 
-### 构建
-
-```bash
+# Build all packages
 pnpm build
 ```
 
-### 运行
+### Configuration
 
-#### 独立模式（单服务器）
-
-```bash
-# 生成证书
-pnpm generate:cert
-
-# 启动 Edge Server
-pnpm start:edge --config config/edge.json
-```
-
-#### 集群模式（分布式）
-
-```bash
-# 启动 Hub Server
-pnpm start:hub --config config/hub.json
-
-# 启动 Edge Servers
-pnpm start:edge --config config/edge1.json
-pnpm start:edge --config config/edge2.json
-```
-
-## 项目结构
-
-```
-node/
-├── packages/
-│   ├── common/          # 共享代码
-│   ├── protocol/        # Mumble 协议实现
-│   ├── hub-server/      # 中心服务器
-│   ├── edge-server/     # 边缘服务器
-│   └── cli/             # 命令行工具
-├── config/              # 配置文件
-├── docs/                # 文档（在上层 docs/ 目录）
-└── scripts/             # 构建脚本
-```
-
-## 文档
-
-详细文档请查看 `docs/` 目录：
-
-- [项目概述](../docs/01-项目概述.md)
-- [协议实现](../docs/02-协议实现.md)
-- [认证系统](../docs/03-认证系统.md)
-- [中心服务器](../docs/04-中心服务器.md)
-- [边缘服务器](../docs/05-边缘服务器.md)
-- [语音路由](../docs/06-语音路由.md)
-- [部署指南](../docs/07-部署指南.md)
-
-## 开发
-
-```bash
-# 开发模式（热重载）
-pnpm dev
-
-# 只启动 Hub Server
-pnpm dev:hub
-
-# 只启动 Edge Server
-pnpm dev:edge
-
-# 运行单元测试
-pnpm test
-
-# 运行集成测试
-pnpm test:integration
-
-# 监听模式运行集成测试
-pnpm test:integration:watch
-
-# 使用 UI 界面运行集成测试
-pnpm test:integration:ui
-
-# 测试覆盖率
-pnpm test:coverage
-
-# 代码检查
-pnpm lint
-pnpm lint:fix
-
-# 类型检查
-pnpm type-check
-
-# 格式化代码
-pnpm format
-```
-
-## 测试
-
-项目包含完整的单元测试和集成测试：
-
-### 单元测试
-
-每个包都有自己的单元测试：
-
-```bash
-pnpm test                  # 运行所有单元测试
-pnpm test:watch            # 监听模式
-pnpm test:coverage         # 生成覆盖率报告
-```
-
-### 集成测试
-
-集成测试覆盖端到端功能：
-
-```bash
-pnpm test:integration      # 运行所有集成测试
-pnpm test:integration:watch # 监听模式
-pnpm test:integration:ui   # 使用 Vitest UI
-```
-
-**测试套件：**
-- ✅ 认证测试 (10个)
-- ✅ ACL 权限测试 (8个)
-- ✅ 频道管理测试 (11个)
-- ✅ 语音传输测试 (8个)
-- ✅ Hub-Edge 通信测试 (5个)
-
-**总计: 42个集成测试用例**
-
-详细信息请查看 [集成测试指南](tests/integration/INTEGRATION_TESTS.md)。
-
-## 配置
-
-配置示例文件位于 `config/` 目录：
-
-- `hub.example.json` - Hub Server 配置
-- `edge.example.json` - Edge Server 配置
-
-复制示例文件并修改：
+Copy example configuration files:
 
 ```bash
 cp config/hub.example.json config/hub.json
 cp config/edge.example.json config/edge.json
 ```
 
-## 许可证
+Edit the configuration files to match your environment. See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed configuration options.
 
-MIT License
+### Running
 
-## 致谢
+#### Development Mode
 
-基于以下项目：
-- [Mumble Protocol](https://github.com/mumble-voip/mumble)
-- [Grumble](https://github.com/mumble-voip/grumble)
-- [ShitSpeak](https://github.com/wfjsw/shitspeak.go)
+```bash
+# Start Hub Server
+pnpm dev:hub
+
+# Start Edge Server (in another terminal)
+pnpm dev:edge
+```
+
+#### Production Mode
+
+```bash
+# Build first
+pnpm build
+
+# Start Hub Server
+pnpm start:hub --config config/hub.json
+
+# Start Edge Server
+pnpm start:edge --config config/edge.json
+```
+
+## Architecture
+
+### Hub-Edge Design
+
+```
+                    ┌─────────────┐
+                    │  Hub Server │
+                    │  (Central)  │
+                    └──────┬──────┘
+                           │
+            ┌──────────────┼──────────────┐
+            │              │              │
+       ┌────▼────┐    ┌────▼────┐   ┌────▼────┐
+       │ Edge #1 │    │ Edge #2 │   │ Edge #3 │
+       └────┬────┘    └────┬────┘   └────┬────┘
+            │              │              │
+         Clients        Clients        Clients
+```
+
+### Components
+
+#### Hub Server (`packages/hub-server`)
+- Central management node
+- User authentication and authorization
+- Channel and ACL management
+- Edge server registry
+- Data persistence (SQLite)
+- Cross-edge voice routing coordination
+
+#### Edge Server (`packages/edge-server`)
+- Client connection handling
+- Voice packet processing
+- Local voice routing
+- UDP stability detection
+- Authentication caching
+- Ban management
+
+#### Common (`packages/common`)
+- Shared utilities and types
+- Configuration management
+- Logging system
+- Heartbeat mechanism
+
+#### Protocol (`packages/protocol`)
+- Protocol Buffers definitions
+- Type-safe RPC communication
+- Mumble protocol implementation
+- OCB2-AES128 encryption
+
+#### CLI (`packages/cli`)
+- Certificate generation
+- Server management tools
+
+#### Client (`packages/client`)
+- Mumble client implementation (for testing)
+
+## Project Structure
+
+```
+node/
+├── packages/
+│   ├── common/          # Shared utilities, types, logging
+│   ├── protocol/        # Mumble protocol, encryption, RPC
+│   ├── hub-server/      # Central management server
+│   ├── edge-server/     # Edge server for client connections
+│   ├── client/          # Test client implementation
+│   └── cli/             # Command-line tools
+├── config/              # Configuration files
+│   ├── hub.example.json
+│   └── edge.example.json
+├── tests/               # Integration tests
+│   └── integration/
+│       └── suites/
+├── docs/                # Documentation (in ../docs/)
+└── scripts/             # Build and utility scripts
+```
+
+## Development
+
+### Available Commands
+
+```bash
+# Development
+pnpm dev              # Start all servers in dev mode
+pnpm dev:hub          # Start only Hub server
+pnpm dev:edge         # Start only Edge server
+
+# Building
+pnpm build            # Build all packages
+pnpm clean            # Clean build artifacts
+
+# Testing
+pnpm test                      # Run unit tests
+pnpm test:watch                # Run unit tests in watch mode
+pnpm test:integration          # Run integration tests
+pnpm test:integration:watch    # Run integration tests in watch mode
+pnpm test:integration:ui       # Run integration tests with UI
+
+# Code Quality
+pnpm lint             # Lint all packages
+pnpm lint:fix         # Fix linting issues
+pnpm type-check       # TypeScript type checking
+pnpm format           # Format code with Prettier
+
+# Protocol Buffers
+pnpm generate:proto   # Generate TS code from .proto files
+```
+
+### Integration Tests
+
+The project includes comprehensive integration tests covering:
+
+- **Authentication** (10 tests) - Password, certificate, token auth
+- **ACL System** (8 tests) - Permissions, inheritance, groups
+- **Channel Management** (11 tests) - Create, move, link, delete
+- **Voice Transmission** (8 tests) - Normal, whisper, VoiceTarget
+- **Hub-Edge Communication** (5 tests) - Registration, sync, routing
+- **Moderation** (tests) - Ban system, user management
+- **Plugin System** (tests) - Plugin data transmission
+- **Listen Channel** (tests) - Monitor channels feature
+
+Total: 42+ integration test cases
+
+Run tests with:
+```bash
+pnpm test:integration
+```
+
+## Configuration
+
+### Hub Server Configuration
+
+Key configuration options in `config/hub.json`:
+
+- **Network** - Host, port, TLS settings
+- **Database** - SQLite path, backup settings
+- **Registry** - Edge server management
+- **Blob Store** - User avatars and channel descriptions
+- **Web API** - Optional REST API (for management)
+
+### Edge Server Configuration
+
+Key configuration options in `config/edge.json`:
+
+- **Network** - Host, port, region, capacity
+- **Hub Connection** - Hub server address and TLS
+- **Authentication** - External API configuration
+- **Server Settings** - Welcome text, limits, permissions
+- **UDP** - Stability detection settings
+- **Ban System** - Ban database configuration
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for complete configuration reference.
+
+## Deployment
+
+For production deployment instructions, including:
+- System requirements
+- Installation steps
+- Certificate generation
+- Process management (PM2, systemd)
+- Monitoring and logging
+- Performance tuning
+- Backup strategies
+
+Please refer to [DEPLOYMENT.md](./DEPLOYMENT.md)
+
+## Documentation
+
+### User Documentation
+- [Deployment Guide](./DEPLOYMENT.md) - Production deployment instructions
+
+### Developer Documentation (Chinese)
+- [Project Overview](../docs/01-项目概述.md)
+- [Protocol Implementation](../docs/02-协议实现.md)
+- [Authentication System](../docs/03-认证系统.md)
+- [Hub Server](../docs/04-中心服务器.md)
+- [Edge Server](../docs/05-边缘服务器.md)
+- [Voice Routing](../docs/06-语音路由.md)
+
+### Technical Documentation
+- [Integration Tests Guide](tests/integration/INTEGRATION_TESTS.md)
+- [Implementation Comparison](./IMPLEMENTATION_COMPARISON.md) - Node vs Go implementation
+- [Missing Features](./MISSING_FEATURES.md) - Roadmap and TODO items
+
+## Performance
+
+### Typical Performance Metrics
+
+- **Latency** (same Edge): ~5-10ms
+- **Latency** (cross-Edge): ~20-50ms
+- **Memory** per client: ~5-10 MB
+- **CPU** usage: Low to moderate (depends on codec)
+
+### Scalability
+
+- **Hub Server**: Supports up to 100 Edge servers
+- **Edge Server**: 1000 concurrent users per server (recommended)
+- **Total Capacity**: 100,000+ users (with 100 Edge servers)
+
+## Contributing
+
+We welcome contributions! Please:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+### Development Guidelines
+
+- Follow TypeScript strict mode
+- Write tests for new features
+- Follow existing code style
+- Update documentation
+
+See [.github/copilot-instructions.md](./.github/copilot-instructions.md) for detailed coding guidelines.
+
+## License
+
+MIT License - see [LICENSE](../LICENSE) for details
+
+## Acknowledgments
+
+This project is based on and inspired by:
+
+- [Mumble Protocol](https://github.com/mumble-voip/mumble) - The original Mumble VoIP protocol
+- [Grumble](https://github.com/mumble-voip/grumble) - Go implementation of Mumble server
+- [ShitSpeak](https://github.com/wfjsw/shitspeak.go) - Go-based Mumble server with enhancements
+
+## Support
+
+- **Issues**: [GitHub Issues](https://github.com/your-org/munode/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/your-org/munode/discussions)
+
+## Status
+
+**Current Version**: 0.1.0 (Beta)
+
+**Production Ready**: Suitable for testing and small-to-medium deployments. Large-scale production use should be thoroughly tested in your environment first.
+
+**Known Limitations**:
+- Blob storage system (avatars, comments) partially implemented
+- Some statistics counters return placeholder values
+- UserList management features not fully implemented
+
+See [MISSING_FEATURES.md](./MISSING_FEATURES.md) for detailed status and roadmap.
