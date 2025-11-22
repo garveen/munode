@@ -14,10 +14,13 @@ build/
 
 # Config files (keep examples)
 config/*.json
+config/*.js
 !config/*.example.json
+!config/*.example.js
 
 # Test config files (keep base test configs, ignore dynamically generated ones)
 tests/config/*-[0-9]*.json
+tests/config/*-[0-9]*.js
 
 # Data and logs
 data/
