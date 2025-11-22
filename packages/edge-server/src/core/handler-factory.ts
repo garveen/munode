@@ -73,7 +73,7 @@ export class HandlerFactory {
     this.channelManager = new ChannelManager(config, logger);
     this.messageHandler = new MessageHandler(config, logger);
     this.voiceRouter = new VoiceRouter(config, logger);
-    this.authManager = new AuthManager(config, logger, userCache);
+    this.authManager = new AuthManager(config, logger, userCache, hubClient);
     this.banManager = new BanManager(config.databasePath, 1024);
     this.contextActions = new ContextActions();
     this.permissionManager = new PermissionManager(logger);

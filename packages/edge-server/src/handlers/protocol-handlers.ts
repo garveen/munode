@@ -21,7 +21,6 @@ export class ProtocolHandlers {
   constructor(private factory: HandlerFactory) {}
 
   private get clientManager() { return this.factory.clientManager; }
-  private get channelManager() { return this.factory.channelManager; }
   private get messageHandler() { return this.factory.messageHandler; }
   private get voiceRouter() { return this.factory.voiceRouter; }
   private get userCache() { return this.factory.userCache; }

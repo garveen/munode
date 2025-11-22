@@ -45,7 +45,6 @@
     "reconnectInterval": 5
   },
   "auth": {
-    "apiUrl": "http://127.0.0.1:8080/auth",
     "timeout": 5000,
     "retry": 3,
     "insecure": true,

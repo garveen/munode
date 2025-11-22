@@ -66,6 +66,36 @@ export interface EdgeAllocateSessionIdMethod {
 }
 
 /**
+ * Edge 请求用户认证
+ */
+export interface EdgeAuthenticateUserMethod {
+  method: 'edge.authenticateUser';
+  params: {
+    server_id: number;
+    username: string;
+    password: string;
+    tokens: string[];
+    client_info: {
+      ip_address: string;
+      ip_version: string; // 'ipv4' or 'ipv6'
+      release: string; // 客户端版本
+      os: string; // 操作系统
+      os_version: string; // 操作系统版本
+      certificate_hash?: string; // 证书哈希
+    };
+  };
+  result: {
+    success: boolean;
+    user_id?: number;
+    username?: string;
+    displayName?: string;
+    groups?: string[];
+    reason?: string;
+    rejectType?: number; // mumbleproto.Reject.RejectType
+  };
+}
+
+/**
  * Edge 上报用户会话
  */
 export interface EdgeReportSessionMethod {
@@ -519,6 +549,7 @@ export type EdgeToHubMethods =
   | EdgeRegisterMethod
   | EdgeHeartbeatMethod
   | EdgeAllocateSessionIdMethod
+  | EdgeAuthenticateUserMethod
   | EdgeReportSessionMethod
   | EdgeSyncVoiceTargetMethod
   | EdgeGetVoiceTargetsMethod

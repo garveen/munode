@@ -76,6 +76,9 @@ export interface HubConfig {
   // 日志配置
   logDays?: number; // 数据库日志保留天数，默认: 31
   
+  // 认证配置
+  auth?: HubAuthConfig;
+  
   tls: TLSConfig;
   registry: RegistryConfig;
   database: DatabaseConfig;
@@ -83,6 +86,27 @@ export interface HubConfig {
   webApi: WebApiConfig;
   logLevel: string;
   logFile?: string;
+}
+
+// Hub 认证配置
+export interface HubAuthConfig {
+  apiUrl?: string; // 外部认证 API 地址
+  apiKey?: string; // API 密钥
+  timeout?: number; // 超时时间（毫秒），默认 5000
+  headers?: {
+    authHeaderName?: string; // 认证头名称，默认 'Authorization'
+    authHeaderFormat?: string; // 认证头格式，默认 'Bearer {apiKey}'
+  };
+  responseFields?: {
+    successField?: string; // 成功标志字段名，默认 'success'
+    userIdField?: string; // 用户ID字段名，默认 'user_id'
+    usernameField?: string; // 用户名字段名，默认 'username'
+    displayNameField?: string; // 显示名字段名，默认 'displayName'
+    groupsField?: string; // 用户组字段名，默认 'groups'
+    reasonField?: string; // 失败原因字段名，默认 'reason' 或 'message'
+  };
+  cacheTTL?: number; // 缓存TTL（毫秒），默认 300000 (5分钟)
+  allowCacheFallback?: boolean; // 是否允许缓存回退，默认 false
 }
 
 // TLS 配置

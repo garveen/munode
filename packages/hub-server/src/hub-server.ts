@@ -11,6 +11,7 @@ import { ChannelManager } from './channel-manager.js';
 import { ACLManager } from './acl-manager.js';
 import { ChannelGroupManager } from './channel-group-manager.js';
 import { BanManager } from './ban-manager.js';
+import { HubAuthManager } from './auth-manager.js';
 import { VoiceUDPTransport } from '@munode/protocol';
 import { validateHubConfig } from './config-validator.js';
 import { applyConfigDefaults } from './config-defaults.js';
@@ -34,6 +35,7 @@ export class HubServer {
   private aclManager!: ACLManager;
   private channelGroupManager!: ChannelGroupManager;
   private banManager!: BanManager;
+  private authManager!: HubAuthManager;
   private blobStore?: BlobStore;
   private voiceTransport?: VoiceUDPTransport;
   private started = false;
@@ -84,6 +86,7 @@ export class HubServer {
     this.sessionManager = new GlobalSessionManager(); // 不再传递 database
     this.voiceTargetSync = new VoiceTargetSyncService(this.sessionManager);
     this.certExchange = new CertificateExchangeService(this.registry);
+    this.authManager = new HubAuthManager(this.config);
 
     // 初始化控制信道服务
     this.controlService = new HubControlService(
@@ -95,7 +98,8 @@ export class HubServer {
       this.database,
       this.aclManager,
       this.channelGroupManager,
-      this.blobStore
+      this.blobStore,
+      this.authManager
     );
 
     // 初始化语音 UDP 传输（如果配置了端口）
