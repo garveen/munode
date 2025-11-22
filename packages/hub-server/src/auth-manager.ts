@@ -213,7 +213,7 @@ export class HubAuthManager {
           }
         }
         body = params.toString();
-        logger.debug(`Auth API request to ${authUrl} (form-urlencoded):`, body);
+        logger.debug(`Auth API request to ${authUrl} (form-urlencoded):`, { body });
       } else {
         // JSON 编码（默认）
         body = JSON.stringify(requestData);
