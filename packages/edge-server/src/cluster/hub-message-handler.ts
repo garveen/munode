@@ -148,20 +148,21 @@ export class HubMessageHandlers {
       const userStateMessage = userState.serialize();
       const allClients = this.clientManager.getAllClients();
       const targetSessions = params.target_sessions; // List of target sessions in Channel Ninja mode
+      const targetSessionsSet = targetSessions ? new Set(targetSessions) : null; // Convert to Set for O(1) lookup
       
       for (const client of allClients) {
         if (client.user_id > 0) {
           // If target_sessions provided, only broadcast to specified sessions
-          if (!targetSessions || targetSessions.includes(client.session)) {
+          if (!targetSessionsSet || targetSessionsSet.has(client.session)) {
             this.messageHandler.sendMessage(client.session, MessageType.UserState, Buffer.from(userStateMessage));
           }
         }
       }
 
-      const broadcasted = targetSessions 
-        ? allClients.filter(c => c.user_id > 0 && targetSessions.includes(c.session)).length
+      const broadcasted = targetSessionsSet 
+        ? allClients.filter(c => c.user_id > 0 && targetSessionsSet.has(c.session)).length
         : allClients.filter(c => c.user_id > 0).length;
-      logger.debug(`Broadcasted UserState to ${broadcasted} local clients${targetSessions ? ' (filtered)' : ''}`);
+      logger.debug(`Broadcasted UserState to ${broadcasted} local clients${targetSessionsSet ? ' (filtered)' : ''}`);
     } catch (error) {
       logger.error('Error handling UserState broadcast from Hub:', error);
     }
@@ -321,10 +322,12 @@ export class HubMessageHandlers {
 
       // Broadcast to all local authenticated clients (if target_sessions provided, only broadcast to these clients)
       const allClients = this.clientManager.getAllClients();
+      const targetSessionsSet = target_sessions ? new Set(target_sessions) : null; // Convert to Set for O(1) lookup
+      
       for (const client of allClients) {
         if (client.user_id > 0) {
           // If target_sessions provided, only broadcast to specified sessions (Channel Ninja mode)
-          if (!target_sessions || target_sessions.includes(client.session)) {
+          if (!targetSessionsSet || targetSessionsSet.has(client.session)) {
             this.messageHandler.sendMessage(client.session, MessageType.UserRemove, Buffer.from(userRemoveMessage));
           }
         }
@@ -342,10 +345,10 @@ export class HubMessageHandlers {
         }
       }
 
-      const broadcasted = target_sessions 
-        ? allClients.filter(c => c.user_id > 0 && target_sessions.includes(c.session)).length
+      const broadcasted = targetSessionsSet 
+        ? allClients.filter(c => c.user_id > 0 && targetSessionsSet.has(c.session)).length
         : allClients.filter(c => c.user_id > 0).length;
-      logger.debug(`Broadcasted UserRemove to ${broadcasted} local clients${target_sessions ? ' (filtered)' : ''}`);
+      logger.debug(`Broadcasted UserRemove to ${broadcasted} local clients${targetSessionsSet ? ' (filtered)' : ''}`);
     } catch (error) {
       logger.error('Error handling UserRemove broadcast from Hub:', error);
     }

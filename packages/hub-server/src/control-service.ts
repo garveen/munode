@@ -541,7 +541,7 @@ export class HubControlService {
             continue; // Skip target user themselves
           }
           
-          const otherUserInfo = HubPermissionChecker.sessionToUserInfo(otherSession, otherSession.channel_id);
+          const otherUserInfo = HubPermissionChecker.sessionToUserInfo(otherSession, otherSession.channel_id ?? 0);
           const canSeeChannel = await this._permissionChecker.canUserSeeChannel(currentChannelId, otherUserInfo);
           
           if (canSeeChannel) {
