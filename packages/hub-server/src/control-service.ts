@@ -151,6 +151,10 @@ export class HubControlService {
         this.handlePluginDataTransmissionNotification(params);
         break;
 
+      case 'hub.handleUserStats':
+        void this.handleUserStatsNotification(params);
+        break;
+
       default:
         logger.debug(`Unknown notification method: ${method}`);
     }
@@ -1389,6 +1393,133 @@ export class HubControlService {
       logger.info(`Broadcasted PluginDataTransmission from ${actor_username} to ${targetSessions.length} users across ${targetSessionsByEdge.size} edges`);
     } catch (error) {
       logger.error('Error handling PluginDataTransmission notification:', error);
+    }
+  }
+
+  /**
+   * 处理UserStats请求通知 - 从Hub获取完整的用户统计信息
+   */
+  private async handleUserStatsNotification(params: any): Promise<void> {
+    try {
+      const { edge_id, actor_session, actor_user_id, target_session, stats_only } = params;
+
+      logger.info(`Hub received UserStats request from Edge ${edge_id}, actor: ${actor_session}, target: ${target_session}`);
+
+      // 获取actor和target会话
+      const actorSession = this._sessionManager.getSession(actor_session);
+      const targetSession = this._sessionManager.getSession(target_session);
+
+      if (!actorSession) {
+        logger.warn(`Actor session ${actor_session} not found in Hub`);
+        this.notify(edge_id, 'hub.userStatsResponse', {
+          actor_session,
+          error: 'Actor session not found',
+        });
+        return;
+      }
+
+      if (!targetSession) {
+        logger.warn(`Target session ${target_session} not found in Hub`);
+        this.notify(edge_id, 'hub.userStatsResponse', {
+          actor_session,
+          error: 'Target session not found',
+        });
+        return;
+      }
+
+      // 权限检查
+      const actorUserInfo = HubPermissionChecker.sessionToUserInfo(actorSession, actorSession.channel_id);
+      
+      // extended权限：自己 或者 有 Register 权限
+      let extended = actor_session === target_session;
+      if (!extended) {
+        const hasRegister = await this._permissionChecker.hasPermission(
+          0, // root channel
+          actorUserInfo,
+          Permission.Register
+        );
+        extended = hasRegister;
+      }
+
+      // 如果没有extended权限，检查是否有进入目标用户频道的权限
+      if (!extended) {
+        const hasEnter = await this._permissionChecker.hasPermission(
+          targetSession.channel_id,
+          actorUserInfo,
+          Permission.Enter
+        );
+        if (!hasEnter) {
+          logger.warn(`Permission denied for UserStats: actor ${actor_session} cannot enter target ${target_session} channel`);
+          this.notify(edge_id, 'hub.userStatsResponse', {
+            actor_session,
+            error: 'Permission denied: Cannot view user stats',
+          });
+          return;
+        }
+      }
+
+      // 构建UserStats响应
+      const now = Math.floor(Date.now() / 1000);
+      const userStats: any = {
+        session: target_session,
+        onlinesecs: now - targetSession.connected_at,
+        idlesecs: now - targetSession.last_active,
+      };
+
+      // details权限：extended 且不是 stats_only 模式
+      const details = extended && !stats_only;
+      
+      if (details) {
+        // 添加证书信息
+        if (targetSession.cert_hash) {
+          userStats.strong_certificate = true;
+          // TODO: 从证书缓存获取完整证书链
+        }
+
+        // 添加IP地址
+        if (targetSession.ip_address) {
+          // 将IP字符串转换为字节数组
+          const ipParts = targetSession.ip_address.split('.');
+          if (ipParts.length === 4) {
+            userStats.address = Buffer.from(ipParts.map(p => parseInt(p, 10)));
+          }
+        }
+      }
+
+      // local权限：extended 或者 同频道
+      const local = extended || targetSession.channel_id === actorSession.channel_id;
+      if (local) {
+        // 添加网络统计信息（从Edge获取）
+        // 这里返回占位数据，实际应该从Edge获取
+        userStats.from_client = {
+          good: 0,
+          late: 0,
+          lost: 0,
+          resync: 0,
+        };
+        userStats.from_server = {
+          good: 0,
+          late: 0,
+          lost: 0,
+          resync: 0,
+        };
+        userStats.udp_packets = 0;
+        userStats.tcp_packets = 0;
+        userStats.udp_ping_avg = 0;
+        userStats.udp_ping_var = 0;
+        userStats.tcp_ping_avg = 0;
+        userStats.tcp_ping_var = 0;
+      }
+
+      // 返回响应给发起请求的Edge
+      this.notify(edge_id, 'hub.userStatsResponse', {
+        actor_session,
+        userStats,
+      });
+
+      logger.info(`Sent UserStats response to Edge ${edge_id} for session ${target_session}`);
+    } catch (error) {
+      logger.error('Error handling UserStats notification:', error);
     }
   }
 

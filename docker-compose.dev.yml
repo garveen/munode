@@ -1,0 +1,85 @@
+version: '3.8'
+
+# 开发环境 Docker Compose 配置
+# 使用方法: docker-compose -f docker-compose.dev.yml up
+
+services:
+  # Hub Server - 开发模式
+  hub-dev:
+    image: node:22-alpine
+    container_name: munode-hub-dev
+    working_dir: /app
+    command: sh -c "corepack enable && corepack prepare pnpm@8.15.4 --activate && pnpm install && pnpm --filter @munode/hub-server dev"
+    ports:
+      - "8443:8443"
+      - "9229:9229"  # Node.js debugger
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/packages/hub-server/node_modules
+      - /app/packages/common/node_modules
+      - /app/packages/protocol/node_modules
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+      - DEBUG=munode:*
+    networks:
+      - munode-dev-network
+
+  # Edge Server - 开发模式
+  edge-dev:
+    image: node:22-alpine
+    container_name: munode-edge-dev
+    working_dir: /app
+    command: sh -c "corepack enable && corepack prepare pnpm@8.15.4 --activate && pnpm install && pnpm --filter @munode/edge-server dev"
+    ports:
+      - "64738:64738/tcp"
+      - "64738:64738/udp"
+      - "9230:9229"  # Node.js debugger (不同端口)
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/packages/edge-server/node_modules
+      - /app/packages/common/node_modules
+      - /app/packages/protocol/node_modules
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+      - DEBUG=munode:*
+      - HUB_HOST=hub-dev
+      - HUB_PORT=8443
+    depends_on:
+      - hub-dev
+    networks:
+      - munode-dev-network
+
+  # Client - 开发模式
+  client-dev:
+    image: node:22-alpine
+    container_name: munode-client-dev
+    working_dir: /app
+    command: sh -c "apk add --no-cache ffmpeg opus opus-dev python3 make g++ && corepack enable && corepack prepare pnpm@8.15.4 --activate && pnpm install && pnpm --filter @munode/client dev"
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+      - "9231:9229"  # Node.js debugger (不同端口)
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/packages/client/node_modules
+      - /app/packages/common/node_modules
+      - /app/packages/protocol/node_modules
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+      - DEBUG=munode:*
+      - EDGE_HOST=edge-dev
+      - EDGE_PORT=64738
+    depends_on:
+      - edge-dev
+    networks:
+      - munode-dev-network
+
+networks:
+  munode-dev-network:
+    driver: bridge

@@ -1,0 +1,141 @@
+version: '3.8'
+
+services:
+  # Hub Server - 中心管理节点
+  hub:
+    build:
+      context: .
+      dockerfile: packages/hub-server/Dockerfile
+    container_name: munode-hub
+    restart: unless-stopped
+    ports:
+      - "8443:8443"  # gRPC for Edge servers
+    volumes:
+      - ./config/hub.json:/app/config/hub.json:ro
+      - ./data/hub.sqlite:/app/data/hub.sqlite
+      - ./data/users.json:/app/data/users.json
+      - ./session:/app/session
+      - ./logs/hub:/app/logs
+    environment:
+      - NODE_ENV=production
+      - LOG_LEVEL=info
+    networks:
+      - munode-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(8443, 'localhost').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Edge Server 1 - 边缘节点（主要）
+  edge-1:
+    build:
+      context: .
+      dockerfile: packages/edge-server/Dockerfile
+    container_name: munode-edge-1
+    restart: unless-stopped
+    ports:
+      - "64738:64738/tcp"  # Mumble TCP
+      - "64738:64738/udp"  # Mumble UDP
+    volumes:
+      - ./config/edge.json:/app/config/edge.json:ro
+      - ./data/GeoLite2-City.mmdb:/app/data/GeoLite2-City.mmdb:ro
+      - ./logs/edge-1:/app/logs
+    environment:
+      - NODE_ENV=production
+      - LOG_LEVEL=info
+      - HUB_HOST=hub
+      - HUB_PORT=8443
+      - EDGE_NAME=edge-1
+    depends_on:
+      hub:
+        condition: service_healthy
+    networks:
+      - munode-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(64738, 'localhost').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Edge Server 2 - 边缘节点（备用/负载均衡）
+  edge-2:
+    build:
+      context: .
+      dockerfile: packages/edge-server/Dockerfile
+    container_name: munode-edge-2
+    restart: unless-stopped
+    ports:
+      - "64739:64738/tcp"  # Mumble TCP (不同主机端口)
+      - "64739:64738/udp"  # Mumble UDP (不同主机端口)
+    volumes:
+      - ./config/edge-2.json:/app/config/edge.json:ro
+      - ./data/GeoLite2-City.mmdb:/app/data/GeoLite2-City.mmdb:ro
+      - ./logs/edge-2:/app/logs
+    environment:
+      - NODE_ENV=production
+      - LOG_LEVEL=info
+      - HUB_HOST=hub
+      - HUB_PORT=8443
+      - EDGE_NAME=edge-2
+    depends_on:
+      hub:
+        condition: service_healthy
+    networks:
+      - munode-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(64738, 'localhost').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    profiles:
+      - full  # 可选服务，使用 --profile full 启动
+
+  # Headless Client - 无头客户端（用于测试/自动化）
+  client:
+    build:
+      context: .
+      dockerfile: packages/client/Dockerfile
+    container_name: munode-client
+    restart: unless-stopped
+    ports:
+      - "3000:3000"  # HTTP API
+      - "3001:3001"  # WebSocket
+    volumes:
+      - ./config/client.json:/app/config/client.json:ro
+      - ./logs/client:/app/logs
+    environment:
+      - NODE_ENV=production
+      - LOG_LEVEL=info
+      - EDGE_HOST=edge-1
+      - EDGE_PORT=64738
+    depends_on:
+      edge-1:
+        condition: service_healthy
+    networks:
+      - munode-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    profiles:
+      - full  # 可选服务
+
+networks:
+  munode-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  hub-data:
+  hub-logs:
+  edge-1-logs:
+  edge-2-logs:
+  client-logs:

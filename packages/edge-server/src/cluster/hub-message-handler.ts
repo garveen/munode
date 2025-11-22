@@ -541,4 +541,75 @@ export class HubMessageHandlers {
       logger.error('Error handling ACL update notification:', error);
     }
   }
+
+  /**
+   * 处理来自Hub的UserStats响应
+   */
+  handleUserStatsResponseFromHub(params: any): void {
+    try {
+      const { actor_session, userStats, error } = params;
+
+      if (error) {
+        logger.warn(`UserStats request from session ${actor_session} failed: ${error}`);
+        // 发送空响应或错误提示
+        return;
+      }
+
+      // 将 Hub 返回的 UserStats 数据发送给请求的客户端
+      logger.debug(`Sending UserStats response to session ${actor_session}`);
+      
+      // 构建 UserStats protobuf 对象
+      const response: any = {
+        session: userStats.session,
+        onlinesecs: userStats.onlinesecs,
+        idlesecs: userStats.idlesecs,
+      };
+
+      // 添加可选字段
+      if (userStats.strong_certificate !== undefined) {
+        response.strong_certificate = userStats.strong_certificate;
+      }
+      if (userStats.address) {
+        response.address = userStats.address;
+      }
+      if (userStats.version) {
+        response.version = new mumbleproto.Version(userStats.version);
+      }
+
+      // 添加网络统计字段（需要转换为 protobuf 对象）
+      if (userStats.from_client) {
+        response.from_client = new mumbleproto.UserStats.Stats(userStats.from_client);
+      }
+      if (userStats.from_server) {
+        response.from_server = new mumbleproto.UserStats.Stats(userStats.from_server);
+      }
+      if (userStats.udp_packets !== undefined) {
+        response.udp_packets = userStats.udp_packets;
+      }
+      if (userStats.tcp_packets !== undefined) {
+        response.tcp_packets = userStats.tcp_packets;
+      }
+      if (userStats.udp_ping_avg !== undefined) {
+        response.udp_ping_avg = userStats.udp_ping_avg;
+      }
+      if (userStats.udp_ping_var !== undefined) {
+        response.udp_ping_var = userStats.udp_ping_var;
+      }
+      if (userStats.tcp_ping_avg !== undefined) {
+        response.tcp_ping_avg = userStats.tcp_ping_avg;
+      }
+      if (userStats.tcp_ping_var !== undefined) {
+        response.tcp_ping_var = userStats.tcp_ping_var;
+      }
+
+      const userStatsMessage = new mumbleproto.UserStats(response);
+      const responseMessage = userStatsMessage.serialize();
+      
+      this.messageHandler.sendMessage(actor_session, MessageType.UserStats, Buffer.from(responseMessage));
+      
+      logger.debug(`Sent UserStats response to session ${actor_session}`);
+    } catch (error) {
+      logger.error('Error handling UserStats response from Hub:', error);
+    }
+  }
 }

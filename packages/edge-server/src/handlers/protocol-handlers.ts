@@ -25,6 +25,7 @@ export class ProtocolHandlers {
   private get messageHandler() { return this.factory.messageHandler; }
   private get voiceRouter() { return this.factory.voiceRouter; }
   private get userCache() { return this.factory.userCache; }
+  private get config() { return this.factory.config; }
 
   /**
    * 处理 Version 消息
@@ -179,7 +180,7 @@ export class ProtocolHandlers {
   /**
    * 处理 UserStats 消息
    */
-  handleUserStats(session_id: number, data: Buffer, hasPermission: (client: ClientInfo, channel: any, perm: Permission) => boolean): void {
+  handleUserStats(session_id: number, data: Buffer, _hasPermission: (client: ClientInfo, channel: any, perm: Permission) => boolean): void {
     try {
       const statsRequest = mumbleproto.UserStats.deserialize(data);
 
@@ -189,84 +190,23 @@ export class ProtocolHandlers {
       }
 
       const actor = this.clientManager.getClient(session_id);
-      const target = this.clientManager.getClient(statsRequest.session);
-
-      if (!actor || !target) {
-        logger.warn(`UserStats for invalid sessions: actor=${session_id}, target=${statsRequest.session}`);
+      if (!actor) {
+        logger.warn(`UserStats request from invalid actor session: ${session_id}`);
         return;
       }
 
-      // 权限检查
-      const rootChannel = this.channelManager.getChannel(0);
-      const extended = actor === target || (rootChannel && hasPermission(actor, rootChannel, Permission.Register));
-
-      if (!extended) {
-        const targetChannel = this.channelManager.getChannel(target.channel_id);
-        if (!targetChannel || !hasPermission(actor, targetChannel, Permission.Enter)) {
-          logger.warn(`Permission denied for UserStats: session ${session_id}`);
-          return;
-        }
-      }
-
-      // 构建响应
-      const response: Partial<mumbleproto.UserStats> & { certificates: Buffer[]; celt_versions: number[] } = {
-        session: target.session,
-        onlinesecs: Math.floor((Date.now() - target.connected_at.getTime()) / 1000),
-        idlesecs: Math.floor((Date.now() - target.last_active.getTime()) / 1000),
-        certificates: [],
-        celt_versions: [],
-      };
-
-      // 详细信息（extended权限）
-      if (extended && !statsRequest.stats_only) {
-        if (target.version || target.client_name || target.os_name) {
-          response.version = new mumbleproto.Version({
-            version: target.version ? parseInt(target.version, 16) : undefined,
-            release: target.client_name || undefined,
-            os: target.os_name || undefined,
-            os_version: target.os_version || undefined,
-          });
-        }
-
-        if (target.cert_hash) {
-          response.strong_certificate = true;
-        }
-
-        response.address = target.ip_address
-          ? Buffer.from(target.ip_address.split('.').map((n) => parseInt(n)))
-          : undefined;
-      }
-
-      // 网络统计
-      const local = extended || target.channel_id === actor.channel_id;
-      if (local) {
-        response.from_client = new mumbleproto.UserStats.Stats({
-          good: 0,
-          late: 0,
-          lost: 0,
-          resync: 0,
-        });
-
-        response.from_server = new mumbleproto.UserStats.Stats({
-          good: 0,
-          late: 0,
-          lost: 0,
-          resync: 0,
-        });
-
-        response.udp_packets = 0;
-        response.tcp_packets = 0;
-        response.udp_ping_avg = 0;
-        response.udp_ping_var = 0;
-        response.tcp_ping_avg = 0;
-        response.tcp_ping_var = 0;
-      }
-
-      // 发送响应
-      const responseMessage = new mumbleproto.UserStats(response).serialize();
-      this.messageHandler.sendMessage(session_id, MessageType.UserStats, Buffer.from(responseMessage));
-
-      logger.debug(`Sent UserStats for session ${target.session} to ${session_id}`);
+      // UserStats 需要从 Hub 获取完整信息（用户数据库、证书、跨Edge会话等）
+      // 发送到 Hub 处理
+      logger.debug(`Forwarding UserStats request to Hub: actor=${session_id}, target=${statsRequest.session}, stats_only=${statsRequest.stats_only}`);
+      
+      // 触发事件，由 event-setup-manager 转发到 Hub
+      this.messageHandler.emit('userStatsForward', {
+        edge_id: this.config.server_id,
+        actor_session: session_id,
+        actor_user_id: actor.user_id,
+        target_session: statsRequest.session,
+        stats_only: statsRequest.stats_only || false,
+      });
     } catch (error) {
       logger.error(`Error handling UserStats for session ${session_id}:`, error);
     }

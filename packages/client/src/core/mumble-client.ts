@@ -531,6 +531,137 @@ export class MumbleClient extends EventEmitter {
   }
 
   /**
+   * 查询封禁列表
+   */
+  async queryBanList(): Promise<void> {
+    const banListMessage = mumbleproto.BanList.fromObject({
+      query: true,
+      bans: []
+    });
+    
+    const serialized = banListMessage.serialize();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.BanList, serialized);
+    await this.connection.sendTCP(wrappedMessage);
+  }
+
+  /**
+   * 更新封禁列表
+   */
+  async updateBanList(bans: any[]): Promise<void> {
+    const banListMessage = mumbleproto.BanList.fromObject({
+      query: false,
+      bans: bans
+    });
+    
+    const serialized = banListMessage.serialize();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.BanList, serialized);
+    await this.connection.sendTCP(wrappedMessage);
+  }
+
+  /**
+   * 请求用户统计信息
+   */
+  async requestUserStats(session: number, statsOnly: boolean = false): Promise<void> {
+    const userStatsMessage = mumbleproto.UserStats.fromObject({
+      session: session,
+      stats_only: statsOnly,
+      certificates: [],
+      celt_versions: []
+    });
+    
+    const serialized = userStatsMessage.serialize();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.UserStats, serialized);
+    await this.connection.sendTCP(wrappedMessage);
+  }
+
+  /**
+   * 查询注册用户
+   */
+  async queryUsers(query: { ids?: number[]; names?: string[] }): Promise<void> {
+    const queryUsersMessage = mumbleproto.QueryUsers.fromObject({
+      ids: query.ids || [],
+      names: query.names || []
+    });
+    
+    const serialized = queryUsersMessage.serialize();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.QueryUsers, serialized);
+    await this.connection.sendTCP(wrappedMessage);
+  }
+
+  /**
+   * 请求大型资源（头像、评论、频道描述）
+   */
+  async requestBlob(request: {
+    sessionTexture?: number[];
+    sessionComment?: number[];
+    channelDescription?: number[];
+  }): Promise<void> {
+    const requestBlobMessage = mumbleproto.RequestBlob.fromObject({
+      session_texture: request.sessionTexture || [],
+      session_comment: request.sessionComment || [],
+      channel_description: request.channelDescription || []
+    });
+    
+    const serialized = requestBlobMessage.serialize();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.RequestBlob, serialized);
+    await this.connection.sendTCP(wrappedMessage);
+  }
+
+  /**
+   * 设置用户头像
+   */
+  async setTexture(texture: Buffer): Promise<void> {
+    const userStateMessage = mumbleproto.UserState.fromObject({
+      texture: texture,
+      temporary_access_tokens: [],
+      listening_channel_add: [],
+      listening_channel_remove: []
+    });
+    
+    const serialized = userStateMessage.serialize();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
+    await this.connection.sendTCP(wrappedMessage);
+  }
+
+  /**
+   * 设置用户评论
+   */
+  async setComment(comment: string): Promise<void> {
+    const userStateMessage = mumbleproto.UserState.fromObject({
+      comment: comment,
+      temporary_access_tokens: [],
+      listening_channel_add: [],
+      listening_channel_remove: []
+    });
+    
+    const serialized = userStateMessage.serialize();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
+    await this.connection.sendTCP(wrappedMessage);
+  }
+
+  /**
+   * 移动到指定频道
+   */
+  async moveToChannel(channelId: number): Promise<void> {
+    // moveToChannel 和 joinChannel 功能相同
+    return this.joinChannel(channelId);
+  }
+
+  /**
+   * 发送语音包
+   */
+  async sendVoice(voicePacket: Buffer): Promise<void> {
+    // 通过 UDPTunnel 发送语音包
+    const udpTunnelMessage = mumbleproto.UDPTunnel.fromObject({
+      packet: voicePacket
+    });
+    
+    const serialized = udpTunnelMessage.serialize();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.UDPTunnel, serialized);
+    await this.connection.sendTCP(wrappedMessage);
+  }
+
+  /**
    * 获取配置
    */
   getConfig(): ClientConfig {

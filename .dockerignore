@@ -1,0 +1,77 @@
+# 依赖
+node_modules
+**/node_modules
+.pnpm-store
+
+# 构建输出
+dist
+**/dist
+*.tsbuildinfo
+
+# 日志
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# 测试
+coverage
+.nyc_output
+test-results
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# 临时文件
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# 文档
+*.md
+!README.md
+docs
+
+# 测试文件
+test-*.js
+test-*.ts
+**/*.test.ts
+**/*.spec.ts
+tests
+
+# 备份
+backups
+*.bak
+
+# 会话数据（开发环境）
+session/*
+!session/.gitkeep
+
+# 数据文件（开发环境）
+data/*.sqlite
+data/*.db
+data/*.json
+!data/GeoLite2-City.mmdb
+
+# 配置示例
+*.example.json

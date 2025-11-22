@@ -170,6 +170,16 @@ export class EventSetupManager {
       this.handlerFactory.protocolHandlers.handleUserStats(session_id, data, hasPermission);
     });
 
+    // userStatsForward 转发事件 - 转发到 Hub 处理
+    this.handlerFactory.messageHandler.on('userStatsForward', (params: any) => {
+      if (this.hubClient) {
+        this.hubClient.notify('hub.handleUserStats', params);
+        logger.debug(`Forwarded UserStats request to Hub: actor=${params.actor_session}, target=${params.target_session}`);
+      } else {
+        logger.error('Cannot forward UserStats: Hub client not available');
+      }
+    });
+
     // VoiceTarget 事件
     this.handlerFactory.messageHandler.on('voiceTarget', (session_id: number, data: Buffer) => {
       this.handlerFactory.protocolHandlers.handleVoiceTarget(session_id, data);
@@ -408,6 +418,9 @@ export class EventSetupManager {
         } else if (message.method === 'edge.aclUpdated') {
           // ACL更新通知 - 触发权限刷新
           this.handlerFactory.hubMessageHandlers.handleACLUpdatedNotification(message.params);
+        } else if (message.method === 'hub.userStatsResponse') {
+          // UserStats 响应
+          this.handlerFactory.hubMessageHandlers.handleUserStatsResponseFromHub(message.params);
         }
       });
     }
