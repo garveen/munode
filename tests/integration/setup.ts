@@ -71,11 +71,21 @@ class TestAuthServer {
 
   private authenticate(req: any): any {
     // 测试用户数据
-    const users: Record<string, { password: string; user_id: number }> = {
-      'admin': { password: 'admin123', user_id: 1 },
+    const users: Record<string, { password: string; user_id: number; groups?: string[] }> = {
+      'admin': { password: 'admin123', user_id: 1, groups: ['admin'] },
+      'admin_password': { password: 'admin_password', user_id: 11, groups: ['admin'] },
+      'admin_multi': { password: 'admin_password', user_id: 12, groups: ['admin'] },
+      'admin_state': { password: 'admin_password', user_id: 13, groups: ['admin'] },
+      'admin_no_ninja': { password: 'admin_password', user_id: 14, groups: ['admin'] },
       'user1': { password: 'password1', user_id: 2 },
+      'user1_password': { password: 'user1_password', user_id: 21 },
       'user2': { password: 'password2', user_id: 3 },
+      'user2_password': { password: 'user2_password', user_id: 22 },
       'guest': { password: 'guest123', user_id: 4 },
+      'user_edge1': { password: 'user_password', user_id: 31 },
+      'user_edge2': { password: 'user_password', user_id: 32 },
+      'user_state': { password: 'user_password', user_id: 33 },
+      'user_no_ninja': { password: 'user_password', user_id: 34 },
     };
 
     const user = users[req.username];
@@ -88,7 +98,7 @@ class TestAuthServer {
       user_id: user.user_id,
       username: req.username,
       displayName: req.username,
-      groups: req.username === 'admin' ? ['admin'] : ['user'],
+      groups: user.groups || ['user'],
     };
   }
 
@@ -275,6 +285,7 @@ export async function setupTestEnvironment(
     startEdge?: boolean;
     startEdge2?: boolean; // 是否启动第二个 Edge 服务器
     startAuth?: boolean;
+    hubConfig?: Record<string, any>; // 自定义Hub配置
   } = { startHub: true, startEdge: true, startEdge2: true, startAuth: true }
 ): Promise<TestEnvironment> {
   console.log('Setting up test environment...');
@@ -311,6 +322,11 @@ export async function setupTestEnvironment(
         // 配置认证（指向测试认证服务器）
         hubConfig.auth = hubConfig.auth || {};
         hubConfig.auth.apiUrl = `http://127.0.0.1:${port}/auth`;
+        
+        // 应用自定义Hub配置
+        if (options.hubConfig) {
+          Object.assign(hubConfig, options.hubConfig);
+        }
         
         const tempHubConfigPath = join(PROJECT_ROOT, `config/hub-test-${port}.json`);
         fs.writeFileSync(tempHubConfigPath, JSON.stringify(hubConfig, null, 2));

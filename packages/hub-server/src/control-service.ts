@@ -523,12 +523,12 @@ export class HubControlService {
       const channelNinjaEnabled = this.config.channelNinja ?? false;
       const isChannelChange = broadcastUserState.channel_id !== undefined;
 
-      if (channelNinjaEnabled && isChannelChange && this._permissionChecker && this._database) {
+      if (channelNinjaEnabled && this._permissionChecker && this._database) {
         // === Channel Ninja模式：根据频道可见性过滤广播 ===
-        const newChannelId = broadcastUserState.channel_id;
+        const currentChannelId = isChannelChange ? broadcastUserState.channel_id : targetGlobalSession.channel_id;
         const allSessions = this._sessionManager.getAllSessions();
 
-        // 分组会话：哪些可以看到新频道，哪些不能
+        // 分组会话：哪些可以看到目标用户的频道，哪些不能
         const visibleToSessions = new Set<number>();
         const invisibleToSessions = new Set<number>();
         
@@ -539,7 +539,7 @@ export class HubControlService {
           }
           
           const otherUserInfo = HubPermissionChecker.sessionToUserInfo(otherSession, otherSession.channel_id);
-          const canSeeChannel = await this._permissionChecker.canUserSeeChannel(newChannelId, otherUserInfo);
+          const canSeeChannel = await this._permissionChecker.canUserSeeChannel(currentChannelId, otherUserInfo);
           
           if (canSeeChannel) {
             visibleToSessions.add(otherSession.session_id);
@@ -548,9 +548,9 @@ export class HubControlService {
           }
         }
 
-        // 对于看不见新频道的用户，发送UserRemove（用户离开服务器）
-        if (invisibleToSessions.size > 0) {
-          logger.info(`Channel Ninja: Sending UserRemove for session ${targetSession} to ${invisibleToSessions.size} users who cannot see channel ${newChannelId}`);
+        // 如果是频道变更，对于看不见新频道的用户，发送UserRemove（用户离开服务器）
+        if (isChannelChange && invisibleToSessions.size > 0) {
+          logger.info(`Channel Ninja: Sending UserRemove for session ${targetSession} to ${invisibleToSessions.size} users who cannot see channel ${currentChannelId}`);
           
           // 按Edge分组发送UserRemove
           const sessionsByEdge = new Map<number, number[]>();
@@ -572,9 +572,9 @@ export class HubControlService {
           }
         }
 
-        // 对于可以看见新频道的用户，正常广播UserState
+        // 对于可以看见频道的用户，正常广播UserState
         if (visibleToSessions.size > 0) {
-          logger.info(`Channel Ninja: Broadcasting UserState for session ${targetSession} to ${visibleToSessions.size} users who can see channel ${newChannelId}`);
+          logger.info(`Channel Ninja: Broadcasting UserState for session ${targetSession} to ${visibleToSessions.size} users who can see channel ${currentChannelId}`);
           
           // 按Edge分组发送UserState
           const sessionsByEdge = new Map<number, number[]>();
