@@ -70,7 +70,7 @@ class TestAuthServer {
   }
 
   private authenticate(req: any): any {
-    // 测试用户数据
+    // Test user data
     const users: Record<string, { password: string; user_id: number; groups?: string[] }> = {
       'admin': { password: 'admin123', user_id: 1, groups: ['admin'] },
       'admin_password': { password: 'admin_password', user_id: 11, groups: ['admin'] },
@@ -296,34 +296,34 @@ export async function setupTestEnvironment(
   let edgeProcess2: ChildProcess | undefined;
   const hubPort = port + 1000;
   const edgePort = port + 2000;
-  const edgePort2 = port + 2100; // 第二个 Edge 端口
+  const edgePort2 = port + 2100; // Second Edge port
 
-  // 1. 启动认证服务器（如果需要）
+  // 1. Start auth server (if needed)
   if (options.startAuth !== false) {
     authServer = new TestAuthServer(port);
     await authServer.start();
-    // 给认证服务器一点启动时间
+    // Give auth server a bit of startup time
     await sleep(100);
   }
 
-  // 2. 启动 Hub 服务器（如果需要）
+  // 2. Start Hub server (if needed)
   if (options.startHub !== false) {
     try {
       const hubConfigPath = join(PROJECT_ROOT, 'config/hub-test.json');
       if (fs.existsSync(hubConfigPath)) {
-        // 使用动态端口避免冲突
-        const actualHubPort = port + 1000; // Hub使用8080+1000=9080
-        const controlPort = port + 3000; // 控制端口使用8080+3000=11080
+        // Use dynamic ports to avoid conflicts
+        const actualHubPort = port + 1000; // Hub uses 8080+1000=9080
+        const controlPort = port + 3000; // Control port uses 8080+3000=11080
         const hubConfig = JSON.parse(fs.readFileSync(hubConfigPath, 'utf8'));
         hubConfig.port = actualHubPort;
-        hubConfig.controlPort = controlPort; // 设置动态控制端口
-        hubConfig.webApi.port = port + 100; // Web API使用8080+100=8180
+        hubConfig.controlPort = controlPort; // Set dynamic control port
+        hubConfig.webApi.port = port + 100; // Web API uses 8080+100=8180
         
-        // 配置认证（指向测试认证服务器）
+        // Configure auth (pointing to test auth server)
         hubConfig.auth = hubConfig.auth || {};
         hubConfig.auth.apiUrl = `http://127.0.0.1:${port}/auth`;
         
-        // 应用自定义Hub配置
+        // Apply custom Hub config
         if (options.hubConfig) {
           Object.assign(hubConfig, options.hubConfig);
         }
@@ -331,14 +331,14 @@ export async function setupTestEnvironment(
         const tempHubConfigPath = join(PROJECT_ROOT, `config/hub-test-${port}.json`);
         fs.writeFileSync(tempHubConfigPath, JSON.stringify(hubConfig, null, 2));
         
-        // 删除测试数据库文件以确保干净的状态
+        // Delete test database file to ensure clean state
         const dbPath = join(PROJECT_ROOT, 'data/hub-test.db');
         if (fs.existsSync(dbPath)) {
           fs.unlinkSync(dbPath);
           console.log('Deleted existing test database file');
         }
         
-        // 初始化测试数据库
+        // Initialize test database
         console.log('Initializing test database...');
         const initScript = join(PROJECT_ROOT, 'scripts/init-test-db.ts');
         if (fs.existsSync(initScript)) {

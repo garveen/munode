@@ -519,23 +519,23 @@ export class HubControlService {
 
       logger.info(`Hub: Broadcasting UserState for session ${targetSession} to all edges, fields: ${Object.keys(broadcastUserState).join(', ')}`);
       
-      // 检查是否启用了Channel Ninja功能
+      // Check if Channel Ninja feature is enabled
       const channelNinjaEnabled = this.config.channelNinja ?? false;
       const isChannelChange = broadcastUserState.channel_id !== undefined;
 
       if (channelNinjaEnabled && this._permissionChecker && this._database) {
-        // === Channel Ninja模式：根据频道可见性过滤广播 ===
+        // === Channel Ninja mode: Filter broadcasts based on channel visibility ===
         const currentChannelId = isChannelChange ? broadcastUserState.channel_id : targetGlobalSession.channel_id;
         const allSessions = this._sessionManager.getAllSessions();
 
-        // 分组会话：哪些可以看到目标用户的频道，哪些不能
+        // Group sessions: which can see target user channel, which cannot
         const visibleToSessions = new Set<number>();
         const invisibleToSessions = new Set<number>();
         
-        // 为每个其他用户检查可见性
+        // Check visibility for each other user
         for (const otherSession of allSessions) {
           if (otherSession.session_id === targetSession) {
-            continue; // 跳过目标用户自己
+            continue; // Skip target user themselves
           }
           
           const otherUserInfo = HubPermissionChecker.sessionToUserInfo(otherSession, otherSession.channel_id);
@@ -548,11 +548,11 @@ export class HubControlService {
           }
         }
 
-        // 如果是频道变更，对于看不见新频道的用户，发送UserRemove（用户离开服务器）
+        // If channel change, send UserRemove (user left server) to users who cannot see new channel
         if (isChannelChange && invisibleToSessions.size > 0) {
           logger.info(`Channel Ninja: Sending UserRemove for session ${targetSession} to ${invisibleToSessions.size} users who cannot see channel ${currentChannelId}`);
           
-          // 按Edge分组发送UserRemove
+          // Send UserRemove grouped by Edge
           const sessionsByEdge = new Map<number, number[]>();
           for (const sessionId of invisibleToSessions) {
             const session = this._sessionManager.getSession(sessionId);
@@ -567,16 +567,16 @@ export class HubControlService {
           for (const [targetEdgeId, sessions] of sessionsByEdge.entries()) {
             this.notify(targetEdgeId, 'hub.userRemoveBroadcast', {
               session_id: targetSession,
-              target_sessions: sessions, // 仅对这些会话隐藏
+              target_sessions: sessions, // Hide only for these sessions
             });
           }
         }
 
-        // 对于可以看见频道的用户，正常广播UserState
+        // For users who can see channel, normally broadcast UserState
         if (visibleToSessions.size > 0) {
           logger.info(`Channel Ninja: Broadcasting UserState for session ${targetSession} to ${visibleToSessions.size} users who can see channel ${currentChannelId}`);
           
-          // 按Edge分组发送UserState
+          // Send UserState grouped by Edge
           const sessionsByEdge = new Map<number, number[]>();
           for (const sessionId of visibleToSessions) {
             const session = this._sessionManager.getSession(sessionId);
@@ -593,14 +593,14 @@ export class HubControlService {
               session_id: targetSession,
               edge_id: targetGlobalSession.edge_id,
               userState: broadcastUserState,
-              target_sessions: sessions, // 仅对这些会话广播
+              target_sessions: sessions, // Broadcast only to these sessions
             });
           }
         }
 
         logger.info(`Hub: Broadcasted UserState for session ${targetSession} with Channel Ninja filtering`);
       } else {
-        // === 普通模式：广播给所有Edge ===
+        // === Normal mode: Broadcast to all Edges ===
         this.broadcast('hub.userStateBroadcast', {
           session_id: targetSession,
           edge_id: targetGlobalSession.edge_id,

@@ -144,14 +144,14 @@ export class HubMessageHandlers {
         }
       }
 
-      // 广播给所有本地已认证的客户端（如果提供了target_sessions，则只广播给这些客户端）
+      // Broadcast to all local authenticated clients (if target_sessions provided, only broadcast to these clients)
       const userStateMessage = userState.serialize();
       const allClients = this.clientManager.getAllClients();
       const targetSessions = params.target_sessions; // Channel Ninja模式下的目标会话列表
       
       for (const client of allClients) {
         if (client.user_id > 0) {
-          // 如果提供了target_sessions，只广播给指定的会话
+          // If target_sessions provided, only broadcast to specified sessions
           if (!targetSessions || targetSessions.includes(client.session)) {
             this.messageHandler.sendMessage(client.session, MessageType.UserState, Buffer.from(userStateMessage));
           }
@@ -304,7 +304,7 @@ export class HubMessageHandlers {
     try {
       const { session_id, actor_session, target_session, target_edge_id, reason, ban, target_sessions } = params;
 
-      // 使用 session_id 作为主要目标（Channel Ninja模式），否则使用 target_session（传统kick/ban模式）
+      // Use session_id as primary target (Channel Ninja mode), otherwise use target_session (traditional kick/ban mode)
       const actualTargetSession = session_id || target_session;
 
       logger.debug(`Received UserRemove broadcast from Hub: target ${actualTargetSession} on Edge ${target_edge_id}${target_sessions ? ' (filtered)' : ''}`);
@@ -319,18 +319,18 @@ export class HubMessageHandlers {
 
       const userRemoveMessage = userRemove.serialize();
 
-      // 广播给所有本地已认证的客户端（如果提供了target_sessions，则只广播给这些客户端）
+      // Broadcast to all local authenticated clients (if target_sessions provided, only broadcast to these clients)
       const allClients = this.clientManager.getAllClients();
       for (const client of allClients) {
         if (client.user_id > 0) {
-          // 如果提供了target_sessions，只广播给指定的会话（Channel Ninja模式）
+          // If target_sessions provided, only broadcast to specified sessions（Channel Ninja模式）
           if (!target_sessions || target_sessions.includes(client.session)) {
             this.messageHandler.sendMessage(client.session, MessageType.UserRemove, Buffer.from(userRemoveMessage));
           }
         }
       }
 
-      // 如果目标用户在本Edge且是真正的kick/ban（不是Channel Ninja隐藏），强制断开连接
+      // If target user on this Edge and is real kick/ban (not Channel Ninja hiding), force disconnect
       if (!target_sessions && target_edge_id === String(this.config.server_id)) {
         const targetClient = this.clientManager.getClient(actualTargetSession);
         if (targetClient) {

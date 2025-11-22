@@ -475,15 +475,15 @@ export class HubPermissionChecker {
   }
 
   /**
-   * 检查用户是否可以看到指定频道（用于Channel Ninja功能）
-   * 一个频道对用户可见，当且仅当：
-   * 1. 用户对该频道有Enter权限，或
-   * 2. 用户对该频道有Listen权限，或
-   * 3. 用户对该频道的任一链接频道有Enter或Listen权限
+   * Check if a user can see a specified channel (for Channel Ninja feature)
+   * A channel is visible to a user if and only if:
+   * 1. User has Enter permission on the channel, or
+   * 2. User has Listen permission on the channel, or
+   * 3. User has Enter or Listen permission on any linked channel of this channel
    * 
-   * @param channelId - 要检查的频道ID
-   * @param user - 用户信息
-   * @returns 用户是否可以看到该频道
+   * @param channelId - Channel ID to check
+   * @param user - User info
+   * @returns Whether the user can see the channel
    */
   async canUserSeeChannel(channelId: number, user: UserInfo): Promise<boolean> {
     // 检查对频道本身的Enter或Listen权限

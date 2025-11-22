@@ -1,12 +1,12 @@
 /**
- * Channel Ninja功能集成测试
+ * Channel Ninja Feature Integration Tests
  *
- * 测试频道Ninja功能，包括：
- * - 配置开关控制
- * - 用户移动到不可见频道时的隐藏行为
- * - 用户移动回可见频道时的显示行为
- * - 语音包仍然正常路由
- * - 跨Edge服务器的Ninja功能
+ * Tests for the Channel Ninja functionality, including:
+ * - Configuration toggle control
+ * - User hiding behavior when moving to invisible channels
+ * - User showing behavior when returning to visible channels
+ * - Voice packets still routing normally
+ * - Cross-Edge server Ninja functionality
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -18,10 +18,10 @@ describe('Channel Ninja Integration Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {
-    // 使用特殊端口以避免与其他测试冲突
+    // Use special port to avoid conflicts with other tests
     testEnv = await setupTestEnvironment(8090, {
       hubConfig: {
-        channelNinja: true, // 启用Channel Ninja功能
+        channelNinja: true, // Enable Channel Ninja functionality
       },
     });
   }, 60000);
@@ -32,13 +32,13 @@ describe('Channel Ninja Integration Tests', () => {
 
   describe('Basic Ninja Functionality', () => {
     it('should hide users in channels without Enter/Listen permission', async () => {
-      // 创建三个客户端
+      // Create three clients
       const admin = new MumbleClient();
       const user1 = new MumbleClient();
       const user2 = new MumbleClient();
 
       try {
-        // 管理员连接
+        // Admin connects
         await admin.connect({
           host: 'localhost',
           port: testEnv.edgePort,
@@ -50,7 +50,7 @@ describe('Channel Ninja Integration Tests', () => {
         // 等待同步完成
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        // 创建一个受限频道（只有admin组可以进入）
+        // Create a restricted channel (only admin group can enter)
         const restrictedChannelName = `Restricted_${Date.now()}`;
         let restrictedChannelId: number | undefined;
 
@@ -63,7 +63,7 @@ describe('Channel Ninja Integration Tests', () => {
           });
         });
 
-        // 创建频道
+        // Create channel
         admin.sendChannelState({
           parent: 0,
           name: restrictedChannelName,
@@ -77,11 +77,11 @@ describe('Channel Ninja Integration Tests', () => {
 
         expect(restrictedChannelId).toBeDefined();
 
-        // 设置ACL使得只有admin组可以进入
-        // 这里简化测试，假设已经通过其他方式设置了ACL
-        // 实际测试中需要通过ACL消息设置权限
+        // Set ACL so only admin group can enter
+        // Simplified test - assuming ACL is set through other means
+        // In actual tests, need to set ACL permissions via ACL messages
 
-        // user1连接（普通用户）
+        // user1 connects (normal user)
         await user1.connect({
           host: 'localhost',
           port: testEnv.edgePort,
@@ -92,7 +92,7 @@ describe('Channel Ninja Integration Tests', () => {
 
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        // user2连接（普通用户）
+        // user2 connects (normal user)
         await user2.connect({
           host: 'localhost',
           port: testEnv.edgePort,
@@ -103,7 +103,7 @@ describe('Channel Ninja Integration Tests', () => {
 
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        // 记录user1看到的用户
+        // Track users seen by user1
         const user1SeesUsers = new Set<number>();
         user1.on('userState', (state: any) => {
           if (state.session !== undefined) {
@@ -111,7 +111,7 @@ describe('Channel Ninja Integration Tests', () => {
           }
         });
 
-        // 记录user1收到的UserRemove消息
+        // Track UserRemove messages received by user1
         let user1SawAdminRemove = false;
         user1.on('userRemove', (remove: any) => {
           if (remove.session === admin.session) {
@@ -119,13 +119,13 @@ describe('Channel Ninja Integration Tests', () => {
           }
         });
 
-        // 等待初始状态同步
+        // Wait for initial state sync
         await new Promise(resolve => setTimeout(resolve, 1000));
 
-        // user1应该能看到admin（都在Root频道）
+        // user1 should be able to see admin (both in Root channel)
         expect(user1SeesUsers.has(admin.session!)).toBe(true);
 
-        // admin移动到受限频道
+        // admin moves to restricted channel
         const userRemovePromise = new Promise<void>((resolve) => {
           const checkInterval = setInterval(() => {
             if (user1SawAdminRemove) {
@@ -140,16 +140,16 @@ describe('Channel Ninja Integration Tests', () => {
           channelId: restrictedChannelId,
         });
 
-        // 等待UserRemove消息
+        // Wait for UserRemove message
         await Promise.race([
           userRemovePromise,
           new Promise((_, reject) => setTimeout(() => reject(new Error('UserRemove timeout')), 5000)),
         ]);
 
-        // user1应该收到admin的UserRemove消息（因为看不见受限频道）
+        // user1 should receive admin's UserRemove message (because can't see restricted channel)
         expect(user1SawAdminRemove).toBe(true);
 
-        // admin移动回Root频道
+        // admin moves back to Root channel
         user1SawAdminRemove = false;
         let user1SawAdminReturn = false;
 
@@ -167,13 +167,13 @@ describe('Channel Ninja Integration Tests', () => {
           channelId: 0,
         });
 
-        // 等待admin返回的UserState消息
+        // Wait for admin's return UserState message
         await Promise.race([
           userReturnPromise,
           new Promise((_, reject) => setTimeout(() => reject(new Error('UserState return timeout')), 5000)),
         ]);
 
-        // user1应该再次看到admin
+        // user1 should see admin again
         expect(user1SawAdminReturn).toBe(true);
       } finally {
         await admin.disconnect();
@@ -183,13 +183,13 @@ describe('Channel Ninja Integration Tests', () => {
     }, 30000);
 
     it('should work across multiple Edge servers', async () => {
-      // 创建三个客户端，分别连接到不同的Edge
+      // Create three clients connecting to different Edges
       const admin = new MumbleClient();
       const userEdge1 = new MumbleClient();
       const userEdge2 = new MumbleClient();
 
       try {
-        // admin连接到Edge1
+        // admin connects to Edge1
         await admin.connect({
           host: 'localhost',
           port: testEnv.edgePort,
@@ -200,7 +200,7 @@ describe('Channel Ninja Integration Tests', () => {
 
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        // userEdge1连接到Edge1
+        // userEdge1 connects to Edge1
         await userEdge1.connect({
           host: 'localhost',
           port: testEnv.edgePort,
@@ -211,7 +211,7 @@ describe('Channel Ninja Integration Tests', () => {
 
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        // userEdge2连接到Edge2
+        // userEdge2 connects to Edge2
         await userEdge2.connect({
           host: 'localhost',
           port: testEnv.edgePort2,
@@ -222,7 +222,7 @@ describe('Channel Ninja Integration Tests', () => {
 
         await new Promise(resolve => setTimeout(resolve, 1000));
 
-        // 监听userEdge2收到的UserRemove
+        // Listen for UserRemove received by userEdge2
         let userEdge2SawAdminRemove = false;
         userEdge2.on('userRemove', (remove: any) => {
           if (remove.session === admin.session) {
@@ -230,7 +230,7 @@ describe('Channel Ninja Integration Tests', () => {
           }
         });
 
-        // 创建受限频道
+        // Create restricted channel
         const restrictedChannelName = `Restricted_Multi_${Date.now()}`;
         let restrictedChannelId: number | undefined;
 
@@ -256,7 +256,7 @@ describe('Channel Ninja Integration Tests', () => {
 
         expect(restrictedChannelId).toBeDefined();
 
-        // admin移动到受限频道
+        // admin moves to restricted channel
         const userRemovePromise = new Promise<void>((resolve) => {
           const checkInterval = setInterval(() => {
             if (userEdge2SawAdminRemove) {
@@ -277,7 +277,7 @@ describe('Channel Ninja Integration Tests', () => {
           new Promise((_, reject) => setTimeout(() => reject(new Error('Cross-edge UserRemove timeout')), 5000)),
         ]);
 
-        // userEdge2应该在另一个Edge上收到admin的UserRemove消息
+        // userEdge2 should receive admin UserRemove message on another Edge
         expect(userEdge2SawAdminRemove).toBe(true);
       } finally {
         await admin.disconnect();
@@ -293,7 +293,7 @@ describe('Channel Ninja Integration Tests', () => {
       const user = new MumbleClient();
 
       try {
-        // admin连接
+        // admin connects
         await admin.connect({
           host: 'localhost',
           port: testEnv.edgePort,
@@ -304,7 +304,7 @@ describe('Channel Ninja Integration Tests', () => {
 
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        // 创建受限频道
+        // Create restricted channel
         const restrictedChannelName = `Restricted_State_${Date.now()}`;
         let restrictedChannelId: number | undefined;
 
@@ -330,7 +330,7 @@ describe('Channel Ninja Integration Tests', () => {
 
         expect(restrictedChannelId).toBeDefined();
 
-        // admin移动到受限频道
+        // admin moves to restricted channel
         admin.sendUserState({
           session: admin.session,
           channelId: restrictedChannelId,
@@ -338,7 +338,7 @@ describe('Channel Ninja Integration Tests', () => {
 
         await new Promise(resolve => setTimeout(resolve, 1000));
 
-        // user连接
+        // user connects
         await user.connect({
           host: 'localhost',
           port: testEnv.edgePort,
@@ -349,7 +349,7 @@ describe('Channel Ninja Integration Tests', () => {
 
         await new Promise(resolve => setTimeout(resolve, 1000));
 
-        // 监听user收到的UserState更新
+        // Listen for UserState updates received by user
         let userSawAdminMuteChange = false;
         user.on('userState', (state: any) => {
           if (state.session === admin.session && state.mute !== undefined) {
@@ -357,7 +357,7 @@ describe('Channel Ninja Integration Tests', () => {
           }
         });
 
-        // admin在受限频道中切换静音状态
+        // admin toggles mute state in restricted channel
         admin.sendUserState({
           session: admin.session,
           mute: true,
@@ -366,7 +366,7 @@ describe('Channel Ninja Integration Tests', () => {
         // 等待一段时间
         await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // user不应该收到admin的静音状态更新（因为admin在不可见频道中）
+        // user should not receive admin mute state update (because admin is in invisible channel)
         expect(userSawAdminMuteChange).toBe(false);
       } finally {
         await admin.disconnect();
@@ -380,7 +380,7 @@ describe('Channel Ninja Disabled Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {
-    // 创建不启用Channel Ninja的测试环境
+    // Create test environment without Channel Ninja enabled
     testEnv = await setupTestEnvironment(8091, {
       hubConfig: {
         channelNinja: false, // 禁用Channel Ninja功能
@@ -397,7 +397,7 @@ describe('Channel Ninja Disabled Tests', () => {
     const user = new MumbleClient();
 
     try {
-      // admin连接
+      // admin connects
       await admin.connect({
         host: 'localhost',
         port: testEnv.edgePort,
@@ -408,7 +408,7 @@ describe('Channel Ninja Disabled Tests', () => {
 
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      // 创建一个频道
+      // Create a channel
       const channelName = `Channel_No_Ninja_${Date.now()}`;
       let channelId: number | undefined;
 
@@ -434,7 +434,7 @@ describe('Channel Ninja Disabled Tests', () => {
 
       expect(channelId).toBeDefined();
 
-      // user连接
+      // user connects
       await user.connect({
         host: 'localhost',
         port: testEnv.edgePort,
@@ -445,7 +445,7 @@ describe('Channel Ninja Disabled Tests', () => {
 
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      // 监听user收到的消息
+      // Listen for messages received by user
       let userSawAdminMove = false;
       let userSawAdminRemove = false;
 
@@ -461,7 +461,7 @@ describe('Channel Ninja Disabled Tests', () => {
         }
       });
 
-      // admin移动到新频道
+      // admin moves to new channel
       const userStateMovePromise = new Promise<void>((resolve) => {
         const checkInterval = setInterval(() => {
           if (userSawAdminMove) {
@@ -481,7 +481,7 @@ describe('Channel Ninja Disabled Tests', () => {
         new Promise((_, reject) => setTimeout(() => reject(new Error('UserState move timeout')), 5000)),
       ]);
 
-      // 当ninja禁用时，user应该看到admin的移动（UserState），而不是UserRemove
+      // When ninja is disabled, user should see admin move (UserState), not UserRemove
       expect(userSawAdminMove).toBe(true);
       expect(userSawAdminRemove).toBe(false);
     } finally {
