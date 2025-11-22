@@ -2,6 +2,22 @@
 
 This directory contains example configuration files for MuNode servers and clients.
 
+## ⚠️ Breaking Changes in This Version
+
+**HTTP API Authentication Field Mapping Removed**: The `requestFields` configuration option has been removed. If you're using HTTP API authentication, your API must now accept standard field names:
+
+- `username`, `password`, `tokens`
+- `session_id`, `server_id`  
+- `ip_address`, `ip_version`
+- `release`, `version`, `os`, `os_version`
+- `certificate_hash`
+
+**Migration Options:**
+1. Update your authentication API to accept standard field names, OR
+2. Switch to the new callback-based authentication (recommended)
+
+---
+
 ## Configuration Files
 
 - `hub.example.js` - Hub Server configuration example
@@ -105,15 +121,6 @@ export default {
 ### HTTP API Authentication (Legacy)
 
 The HTTP API approach is still supported for backward compatibility:
-
-**⚠️ Breaking Change Note**: The `requestFields` configuration option has been removed in favor of using standard field names. If you were using custom field mappings, you'll need to update your authentication API to accept the standard field names:
-
-Standard request fields:
-- `username`, `password`, `tokens`
-- `session_id`, `server_id`
-- `ip_address`, `ip_version`
-- `release`, `version`, `os`, `os_version`
-- `certificate_hash`
 
 ```javascript
 export default {

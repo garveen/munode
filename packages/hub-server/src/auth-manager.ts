@@ -4,7 +4,7 @@
  */
 
 import { createLogger } from '@munode/common';
-import type { HubConfig, ExternalAuthRequest, ExternalAuthResult } from './types.js';
+import type { HubConfig, ExternalAuthRequest } from './types.js';
 
 const logger = createLogger({ service: 'hub-auth-manager' });
 
@@ -12,7 +12,7 @@ const logger = createLogger({ service: 'hub-auth-manager' });
  * 认证配置
  */
 export interface AuthConfig {
-  callback?: (request: ExternalAuthRequest) => Promise<ExternalAuthResult>;
+  callback?: import('./types.js').ExternalAuthCallback;
   apiUrl?: string; // 外部认证 API 地址
   apiKey?: string; // API 密钥
   timeout?: number; // 超时时间（毫秒）

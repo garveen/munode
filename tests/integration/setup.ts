@@ -13,6 +13,9 @@ const __dirname = dirname(__filename);
 // 获取项目根目录（从 tests/integration 向上两级）
 const PROJECT_ROOT = join(__dirname, '../..');
 
+// Counter for cache busting in dynamic imports
+let importCounter = 0;
+
 export interface TestEnvironment {
   hubProcess?: ChildProcess;
   edgeProcess?: ChildProcess;
@@ -363,7 +366,7 @@ export async function setupTestEnvironment(
         const controlPort = port + 3000; // Control port uses 8080+3000=11080
         
         // Load the JS config file
-        const hubConfigModule = await import(`file://${hubConfigPath}`);
+        const hubConfigModule = await import(`file://${hubConfigPath}?v=${++importCounter}`);
         const hubConfig = { ...(hubConfigModule.default || hubConfigModule) };
         
         hubConfig.port = actualHubPort;
@@ -443,7 +446,7 @@ export async function setupTestEnvironment(
         const controlPort = port + 3000; // 控制端口
         
         // Load the JS config file
-        const edgeConfigModule = await import(`file://${edgeConfigPath}`);
+        const edgeConfigModule = await import(`file://${edgeConfigPath}?v=${++importCounter}`);
         const edgeConfig = { ...(edgeConfigModule.default || edgeConfigModule) };
         
         // 设置服务器 ID
@@ -507,8 +510,8 @@ export async function setupTestEnvironment(
         const actualHubPort = port + 1000; // Hub端口
         const controlPort = port + 3000; // 控制端口
         
-        // Load the JS config file (use random cache buster for multiple imports)
-        const edgeConfigModule2 = await import(`file://${edgeConfigPath}?t=${Date.now()}-${Math.random()}`);
+        // Load the JS config file (use counter for cache busting)
+        const edgeConfigModule2 = await import(`file://${edgeConfigPath}?v=${++importCounter}`);
         const edgeConfig2 = { ...(edgeConfigModule2.default || edgeConfigModule2) };
         
         // 设置服务器 ID
