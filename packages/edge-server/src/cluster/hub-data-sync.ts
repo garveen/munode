@@ -110,32 +110,40 @@ export class HubDataManager {
 
       // 追踪远程用户状态
 
-      // 构建UserState消息
-      const userState = new mumbleproto.UserState({
-        session: params.session_id,
-        user_id: params.user_id,
-        name: params.username,
-        channel_id: params.channel_id,
-        temporary_access_tokens: [],
-        listening_channel_add: [],
-        listening_channel_remove: [],
-      });
-
-      if (params.cert_hash) {
-        userState.hash = params.cert_hash;
-      }
-
-      const userStateMessage = userState.serialize();
-
       // 广播给所有本地已认证的客户端
       const allClients = this.handlerFactory.clientManager.getAllClients();
+      let broadcastCount = 0;
+      
       for (const client of allClients) {
         if (client.user_id > 0 && client.has_full_user_list) {
+          // 🔒 根据接收方是否为已注册用户，决定是否发送证书哈希
+          const receiverIsRegistered = client.user_id > 0;
+          
+          // 构建UserState消息（每个客户端都单独构建，因为cert_hash字段可能不同）
+          const userStateData: any = {
+            session: params.session_id,
+            user_id: params.user_id,
+            name: params.username,
+            channel_id: params.channel_id,
+            temporary_access_tokens: [],
+            listening_channel_add: [],
+            listening_channel_remove: [],
+          };
+
+          // 只有接收方是已注册用户时，才发送证书哈希
+          if (params.cert_hash && receiverIsRegistered) {
+            userStateData.hash = params.cert_hash;
+          }
+
+          const userState = new mumbleproto.UserState(userStateData);
+          const userStateMessage = userState.serialize();
+          
           this.handlerFactory.messageHandler.sendMessage(client.session, MessageType.UserState, Buffer.from(userStateMessage));
+          broadcastCount++;
         }
       }
 
-      logger.debug(`Broadcasted remote user ${params.username} to ${allClients.filter(c => c.user_id > 0 && c.has_full_user_list).length} local clients`);
+      logger.debug(`Broadcasted remote user ${params.username} to ${broadcastCount} local clients`);
     } catch (error) {
       logger.error('Error handling remote user joined:', error);
     }

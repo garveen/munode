@@ -228,7 +228,7 @@ export class HubAuthManager {
       }
 
       const result = await response.json();
-      logger.debug(`Auth API response:`, result);
+      logger.info(`Auth API response for user ${request.username}:`, result);
 
       // 使用配置的字段名提取响应数据
       const fields = this.config.responseFields || {};
@@ -254,7 +254,7 @@ export class HubAuthManager {
             : 0, // mumbleproto.Reject.RejectType.None
       };
 
-      logger.debug(`Normalized auth result:`, normalized);
+      logger.info(`Normalized auth result for ${request.username}: userId=${normalized.user_id}, groups=${JSON.stringify(normalized.groups)}`);
       return normalized;
     } catch (error) {
       logger.error('External auth API error:', error);

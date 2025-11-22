@@ -252,13 +252,21 @@ export class MessageHandlers {
 
   /**
    * 发送用户列表给新认证的客户端（不包括自己）
-   * 类似 Go 实现的 sendUserList
+   * 权限规则：只有已注册用户才能看到其他用户的证书哈希
    */
   async sendUserListToClient(session_id: number): Promise<void> {
-    // 从Hub获取全部用户会话信息（包括其他Edge的用户）
+    const receiverClient = this.clientManager.getClient(session_id);
+    if (!receiverClient) {
+      logger.warn(`Client session ${session_id} not found for sendUserList`);
+      return;
+    }
+    
+    // 只有已注册用户才能看到证书哈希
+    const receiverIsRegistered = receiverClient.user_id > 0;
+
+    // 从Hub获取全部用户会话信息
     if (this.hubClient && this.hubClient.isConnected()) {
       try {
-        // 通过fullSync获取所有会话
         const syncData = await this.hubClient.call('edge.fullSync', {});
         const allSessions = syncData.sessions || [];
         
@@ -276,31 +284,17 @@ export class MessageHandlers {
               listening_channel_remove: [],
             };
             
-            // 添加可选字段（只添加非 undefined 的字段）
-            if (session.cert_hash !== undefined) {
+            // 只有已注册用户才能看到证书哈希
+            if (session.cert_hash && receiverIsRegistered) {
               userStateData.hash = session.cert_hash;
             }
-            if (session.mute !== undefined) {
-              userStateData.mute = session.mute;
-            }
-            if (session.deaf !== undefined) {
-              userStateData.deaf = session.deaf;
-            }
-            if (session.suppress !== undefined) {
-              userStateData.suppress = session.suppress;
-            }
-            if (session.self_mute !== undefined) {
-              userStateData.self_mute = session.self_mute;
-            }
-            if (session.self_deaf !== undefined) {
-              userStateData.self_deaf = session.self_deaf;
-            }
-            if (session.priority_speaker !== undefined) {
-              userStateData.priority_speaker = session.priority_speaker;
-            }
-            if (session.recording !== undefined) {
-              userStateData.recording = session.recording;
-            }
+            if (session.mute) userStateData.mute = session.mute;
+            if (session.deaf) userStateData.deaf = session.deaf;
+            if (session.suppress) userStateData.suppress = session.suppress;
+            if (session.self_mute) userStateData.self_mute = session.self_mute;
+            if (session.self_deaf) userStateData.self_deaf = session.self_deaf;
+            if (session.priority_speaker) userStateData.priority_speaker = session.priority_speaker;
+            if (session.recording) userStateData.recording = session.recording;
             
             const userState = new mumbleproto.UserState(userStateData);
             this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(userState.serialize())); 
@@ -308,27 +302,31 @@ export class MessageHandlers {
           }
         }
         
-        logger.debug(`Sent user list to session ${session_id} from Hub (${sentCount} users)`);
+        logger.debug(`Sent user list to session ${session_id} (${sentCount} users, receiver_registered=${receiverIsRegistered})`);
       } catch (error) {
         logger.error(`Failed to get user list from Hub for session ${session_id}:`, error);
-        // Fallback: 只发送本地用户
         this.sendLocalUserListToClient(session_id);
       }
     } else {
-      // 如果没有连接到Hub，只发送本地用户
       logger.warn(`Hub not connected, sending local users only to session ${session_id}`);
       this.sendLocalUserListToClient(session_id);
     }
   }
 
   /**
-   * Fallback: 只发送本地Edge的用户列表
+   * Fallback: 只发送本地Edge的用户列表（降级方案）
+   * 注意：这个方案不推荐使用，因为无法应用 Hub 的权限检查
    */
   private sendLocalUserListToClient(session_id: number): void {
     const clients = this.clientManager.getAllClients();
 
+    // 获取接收方信息，判断是否为注册用户
+    const receiver = this.clientManager.getClient(session_id);
+    const receiverIsRegistered = receiver && receiver.user_id > 0;
+
     for (const client of clients) {
       // 发送所有其他已认证的客户端状态（不包括自己）
+      // 注意：降级模式下不发送敏感信息（如证书哈希）
       if (client.user_id > 0 && client.session !== session_id) {
         const userState = new mumbleproto.UserState({
           session: client.session,
@@ -339,7 +337,14 @@ export class MessageHandlers {
           listening_channel_add: [],
           listening_channel_remove: [],
         });
-        for (const field of ['cert_hash', 'mute', 'deaf', 'suppress', 'self_mute', 'self_deaf', 'priority_speaker', 'recording'] as const) {
+        
+        // 🔒 证书哈希只发送给已注册用户
+        if (client.cert_hash && receiverIsRegistered) {
+          (userState as any).hash = client.cert_hash;
+        }
+        
+        // 添加其他字段
+        for (const field of ['mute', 'deaf', 'suppress', 'self_mute', 'self_deaf', 'priority_speaker', 'recording'] as const) {
           const value = client[field];
           if (value) {
             (userState as any)[field] = value;
@@ -350,7 +355,7 @@ export class MessageHandlers {
       }
     }
     
-    logger.debug(`Sent local user list to session ${session_id} (${clients.filter(c => c.user_id > 0 && c.session !== session_id).length} users)`);
+    logger.debug(`Sent local user list to session ${session_id} (${clients.filter(c => c.user_id > 0 && c.session !== session_id).length} users, registered=${receiverIsRegistered})`);
   }
 
   /**
@@ -454,23 +459,78 @@ export class MessageHandlers {
   /**
    * 广播用户状态给所有已认证的客户端
    * 类似 Go 实现的 broadcastProtoMessageWithPredicate
+   * 
+   * 权限说明：
+   * - 如果 UserState 包含 certificate hash，只发送给已注册用户
+   * - 参考 Go 实现: if connectedClient.HasCertificate() && client.IsRegistered()
    */
   broadcastUserStateToAuthenticatedClients(
     userState: mumbleproto.UserState,
     excludeSession?: number
   ): void {
     const clients = this.clientManager.getAllClients();
-    const serializedState = Buffer.from(userState.serialize());
-
-    for (const client of clients) {
-      // 只广播给已收到完整用户列表的客户端，排除指定的会话
-      if (client.has_full_user_list && client.session !== excludeSession) {
-        this.messageHandler.sendMessage(client.session, MessageType.UserState, serializedState);
+    
+    // 检查 UserState 是否包含证书哈希
+    const hasCertHash = userState.has_hash && userState.hash;
+    
+    if (hasCertHash) {
+      // 如果包含证书哈希，需要根据接收方权限单独发送
+      let broadcastCount = 0;
+      for (const client of clients) {
+        // 只广播给已收到完整用户列表的客户端，排除指定的会话
+        if (client.has_full_user_list && client.session !== excludeSession) {
+          const receiverIsRegistered = client.user_id > 0;
+          
+          if (receiverIsRegistered) {
+            // 已注册用户：发送完整的 UserState（包含证书哈希）
+            const serializedState = Buffer.from(userState.serialize());
+            this.messageHandler.sendMessage(client.session, MessageType.UserState, serializedState);
+            broadcastCount++;
+          } else {
+            // 未注册用户：需要克隆 UserState 并移除证书哈希
+            const stateWithoutHash = new mumbleproto.UserState({
+              session: userState.session,
+              actor: userState.actor,
+              name: userState.name,
+              user_id: userState.user_id,
+              channel_id: userState.channel_id,
+              mute: userState.mute,
+              deaf: userState.deaf,
+              suppress: userState.suppress,
+              self_mute: userState.self_mute,
+              self_deaf: userState.self_deaf,
+              priority_speaker: userState.priority_speaker,
+              recording: userState.recording,
+              temporary_access_tokens: userState.temporary_access_tokens || [],
+              listening_channel_add: userState.listening_channel_add || [],
+              listening_channel_remove: userState.listening_channel_remove || [],
+              // 注意：不包含 hash 字段
+            });
+            
+            const serializedState = Buffer.from(stateWithoutHash.serialize());
+            this.messageHandler.sendMessage(client.session, MessageType.UserState, serializedState);
+            broadcastCount++;
+          }
+        }
       }
+      
+      logger.debug(
+        `Broadcasted UserState (with cert_hash permission check) to ${broadcastCount} authenticated clients`
+      );
+    } else {
+      // 如果不包含证书哈希，可以直接广播给所有人
+      const serializedState = Buffer.from(userState.serialize());
+      
+      for (const client of clients) {
+        // 只广播给已收到完整用户列表的客户端，排除指定的会话
+        if (client.has_full_user_list && client.session !== excludeSession) {
+          this.messageHandler.sendMessage(client.session, MessageType.UserState, serializedState);
+        }
+      }
+      
+      logger.debug(
+        `Broadcasted UserState to ${clients.filter(c => c.has_full_user_list && c.session !== excludeSession).length} authenticated clients`
+      );
     }
-
-    logger.debug(
-      `Broadcasted UserState to ${clients.filter(c => c.has_full_user_list && c.session !== excludeSession).length} authenticated clients`
-    );
   }
 }

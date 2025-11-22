@@ -23,7 +23,7 @@ export class ClientManager extends EventEmitter {
   /**
    * 创建新客户端（使用外部提供的 session ID）
    */
-  createClient(socket: Socket | TLSSocket, sessionId: number): ClientInfo {
+  createClient(socket: Socket | TLSSocket, sessionId: number, cert_hash?: string): ClientInfo {
     const clientAddress = socket.remoteAddress || 'unknown';
 
     const client: ClientInfo = {
@@ -41,6 +41,7 @@ export class ClientManager extends EventEmitter {
       groups: [],
       comment: '',
       hash: '',
+      cert_hash: cert_hash,
        ip_address: clientAddress,
        connected_at: new Date(),
       last_active: new Date(),

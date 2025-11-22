@@ -284,6 +284,12 @@ function createHubConfig(): HubConfig {
       requireClientCert: false,
       rejectUnauthorized: false,
     },
+    auth: {
+      apiUrl: 'http://localhost:8080/auth',
+      timeout: 5000,
+      cacheTTL: 300000,
+      allowCacheFallback: false,
+    },
     blobStore: {
       enabled: false,
       path: path.join(__dirname, 'data/blobs'),

@@ -1,4 +1,5 @@
 import { createLogger, BlobStore } from '@munode/common';
+import { createHash } from 'crypto';
 import {
   ControlChannelServer,
   ControlChannelConfig,
@@ -1477,6 +1478,18 @@ export class HubControlService {
         // 添加证书信息
         if (targetSession.cert_hash) {
           userStats.strong_certificate = true;
+          
+          // 根据配置决定返回真实证书哈希还是用户ID哈希
+          if (this.config.hideCertHashes) {
+            // 返回用户ID的哈希（如果有用户ID）
+            if (targetSession.user_id !== undefined && targetSession.user_id !== null) {
+              userStats.cert_hash = this.hashUserId(targetSession.user_id);
+            }
+          } else {
+            // 返回真实的证书哈希
+            userStats.cert_hash = targetSession.cert_hash;
+          }
+          
           // TODO: 从证书缓存获取完整证书链
         }
 
@@ -1490,9 +1503,21 @@ export class HubControlService {
         }
       }
 
-      // local权限：extended 或者 同频道
-      const local = extended || targetSession.channel_id === actorSession.channel_id;
-      if (local) {
+      // 版本和OS信息只有extended权限才能查看（管理员或查看自己）
+      // 普通用户不能看到其他用户的版本和OS信息
+      if (details) {
+        // 添加客户端版本信息
+        if (targetSession.version || targetSession.release || targetSession.os) {
+          userStats.version = {
+            version_v1: targetSession.version ? parseInt(targetSession.version.split('.')[0]) || 0 : 0,
+            version_v2: targetSession.version ? parseInt(targetSession.version.split('.')[1]) || 0 : 0,
+            version_v3: targetSession.version ? parseInt(targetSession.version.split('.')[2]) || 0 : 0,
+            release: targetSession.release || '',
+            os: targetSession.os || '',
+            os_version: targetSession.os_version || '',
+          };
+        }
+        
         // 添加网络统计信息（从Edge获取）
         // 这里返回占位数据，实际应该从Edge获取
         userStats.from_client = {
@@ -1525,6 +1550,18 @@ export class HubControlService {
     } catch (error) {
       logger.error('Error handling UserStats notification:', error);
     }
+  }
+
+  /**
+   * 计算用户ID的SHA1哈希
+   * 用于在hideCertHashes=true时替代真实证书哈希
+   * @param userId - 用户ID
+   * @returns SHA1哈希（40位十六进制字符串）
+   */
+  private hashUserId(userId: number): string {
+    const hash = createHash('sha1');
+    hash.update('this is a random hash salt for nothing' + userId);
+    return hash.digest('hex');
   }
 
   private registerHandlers(): void {
@@ -1591,6 +1628,10 @@ export class HubControlService {
 
     this.typedServer.handle('edge.handleACL', async (channel, params) => {
       return this.handleACLRequest(channel, params);
+    });
+
+    this.typedServer.handle('edge.handlePermissionQuery', async (channel, params) => {
+      return this.handlePermissionQueryRequest(channel, params);
     });
 
     this.typedServer.handle('edge.join', async (channel, params) => {
@@ -1724,7 +1765,13 @@ export class HubControlService {
       connected_at: Math.floor(params.startTime.getTime() / 1000),
       last_active: Math.floor(Date.now() / 1000),
       groups: params.groups || [], // 传递用户组信息
+      version: params.version,
+      release: params.release,
+      os: params.os,
+      os_version: params.os_version,
     };
+    
+    logger.info(`Session reported: ${params.username} (user_id: ${params.user_id}), groups: ${JSON.stringify(session.groups)}`);
 
     // 上报会话
     this._sessionManager.reportSession(session);
@@ -2015,6 +2062,8 @@ export class HubControlService {
 
         const actorUserInfo = HubPermissionChecker.sessionToUserInfo(actorGlobalSession, actorGlobalSession.channel_id);
         
+        logger.debug(`ACL permission check for user ${actorUserInfo.user_id} (${actorGlobalSession.username}), groups: ${JSON.stringify(actorUserInfo.groups)}`);
+        
         // 检查三个位置的 Write 权限
         const hasWriteOnChannel = await this._permissionChecker.hasPermission(
           channel_id,
@@ -2208,6 +2257,61 @@ export class HubControlService {
     } catch (error) {
       logger.error('Error handling ACL request:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  /**
+   * 处理来自 Edge 的 PermissionQuery 请求
+   */
+  private async handlePermissionQueryRequest(
+    _channel: RPCChannel,
+    params: RPCParams<'edge.handlePermissionQuery'>
+  ): Promise<RPCResult<'edge.handlePermissionQuery'>> {
+    try {
+      const { edge_id, actor_session, channel_id } = params;
+      
+      logger.info(`Hub received PermissionQuery from Edge ${edge_id}, actor: ${actor_session}, channel: ${channel_id}`);
+
+      // 获取会话信息
+      if (!this._sessionManager) {
+        logger.error('SessionManager not available');
+        return { success: false, error: 'SessionManager not available' };
+      }
+
+      const actorGlobalSession = this._sessionManager.getSession(actor_session);
+      if (!actorGlobalSession) {
+        logger.warn(`PermissionQuery from unknown session: ${actor_session}`);
+        return { 
+          success: false, 
+          error: 'Session not found' 
+        };
+      }
+
+      // 转换为 UserInfo
+      const actorUserInfo = HubPermissionChecker.sessionToUserInfo(actorGlobalSession, actorGlobalSession.channel_id);
+      
+      logger.info(`PermissionQuery for user ${actorUserInfo.user_id} (${actorGlobalSession.username}), groups: ${JSON.stringify(actorUserInfo.groups)}, channel: ${channel_id}`);
+
+      // 计算权限
+      if (!this._permissionChecker) {
+        logger.error('PermissionChecker not available');
+        return { success: false, error: 'PermissionChecker not available' };
+      }
+
+      const permissions = await this._permissionChecker.calculatePermission(channel_id, actorUserInfo);
+      
+      logger.info(`PermissionQuery result for session ${actor_session} on channel ${channel_id}: ${permissions} (0x${permissions.toString(16)})`);
+
+      return {
+        success: true,
+        permissions,
+      };
+    } catch (error) {
+      logger.error(`PermissionQuery error:`, error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Internal server error',
+      };
     }
   }
 

@@ -54,6 +54,7 @@
   "defaultChannel": 0,
   "rememberChannel": true,
   "allowRecording": true,
+  "hideCertHashes": false,
   "autoBan": {
     "attempts": 10,
     "timeframe": 120,

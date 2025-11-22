@@ -107,6 +107,8 @@ export class AuthHandlers {
         username: authResult.displayName || authResult.username,
         groups: authResult.groups || [],
       });
+      
+      logger.info(`Auth success: user=${authResult.username}, user_id=${authResult.user_id}, groups=${JSON.stringify(authResult.groups)}`);
 
       // 1. 生成加密密钥并发送 CryptSetup
       const cryptKey = Buffer.alloc(16);
@@ -219,8 +221,7 @@ export class AuthHandlers {
       );
 
       // 10. 广播新用户加入给其他已认证客户端
-      // 注意：只广播给 has_full_user_list=true 的客户端
-      // 重要：只发送非 undefined 的字段，不发送 false 值（协议规范）
+      // broadcastUserStateToAuthenticatedClients 会根据接收方是否为注册用户决定是否发送证书哈希
       const broadcastStateData: any = {
         session: session_id,
         name: updatedClient.username,
@@ -231,34 +232,17 @@ export class AuthHandlers {
         listening_channel_remove: [],
       };
       
-      // 只添加非 undefined 且为 true 的布尔字段，或非空的字符串字段
-      if (updatedClient.cert_hash) {
-        broadcastStateData.hash = updatedClient.cert_hash;
-      }
-      if (updatedClient.mute) {
-        broadcastStateData.mute = true;
-      }
-      if (updatedClient.deaf) {
-        broadcastStateData.deaf = true;
-      }
-      if (updatedClient.suppress) {
-        broadcastStateData.suppress = true;
-      }
-      if (updatedClient.self_mute) {
-        broadcastStateData.self_mute = true;
-      }
-      if (updatedClient.self_deaf) {
-        broadcastStateData.self_deaf = true;
-      }
-      if (updatedClient.priority_speaker) {
-        broadcastStateData.priority_speaker = true;
-      }
-      if (updatedClient.recording) {
-        broadcastStateData.recording = true;
-      }
+      // 添加非 false 的状态字段
+      if (updatedClient.cert_hash) broadcastStateData.hash = updatedClient.cert_hash;
+      if (updatedClient.mute) broadcastStateData.mute = true;
+      if (updatedClient.deaf) broadcastStateData.deaf = true;
+      if (updatedClient.suppress) broadcastStateData.suppress = true;
+      if (updatedClient.self_mute) broadcastStateData.self_mute = true;
+      if (updatedClient.self_deaf) broadcastStateData.self_deaf = true;
+      if (updatedClient.priority_speaker) broadcastStateData.priority_speaker = true;
+      if (updatedClient.recording) broadcastStateData.recording = true;
       
       const broadcastState = new mumbleproto.UserState(broadcastStateData);
-      
       this.broadcastUserState(broadcastState, session_id);
       logger.debug(`Broadcasted UserState for new user ${updatedClient.username} (session ${session_id})`);
 
@@ -278,6 +262,10 @@ export class AuthHandlers {
             ip_address: updatedClient.ip_address,
             groups: updatedClient.groups,
             cert_hash: updatedClient.cert_hash,
+            version: updatedClient.version,
+            release: updatedClient.client_name,
+            os: updatedClient.os_name,
+            os_version: updatedClient.os_version,
           });
           logger.info(`Reported session ${session_id} (${updatedClient.username}) to Hub`);
         } catch (error) {

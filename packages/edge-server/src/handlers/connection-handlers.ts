@@ -59,8 +59,13 @@ export class ConnectionHandlers {
     }
 
 
-      // 创建客户端（使用从 Hub 分配的 session ID）
-      this.clientManager.createClient(socket, sessionId);
+      // 创建客户端（使用从 Hub 分配的 session ID，并传递证书哈希）
+      this.clientManager.createClient(socket, sessionId, cert_hash);
+      
+      // 记录证书信息
+      if (cert_hash) {
+        logger.debug(`Client session ${sessionId} has certificate hash: ${cert_hash.substring(0, 16)}...`);
+      }
     } catch (error) {
       logger.error('Error handling TLS connection:', error);
       socket.destroy();

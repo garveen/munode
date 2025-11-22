@@ -90,8 +90,9 @@ export class PermissionHandlers {
 
   /**
    * 处理权限查询消息
+   * 转发到 Hub 进行权限计算
    */
-  handlePermissionQuery(session_id: number, data: Buffer): void {
+  async handlePermissionQuery(session_id: number, data: Buffer): Promise<void> {
     try {
       const permQuery = mumbleproto.PermissionQuery.deserialize(data);
 
@@ -102,32 +103,68 @@ export class PermissionHandlers {
         return;
       }
 
+      if (!actor.user_id || actor.user_id <= 0) {
+        logger.warn(`PermissionQuery from unauthenticated session: ${session_id}`);
+        return;
+      }
+
+      logger.debug(`PermissionQuery from session ${session_id}: user_id=${actor.user_id}, username=${actor.username}, groups=${JSON.stringify(actor.groups)}`);
+
       if (permQuery.channel_id === undefined) {
         logger.warn(`PermissionQuery without channel_id from session: ${session_id}`);
         return;
       }
 
-      const channel = this.channelManager.getChannel(permQuery.channel_id);
-      if (!channel) {
-        logger.warn(`PermissionQuery for non-existent channel: ${permQuery.channel_id}`);
+      // 必须在集群模式下运行
+      if (!this.hubClient) {
+        logger.error('PermissionQuery rejected: Hub client not available');
+        // 返回默认权限
+        const defaultPerms = 0x30e; // Traverse | Enter | Speak | Whisper | TextMessage
+        const permissionQueryResponse = new mumbleproto.PermissionQuery({
+          channel_id: permQuery.channel_id,
+          permissions: defaultPerms,
+          flush: false,
+        });
+        this.messageHandler.sendMessage(
+          session_id,
+          MessageType.PermissionQuery,
+          Buffer.from(permissionQueryResponse.serialize())
+        );
         return;
       }
 
-      // 计算用户在该频道的权限
-      const channelTree = this.channelManager.getChannelTree();
-      const permissions = this.permissionManager.calculatePermission(
-        channel,
-        actor,
-        channelTree,
-        this.aclMap
-      );
+      logger.info(`Forwarding PermissionQuery from session ${session_id} to Hub, channel: ${permQuery.channel_id}`);
+
+      // 转发到 Hub（使用 RPC call）
+      const result = await this.hubClient.call('edge.handlePermissionQuery', {
+        edge_id: this.config.server_id,
+        actor_session: session_id,
+        actor_user_id: actor.user_id,
+        actor_username: actor.username,
+        channel_id: permQuery.channel_id,
+      });
+
+      if (!result?.success || result.permissions === undefined) {
+        logger.warn(`PermissionQuery failed: ${result?.error}`);
+        // 返回默认权限
+        const defaultPerms = 0x30e;
+        const permissionQueryResponse = new mumbleproto.PermissionQuery({
+          channel_id: permQuery.channel_id,
+          permissions: defaultPerms,
+          flush: false,
+        });
+        this.messageHandler.sendMessage(
+          session_id,
+          MessageType.PermissionQuery,
+          Buffer.from(permissionQueryResponse.serialize())
+        );
+        return;
+      }
 
       // 发送权限响应
-      // 注意: flush 不应该设置为 true，否则会导致客户端清空所有权限缓存并重新请求，造成无限循环
-      // flush 只应该在 ACL 变更等需要主动刷新客户端缓存的场景下使用
       const permissionQueryResponse = new mumbleproto.PermissionQuery({
         channel_id: permQuery.channel_id,
-        permissions: permissions,
+        permissions: result.permissions,
         flush: false,
       });
 
@@ -137,7 +174,7 @@ export class PermissionHandlers {
         Buffer.from(permissionQueryResponse.serialize())
       );
 
-      logger.debug(`Sent permission query response for channel ${permQuery.channel_id} to session ${session_id}: ${permissions}`);
+      logger.info(`Sent permission query response for channel ${permQuery.channel_id} to session ${session_id}: ${result.permissions}`);
     } catch (error) {
       logger.error(`Error handling PermissionQuery for session ${session_id}:`, error);
     }

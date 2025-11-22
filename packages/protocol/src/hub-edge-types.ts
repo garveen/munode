@@ -156,6 +156,11 @@ export interface GlobalSession {
   connected_at: number;
   last_active: number;
   groups?: string[]; // 用户所属的组（如 admin、user 等）
+  // 客户端信息
+  version?: string; // 客户端版本（如 "1.5.634"）
+  release?: string; // 客户端名称（如 "Mumble"）
+  os?: string; // 操作系统（如 "Windows"）
+  os_version?: string; // 操作系统版本
   // 用户状态字段（由 Edge 上报，Hub 转发）
   mute?: boolean;
   deaf?: boolean;

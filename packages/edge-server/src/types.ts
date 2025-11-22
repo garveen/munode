@@ -144,7 +144,6 @@ export interface FeatureConfig {
   userCache: boolean;
   packetPool: boolean;
   udpMonitor: boolean;
-  certObfuscation: boolean;
   allowHtml?: boolean;
 }
 

@@ -3,6 +3,7 @@
  * 实现完整的Mumble ACL权限检查系统，供Hub使用
  */
 
+import { logger } from '@munode/common';
 import type { HubDatabase } from './database.js';
 import type { GlobalSession } from '@munode/protocol';
 import type { ChannelGroupManager } from './channel-group-manager.js';
@@ -265,7 +266,9 @@ export class HubPermissionChecker {
    */
   private isSuperUser(user: UserInfo): boolean {
     // 基于用户组检查
-    return user.groups?.includes('admin') || user.groups?.includes('superuser') || false;
+    const isSuperUser = user.groups?.includes('admin') || user.groups?.includes('superuser') || false;
+    logger.debug(`isSuperUser check for user ${user.user_id}: groups=${JSON.stringify(user.groups)}, result=${isSuperUser}`);
+    return isSuperUser;
   }
 
   /**

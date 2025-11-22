@@ -110,6 +110,10 @@ export interface EdgeReportSessionMethod {
     ip_address: string;
     groups?: string[]; // 用户所属的组
     cert_hash?: string; // 证书哈希
+    version?: string; // 客户端版本
+    release?: string; // 客户端名称
+    os?: string; // 操作系统
+    os_version?: string; // 操作系统版本
   };
   result: RPCResponse;
 }
@@ -350,6 +354,25 @@ export interface EdgeHandleACLMethod {
 }
 
 /**
+ * Edge 处理 PermissionQuery 消息
+ */
+export interface EdgeHandlePermissionQueryMethod {
+  method: 'edge.handlePermissionQuery';
+  params: {
+    edge_id: number;
+    actor_session: number;
+    actor_user_id: number;
+    actor_username: string;
+    channel_id: number;
+  };
+  result: {
+    success: boolean;
+    permissions?: number; // 计算出的权限值
+    error?: string;
+  };
+}
+
+/**
  * Edge 报告 Peer 断开连接
  */
 export interface EdgeReportPeerDisconnectMethod {
@@ -562,6 +585,7 @@ export type EdgeToHubMethods =
   | EdgeSaveChannelMethod
   | EdgeSaveACLMethod
   | EdgeHandleACLMethod
+  | EdgeHandlePermissionQueryMethod
   | EdgeJoinMethod
   | EdgeJoinCompleteMethod
   | EdgeReportPeerDisconnectMethod

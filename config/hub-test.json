@@ -65,5 +65,8 @@
       "reasonField": "reason"
     }
   },
+  "allowHTML": true,
+  "allowRecording": true,
+  "hideCertHashes": false,
   "logLevel": "info"
 }

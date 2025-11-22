@@ -333,6 +333,10 @@ export class EdgeControlClient extends EventEmitter {
     ip_address: string;
     groups?: string[];
     cert_hash?: string;
+    version?: string;
+    release?: string;
+    os?: string;
+    os_version?: string;
   }): Promise<void> {
     if (!this.isConnected() || (!this.useExternalClient && !this.registered)) {
       return;

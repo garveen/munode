@@ -65,7 +65,6 @@ export function loadEdgeConfig(configPath?: string): EdgeConfig {
       userCache: true,
       packetPool: true,
       udpMonitor: true,
-      certObfuscation: true,
     },
   };
 

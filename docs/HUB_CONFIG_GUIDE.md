@@ -373,6 +373,13 @@ This document describes all available configuration options for the MuNode Hub S
 - **Default**: `true`
 - **Example**: `false`
 
+### `hideCertHashes` (optional)
+- **Type**: `boolean`
+- **Description**: Obfuscate certificate hashes by returning user ID hash instead of real certificate hash
+- **Default**: `false`
+- **Example**: `true`
+- **Privacy Note**: When enabled, UserStats responses will contain a SHA1 hash of the user ID instead of the actual certificate hash, providing additional privacy protection
+
 ## TLS Configuration
 
 ### `tls` (required)
