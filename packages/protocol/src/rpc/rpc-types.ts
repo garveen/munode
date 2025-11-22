@@ -71,6 +71,7 @@ export interface EdgeAllocateSessionIdMethod {
 export interface EdgeAuthenticateUserMethod {
   method: 'edge.authenticateUser';
   params: {
+    session_id: number;
     server_id: number;
     username: string;
     password: string;
@@ -79,6 +80,7 @@ export interface EdgeAuthenticateUserMethod {
       ip_address: string;
       ip_version: string; // 'ipv4' or 'ipv6'
       release: string; // 客户端版本
+      version?: number; // 客户端版本号（数字格式）
       os: string; // 操作系统
       os_version: string; // 操作系统版本
       certificate_hash?: string; // 证书哈希

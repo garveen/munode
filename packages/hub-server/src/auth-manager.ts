@@ -24,6 +24,7 @@ export interface AuthConfig {
     usernameField?: string; // 用户名字段名，默认 'username'
     passwordField?: string; // 密码字段名，默认 'password'
     tokensField?: string; // 令牌数组字段名，默认 'tokens'
+    sessionIdField?: string; // 会话ID字段名，默认 'session_id'
     serverIdField?: string; // 服务器ID字段名，默认 'server_id'
     ipAddressField?: string; // IP地址字段名，默认 'ip_address'
     ipVersionField?: string; // IP版本字段名，默认 'ip_version'
@@ -70,6 +71,7 @@ export interface AuthResult {
  * 认证请求参数
  */
 export interface AuthRequest {
+  session_id: number;
   server_id: number;
   username: string;
   password: string;
@@ -112,6 +114,7 @@ export class HubAuthManager {
     this.config.requestFields.usernameField = this.config.requestFields.usernameField || 'username';
     this.config.requestFields.passwordField = this.config.requestFields.passwordField || 'password';
     this.config.requestFields.tokensField = this.config.requestFields.tokensField || 'tokens';
+    this.config.requestFields.sessionIdField = this.config.requestFields.sessionIdField || 'session_id';
     this.config.requestFields.serverIdField = this.config.requestFields.serverIdField || 'server_id';
     this.config.requestFields.ipAddressField = this.config.requestFields.ipAddressField || 'ip_address';
     this.config.requestFields.ipVersionField = this.config.requestFields.ipVersionField || 'ip_version';
@@ -221,6 +224,7 @@ export class HubAuthManager {
       requestData[reqFields.usernameField || 'username'] = request.username;
       requestData[reqFields.passwordField || 'password'] = request.password;
       requestData[reqFields.tokensField || 'tokens'] = request.tokens;
+      requestData[reqFields.sessionIdField || 'session_id'] = request.session_id;
       requestData[reqFields.serverIdField || 'server_id'] = request.server_id;
       requestData[reqFields.ipAddressField || 'ip_address'] = request.client_info.ip_address;
       requestData[reqFields.ipVersionField || 'ip_version'] = request.client_info.ip_version;

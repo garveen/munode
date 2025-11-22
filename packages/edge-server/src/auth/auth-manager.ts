@@ -89,7 +89,7 @@ export class AuthManager extends EventEmitter {
       }
 
       // 通过 Hub 认证
-      const authResult = await this.authenticateViaHub(username, password, tokens, clientInfo);
+      const authResult = await this.authenticateViaHub(session_id, username, password, tokens, clientInfo);
 
       // 缓存结果
       if (authResult.success) {
@@ -123,6 +123,7 @@ export class AuthManager extends EventEmitter {
    * 通过 Hub 进行认证
    */
   private async authenticateViaHub(
+    session_id: number,
     username: string,
     password: string,
     tokens: string[],
@@ -151,6 +152,7 @@ export class AuthManager extends EventEmitter {
     try {
       // 调用 Hub 的认证 RPC
       const response = await this.hubClient.call('edge.authenticateUser', {
+        session_id: session_id, // 使用真实的客户端 session_id
         server_id: this.config.server_id,
         username,
         password,

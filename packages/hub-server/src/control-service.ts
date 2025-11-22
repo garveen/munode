@@ -1727,13 +1727,14 @@ export class HubControlService {
     }
 
     try {
-      logger.info(`Authentication request from Edge ${params.server_id} for user: ${params.username}`);
+      logger.info(`Authentication request from Edge ${params.server_id} for user: ${params.username}, session: ${params.session_id}`);
       
       const authResult = await this._authManager.authenticate({
+        session_id: params.session_id,
         server_id: params.server_id,
         username: params.username,
         password: params.password,
-        tokens: params.tokens,
+        tokens: params.tokens || [],
         client_info: params.client_info,
       });
 
