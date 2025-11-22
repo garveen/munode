@@ -70,6 +70,7 @@ export class AuthManager extends EventEmitter {
       ip_address: string;
       ip_version: string;
       release: string;
+      version?: number;
       os: string;
       os_version: string;
       certificate_hash?: string;
@@ -129,6 +130,7 @@ export class AuthManager extends EventEmitter {
       ip_address: string;
       ip_version: string;
       release: string;
+      version?: number;
       os: string;
       os_version: string;
       certificate_hash?: string;

@@ -60,6 +60,7 @@ export class AuthHandlers {
         ip_address: client.ip_address || '0.0.0.0',
         ip_version: client.ip_address?.includes(':') ? 'ipv6' : 'ipv4',
         release: client.client_name || 'unknown', // 客户端版本/名称
+        version: client.version_number, // 数字版本号
         os: client.os_name || 'unknown', // 操作系统名称
         os_version: client.os_version || 'unknown', // 操作系统版本
         certificate_hash: client.cert_hash,

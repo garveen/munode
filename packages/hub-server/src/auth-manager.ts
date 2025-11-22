@@ -20,6 +20,19 @@ export interface AuthConfig {
     authHeaderName?: string; // 认证头名称，默认 'Authorization'
     authHeaderFormat?: string; // 认证头格式，默认 'Bearer {apiKey}'
   };
+  requestFields?: {
+    usernameField?: string; // 用户名字段名，默认 'username'
+    passwordField?: string; // 密码字段名，默认 'password'
+    tokensField?: string; // 令牌数组字段名，默认 'tokens'
+    serverIdField?: string; // 服务器ID字段名，默认 'server_id'
+    ipAddressField?: string; // IP地址字段名，默认 'ip_address'
+    ipVersionField?: string; // IP版本字段名，默认 'ip_version'
+    releaseField?: string; // 客户端版本字段名，默认 'release'
+    versionField?: string; // 客户端版本号字段名（数字格式），默认 'version'
+    osField?: string; // 操作系统字段名，默认 'os'
+    osVersionField?: string; // 操作系统版本字段名，默认 'os_version'
+    certHashField?: string; // 证书哈希字段名，默认 'certificate_hash'
+  };
   responseFields?: {
     successField?: string; // 成功标志字段名，默认 'success'
     userIdField?: string; // 用户ID字段名，默认 'user_id'
@@ -65,6 +78,7 @@ export interface AuthRequest {
     ip_address: string;
     ip_version: string;
     release: string;
+    version?: number; // 客户端版本号（数字格式，例如：66051 代表 1.2.3）
     os: string;
     os_version: string;
     certificate_hash?: string;
@@ -92,6 +106,20 @@ export class HubAuthManager {
     this.config.headers = this.config.headers || {};
     this.config.headers.authHeaderName = this.config.headers.authHeaderName || 'Authorization';
     this.config.headers.authHeaderFormat = this.config.headers.authHeaderFormat || 'Bearer {apiKey}';
+    
+    // 设置默认请求字段映射
+    this.config.requestFields = this.config.requestFields || {};
+    this.config.requestFields.usernameField = this.config.requestFields.usernameField || 'username';
+    this.config.requestFields.passwordField = this.config.requestFields.passwordField || 'password';
+    this.config.requestFields.tokensField = this.config.requestFields.tokensField || 'tokens';
+    this.config.requestFields.serverIdField = this.config.requestFields.serverIdField || 'server_id';
+    this.config.requestFields.ipAddressField = this.config.requestFields.ipAddressField || 'ip_address';
+    this.config.requestFields.ipVersionField = this.config.requestFields.ipVersionField || 'ip_version';
+    this.config.requestFields.releaseField = this.config.requestFields.releaseField || 'release';
+    this.config.requestFields.versionField = this.config.requestFields.versionField || 'version';
+    this.config.requestFields.osField = this.config.requestFields.osField || 'os';
+    this.config.requestFields.osVersionField = this.config.requestFields.osVersionField || 'os_version';
+    this.config.requestFields.certHashField = this.config.requestFields.certHashField || 'certificate_hash';
     
     // 设置默认响应字段映射
     this.config.responseFields = this.config.responseFields || {};
@@ -176,6 +204,7 @@ export class HubAuthManager {
       // 构建请求头
       const headers: Record<string, string> = {
         'Content-Type': contentType,
+        "Accept": "application/json",
       };
 
       // 添加认证头
@@ -185,19 +214,25 @@ export class HubAuthManager {
         headers[authHeaderName] = authHeaderFormat.replace('{apiKey}', this.config.apiKey);
       }
 
-      // 构建请求数据，包含客户端信息
-      const requestData = {
-        username: request.username,
-        password: request.password,
-        tokens: request.tokens,
-        server_id: request.server_id,
-        ip_address: request.client_info.ip_address,
-        ip_version: request.client_info.ip_version,
-        release: request.client_info.release,
-        os: request.client_info.os,
-        os_version: request.client_info.os_version,
-        certificate_hash: request.client_info.certificate_hash,
-      };
+      // 使用配置的字段名构建请求数据
+      const reqFields = this.config.requestFields || {};
+      const requestData: Record<string, any> = {};
+      
+      requestData[reqFields.usernameField || 'username'] = request.username;
+      requestData[reqFields.passwordField || 'password'] = request.password;
+      requestData[reqFields.tokensField || 'tokens'] = request.tokens;
+      requestData[reqFields.serverIdField || 'server_id'] = request.server_id;
+      requestData[reqFields.ipAddressField || 'ip_address'] = request.client_info.ip_address;
+      requestData[reqFields.ipVersionField || 'ip_version'] = request.client_info.ip_version;
+      requestData[reqFields.releaseField || 'release'] = request.client_info.release;
+      if (request.client_info.version !== undefined) {
+        requestData[reqFields.versionField || 'version'] = request.client_info.version;
+      }
+      requestData[reqFields.osField || 'os'] = request.client_info.os;
+      requestData[reqFields.osVersionField || 'os_version'] = request.client_info.os_version;
+      if (request.client_info.certificate_hash) {
+        requestData[reqFields.certHashField || 'certificate_hash'] = request.client_info.certificate_hash;
+      }
 
       // 根据内容类型编码请求体
       let body: string;
@@ -206,7 +241,7 @@ export class HubAuthManager {
         const params = new URLSearchParams();
         for (const [key, value] of Object.entries(requestData)) {
           if (Array.isArray(value)) {
-            // 数组字段处理：tokens
+            // 数组字段处理（如 tokens）
             value.forEach(v => params.append(key + '[]', String(v)));
           } else if (value !== undefined && value !== null) {
             params.append(key, String(value));

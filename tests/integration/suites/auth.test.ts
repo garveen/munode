@@ -261,5 +261,92 @@ describe('Authentication Integration Tests', () => {
 
       expect(response.status).toBe(404);
     });
+
+    it('should accept application/json content type', async () => {
+      const authRequest = {
+        username: 'admin',
+        password: 'admin123',
+        tokens: [],
+        server_id: 1,
+      };
+
+      const response = await fetch('http://localhost:8080/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(authRequest),
+      });
+
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept application/x-www-form-urlencoded content type', async () => {
+      const params = new URLSearchParams({
+        username: 'admin',
+        password: 'admin123',
+        server_id: '1',
+      });
+      // 添加 tokens 数组
+      params.append('tokens[]', '');
+
+      const response = await fetch('http://localhost:8080/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString(),
+      });
+
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      expect(result.success).toBe(true);
+      expect(result.user_id).toBe(1);
+      expect(result.username).toBe('admin');
+    });
+
+    it('should handle form-urlencoded with multiple tokens', async () => {
+      const params = new URLSearchParams({
+        username: 'user1',
+        password: 'password1',
+        server_id: '1',
+      });
+      params.append('tokens[]', 'token1');
+      params.append('tokens[]', 'token2');
+      params.append('tokens[]', 'token3');
+
+      const response = await fetch('http://localhost:8080/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString(),
+      });
+
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      expect(result.success).toBe(true);
+      expect(result.username).toBe('user1');
+    });
+
+    it('should handle form-urlencoded with client info', async () => {
+      const params = new URLSearchParams({
+        username: 'admin',
+        password: 'admin123',
+        server_id: '1',
+        ip_address: '192.168.1.100',
+        ip_version: 'IPv4',
+        release: 'Mumble 1.4.0',
+        os: 'Linux',
+        os_version: 'Ubuntu 22.04',
+      });
+      params.append('tokens[]', '');
+
+      const response = await fetch('http://localhost:8080/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString(),
+      });
+
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      expect(result.success).toBe(true);
+    });
   });
 });

@@ -177,6 +177,61 @@ This document describes all available configuration options for the MuNode Hub S
 - **Description**: Force users to authenticate via external authentication system
 - **Default**: `false`
 - **Example**: `true`
+- **See**: [External Authentication Configuration](./EXTERNAL_AUTH_CONFIGURATION.md) for detailed setup
+
+### `auth` (optional)
+- **Type**: `object`
+- **Description**: External authentication configuration
+- **Default**: `undefined` (no external authentication)
+- **See**: [External Authentication Configuration](./EXTERNAL_AUTH_CONFIGURATION.md) for complete documentation
+
+#### `auth.apiUrl`
+- **Type**: `string`
+- **Description**: External authentication API URL
+- **Example**: `"https://auth.example.com/api/authenticate"`
+
+#### `auth.apiKey`
+- **Type**: `string`
+- **Description**: API key for authentication server
+- **Example**: `"your-secret-api-key"`
+
+#### `auth.timeout`
+- **Type**: `number`
+- **Description**: Authentication request timeout in milliseconds
+- **Default**: `5000`
+- **Example**: `10000`
+
+#### `auth.contentType`
+- **Type**: `"application/json" | "application/x-www-form-urlencoded"`
+- **Description**: HTTP request body content type
+- **Default**: `"application/json"`
+- **Example**: `"application/x-www-form-urlencoded"`
+- **Note**: Use `"application/x-www-form-urlencoded"` for legacy authentication servers
+
+#### `auth.headers`
+- **Type**: `object`
+- **Description**: Custom authentication headers configuration
+
+**Example:**
+```json
+"auth": {
+  "apiUrl": "https://auth.myserver.com/authenticate",
+  "apiKey": "secret-key",
+  "timeout": 5000,
+  "contentType": "application/json",
+  "headers": {
+    "authHeaderName": "X-API-Token",
+    "authHeaderFormat": "Bearer {apiKey}"
+  },
+  "responseFields": {
+    "successField": "success",
+    "userIdField": "user_id",
+    "usernameField": "username"
+  },
+  "cacheTTL": 300000,
+  "allowCacheFallback": true
+}
+```
 
 ### `sslCiphers` (optional)
 - **Type**: `string`

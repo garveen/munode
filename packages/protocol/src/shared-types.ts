@@ -43,7 +43,8 @@ export interface ClientInfo {
   connected_at: Date;
   last_active: Date;
   last_ping?: number; // 最后 ping 时间戳（毫秒）
-  version: string;
+  version: string; // 版本号（十六进制字符串）
+  version_number?: number; // 版本号（数字格式，例如：66051 代表 1.2.3）
   client_name: string;
   os_name: string;
   os_version: string;

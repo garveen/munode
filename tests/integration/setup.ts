@@ -53,7 +53,17 @@ class TestAuthServer {
       req.on('data', chunk => body += chunk);
       req.on('end', () => {
         try {
-          const authReq = JSON.parse(body);
+          let authReq: any;
+          const contentType = req.headers['content-type'] || '';
+          
+          if (contentType.includes('application/x-www-form-urlencoded')) {
+            // 解析 form-urlencoded 格式
+            authReq = this.parseFormData(body);
+          } else {
+            // 解析 JSON 格式
+            authReq = JSON.parse(body);
+          }
+          
           const result = this.authenticate(authReq);
           res.writeHead(result.success ? 200 : 401);
           res.end(JSON.stringify(result));
@@ -67,6 +77,43 @@ class TestAuthServer {
 
     res.writeHead(404);
     res.end(JSON.stringify({ error: 'Not found' }));
+  }
+
+  private parseFormData(body: string): any {
+    const params = new URLSearchParams(body);
+    const result: any = {};
+    const arrays: Record<string, string[]> = {};
+    
+    for (const [key, value] of params.entries()) {
+      if (key.endsWith('[]')) {
+        const arrayKey = key.slice(0, -2);
+        if (!arrays[arrayKey]) {
+          arrays[arrayKey] = [];
+        }
+        if (value) { // 忽略空字符串
+          arrays[arrayKey].push(value);
+        }
+      } else {
+        result[key] = value;
+      }
+    }
+    
+    // 将数组添加到结果中
+    for (const [key, values] of Object.entries(arrays)) {
+      result[key] = values;
+    }
+    
+    // 确保 tokens 数组存在
+    if (!result.tokens) {
+      result.tokens = [];
+    }
+    
+    // 转换数字字段
+    if (result.server_id) {
+      result.server_id = parseInt(result.server_id, 10);
+    }
+    
+    return result;
   }
 
   private authenticate(req: any): any {

@@ -42,6 +42,7 @@ export class ProtocolHandlers {
       // 更新客户端版本信息
       this.clientManager.updateClient(session_id, {
         version: version.version ? version.version.toString(16) : undefined,
+        version_number: version.version, // 保存数字版本号
         client_name: version.release || undefined,
         os_name: version.os || undefined,
         os_version: version.os_version || undefined,
