@@ -90,8 +90,50 @@ export interface HubConfig {
   logFile?: string;
 }
 
+/**
+ * 外部认证请求参数
+ */
+export interface ExternalAuthRequest {
+  username: string;
+  password: string;
+  tokens: string[];
+  session_id: number;
+  server_id: number;
+  ip_address: string;
+  ip_version: string;
+  release: string;
+  version?: number;
+  os: string;
+  os_version: string;
+  certificate_hash?: string;
+}
+
+/**
+ * 外部认证响应结果
+ */
+export interface ExternalAuthResult {
+  success: boolean;
+  user_id?: number;
+  username?: string;
+  displayName?: string;
+  groups?: string[];
+  reason?: string;
+  rejectType?: number;
+}
+
+/**
+ * 外部认证回调函数
+ */
+export type ExternalAuthCallback = (
+  request: ExternalAuthRequest
+) => Promise<ExternalAuthResult>;
+
 // Hub 认证配置
 export interface HubAuthConfig {
+  // 方式1: 使用回调函数进行认证（推荐）
+  callback?: ExternalAuthCallback;
+  
+  // 方式2: 使用HTTP API进行认证（向后兼容）
   apiUrl?: string; // 外部认证 API 地址
   apiKey?: string; // API 密钥
   timeout?: number; // 超时时间（毫秒），默认 5000

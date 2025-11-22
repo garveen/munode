@@ -1,12 +1,11 @@
-import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { EdgeConfig } from './types.js';
-// import { loadConfig } from '@munode/common';
+import { loadConfig } from '@munode/common';
 
 /**
  * 加载 Edge Server 配置
  */
-export function loadEdgeConfig(configPath?: string): EdgeConfig {
+export async function loadEdgeConfig(configPath?: string): Promise<EdgeConfig> {
   const defaultConfig: EdgeConfig = {
      server_id: 1,
     name: 'Edge Server',
@@ -68,8 +67,7 @@ export function loadEdgeConfig(configPath?: string): EdgeConfig {
 
   if (configPath) {
     try {
-      const configFile = readFileSync(resolve(configPath), 'utf-8');
-      const userConfig = JSON.parse(configFile);
+      const userConfig = await loadConfig<Partial<EdgeConfig>>(resolve(configPath));
       return { ...defaultConfig, ...userConfig };
     } catch (error) {
       console.warn(`Failed to load config from ${configPath}:`, error);

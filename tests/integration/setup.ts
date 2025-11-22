@@ -13,6 +13,9 @@ const __dirname = dirname(__filename);
 // 获取项目根目录（从 tests/integration 向上两级）
 const PROJECT_ROOT = join(__dirname, '../..');
 
+// Counter for cache busting in dynamic imports
+let importCounter = 0;
+
 export interface TestEnvironment {
   hubProcess?: ChildProcess;
   edgeProcess?: ChildProcess;
@@ -356,12 +359,16 @@ export async function setupTestEnvironment(
   // 2. Start Hub server (if needed)
   if (options.startHub !== false) {
     try {
-      const hubConfigPath = join(PROJECT_ROOT, 'tests/config/hub-test.json');
+      const hubConfigPath = join(PROJECT_ROOT, 'tests/config/hub-test.js');
       if (fs.existsSync(hubConfigPath)) {
         // Use dynamic ports to avoid conflicts
         const actualHubPort = port + 1000; // Hub uses 8080+1000=9080
         const controlPort = port + 3000; // Control port uses 8080+3000=11080
-        const hubConfig = JSON.parse(fs.readFileSync(hubConfigPath, 'utf8'));
+        
+        // Load the JS config file
+        const hubConfigModule = await import(`file://${hubConfigPath}?v=${++importCounter}`);
+        const hubConfig = { ...(hubConfigModule.default || hubConfigModule) };
+        
         hubConfig.port = actualHubPort;
         hubConfig.controlPort = controlPort; // Set dynamic control port
         hubConfig.webApi.port = port + 100; // Web API uses 8080+100=8180
@@ -375,8 +382,8 @@ export async function setupTestEnvironment(
           Object.assign(hubConfig, options.hubConfig);
         }
         
-        const tempHubConfigPath = join(PROJECT_ROOT, `tests/config/hub-test-${port}.json`);
-        fs.writeFileSync(tempHubConfigPath, JSON.stringify(hubConfig, null, 2));
+        const tempHubConfigPath = join(PROJECT_ROOT, `tests/config/hub-test-${port}.js`);
+        fs.writeFileSync(tempHubConfigPath, `export default ${JSON.stringify(hubConfig, null, 2)};`);
         
         // Delete test database file to ensure clean state
         const dbPath = join(PROJECT_ROOT, 'data/hub-test.db');
@@ -431,13 +438,16 @@ export async function setupTestEnvironment(
   // 3. 启动第一个 Edge 服务器（如果需要）
   if (options.startEdge !== false) {
     try {
-      const edgeConfigPath = join(PROJECT_ROOT, 'tests/config/edge-test.json');
+      const edgeConfigPath = join(PROJECT_ROOT, 'tests/config/edge-test.js');
       if (fs.existsSync(edgeConfigPath)) {
         // 使用动态端口避免冲突
         const actualEdgePort = port + 2000; // Edge使用8080+2000=10080
         const actualHubPort = port + 1000; // Hub端口
         const controlPort = port + 3000; // 控制端口
-        const edgeConfig = JSON.parse(fs.readFileSync(edgeConfigPath, 'utf8'));
+        
+        // Load the JS config file
+        const edgeConfigModule = await import(`file://${edgeConfigPath}?v=${++importCounter}`);
+        const edgeConfig = { ...(edgeConfigModule.default || edgeConfigModule) };
         
         // 设置服务器 ID
         edgeConfig.server_id = 1;
@@ -469,8 +479,8 @@ export async function setupTestEnvironment(
         edgeConfig.auth = edgeConfig.auth || {};
         delete edgeConfig.auth.apiUrl;
         
-        const tempEdgeConfigPath = join(PROJECT_ROOT, `tests/config/edge-test-${port}.json`);
-        fs.writeFileSync(tempEdgeConfigPath, JSON.stringify(edgeConfig, null, 2));
+        const tempEdgeConfigPath = join(PROJECT_ROOT, `tests/config/edge-test-${port}.js`);
+        fs.writeFileSync(tempEdgeConfigPath, `export default ${JSON.stringify(edgeConfig, null, 2)};`);
         console.log(`Created temp edge config at ${tempEdgeConfigPath} with port ${actualEdgePort}`);
         
         edgeProcess = await startEdgeServer(tempEdgeConfigPath, actualEdgePort);
@@ -493,13 +503,16 @@ export async function setupTestEnvironment(
   // 4. 启动第二个 Edge 服务器（如果需要，用于跨 Edge 测试）
   if (options.startEdge2 !== false) {
     try {
-      const edgeConfigPath = join(PROJECT_ROOT, 'tests/config/edge-test.json');
+      const edgeConfigPath = join(PROJECT_ROOT, 'tests/config/edge-test.js');
       if (fs.existsSync(edgeConfigPath)) {
         // 使用动态端口避免冲突
         const actualEdgePort2 = port + 2100; // Edge2使用8080+2100=10180
         const actualHubPort = port + 1000; // Hub端口
         const controlPort = port + 3000; // 控制端口
-        const edgeConfig2 = JSON.parse(fs.readFileSync(edgeConfigPath, 'utf8'));
+        
+        // Load the JS config file (use counter for cache busting)
+        const edgeConfigModule2 = await import(`file://${edgeConfigPath}?v=${++importCounter}`);
+        const edgeConfig2 = { ...(edgeConfigModule2.default || edgeConfigModule2) };
         
         // 设置服务器 ID
         edgeConfig2.server_id = 2;
@@ -531,8 +544,8 @@ export async function setupTestEnvironment(
         edgeConfig2.auth = edgeConfig2.auth || {};
         delete edgeConfig2.auth.apiUrl;
         
-        const tempEdgeConfigPath2 = join(PROJECT_ROOT, `tests/config/edge-test-${port}-2.json`);
-        fs.writeFileSync(tempEdgeConfigPath2, JSON.stringify(edgeConfig2, null, 2));
+        const tempEdgeConfigPath2 = join(PROJECT_ROOT, `tests/config/edge-test-${port}-2.js`);
+        fs.writeFileSync(tempEdgeConfigPath2, `export default ${JSON.stringify(edgeConfig2, null, 2)};`);
         console.log(`Created temp edge config 2 at ${tempEdgeConfigPath2} with port ${actualEdgePort2}`);
         
         edgeProcess2 = await startEdgeServer(tempEdgeConfigPath2, actualEdgePort2);
