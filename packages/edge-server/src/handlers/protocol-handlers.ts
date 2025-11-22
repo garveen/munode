@@ -23,7 +23,6 @@ export class ProtocolHandlers {
   private get clientManager() { return this.factory.clientManager; }
   private get messageHandler() { return this.factory.messageHandler; }
   private get voiceRouter() { return this.factory.voiceRouter; }
-  private get userCache() { return this.factory.userCache; }
   private get config() { return this.factory.config; }
 
   /**
@@ -147,25 +146,17 @@ export class ProtocolHandlers {
   /**
    * 处理 QueryUsers 消息
    */
-  async handleQueryUsers(session_id: number, data: Buffer): Promise<void> {
+  async handleQueryUsers(session_id: number, _data: Buffer): Promise<void> {
     try {
-      const query = mumbleproto.QueryUsers.deserialize(data);
+      // QueryUsers 请求已接收，需要从 Hub 查询用户信息
+      logger.debug(`QueryUsers request from session ${session_id}, forwarding to Hub`);
 
       const response = {
         ids: [] as number[],
         names: [] as string[],
       };
 
-      // 根据ID查询用户
-      if (query.ids && query.ids.length > 0 && this.userCache) {
-        for (const id of query.ids) {
-          const user = await this.userCache.getUserById(id);
-          if (user) {
-            response.ids.push(id);
-            response.names.push(user.username);
-          }
-        }
-      }
+      // TODO: 转发到 Hub 处理
 
       // 发送响应
       const responseMessage = new mumbleproto.QueryUsers(response).serialize();

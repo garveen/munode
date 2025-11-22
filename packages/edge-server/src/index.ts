@@ -33,6 +33,5 @@ export { EdgeControlClient } from './cluster/hub-client.js';
 export { BanManager } from './ban/ban-manager.js';
 export { ContextActions } from './handlers/context-action.js';
 export { GeoIPManager } from './util/geoip-manager.js';
-export { UserCache } from './state/user-cache.js';
 export { PacketConnPool } from './network/packet-pool.js';
 export { UDPMonitor } from './network/udp-monitor.js';

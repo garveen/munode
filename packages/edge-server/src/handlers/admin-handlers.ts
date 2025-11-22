@@ -308,7 +308,8 @@ export class AdminHandlers {
   }
 
   /**
-   * 处理清除用户缓存
+   * 处理清除用户缓存（仅清理客户端纹理和评论缓存）
+   * Edge 不再保留本地用户数据缓存
    */
   public handleClearUserCache(session_id: number): void {
     try {

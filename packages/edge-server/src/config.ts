@@ -61,7 +61,6 @@ export function loadEdgeConfig(configPath?: string): EdgeConfig {
       geoip: true,
       banSystem: true,
       contextActions: true,
-      userCache: true,
       packetPool: true,
       udpMonitor: true,
     },

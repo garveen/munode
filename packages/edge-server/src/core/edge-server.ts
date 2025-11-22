@@ -2,7 +2,6 @@ import { EventEmitter } from 'events';
 import { logger } from '@munode/common';
 import { EdgeConfig, ClientInfo, ChannelInfo, ServerStats } from '../types.js';
 import { GeoIPManager } from '../util/geoip-manager.js';
-import { UserCache } from '../state/user-cache.js';
 import { EdgeClusterManager } from '../cluster/cluster-manager.js';
 import { VoiceUDPTransport } from '@munode/protocol';
 import { HandlerFactory } from './handler-factory.js';
@@ -37,7 +36,6 @@ export class EdgeServer extends EventEmitter {
   private hubClient?: EdgeControlClient;
   private clusterManager?: EdgeClusterManager;
   private geoIPManager?: GeoIPManager;
-  private userCache?: UserCache;
   private voiceTransport?: VoiceUDPTransport; // 语音 UDP 传输
 
   // 服务器状态
@@ -66,10 +64,6 @@ export class EdgeServer extends EventEmitter {
     // 初始化可选组件
     if (this.config.features.geoip) {
       this.geoIPManager = new GeoIPManager(this.config, logger);
-    }
-
-    if (this.config.features.userCache) {
-      this.userCache = new UserCache(this.config, logger);
     }
 
     // 初始化集群组件
@@ -102,8 +96,7 @@ export class EdgeServer extends EventEmitter {
     // 初始化处理器工厂（自动创建所有核心组件和处理器）
     this.handlerFactory = new HandlerFactory(
       this.config,
-      this.hubClient,
-      this.userCache
+      this.hubClient
     );
 
     // 初始化管理器（注意：VoiceManager必须在ServerLifecycleManager之前创建）
@@ -143,10 +136,6 @@ export class EdgeServer extends EventEmitter {
         await this.geoIPManager.initialize();
       }
 
-      if (this.userCache) {
-        await this.userCache.initialize();
-      }
-
       await this.serverLifecycleManager.start();
       this.isRunning = true;
     } catch (error) {
@@ -163,10 +152,6 @@ export class EdgeServer extends EventEmitter {
       this.isRunning = false;
 
       await this.serverLifecycleManager.stop();
-
-      if (this.userCache) {
-        await this.userCache.shutdown();
-      }
 
       logger.info('Edge Server stopped successfully');
       this.emit('stopped');

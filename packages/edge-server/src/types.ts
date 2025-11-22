@@ -117,7 +117,6 @@ export interface AuthConfig {
   retry: number;
   insecure: boolean;
   cacheTTL: number;
-  userCachePath?: string;
   pullInterval: number;
   trackSessions: boolean;
   allowCacheFallback: boolean;
@@ -140,7 +139,6 @@ export interface FeatureConfig {
   geoip: boolean;
   banSystem: boolean;
   contextActions: boolean;
-  userCache: boolean;
   packetPool: boolean;
   udpMonitor: boolean;
   allowHtml?: boolean;

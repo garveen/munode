@@ -13,7 +13,6 @@ import { AuthManager } from '../auth/auth-manager.js';
 import { EdgeControlClient } from '../cluster/hub-client.js';
 import { BanManager } from '../ban/ban-manager.js';
 import { ContextActions } from '../handlers/context-action.js';
-import { UserCache } from '../state/user-cache.js';
 import { EdgeStateManager } from '../state/state-manager.js';
 import { PermissionManager, type ACLEntry } from '@munode/protocol';
 import { EdgeConfig } from '../types.js';
@@ -45,7 +44,6 @@ export class HandlerFactory {
   
   // 可选组件
   public readonly hubClient: EdgeControlClient;
-  public readonly userCache?: UserCache;
   public readonly stateManager: EdgeStateManager;
   public readonly aclMap: Map<number, ACLEntry[]>;
 
@@ -61,19 +59,17 @@ export class HandlerFactory {
 
   constructor(
     config: EdgeConfig,
-    hubClient: EdgeControlClient,
-    userCache?: UserCache
+    hubClient: EdgeControlClient
   ) {
     this.config = config;
     this.hubClient = hubClient;
-    this.userCache = userCache;
     
     // 初始化核心组件
     this.clientManager = new ClientManager(config, logger);
     this.channelManager = new ChannelManager(config, logger);
     this.messageHandler = new MessageHandler(config, logger);
     this.voiceRouter = new VoiceRouter(config, logger);
-    this.authManager = new AuthManager(config, logger, userCache, hubClient);
+    this.authManager = new AuthManager(config, logger, hubClient);
     this.banManager = new BanManager(1024);
     this.contextActions = new ContextActions();
     this.permissionManager = new PermissionManager(logger);

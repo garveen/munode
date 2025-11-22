@@ -1,7 +1,6 @@
 import { EventEmitter } from 'events';
 import type { Logger } from 'winston';
 import { EdgeConfig, AuthResult } from '../types.js';
-import { UserCache } from '../state/user-cache.js';
 import type { EdgeControlClient } from '../cluster/hub-client.js';
 
 /**
@@ -22,20 +21,18 @@ interface AuthStats {
 
 /**
  * 认证管理器 - 处理用户认证和授权
- * 现在通过 Hub 进行认证，不再直接连接认证服务器
+ * 所有认证请求必须通过 Hub 进行，Edge 不保留本地用户数据
  */
 export class AuthManager extends EventEmitter {
   private config: EdgeConfig;
   private logger: Logger;
   private authCache: Map<string, AuthCacheItem> = new Map();
-  private userCache?: UserCache; // UserCache instance
   private hubClient?: EdgeControlClient; // Hub 客户端
 
-  constructor(config: EdgeConfig, logger: Logger, userCache?: UserCache, hubClient?: EdgeControlClient) {
+  constructor(config: EdgeConfig, logger: Logger, hubClient?: EdgeControlClient) {
     super();
     this.config = config;
     this.logger = logger;
-    this.userCache = userCache;
     this.hubClient = hubClient;
   }
 
@@ -138,15 +135,11 @@ export class AuthManager extends EventEmitter {
     }
   ): Promise<AuthResult> {
     if (!this.hubClient || !this.hubClient.isConnected()) {
-      this.logger.warn('Hub client not connected, falling back to local auth');
-      
-      // 如果允许缓存回退，尝试从缓存认证
-      if (this.config.auth.allowCacheFallback) {
-        return this.authenticateFromCache(username, password);
-      }
-      
-      // 否则使用本地认证
-      return this.authenticateLocally(username, password);
+      this.logger.error('Hub client not connected, authentication unavailable');
+      return {
+        success: false,
+        reason: 'Authentication service unavailable',
+      };
     }
 
     try {
@@ -170,98 +163,11 @@ export class AuthManager extends EventEmitter {
       return response as AuthResult;
     } catch (error) {
       this.logger.error('Hub authentication error:', error);
-
-      // 如果允许缓存回退，尝试从缓存认证
-      if (this.config.auth.allowCacheFallback) {
-        return this.authenticateFromCache(username, password);
-      }
-
-      // 认证失败，返回失败结果
       return {
         success: false,
-        reason: 'Authentication service unavailable',
+        reason: 'Authentication service error',
       };
     }
-  }
-
-  /**
-   * 本地认证（开发模式）
-   */
-  /**
-   * 本地认证（备用方案）
-   */
-  private authenticateLocally(username: string, password: string): AuthResult {
-    // 简单的本地认证逻辑
-    if (username && password) {
-      return {
-        success: true,
-        user_id: this.generateUserId(username),
-        username,
-        groups: ['user'],
-        displayName: username,
-      };
-    }
-
-    return {
-      success: false,
-      reason: 'Invalid credentials',
-    };
-  }
-
-  /**
-   * 从缓存认证
-   */
-  private authenticateFromCache(username: string, password: string): AuthResult {
-    if (!this.userCache) {
-      return {
-        success: false,
-        reason: 'Cache not available',
-      };
-    }
-
-    // 尝试从用户缓存获取用户
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
-    const cachedUser = this.userCache.findUserByName(username);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-    if (cachedUser && cachedUser.password === password) {
-      // 检查缓存是否过期
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-      if (Date.now() - cachedUser.cachedAt > this.config.auth.cacheTTL) {
-        this.logger.warn(`User cache expired for ${username}`);
-        if (!this.config.auth.allowCacheFallback) {
-          return {
-            success: false,
-            reason: 'Cache expired',
-          };
-        }
-      }
-
-      return {
-        success: true,
-        user_id: parseInt(cachedUser.user_id, 10),
-        username: cachedUser.username,
-        groups: cachedUser.groups,
-        displayName: cachedUser.username,
-      };
-    }
-
-    return {
-      success: false,
-      reason: 'User not found in cache',
-    };
-  }
-
-  /**
-   * 生成用户ID
-   */
-  private generateUserId(username: string): number {
-    let hash = 0;
-    for (let i = 0; i < username.length; i++) {
-      const char = username.charCodeAt(i);
-      hash = (hash << 5) - hash + char;
-      hash = hash & hash; // 转换为32位整数
-    }
-    return Math.abs(hash);
   }
 
   /**
