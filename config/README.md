@@ -106,6 +106,15 @@ export default {
 
 The HTTP API approach is still supported for backward compatibility:
 
+**⚠️ Breaking Change Note**: The `requestFields` configuration option has been removed in favor of using standard field names. If you were using custom field mappings, you'll need to update your authentication API to accept the standard field names:
+
+Standard request fields:
+- `username`, `password`, `tokens`
+- `session_id`, `server_id`
+- `ip_address`, `ip_version`
+- `release`, `version`, `os`, `os_version`
+- `certificate_hash`
+
 ```javascript
 export default {
   // ... other config

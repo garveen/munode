@@ -12,7 +12,7 @@ program
 program
   .command('start')
   .description('Start the Edge Server')
-  .option('-c, --config <path>', 'Path to configuration file', './config/edge-server.json')
+  .option('-c, --config <path>', 'Path to configuration file', './config/edge-server.js')
   .option('-p, --port <port>', 'Server port', '64738')
   .option('-h, --host <host>', 'Server host', '0.0.0.0')
   .option('--hub-host <host>', 'Hub server host')
@@ -70,7 +70,7 @@ program
 program
   .command('validate-config')
   .description('Validate configuration file')
-  .option('-c, --config <path>', 'Path to configuration file', './config/edge-server.json')
+  .option('-c, --config <path>', 'Path to configuration file', './config/edge-server.js')
   .action(async (options) => {
     try {
       const config = await loadEdgeConfig(options.config);
@@ -93,7 +93,8 @@ program
 program
   .command('generate-config')
   .description('Generate default configuration file')
-  .option('-o, --output <path>', 'Output path', './config/edge-server.json')
+  .option('-o, --output <path>', 'Output path', './config/edge-server.js')
+  .option('-f, --format <format>', 'Output format (js or json)', 'js')
   .action(async (options) => {
     try {
       const config = await loadEdgeConfig();
@@ -104,8 +105,19 @@ program
       const dir = path.dirname(options.output);
       await fs.promises.mkdir(dir, { recursive: true });
 
-      // 写入配置文件
-      await fs.promises.writeFile(options.output, JSON.stringify(config, null, 2));
+      // 根据格式输出配置文件
+      if (options.format === 'json') {
+        await fs.promises.writeFile(options.output, JSON.stringify(config, null, 2));
+      } else {
+        // 输出 JS 格式
+        const jsContent = `/**
+ * Edge Server Configuration
+ * @type {import('../packages/edge-server/src/types.js').EdgeConfig}
+ */
+export default ${JSON.stringify(config, null, 2)};
+`;
+        await fs.promises.writeFile(options.output, jsContent);
+      }
       console.log(`Default configuration written to ${options.output}`);
     } catch (error) {
       console.error('Failed to generate configuration:', error);

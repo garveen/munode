@@ -507,8 +507,8 @@ export async function setupTestEnvironment(
         const actualHubPort = port + 1000; // Hub端口
         const controlPort = port + 3000; // 控制端口
         
-        // Load the JS config file
-        const edgeConfigModule2 = await import(`file://${edgeConfigPath}?t=${Date.now()}`);
+        // Load the JS config file (use random cache buster for multiple imports)
+        const edgeConfigModule2 = await import(`file://${edgeConfigPath}?t=${Date.now()}-${Math.random()}`);
         const edgeConfig2 = { ...(edgeConfigModule2.default || edgeConfigModule2) };
         
         // 设置服务器 ID
