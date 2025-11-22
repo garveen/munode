@@ -473,4 +473,44 @@ export class HubPermissionChecker {
       groups: session.groups || [], // 从 session 中获取用户组
     };
   }
+
+  /**
+   * Check if a user can see a specified channel (for Channel Ninja feature)
+   * A channel is visible to a user if and only if:
+   * 1. User has Enter permission on the channel, or
+   * 2. User has Listen permission on the channel, or
+   * 3. User has Enter or Listen permission on any linked channel of this channel
+   * 
+   * @param channelId - Channel ID to check
+   * @param user - User info
+   * @returns Whether the user can see the channel
+   */
+  async canUserSeeChannel(channelId: number, user: UserInfo): Promise<boolean> {
+    // Check Enter or Listen permissions on the channel itself
+    const hasEnter = await this.hasPermission(channelId, user, Permission.Enter);
+    if (hasEnter) {
+      return true;
+    }
+
+    const hasListen = await this.hasPermission(channelId, user, Permission.Listen);
+    if (hasListen) {
+      return true;
+    }
+
+    // Check permissions on linked channels
+    const linkedChannels = await this.database.getChannelLinks(channelId);
+    for (const linkedChannelId of linkedChannels) {
+      const hasEnterOnLinked = await this.hasPermission(linkedChannelId, user, Permission.Enter);
+      if (hasEnterOnLinked) {
+        return true;
+      }
+
+      const hasListenOnLinked = await this.hasPermission(linkedChannelId, user, Permission.Listen);
+      if (hasListenOnLinked) {
+        return true;
+      }
+    }
+
+    return false;
+  }
 }

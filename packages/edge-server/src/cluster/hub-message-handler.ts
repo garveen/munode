@@ -144,16 +144,25 @@ export class HubMessageHandlers {
         }
       }
 
-      // 广播给所有本地已认证的客户端（包括发起者自己）
+      // Broadcast to all local authenticated clients (if target_sessions provided, only broadcast to these clients)
       const userStateMessage = userState.serialize();
       const allClients = this.clientManager.getAllClients();
+      const targetSessions = params.target_sessions; // List of target sessions in Channel Ninja mode
+      const targetSessionsSet = targetSessions ? new Set(targetSessions) : null; // Convert to Set for O(1) lookup
+      
       for (const client of allClients) {
         if (client.user_id > 0) {
-          this.messageHandler.sendMessage(client.session, MessageType.UserState, Buffer.from(userStateMessage));
+          // If target_sessions provided, only broadcast to specified sessions
+          if (!targetSessionsSet || targetSessionsSet.has(client.session)) {
+            this.messageHandler.sendMessage(client.session, MessageType.UserState, Buffer.from(userStateMessage));
+          }
         }
       }
 
-      logger.debug(`Broadcasted UserState to ${allClients.filter(c => c.user_id > 0).length} local clients`);
+      const broadcasted = targetSessionsSet 
+        ? allClients.filter(c => c.user_id > 0 && targetSessionsSet.has(c.session)).length
+        : allClients.filter(c => c.user_id > 0).length;
+      logger.debug(`Broadcasted UserState to ${broadcasted} local clients${targetSessionsSet ? ' (filtered)' : ''}`);
     } catch (error) {
       logger.error('Error handling UserState broadcast from Hub:', error);
     }
@@ -294,13 +303,16 @@ export class HubMessageHandlers {
    */
   handleUserRemoveBroadcastFromHub(params: any): void {
     try {
-      const { actor_session, target_session, target_edge_id, reason, ban } = params;
+      const { session_id, actor_session, target_session, target_edge_id, reason, ban, target_sessions } = params;
 
-      logger.debug(`Received UserRemove broadcast from Hub: target ${target_session} on Edge ${target_edge_id}`);
+      // Use session_id as primary target (Channel Ninja mode), otherwise use target_session (traditional kick/ban mode)
+      const actualTargetSession = session_id || target_session;
+
+      logger.debug(`Received UserRemove broadcast from Hub: target ${actualTargetSession} on Edge ${target_edge_id}${target_sessions ? ' (filtered)' : ''}`);
 
       // 构建UserRemove消息
       const userRemove = new mumbleproto.UserRemove({
-        session: target_session,
+        session: actualTargetSession,
         actor: actor_session,
         reason: reason || '',
         ban: ban || false,
@@ -308,27 +320,35 @@ export class HubMessageHandlers {
 
       const userRemoveMessage = userRemove.serialize();
 
-      // 广播给所有本地已认证的客户端
+      // Broadcast to all local authenticated clients (if target_sessions provided, only broadcast to these clients)
       const allClients = this.clientManager.getAllClients();
+      const targetSessionsSet = target_sessions ? new Set(target_sessions) : null; // Convert to Set for O(1) lookup
+      
       for (const client of allClients) {
         if (client.user_id > 0) {
-          this.messageHandler.sendMessage(client.session, MessageType.UserRemove, Buffer.from(userRemoveMessage));
+          // If target_sessions provided, only broadcast to specified sessions (Channel Ninja mode)
+          if (!targetSessionsSet || targetSessionsSet.has(client.session)) {
+            this.messageHandler.sendMessage(client.session, MessageType.UserRemove, Buffer.from(userRemoveMessage));
+          }
         }
       }
 
-      // 如果目标用户在本Edge，强制断开连接
-      if (target_edge_id === String(this.config.server_id)) {
-        const targetClient = this.clientManager.getClient(target_session);
+      // If target user on this Edge and is real kick/ban (not Channel Ninja hiding), force disconnect
+      if (!target_sessions && target_edge_id === String(this.config.server_id)) {
+        const targetClient = this.clientManager.getClient(actualTargetSession);
         if (targetClient) {
           this.clientManager.forceDisconnect(
-            target_session,
+            actualTargetSession,
             ban ? `Banned: ${reason}` : `Kicked: ${reason}`
           );
-          logger.info(`Disconnected local client ${target_session} due to ${ban ? 'ban' : 'kick'}`);
+          logger.info(`Disconnected local client ${actualTargetSession} due to ${ban ? 'ban' : 'kick'}`);
         }
       }
 
-      logger.debug(`Broadcasted UserRemove to ${allClients.filter(c => c.user_id > 0).length} local clients`);
+      const broadcasted = targetSessionsSet 
+        ? allClients.filter(c => c.user_id > 0 && targetSessionsSet.has(c.session)).length
+        : allClients.filter(c => c.user_id > 0).length;
+      logger.debug(`Broadcasted UserRemove to ${broadcasted} local clients${targetSessionsSet ? ' (filtered)' : ''}`);
     } catch (error) {
       logger.error('Error handling UserRemove broadcast from Hub:', error);
     }
