@@ -39,7 +39,6 @@ export interface EdgeConfig {
   capacity: number;
   max_bandwidth: number;
   defaultChannel: number;
-  databasePath: string;
   logLevel: string;
   features: FeatureConfig;
   welcomeText?: string;

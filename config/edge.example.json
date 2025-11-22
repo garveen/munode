@@ -73,7 +73,6 @@
   },
   "ban": {
     "enabled": true,
-    "dbPath": "./data/bans.db",
     "cacheTTL": 300
   },
   "logLevel": "info",

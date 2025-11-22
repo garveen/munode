@@ -56,7 +56,6 @@ export function loadEdgeConfig(configPath?: string): EdgeConfig {
     capacity: 100,
     max_bandwidth: 1000000, // 1MB/s
     defaultChannel: 0,
-    databasePath: './data/edge.db',
     logLevel: 'info',
     features: {
       geoip: true,

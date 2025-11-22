@@ -1,6 +1,5 @@
 import { createLogger } from '@munode/common';
 import { LRUCache } from 'lru-cache';
-import Database from 'sqlite3';
 import * as ipaddr from 'ipaddr.js';
 import type { BanInfo, BanCheckResult } from '../types.js';
 
@@ -8,19 +7,20 @@ const logger = createLogger({ service: 'ban-manager' });
 
 /**
  * 封禁管理系统
- * 支持 IP、证书、用户封禁，包含 LRU 缓存和 SQLite 持久化
+ * 支持 IP、证书、用户封禁，包含内存缓存
+ * 注意：Edge 服务器不进行持久化，所有封禁数据在重启后丢失
  */
 export class BanManager {
-  private db: Database.Database;
+  private bans: Map<number, BanInfo>;
   private temporaryBans: LRUCache<string, BanInfo>;
   private certBans: Set<string>;
+  private nextId = 1;
   private initialized = false;
 
   constructor(
-    private dbPath: string,
     private cacheSize = 1024
   ) {
-    this.db = new Database.Database(dbPath);
+    this.bans = new Map<number, BanInfo>();
     this.certBans = new Set<string>();
 
     // LRU 缓存用于临时封禁和性能优化
@@ -31,45 +31,24 @@ export class BanManager {
   }
 
   /**
-   * 初始化数据库和缓存
+   * 初始化内存缓存
    */
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
-    try {
-      // 创建封禁表
-      await this.runQuery(`
-        CREATE TABLE IF NOT EXISTS bans (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          address TEXT,
-          mask INTEGER DEFAULT 32,
-          name TEXT,
-          hash TEXT,
-          reason TEXT NOT NULL,
-          start_date TEXT NOT NULL,
-          duration INTEGER DEFAULT 0,
-          created_by TEXT,
-          created_at INTEGER DEFAULT (strftime('%s','now'))
-        )
-      `);
-
-      // 创建索引
-      await this.runQuery('CREATE INDEX IF NOT EXISTS idx_bans_address ON bans(address)');
-      await this.runQuery('CREATE INDEX IF NOT EXISTS idx_bans_hash ON bans(hash)');
-      await this.runQuery('CREATE INDEX IF NOT EXISTS idx_bans_start_date ON bans(start_date)');
-
-      // 预加载证书封禁到内存
-      await this.loadCertBans();
-
-      // 清理过期封禁
-      await this.cleanExpiredBans();
-
-      this.initialized = true;
-      logger.info('BanManager initialized', { dbPath: this.dbPath, cacheSize: this.cacheSize });
-    } catch (error) {
-      logger.error('Failed to initialize BanManager:', error);
-      throw error;
+    // 初始化证书封禁缓存
+    this.certBans.clear();
+    for (const ban of this.bans.values()) {
+      if (ban.hash) {
+        this.certBans.add(ban.hash);
+      }
     }
+
+    // 清理过期封禁
+    await this.cleanExpiredBans();
+
+    this.initialized = true;
+    logger.info('BanManager initialized (memory-only)', { cacheSize: this.cacheSize });
   }
 
   /**
@@ -79,7 +58,7 @@ export class BanManager {
     // 1. 检查证书封禁 (最快)
     if (certHash && this.certBans.has(certHash)) {
       const ban = await this.getBanByCertHash(certHash);
-      if (ban) {
+      if (ban && this.isBanActive(ban)) {
         return {
           banned: true,
           reason: ban.reason,
@@ -105,9 +84,9 @@ export class BanManager {
       }
     }
 
-    // 3. 检查数据库
-    const ban = await this.findMatchingBan(ip);
-    if (ban) {
+    // 3. 检查内存中的封禁列表
+    const ban = this.findMatchingBan(ip);
+    if (ban && this.isBanActive(ban)) {
       // 缓存结果
       this.temporaryBans.set(cacheKey, ban);
 
@@ -142,6 +121,29 @@ export class BanManager {
       }
     }
 
+    // 创建封禁对象
+    const banId = this.nextId++;
+    const banInfo: BanInfo = {
+      id: banId,
+      address: ban.address,
+      mask: ban.mask || 32,
+      name: ban.name,
+      hash: ban.hash,
+      reason: ban.reason,
+      startDate: ban.startDate,
+      duration: ban.duration,
+      createdBy: ban.createdBy,
+      createdAt: new Date(),
+    };
+
+    // 存储到内存
+    this.bans.set(banId, banInfo);
+
+    // 更新缓存
+    if (ban.hash) {
+      this.certBans.add(ban.hash);
+    }
+
     // 审计日志
     logger.info({
       action: 'ban_add',
@@ -152,29 +154,6 @@ export class BanManager {
       timestamp: Date.now(),
     });
 
-    // 执行封禁
-    const result = await this.runQuery(
-      `INSERT INTO bans (address, mask, name, hash, reason, start_date, duration, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        ban.address || null,
-        ban.mask || 32,
-        ban.name || null,
-        ban.hash || null,
-        ban.reason,
-        ban.startDate.toISOString(),
-        ban.duration,
-        ban.createdBy || null,
-      ]
-    );
-
-    const banId = result.lastID;
-
-    // 更新缓存
-    if (ban.hash) {
-      this.certBans.add(ban.hash);
-    }
-
     logger.info(`Added ban #${banId}:`, ban);
 
     return banId;
@@ -184,10 +163,10 @@ export class BanManager {
    * 移除封禁
    */
   async removeBan(banId: number): Promise<boolean> {
-    const ban = await this.getBanById(banId);
+    const ban = this.bans.get(banId);
     if (!ban) return false;
 
-    await this.runQuery('DELETE FROM bans WHERE id = ?', [banId]);
+    this.bans.delete(banId);
 
     // 清除缓存
     if (ban.hash) {
@@ -206,52 +185,47 @@ export class BanManager {
    * 获取所有封禁
    */
   async getAllBans(): Promise<BanInfo[]> {
-    return this.queryAll('SELECT * FROM bans ORDER BY id DESC');
+    return Array.from(this.bans.values());
   }
 
   /**
    * 获取所有活跃封禁
    */
   async getAllActiveBans(): Promise<BanInfo[]> {
-    const now = new Date().toISOString();
-
-    return this.queryAll(
-      `
-      SELECT * FROM bans
-      WHERE duration = 0
-         OR datetime(start_date, '+' || duration || ' seconds') > datetime(?)
-    `,
-      [now]
-    );
+    return Array.from(this.bans.values()).filter(ban => this.isBanActive(ban));
   }
 
   /**
    * 清理过期封禁
    */
   async cleanExpiredBans(): Promise<number> {
-    const now = new Date().toISOString();
+    let cleaned = 0;
 
-    const result = await this.runQuery(
-      `
-      DELETE FROM bans
-      WHERE duration > 0
-        AND datetime(start_date, '+' || duration || ' seconds') <= datetime(?)
-    `,
-      [now]
-    );
-
-    if (result.changes > 0) {
-      logger.info(`Cleaned ${result.changes} expired bans`);
+    for (const [id, ban] of this.bans) {
+      if (!this.isBanActive(ban)) {
+        this.bans.delete(id);
+        if (ban.hash) {
+          this.certBans.delete(ban.hash);
+        }
+        if (ban.address) {
+          this.temporaryBans.delete(`ip:${ban.address}`);
+        }
+        cleaned++;
+      }
     }
 
-    return result.changes;
+    if (cleaned > 0) {
+      logger.info(`Cleaned ${cleaned} expired bans`);
+    }
+
+    return cleaned;
   }
 
   /**
    * 清空所有封禁
    */
   async purgeBans(): Promise<void> {
-    await this.runQuery('DELETE FROM bans');
+    this.bans.clear();
     this.temporaryBans.clear();
     this.certBans.clear();
 
@@ -262,44 +236,41 @@ export class BanManager {
    * 根据 ID 获取封禁
    */
   async getBanById(id: number): Promise<BanInfo | null> {
-    return this.queryOne('SELECT * FROM bans WHERE id = ?', [id]);
+    return this.bans.get(id) || null;
   }
 
   /**
    * 根据证书哈希获取封禁
    */
   async getBanByCertHash(hash: string): Promise<BanInfo | null> {
-    return this.queryOne('SELECT * FROM bans WHERE hash = ? LIMIT 1', [hash]);
+    for (const ban of this.bans.values()) {
+      if (ban.hash === hash) {
+        return ban;
+      }
+    }
+    return null;
   }
 
   /**
    * 根据 IP 获取封禁列表
    */
   async getBansByIP(ip: string): Promise<BanInfo[]> {
-    return this.queryAll('SELECT * FROM bans WHERE address = ?', [ip]);
+    return Array.from(this.bans.values()).filter(ban => ban.address === ip);
   }
 
   /**
    * 根据用户 ID 获取封禁列表
    */
   async getBansByUser(userId: number): Promise<BanInfo[]> {
-    return this.queryAll('SELECT * FROM bans WHERE name = ?', [String(userId)]);
+    return Array.from(this.bans.values()).filter(ban => ban.name === String(userId));
   }
 
   /**
-   * 关闭数据库连接
+   * 关闭 (无操作，因为没有持久化资源)
    */
   async close(): Promise<void> {
-    return new Promise((resolve) => {
-      this.db.close((err) => {
-        if (err) {
-          logger.error('Error closing database:', err);
-        } else {
-          logger.info('Database connection closed');
-        }
-        resolve();
-      });
-    });
+    // 内存实现不需要清理资源
+    logger.info('BanManager closed (memory-only)');
   }
 
   // ===== 私有方法 =====
@@ -307,10 +278,10 @@ export class BanManager {
   /**
    * 查找匹配的封禁
    */
-  private async findMatchingBan(ip: string): Promise<BanInfo | null> {
-    const bans = await this.getAllActiveBans();
+  private findMatchingBan(ip: string): BanInfo | null {
+    const activeBans = Array.from(this.bans.values()).filter(ban => this.isBanActive(ban));
 
-    for (const ban of bans) {
+    for (const ban of activeBans) {
       if (!ban.address) continue;
 
       if (this.ipMatchesBan(ip, ban)) {
@@ -366,67 +337,5 @@ export class BanManager {
     }
 
     return new Date(ban.startDate.getTime() + ban.duration * 1000);
-  }
-
-  /**
-   * 预加载证书封禁到内存
-   */
-  private async loadCertBans(): Promise<void> {
-    const bans = await this.queryAll<BanInfo>('SELECT hash FROM bans WHERE hash IS NOT NULL');
-
-    this.certBans.clear();
-    for (const ban of bans) {
-      if (ban.hash) {
-        this.certBans.add(ban.hash);
-      }
-    }
-
-    logger.info(`Loaded ${this.certBans.size} certificate bans`);
-  }
-
-  // ===== 数据库辅助方法 =====
-
-  private async runQuery(sql: string, params: any[] = []): Promise<any> {
-    return new Promise((resolve, reject) => {
-      this.db.run(sql, params, function (err) {
-        if (err) reject(err);
-        else resolve(this);
-      });
-    });
-  }
-
-  private async queryOne<T = BanInfo>(sql: string, params: any[] = []): Promise<T | null> {
-    return new Promise((resolve, reject) => {
-      this.db.get(sql, params, (err, row) => {
-        if (err) reject(err);
-        else resolve(this.parseBan(row) as T);
-      });
-    });
-  }
-
-  private async queryAll<T = BanInfo>(sql: string, params: any[] = []): Promise<T[]> {
-    return new Promise((resolve, reject) => {
-      this.db.all(sql, params, (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows.map((r) => this.parseBan(r)) as T[]);
-      });
-    });
-  }
-
-  private parseBan(row: any): BanInfo | null {
-    if (!row) return null;
-
-    return {
-      id: row.id,
-      address: row.address,
-      mask: row.mask,
-      name: row.name,
-      hash: row.hash,
-      reason: row.reason,
-      startDate: new Date(row.start_date),
-      duration: row.duration,
-      createdBy: row.created_by,
-      createdAt: row.created_at ? new Date(row.created_at * 1000) : undefined,
-    };
   }
 }
