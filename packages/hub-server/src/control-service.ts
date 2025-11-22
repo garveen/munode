@@ -21,6 +21,7 @@ import type { CertificateExchangeService } from './certificate-exchange.js';
 import type { HubDatabase } from './database.js';
 import type { ACLManager } from './acl-manager.js';
 import type { ChannelGroupManager } from './channel-group-manager.js';
+import type { HubAuthManager } from './auth-manager.js';
 import { HubPermissionChecker, Permission } from './permission-checker.js';
 
 const logger = createLogger({ service: 'hub-control' });
@@ -44,6 +45,7 @@ export class HubControlService {
   private _channelGroupManager?: ChannelGroupManager;
   private _permissionChecker?: HubPermissionChecker;
   private _blobStore?: BlobStore;
+  private _authManager?: HubAuthManager;
   private edgeChannels = new Map<number, RPCChannel>(); // edge_id -> channel
 
   constructor(
@@ -55,7 +57,8 @@ export class HubControlService {
     database?: HubDatabase,
     aclManager?: ACLManager,
     channelGroupManager?: ChannelGroupManager,
-    blobStore?: BlobStore
+    blobStore?: BlobStore,
+    authManager?: HubAuthManager
   ) {
     this.config = config;
     this._registry = registry;
@@ -66,6 +69,7 @@ export class HubControlService {
     this._aclManager = aclManager;
     this._channelGroupManager = channelGroupManager;
     this._blobStore = blobStore;
+    this._authManager = authManager;
     
     // 初始化权限检查器
     if (database) {
@@ -1401,7 +1405,7 @@ export class HubControlService {
    */
   private async handleUserStatsNotification(params: any): Promise<void> {
     try {
-      const { edge_id, actor_session, actor_user_id, target_session, stats_only } = params;
+      const { edge_id, actor_session, target_session, stats_only } = params;
 
       logger.info(`Hub received UserStats request from Edge ${edge_id}, actor: ${actor_session}, target: ${target_session}`);
 
@@ -1537,6 +1541,10 @@ export class HubControlService {
       return this.handleAllocateSessionId(channel, params);
     });
 
+    this.typedServer.handle('edge.authenticateUser', async (channel, params) => {
+      return this.handleAuthenticateUser(channel, params);
+    });
+
     this.typedServer.handle('edge.reportSession', async (channel, params) => {
       return this.handleReportSession(channel, params);
     });
@@ -1662,6 +1670,40 @@ export class HubControlService {
     const session_id = this._sessionManager.allocateSessionId();
     logger.debug(`Allocated session ID ${session_id} for Edge ${params.edge_id}`);
     return { session_id };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  private async handleAuthenticateUser(
+    _channel: RPCChannel,
+    params: RPCParams<'edge.authenticateUser'>
+  ): Promise<RPCResult<'edge.authenticateUser'>> {
+    if (!this._authManager) {
+      logger.error('Auth manager not initialized');
+      return {
+        success: false,
+        reason: 'Authentication service not available',
+      };
+    }
+
+    try {
+      logger.info(`Authentication request from Edge ${params.server_id} for user: ${params.username}`);
+      
+      const authResult = await this._authManager.authenticate({
+        server_id: params.server_id,
+        username: params.username,
+        password: params.password,
+        tokens: params.tokens,
+        client_info: params.client_info,
+      });
+
+      return authResult;
+    } catch (error) {
+      logger.error(`Authentication error for user ${params.username}:`, error);
+      return {
+        success: false,
+        reason: 'Internal authentication error',
+      };
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars

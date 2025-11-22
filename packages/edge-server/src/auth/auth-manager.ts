@@ -1,8 +1,8 @@
 import { EventEmitter } from 'events';
 import type { Logger } from 'winston';
-import { EdgeConfig, AuthConfig, AuthResult } from '../types.js';
+import { EdgeConfig, AuthResult } from '../types.js';
 import { UserCache } from '../state/user-cache.js';
-import { mumbleproto } from '@munode/protocol';
+import type { EdgeControlClient } from '../cluster/hub-client.js';
 
 /**
  * 认证缓存项
@@ -21,33 +21,22 @@ interface AuthStats {
 }
 
 /**
- * API认证响应
- */
-interface AuthAPIResponse {
-  success: boolean;
-  user_id?: number;
-  username?: string;
-  displayName?: string;
-  groups?: string[];
-  error?: string;
-  message?: string;
-  reason?: string;
-}
-
-/**
  * 认证管理器 - 处理用户认证和授权
+ * 现在通过 Hub 进行认证，不再直接连接认证服务器
  */
 export class AuthManager extends EventEmitter {
   private config: EdgeConfig;
   private logger: Logger;
   private authCache: Map<string, AuthCacheItem> = new Map();
   private userCache?: UserCache; // UserCache instance
+  private hubClient?: EdgeControlClient; // Hub 客户端
 
-  constructor(config: EdgeConfig, logger: Logger, userCache?: UserCache) {
+  constructor(config: EdgeConfig, logger: Logger, userCache?: UserCache, hubClient?: EdgeControlClient) {
     super();
     this.config = config;
     this.logger = logger;
     this.userCache = userCache;
+    this.hubClient = hubClient;
   }
 
   /**
@@ -63,13 +52,28 @@ export class AuthManager extends EventEmitter {
   }
 
   /**
+   * 设置 Hub 客户端
+   */
+  setHubClient(hubClient: EdgeControlClient): void {
+    this.hubClient = hubClient;
+  }
+
+  /**
    * 处理用户认证
    */
   async authenticate(
-     session_id: number,
+    session_id: number,
     username: string,
     password: string,
-    tokens: string[]
+    tokens: string[],
+    clientInfo?: {
+      ip_address: string;
+      ip_version: string;
+      release: string;
+      os: string;
+      os_version: string;
+      certificate_hash?: string;
+    }
   ): Promise<AuthResult> {
     try {
       this.logger.info(`Authenticating user: session=${session_id}, username=${username}`);
@@ -81,14 +85,16 @@ export class AuthManager extends EventEmitter {
         return cached.result;
       }
 
-      // 调用外部认证 API
-      const authResult = await this.authenticateWithAPI(username, password, tokens);
+      // 通过 Hub 认证
+      const authResult = await this.authenticateViaHub(username, password, tokens, clientInfo);
 
       // 缓存结果
-      this.authCache.set(cacheKey, {
-        result: authResult,
-        timestamp: Date.now(),
-      });
+      if (authResult.success) {
+        this.authCache.set(cacheKey, {
+          result: authResult,
+          timestamp: Date.now(),
+        });
+      }
 
       if (authResult.success) {
         this.logger.info(
@@ -111,89 +117,56 @@ export class AuthManager extends EventEmitter {
   }
 
   /**
-   * 调用外部认证 API
+   * 通过 Hub 进行认证
    */
-  private async authenticateWithAPI(
+  private async authenticateViaHub(
     username: string,
     password: string,
-    tokens: string[]
+    tokens: string[],
+    clientInfo?: {
+      ip_address: string;
+      ip_version: string;
+      release: string;
+      os: string;
+      os_version: string;
+      certificate_hash?: string;
+    }
   ): Promise<AuthResult> {
-    // 支持 apiUrl 或 endpoint 字段（向后兼容）
-    const authConfig = this.config.auth as AuthConfig & { endpoint?: string };
-    const authUrl = authConfig.apiUrl || authConfig.endpoint;
-
-    if (!authUrl) {
-      // 如果没有配置外部 API，使用本地认证
+    if (!this.hubClient || !this.hubClient.isConnected()) {
+      this.logger.warn('Hub client not connected, falling back to local auth');
+      
+      // 如果允许缓存回退，尝试从缓存认证
+      if (this.config.auth.allowCacheFallback) {
+        return this.authenticateFromCache(username, password);
+      }
+      
+      // 否则使用本地认证
       return this.authenticateLocally(username, password);
     }
 
     try {
-      const response = await fetch(authUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${authConfig.apiKey || ''}`,
+      // 调用 Hub 的认证 RPC
+      const response = await this.hubClient.call('edge.authenticateUser', {
+        server_id: this.config.server_id,
+        username,
+        password,
+        tokens,
+        client_info: clientInfo || {
+          ip_address: '0.0.0.0',
+          ip_version: 'ipv4',
+          release: 'unknown',
+          os: 'unknown',
+          os_version: 'unknown',
         },
-        body: JSON.stringify({
-          username,
-          password,
-          tokens,
-           server_id: this.config.server_id,
-        }),
-        signal: AbortSignal.timeout(authConfig.timeout || 5000),
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        this.logger.error(`Auth API error: ${response.status} - ${errorText}`);
-
-        // 根据 HTTP 状态码确定 reject 类型
-        if (response.status === 401 || response.status === 403) {
-          // 401/403 表示认证凭据错误（用户名或密码错误）
-          let errorData: AuthAPIResponse | null = null;
-          try {
-            errorData = JSON.parse(errorText) as AuthAPIResponse;
-          } catch {
-            // 忽略解析错误
-          }
-
-          return {
-            success: false,
-            reason: errorData?.message || errorData?.reason || 'Invalid username or password',
-            rejectType: mumbleproto.Reject.RejectType.WrongUserPW,
-          };
-        }
-
-        // 其他错误视为服务不可用
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const result = (await response.json()) as AuthAPIResponse;
-
-      this.logger.info(`Auth API response: ${JSON.stringify(result)}`);
-
-      // 规范化返回格式，确保包含所有必需字段
-      const normalized: AuthResult = {
-        success: result.success || false,
-        user_id: result.user_id || 0,
-        username: result.username || username,
-        displayName: result.displayName || result.username || username,
-        groups: result.groups || ['user'],
-        reason: result.message || result.reason,
-        rejectType: result.success
-          ? undefined
-          : result.message?.includes('Invalid password')
-            ? mumbleproto.Reject.RejectType.WrongUserPW
-            : mumbleproto.Reject.RejectType.None,
-      };
-
-      this.logger.info(`Normalized auth result: ${JSON.stringify(normalized)}`);
-      return normalized;
+      this.logger.debug(`Hub auth response:`, response);
+      return response as AuthResult;
     } catch (error) {
-      this.logger.error('External auth API error:', error);
+      this.logger.error('Hub authentication error:', error);
 
-      // 如果允许缓存回退，尝试本地缓存
-      if (authConfig.allowCacheFallback) {
+      // 如果允许缓存回退，尝试从缓存认证
+      if (this.config.auth.allowCacheFallback) {
         return this.authenticateFromCache(username, password);
       }
 

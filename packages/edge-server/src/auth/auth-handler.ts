@@ -54,12 +54,25 @@ export class AuthHandlers {
         return;
       }
 
+      // 收集客户端信息（使用已有的客户端状态信息）
+      // 注意：客户端版本和OS信息通常从Version消息获取，这里我们使用默认值
+      // Hub会在调用外部认证API时传递这些信息
+      const clientInfo = {
+        ip_address: client.ip_address || '0.0.0.0',
+        ip_version: client.ip_address?.includes(':') ? 'ipv6' : 'ipv4',
+        release: 'unknown', // 客户端版本信息需要从Version消息获取
+        os: 'unknown', // 操作系统信息需要从Version消息获取
+        os_version: 'unknown',
+        certificate_hash: client.cert_hash,
+      };
+
       // 调用认证管理器
       const authResult = await this.authManager.authenticate(
         session_id,
         authMessage.username || '',
         authMessage.password || '',
-        authMessage.tokens || []
+        authMessage.tokens || [],
+        clientInfo
       );
 
       if (authResult.success) {

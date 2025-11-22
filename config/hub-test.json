@@ -46,5 +46,24 @@
   "acl": {
     "enabled": true
   },
+  "auth": {
+    "apiUrl": "http://127.0.0.1:8080/auth",
+    "apiKey": "",
+    "timeout": 5000,
+    "cacheTTL": 300000,
+    "allowCacheFallback": false,
+    "headers": {
+      "authHeaderName": "Authorization",
+      "authHeaderFormat": "Bearer {apiKey}"
+    },
+    "responseFields": {
+      "successField": "success",
+      "userIdField": "user_id",
+      "usernameField": "username",
+      "displayNameField": "displayName",
+      "groupsField": "groups",
+      "reasonField": "reason"
+    }
+  },
   "logLevel": "info"
 }

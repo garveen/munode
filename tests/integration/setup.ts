@@ -308,6 +308,10 @@ export async function setupTestEnvironment(
         hubConfig.controlPort = controlPort; // 设置动态控制端口
         hubConfig.webApi.port = port + 100; // Web API使用8080+100=8180
         
+        // 配置认证（指向测试认证服务器）
+        hubConfig.auth = hubConfig.auth || {};
+        hubConfig.auth.apiUrl = `http://127.0.0.1:${port}/auth`;
+        
         const tempHubConfigPath = join(PROJECT_ROOT, `config/hub-test-${port}.json`);
         fs.writeFileSync(tempHubConfigPath, JSON.stringify(hubConfig, null, 2));
         
@@ -398,9 +402,9 @@ export async function setupTestEnvironment(
         edgeConfig.hubServer.port = actualHubPort;
         edgeConfig.hubServer.controlPort = controlPort;
         
-        // 配置认证
+        // 移除直接的认证 API 配置（现在通过 Hub 认证）
         edgeConfig.auth = edgeConfig.auth || {};
-        edgeConfig.auth.apiUrl = `http://127.0.0.1:${port}/auth`;
+        delete edgeConfig.auth.apiUrl;
         
         const tempEdgeConfigPath = join(PROJECT_ROOT, `config/edge-test-${port}.json`);
         fs.writeFileSync(tempEdgeConfigPath, JSON.stringify(edgeConfig, null, 2));
@@ -460,9 +464,9 @@ export async function setupTestEnvironment(
         edgeConfig2.hubServer.port = actualHubPort;
         edgeConfig2.hubServer.controlPort = controlPort;
         
-        // 配置认证
+        // 移除直接的认证 API 配置（现在通过 Hub 认证）
         edgeConfig2.auth = edgeConfig2.auth || {};
-        edgeConfig2.auth.apiUrl = `http://127.0.0.1:${port}/auth`;
+        delete edgeConfig2.auth.apiUrl;
         
         const tempEdgeConfigPath2 = join(PROJECT_ROOT, `config/edge-test-${port}-2.json`);
         fs.writeFileSync(tempEdgeConfigPath2, JSON.stringify(edgeConfig2, null, 2));
