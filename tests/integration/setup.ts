@@ -283,9 +283,9 @@ export async function setupTestEnvironment(
   options: {
     startHub?: boolean;
     startEdge?: boolean;
-    startEdge2?: boolean; // 是否启动第二个 Edge 服务器
+    startEdge2?: boolean; // Whether to start the second Edge server
     startAuth?: boolean;
-    hubConfig?: Record<string, any>; // 自定义Hub配置
+    hubConfig?: Record<string, any>; // Custom Hub configuration
   } = { startHub: true, startEdge: true, startEdge2: true, startAuth: true }
 ): Promise<TestEnvironment> {
   console.log('Setting up test environment...');

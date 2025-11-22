@@ -147,7 +147,7 @@ export class HubMessageHandlers {
       // Broadcast to all local authenticated clients (if target_sessions provided, only broadcast to these clients)
       const userStateMessage = userState.serialize();
       const allClients = this.clientManager.getAllClients();
-      const targetSessions = params.target_sessions; // Channel Ninja模式下的目标会话列表
+      const targetSessions = params.target_sessions; // List of target sessions in Channel Ninja mode
       
       for (const client of allClients) {
         if (client.user_id > 0) {
@@ -323,7 +323,7 @@ export class HubMessageHandlers {
       const allClients = this.clientManager.getAllClients();
       for (const client of allClients) {
         if (client.user_id > 0) {
-          // If target_sessions provided, only broadcast to specified sessions（Channel Ninja模式）
+          // If target_sessions provided, only broadcast to specified sessions (Channel Ninja mode)
           if (!target_sessions || target_sessions.includes(client.session)) {
             this.messageHandler.sendMessage(client.session, MessageType.UserRemove, Buffer.from(userRemoveMessage));
           }

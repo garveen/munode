@@ -47,7 +47,7 @@ describe('Channel Ninja Integration Tests', () => {
           rejectUnauthorized: false,
         });
 
-        // 等待同步完成
+        // Wait for sync to complete
         await new Promise(resolve => setTimeout(resolve, 500));
 
         // Create a restricted channel (only admin group can enter)
@@ -271,7 +271,7 @@ describe('Channel Ninja Integration Tests', () => {
           channelId: restrictedChannelId,
         });
 
-        // 等待跨Edge的UserRemove消息
+        // Wait for cross-Edge UserRemove message
         await Promise.race([
           userRemovePromise,
           new Promise((_, reject) => setTimeout(() => reject(new Error('Cross-edge UserRemove timeout')), 5000)),
@@ -363,7 +363,7 @@ describe('Channel Ninja Integration Tests', () => {
           mute: true,
         });
 
-        // 等待一段时间
+        // Wait for a period of time
         await new Promise(resolve => setTimeout(resolve, 2000));
 
         // user should not receive admin mute state update (because admin is in invisible channel)
@@ -383,7 +383,7 @@ describe('Channel Ninja Disabled Tests', () => {
     // Create test environment without Channel Ninja enabled
     testEnv = await setupTestEnvironment(8091, {
       hubConfig: {
-        channelNinja: false, // 禁用Channel Ninja功能
+        channelNinja: false, // Disable Channel Ninja functionality
       },
     });
   }, 60000);

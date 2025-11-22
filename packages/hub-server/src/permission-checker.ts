@@ -486,7 +486,7 @@ export class HubPermissionChecker {
    * @returns Whether the user can see the channel
    */
   async canUserSeeChannel(channelId: number, user: UserInfo): Promise<boolean> {
-    // 检查对频道本身的Enter或Listen权限
+    // Check Enter or Listen permissions on the channel itself
     const hasEnter = await this.hasPermission(channelId, user, Permission.Enter);
     if (hasEnter) {
       return true;
@@ -497,7 +497,7 @@ export class HubPermissionChecker {
       return true;
     }
 
-    // 检查链接频道的权限
+    // Check permissions on linked channels
     const linkedChannels = await this.database.getChannelLinks(channelId);
     for (const linkedChannelId of linkedChannels) {
       const hasEnterOnLinked = await this.hasPermission(linkedChannelId, user, Permission.Enter);

@@ -525,7 +525,10 @@ export class HubControlService {
 
       if (channelNinjaEnabled && this._permissionChecker && this._database) {
         // === Channel Ninja mode: Filter broadcasts based on channel visibility ===
-        const currentChannelId = isChannelChange ? broadcastUserState.channel_id : targetGlobalSession.channel_id;
+        // Determine current channel (use new channel if changing, otherwise use current channel, default to 0)
+        const currentChannelId = isChannelChange 
+          ? broadcastUserState.channel_id 
+          : (targetGlobalSession.channel_id ?? 0);
         const allSessions = this._sessionManager.getAllSessions();
 
         // Group sessions: which can see target user channel, which cannot
