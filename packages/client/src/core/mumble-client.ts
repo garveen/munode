@@ -58,6 +58,11 @@ export class MumbleClient extends EventEmitter {
       // 初始化认证信息
       this.auth.initialize(options);
       
+      // 设置TCP语音模式（如果指定）
+      if (options.forceTcpVoice) {
+        this.connection.setForceTcpVoice(true);
+      }
+      
       // 建立 TCP 连接
       await this.connection.connectTCP(options);
       
