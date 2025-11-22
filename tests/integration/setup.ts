@@ -345,7 +345,7 @@ export async function setupTestEnvironment(
   // 2. 启动 Hub 服务器（如果需要）
   if (options.startHub !== false) {
     try {
-      const hubConfigPath = join(PROJECT_ROOT, 'config/hub-test.json');
+      const hubConfigPath = join(PROJECT_ROOT, 'tests/config/hub-test.json');
       if (fs.existsSync(hubConfigPath)) {
         // 使用动态端口避免冲突
         const actualHubPort = port + 1000; // Hub使用8080+1000=9080
@@ -359,7 +359,7 @@ export async function setupTestEnvironment(
         hubConfig.auth = hubConfig.auth || {};
         hubConfig.auth.apiUrl = `http://127.0.0.1:${port}/auth`;
         
-        const tempHubConfigPath = join(PROJECT_ROOT, `config/hub-test-${port}.json`);
+        const tempHubConfigPath = join(PROJECT_ROOT, `tests/config/hub-test-${port}.json`);
         fs.writeFileSync(tempHubConfigPath, JSON.stringify(hubConfig, null, 2));
         
         // 删除测试数据库文件以确保干净的状态
@@ -415,7 +415,7 @@ export async function setupTestEnvironment(
   // 3. 启动第一个 Edge 服务器（如果需要）
   if (options.startEdge !== false) {
     try {
-      const edgeConfigPath = join(PROJECT_ROOT, 'config/edge-test.json');
+      const edgeConfigPath = join(PROJECT_ROOT, 'tests/config/edge-test.json');
       if (fs.existsSync(edgeConfigPath)) {
         // 使用动态端口避免冲突
         const actualEdgePort = port + 2000; // Edge使用8080+2000=10080
@@ -453,7 +453,7 @@ export async function setupTestEnvironment(
         edgeConfig.auth = edgeConfig.auth || {};
         delete edgeConfig.auth.apiUrl;
         
-        const tempEdgeConfigPath = join(PROJECT_ROOT, `config/edge-test-${port}.json`);
+        const tempEdgeConfigPath = join(PROJECT_ROOT, `tests/config/edge-test-${port}.json`);
         fs.writeFileSync(tempEdgeConfigPath, JSON.stringify(edgeConfig, null, 2));
         console.log(`Created temp edge config at ${tempEdgeConfigPath} with port ${actualEdgePort}`);
         
@@ -477,7 +477,7 @@ export async function setupTestEnvironment(
   // 4. 启动第二个 Edge 服务器（如果需要，用于跨 Edge 测试）
   if (options.startEdge2 !== false) {
     try {
-      const edgeConfigPath = join(PROJECT_ROOT, 'config/edge-test.json');
+      const edgeConfigPath = join(PROJECT_ROOT, 'tests/config/edge-test.json');
       if (fs.existsSync(edgeConfigPath)) {
         // 使用动态端口避免冲突
         const actualEdgePort2 = port + 2100; // Edge2使用8080+2100=10180
@@ -515,7 +515,7 @@ export async function setupTestEnvironment(
         edgeConfig2.auth = edgeConfig2.auth || {};
         delete edgeConfig2.auth.apiUrl;
         
-        const tempEdgeConfigPath2 = join(PROJECT_ROOT, `config/edge-test-${port}-2.json`);
+        const tempEdgeConfigPath2 = join(PROJECT_ROOT, `tests/config/edge-test-${port}-2.json`);
         fs.writeFileSync(tempEdgeConfigPath2, JSON.stringify(edgeConfig2, null, 2));
         console.log(`Created temp edge config 2 at ${tempEdgeConfigPath2} with port ${actualEdgePort2}`);
         

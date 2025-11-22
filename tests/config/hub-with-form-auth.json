@@ -1,0 +1,84 @@
+{
+  "serverId": 1,
+  "name": "MuNode Hub Server with Form-URLEncoded Auth",
+  "registerName": "MuNode Server",
+  "host": "0.0.0.0",
+  "port": 50051,
+  
+  "tls": {
+    "cert": "./certs/server.pem",
+    "key": "./certs/server.key",
+    "ca": "./certs/ca.pem",
+    "requireClientCert": true,
+    "rejectUnauthorized": false
+  },
+  
+  "registry": {
+    "heartbeatInterval": 30000,
+    "timeout": 90000,
+    "maxEdges": 100
+  },
+  
+  "database": {
+    "path": "./data/hub.db",
+    "backupDir": "./data/backups",
+    "backupInterval": 86400000,
+    "walMode": false
+  },
+  
+  "blobStore": {
+    "enabled": true,
+    "path": "./data/blobs"
+  },
+  
+  "webApi": {
+    "enabled": true,
+    "port": 8080,
+    "cors": true
+  },
+  
+  "timeout": 30,
+  "maxUsers": 1000,
+  "allowHTML": true,
+  "forceExternalAuth": false,
+  
+  "auth": {
+    "apiUrl": "https://legacy-auth-server.example.com/api/authenticate",
+    "apiKey": "your-legacy-api-key-here",
+    "timeout": 10000,
+    "contentType": "application/x-www-form-urlencoded",
+    "headers": {
+      "authHeaderName": "X-API-Key",
+      "authHeaderFormat": "{apiKey}"
+    },
+    "requestFields": {
+      "usernameField": "user",
+      "passwordField": "pass",
+      "tokensField": "access_tokens",
+      "sessionIdField": "sess_id",
+      "serverIdField": "sid",
+      "ipAddressField": "client_ip",
+      "ipVersionField": "ip_ver",
+      "releaseField": "client_release",
+      "versionField": "client_version",
+      "osField": "client_os",
+      "osVersionField": "client_os_ver",
+      "certHashField": "cert_hash"
+    },
+    "responseFields": {
+      "successField": "success",
+      "successValue": true,
+      "userIdField": "user_id",
+      "usernameField": "username",
+      "displayNameField": "displayName",
+      "groupsField": "groups",
+      "reasonField": "reason"
+    },
+    "cacheTTL": 300000,
+    "allowCacheFallback": true
+  },
+  
+  "logLevel": "info",
+  "logFile": "./logs/hub.log",
+  "logDays": 31
+}

@@ -286,6 +286,7 @@ function createHubConfig(): HubConfig {
     },
     auth: {
       apiUrl: 'http://localhost:8080/auth',
+      contentType: 'application/x-www-form-urlencoded',
       timeout: 5000,
       cacheTTL: 300000,
       allowCacheFallback: false,

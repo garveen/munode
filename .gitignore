@@ -16,6 +16,9 @@ build/
 config/*.json
 !config/*.example.json
 
+# Test config files (keep base test configs, ignore dynamically generated ones)
+tests/config/*-[0-9]*.json
+
 # Data and logs
 data/
 logs/

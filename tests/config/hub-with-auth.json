@@ -1,0 +1,121 @@
+{
+  "serverId": 1,
+  "name": "MuNode Hub Server with External Auth",
+  "registerName": "MuNode Server",
+  "host": "0.0.0.0",
+  "port": 50051,
+  
+  "tls": {
+    "cert": "./certs/server.pem",
+    "key": "./certs/server.key",
+    "ca": "./certs/ca.pem",
+    "requireClientCert": true,
+    "rejectUnauthorized": false
+  },
+  
+  "registry": {
+    "heartbeatInterval": 30000,
+    "timeout": 90000,
+    "maxEdges": 100
+  },
+  
+  "database": {
+    "path": "./data/hub.db",
+    "backupDir": "./data/backups",
+    "backupInterval": 86400000,
+    "walMode": false
+  },
+  
+  "blobStore": {
+    "enabled": true,
+    "path": "./data/blobs"
+  },
+  
+  "webApi": {
+    "enabled": true,
+    "port": 8080,
+    "cors": true
+  },
+  
+  "timeout": 30,
+  "maxUsers": 1000,
+  "maxUsersPerChannel": 0,
+  "channelNestingLimit": 10,
+  "channelCountLimit": 1000,
+  
+  "bandwidth": 558000,
+  "textMessageLength": 5000,
+  "imageMessageLength": 131072,
+  "messageLimit": 1,
+  "messageBurst": 5,
+  "pluginMessageLimit": 4,
+  "pluginMessageBurst": 15,
+  
+  "allowHTML": true,
+  "forceExternalAuth": false,
+  
+  "usernameRegex": "[ -=\\w\\[\\]\\{\\}\\(\\)\\@\\|\\.]+",
+  "channelNameRegex": "[ -=\\w\\#\\[\\]\\{\\}\\(\\)\\@\\|]+",
+  
+  "defaultChannel": 0,
+  "rememberChannel": true,
+  "rememberChannelDuration": 0,
+  
+  "allowRecording": true,
+  "sendVersion": true,
+  "allowPing": true,
+  "hideCertHashes": false,
+  
+  "autoBan": {
+    "attempts": 10,
+    "timeframe": 120,
+    "duration": 300,
+    "banSuccessfulConnections": true
+  },
+  
+  "suggest": {
+    "version": "1.4.0",
+    "positional": null,
+    "pushToTalk": null
+  },
+  
+  "auth": {
+    "apiUrl": "https://your-auth-server.com/api/v1/mumble/authenticate",
+    "apiKey": "your-api-key-here",
+    "timeout": 5000,
+    "contentType": "application/json",
+    "headers": {
+      "authHeaderName": "X-Token",
+      "authHeaderFormat": "{apiKey}"
+    },
+    "requestFields": {
+      "usernameField": "username",
+      "passwordField": "password",
+      "tokensField": "tokens",
+      "sessionIdField": "session_id",
+      "serverIdField": "server_id",
+      "ipAddressField": "ip_address",
+      "ipVersionField": "ip_version",
+      "releaseField": "release",
+      "versionField": "version",
+      "osField": "os",
+      "osVersionField": "os_version",
+      "certHashField": "certificate_hash"
+    },
+    "responseFields": {
+      "successField": "success",
+      "successValue": true,
+      "userIdField": "user_id",
+      "usernameField": "name",
+      "displayNameField": "nickname",
+      "groupsField": "groups",
+      "reasonField": "reason"
+    },
+    "cacheTTL": 300000,
+    "allowCacheFallback": true
+  },
+  
+  "logLevel": "info",
+  "logFile": "./logs/hub.log",
+  "logDays": 31
+}

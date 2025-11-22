@@ -176,11 +176,11 @@ afterAll(async () => {
    - CORS 启用
 
 2. **Hub 服务器** (可选)
-   - 需要配置文件: `config/hub-test.json`
+   - 需要配置文件: `tests/config/hub-test.json`
    - 处理中心管理功能
 
 3. **Edge 服务器** (可选)
-   - 需要配置文件: `config/edge-test.json`
+   - 需要配置文件: `tests/config/edge-test.json`
    - 处理客户端连接
 
 ## 配置
