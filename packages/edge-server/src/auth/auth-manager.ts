@@ -78,8 +78,10 @@ export class AuthManager extends EventEmitter {
     try {
       this.logger.info(`Authenticating user: session=${session_id}, username=${username}`);
 
-      // 检查缓存
-      const cacheKey = `${username}:${password}`;
+      // 检查缓存 - 使用密码的哈希值而不是明文
+      const crypto = await import('crypto');
+      const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
+      const cacheKey = `${username}:${passwordHash}`;
       const cached = this.authCache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < this.config.auth.cacheTTL) {
         return cached.result;

@@ -115,8 +115,10 @@ export class HubAuthManager {
     try {
       logger.info(`Authenticating user: username=${request.username}, server_id=${request.server_id}`);
 
-      // 检查缓存
-      const cacheKey = `${request.username}:${request.password}`;
+      // 检查缓存 - 使用密码的哈希值而不是明文
+      const crypto = await import('crypto');
+      const passwordHash = crypto.createHash('sha256').update(request.password).digest('hex');
+      const cacheKey = `${request.username}:${passwordHash}`;
       const cached = this.authCache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < (this.config.cacheTTL || 300000)) {
         logger.debug(`Auth cache hit for user: ${request.username}`);
