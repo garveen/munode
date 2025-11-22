@@ -54,15 +54,14 @@ export class AuthHandlers {
         return;
       }
 
-      // 收集客户端信息（使用已有的客户端状态信息）
-      // 注意：客户端版本和OS信息通常从Version消息获取，这里我们使用默认值
-      // Hub会在调用外部认证API时传递这些信息
+      // 收集客户端信息（从客户端状态获取，如果客户端未提供则使用默认值）
+      // 客户端通常在Version消息中提供这些信息
       const clientInfo = {
         ip_address: client.ip_address || '0.0.0.0',
         ip_version: client.ip_address?.includes(':') ? 'ipv6' : 'ipv4',
-        release: 'unknown', // 客户端版本信息需要从Version消息获取
-        os: 'unknown', // 操作系统信息需要从Version消息获取
-        os_version: 'unknown',
+        release: client.client_name || 'unknown', // 客户端版本/名称
+        os: client.os_name || 'unknown', // 操作系统名称
+        os_version: client.os_version || 'unknown', // 操作系统版本
         certificate_hash: client.cert_hash,
       };
 
