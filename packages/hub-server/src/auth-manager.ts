@@ -36,6 +36,7 @@ export interface AuthConfig {
   };
   responseFields?: {
     successField?: string; // 成功标志字段名，默认 'success'
+    successValue?: any; // 成功标志的期望值，默认 true（可以是 true, 1, 'ok', 'success' 等）
     userIdField?: string; // 用户ID字段名，默认 'user_id'
     usernameField?: string; // 用户名字段名，默认 'username'
     displayNameField?: string; // 显示名字段名，默认 'displayName'
@@ -127,6 +128,7 @@ export class HubAuthManager {
     // 设置默认响应字段映射
     this.config.responseFields = this.config.responseFields || {};
     this.config.responseFields.successField = this.config.responseFields.successField || 'success';
+    this.config.responseFields.successValue = this.config.responseFields.successValue ?? true; // 默认期望 true
     this.config.responseFields.userIdField = this.config.responseFields.userIdField || 'user_id';
     this.config.responseFields.usernameField = this.config.responseFields.usernameField || 'username';
     this.config.responseFields.displayNameField = this.config.responseFields.displayNameField || 'displayName';
@@ -296,21 +298,25 @@ export class HubAuthManager {
       // 使用配置的字段名提取响应数据
       const fields = this.config.responseFields || {};
       const successField = fields.successField || 'success';
+      const successValue = fields.successValue ?? true;
       const userIdField = fields.userIdField || 'user_id';
       const usernameField = fields.usernameField || 'username';
       const displayNameField = fields.displayNameField || 'displayName';
       const groupsField = fields.groupsField || 'groups';
       const reasonField = fields.reasonField || 'reason';
 
+      // 判断认证是否成功：比较响应中的成功字段值与配置的期望值
+      const isSuccess = result[successField] === successValue;
+
       // 规范化返回格式
       const normalized: AuthResult = {
-        success: result[successField] || false,
+        success: isSuccess,
         user_id: result[userIdField] || 0,
         username: result[usernameField] || request.username,
         displayName: result[displayNameField] || result[usernameField] || request.username,
         groups: result[groupsField] || ['user'],
         reason: (result as any).message || result[reasonField],
-        rejectType: result[successField]
+        rejectType: isSuccess
           ? undefined
           : ((result as any).message?.includes('Invalid password'))
             ? 2 // mumbleproto.Reject.RejectType.WrongUserPW
