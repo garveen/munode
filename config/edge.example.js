@@ -6,7 +6,7 @@
  * 
  * @type {import('../packages/edge-server/src/types.js').EdgeConfig}
  */
-module.exports = {
+export default {
   // Server identification
   server_id: 1,
   name: 'MuNode Edge Server #1',

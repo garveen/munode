@@ -6,7 +6,7 @@
  * 
  * @type {import('../../packages/hub-server/src/types.js').HubConfig}
  */
-module.exports = {
+export default {
   server_id: 1,
   name: 'MuNode Hub Server with Form Auth',
   registerName: 'MuNode Server',

@@ -6,7 +6,7 @@
  * 
  * @type {import('../packages/client/src/types/client-types.js').ClientConfig}
  */
-module.exports = {
+export default {
   // Connection configuration
   connection: {
     host: 'localhost',

@@ -6,7 +6,7 @@
  * 
  * @type {import('../packages/hub-server/src/types.js').HubConfig}
  */
-module.exports = {
+export default {
   // Server identification
   server_id: 0,
   name: 'MuNode Hub Server',

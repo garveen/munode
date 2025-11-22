@@ -3,7 +3,7 @@
  * 
  * @type {import('../../packages/edge-server/src/types.js').EdgeConfig}
  */
-module.exports = {
+export default {
   server_id: 1,
   name: 'MuNode Edge Server #1 (Test)',
   mode: 'cluster',

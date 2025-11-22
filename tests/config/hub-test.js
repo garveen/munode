@@ -3,7 +3,7 @@
  * 
  * @type {import('../../packages/hub-server/src/types.js').HubConfig}
  */
-module.exports = {
+export default {
   server_id: 0,
   name: 'MuNode Hub Server (Test)',
   registerName: 'MuNode Test',

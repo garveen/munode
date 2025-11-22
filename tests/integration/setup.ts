@@ -380,7 +380,7 @@ export async function setupTestEnvironment(
         }
         
         const tempHubConfigPath = join(PROJECT_ROOT, `tests/config/hub-test-${port}.js`);
-        fs.writeFileSync(tempHubConfigPath, `module.exports = ${JSON.stringify(hubConfig, null, 2)};`);
+        fs.writeFileSync(tempHubConfigPath, `export default ${JSON.stringify(hubConfig, null, 2)};`);
         
         // Delete test database file to ensure clean state
         const dbPath = join(PROJECT_ROOT, 'data/hub-test.db');
@@ -477,7 +477,7 @@ export async function setupTestEnvironment(
         delete edgeConfig.auth.apiUrl;
         
         const tempEdgeConfigPath = join(PROJECT_ROOT, `tests/config/edge-test-${port}.js`);
-        fs.writeFileSync(tempEdgeConfigPath, `module.exports = ${JSON.stringify(edgeConfig, null, 2)};`);
+        fs.writeFileSync(tempEdgeConfigPath, `export default ${JSON.stringify(edgeConfig, null, 2)};`);
         console.log(`Created temp edge config at ${tempEdgeConfigPath} with port ${actualEdgePort}`);
         
         edgeProcess = await startEdgeServer(tempEdgeConfigPath, actualEdgePort);
@@ -542,7 +542,7 @@ export async function setupTestEnvironment(
         delete edgeConfig2.auth.apiUrl;
         
         const tempEdgeConfigPath2 = join(PROJECT_ROOT, `tests/config/edge-test-${port}-2.js`);
-        fs.writeFileSync(tempEdgeConfigPath2, `module.exports = ${JSON.stringify(edgeConfig2, null, 2)};`);
+        fs.writeFileSync(tempEdgeConfigPath2, `export default ${JSON.stringify(edgeConfig2, null, 2)};`);
         console.log(`Created temp edge config 2 at ${tempEdgeConfigPath2} with port ${actualEdgePort2}`);
         
         edgeProcess2 = await startEdgeServer(tempEdgeConfigPath2, actualEdgePort2);
