@@ -24,10 +24,10 @@ program
       // 加载配置
       let config;
       try {
-        config = loadEdgeConfig(options.config);
+        config = await loadEdgeConfig(options.config);
       } catch (error) {
         console.log('Using default configuration...');
-        config = loadEdgeConfig();
+        config = await loadEdgeConfig();
       }
 
       // 应用命令行选项
@@ -73,7 +73,7 @@ program
   .option('-c, --config <path>', 'Path to configuration file', './config/edge-server.json')
   .action(async (options) => {
     try {
-      const config = loadEdgeConfig(options.config);
+      const config = await loadEdgeConfig(options.config);
       const { validateConfig } = await import('./config.js');
       const errors = validateConfig(config);
 
@@ -96,7 +96,7 @@ program
   .option('-o, --output <path>', 'Output path', './config/edge-server.json')
   .action(async (options) => {
     try {
-      const config = loadEdgeConfig();
+      const config = await loadEdgeConfig();
       const fs = await import('fs');
       const path = await import('path');
 

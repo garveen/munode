@@ -10,7 +10,6 @@ import { program } from 'commander';
 import { MumbleClient } from './core/mumble-client.js';
 import { startHttpServer } from './api/http-server.js';
 import { startWebSocketServer } from './api/websocket.js';
-import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import type { ConnectOptions } from './types/client-types.js';
 
@@ -71,9 +70,9 @@ program
       // 加载配置文件
       let config: CliConfig;
       try {
+        const { loadConfig } = await import('@munode/common');
         const configPath = resolve(options.config);
-        const configData = readFileSync(configPath, 'utf-8');
-        config = JSON.parse(configData);
+        config = await loadConfig<CliConfig>(configPath);
         console.log(`Loaded configuration from ${configPath}`);
       } catch (error) {
         console.log('Using default configuration...');
