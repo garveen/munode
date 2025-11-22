@@ -68,5 +68,6 @@
   "allowHTML": true,
   "allowRecording": true,
   "hideCertHashes": false,
+  "channelNinja": false,
   "logLevel": "info"
 }

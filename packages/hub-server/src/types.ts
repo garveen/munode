@@ -73,6 +73,7 @@ export interface HubConfig {
   sendVersion?: boolean; // 向客户端发送版本信息，默认: true
   allowPing?: boolean; // 允许ping，默认: true
   hideCertHashes?: boolean; // 混淆证书哈希，返回用户ID哈希代替真实证书哈希，默认: false
+  channelNinja?: boolean; // Enable channel Ninja functionality to hide users in channels without view permissions, default: false
   
   // 日志配置
   logDays?: number; // 数据库日志保留天数，默认: 31

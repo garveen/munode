@@ -66,6 +66,7 @@ export const CONFIG_DEFAULTS = {
   allowRecording: true,
   sendVersion: true,
   allowPing: true,
+  channelNinja: false,
   
   // 日志配置
   logDays: 31,
@@ -120,6 +121,7 @@ export function applyConfigDefaults(config: HubConfig): HubConfig {
     allowRecording: config.allowRecording ?? CONFIG_DEFAULTS.allowRecording,
     sendVersion: config.sendVersion ?? CONFIG_DEFAULTS.sendVersion,
     allowPing: config.allowPing ?? CONFIG_DEFAULTS.allowPing,
+    channelNinja: config.channelNinja ?? CONFIG_DEFAULTS.channelNinja,
     
     logDays: config.logDays ?? CONFIG_DEFAULTS.logDays,
     

@@ -519,14 +519,99 @@ export class HubControlService {
 
       logger.info(`Hub: Broadcasting UserState for session ${targetSession} to all edges, fields: ${Object.keys(broadcastUserState).join(', ')}`);
       
-      // 广播UserState给所有Edge（只包含实际变更的字段）
-      this.broadcast('hub.userStateBroadcast', {
-        session_id: targetSession,
-        edge_id: targetGlobalSession.edge_id,
-        userState: broadcastUserState,
-      });
+      // Check if Channel Ninja feature is enabled
+      const channelNinjaEnabled = this.config.channelNinja ?? false;
+      const isChannelChange = broadcastUserState.channel_id !== undefined;
 
-      logger.info(`Hub: Broadcasted UserState for session ${targetSession} to all edges`);
+      if (channelNinjaEnabled && this._permissionChecker && this._database) {
+        // === Channel Ninja mode: Filter broadcasts based on channel visibility ===
+        // Determine current channel (use new channel if changing, otherwise use current channel, default to 0)
+        const currentChannelId = isChannelChange 
+          ? broadcastUserState.channel_id 
+          : (targetGlobalSession.channel_id ?? 0);
+        const allSessions = this._sessionManager.getAllSessions();
+
+        // Group sessions: which can see target user channel, which cannot
+        const visibleToSessions = new Set<number>();
+        const invisibleToSessions = new Set<number>();
+        
+        // Check visibility for each other user
+        for (const otherSession of allSessions) {
+          if (otherSession.session_id === targetSession) {
+            continue; // Skip target user themselves
+          }
+          
+          const otherUserInfo = HubPermissionChecker.sessionToUserInfo(otherSession, otherSession.channel_id ?? 0);
+          const canSeeChannel = await this._permissionChecker.canUserSeeChannel(currentChannelId, otherUserInfo);
+          
+          if (canSeeChannel) {
+            visibleToSessions.add(otherSession.session_id);
+          } else {
+            invisibleToSessions.add(otherSession.session_id);
+          }
+        }
+
+        // If channel change, send UserRemove (user left server) to users who cannot see new channel
+        if (isChannelChange && invisibleToSessions.size > 0) {
+          logger.info(`Channel Ninja: Sending UserRemove for session ${targetSession} to ${invisibleToSessions.size} users who cannot see channel ${currentChannelId}`);
+          
+          // Send UserRemove grouped by Edge
+          const sessionsByEdge = new Map<number, number[]>();
+          for (const sessionId of invisibleToSessions) {
+            const session = this._sessionManager.getSession(sessionId);
+            if (session) {
+              if (!sessionsByEdge.has(session.edge_id)) {
+                sessionsByEdge.set(session.edge_id, []);
+              }
+              sessionsByEdge.get(session.edge_id)!.push(sessionId);
+            }
+          }
+
+          for (const [targetEdgeId, sessions] of sessionsByEdge.entries()) {
+            this.notify(targetEdgeId, 'hub.userRemoveBroadcast', {
+              session_id: targetSession,
+              target_sessions: sessions, // Hide only for these sessions
+            });
+          }
+        }
+
+        // For users who can see channel, normally broadcast UserState
+        if (visibleToSessions.size > 0) {
+          logger.info(`Channel Ninja: Broadcasting UserState for session ${targetSession} to ${visibleToSessions.size} users who can see channel ${currentChannelId}`);
+          
+          // Send UserState grouped by Edge
+          const sessionsByEdge = new Map<number, number[]>();
+          for (const sessionId of visibleToSessions) {
+            const session = this._sessionManager.getSession(sessionId);
+            if (session) {
+              if (!sessionsByEdge.has(session.edge_id)) {
+                sessionsByEdge.set(session.edge_id, []);
+              }
+              sessionsByEdge.get(session.edge_id)!.push(sessionId);
+            }
+          }
+
+          for (const [targetEdgeId, sessions] of sessionsByEdge.entries()) {
+            this.notify(targetEdgeId, 'hub.userStateBroadcast', {
+              session_id: targetSession,
+              edge_id: targetGlobalSession.edge_id,
+              userState: broadcastUserState,
+              target_sessions: sessions, // Broadcast only to these sessions
+            });
+          }
+        }
+
+        logger.info(`Hub: Broadcasted UserState for session ${targetSession} with Channel Ninja filtering`);
+      } else {
+        // === Normal mode: Broadcast to all Edges ===
+        this.broadcast('hub.userStateBroadcast', {
+          session_id: targetSession,
+          edge_id: targetGlobalSession.edge_id,
+          userState: broadcastUserState,
+        });
+
+        logger.info(`Hub: Broadcasted UserState for session ${targetSession} to all edges`);
+      }
     } catch (error) {
       logger.error('Error handling UserState notification:', error);
     }

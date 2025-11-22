@@ -117,12 +117,22 @@ class TestAuthServer {
   }
 
   private authenticate(req: any): any {
-    // 测试用户数据
-    const users: Record<string, { password: string; user_id: number }> = {
-      'admin': { password: 'admin123', user_id: 1 },
+    // Test user data
+    const users: Record<string, { password: string; user_id: number; groups?: string[] }> = {
+      'admin': { password: 'admin123', user_id: 1, groups: ['admin'] },
+      'admin_password': { password: 'admin_password', user_id: 11, groups: ['admin'] },
+      'admin_multi': { password: 'admin_password', user_id: 12, groups: ['admin'] },
+      'admin_state': { password: 'admin_password', user_id: 13, groups: ['admin'] },
+      'admin_no_ninja': { password: 'admin_password', user_id: 14, groups: ['admin'] },
       'user1': { password: 'password1', user_id: 2 },
+      'user1_password': { password: 'user1_password', user_id: 21 },
       'user2': { password: 'password2', user_id: 3 },
+      'user2_password': { password: 'user2_password', user_id: 22 },
       'guest': { password: 'guest123', user_id: 4 },
+      'user_edge1': { password: 'user_password', user_id: 31 },
+      'user_edge2': { password: 'user_password', user_id: 32 },
+      'user_state': { password: 'user_password', user_id: 33 },
+      'user_no_ninja': { password: 'user_password', user_id: 34 },
     };
 
     const user = users[req.username];
@@ -135,7 +145,7 @@ class TestAuthServer {
       user_id: user.user_id,
       username: req.username,
       displayName: req.username,
-      groups: req.username === 'admin' ? ['admin'] : ['user'],
+      groups: user.groups || ['user'],
     };
   }
 
@@ -320,8 +330,9 @@ export async function setupTestEnvironment(
   options: {
     startHub?: boolean;
     startEdge?: boolean;
-    startEdge2?: boolean; // 是否启动第二个 Edge 服务器
+    startEdge2?: boolean; // Whether to start the second Edge server
     startAuth?: boolean;
+    hubConfig?: Record<string, any>; // Custom Hub configuration
   } = { startHub: true, startEdge: true, startEdge2: true, startAuth: true }
 ): Promise<TestEnvironment> {
   console.log('Setting up test environment...');
@@ -332,44 +343,49 @@ export async function setupTestEnvironment(
   let edgeProcess2: ChildProcess | undefined;
   const hubPort = port + 1000;
   const edgePort = port + 2000;
-  const edgePort2 = port + 2100; // 第二个 Edge 端口
+  const edgePort2 = port + 2100; // Second Edge port
 
-  // 1. 启动认证服务器（如果需要）
+  // 1. Start auth server (if needed)
   if (options.startAuth !== false) {
     authServer = new TestAuthServer(port);
     await authServer.start();
-    // 给认证服务器一点启动时间
+    // Give auth server a bit of startup time
     await sleep(100);
   }
 
-  // 2. 启动 Hub 服务器（如果需要）
+  // 2. Start Hub server (if needed)
   if (options.startHub !== false) {
     try {
       const hubConfigPath = join(PROJECT_ROOT, 'tests/config/hub-test.json');
       if (fs.existsSync(hubConfigPath)) {
-        // 使用动态端口避免冲突
-        const actualHubPort = port + 1000; // Hub使用8080+1000=9080
-        const controlPort = port + 3000; // 控制端口使用8080+3000=11080
+        // Use dynamic ports to avoid conflicts
+        const actualHubPort = port + 1000; // Hub uses 8080+1000=9080
+        const controlPort = port + 3000; // Control port uses 8080+3000=11080
         const hubConfig = JSON.parse(fs.readFileSync(hubConfigPath, 'utf8'));
         hubConfig.port = actualHubPort;
-        hubConfig.controlPort = controlPort; // 设置动态控制端口
-        hubConfig.webApi.port = port + 100; // Web API使用8080+100=8180
+        hubConfig.controlPort = controlPort; // Set dynamic control port
+        hubConfig.webApi.port = port + 100; // Web API uses 8080+100=8180
         
-        // 配置认证（指向测试认证服务器）
+        // Configure auth (pointing to test auth server)
         hubConfig.auth = hubConfig.auth || {};
         hubConfig.auth.apiUrl = `http://127.0.0.1:${port}/auth`;
+        
+        // Apply custom Hub config
+        if (options.hubConfig) {
+          Object.assign(hubConfig, options.hubConfig);
+        }
         
         const tempHubConfigPath = join(PROJECT_ROOT, `tests/config/hub-test-${port}.json`);
         fs.writeFileSync(tempHubConfigPath, JSON.stringify(hubConfig, null, 2));
         
-        // 删除测试数据库文件以确保干净的状态
+        // Delete test database file to ensure clean state
         const dbPath = join(PROJECT_ROOT, 'data/hub-test.db');
         if (fs.existsSync(dbPath)) {
           fs.unlinkSync(dbPath);
           console.log('Deleted existing test database file');
         }
         
-        // 初始化测试数据库
+        // Initialize test database
         console.log('Initializing test database...');
         const initScript = join(PROJECT_ROOT, 'scripts/init-test-db.ts');
         if (fs.existsSync(initScript)) {
