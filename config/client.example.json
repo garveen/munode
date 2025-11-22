@@ -1,0 +1,32 @@
+{
+  "server": {
+    "host": "localhost",
+    "port": 64738,
+    "username": "HeadlessClient",
+    "password": "",
+    "tokens": []
+  },
+  "api": {
+    "http": {
+      "enabled": true,
+      "host": "0.0.0.0",
+      "port": 3000,
+      "cors": true,
+      "auth": {
+        "enabled": false,
+        "token": ""
+      }
+    },
+    "websocket": {
+      "enabled": true,
+      "port": 3001,
+      "auth": {
+        "enabled": false,
+        "token": ""
+      }
+    }
+  },
+  "logging": {
+    "level": "info"
+  }
+}

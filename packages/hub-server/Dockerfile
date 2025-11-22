@@ -68,4 +68,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 
 WORKDIR /app/packages/hub-server
 
-CMD ["node", "dist/cli.js", "--config", "/app/config/hub.json"]
+CMD ["node", "dist/cli.js", "/app/config/hub.json"]
