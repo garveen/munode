@@ -473,4 +473,44 @@ export class HubPermissionChecker {
       groups: session.groups || [], // 从 session 中获取用户组
     };
   }
+
+  /**
+   * 检查用户是否可以看到指定频道（用于Channel Ninja功能）
+   * 一个频道对用户可见，当且仅当：
+   * 1. 用户对该频道有Enter权限，或
+   * 2. 用户对该频道有Listen权限，或
+   * 3. 用户对该频道的任一链接频道有Enter或Listen权限
+   * 
+   * @param channelId - 要检查的频道ID
+   * @param user - 用户信息
+   * @returns 用户是否可以看到该频道
+   */
+  async canUserSeeChannel(channelId: number, user: UserInfo): Promise<boolean> {
+    // 检查对频道本身的Enter或Listen权限
+    const hasEnter = await this.hasPermission(channelId, user, Permission.Enter);
+    if (hasEnter) {
+      return true;
+    }
+
+    const hasListen = await this.hasPermission(channelId, user, Permission.Listen);
+    if (hasListen) {
+      return true;
+    }
+
+    // 检查链接频道的权限
+    const linkedChannels = await this.database.getChannelLinks(channelId);
+    for (const linkedChannelId of linkedChannels) {
+      const hasEnterOnLinked = await this.hasPermission(linkedChannelId, user, Permission.Enter);
+      if (hasEnterOnLinked) {
+        return true;
+      }
+
+      const hasListenOnLinked = await this.hasPermission(linkedChannelId, user, Permission.Listen);
+      if (hasListenOnLinked) {
+        return true;
+      }
+    }
+
+    return false;
+  }
 }

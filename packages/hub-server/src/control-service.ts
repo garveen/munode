@@ -519,14 +519,96 @@ export class HubControlService {
 
       logger.info(`Hub: Broadcasting UserState for session ${targetSession} to all edges, fields: ${Object.keys(broadcastUserState).join(', ')}`);
       
-      // 广播UserState给所有Edge（只包含实际变更的字段）
-      this.broadcast('hub.userStateBroadcast', {
-        session_id: targetSession,
-        edge_id: targetGlobalSession.edge_id,
-        userState: broadcastUserState,
-      });
+      // 检查是否启用了Channel Ninja功能
+      const channelNinjaEnabled = this.config.channelNinja ?? false;
+      const isChannelChange = broadcastUserState.channel_id !== undefined;
 
-      logger.info(`Hub: Broadcasted UserState for session ${targetSession} to all edges`);
+      if (channelNinjaEnabled && isChannelChange && this._permissionChecker && this._database) {
+        // === Channel Ninja模式：根据频道可见性过滤广播 ===
+        const newChannelId = broadcastUserState.channel_id;
+        const allSessions = this._sessionManager.getAllSessions();
+
+        // 分组会话：哪些可以看到新频道，哪些不能
+        const visibleToSessions = new Set<number>();
+        const invisibleToSessions = new Set<number>();
+        
+        // 为每个其他用户检查可见性
+        for (const otherSession of allSessions) {
+          if (otherSession.session_id === targetSession) {
+            continue; // 跳过目标用户自己
+          }
+          
+          const otherUserInfo = HubPermissionChecker.sessionToUserInfo(otherSession, otherSession.channel_id);
+          const canSeeChannel = await this._permissionChecker.canUserSeeChannel(newChannelId, otherUserInfo);
+          
+          if (canSeeChannel) {
+            visibleToSessions.add(otherSession.session_id);
+          } else {
+            invisibleToSessions.add(otherSession.session_id);
+          }
+        }
+
+        // 对于看不见新频道的用户，发送UserRemove（用户离开服务器）
+        if (invisibleToSessions.size > 0) {
+          logger.info(`Channel Ninja: Sending UserRemove for session ${targetSession} to ${invisibleToSessions.size} users who cannot see channel ${newChannelId}`);
+          
+          // 按Edge分组发送UserRemove
+          const sessionsByEdge = new Map<number, number[]>();
+          for (const sessionId of invisibleToSessions) {
+            const session = this._sessionManager.getSession(sessionId);
+            if (session) {
+              if (!sessionsByEdge.has(session.edge_id)) {
+                sessionsByEdge.set(session.edge_id, []);
+              }
+              sessionsByEdge.get(session.edge_id)!.push(sessionId);
+            }
+          }
+
+          for (const [targetEdgeId, sessions] of sessionsByEdge.entries()) {
+            this.notify(targetEdgeId, 'hub.userRemoveBroadcast', {
+              session_id: targetSession,
+              target_sessions: sessions, // 仅对这些会话隐藏
+            });
+          }
+        }
+
+        // 对于可以看见新频道的用户，正常广播UserState
+        if (visibleToSessions.size > 0) {
+          logger.info(`Channel Ninja: Broadcasting UserState for session ${targetSession} to ${visibleToSessions.size} users who can see channel ${newChannelId}`);
+          
+          // 按Edge分组发送UserState
+          const sessionsByEdge = new Map<number, number[]>();
+          for (const sessionId of visibleToSessions) {
+            const session = this._sessionManager.getSession(sessionId);
+            if (session) {
+              if (!sessionsByEdge.has(session.edge_id)) {
+                sessionsByEdge.set(session.edge_id, []);
+              }
+              sessionsByEdge.get(session.edge_id)!.push(sessionId);
+            }
+          }
+
+          for (const [targetEdgeId, sessions] of sessionsByEdge.entries()) {
+            this.notify(targetEdgeId, 'hub.userStateBroadcast', {
+              session_id: targetSession,
+              edge_id: targetGlobalSession.edge_id,
+              userState: broadcastUserState,
+              target_sessions: sessions, // 仅对这些会话广播
+            });
+          }
+        }
+
+        logger.info(`Hub: Broadcasted UserState for session ${targetSession} with Channel Ninja filtering`);
+      } else {
+        // === 普通模式：广播给所有Edge ===
+        this.broadcast('hub.userStateBroadcast', {
+          session_id: targetSession,
+          edge_id: targetGlobalSession.edge_id,
+          userState: broadcastUserState,
+        });
+
+        logger.info(`Hub: Broadcasted UserState for session ${targetSession} to all edges`);
+      }
     } catch (error) {
       logger.error('Error handling UserState notification:', error);
     }

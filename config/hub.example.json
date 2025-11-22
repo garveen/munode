@@ -55,6 +55,7 @@
   "rememberChannel": true,
   "allowRecording": true,
   "hideCertHashes": false,
+  "channelNinja": false,
   "autoBan": {
     "attempts": 10,
     "timeframe": 120,
