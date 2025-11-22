@@ -94,6 +94,7 @@ export interface HubAuthConfig {
   apiUrl?: string; // 外部认证 API 地址
   apiKey?: string; // API 密钥
   timeout?: number; // 超时时间（毫秒），默认 5000
+  contentType?: 'application/json' | 'application/x-www-form-urlencoded'; // 请求内容类型，默认 'application/json'
   headers?: {
     authHeaderName?: string; // 认证头名称，默认 'Authorization'
     authHeaderFormat?: string; // 认证头格式，默认 'Bearer {apiKey}'

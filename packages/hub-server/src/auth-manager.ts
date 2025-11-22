@@ -15,6 +15,7 @@ export interface AuthConfig {
   apiUrl?: string; // 外部认证 API 地址
   apiKey?: string; // API 密钥
   timeout?: number; // 超时时间（毫秒）
+  contentType?: 'application/json' | 'application/x-www-form-urlencoded'; // 请求内容类型，默认 'application/json'
   headers?: {
     authHeaderName?: string; // 认证头名称，默认 'Authorization'
     authHeaderFormat?: string; // 认证头格式，默认 'Bearer {apiKey}'
@@ -85,6 +86,7 @@ export class HubAuthManager {
     this.config.timeout = this.config.timeout || 5000;
     this.config.cacheTTL = this.config.cacheTTL || 300000;
     this.config.allowCacheFallback = this.config.allowCacheFallback ?? false;
+    this.config.contentType = this.config.contentType || 'application/json';
     
     // 设置默认 header 配置
     this.config.headers = this.config.headers || {};
@@ -100,7 +102,7 @@ export class HubAuthManager {
     this.config.responseFields.groupsField = this.config.responseFields.groupsField || 'groups';
     this.config.responseFields.reasonField = this.config.responseFields.reasonField || 'reason';
 
-    logger.info('Hub Authentication Manager initialized');
+    logger.info('Hub Authentication Manager initialized', { contentType: this.config.contentType });
 
     // 定期清理过期缓存
     setInterval(() => {
@@ -168,9 +170,12 @@ export class HubAuthManager {
     }
 
     try {
+      // 确定内容类型
+      const contentType = this.config.contentType || 'application/json';
+      
       // 构建请求头
       const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
+        'Content-Type': contentType,
       };
 
       // 添加认证头
@@ -180,8 +185,8 @@ export class HubAuthManager {
         headers[authHeaderName] = authHeaderFormat.replace('{apiKey}', this.config.apiKey);
       }
 
-      // 构建请求体，包含客户端信息
-      const requestBody = {
+      // 构建请求数据，包含客户端信息
+      const requestData = {
         username: request.username,
         password: request.password,
         tokens: request.tokens,
@@ -194,12 +199,31 @@ export class HubAuthManager {
         certificate_hash: request.client_info.certificate_hash,
       };
 
-      logger.debug(`Auth API request to ${authUrl}:`, requestBody);
+      // 根据内容类型编码请求体
+      let body: string;
+      if (contentType === 'application/x-www-form-urlencoded') {
+        // URL 编码
+        const params = new URLSearchParams();
+        for (const [key, value] of Object.entries(requestData)) {
+          if (Array.isArray(value)) {
+            // 数组字段处理：tokens
+            value.forEach(v => params.append(key + '[]', String(v)));
+          } else if (value !== undefined && value !== null) {
+            params.append(key, String(value));
+          }
+        }
+        body = params.toString();
+        logger.debug(`Auth API request to ${authUrl} (form-urlencoded):`, body);
+      } else {
+        // JSON 编码（默认）
+        body = JSON.stringify(requestData);
+        logger.debug(`Auth API request to ${authUrl} (json):`, requestData);
+      }
 
       const response = await fetch(authUrl, {
         method: 'POST',
         headers,
-        body: JSON.stringify(requestBody),
+        body,
         signal: AbortSignal.timeout(this.config.timeout || 5000),
       });
 

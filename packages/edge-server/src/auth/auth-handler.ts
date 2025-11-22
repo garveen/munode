@@ -293,6 +293,9 @@ export class AuthHandlers {
   ): void {
     logger.warn(`Authentication failed for session ${session_id}: ${reason}`);
     this.sendReject(session_id, reason, rejectType);
+    
+    // 认证失败时断开客户端连接
+    this.clientManager.forceDisconnect(session_id, `Authentication failed: ${reason}`);
   }
 
   /**
