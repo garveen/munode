@@ -209,7 +209,13 @@ export class VoiceRouter extends EventEmitter {
       this.logger.debug(`Received voice tunnel from session ${session_id}, data length: ${data.length}`);
       
       // data是protobuf编码的UDPTunnel消息，需要先反序列化
-      const udpTunnelMessage = mumbleproto.UDPTunnel.deserialize(data);
+      let udpTunnelMessage;
+      try {
+        udpTunnelMessage = mumbleproto.UDPTunnel.deserialize(data);
+      } catch (error) {
+        this.logger.error(`Failed to deserialize UDPTunnel message from session ${session_id}:`, error);
+        return;
+      }
       
       // 提取实际的语音包数据
       const voicePacketData = Buffer.from(udpTunnelMessage.packet || []);
