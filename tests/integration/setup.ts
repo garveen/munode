@@ -131,6 +131,7 @@ class TestAuthServer {
       'user1_password': { password: 'user1_password', user_id: 21 },
       'user2': { password: 'password2', user_id: 3 },
       'user2_password': { password: 'user2_password', user_id: 22 },
+      'user3': { password: 'password3', user_id: 5 },
       'guest': { password: 'guest123', user_id: 4 },
       'user_edge1': { password: 'user_password', user_id: 31 },
       'user_edge2': { password: 'user_password', user_id: 32 },

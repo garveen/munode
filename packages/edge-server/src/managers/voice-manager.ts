@@ -169,19 +169,21 @@ export class VoiceManager {
 
       logger.debug(`Received remote voice from session ${senderSession}`);
 
-      // 远程用户的状态已经通过 Hub 同步到本地
-      // 我们可以从远程用户列表中查找（通过 user.remoteUserJoined 通知同步）
-      // 但语音包可以直接转发给频道内的所有用户，不需要查询频道
+      // 从远程用户列表中获取发送者的频道信息
+      const remoteUser = this.handlerFactory.stateManager.getRemoteUserInfo(senderSession);
+      if (!remoteUser) {
+        logger.warn(`Remote user ${senderSession} not found in state, cannot determine channel`);
+        return;
+      }
 
-      // 根据发送者的session ID，从本地客户端映射中查找对应的用户信息
-      // 注意：远程用户的session ID可能与本地不同，需要通过 Hub 同步的全局用户状态
+      const senderChannelId = remoteUser.channel_id;
+      logger.debug(`Remote voice sender ${senderSession} is in channel ${senderChannelId}`);
 
-      // 简化方案：直接转发给所有本地客户端
-      // 客户端会根据自己的频道和状态决定是否播放
-      const allClients = this.handlerFactory.clientManager.getAllClients();
+      // 只转发给同一频道的本地客户端
+      const channelClients = this.handlerFactory.clientManager.getClientsInChannel(senderChannelId);
 
       let forwardedCount = 0;
-      for (const client of allClients) {
+      for (const client of channelClients) {
         // 跳过 deaf 或 self_deaf 的客户端
         if (client.deaf || client.self_deaf) {
           continue;
@@ -202,7 +204,7 @@ export class VoiceManager {
         forwardedCount++;
       }
 
-      logger.debug(`Forwarded remote voice from session ${senderSession} to ${forwardedCount} local clients`);
+      logger.debug(`Forwarded remote voice from session ${senderSession} (channel ${senderChannelId}) to ${forwardedCount} local clients`);
     } catch (error) {
       logger.error('Error handling remote channel voice broadcast:', error);
     }

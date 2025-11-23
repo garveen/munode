@@ -161,7 +161,7 @@ describe('Voice Interconnect Integration Tests', () => {
       await senderEdge1.connect({
         host: 'localhost',
         port: testEnv.edgePort,
-        username: 'sender_edge1',
+        username: 'user1',
         password: 'password1',
         rejectUnauthorized: false,
       });
@@ -169,7 +169,7 @@ describe('Voice Interconnect Integration Tests', () => {
       await receiverEdge2.connect({
         host: 'localhost',
         port: testEnv.edgePort2, // 不同的 Edge
-        username: 'receiver_edge2',
+        username: 'user2',
         password: 'password2',
         rejectUnauthorized: false,
       });
@@ -183,10 +183,15 @@ describe('Voice Interconnect Integration Tests', () => {
       expect(receiverChannel).toBe(0); // Root 频道
 
       let voiceReceived = false;
-      const voicePromise = new Promise<void>((resolve) => {
+      const voicePromise = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Voice packet not received within 10 seconds'));
+        }, 10000);
+
         receiverEdge2.on('voice', (data: any) => {
           const receiverSession = receiverEdge2.getStateManager().getSession()?.session;
           if (data.session !== receiverSession) {
+            clearTimeout(timeout);
             voiceReceived = true;
             resolve();
           }
@@ -197,18 +202,13 @@ describe('Voice Interconnect Integration Tests', () => {
       const voicePacket = createVoicePacket(4, 0);
       await senderEdge1.sendVoice(voicePacket);
 
-      // 等待跨 Edge 转发（可能需要更长时间）
-      await Promise.race([
-        voicePromise,
-        new Promise(resolve => setTimeout(resolve, 4000))
-      ]);
-
-      // 跨 Edge 语音应该通过 Hub 转发
-      // expect(voiceReceived).toBe(true);
+      // 等待跨 Edge 转发
+      await voicePromise;
+      expect(voiceReceived).toBe(true);
 
       await senderEdge1.disconnect();
       await receiverEdge2.disconnect();
-    });
+    }, 20000);
 
     it('should forward voice from Edge 2 to Edge 1', async () => {
       const senderEdge2 = new MumbleClient();
@@ -217,25 +217,30 @@ describe('Voice Interconnect Integration Tests', () => {
       await senderEdge2.connect({
         host: 'localhost',
         port: testEnv.edgePort2,
-        username: 'sender_edge2',
-        password: 'password1',
+        username: 'user3',
+        password: 'password3',
         rejectUnauthorized: false,
       });
 
       await receiverEdge1.connect({
         host: 'localhost',
         port: testEnv.edgePort,
-        username: 'receiver_edge1',
-        password: 'password2',
+        username: 'guest',
+        password: 'guest123',
         rejectUnauthorized: false,
       });
 
       await new Promise(resolve => setTimeout(resolve, 3000));
 
       let voiceReceived = false;
-      const voicePromise = new Promise<void>((resolve) => {
+      const voicePromise = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Voice packet not received within 10 seconds'));
+        }, 10000);
+
         receiverEdge1.on('voice', (data: any) => {
           if (data.session !== receiverEdge1.getStateManager().getSession()?.session) {
+            clearTimeout(timeout);
             voiceReceived = true;
             resolve();
           }
@@ -246,16 +251,12 @@ describe('Voice Interconnect Integration Tests', () => {
       const voicePacket = createVoicePacket(4, 0);
       await senderEdge2.sendVoice(voicePacket);
 
-      await Promise.race([
-        voicePromise,
-        new Promise(resolve => setTimeout(resolve, 4000))
-      ]);
-
-      // expect(voiceReceived).toBe(true);
+      await voicePromise;
+      expect(voiceReceived).toBe(true);
 
       await senderEdge2.disconnect();
       await receiverEdge1.disconnect();
-    });
+    }, 20000);
 
     it('should handle multiple senders across different edges', async () => {
       const senderEdge1 = new MumbleClient();
@@ -276,7 +277,7 @@ describe('Voice Interconnect Integration Tests', () => {
           host: 'localhost',
           port: testEnv.edgePort,
           username: 'receiver1_e1',
-          password: 'password2',
+          password: 'password1',
           rejectUnauthorized: false,
         }),
         senderEdge2.connect({
@@ -290,7 +291,7 @@ describe('Voice Interconnect Integration Tests', () => {
           host: 'localhost',
           port: testEnv.edgePort2,
           username: 'receiver1_e2',
-          password: 'password2',
+          password: 'password1',
           rejectUnauthorized: false,
         }),
       ]);
@@ -300,16 +301,34 @@ describe('Voice Interconnect Integration Tests', () => {
       let edge1ReceivedFromEdge2 = false;
       let edge2ReceivedFromEdge1 = false;
 
-      receiverEdge1.on('voice', (data: any) => {
-        if (data.session !== receiverEdge1.getStateManager().getSession()?.session) {
-          edge1ReceivedFromEdge2 = true;
-        }
-      });
+      const voicePromise = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          if (!edge1ReceivedFromEdge2 || !edge2ReceivedFromEdge1) {
+            reject(new Error(`Voice not received: edge1=${edge1ReceivedFromEdge2}, edge2=${edge2ReceivedFromEdge1}`));
+          } else {
+            resolve();
+          }
+        }, 10000);
 
-      receiverEdge2.on('voice', (data: any) => {
-        if (data.session !== receiverEdge2.getStateManager().getSession()?.session) {
-          edge2ReceivedFromEdge1 = true;
-        }
+        receiverEdge1.on('voice', (data: any) => {
+          if (data.session !== receiverEdge1.getStateManager().getSession()?.session) {
+            edge1ReceivedFromEdge2 = true;
+            if (edge2ReceivedFromEdge1) {
+              clearTimeout(timeout);
+              resolve();
+            }
+          }
+        });
+
+        receiverEdge2.on('voice', (data: any) => {
+          if (data.session !== receiverEdge2.getStateManager().getSession()?.session) {
+            edge2ReceivedFromEdge1 = true;
+            if (edge1ReceivedFromEdge2) {
+              clearTimeout(timeout);
+              resolve();
+            }
+          }
+        });
       });
 
       // 两个 Edge 同时发送语音
@@ -322,16 +341,17 @@ describe('Voice Interconnect Integration Tests', () => {
       ]);
 
       // 等待跨 Edge 转发
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await voicePromise;
 
-      // 验证双向转发
-      // expect(edge1ReceivedFromEdge2 || edge2ReceivedFromEdge1).toBe(true);
+      // 验证双向转发都成功
+      expect(edge1ReceivedFromEdge2).toBe(true);
+      expect(edge2ReceivedFromEdge1).toBe(true);
 
       await senderEdge1.disconnect();
       await senderEdge2.disconnect();
       await receiverEdge1.disconnect();
       await receiverEdge2.disconnect();
-    });
+    }, 25000);
   });
 
   describe('Voice Packet Format', () => {

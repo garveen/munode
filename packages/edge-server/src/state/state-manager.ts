@@ -619,6 +619,13 @@ export class EdgeStateManager {
     return edges ? edges.size : 0;
   }
 
+  /**
+   * 获取远程用户信息
+   */
+  getRemoteUserInfo(session_id: number): { edge_id: number; channel_id: number } | undefined {
+    return this.remoteUsers.get(session_id);
+  }
+
   // ==================
   // 公共查询接口
   // ==================

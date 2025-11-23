@@ -679,12 +679,9 @@ export class MumbleClient extends EventEmitter {
    */
   async sendVoice(voicePacket: Buffer): Promise<void> {
     // 通过 UDPTunnel 发送语音包
-    const udpTunnelMessage = mumbleproto.UDPTunnel.fromObject({
-      packet: voicePacket
-    });
-    
-    const serialized = udpTunnelMessage.serialize();
-    const wrappedMessage = this.connection.wrapMessage(MessageType.UDPTunnel, serialized);
+    // 注意：根据 Mumble 协议，UDPTunnel 消息直接发送语音包数据
+    // 不需要 protobuf 包装，这是一个性能优化
+    const wrappedMessage = this.connection.wrapMessage(MessageType.UDPTunnel, voicePacket);
     await this.connection.sendTCP(wrappedMessage);
   }
 

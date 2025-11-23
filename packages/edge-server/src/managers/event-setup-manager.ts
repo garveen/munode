@@ -314,16 +314,12 @@ export class EventSetupManager {
     this.handlerFactory.voiceRouter.on('sendTCPVoicePacket', (session_id: number, voiceData: Buffer) => {
       try {
         // 通过TCP隧道（UDPTunnel消息）发送语音包
-        // voiceData 已经是加密后的语音包，需要包装到 UDPTunnel protobuf 消息中
-        logger.debug(`Wrapping voice data (${voiceData.length} bytes) in UDPTunnel message for session ${session_id}`);
-        const udpTunnelMessage = mumbleproto.UDPTunnel.fromObject({
-          packet: voiceData
-        });
-        const serialized = udpTunnelMessage.serialize();
-        logger.debug(`Serialized UDPTunnel message: ${serialized.length} bytes, sending to session ${session_id}`);
-        this.messageManager!.sendMessageToClient(session_id, MessageType.UDPTunnel, Buffer.from(serialized));
+        // 注意：根据 Mumble 协议，UDPTunnel 消息的 payload 直接就是语音包数据
+        // 不需要 protobuf 包装，这是一个性能优化
+        logger.debug(`Sending voice data (${voiceData.length} bytes) as UDPTunnel to session ${session_id}`);
+        this.messageManager!.sendMessageToClient(session_id, MessageType.UDPTunnel, voiceData);
       } catch (error) {
-        logger.error(`Failed to serialize/send UDPTunnel message for session ${session_id}:`, error);
+        logger.error(`Failed to send UDPTunnel message for session ${session_id}:`, error);
       }
     });
 

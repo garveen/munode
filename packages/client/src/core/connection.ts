@@ -573,38 +573,40 @@ export class ConnectionManager {
    */
   private handleUDPTunnel(payload: Buffer): void {
     // UDP隧道消息包含音频数据
+    // 注意：根据 Mumble 协议，UDPTunnel 消息的 payload 直接就是语音包数据
+    // 不需要 protobuf 反序列化，这是一个性能优化
     try {
-      const udpTunnelMessage = mumbleproto.UDPTunnel.deserialize(payload);
-      const packet = udpTunnelMessage.packet;
+      const packetBuffer = payload;
       
-      if (packet && packet.length > 0) {
-        const packetBuffer = Buffer.from(packet);
-        
-        // UDP隧道中的数据与UDP包一样，是加密的，需要先解密
-        let decryptedData: Buffer = packetBuffer;
-        if (this.client.getCryptoManager().isInitialized()) {
-          try {
-            const decrypted = this.client.getCryptoManager().decrypt(packetBuffer);
-            decryptedData = Buffer.from(decrypted);
-          } catch (error) {
-            console.warn('Failed to decrypt UDP tunnel packet:', error);
-            return;
-          }
+      if (packetBuffer.length === 0) {
+        console.warn('Received empty UDP tunnel packet');
+        return;
+      }
+      
+      // UDP隧道中的数据与UDP包一样，是加密的，需要先解密
+      let decryptedData: Buffer = packetBuffer;
+      if (this.client.getCryptoManager().isInitialized()) {
+        try {
+          const decrypted = this.client.getCryptoManager().decrypt(packetBuffer);
+          decryptedData = Buffer.from(decrypted);
+        } catch (error) {
+          console.warn('Failed to decrypt UDP tunnel packet:', error);
+          return;
         }
-        
-        // 解析语音包
-        const voiceInfo = this.parseVoicePacket(decryptedData);
-        
-        if (voiceInfo) {
-          // 发射 voice 事件供应用层使用
-          this.client.emit('voice', {
-            session: voiceInfo.sessionId,
-            codec: voiceInfo.codec,
-            target: voiceInfo.target,
-            sequence: voiceInfo.sequence,
-            data: voiceInfo.audioData,
-          });
-        }
+      }
+      
+      // 解析语音包
+      const voiceInfo = this.parseVoicePacket(decryptedData);
+      
+      if (voiceInfo) {
+        // 发射 voice 事件供应用层使用
+        this.client.emit('voice', {
+          session: voiceInfo.sessionId,
+          codec: voiceInfo.codec,
+          target: voiceInfo.target,
+          sequence: voiceInfo.sequence,
+          data: voiceInfo.audioData,
+        });
       }
       
       // 保持向后兼容，继续发射原始 udpTunnel 事件

@@ -144,6 +144,7 @@ class SimpleAuthServer {
           
           logger.info(`Auth request: ${authReq.username} - ${authRes.success ? 'SUCCESS' : 'FAILED'}`);
         } catch (error) {
+          console.log('qqqqqq', error)
           res.writeHead(400);
           res.end(JSON.stringify({ success: false, message: 'Invalid request' }));
         }
@@ -286,7 +287,7 @@ function createHubConfig(): HubConfig {
     },
     auth: {
       apiUrl: 'http://localhost:8080/auth',
-      contentType: 'application/x-www-form-urlencoded',
+      contentType: 'application/json',
       timeout: 5000,
       cacheTTL: 300000,
       allowCacheFallback: false,
@@ -361,7 +362,6 @@ function createEdgeConfig(server_id: number, port: number): EdgeConfig {
       geoip: false,
       banSystem: false,
       contextActions: false,
-      userCache: true,
       packetPool: false,
       udpMonitor: false,
       certObfuscation: false,
