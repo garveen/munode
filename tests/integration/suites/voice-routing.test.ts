@@ -198,6 +198,10 @@ describe('Voice Routing Integration Tests', () => {
 
         // 链接频道1和频道2
         await linkChannels(admin, channels[1].channel_id, channels[2].channel_id);
+        
+        // Disconnect admin before testing voice to avoid interference
+        await admin.disconnect();
+        await new Promise(resolve => setTimeout(resolve, 200));
 
         // 设置监听
         const voice2Promise = waitForVoice(client2, session1!, 2000);
@@ -213,8 +217,6 @@ describe('Voice Routing Integration Tests', () => {
         
         expect(received2).toBe(true); // 用户2在链接的频道2中，应该收到
         expect(received3).toBe(false); // 用户3在根频道，不应该收到
-
-        await admin.disconnect();
 
         expect(client1.isConnected()).toBe(true);
         expect(client2.isConnected()).toBe(true);
@@ -266,6 +268,10 @@ describe('Voice Routing Integration Tests', () => {
 
         // 链接频道1和频道2
         await linkChannels(admin, channels[1].channel_id, channels[2].channel_id);
+        
+        // Disconnect admin before testing
+        await admin.disconnect();
+        await new Promise(resolve => setTimeout(resolve, 200));
 
         // 设置监听
         const voice2Promise = waitForVoice(client2, session1!, 2000);
@@ -276,8 +282,6 @@ describe('Voice Routing Integration Tests', () => {
 
         const received2 = await voice2Promise;
         expect(received2).toBe(true);
-
-        await admin.disconnect();
 
         expect(client1.isConnected()).toBe(true);
         expect(client2.isConnected()).toBe(true);
@@ -338,6 +342,10 @@ describe('Voice Routing Integration Tests', () => {
         // 链接频道 1->2, 2->3
         await linkChannels(admin, channels[1].channel_id, channels[2].channel_id);
         await linkChannels(admin, channels[2].channel_id, channels[3].channel_id);
+        
+        // Disconnect admin before testing
+        await admin.disconnect();
+        await new Promise(resolve => setTimeout(resolve, 200));
 
         // 设置监听
         const voice2Promise = waitForVoice(client2, session1!, 2000);
@@ -352,8 +360,6 @@ describe('Voice Routing Integration Tests', () => {
         
         expect(received2).toBe(true);
         expect(received3).toBe(true); // 传递链接: 1->2->3
-
-        await admin.disconnect();
 
         expect(client1.isConnected()).toBe(true);
         expect(client2.isConnected()).toBe(true);
@@ -411,6 +417,9 @@ describe('Voice Routing Integration Tests', () => {
             session: [session2],
           },
         ]);
+        
+        // Wait for VoiceTarget to be processed
+        await new Promise(resolve => setTimeout(resolve, 300));
 
         // 设置监听
         const voice2Promise = waitForVoice(client2, session1, 2000);
@@ -488,6 +497,9 @@ describe('Voice Routing Integration Tests', () => {
             children: false,
           },
         ]);
+        
+        // Wait for VoiceTarget to be processed
+        await new Promise(resolve => setTimeout(resolve, 300));
 
         // 设置监听
         const voice2Promise = waitForVoice(client2, session1!, 2000);
