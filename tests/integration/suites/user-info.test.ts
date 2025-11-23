@@ -31,7 +31,7 @@ describe('User Info Query Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user1',
-        password: 'pass1',
+        password: 'password1',
         rejectUnauthorized: false,
       });
 
@@ -85,7 +85,7 @@ describe('User Info Query Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user1',
-        password: 'pass1',
+        password: 'password1',
         rejectUnauthorized: false,
       });
 
@@ -93,7 +93,7 @@ describe('User Info Query Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user2',
-        password: 'pass2',
+        password: 'password2',
         rejectUnauthorized: false,
       });
 
@@ -146,7 +146,7 @@ describe('User Info Query Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user1',
-        password: 'pass1',
+        password: 'password1',
         rejectUnauthorized: false,
       });
 
@@ -154,7 +154,7 @@ describe('User Info Query Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user2',
-        password: 'pass2',
+        password: 'password2',
         rejectUnauthorized: false,
       });
 
@@ -201,7 +201,7 @@ describe('User Info Query Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user1',
-        password: 'pass1',
+        password: 'password1',
         rejectUnauthorized: false,
       });
 
@@ -209,7 +209,7 @@ describe('User Info Query Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort2, // 不同的 Edge
         username: 'user2',
-        password: 'pass2',
+        password: 'password2',
         rejectUnauthorized: false,
       });
 
@@ -252,7 +252,7 @@ describe('User Info Query Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user1',
-        password: 'pass1',
+        password: 'password1',
         rejectUnauthorized: false,
       });
 
@@ -472,7 +472,7 @@ describe('User Info Query Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user1',
-        password: 'pass1',
+        password: 'password1',
         rejectUnauthorized: false,
       });
 
@@ -493,7 +493,7 @@ describe('User Info Query Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user2',
-        password: 'pass2',
+        password: 'password2',
         rejectUnauthorized: false,
       });
 
@@ -534,7 +534,7 @@ describe('User Info Query Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user1',
-        password: 'pass1',
+        password: 'password1',
         rejectUnauthorized: false,
       });
 
@@ -550,7 +550,7 @@ describe('User Info Query Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user2',
-        password: 'pass2',
+        password: 'password2',
         rejectUnauthorized: false,
       });
 

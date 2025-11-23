@@ -112,6 +112,17 @@ export class MumbleClient extends EventEmitter {
   }
 
   /**
+   * 发送原始 UserState 消息
+   * 用于移动到频道、静音/禁音等的低级API
+   */
+  async sendUserState(userState: any): Promise<void> {
+    const userStateMessage = mumbleproto.UserState.fromObject(userState);
+    const serialized = userStateMessage.serialize();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
+    await this.connection.sendTCP(wrappedMessage);
+  }
+
+  /**
    * 创建频道
    */
   async createChannel(name: string, parent?: number): Promise<number> {
@@ -149,6 +160,17 @@ export class MumbleClient extends EventEmitter {
         reject(error);
       });
     });
+  }
+
+  /**
+   * 发送原始 ChannelState 消息
+   * 用于创建或修改频道的低级API
+   */
+  async sendChannelState(channelState: any): Promise<void> {
+    const channelStateMessage = mumbleproto.ChannelState.fromObject(channelState);
+    const serialized = channelStateMessage.serialize();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.ChannelState, serialized);
+    await this.connection.sendTCP(wrappedMessage);
   }
 
   /**

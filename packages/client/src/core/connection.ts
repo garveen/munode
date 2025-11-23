@@ -572,9 +572,33 @@ export class ConnectionManager {
    * 处理 UDP 隧道消息
    */
   private handleUDPTunnel(payload: Buffer): void {
-    // UDP隧道消息包含音频数据，暂不实现音频流处理
-    console.debug('Received UDP tunnel message, audio streaming not implemented');
-    this.client.emit('udpTunnel', payload);
+    // UDP隧道消息包含音频数据
+    try {
+      const udpTunnelMessage = mumbleproto.UDPTunnel.deserialize(payload);
+      const packet = udpTunnelMessage.packet;
+      
+      if (packet && packet.length > 0) {
+        // 解析语音包
+        const voiceInfo = this.parseVoicePacket(Buffer.from(packet));
+        
+        if (voiceInfo) {
+          // 发射 voice 事件供应用层使用
+          this.client.emit('voice', {
+            session: voiceInfo.sessionId,
+            codec: voiceInfo.codec,
+            target: voiceInfo.target,
+            sequence: voiceInfo.sequence,
+            data: voiceInfo.audioData,
+          });
+        }
+      }
+      
+      // 保持向后兼容，继续发射原始 udpTunnel 事件
+      this.client.emit('udpTunnel', payload);
+    } catch (error) {
+      console.debug('Error parsing UDP tunnel message:', error);
+      this.client.emit('udpTunnel', payload);
+    }
   }
 
   /**

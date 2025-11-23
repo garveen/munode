@@ -585,6 +585,11 @@ export class HubMessageHandlers {
         idlesecs: userStats.idlesecs,
       };
 
+      // 添加 stats_only 标志（如果在请求中设置）
+      if (userStats.stats_only !== undefined) {
+        response.stats_only = userStats.stats_only;
+      }
+
       // 添加可选字段
       if (userStats.strong_certificate !== undefined) {
         response.strong_certificate = userStats.strong_certificate;

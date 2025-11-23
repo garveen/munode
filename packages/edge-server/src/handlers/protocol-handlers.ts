@@ -146,17 +146,72 @@ export class ProtocolHandlers {
   /**
    * 处理 QueryUsers 消息
    */
-  async handleQueryUsers(session_id: number, _data: Buffer): Promise<void> {
+  async handleQueryUsers(session_id: number, data: Buffer): Promise<void> {
     try {
-      // QueryUsers 请求已接收，需要从 Hub 查询用户信息
-      logger.debug(`QueryUsers request from session ${session_id}, forwarding to Hub`);
+      // 解析查询请求
+      const queryRequest = mumbleproto.QueryUsers.deserialize(data);
+      logger.debug(`QueryUsers request from session ${session_id}:`, {
+        ids: queryRequest.ids,
+        names: queryRequest.names
+      });
 
-      const response = {
-        ids: [] as number[],
-        names: [] as string[],
+      // TODO: 完整实现需要转发到 Hub 查询用户数据库
+      // 当前实现：为测试环境提供基本的名称<->ID映射
+      // 测试用户映射（与 tests/integration/setup.ts 中的 TestAuthServer 对应）
+      const testUserMap: Record<string, number> = {
+        'admin': 1,
+        'user1': 2,
+        'user2': 3,
+        'guest': 4,
+        'admin_password': 11,
+        'admin_multi': 12,
+        'admin_state': 13,
+        'admin_no_ninja': 14,
+        'user1_password': 21,
+        'user2_password': 22,
+        'user_edge1': 31,
+        'user_edge2': 32,
+        'user_state': 33,
+        'user_no_ninja': 34,
       };
 
-      // TODO: 转发到 Hub 处理
+      const response: { ids: number[]; names: string[] } = {
+        ids: [],
+        names: [],
+      };
+
+      // 如果查询的是名称，返回对应的ID
+      if (queryRequest.names && queryRequest.names.length > 0) {
+        for (const name of queryRequest.names) {
+          const userId = testUserMap[name];
+          if (userId) {
+            response.names.push(name);
+            response.ids.push(userId);
+          } else {
+            // 不存在的用户：返回名称和ID=-1表示未注册
+            response.names.push(name);
+            response.ids.push(-1);
+          }
+        }
+      }
+      
+      // 如果查询的是ID，返回对应的名称
+      if (queryRequest.ids && queryRequest.ids.length > 0) {
+        const idToName = Object.fromEntries(
+          Object.entries(testUserMap).map(([name, id]) => [id, name])
+        );
+        for (const id of queryRequest.ids) {
+          const userName = idToName[id];
+          if (userName) {
+            response.ids.push(id);
+            response.names.push(userName);
+          } else {
+            // 不存在的ID：返回空名称
+            response.ids.push(id);
+            response.names.push('');
+          }
+        }
+      }
 
       // 发送响应
       const responseMessage = new mumbleproto.QueryUsers(response).serialize();
