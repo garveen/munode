@@ -46,30 +46,31 @@ function createVoicePacket(codec: number = 4, target: number = 0, sequence: numb
 /**
  * 链接两个频道 (需要管理员权限)
  */
-async function linkChannels(client: MumbleClient, channelId1: number, channelId2: number): Promise<void> {
-  // 使用 admin 用户来链接频道，因为需要 Write 权限
-  const adminClient = new MumbleClient();
-  try {
-    await adminClient.connect({
-      host: client.getConfig().host || 'localhost',
-      port: client.getConfig().port || 64738,
-      username: 'admin',
-      password: 'admin123',
-      rejectUnauthorized: false,
-    });
-    
-    await new Promise(resolve => setTimeout(resolve, 300));
-    
-    await adminClient.sendChannelState({
-      channel_id: channelId1,
-      links_add: [channelId2],
-    });
-    
-    // 等待链接生效
-    await new Promise(resolve => setTimeout(resolve, 300));
-  } finally {
-    await adminClient.disconnect();
-  }
+async function linkChannels(adminClient: MumbleClient, channelId1: number, channelId2: number): Promise<void> {
+  // 直接使用传入的管理员客户端链接频道
+  await adminClient.sendChannelState({
+    channel_id: channelId1,
+    links_add: [channelId2],
+  });
+  
+  // 等待链接生效和同步
+  await new Promise(resolve => setTimeout(resolve, 500));
+}
+
+/**
+ * 创建并连接管理员客户端
+ */
+async function createAdminClient(testEnv: TestEnvironment): Promise<MumbleClient> {
+  const admin = new MumbleClient();
+  await admin.connect({
+    host: 'localhost',
+    port: testEnv.edgePort,
+    username: 'admin',
+    password: 'admin123',
+    rejectUnauthorized: false,
+  });
+  await new Promise(resolve => setTimeout(resolve, 300));
+  return admin;
 }
 
 /**
@@ -185,6 +186,9 @@ describe('Voice Routing Integration Tests', () => {
       if (channels.length >= 3) {
         const session1 = client1.getStateManager().getSession()?.session;
         
+        // 创建管理员客户端用于链接频道
+        const admin = await createAdminClient(testEnv);
+        
         // 用户1在频道1
         await client1.joinChannel(channels[1].channel_id);
         // 用户2在频道2
@@ -193,7 +197,7 @@ describe('Voice Routing Integration Tests', () => {
         await new Promise(resolve => setTimeout(resolve, 300));
 
         // 链接频道1和频道2
-        await linkChannels(client1, channels[1].channel_id, channels[2].channel_id);
+        await linkChannels(admin, channels[1].channel_id, channels[2].channel_id);
 
         // 设置监听
         const voice2Promise = waitForVoice(client2, session1!, 2000);
@@ -209,6 +213,8 @@ describe('Voice Routing Integration Tests', () => {
         
         expect(received2).toBe(true); // 用户2在链接的频道2中，应该收到
         expect(received3).toBe(false); // 用户3在根频道，不应该收到
+
+        await admin.disconnect();
 
         expect(client1.isConnected()).toBe(true);
         expect(client2.isConnected()).toBe(true);
@@ -249,6 +255,9 @@ describe('Voice Routing Integration Tests', () => {
       if (channels.length >= 3) {
         const session1 = client1.getStateManager().getSession()?.session;
         
+        // 创建管理员客户端
+        const admin = await createAdminClient(testEnv);
+        
         // 用户1在频道1
         await client1.joinChannel(channels[1].channel_id);
         // 用户2在根频道，但监听频道2
@@ -256,7 +265,7 @@ describe('Voice Routing Integration Tests', () => {
         await new Promise(resolve => setTimeout(resolve, 300));
 
         // 链接频道1和频道2
-        await linkChannels(client1, channels[1].channel_id, channels[2].channel_id);
+        await linkChannels(admin, channels[1].channel_id, channels[2].channel_id);
 
         // 设置监听
         const voice2Promise = waitForVoice(client2, session1!, 2000);
@@ -267,6 +276,8 @@ describe('Voice Routing Integration Tests', () => {
 
         const received2 = await voice2Promise;
         expect(received2).toBe(true);
+
+        await admin.disconnect();
 
         expect(client1.isConnected()).toBe(true);
         expect(client2.isConnected()).toBe(true);
@@ -313,6 +324,9 @@ describe('Voice Routing Integration Tests', () => {
       if (channels.length >= 4) {
         const session1 = client1.getStateManager().getSession()?.session;
         
+        // 创建管理员客户端
+        const admin = await createAdminClient(testEnv);
+        
         // 用户1在频道1
         await client1.joinChannel(channels[1].channel_id);
         // 用户2在频道2
@@ -322,8 +336,8 @@ describe('Voice Routing Integration Tests', () => {
         await new Promise(resolve => setTimeout(resolve, 300));
 
         // 链接频道 1->2, 2->3
-        await linkChannels(client1, channels[1].channel_id, channels[2].channel_id);
-        await linkChannels(client1, channels[2].channel_id, channels[3].channel_id);
+        await linkChannels(admin, channels[1].channel_id, channels[2].channel_id);
+        await linkChannels(admin, channels[2].channel_id, channels[3].channel_id);
 
         // 设置监听
         const voice2Promise = waitForVoice(client2, session1!, 2000);
@@ -338,6 +352,8 @@ describe('Voice Routing Integration Tests', () => {
         
         expect(received2).toBe(true);
         expect(received3).toBe(true); // 传递链接: 1->2->3
+
+        await admin.disconnect();
 
         expect(client1.isConnected()).toBe(true);
         expect(client2.isConnected()).toBe(true);
