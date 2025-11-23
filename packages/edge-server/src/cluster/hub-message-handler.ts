@@ -229,18 +229,52 @@ export class HubMessageHandlers {
         const existingChannel = this.channelManager.getChannel(channelState.channel_id);
         
         if (existingChannel) {
+          const updates: any = {};
+          
           // 更新现有频道
           if (channelState.name !== undefined) {
-            existingChannel.name = channelState.name;
+            updates.name = channelState.name;
           }
           if (channelState.position !== undefined) {
-            existingChannel.position = channelState.position;
+            updates.position = channelState.position;
           }
           if (channelState.max_users !== undefined) {
-            existingChannel.max_users = channelState.max_users;
+            updates.max_users = channelState.max_users;
           }
           if (channelState.description !== undefined) {
-            existingChannel.description = channelState.description;
+            updates.description = channelState.description;
+          }
+          
+          // 处理频道链接
+          if (channelState.links !== undefined && Array.isArray(channelState.links)) {
+            // 完整替换链接列表
+            updates.links = [...channelState.links];
+            logger.debug(`Updated channel ${existingChannel.id} links to: [${updates.links.join(', ')}]`);
+          } else if (channelState.links_add !== undefined || channelState.links_remove !== undefined) {
+            // 基于当前链接进行增量更新
+            let newLinks = [...(existingChannel.links || [])];
+            
+            if (channelState.links_add !== undefined && Array.isArray(channelState.links_add)) {
+              for (const linkId of channelState.links_add) {
+                if (!newLinks.includes(linkId)) {
+                  newLinks.push(linkId);
+                }
+              }
+              logger.debug(`Added links to channel ${existingChannel.id}: [${channelState.links_add.join(', ')}]`);
+            }
+            
+            if (channelState.links_remove !== undefined && Array.isArray(channelState.links_remove)) {
+              newLinks = newLinks.filter(linkId => !channelState.links_remove.includes(linkId));
+              logger.debug(`Removed links from channel ${existingChannel.id}: [${channelState.links_remove.join(', ')}]`);
+            }
+            
+            updates.links = newLinks;
+            logger.debug(`Channel ${existingChannel.id} final links: [${newLinks.join(', ')}]`);
+          }
+          
+          // 应用更新
+          if (Object.keys(updates).length > 0) {
+            this.channelManager.updateChannel(existingChannel.id, updates);
           }
         } else {
           // 创建新频道

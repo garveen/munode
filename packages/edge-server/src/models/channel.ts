@@ -182,6 +182,11 @@ export class ChannelManager extends EventEmitter {
       
       this.invalidateCache(); // 父子关系变化时使缓存失效
     }
+    
+    // 处理频道链接变更
+    if (updates.links !== undefined) {
+      this.invalidateCache(); // 链接变化时使缓存失效
+    }
 
     Object.assign(channel, updates);
     this.logger.info(`Channel updated: id=${channel_id}, name=${channel.name}`);
