@@ -58,6 +58,35 @@ async function linkChannels(adminClient: MumbleClient, channelId1: number, chann
 }
 
 /**
+ * 移除频道链接
+ */
+async function unlinkChannels(adminClient: MumbleClient, channelId1: number, channelId2: number): Promise<void> {
+  await adminClient.sendChannelState({
+    channel_id: channelId1,
+    links_remove: [channelId2],
+  });
+  
+  // 等待移除生效
+  await new Promise(resolve => setTimeout(resolve, 500));
+}
+
+/**
+ * 清除所有频道链接 (用于测试隔离)
+ */
+async function clearAllChannelLinks(adminClient: MumbleClient, channels: any[]): Promise<void> {
+  for (const channel of channels) {
+    if (channel.links && channel.links.length > 0) {
+      await adminClient.sendChannelState({
+        channel_id: channel.channel_id,
+        links_remove: channel.links,
+      });
+    }
+  }
+  // 等待清除生效
+  await new Promise(resolve => setTimeout(resolve, 500));
+}
+
+/**
  * 创建并连接管理员客户端
  */
 async function createAdminClient(testEnv: TestEnvironment): Promise<MumbleClient> {
@@ -96,16 +125,40 @@ function waitForVoice(client: MumbleClient, senderSession: number, timeoutMs: nu
 
 describe('Voice Routing Integration Tests', () => {
   let testEnv: TestEnvironment;
+  let adminForCleanup: MumbleClient | null = null;
 
   beforeAll(async () => {
     testEnv = await setupTestEnvironment(8090);
   }, 60000);
 
   afterAll(async () => {
+    if (adminForCleanup) {
+      await adminForCleanup.disconnect();
+    }
     await testEnv?.cleanup();
   });
 
   describe('Push-to-Talk (target=0) with Channel Links', () => {
+    beforeEach(async () => {
+      // Clear any existing channel links before each test to ensure isolation
+      if (!adminForCleanup) {
+        adminForCleanup = await createAdminClient(testEnv);
+      }
+      const tempClient = new MumbleClient();
+      await tempClient.connect({
+        host: 'localhost',
+        port: testEnv.edgePort,
+        username: 'user1',
+        password: 'password1',
+        rejectUnauthorized: false,
+      });
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const channels = tempClient.getChannels();
+      await clearAllChannelLinks(adminForCleanup, channels);
+      await tempClient.disconnect();
+      await new Promise(resolve => setTimeout(resolve, 200));
+    });
+
     it('should route voice to users in sender channel', async () => {
       const client1 = new MumbleClient();
       const client2 = new MumbleClient();
@@ -375,6 +428,26 @@ describe('Voice Routing Integration Tests', () => {
   });
 
   describe('Whisper (VoiceTarget) - Basic', () => {
+    beforeEach(async () => {
+      // Clear any existing channel links before each test
+      if (!adminForCleanup) {
+        adminForCleanup = await createAdminClient(testEnv);
+      }
+      const tempClient = new MumbleClient();
+      await tempClient.connect({
+        host: 'localhost',
+        port: testEnv.edgePort,
+        username: 'user1',
+        password: 'password1',
+        rejectUnauthorized: false,
+      });
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const channels = tempClient.getChannels();
+      await clearAllChannelLinks(adminForCleanup, channels);
+      await tempClient.disconnect();
+      await new Promise(resolve => setTimeout(resolve, 200));
+    });
+
     it('should send whisper to specific users', async () => {
       const client1 = new MumbleClient();
       const client2 = new MumbleClient();
