@@ -233,6 +233,7 @@ describe('Voice Routing Integration Tests', () => {
 
       // 获取频道列表
       const channels = client1.getChannels();
+      console.log(`[TEST DEBUG] channels.length: ${channels.length}, channels: ${JSON.stringify(channels.map(c => ({ id: c.channel_id, name: c.name })))}`);
       expect(channels.length).toBeGreaterThanOrEqual(1);
 
       // 如果有多个频道，测试跨频道链接
@@ -247,7 +248,12 @@ describe('Voice Routing Integration Tests', () => {
         // 用户2在频道2
         await client2.joinChannel(channels[2].channel_id);
         // 用户3留在根频道
-        await new Promise(resolve => setTimeout(resolve, 300));
+        
+        // Wait for channel changes to be confirmed by server
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        console.log(`[TEST DEBUG] After wait - client1 in channel: ${client1.getStateManager().getSession()?.channel_id}, client2 in: ${client2.getStateManager().getSession()?.channel_id}, client3 in: ${client3.getStateManager().getSession()?.channel_id}`);
+        
 
         // 链接频道1和频道2
         await linkChannels(admin, channels[1].channel_id, channels[2].channel_id);
