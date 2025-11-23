@@ -578,8 +578,22 @@ export class ConnectionManager {
       const packet = udpTunnelMessage.packet;
       
       if (packet && packet.length > 0) {
+        const packetBuffer = Buffer.from(packet);
+        
+        // UDP隧道中的数据与UDP包一样，是加密的，需要先解密
+        let decryptedData: Buffer = packetBuffer;
+        if (this.client.getCryptoManager().isInitialized()) {
+          try {
+            const decrypted = this.client.getCryptoManager().decrypt(packetBuffer);
+            decryptedData = Buffer.from(decrypted);
+          } catch (error) {
+            console.warn('Failed to decrypt UDP tunnel packet:', error);
+            return;
+          }
+        }
+        
         // 解析语音包
-        const voiceInfo = this.parseVoicePacket(Buffer.from(packet));
+        const voiceInfo = this.parseVoicePacket(decryptedData);
         
         if (voiceInfo) {
           // 发射 voice 事件供应用层使用

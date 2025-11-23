@@ -4,6 +4,7 @@ import type { Logger } from 'winston';
 import { EdgeConfig, VoicePacket, VoiceBroadcast, ClientInfo } from '../types.js';
 import { OCB2AES128 } from '@munode/common';
 import type { Socket as UDPSocket } from 'dgram';
+import { mumbleproto } from '@munode/protocol';
 
 /**
  * 语音路由器 - 处理语音包的路由和转发
@@ -205,15 +206,30 @@ export class VoiceRouter extends EventEmitter {
    */
   handleVoiceTunnel(session_id: number, data: Buffer): void {
     try {
+      this.logger.debug(`Received voice tunnel from session ${session_id}, data length: ${data.length}`);
+      
+      // data是protobuf编码的UDPTunnel消息，需要先反序列化
+      const udpTunnelMessage = mumbleproto.UDPTunnel.deserialize(data);
+      
+      // 提取实际的语音包数据
+      const voicePacketData = Buffer.from(udpTunnelMessage.packet || []);
+      if (voicePacketData.length === 0) {
+        this.logger.warn(`Empty voice packet from session ${session_id}`);
+        return;
+      }
+      
+      this.logger.debug(`Extracted voice packet data: ${voicePacketData.length} bytes`);
+      
       // 解析语音包
-      const packet = this.parseVoicePacket(data);
+      const packet = this.parseVoicePacket(voicePacketData);
       if (!packet) {
+        this.logger.warn(`Failed to parse voice packet from session ${session_id}`);
         return;
       }
 
       packet.sender_session = session_id;
       this.logger.debug(
-        `Voice tunnel: sender=${session_id}, target=${packet.target}`
+        `Voice tunnel: sender=${session_id}, target=${packet.target}, codec=${packet.codec}, packet_size=${voicePacketData.length}`
       );
 
       // 处理语音包路由
@@ -315,6 +331,8 @@ export class VoiceRouter extends EventEmitter {
       return;
     }
 
+    this.logger.debug(`Routing voice from ${sender.username} (session ${packet.sender_session}) in channel ${sender.channel_id}`);
+
     // 检查发送者是否被mute或suppress
     if (sender.mute || sender.self_mute || sender.suppress) {
       this.logger.debug(`Voice packet from ${sender.username} dropped: muted or suppressed`);
@@ -323,6 +341,7 @@ export class VoiceRouter extends EventEmitter {
 
     // 获取发送者所在频道的所有客户端
     const channelClients = this.clientManager.getClientsInChannel(sender.channel_id);
+    this.logger.debug(`Found ${channelClients.length} clients in channel ${sender.channel_id}`);
 
     // 准备广播的语音包（包含发送者会话ID）
     const broadcastPacket = this.serializeVoicePacket(packet);
@@ -332,25 +351,33 @@ export class VoiceRouter extends EventEmitter {
     );
 
     // 发送给频道中的所有其他客户端（不包括发送者和被mute/deaf的客户端）
+    let sentCount = 0;
     for (const targetClient of channelClients) {
       // 跳过发送者自己
       if (targetClient.session === packet.sender_session) {
+        this.logger.debug(`Skipping sender ${targetClient.session}`);
         continue;
       }
 
       // 跳过deaf或self_deaf的客户端
       if (targetClient.deaf || targetClient.self_deaf) {
+        this.logger.debug(`Skipping deaf client ${targetClient.session}`);
         continue;
       }
 
       // 跳过未连接或断开的客户端
       if (!targetClient.user_id || targetClient.user_id <= 0) {
+        this.logger.debug(`Skipping unauthenticated client ${targetClient.session}`);
         continue;
       }
 
       // 发送语音包
+      this.logger.debug(`Sending voice packet to ${targetClient.username} (session ${targetClient.session})`);
       this.sendVoicePacketToClient(targetClient, broadcastPacket);
+      sentCount++;
     }
+    
+    this.logger.debug(`Sent voice packet to ${sentCount} clients in channel ${sender.channel_id}`);
     
     // 发送给正在监听此频道的用户（不在该频道内）
     const allClients = this.clientManager.getAllClients();
@@ -786,17 +813,21 @@ export class VoiceRouter extends EventEmitter {
       return;
     }
 
+    this.logger.debug(`Sending voice via TCP to ${client.username} (${client.session}), voice data size: ${voiceData.length}`);
+
     // 加密语音数据
     let encrypted: Buffer;
     try {
       encrypted = crypto.encrypt(voiceData);
+      this.logger.debug(`Encrypted voice data size: ${encrypted.length}`);
     } catch (error) {
       this.logger.error(`Failed to encrypt voice packet for client ${client.session}:`, error);
       return;
     }
 
-    // 通过MessageHandler发送UDPTunnel消息
+    // 将加密的语音数据包装到UDPTunnel protobuf消息中
+    // 这样客户端接收时可以正确解析
     this.emit('sendTCPVoicePacket', client.session, encrypted);
-    this.logger.debug(`Sent voice packet via TCP tunnel to ${client.username} (${client.session})`);
+    this.logger.debug(`Emitted sendTCPVoicePacket event for ${client.username} (${client.session}), encrypted size: ${encrypted.length}`);
   }
 }
