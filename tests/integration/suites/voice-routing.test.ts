@@ -268,9 +268,9 @@ describe('Voice Routing Integration Tests', () => {
         const voiceTarget = new mumbleproto.VoiceTarget({
           id: 1,
           targets: [
-            {
+            new mumbleproto.VoiceTarget.Target({
               session: [session2],
-            },
+            }),
           ],
         });
 
@@ -332,11 +332,12 @@ describe('Voice Routing Integration Tests', () => {
         const voiceTarget = new mumbleproto.VoiceTarget({
           id: 1,
           targets: [
-            {
+            new mumbleproto.VoiceTarget.Target({
+              session: [],
               channel_id: channels[1].channel_id,
               links: false,
               children: false,
-            },
+            }),
           ],
         });
 
@@ -410,11 +411,12 @@ describe('Voice Routing Integration Tests', () => {
         const voiceTarget = new mumbleproto.VoiceTarget({
           id: 1,
           targets: [
-            {
+            new mumbleproto.VoiceTarget.Target({
+              session: [],
               channel_id: channels[1].channel_id,
               links: true,
               children: false,
-            },
+            }),
           ],
         });
 
@@ -480,11 +482,12 @@ describe('Voice Routing Integration Tests', () => {
         const voiceTarget = new mumbleproto.VoiceTarget({
           id: 1,
           targets: [
-            {
+            new mumbleproto.VoiceTarget.Target({
+              session: [],
               channel_id: channels[1].channel_id,
               links: true,
               children: false,
-            },
+            }),
           ],
         });
 
@@ -561,11 +564,12 @@ describe('Voice Routing Integration Tests', () => {
         const voiceTarget = new mumbleproto.VoiceTarget({
           id: 1,
           targets: [
-            {
+            new mumbleproto.VoiceTarget.Target({
+              session: [],
               channel_id: channels[1].channel_id,
               links: false,
               children: true,
-            },
+            }),
           ],
         });
 
@@ -629,11 +633,12 @@ describe('Voice Routing Integration Tests', () => {
         const voiceTarget = new mumbleproto.VoiceTarget({
           id: 1,
           targets: [
-            {
+            new mumbleproto.VoiceTarget.Target({
+              session: [],
               channel_id: channels[1].channel_id,
               links: false,
               children: true,
-            },
+            }),
           ],
         });
 
@@ -721,11 +726,12 @@ describe('Voice Routing Integration Tests', () => {
         const voiceTarget = new mumbleproto.VoiceTarget({
           id: 1,
           targets: [
-            {
+            new mumbleproto.VoiceTarget.Target({
+              session: [],
               channel_id: channels[1].channel_id,
               links: true,
               children: true,
-            },
+            }),
           ],
         });
 
@@ -896,12 +902,13 @@ describe('Voice Routing Integration Tests', () => {
         const voiceTarget = new mumbleproto.VoiceTarget({
           id: 1,
           targets: [
-            {
+            new mumbleproto.VoiceTarget.Target({
+              session: [],
               channel_id: channels[1].channel_id,
               links: false,
               children: false,
               group: 'speakers',
-            },
+            }),
           ],
         });
 
@@ -977,12 +984,13 @@ describe('Voice Routing Integration Tests', () => {
         const voiceTarget = new mumbleproto.VoiceTarget({
           id: 1,
           targets: [
-            {
+            new mumbleproto.VoiceTarget.Target({
+              session: [],
               channel_id: channels[1].channel_id,
               links: true,
               children: false,
               group: 'moderators',
-            },
+            }),
           ],
         });
 
@@ -1049,12 +1057,13 @@ describe('Voice Routing Integration Tests', () => {
         const voiceTarget = new mumbleproto.VoiceTarget({
           id: 1,
           targets: [
-            {
+            new mumbleproto.VoiceTarget.Target({
+              session: [],
               channel_id: channels[1].channel_id,
               links: false,
               children: false,
               group: 'premium',
-            },
+            }),
           ],
         });
 
@@ -1129,12 +1138,13 @@ describe('Voice Routing Integration Tests', () => {
         const voiceTarget = new mumbleproto.VoiceTarget({
           id: 1,
           targets: [
-            {
+            new mumbleproto.VoiceTarget.Target({
+              session: [],
               channel_id: channels[1].channel_id,
               links: false,
               children: false,
               group: 'moderators',
-            },
+            }),
           ],
         });
 
@@ -1199,12 +1209,13 @@ describe('Voice Routing Integration Tests', () => {
         const voiceTarget = new mumbleproto.VoiceTarget({
           id: 1,
           targets: [
-            {
+            new mumbleproto.VoiceTarget.Target({
+              session: [],
               channel_id: channels[1].channel_id,
               links: false,
               children: true,
               group: 'team',
-            },
+            }),
           ],
         });
 

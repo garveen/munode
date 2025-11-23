@@ -176,6 +176,7 @@ class TestAuthServer {
       'sender_edge2': { password: 'password1', user_id: 89 },
       'whisper_sender': { password: 'password1', user_id: 90 },
       'whisper_target': { password: 'password2', user_id: 91 },
+      'moderator': { password: 'mod123', user_id: 92, groups: ['moderator'] },
     };
 
     const user = users[req.username];
