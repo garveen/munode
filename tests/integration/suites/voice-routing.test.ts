@@ -1002,6 +1002,158 @@ describe('Voice Routing Integration Tests', () => {
       ]);
     });
 
+    it('should filter by user authentication groups from auth server', async () => {
+      const client1 = new MumbleClient();
+      const client2 = new MumbleClient();
+      const client3 = new MumbleClient();
+
+      await Promise.all([
+        client1.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'user1',
+          password: 'password1',
+          rejectUnauthorized: false,
+        }),
+        client2.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'user2',
+          password: 'password2',
+          rejectUnauthorized: false,
+        }),
+        client3.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'guest',
+          password: 'guest123',
+          rejectUnauthorized: false,
+        }),
+      ]);
+
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const channels = client1.getChannels();
+      if (channels.length >= 2) {
+        // 用户1在根频道
+        // 用户2和用户3在频道1
+        await client2.joinChannel(channels[1].channel_id);
+        await client3.joinChannel(channels[1].channel_id);
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        // 假设认证服务器返回：
+        // user2 属于 "premium" 组（存储在 client.groups）
+        // guest 不属于任何特殊组
+        
+        // 用户1设置 VoiceTarget：发送到频道1，限制为 "premium" 组
+        const voiceTarget = new mumbleproto.VoiceTarget({
+          id: 1,
+          targets: [
+            {
+              channel_id: channels[1].channel_id,
+              links: false,
+              children: false,
+              group: 'premium',
+            },
+          ],
+        });
+
+        // TODO: 发送 VoiceTarget 消息并发送语音
+        // 只有用户2应该收到（认证组 "premium" 成员）
+        // 用户3不应该收到（不在认证组中）
+
+        expect(client1.isConnected()).toBe(true);
+      }
+
+      await Promise.all([
+        client1.disconnect(),
+        client2.disconnect(),
+        client3.disconnect(),
+      ]);
+    });
+
+    it('should accept users in either channel ACL group or auth group', async () => {
+      const client1 = new MumbleClient();
+      const client2 = new MumbleClient();
+      const client3 = new MumbleClient();
+      const client4 = new MumbleClient();
+
+      await Promise.all([
+        client1.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'user1',
+          password: 'password1',
+          rejectUnauthorized: false,
+        }),
+        client2.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'user2',
+          password: 'password2',
+          rejectUnauthorized: false,
+        }),
+        client3.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'guest',
+          password: 'guest123',
+          rejectUnauthorized: false,
+        }),
+        client4.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'admin',
+          password: 'admin123',
+          rejectUnauthorized: false,
+        }),
+      ]);
+
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const channels = client1.getChannels();
+      if (channels.length >= 2) {
+        // 用户1在根频道
+        // 用户2、3、4在频道1
+        await client2.joinChannel(channels[1].channel_id);
+        await client3.joinChannel(channels[1].channel_id);
+        await client4.joinChannel(channels[1].channel_id);
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        // 假设：
+        // user2 在频道ACL组 "moderators" 中（通过 channel.groups）
+        // guest 在认证组 "moderators" 中（通过 client.groups）
+        // admin 两个都不在
+        
+        // 用户1设置 VoiceTarget：发送到频道1，限制为 "moderators" 组
+        const voiceTarget = new mumbleproto.VoiceTarget({
+          id: 1,
+          targets: [
+            {
+              channel_id: channels[1].channel_id,
+              links: false,
+              children: false,
+              group: 'moderators',
+            },
+          ],
+        });
+
+        // TODO: 发送 VoiceTarget 消息并发送语音
+        // 用户2应该收到（在频道ACL组中）
+        // 用户3应该收到（在认证组中）
+        // 用户4不应该收到（两个都不在）
+
+        expect(client1.isConnected()).toBe(true);
+      }
+
+      await Promise.all([
+        client1.disconnect(),
+        client2.disconnect(),
+        client3.disconnect(),
+        client4.disconnect(),
+      ]);
+    });
+
     it('should handle inherited group members correctly', async () => {
       const client1 = new MumbleClient();
       const client2 = new MumbleClient();

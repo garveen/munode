@@ -480,7 +480,11 @@ export class VoiceRouter extends EventEmitter {
    * 3. links=false, children=true: 发送给在/监听目标频道及其子频道的用户
    * 4. links=true, children=true: 发送给在/监听目标频道、链接频道、子频道及子频道的链接频道的用户
    * 
-   * 如果指定了 group，则以上所有情况都会额外过滤，只有属于该组的用户才能收到语音
+   * 如果指定了 group，则以上所有情况都会额外过滤，只有属于该组的用户才能收到语音。
+   * 组成员来源有两个：
+   * 1. 频道ACL组（channel.groups，基于 user_id 匹配）
+   * 2. 用户认证组（client.groups，来自认证服务器）
+   * 用户只要在任一来源的组中，就可以收到语音
    */
   private routeToVoiceTarget(packet: VoicePacket): void {
     if (!this.clientManager) {
@@ -565,11 +569,11 @@ export class VoiceRouter extends EventEmitter {
           this.logger.debug(`Added ${descendants.size} descendant channels`);
         }
 
-        // 如果指定了组，预先收集组成员
-        let groupMembers: Set<number> | undefined;
+        // 如果指定了组，预先收集ACL频道组成员
+        let channelGroupMembers: Set<number> | undefined;
         if (groupName && this.channelManager) {
-          groupMembers = this.getGroupMembersInChannels(groupName, targetChannels);
-          this.logger.debug(`Group '${groupName}' has ${groupMembers.size} members in target channels`);
+          channelGroupMembers = this.getGroupMembersInChannels(groupName, targetChannels);
+          this.logger.debug(`Channel ACL group '${groupName}' has ${channelGroupMembers.size} members in target channels`);
         }
 
         // 收集这些频道中的所有用户
@@ -595,11 +599,24 @@ export class VoiceRouter extends EventEmitter {
           // 如果在目标频道中或监听目标频道
           if (isInTargetChannel) {
             // 如果指定了组，检查用户是否在组中
-            if (groupMembers) {
-              if (groupMembers.has(client.user_id)) {
+            if (groupName) {
+              // 检查两个来源：
+              // 1. 频道ACL组（基于 user_id）
+              // 2. 用户认证组（来自认证服务器，存储在 client.groups 中）
+              const inChannelGroup = channelGroupMembers && channelGroupMembers.has(client.user_id);
+              const inUserGroup = client.groups && client.groups.includes(groupName);
+              
+              if (inChannelGroup || inUserGroup) {
                 targetSessions.add(client.session);
+                if (inChannelGroup && inUserGroup) {
+                  this.logger.debug(`Client ${client.username} in group '${groupName}' (both channel ACL and user auth)`);
+                } else if (inChannelGroup) {
+                  this.logger.debug(`Client ${client.username} in group '${groupName}' (channel ACL)`);
+                } else {
+                  this.logger.debug(`Client ${client.username} in group '${groupName}' (user auth)`);
+                }
               } else {
-                this.logger.debug(`Client ${client.username} (user_id=${client.user_id}) not in group '${groupName}', skipping`);
+                this.logger.debug(`Client ${client.username} not in group '${groupName}' (checked both channel ACL and user auth), skipping`);
               }
             } else {
               // 没有组限制，添加所有用户
@@ -852,7 +869,8 @@ export class VoiceRouter extends EventEmitter {
   }
 
   /**
-   * 获取指定频道组在多个频道中的所有成员
+   * 获取指定频道ACL组在多个频道中的所有成员
+   * 注意：这只检查频道ACL组（channel.groups），不包括用户认证组（client.groups）
    * @param groupName 组名
    * @param channelIds 频道ID集合
    * @returns 用户ID集合
