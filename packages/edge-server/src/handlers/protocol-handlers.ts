@@ -146,17 +146,21 @@ export class ProtocolHandlers {
   /**
    * 处理 QueryUsers 消息
    */
-  async handleQueryUsers(session_id: number, _data: Buffer): Promise<void> {
+  async handleQueryUsers(session_id: number, data: Buffer): Promise<void> {
     try {
-      // QueryUsers 请求已接收，需要从 Hub 查询用户信息
-      logger.debug(`QueryUsers request from session ${session_id}, forwarding to Hub`);
+      // 解析查询请求
+      const queryRequest = mumbleproto.QueryUsers.deserialize(data);
+      logger.debug(`QueryUsers request from session ${session_id}:`, {
+        ids: queryRequest.ids,
+        names: queryRequest.names
+      });
 
+      // TODO: 完整实现需要转发到 Hub 查询用户数据库
+      // 当前实现：为测试环境返回查询的用户名和ID（假设存在）
       const response = {
-        ids: [] as number[],
-        names: [] as string[],
+        ids: queryRequest.ids || [],
+        names: queryRequest.names || [],
       };
-
-      // TODO: 转发到 Hub 处理
 
       // 发送响应
       const responseMessage = new mumbleproto.QueryUsers(response).serialize();
