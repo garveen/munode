@@ -233,7 +233,6 @@ describe('Voice Routing Integration Tests', () => {
 
       // 获取频道列表
       const channels = client1.getChannels();
-      console.log(`[TEST DEBUG] channels.length: ${channels.length}, channels: ${JSON.stringify(channels.map(c => ({ id: c.channel_id, name: c.name })))}`);
       expect(channels.length).toBeGreaterThanOrEqual(1);
 
       // 如果有多个频道，测试跨频道链接
@@ -251,8 +250,6 @@ describe('Voice Routing Integration Tests', () => {
         
         // Wait for channel changes to be confirmed by server
         await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        console.log(`[TEST DEBUG] After wait - client1 in channel: ${client1.getStateManager().getSession()?.channel_id}, client2 in: ${client2.getStateManager().getSession()?.channel_id}, client3 in: ${client3.getStateManager().getSession()?.channel_id}`);
         
 
         // 链接频道1和频道2
@@ -323,7 +320,8 @@ describe('Voice Routing Integration Tests', () => {
         await client1.joinChannel(channels[1].channel_id);
         // 用户2在根频道，但监听频道2
         await client2.addListeningChannel(channels[2].channel_id);
-        await new Promise(resolve => setTimeout(resolve, 300));
+        // Wait for channel changes to be confirmed
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
         // 链接频道1和频道2
         await linkChannels(admin, channels[1].channel_id, channels[2].channel_id);
@@ -396,7 +394,8 @@ describe('Voice Routing Integration Tests', () => {
         await client2.joinChannel(channels[2].channel_id);
         // 用户3在频道3
         await client3.joinChannel(channels[3].channel_id);
-        await new Promise(resolve => setTimeout(resolve, 300));
+        // Wait for channel changes to be confirmed
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
         // 链接频道 1->2, 2->3
         await linkChannels(admin, channels[1].channel_id, channels[2].channel_id);
@@ -565,7 +564,8 @@ describe('Voice Routing Integration Tests', () => {
         await client2.joinChannel(channels[1].channel_id);
         // 用户3也在频道1
         await client3.joinChannel(channels[1].channel_id);
-        await new Promise(resolve => setTimeout(resolve, 300));
+        // Wait for channel changes to be confirmed
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
         // 用户1设置 VoiceTarget：发送到频道1，不包含链接和子频道
         await client1.setVoiceTarget(1, [
@@ -1225,7 +1225,8 @@ describe('Voice Routing Integration Tests', () => {
         await client3.joinChannel(channels[2].channel_id);
         // 用户4也在频道2
         await client4.joinChannel(channels[2].channel_id);
-        await new Promise(resolve => setTimeout(resolve, 300));
+        // Wait for channel changes to be confirmed
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
         // TODO: 链接频道1和频道2
         // TODO: 在两个频道中设置相同的ACL组 "moderators"
@@ -1378,7 +1379,8 @@ describe('Voice Routing Integration Tests', () => {
         await client2.joinChannel(channels[1].channel_id);
         await client3.joinChannel(channels[1].channel_id);
         await client4.joinChannel(channels[1].channel_id);
-        await new Promise(resolve => setTimeout(resolve, 300));
+        // Wait for channel changes to be confirmed
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
         // 假设：
         // user2 在频道ACL组 "moderators" 中（通过 channel.groups）

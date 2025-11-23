@@ -373,7 +373,7 @@ export class VoiceRouter extends EventEmitter {
       for (const linkedId of linkedChannels) {
         targetChannels.add(linkedId);
       }
-      this.logger.info(`[DEBUG] Push-to-talk: channel ${sender.channel_id} has ${linkedChannels.size} linked channels: [${Array.from(linkedChannels).join(', ')}], total target channels: [${Array.from(targetChannels).join(', ')}]`);
+      this.logger.debug(`Push-to-talk: channel ${sender.channel_id} has ${linkedChannels.size} linked channels: [${Array.from(linkedChannels).join(', ')}]`);
     }
 
     // 发送给目标频道中的所有客户端
