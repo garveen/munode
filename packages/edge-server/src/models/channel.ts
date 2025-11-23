@@ -528,6 +528,7 @@ export class ChannelManager extends EventEmitter {
   /**
    * 递归收集频道的所有传递链接（深度优先搜索）
    * 如果 A 链接 B，B 链接 C，则 A 的传递链接包含 B 和 C
+   * 注意：不包括频道自身
    */
   private collectTransitiveLinks(
     channel_id: number,
@@ -545,9 +546,10 @@ export class ChannelManager extends EventEmitter {
     }
 
     for (const linkedId of links) {
-      if (!result.has(linkedId)) {
-        result.add(linkedId);
-        // 递归收集链接频道的链接
+      // 添加到结果集（不包括起始频道自己）
+      result.add(linkedId);
+      // 递归收集链接频道的链接（但不重复添加已访问的）
+      if (!visited.has(linkedId)) {
         this.collectTransitiveLinks(linkedId, result, visited);
       }
     }
@@ -556,10 +558,22 @@ export class ChannelManager extends EventEmitter {
   /**
    * 获取频道的所有传递链接（包括直接链接和间接链接）
    * 使用缓存以提高性能
+   * 不包括频道自身
    */
   getAllLinkedChannels(channel_id: number): Set<number> {
     this.rebuildCache();
-    return this.transitiveLinksCache.get(channel_id) || new Set<number>();
+    const cached = this.transitiveLinksCache.get(channel_id);
+    if (!cached) {
+      return new Set<number>();
+    }
+    // 过滤掉频道自身（如果存在）
+    const result = new Set<number>();
+    for (const id of cached) {
+      if (id !== channel_id) {
+        result.add(id);
+      }
+    }
+    return result;
   }
 
   /**
