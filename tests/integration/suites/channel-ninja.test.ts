@@ -57,7 +57,7 @@ describe('Channel Ninja Integration Tests', () => {
         const channelCreatePromise = new Promise<void>((resolve) => {
           admin.on('channelState', (state: any) => {
             if (state.name === restrictedChannelName) {
-              restrictedChannelId = state.channelId;
+              restrictedChannelId = state.channel_id;
               resolve();
             }
           });
@@ -155,7 +155,7 @@ describe('Channel Ninja Integration Tests', () => {
 
         const userReturnPromise = new Promise<void>((resolve) => {
           user1.on('userState', (state: any) => {
-            if (state.session === admin.session && state.channelId === 0) {
+            if (state.session === admin.session && state.channel_id === 0) {
               user1SawAdminReturn = true;
               resolve();
             }
@@ -237,7 +237,7 @@ describe('Channel Ninja Integration Tests', () => {
         const channelCreatePromise = new Promise<void>((resolve) => {
           admin.on('channelState', (state: any) => {
             if (state.name === restrictedChannelName) {
-              restrictedChannelId = state.channelId;
+              restrictedChannelId = state.channel_id;
               resolve();
             }
           });
@@ -311,7 +311,7 @@ describe('Channel Ninja Integration Tests', () => {
         const channelCreatePromise = new Promise<void>((resolve) => {
           admin.on('channelState', (state: any) => {
             if (state.name === restrictedChannelName) {
-              restrictedChannelId = state.channelId;
+              restrictedChannelId = state.channel_id;
               resolve();
             }
           });
@@ -415,7 +415,7 @@ describe('Channel Ninja Disabled Tests', () => {
       const channelCreatePromise = new Promise<void>((resolve) => {
         admin.on('channelState', (state: any) => {
           if (state.name === channelName) {
-            channelId = state.channelId;
+            channelId = state.channel_id;
             resolve();
           }
         });
@@ -450,7 +450,7 @@ describe('Channel Ninja Disabled Tests', () => {
       let userSawAdminRemove = false;
 
       user.on('userState', (state: any) => {
-        if (state.session === admin.session && state.channelId === channelId) {
+        if (state.session === admin.session && state.channel_id === channelId) {
           userSawAdminMove = true;
         }
       });
