@@ -12,6 +12,11 @@ export class ChannelManager extends EventEmitter {
   private channels: Map<number, ChannelInfo> = new Map();
   private channelCounter = 1;
   private channelLinks: Map<number, Set<number>> = new Map(); // 频道链接映射
+  
+  // 缓存：用于语音路由优化
+  private transitiveLinksCache: Map<number, Set<number>> = new Map(); // 频道的所有传递链接（包括自己的链接和链接频道的链接）
+  private descendantsCache: Map<number, Set<number>> = new Map(); // 频道的所有子孙频道
+  private cacheValid = false; // 缓存是否有效
 
   constructor(_config: EdgeConfig, logger: Logger) {
     super();
@@ -53,6 +58,7 @@ export class ChannelManager extends EventEmitter {
       }
     }
 
+    this.invalidateCache(); // 使缓存失效
     this.logger.info(`Channel created: id=${channel.id}, name=${channel.name}`);
     this.emit('channelCreated', channel);
     return channel;
@@ -86,6 +92,7 @@ export class ChannelManager extends EventEmitter {
     }
 
     this.channels.delete(channel_id);
+    this.invalidateCache(); // 使缓存失效
     this.logger.info(`Channel removed: id=${channel_id}, name=${channel.name}`);
     this.emit('channelRemoved', channel);
     return true;
@@ -172,6 +179,8 @@ export class ChannelManager extends EventEmitter {
       if (newParent && !newParent.children.includes(channel_id)) {
         newParent.children.push(channel_id);
       }
+      
+      this.invalidateCache(); // 父子关系变化时使缓存失效
     }
 
     Object.assign(channel, updates);
@@ -362,6 +371,7 @@ export class ChannelManager extends EventEmitter {
       channel2.links = Array.from(links2Set);
     }
 
+    this.invalidateCache(); // 使缓存失效
     this.logger.info(`Channels linked: ${channel_id1} <-> ${channel_id2}`);
     this.emit('channelsLinked', channel_id1, channel_id2);
     return true;
@@ -387,6 +397,7 @@ export class ChannelManager extends EventEmitter {
     channel1.links = Array.from(links1);
     channel2.links = Array.from(links2);
 
+    this.invalidateCache(); // 使缓存失效
     this.logger.info(`Channels unlinked: ${channel_id1} <-> ${channel_id2}`);
     this.emit('channelsUnlinked', channel_id1, channel_id2);
     return true;
@@ -455,5 +466,108 @@ export class ChannelManager extends EventEmitter {
     this.logger.info(`Channel renamed: id=${channel_id}, oldName=${oldName}, newName=${newName}`);
     this.emit('channelRenamed', channel);
     return true;
+  }
+
+  /**
+   * 使缓存失效
+   * 在频道结构或链接发生变化时调用
+   */
+  private invalidateCache(): void {
+    this.cacheValid = false;
+    this.transitiveLinksCache.clear();
+    this.descendantsCache.clear();
+  }
+
+  /**
+   * 重建缓存
+   * 计算所有频道的传递链接和子孙频道
+   */
+  private rebuildCache(): void {
+    if (this.cacheValid) {
+      return;
+    }
+
+    this.transitiveLinksCache.clear();
+    this.descendantsCache.clear();
+
+    // 计算所有频道的子孙频道
+    for (const channel of this.channels.values()) {
+      const descendants = new Set<number>();
+      this.collectDescendants(channel.id, descendants);
+      this.descendantsCache.set(channel.id, descendants);
+    }
+
+    // 计算所有频道的传递链接
+    for (const channel of this.channels.values()) {
+      const transitiveLinks = new Set<number>();
+      this.collectTransitiveLinks(channel.id, transitiveLinks, new Set<number>());
+      this.transitiveLinksCache.set(channel.id, transitiveLinks);
+    }
+
+    this.cacheValid = true;
+    this.logger.debug('Channel cache rebuilt');
+  }
+
+  /**
+   * 递归收集频道的所有子孙频道
+   */
+  private collectDescendants(channel_id: number, result: Set<number>): void {
+    const channel = this.channels.get(channel_id);
+    if (!channel) {
+      return;
+    }
+
+    for (const childId of channel.children) {
+      if (!result.has(childId)) {
+        result.add(childId);
+        this.collectDescendants(childId, result);
+      }
+    }
+  }
+
+  /**
+   * 递归收集频道的所有传递链接（深度优先搜索）
+   * 如果 A 链接 B，B 链接 C，则 A 的传递链接包含 B 和 C
+   */
+  private collectTransitiveLinks(
+    channel_id: number,
+    result: Set<number>,
+    visited: Set<number>
+  ): void {
+    if (visited.has(channel_id)) {
+      return;
+    }
+    visited.add(channel_id);
+
+    const links = this.channelLinks.get(channel_id);
+    if (!links) {
+      return;
+    }
+
+    for (const linkedId of links) {
+      if (!result.has(linkedId)) {
+        result.add(linkedId);
+        // 递归收集链接频道的链接
+        this.collectTransitiveLinks(linkedId, result, visited);
+      }
+    }
+  }
+
+  /**
+   * 获取频道的所有传递链接（包括直接链接和间接链接）
+   * 使用缓存以提高性能
+   */
+  getAllLinkedChannels(channel_id: number): Set<number> {
+    this.rebuildCache();
+    return this.transitiveLinksCache.get(channel_id) || new Set<number>();
+  }
+
+  /**
+   * 获取频道的所有子孙频道
+   * 使用缓存以提高性能
+   */
+  getAllDescendants(channel_id: number): Set<number> {
+    this.rebuildCache();
+    return this.descendantsCache.get(channel_id) || new Set<number>();
   }
 }
