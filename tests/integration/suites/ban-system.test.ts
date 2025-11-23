@@ -73,7 +73,7 @@ describe('Ban System Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user1',
-        password: 'pass1',
+        password: 'password1',
         rejectUnauthorized: false,
       });
 

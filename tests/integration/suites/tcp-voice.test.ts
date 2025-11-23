@@ -140,7 +140,7 @@ describe('TCP Voice Transmission Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'mixed_tcp1',
-        password: 'pass1',
+        password: 'password1',
         rejectUnauthorized: false,
         forceTcpVoice: true,
       });
@@ -150,7 +150,7 @@ describe('TCP Voice Transmission Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'mixed_tcp2',
-        password: 'pass2',
+        password: 'password2',
         rejectUnauthorized: false,
         forceTcpVoice: true,
       });
@@ -160,7 +160,7 @@ describe('TCP Voice Transmission Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'mixed_udp',
-        password: 'pass3',
+        password: 'password3',
         rejectUnauthorized: false,
         forceTcpVoice: false,
       });
@@ -349,7 +349,7 @@ describe('TCP Voice Transmission Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'cross_edge_tcp1',
-        password: 'pass1',
+        password: 'password1',
         rejectUnauthorized: false,
         forceTcpVoice: true,
       });
@@ -359,7 +359,7 @@ describe('TCP Voice Transmission Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort2,
         username: 'cross_edge_tcp2',
-        password: 'pass2',
+        password: 'password2',
         rejectUnauthorized: false,
         forceTcpVoice: true,
       });
