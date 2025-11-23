@@ -472,13 +472,15 @@ export class VoiceRouter extends EventEmitter {
    * - channel_id: 目标频道
    * - links: 是否包含链接的频道
    * - children: 是否包含子频道
-   * - group: ACL组名（当前未实现）
+   * - group: ACL组名（限制只有该组成员能听到）
    * 
    * 语音路由规则:
    * 1. links=false, children=false: 只发送给在/监听目标频道的用户
    * 2. links=true, children=false: 发送给在/监听目标频道及其链接频道的用户
    * 3. links=false, children=true: 发送给在/监听目标频道及其子频道的用户
    * 4. links=true, children=true: 发送给在/监听目标频道、链接频道、子频道及子频道的链接频道的用户
+   * 
+   * 如果指定了 group，则以上所有情况都会额外过滤，只有属于该组的用户才能收到语音
    */
   private routeToVoiceTarget(packet: VoicePacket): void {
     if (!this.clientManager) {
@@ -532,8 +534,10 @@ export class VoiceRouter extends EventEmitter {
         const includeLinks = target.links === true;
         // 是否包含子频道
         const includeChildren = target.children === true;
+        // 是否限制为特定ACL组
+        const groupName = target.group;
 
-        this.logger.debug(`Whisper target: channel=${target.channel_id}, links=${includeLinks}, children=${includeChildren}`);
+        this.logger.debug(`Whisper target: channel=${target.channel_id}, links=${includeLinks}, children=${includeChildren}, group=${groupName || 'none'}`);
 
         // 添加链接的频道
         if (includeLinks && this.channelManager) {
@@ -561,32 +565,50 @@ export class VoiceRouter extends EventEmitter {
           this.logger.debug(`Added ${descendants.size} descendant channels`);
         }
 
+        // 如果指定了组，预先收集组成员
+        let groupMembers: Set<number> | undefined;
+        if (groupName && this.channelManager) {
+          groupMembers = this.getGroupMembersInChannels(groupName, targetChannels);
+          this.logger.debug(`Group '${groupName}' has ${groupMembers.size} members in target channels`);
+        }
+
         // 收集这些频道中的所有用户
         const allClients = this.clientManager.getAllClients();
         for (const client of allClients) {
+          let isInTargetChannel = false;
+          
           // 检查客户端是否在目标频道中
           if (targetChannels.has(client.channel_id)) {
-            targetSessions.add(client.session);
-            continue;
+            isInTargetChannel = true;
           }
           
           // 检查客户端是否正在监听目标频道之一
-          if (client.listeningChannels) {
+          if (!isInTargetChannel && client.listeningChannels) {
             for (const channelId of targetChannels) {
               if (client.listeningChannels.has(channelId)) {
-                targetSessions.add(client.session);
+                isInTargetChannel = true;
                 break;
               }
+            }
+          }
+          
+          // 如果在目标频道中或监听目标频道
+          if (isInTargetChannel) {
+            // 如果指定了组，检查用户是否在组中
+            if (groupMembers) {
+              if (groupMembers.has(client.user_id)) {
+                targetSessions.add(client.session);
+              } else {
+                this.logger.debug(`Client ${client.username} (user_id=${client.user_id}) not in group '${groupName}', skipping`);
+              }
+            } else {
+              // 没有组限制，添加所有用户
+              targetSessions.add(client.session);
             }
           }
         }
 
         this.logger.debug(`Collected ${targetSessions.size} sessions from ${targetChannels.size} target channels`);
-      }
-
-      // 情况3: 基于ACL组的目标（暂不实现）
-      if (target.group) {
-        this.logger.warn(`ACL group targeting not yet implemented: ${target.group}`);
       }
     }
 
@@ -827,6 +849,56 @@ export class VoiceRouter extends EventEmitter {
     if (broadcast.sender_edge_id !== this.config.server_id) {
       this.emit('forwardBroadcast', broadcast);
     }
+  }
+
+  /**
+   * 获取指定频道组在多个频道中的所有成员
+   * @param groupName 组名
+   * @param channelIds 频道ID集合
+   * @returns 用户ID集合
+   */
+  private getGroupMembersInChannels(groupName: string, channelIds: Set<number>): Set<number> {
+    const members = new Set<number>();
+    
+    if (!this.channelManager) {
+      return members;
+    }
+
+    // 遍历所有目标频道，收集组成员
+    for (const channelId of channelIds) {
+      const channel = this.channelManager.getChannel(channelId);
+      if (!channel || !channel.groups) {
+        continue;
+      }
+
+      const group = channel.groups.get(groupName);
+      if (!group) {
+        continue;
+      }
+
+      // 添加明确添加到组的用户
+      if (group.add && Array.isArray(group.add)) {
+        for (const userId of group.add) {
+          members.add(userId);
+        }
+      }
+
+      // 添加继承的成员
+      if (group.inherited_members && Array.isArray(group.inherited_members)) {
+        for (const userId of group.inherited_members) {
+          members.add(userId);
+        }
+      }
+
+      // 注意：group.remove 中的用户应该被排除，即使他们在 inherited_members 中
+      if (group.remove && Array.isArray(group.remove)) {
+        for (const userId of group.remove) {
+          members.delete(userId);
+        }
+      }
+    }
+
+    return members;
   }
 
   /**
