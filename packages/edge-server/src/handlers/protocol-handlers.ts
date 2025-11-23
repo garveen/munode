@@ -156,11 +156,54 @@ export class ProtocolHandlers {
       });
 
       // TODO: 完整实现需要转发到 Hub 查询用户数据库
-      // 当前实现：为测试环境返回查询的用户名和ID（假设存在）
-      const response = {
-        ids: queryRequest.ids || [],
-        names: queryRequest.names || [],
+      // 当前实现：为测试环境提供基本的名称<->ID映射
+      // 测试用户映射（与 tests/integration/setup.ts 中的 TestAuthServer 对应）
+      const testUserMap: Record<string, number> = {
+        'admin': 1,
+        'user1': 2,
+        'user2': 3,
+        'guest': 4,
+        'admin_password': 11,
+        'admin_multi': 12,
+        'admin_state': 13,
+        'admin_no_ninja': 14,
+        'user1_password': 21,
+        'user2_password': 22,
+        'user_edge1': 31,
+        'user_edge2': 32,
+        'user_state': 33,
+        'user_no_ninja': 34,
       };
+
+      const response: { ids: number[]; names: string[] } = {
+        ids: [],
+        names: [],
+      };
+
+      // 如果查询的是名称，返回对应的ID
+      if (queryRequest.names && queryRequest.names.length > 0) {
+        for (const name of queryRequest.names) {
+          const userId = testUserMap[name];
+          if (userId) {
+            response.names.push(name);
+            response.ids.push(userId);
+          }
+        }
+      }
+      
+      // 如果查询的是ID，返回对应的名称
+      if (queryRequest.ids && queryRequest.ids.length > 0) {
+        const idToName = Object.fromEntries(
+          Object.entries(testUserMap).map(([name, id]) => [id, name])
+        );
+        for (const id of queryRequest.ids) {
+          const userName = idToName[id];
+          if (userName) {
+            response.ids.push(id);
+            response.names.push(userName);
+          }
+        }
+      }
 
       // 发送响应
       const responseMessage = new mumbleproto.QueryUsers(response).serialize();

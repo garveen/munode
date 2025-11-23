@@ -1554,6 +1554,7 @@ export class HubControlService {
         session: target_session,
         onlinesecs: now - targetSession.connected_at,
         idlesecs: now - targetSession.last_active,
+        stats_only: stats_only || false,  // 包含 stats_only 标志
       };
 
       // details权限：extended 且不是 stats_only 模式
