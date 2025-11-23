@@ -77,6 +77,7 @@ export class HandlerFactory {
     
     // 设置 VoiceRouter 的依赖
     this.voiceRouter.setClientManager(this.clientManager);
+    this.voiceRouter.setChannelManager(this.channelManager);
     
     // 初始化状态管理器（集群模式）
     this.stateManager = new EdgeStateManager();
