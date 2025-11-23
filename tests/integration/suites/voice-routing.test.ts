@@ -12,6 +12,86 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestEnvironment, setupTestEnvironment } from '../setup';
 import { MumbleClient } from '../../../packages/client/dist/index.js';
 import { mumbleproto } from '@munode/protocol';
+import * as crypto from 'crypto';
+
+/**
+ * 生成随机语音数据用于测试
+ */
+function generateRandomVoiceData(size: number = 20): Buffer {
+  return crypto.randomBytes(size);
+}
+
+/**
+ * 创建 Opus 语音包
+ * Mumble 语音包格式: [header(1字节)][session_varint][sequence_varint][voice_data]
+ */
+function createVoicePacket(codec: number = 4, target: number = 0, sequence: number = 0): Buffer {
+  // Header: codec(3位高位) + target(5位低位)
+  // codec = 4 (Opus), target = 0 (normal talking) or 1-30 (whisper) or 31 (loopback)
+  const header = Buffer.alloc(1);
+  header.writeUInt8((codec << 5) | (target & 0x1F), 0);
+
+  // Session varint (简化为单字节 0，服务器会替换为实际 session)
+  const sessionVarint = Buffer.from([0x00]);
+
+  // Sequence varint
+  const sequenceVarint = Buffer.from([sequence & 0x7F]);
+
+  // 随机语音数据
+  const voiceData = generateRandomVoiceData(20);
+
+  return Buffer.concat([header, sessionVarint, sequenceVarint, voiceData]);
+}
+
+/**
+ * 链接两个频道 (需要管理员权限)
+ */
+async function linkChannels(client: MumbleClient, channelId1: number, channelId2: number): Promise<void> {
+  // 使用 admin 用户来链接频道，因为需要 Write 权限
+  const adminClient = new MumbleClient();
+  try {
+    await adminClient.connect({
+      host: client.getConfig().host || 'localhost',
+      port: client.getConfig().port || 64738,
+      username: 'admin',
+      password: 'admin123',
+      rejectUnauthorized: false,
+    });
+    
+    await new Promise(resolve => setTimeout(resolve, 300));
+    
+    await adminClient.sendChannelState({
+      channel_id: channelId1,
+      links_add: [channelId2],
+    });
+    
+    // 等待链接生效
+    await new Promise(resolve => setTimeout(resolve, 300));
+  } finally {
+    await adminClient.disconnect();
+  }
+}
+
+/**
+ * 等待接收语音包
+ */
+function waitForVoice(client: MumbleClient, senderSession: number, timeoutMs: number = 2000): Promise<boolean> {
+  return new Promise((resolve) => {
+    let voiceReceived = false;
+    const timer = setTimeout(() => resolve(voiceReceived), timeoutMs);
+    
+    const voiceHandler = (data: any) => {
+      if (data.session === senderSession) {
+        voiceReceived = true;
+        clearTimeout(timer);
+        client.removeListener('voice', voiceHandler);
+        resolve(true);
+      }
+    };
+    
+    client.on('voice', voiceHandler);
+  });
+}
 
 describe('Voice Routing Integration Tests', () => {
   let testEnv: TestEnvironment;
@@ -48,20 +128,19 @@ describe('Voice Routing Integration Tests', () => {
       // 两个用户都在根频道
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      // 用户2监听语音事件
-      let voiceReceived = false;
-      const voicePromise = new Promise<void>((resolve) => {
-        client2.on('voice', (data: any) => {
-          if (data.session === client1.getStateManager().getSession()?.session) {
-            voiceReceived = true;
-            resolve();
-          }
-        });
-      });
+      const session1 = client1.getStateManager().getSession()?.session;
+      expect(session1).toBeGreaterThan(0);
 
-      // 用户1发送语音（模拟）
-      // 注意：实际的语音发送需要通过 UDP 或 TCP tunnel
-      // 这里我们主要测试路由逻辑是否正确配置
+      // 设置语音接收监听
+      const voicePromise = waitForVoice(client2, session1!, 2000);
+
+      // 用户1发送语音 (Push-to-Talk, target=0)
+      const voicePacket = createVoicePacket(4, 0, 0);
+      await client1.sendVoice(voicePacket);
+
+      // 等待接收
+      const received = await voicePromise;
+      expect(received).toBe(true);
 
       await client1.disconnect();
       await client2.disconnect();
@@ -104,6 +183,8 @@ describe('Voice Routing Integration Tests', () => {
 
       // 如果有多个频道，测试跨频道链接
       if (channels.length >= 3) {
+        const session1 = client1.getStateManager().getSession()?.session;
+        
         // 用户1在频道1
         await client1.joinChannel(channels[1].channel_id);
         // 用户2在频道2
@@ -111,9 +192,23 @@ describe('Voice Routing Integration Tests', () => {
         // 用户3留在根频道
         await new Promise(resolve => setTimeout(resolve, 300));
 
-        // TODO: 需要通过 admin API 链接频道1和频道2
-        // 然后用户1发送语音，用户2应该能收到（因为频道链接）
-        // 用户3不应该收到（不在链接的频道中）
+        // 链接频道1和频道2
+        await linkChannels(client1, channels[1].channel_id, channels[2].channel_id);
+
+        // 设置监听
+        const voice2Promise = waitForVoice(client2, session1!, 2000);
+        const voice3Promise = waitForVoice(client3, session1!, 2000);
+
+        // 用户1发送语音，用户2应该能收到（因为频道链接）
+        const voicePacket = createVoicePacket(4, 0, 0);
+        await client1.sendVoice(voicePacket);
+
+        // 验证接收
+        const received2 = await voice2Promise;
+        const received3 = await voice3Promise;
+        
+        expect(received2).toBe(true); // 用户2在链接的频道2中，应该收到
+        expect(received3).toBe(false); // 用户3在根频道，不应该收到
 
         expect(client1.isConnected()).toBe(true);
         expect(client2.isConnected()).toBe(true);
@@ -152,14 +247,26 @@ describe('Voice Routing Integration Tests', () => {
 
       const channels = client1.getChannels();
       if (channels.length >= 3) {
+        const session1 = client1.getStateManager().getSession()?.session;
+        
         // 用户1在频道1
         await client1.joinChannel(channels[1].channel_id);
         // 用户2在根频道，但监听频道2
         await client2.addListeningChannel(channels[2].channel_id);
         await new Promise(resolve => setTimeout(resolve, 300));
 
-        // TODO: 链接频道1和频道2
+        // 链接频道1和频道2
+        await linkChannels(client1, channels[1].channel_id, channels[2].channel_id);
+
+        // 设置监听
+        const voice2Promise = waitForVoice(client2, session1!, 2000);
+
         // 用户1发送语音，用户2应该能收到（因为监听链接的频道2）
+        const voicePacket = createVoicePacket(4, 0, 0);
+        await client1.sendVoice(voicePacket);
+
+        const received2 = await voice2Promise;
+        expect(received2).toBe(true);
 
         expect(client1.isConnected()).toBe(true);
         expect(client2.isConnected()).toBe(true);
@@ -204,6 +311,8 @@ describe('Voice Routing Integration Tests', () => {
 
       const channels = client1.getChannels();
       if (channels.length >= 4) {
+        const session1 = client1.getStateManager().getSession()?.session;
+        
         // 用户1在频道1
         await client1.joinChannel(channels[1].channel_id);
         // 用户2在频道2
@@ -212,8 +321,23 @@ describe('Voice Routing Integration Tests', () => {
         await client3.joinChannel(channels[3].channel_id);
         await new Promise(resolve => setTimeout(resolve, 300));
 
-        // TODO: 链接频道 1->2, 2->3
+        // 链接频道 1->2, 2->3
+        await linkChannels(client1, channels[1].channel_id, channels[2].channel_id);
+        await linkChannels(client1, channels[2].channel_id, channels[3].channel_id);
+
+        // 设置监听
+        const voice2Promise = waitForVoice(client2, session1!, 2000);
+        const voice3Promise = waitForVoice(client3, session1!, 2000);
+
         // 用户1发送语音，用户2和用户3都应该能收到（传递链接）
+        const voicePacket = createVoicePacket(4, 0, 0);
+        await client1.sendVoice(voicePacket);
+
+        const received2 = await voice2Promise;
+        const received3 = await voice3Promise;
+        
+        expect(received2).toBe(true);
+        expect(received3).toBe(true); // 传递链接: 1->2->3
 
         expect(client1.isConnected()).toBe(true);
         expect(client2.isConnected()).toBe(true);
@@ -262,21 +386,30 @@ describe('Voice Routing Integration Tests', () => {
 
       const session2 = client2.getStateManager().getSession()?.session;
       const session3 = client3.getStateManager().getSession()?.session;
+      const session1 = client1.getStateManager().getSession()?.session;
 
-      if (session2 && session3) {
+      if (session2 && session3 && session1) {
         // 用户1设置 VoiceTarget 1：只发给用户2
-        const voiceTarget = new mumbleproto.VoiceTarget({
-          id: 1,
-          targets: [
-            new mumbleproto.VoiceTarget.Target({
-              session: [session2],
-            }),
-          ],
-        });
+        await client1.setVoiceTarget(1, [
+          {
+            session: [session2],
+          },
+        ]);
 
-        // TODO: 发送 VoiceTarget 消息
-        // 然后用户1使用 target=1 发送语音
+        // 设置监听
+        const voice2Promise = waitForVoice(client2, session1, 2000);
+        const voice3Promise = waitForVoice(client3, session1, 2000);
+
+        // 用户1使用 target=1 发送语音
+        const voicePacket = createVoicePacket(4, 1, 0); // target=1 (whisper to VoiceTarget 1)
+        await client1.sendVoice(voicePacket);
+
         // 只有用户2应该收到，用户3不应该收到
+        const received2 = await voice2Promise;
+        const received3 = await voice3Promise;
+        
+        expect(received2).toBe(true);
+        expect(received3).toBe(false);
 
         expect(client1.isConnected()).toBe(true);
       }
@@ -321,6 +454,8 @@ describe('Voice Routing Integration Tests', () => {
 
       const channels = client1.getChannels();
       if (channels.length >= 2) {
+        const session1 = client1.getStateManager().getSession()?.session;
+        
         // 用户1在根频道
         // 用户2在频道1
         await client2.joinChannel(channels[1].channel_id);
@@ -329,20 +464,29 @@ describe('Voice Routing Integration Tests', () => {
         await new Promise(resolve => setTimeout(resolve, 300));
 
         // 用户1设置 VoiceTarget：发送到频道1，不包含链接和子频道
-        const voiceTarget = new mumbleproto.VoiceTarget({
-          id: 1,
-          targets: [
-            new mumbleproto.VoiceTarget.Target({
-              session: [],
-              channel_id: channels[1].channel_id,
-              links: false,
-              children: false,
-            }),
-          ],
-        });
+        await client1.setVoiceTarget(1, [
+          {
+            session: [],
+            channel_id: channels[1].channel_id,
+            links: false,
+            children: false,
+          },
+        ]);
 
-        // TODO: 发送 VoiceTarget 消息并发送语音
+        // 设置监听
+        const voice2Promise = waitForVoice(client2, session1!, 2000);
+        const voice3Promise = waitForVoice(client3, session1!, 2000);
+
+        // 发送语音
+        const voicePacket = createVoicePacket(4, 1, 0);
+        await client1.sendVoice(voicePacket);
+
         // 用户2和用户3应该收到（在频道1中）
+        const received2 = await voice2Promise;
+        const received3 = await voice3Promise;
+        
+        expect(received2).toBe(true);
+        expect(received3).toBe(true);
 
         expect(client1.isConnected()).toBe(true);
       }
