@@ -465,7 +465,7 @@ export class VoiceRouter extends EventEmitter {
   }
 
   /**
-   * 路由到语音目标 (Whisper, target>=2)
+   * 路由到语音目标 (Whisper, target=1-30)
    * 
    * VoiceTarget 可以指定多个目标，每个目标可以包含:
    * - sessions: 直接指定的用户会话ID列表
