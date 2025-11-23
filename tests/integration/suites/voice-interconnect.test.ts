@@ -351,7 +351,7 @@ describe('Voice Interconnect Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'codec_receiver',
-        password: 'password2',
+        password: 'password1',
         rejectUnauthorized: false,
       });
 
@@ -391,7 +391,7 @@ describe('Voice Interconnect Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'random_receiver',
-        password: 'password2',
+        password: 'password1',
         rejectUnauthorized: false,
       });
 
@@ -437,7 +437,7 @@ describe('Voice Interconnect Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'same_channel',
-        password: 'password2',
+        password: 'password1',
         rejectUnauthorized: false,
       });
 
