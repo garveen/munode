@@ -45,6 +45,11 @@ export default {
     heartbeatInterval: 30,
     timeout: 90,
     maxEdges: 100,
+    
+    // HMAC challenge-response authentication for testing
+    hmacSecret: 'test-hmac-secret-key-for-integration-tests',
+    challengeTimeout: 60000,
+    enableAuth: true,
   },
   
   webApi: {

@@ -1,4 +1,5 @@
 import { createLogger } from '@munode/common';
+import { createHmac, randomBytes } from 'crypto';
 import type {
   RegisteredEdge,
   RegistryConfig,
@@ -13,6 +14,15 @@ import type { HubDatabase } from './database.js';
 const logger = createLogger({ service: 'hub-registry' });
 
 /**
+ * 挑战码信息
+ */
+interface ChallengeInfo {
+  challenge: string;
+  serverId: number;
+  createdAt: number;
+}
+
+/**
  * 服务注册表
  * 管理 Edge Server 的注册、心跳和状态
  */
@@ -20,19 +30,83 @@ export class ServiceRegistry {
   private edges = new Map<number, RegisteredEdge>();
   private heartbeatTimers = new Map<number, NodeJS.Timeout>();
   private config: RegistryConfig;
+  
+  // HMAC 挑战-响应认证
+  private challenges = new Map<string, ChallengeInfo>(); // challenge -> ChallengeInfo
+  private challengeCleanupTimer?: NodeJS.Timeout;
+  
   // Edge信息不再持久化到数据库，仅存储在内存中
 
   constructor(config: RegistryConfig, _database: HubDatabase) {
     this.config = config;
     // database参数保留以兼容旧代码，但不再使用
+    
+    // 启动挑战码清理定时器
+    if (this.config.enableAuth !== false && this.config.hmacSecret) {
+      this.startChallengeCleanup();
+    }
   }
 
   /**
    * 注册新的 Edge Server
+   * 支持两阶段 HMAC 挑战-响应认证：
+   * 1. 第一次调用（无 challenge_response）：生成并返回 challenge
+   * 2. 第二次调用（带 challenge_response）：验证签名并完成注册
    */
   async register(request: RegisterRequest): Promise<RegisterResponse> {
-    const {  server_id: reqserver_id, name, host, port, region, capacity, certificate } = request;
+    const { server_id: reqserver_id, name, host, port, region, capacity, certificate } = request;
     const server_id = reqserver_id || 1;
+
+    // HMAC 挑战-响应认证
+    const enableAuth = this.config.enableAuth !== false;
+    const hasSecret = !!this.config.hmacSecret;
+    
+    if (enableAuth && hasSecret) {
+      const challengeResponse = (request as any).challenge_response;
+      const challenge = (request as any).challenge;
+      
+      // 第一阶段：生成挑战码
+      if (!challengeResponse) {
+        const newChallenge = this.generateChallenge(server_id);
+        const challengeTimeout = this.config.challengeTimeout || 60000;
+        
+        logger.info(`Generated challenge for Edge ${server_id}`);
+        
+        return {
+          success: false,
+          challenge: newChallenge,
+          challenge_timeout: challengeTimeout,
+          hub_server_id: 0,
+          edge_list: [],
+        };
+      }
+      
+      // 第二阶段：验证签名
+      if (!challenge) {
+        logger.warn(`Edge ${server_id} missing challenge in response`);
+        return {
+          success: false,
+          error: 'Missing challenge',
+          hub_server_id: 0,
+          edge_list: [],
+        };
+      }
+      
+      const isValid = this.verifyChallenge(server_id, challenge, challengeResponse);
+      if (!isValid) {
+        logger.warn(`Edge ${server_id} authentication failed`);
+        return {
+          success: false,
+          error: 'Authentication failed',
+          hub_server_id: 0,
+          edge_list: [],
+        };
+      }
+      
+      // 验证通过，清理挑战码
+      this.challenges.delete(challenge);
+      logger.info(`Edge ${server_id} authenticated successfully`);
+    }
 
     // 检查是否已存在
     if (this.edges.has(server_id)) {
@@ -47,14 +121,14 @@ export class ServiceRegistry {
       port,
       region,
       capacity,
-       current_load: 0,
+      current_load: 0,
       certificate,
-       last_seen: Date.now(),
+      last_seen: Date.now(),
       stats: {
-         user_count: 0,
-         channel_count: 0,
-         cpu_usage: 0,
-         memory_usage: 0,
+        user_count: 0,
+        channel_count: 0,
+        cpu_usage: 0,
+        memory_usage: 0,
         bandwidth: { in: 0, out: 0 },
       },
     };
@@ -74,8 +148,8 @@ export class ServiceRegistry {
     // 返回响应
     return {
       success: true,
-       hub_server_id: 0, // Hub Server ID
-       edge_list: this.getEdgeList(),
+      hub_server_id: 0, // Hub Server ID
+      edge_list: this.getEdgeList(),
     };
   }
 
@@ -245,5 +319,129 @@ export class ServiceRegistry {
         certificate: edge.certificate,
          last_seen: edge.last_seen,
       }));
+  }
+
+  /**
+   * 生成挑战码
+   */
+  private generateChallenge(serverId: number): string {
+    const challenge = randomBytes(32).toString('hex');
+    
+    this.challenges.set(challenge, {
+      challenge,
+      serverId,
+      createdAt: Date.now(),
+    });
+    
+    return challenge;
+  }
+
+  /**
+   * 验证挑战码响应
+   */
+  private verifyChallenge(serverId: number, challenge: string, response: string): boolean {
+    const challengeInfo = this.challenges.get(challenge);
+    
+    if (!challengeInfo) {
+      logger.warn(`Challenge not found: ${challenge}`);
+      return false;
+    }
+    
+    // 检查 server_id 是否匹配
+    if (challengeInfo.serverId !== serverId) {
+      logger.warn(`Server ID mismatch: expected ${challengeInfo.serverId}, got ${serverId}`);
+      return false;
+    }
+    
+    // 检查是否超时
+    const challengeTimeout = this.config.challengeTimeout || 60000;
+    if (Date.now() - challengeInfo.createdAt > challengeTimeout) {
+      logger.warn(`Challenge expired for server ${serverId}`);
+      this.challenges.delete(challenge);
+      return false;
+    }
+    
+    // 计算期望的 HMAC 签名
+    const expectedResponse = this.computeHmac(challenge, serverId);
+    
+    // 使用常量时间比较防止时序攻击
+    const isValid = this.constantTimeCompare(response, expectedResponse);
+    
+    if (!isValid) {
+      logger.warn(`Invalid HMAC response from server ${serverId}`);
+    }
+    
+    return isValid;
+  }
+
+  /**
+   * 计算 HMAC 签名
+   */
+  private computeHmac(challenge: string, serverId: number): string {
+    if (!this.config.hmacSecret) {
+      throw new Error('HMAC secret not configured');
+    }
+    
+    const message = `${challenge}:${serverId}`;
+    const hmac = createHmac('sha256', this.config.hmacSecret);
+    hmac.update(message);
+    return hmac.digest('hex');
+  }
+
+  /**
+   * 常量时间字符串比较（防止时序攻击）
+   */
+  private constantTimeCompare(a: string, b: string): boolean {
+    if (a.length !== b.length) {
+      return false;
+    }
+    
+    let result = 0;
+    for (let i = 0; i < a.length; i++) {
+      result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    }
+    
+    return result === 0;
+  }
+
+  /**
+   * 启动挑战码清理定时器
+   */
+  private startChallengeCleanup(): void {
+    const cleanupInterval = 60000; // 每分钟清理一次
+    
+    this.challengeCleanupTimer = setInterval(() => {
+      this.cleanupExpiredChallenges();
+    }, cleanupInterval);
+  }
+
+  /**
+   * 清理过期的挑战码
+   */
+  private cleanupExpiredChallenges(): void {
+    const now = Date.now();
+    const challengeTimeout = this.config.challengeTimeout || 60000;
+    
+    for (const [challenge, info] of this.challenges.entries()) {
+      if (now - info.createdAt > challengeTimeout) {
+        this.challenges.delete(challenge);
+        logger.debug(`Cleaned up expired challenge for server ${info.serverId}`);
+      }
+    }
+  }
+
+  /**
+   * 停止服务（清理资源）
+   */
+  stop(): void {
+    if (this.challengeCleanupTimer) {
+      clearInterval(this.challengeCleanupTimer);
+      this.challengeCleanupTimer = undefined;
+    }
+    
+    for (const timer of this.heartbeatTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.heartbeatTimers.clear();
   }
 }

@@ -192,6 +192,9 @@ export class HubServer {
       // 停止清理任务
       this.stopCleanupTasks();
 
+      // 等待一小段时间确保所有数据库操作完成
+      await new Promise(resolve => setTimeout(resolve, 200));
+
       // 关闭数据库连接
       await this.database.close();
 
@@ -220,6 +223,13 @@ export class HubServer {
         voiceTargets: this.voiceTargetSync.getTargetCount(),
       },
     };
+  }
+
+  /**
+   * 获取服务注册表（用于测试）
+   */
+  getRegistry(): ServiceRegistry {
+    return this.registry;
   }
 
   /**

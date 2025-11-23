@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { createHmac } from 'crypto';
 import { createLogger } from '@munode/common';
 import { ControlChannelClient, ControlChannelClientConfig } from '@munode/protocol';
 import type {
@@ -99,6 +100,7 @@ export class EdgeControlClient extends EventEmitter {
 
   /**
    * 注册到 Hub
+   * 实现 HMAC 挑战-响应认证
    */
   private async register(): Promise<void> {
     const registerParams: RPCParams<'edge.register'> = {
@@ -118,14 +120,62 @@ export class EdgeControlClient extends EventEmitter {
     };
 
     try {
-      const response = await this.client.call('edge.register', registerParams) as RPCResult<'edge.register'>;
-      this.registered = true;
-      logger.info(`Registered with Hub: ${JSON.stringify(response)}`);
-      this.emit('registered', response);
+      // 第一阶段：请求挑战码
+      logger.info('Requesting challenge from Hub...');
+      const challengeResponse = await this.client.call('edge.register', registerParams) as RPCResult<'edge.register'>;
+      
+      // 如果 Hub 返回了 challenge，进行第二阶段认证
+      if (!challengeResponse.success && challengeResponse.challenge) {
+        const challenge = challengeResponse.challenge;
+        logger.info('Received challenge, computing response...');
+        
+        // 计算 HMAC 签名
+        const hmacSecret = this.config.hubServer?.hmacSecret;
+        if (!hmacSecret) {
+          throw new Error('HMAC secret not configured in Edge config');
+        }
+        
+        const challengeResponseValue = this.computeHmac(challenge, this.config.server_id, hmacSecret);
+        
+        // 第二阶段：提交签名
+        const authParams: RPCParams<'edge.register'> = {
+          ...registerParams,
+          challenge,
+          challenge_response: challengeResponseValue,
+        };
+        
+        logger.info('Submitting challenge response...');
+        const finalResponse = await this.client.call('edge.register', authParams) as RPCResult<'edge.register'>;
+        
+        if (!finalResponse.success) {
+          throw new Error(finalResponse.error || 'Registration failed after authentication');
+        }
+        
+        this.registered = true;
+        logger.info(`Registered with Hub: ${JSON.stringify(finalResponse)}`);
+        this.emit('registered', finalResponse);
+      } else if (challengeResponse.success) {
+        // Hub 未启用认证，直接注册成功
+        this.registered = true;
+        logger.info(`Registered with Hub (no auth): ${JSON.stringify(challengeResponse)}`);
+        this.emit('registered', challengeResponse);
+      } else {
+        throw new Error(challengeResponse.error || 'Registration failed');
+      }
     } catch (error) {
       logger.error('Registration failed:', error);
       throw error;
     }
+  }
+
+  /**
+   * 计算 HMAC 签名
+   */
+  private computeHmac(challenge: string, serverId: number, secret: string): string {
+    const message = `${challenge}:${serverId}`;
+    const hmac = createHmac('sha256', secret);
+    hmac.update(message);
+    return hmac.digest('hex');
   }
 
   /**

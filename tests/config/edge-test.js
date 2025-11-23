@@ -37,6 +37,10 @@ export default {
     connectionType: 'smux',
     reconnectInterval: 5000,
     heartbeatInterval: 10000,
+    
+    // HMAC authentication (must match Hub's hmacSecret)
+    hmacSecret: 'test-hmac-secret-key-for-integration-tests',
+    
     options: {
       maxStreamWindowSize: 262144,
       maxSessionWindowSize: 524288,

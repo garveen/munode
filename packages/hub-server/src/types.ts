@@ -168,6 +168,11 @@ export interface RegistryConfig {
   heartbeatInterval: number;
   timeout: number;
   maxEdges: number;
+  
+  // HMAC 挑战-响应认证
+  hmacSecret?: string; // HMAC 共享密钥
+  challengeTimeout?: number; // 挑战码超时时间 (ms)，默认: 60000 (60秒)
+  enableAuth?: boolean; // 是否启用认证，默认: true
 }
 
 // 数据库配置

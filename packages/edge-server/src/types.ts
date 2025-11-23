@@ -70,6 +70,9 @@ export interface HubServerConfig {
   reconnectInterval: number;
   heartbeatInterval: number;
   options?: SmuxOptions | GrpcOptions | KcpOptions;
+  
+  // HMAC 挑战-响应认证
+  hmacSecret?: string; // HMAC 共享密钥（需与 Hub 配置一致）
 }
 
 // SMUX 连接选项

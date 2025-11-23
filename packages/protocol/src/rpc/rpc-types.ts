@@ -24,6 +24,9 @@ import type {
 
 /**
  * Edge 注册到 Hub
+ * 支持两阶段认证：
+ * 1. 不传 challenge_response 时，Hub 返回 challenge
+ * 2. 传 challenge_response 时，Hub 验证并完成注册
  */
 export interface EdgeRegisterMethod {
   method: 'edge.register';
@@ -36,6 +39,10 @@ export interface EdgeRegisterMethod {
     capacity: number;
     certificate: string;
     metadata?: Record<string, unknown>;
+    
+    // HMAC 挑战-响应认证
+    challenge?: string; // Hub 返回的挑战码
+    challenge_response?: string; // Edge 计算的 HMAC 签名
   };
   result: RegisterResponse;
 }

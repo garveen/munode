@@ -56,6 +56,11 @@ export default {
     heartbeatInterval: 30, // seconds
     timeout: 90, // seconds
     maxEdges: 100,
+    
+    // HMAC challenge-response authentication
+    hmacSecret: 'change-this-to-a-secure-random-string', // Shared secret for Edge authentication
+    challengeTimeout: 60000, // Challenge timeout in milliseconds (60 seconds)
+    enableAuth: true, // Enable HMAC authentication (default: true)
   },
   
   // Web API configuration

@@ -73,6 +73,10 @@ export interface RegisterResponse extends RPCResponse {
   hub_server_id: number;
   edge_list: EdgeInfo[];
   sync_data?: FullSyncData;
+  
+  // HMAC 挑战-响应认证
+  challenge?: string; // 服务器生成的挑战码（仅在第一阶段返回）
+  challenge_timeout?: number; // 挑战码超时时间（毫秒）
 }
 
 // Edge server information

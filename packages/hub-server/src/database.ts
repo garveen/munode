@@ -1431,7 +1431,23 @@ export class HubDatabase {
    * 关闭数据库连接
    */
   async close(): Promise<void> {
-    await this.db.close();
-    logger.info('Database connection closed');
+    try {
+      // 优化数据库并等待所有操作完成
+      await this.db.run('PRAGMA optimize');
+      
+      // 短暂延迟以确保所有待处理的操作完成
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      await this.db.close();
+      logger.info('Database connection closed');
+    } catch (error) {
+      // 如果关闭失败，强制关闭
+      logger.warn('Error during database close, attempting force close:', error);
+      try {
+        await this.db.close();
+      } catch (e) {
+        logger.error('Force close also failed:', e);
+      }
+    }
   }
 }

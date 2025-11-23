@@ -45,6 +45,10 @@ export default {
     connectionType: 'smux', // 'websocket', 'grpc', 'smux', or 'kcp'
     reconnectInterval: 5000, // milliseconds
     heartbeatInterval: 30000, // milliseconds
+    
+    // HMAC challenge-response authentication
+    hmacSecret: 'change-this-to-a-secure-random-string', // Must match Hub's hmacSecret
+    
     options: {
       // SMUX options
       maxStreamWindowSize: 262144,
