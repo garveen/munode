@@ -187,6 +187,10 @@ export class ProtocolHandlers {
           if (userId) {
             response.names.push(name);
             response.ids.push(userId);
+          } else {
+            // 不存在的用户：返回名称和ID=-1表示未注册
+            response.names.push(name);
+            response.ids.push(-1);
           }
         }
       }
@@ -201,6 +205,10 @@ export class ProtocolHandlers {
           if (userName) {
             response.ids.push(id);
             response.names.push(userName);
+          } else {
+            // 不存在的ID：返回空名称
+            response.ids.push(id);
+            response.names.push('');
           }
         }
       }
