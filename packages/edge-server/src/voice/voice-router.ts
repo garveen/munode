@@ -478,6 +478,14 @@ export class VoiceRouter extends EventEmitter {
 
     // 获取所有链接的频道（包括传递链接）
     if (this.channelManager) {
+      // Debug: 打印当前频道管理器中的所有链接状态
+      const allChannels = this.channelManager.getAllChannels();
+      this.logger.info(`[VOICE-DEBUG] Channel links state: ${JSON.stringify(allChannels.map((c: any) => ({ id: c.id, name: c.name, links: c.links })))}`);
+      
+      // Debug: 打印 channelLinks Map 状态
+      const directLinks = this.channelManager.getChannelLinks(sender.channel_id);
+      this.logger.info(`[VOICE-DEBUG] Direct links for channel ${sender.channel_id}: [${directLinks.join(', ')}]`);
+      
       const linkedChannels = this.channelManager.getAllLinkedChannels(sender.channel_id);
       for (const linkedId of linkedChannels) {
         targetChannels.add(linkedId);
@@ -641,7 +649,14 @@ export class VoiceRouter extends EventEmitter {
       }
 
       // 情况2: 基于频道的目标
-      if (target.channel_id !== undefined && target.channel_id !== null) {
+      // 使用 has_channel_id 检查是否显式设置了 channel_id
+      // 直接检查 channel_id !== undefined/null 会在值为 0 (root channel) 时误判
+      // 因为 protobuf 默认返回 0 而不是 undefined
+      // 注意：protobuf 对象有 has_channel_id 属性，普通对象没有
+      const hasChannelId = 'has_channel_id' in target 
+        ? target.has_channel_id 
+        : (target.channel_id !== undefined && target.channel_id !== null);
+      if (hasChannelId) {
         const targetChannels = new Set<number>();
         targetChannels.add(target.channel_id);
 

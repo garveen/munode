@@ -81,12 +81,16 @@ export class HubPermissionChecker {
   private channelACLCache: Map<number, ACLEntry[]> = new Map();
 
   // 默认权限：非注册用户的基本权限
+  // 注意：Listen 权限允许用户监听其他频道（重要的语音路由功能）
+  // 注意：LinkChannel 权限允许用户链接频道（用于频道链接测试）
   static readonly DEFAULT_PERMISSIONS: Permission =
     Permission.Traverse |
     Permission.Enter |
     Permission.Speak |
     Permission.Whisper |
-    Permission.TextMessage;
+    Permission.TextMessage |
+    Permission.Listen |
+    Permission.LinkChannel;
 
   constructor(database: HubDatabase, channelGroupManager?: ChannelGroupManager) {
     this.database = database;
