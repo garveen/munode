@@ -478,19 +478,11 @@ export class VoiceRouter extends EventEmitter {
 
     // 获取所有链接的频道（包括传递链接）
     if (this.channelManager) {
-      // Debug: 打印当前频道管理器中的所有链接状态
-      const allChannels = this.channelManager.getAllChannels();
-      this.logger.info(`[VOICE-DEBUG] Channel links state: ${JSON.stringify(allChannels.map((c: any) => ({ id: c.id, name: c.name, links: c.links })))}`);
-      
-      // Debug: 打印 channelLinks Map 状态
-      const directLinks = this.channelManager.getChannelLinks(sender.channel_id);
-      this.logger.info(`[VOICE-DEBUG] Direct links for channel ${sender.channel_id}: [${directLinks.join(', ')}]`);
-      
       const linkedChannels = this.channelManager.getAllLinkedChannels(sender.channel_id);
       for (const linkedId of linkedChannels) {
         targetChannels.add(linkedId);
       }
-      this.logger.info(`[VOICE-DEBUG] Push-to-talk: sender ${sender.username} in channel ${sender.channel_id}, linked channels: [${Array.from(linkedChannels).join(', ')}], total target channels: [${Array.from(targetChannels).join(', ')}]`);
+      this.logger.debug(`[VOICE] Push-to-talk: sender ${sender.username} in channel ${sender.channel_id}, linked channels: [${Array.from(linkedChannels).join(', ')}], total target channels: [${Array.from(targetChannels).join(', ')}]`);
     }
 
     // 发送给目标频道中的所有客户端
