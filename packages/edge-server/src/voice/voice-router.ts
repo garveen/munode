@@ -644,10 +644,8 @@ export class VoiceRouter extends EventEmitter {
       // 使用 has_channel_id 检查是否显式设置了 channel_id
       // 直接检查 channel_id !== undefined/null 会在值为 0 (root channel) 时误判
       // 因为 protobuf 默认返回 0 而不是 undefined
-      // 注意：protobuf 对象有 has_channel_id 属性，普通对象没有
-      const hasChannelId = 'has_channel_id' in target 
-        ? target.has_channel_id 
-        : (target.channel_id !== undefined && target.channel_id !== null);
+      // 注意：protobuf 对象有 has_channel_id 属性（布尔值），普通对象没有
+      const hasChannelId = this.hasProtobufChannelId(target);
       if (hasChannelId) {
         const targetChannels = new Set<number>();
         targetChannels.add(target.channel_id);
@@ -1035,6 +1033,21 @@ export class VoiceRouter extends EventEmitter {
     }
 
     return members;
+  }
+
+  /**
+   * 类型安全地检查 VoiceTarget 是否设置了 channel_id
+   * 处理 protobuf 对象（有 has_channel_id 属性）和普通对象的情况
+   * @param target VoiceTarget 目标对象
+   * @returns 是否显式设置了 channel_id
+   */
+  private hasProtobufChannelId(target: any): boolean {
+    // Protobuf 对象有 has_channel_id 布尔属性
+    if (typeof target.has_channel_id === 'boolean') {
+      return target.has_channel_id;
+    }
+    // 普通对象：检查 channel_id 是否存在且不为 undefined/null
+    return target.channel_id !== undefined && target.channel_id !== null;
   }
 
   /**
