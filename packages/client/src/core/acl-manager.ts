@@ -227,7 +227,8 @@ export class ACLManager {
       version: '',
       client_name: '',
       os_name: '',
-      os_version: ''
+      os_version: '',
+      state: 0 // 客户端不需要跟踪状态
     };
 
     // 获取完整的频道树和ACL映射
@@ -311,7 +312,8 @@ export class ACLManager {
       version: '',
       client_name: '',
       os_name: '',
-      os_version: ''
+      os_version: '',
+      state: 0 // 客户端不需要跟踪状态
     };
 
     const channels = this.client.getChannels();

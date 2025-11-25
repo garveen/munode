@@ -5,7 +5,7 @@ import { VoiceManager } from './voice-manager.js';
 import { HubDataManager } from '../cluster/hub-data-sync.js';
 import { BanHandler } from './ban-handler.js';
 import { MessageManager } from './message-manager.js';
-import { mumbleproto, MessageType } from '@munode/protocol';
+import { mumbleproto, MessageType, ClientState } from '@munode/protocol';
 
 /**
  * 事件设置管理器
@@ -463,7 +463,12 @@ export class EventSetupManager {
         Buffer.from(version.serializeBinary())
       );
 
-      logger.debug(`Sent server version to session ${session_id}`);
+      // 发送 Version 后，更新客户端状态为 ServerSentVersion
+      this.handlerFactory.clientManager.updateClient(session_id, {
+        state: ClientState.ServerSentVersion,
+      });
+
+      logger.debug(`Sent server version to session ${session_id}, state updated to ServerSentVersion`);
     } catch (error) {
       logger.error(`Failed to send server version to session ${session_id}:`, error);
     }

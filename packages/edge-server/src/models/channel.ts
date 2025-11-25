@@ -185,6 +185,18 @@ export class ChannelManager extends EventEmitter {
     
     // 处理频道链接变更
     if (updates.links !== undefined) {
+      // 重要：更新内部 channelLinks Map，确保 getAllLinkedChannels() 能正确工作
+      // 注意：Hub已经负责双向链接，这里只需要更新单向链接即可
+      const newLinks = new Set(updates.links);
+      
+      // 直接替换此频道的链接集合
+      if (newLinks.size > 0) {
+        this.channelLinks.set(channel_id, newLinks);
+      } else {
+        this.channelLinks.delete(channel_id);
+      }
+      
+      this.logger.debug(`Updated channelLinks Map for channel ${channel_id}: [${Array.from(newLinks).join(', ')}]`);
       this.invalidateCache(); // 链接变化时使缓存失效
     }
 

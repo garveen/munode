@@ -41,7 +41,7 @@
  */
 
 // 必须在导入任何模块之前设置环境变量
-const logLevel = process.env.LOG_LEVEL || 'debug';
+const logLevel = 'debug';
 process.env.LOG_LEVEL = logLevel;
 console.log(logLevel);
 

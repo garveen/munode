@@ -3,7 +3,7 @@ import { TLSSocket } from 'tls';
 import { EventEmitter } from 'events';
 // import { logger } from '@munode/common';
 import type { Logger } from 'winston';
-import { EdgeConfig, ClientInfo } from '../types.js';
+import { EdgeConfig, ClientInfo, ClientState } from '../types.js';
 
 /**
  * 客户端管理器 - 管理所有连接的客户端
@@ -31,6 +31,7 @@ export class ClientManager extends EventEmitter {
       user_id: 0,
       username: '',
       channel_id: this.config.defaultChannel,
+      state: ClientState.Connected, // 初始状态：已连接
       mute: false,
       deaf: false,
       self_mute: false,
@@ -231,6 +232,7 @@ export class ClientManager extends EventEmitter {
    */
   private setupSocketHandlers(socket: Socket | TLSSocket, sessionId: number): void {
     socket.on('data', (data: Buffer) => {
+      console.log('Received data from client:', { sessionId, length: data.length });
       this.handleClientData(sessionId, data);
     });
 

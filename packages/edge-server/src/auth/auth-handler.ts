@@ -9,8 +9,7 @@
  */
 
 import { logger } from '@munode/common';
-import { mumbleproto } from '@munode/protocol';
-import { MessageType } from '@munode/protocol';
+import { mumbleproto, MessageType, ClientState } from '@munode/protocol';
 import { randomFillSync } from 'crypto';
 import type { ClientInfo, AuthResult } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
@@ -38,14 +37,30 @@ export class AuthHandlers {
    */
   async handleAuthenticate(session_id: number, data: Buffer): Promise<void> {
     try {
-      // 解析认证消息
-      const authMessage = mumbleproto.Authenticate.deserialize(data);
       const client = this.clientManager.getClient(session_id);
 
       if (!client) {
         logger.warn(`Authentication attempt for unknown session: ${session_id}`);
         return;
       }
+
+      // 检查客户端状态：允许在 Connected、ServerSentVersion 或 ClientSentVersion 状态认证（与 C 实现一致）
+      if (client.state !== ClientState.Connected && 
+          client.state !== ClientState.ServerSentVersion &&
+          client.state !== ClientState.ClientSentVersion) {
+        logger.warn(
+          `Authentication attempt in wrong state for session ${session_id}: state=${client.state}`
+        );
+        this.sendReject(
+          session_id,
+          'Invalid state for authentication',
+          mumbleproto.Reject.RejectType.None
+        );
+        return;
+      }
+
+      // 解析认证消息
+      const authMessage = mumbleproto.Authenticate.deserialize(data);
 
       // 检查是否已经认证
       if (client.username) {
@@ -102,14 +117,15 @@ export class AuthHandlers {
     authMessage: mumbleproto.Authenticate
   ): Promise<void> {
     try {
-      // 更新客户端信息
+      // 更新客户端信息，并更新状态为 Authenticated
       this.clientManager.updateClient(session_id, {
         user_id: authResult.user_id,
         username: authResult.displayName || authResult.username,
         groups: authResult.groups || [],
+        state: ClientState.Authenticated, // 认证完成
       });
       
-      logger.info(`Auth success: user=${authResult.username}, user_id=${authResult.user_id}, groups=${JSON.stringify(authResult.groups)}`);
+      logger.info(`Auth success: user=${authResult.username}, user_id=${authResult.user_id}, groups=${JSON.stringify(authResult.groups)}, state=Authenticated`);
 
       // 1. 生成加密密钥并发送 CryptSetup
       const cryptKey = Buffer.alloc(16);
@@ -216,9 +232,14 @@ export class AuthHandlers {
 
       this.messageHandler.sendMessage(session_id, MessageType.ServerSync, Buffer.from(serverSyncMessage));
 
+      // 发送 ServerSync 后，更新客户端状态为 Ready
+      this.clientManager.updateClient(session_id, {
+        state: ClientState.Ready,
+      });
+
       logger.info(
-        `User authenticated: session=${session_id}, ` +
-        `username=${updatedClient.username}, user_id=${updatedClient.user_id}`
+        `User authenticated and ready: session=${session_id}, ` +
+        `username=${updatedClient.username}, user_id=${updatedClient.user_id}, state=Ready`
       );
 
       // 10. 广播新用户加入给其他已认证客户端

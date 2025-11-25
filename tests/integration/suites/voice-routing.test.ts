@@ -8,7 +8,7 @@
  * - 监听频道场景
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { TestEnvironment, setupTestEnvironment } from '../setup';
 import { MumbleClient } from '../../../packages/client/dist/index.js';
 import { mumbleproto } from '@munode/protocol';

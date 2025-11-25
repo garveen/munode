@@ -7,13 +7,15 @@ import type { OCB2AES128 } from '@munode/common';
 
 /**
  * 客户端状态枚举
+ * 与 Go 实现的状态机保持一致
  */
 export enum ClientState {
-  Connecting = 0,
-  Handshaking = 1,
-  Authenticated = 2,
-  Ready = 3,
-  Disconnected = 4,
+  Connected = 0,           // StateClientConnected - 客户端已连接
+  ServerSentVersion = 1,   // StateServerSentVersion - 服务器已发送Version
+  ClientSentVersion = 2,   // StateClientSentVersion - 客户端已发送Version
+  Authenticated = 3,       // StateClientAuthenticated - 认证完成
+  Ready = 4,               // StateClientReady - 客户端准备就绪
+  Dead = 5,                // StateClientDead - 客户端已断开
 }
 
 /**
@@ -25,6 +27,7 @@ export interface ClientInfo {
   user_id: number;
   username: string;
   channel_id: number;
+  state: ClientState; // 客户端连接状态
   mute?: boolean;
   deaf?: boolean;
   self_mute?: boolean;

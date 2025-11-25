@@ -58,9 +58,28 @@ export class VoiceManager {
       logger.debug(`Received broadcastToChannel event for channel ${channel_id}, sender ${broadcast.sender_id}`);
 
       // 在集群模式下，通过UDP直接转发语音包到其他Edge
-      // 获取该频道中有用户的 Edge 列表
-      const targetEdges = this.handlerFactory.stateManager.getEdgesInChannel(channel_id);
-      logger.debug(`Target edges for channel ${channel_id}: ${Array.from(targetEdges)}`);
+      // 获取所有目标频道（包括链接频道）中有用户的 Edge 列表
+      const targetChannels = new Set<number>();
+      targetChannels.add(channel_id);
+      
+      // 获取所有链接的频道（包括传递链接）
+      const linkedChannels = this.handlerFactory.channelManager.getAllLinkedChannels(channel_id);
+      for (const linkedId of linkedChannels) {
+        targetChannels.add(linkedId);
+      }
+      
+      logger.debug(`PTT broadcast: channel ${channel_id} + ${linkedChannels.size} linked channels: [${Array.from(targetChannels).join(', ')}]`);
+      
+      // 收集所有目标频道中有用户的Edge
+      const targetEdges = new Set<number>();
+      for (const channelId of targetChannels) {
+        const edgesInChannel = this.handlerFactory.stateManager.getEdgesInChannel(channelId);
+        for (const edgeId of edgesInChannel) {
+          targetEdges.add(edgeId);
+        }
+      }
+      
+      logger.debug(`Target edges for PTT in ${targetChannels.size} channels: ${Array.from(targetEdges)}`);
 
       if (targetEdges.size === 0) {
         logger.debug(`Skip voice broadcast: no remote users in channel ${channel_id}`);
@@ -154,57 +173,57 @@ export class VoiceManager {
 
   /**
    * 处理来自其他Edge的频道语音广播（通过UDP）
+   * 
+   * 重要：不要在这里重复实现路由逻辑！
+   * 应该解析语音包，然后让VoiceRouter使用统一的路由逻辑处理。
    */
   private handleRemoteChannelVoiceBroadcast(voiceData: Buffer): void {
     try {
       // voiceData格式: [header][session_varint][sequence_varint][voice_data]
-      // 这是完整的 Mumble 语音包格式，可以直接转发
+      // 这是完整的 Mumble 语音包格式
 
-      // 解析session来确定发送者
+      // 解析语音包以获取关键信息
+      if (voiceData.length < 2) {
+        logger.warn('Remote voice packet too short');
+        return;
+      }
+
+      // 解析header
+      const header = voiceData.readUInt8(0);
+      const codec = (header >> 5) & 0x07;
+      const target = header & 0x1f;
+
+      // 解析session（发送者）
       const senderSession = this.parseSessionFromVoicePacket(voiceData);
       if (senderSession === null) {
         logger.warn('Failed to parse session from remote voice packet');
         return;
       }
 
-      logger.debug(`Received remote voice from session ${senderSession}`);
-
-      // 从远程用户列表中获取发送者的频道信息
+      // 从远程用户列表中获取发送者信息
       const remoteUser = this.handlerFactory.stateManager.getRemoteUserInfo(senderSession);
       if (!remoteUser) {
-        logger.warn(`Remote user ${senderSession} not found in state, cannot determine channel`);
+        logger.warn(`Remote user ${senderSession} not found in state`);
         return;
       }
 
-      const senderChannelId = remoteUser.channel_id;
-      logger.debug(`Remote voice sender ${senderSession} is in channel ${senderChannelId}`);
+      logger.debug(`Received remote voice: session=${senderSession}, target=${target}, codec=${codec}, channel=${remoteUser.channel_id}`);
 
-      // 只转发给同一频道的本地客户端
-      const channelClients = this.handlerFactory.clientManager.getClientsInChannel(senderChannelId);
+      // 构造VoicePacket对象（仅用于携带元数据）
+      // 注意：远程语音包已经是完整的序列化格式 [header][session][sequence][data]
+      // 我们只需要提取元数据，实际转发时使用原始的 voiceData
+      const voicePacket = {
+        sender_session: senderSession,
+        target,
+        sequence: 0, // VoiceRouter不使用这个字段
+        codec,
+        data: Buffer.alloc(0), // 远程包不需要这个字段，因为我们会传递serializedData
+        timestamp: Date.now(),
+      };
 
-      let forwardedCount = 0;
-      for (const client of channelClients) {
-        // 跳过 deaf 或 self_deaf 的客户端
-        if (client.deaf || client.self_deaf) {
-          continue;
-        }
-
-        // 跳过未认证的客户端
-        if (!client.user_id || client.user_id <= 0) {
-          continue;
-        }
-
-        // 跳过发送者自己（如果session匹配）
-        if (client.session === senderSession) {
-          continue;
-        }
-
-        // 转发语音包
-        this.handlerFactory.voiceRouter.sendVoicePacketToClient(client, voiceData);
-        forwardedCount++;
-      }
-
-      logger.debug(`Forwarded remote voice from session ${senderSession} (channel ${senderChannelId}) to ${forwardedCount} local clients`);
+      // 让VoiceRouter使用统一的路由逻辑处理
+      // 传递原始的 voiceData 作为已序列化的数据，避免重复序列化
+      this.handlerFactory.voiceRouter.routeRemoteVoicePacket(voicePacket, remoteUser.channel_id, voiceData);
     } catch (error) {
       logger.error('Error handling remote channel voice broadcast:', error);
     }

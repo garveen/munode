@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 // import { logger } from '@munode/common';
 import type { Logger } from 'winston';
-import { EdgeConfig } from './types.js';
+import { EdgeConfig, ClientState } from './types.js';
 import { mumbleproto } from '@munode/protocol';
 import { MessageType } from '@munode/protocol';
 
@@ -9,13 +9,19 @@ import { MessageType } from '@munode/protocol';
  * 消息处理器 - 处理 Mumble 协议消息
  */
 export class MessageHandler extends EventEmitter {
-  // private config: EdgeConfig;
   private logger: Logger;
+  private clientManager: any; // ClientManager 引用，用于获取客户端状态
 
   constructor(_config: EdgeConfig, logger: Logger) {
     super();
-    // this.config = config;
     this.logger = logger;
+  }
+
+  /**
+   * 设置 ClientManager 引用（在 HandlerFactory 中调用）
+   */
+  setClientManager(clientManager: any): void {
+    this.clientManager = clientManager;
   }
 
   /**
@@ -23,9 +29,21 @@ export class MessageHandler extends EventEmitter {
    */
   handleMessage( session_id: number, messageType: number, messageData: Buffer): void {
     try {
+      // 获取客户端状态
+      const client = this.clientManager?.getClient(session_id);
+      const clientState = client?.state;
+
       this.logger.debug(
-        `Handling message: session=${session_id}, type=${messageType}, size=${messageData.length}`
+        `Handling message: session=${session_id}, type=${messageType}, size=${messageData.length}, state=${clientState}`
       );
+
+      // 根据客户端状态检查消息是否合法
+      if (!this.isMessageAllowedInState(messageType, clientState)) {
+        this.logger.warn(
+          `Message type ${messageType} not allowed in state ${clientState} for session ${session_id}`
+        );
+        return;
+      }
 
       switch (messageType) {
         case MessageType.Version:
@@ -115,6 +133,50 @@ export class MessageHandler extends EventEmitter {
       }
     } catch (error) {
       this.logger.error(`Error handling message type ${messageType}:`, error);
+    }
+  }
+
+  /**
+   * 检查消息类型在当前状态下是否允许
+   */
+  private isMessageAllowedInState(messageType: number, clientState?: ClientState): boolean {
+    // 如果客户端状态未定义，拒绝所有消息（除了连接初期）
+    if (clientState === undefined) {
+      return false;
+    }
+
+    switch (clientState) {
+      case ClientState.Connected:
+        // 刚连接时允许接收 Version、Authenticate 和 Ping（与 C 实现保持一致）
+        return messageType === MessageType.Version || 
+               messageType === MessageType.Authenticate || 
+               messageType === MessageType.Ping;
+
+      case ClientState.ServerSentVersion:
+        // 服务器已发送 Version，接受客户端的 Version、Authenticate 和 Ping
+        return messageType === MessageType.Version || 
+               messageType === MessageType.Authenticate || 
+               messageType === MessageType.Ping;
+
+      case ClientState.ClientSentVersion:
+        // 客户端已发送 Version，只接受 Authenticate、UserState（PreConnect）和 Ping
+        return (
+          messageType === MessageType.Authenticate ||
+          messageType === MessageType.UserState ||
+          messageType === MessageType.Ping
+        );
+
+      case ClientState.Authenticated:
+      case ClientState.Ready:
+        // 认证完成后，接受大部分消息
+        return true;
+
+      case ClientState.Dead:
+        // 客户端已断开，不接受任何消息
+        return false;
+
+      default:
+        return false;
     }
   }
 

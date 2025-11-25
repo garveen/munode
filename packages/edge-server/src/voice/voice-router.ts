@@ -303,7 +303,35 @@ export class VoiceRouter extends EventEmitter {
   }
 
   /**
-   * 路由语音包
+   * 路由远程语音包（来自其他Edge服务器）
+   * 
+   * @param packet 语音包（已包含sender_session和target）
+   * @param senderChannelId 发送者所在的频道ID
+   * @param serializedData 已序列化的语音数据（可选，如果提供则直接使用而不重新序列化）
+   */
+  routeRemoteVoicePacket(packet: VoicePacket, senderChannelId: number, serializedData?: Buffer): void {
+    this.logger.debug(`Routing remote voice: session=${packet.sender_session}, target=${packet.target}, channel=${senderChannelId}`);
+    
+    // 根据目标类型路由
+    if (packet.target === 0) {
+      // PTT: 路由到发送者频道及其链接频道
+      this.routeToChannelById(packet, senderChannelId, serializedData);
+    } else if (packet.target >= 1 && packet.target <= 30) {
+      // Whisper: 使用与本地whisper相同的逻辑
+      // 注意：whisper需要voiceTarget信息，这里远程语音包可能没有，暂时使用本地逻辑
+      this.routeToVoiceTarget(packet);
+    } else if (packet.target === 31) {
+      // Loopback: 远程用户的loopback不应该到达这里，忽略
+      this.logger.debug(`Ignoring remote loopback packet from session ${packet.sender_session}`);
+    } else {
+      this.logger.warn(`Invalid voice target: ${packet.target}`);
+    }
+
+    this.emit('voicePacket', packet);
+  }
+
+  /**
+   * 路由语音包（本地客户端）
    * 
    * 根据 target 字段路由:
    * - target = 0: Push-to-Talk (普通频道语音)
@@ -326,6 +354,87 @@ export class VoiceRouter extends EventEmitter {
     }
 
     this.emit('voicePacket', packet);
+  }
+
+  /**
+   * 路由到频道 (Push-to-Talk, target=0) - 用于远程语音包
+   * 
+   * 与routeToChannel相同的逻辑，但发送者频道ID由参数提供（因为远程用户不在本地clientManager中）
+   * 
+   * @param packet 语音包
+   * @param senderChannelId 发送者频道ID
+   * @param serializedData 已序列化的数据（远程语音包已经是正确格式，无需重新序列化）
+   */
+  private routeToChannelById(packet: VoicePacket, senderChannelId: number, serializedData?: Buffer): void {
+    if (!this.clientManager) {
+      this.logger.warn('ClientManager not set, cannot route voice packet');
+      return;
+    }
+
+    this.logger.debug(`Routing remote voice from session ${packet.sender_session} in channel ${senderChannelId}`);
+
+    // 使用已序列化的数据，或者重新序列化（针对本地语音包）
+    const broadcastPacket = serializedData || this.serializeVoicePacket(packet);
+
+    // 收集所有应该接收语音的频道ID
+    const targetChannels = new Set<number>();
+    targetChannels.add(senderChannelId); // 发送者所在频道
+
+    // 获取所有链接的频道（包括传递链接）
+    if (this.channelManager) {
+      const linkedChannels = this.channelManager.getAllLinkedChannels(senderChannelId);
+      for (const linkedId of linkedChannels) {
+        targetChannels.add(linkedId);
+      }
+      this.logger.info(`[VOICE-DEBUG] Remote PTT: sender in channel ${senderChannelId}, linked channels: [${Array.from(linkedChannels).join(', ')}], total target channels: [${Array.from(targetChannels).join(', ')}]`);
+    }
+
+    // 发送给目标频道中的所有客户端
+    let sentCount = 0;
+    const allClients = this.clientManager.getAllClients();
+    
+    for (const targetClient of allClients) {
+      // 跳过发送者自己（远程session可能与本地session冲突，这里也检查一下）
+      if (targetClient.session === packet.sender_session) {
+        continue;
+      }
+
+      // 跳过deaf或self_deaf的客户端
+      if (targetClient.deaf || targetClient.self_deaf) {
+        continue;
+      }
+
+      // 跳过未认证的客户端
+      if (!targetClient.user_id || targetClient.user_id <= 0) {
+        continue;
+      }
+
+      // 检查客户端是否在目标频道中，或者正在监听目标频道
+      let shouldReceive = false;
+      
+      // 情况1: 客户端在目标频道之一中
+      if (targetChannels.has(targetClient.channel_id)) {
+        shouldReceive = true;
+      }
+      
+      // 情况2: 客户端正在监听目标频道之一
+      if (!shouldReceive && targetClient.listeningChannels) {
+        for (const channelId of targetChannels) {
+          if (targetClient.listeningChannels.has(channelId)) {
+            shouldReceive = true;
+            break;
+          }
+        }
+      }
+
+      if (shouldReceive) {
+        this.logger.debug(`[VOICE-DEBUG] Sending remote voice to ${targetClient.username} (session ${targetClient.session}, channel ${targetClient.channel_id})`);
+        this.sendVoicePacketToClient(targetClient, broadcastPacket);
+        sentCount++;
+      }
+    }
+    
+    this.logger.info(`[VOICE] Remote PTT from session ${packet.sender_session} sent to ${sentCount} local clients across ${targetChannels.size} channels`);
   }
 
   /**
@@ -373,7 +482,7 @@ export class VoiceRouter extends EventEmitter {
       for (const linkedId of linkedChannels) {
         targetChannels.add(linkedId);
       }
-      this.logger.debug(`Push-to-talk: channel ${sender.channel_id} has ${linkedChannels.size} linked channels: [${Array.from(linkedChannels).join(', ')}]`);
+      this.logger.info(`[VOICE-DEBUG] Push-to-talk: sender ${sender.username} in channel ${sender.channel_id}, linked channels: [${Array.from(linkedChannels).join(', ')}], total target channels: [${Array.from(targetChannels).join(', ')}]`);
     }
 
     // 发送给目标频道中的所有客户端
@@ -415,9 +524,11 @@ export class VoiceRouter extends EventEmitter {
       }
 
       if (shouldReceive) {
-        this.logger.debug(`Sending voice to ${targetClient.username} (session ${targetClient.session}, channel ${targetClient.channel_id})`);
+        this.logger.debug(`[VOICE-DEBUG] Sending voice to ${targetClient.username} (session ${targetClient.session}, channel ${targetClient.channel_id}, listening: [${targetClient.listeningChannels ? Array.from(targetClient.listeningChannels).join(',') : 'none'}])`);
         this.sendVoicePacketToClient(targetClient, broadcastPacket);
         sentCount++;
+      } else {
+        this.logger.debug(`[VOICE-DEBUG] NOT sending voice to ${targetClient.username} (session ${targetClient.session}, channel ${targetClient.channel_id}, not in target channels or listening)`);
       }
     }
     

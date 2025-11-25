@@ -5,7 +5,6 @@ import type { EdgeInfo, ChannelUserMap } from '@munode/protocol';
 
 // 从 protocol 包导入共享类型并重新导出供本地使用
 export type {
-  ClientState,
   ClientInfo,
   ChannelGroup,
   ChannelInfo,
@@ -23,7 +22,7 @@ export type {
   HeartbeatResponse,
   ChannelUserMap,
 } from '@munode/protocol';
-export { ClientStateEnum } from '@munode/protocol';
+export { ClientState } from '@munode/protocol';
 
 // Edge Server 配置
 export interface EdgeConfig {

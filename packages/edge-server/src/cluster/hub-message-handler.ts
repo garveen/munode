@@ -88,12 +88,13 @@ export class HubMessageHandlers {
       const targetSession = userState.session || session_id;
 
       // 更新本地用户状态镜像（如果是本Edge的用户）
-      if (edge_id === String(this.config.server_id)) {
+      if (edge_id === this.config.server_id) {
         const client = this.clientManager.getClient(targetSession);
         if (client) {
           const updates: Partial<ClientInfo> = {};
           
           if (userState.has_channel_id && userState.channel_id !== undefined) {
+            logger.info(`[USERSTATE-DEBUG] Moving local client ${client.username} (session ${targetSession}) from channel ${client.channel_id} to ${userState.channel_id}`);
             this.clientManager.moveClient(targetSession, userState.channel_id);
           }
           if (userState.has_mute && userState.mute !== undefined) {
@@ -368,7 +369,7 @@ export class HubMessageHandlers {
       }
 
       // If target user on this Edge and is real kick/ban (not Channel Ninja hiding), force disconnect
-      if (!target_sessions && target_edge_id === String(this.config.server_id)) {
+      if (!target_sessions && target_edge_id === this.config.server_id) {
         const targetClient = this.clientManager.getClient(actualTargetSession);
         if (targetClient) {
           this.clientManager.forceDisconnect(

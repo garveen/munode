@@ -34,7 +34,6 @@ export type Reject_RejectType = mumbleproto.Reject.RejectType;
 
 // Shared types (Client and Server)
 export type {
-  ClientState,
   ClientInfo,
   ChannelGroup,
   ChannelInfo,
@@ -45,7 +44,8 @@ export type {
   GeoIPResult,
   UDPStats,
 } from './shared-types.js';
-export { ClientState as ClientStateEnum } from './shared-types.js';
+// 导出 ClientState 枚举（既作为类型也作为值）
+export { ClientState } from './shared-types.js';
 
 // RPC Channel
 export { RPCChannel } from './rpc/rpc-channel.js';

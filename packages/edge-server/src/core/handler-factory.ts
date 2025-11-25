@@ -68,6 +68,7 @@ export class HandlerFactory {
     this.clientManager = new ClientManager(config, logger);
     this.channelManager = new ChannelManager(config, logger);
     this.messageHandler = new MessageHandler(config, logger);
+    this.messageHandler.setClientManager(this.clientManager); // 设置 ClientManager 引用
     this.voiceRouter = new VoiceRouter(config, logger);
     this.authManager = new AuthManager(config, logger, hubClient);
     this.banManager = new BanManager(1024);

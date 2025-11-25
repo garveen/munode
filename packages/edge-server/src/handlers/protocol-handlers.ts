@@ -11,9 +11,7 @@
  */
 
 import { logger } from '@munode/common';
-import { mumbleproto } from '@munode/protocol';
-import { MessageType } from '@munode/protocol';
-import { Permission } from '@munode/protocol';
+import { mumbleproto, MessageType, Permission, ClientState } from '@munode/protocol';
 import type { ClientInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
@@ -39,16 +37,24 @@ export class ProtocolHandlers {
       }
 
       // 更新客户端版本信息
-      this.clientManager.updateClient(session_id, {
+      const updates: Partial<ClientInfo> = {
         version: version.version ? version.version.toString(16) : undefined,
         version_number: version.version, // 保存数字版本号
         client_name: version.release || undefined,
         os_name: version.os || undefined,
         os_version: version.os_version || undefined,
-      });
+      };
+
+      // 只在首次收到 Version 时更新状态（允许客户端多次发送 Version，与 C 实现一致）
+      const currentState = client.state;
+      if (currentState === ClientState.Connected || currentState === ClientState.ServerSentVersion) {
+        updates.state = ClientState.ClientSentVersion; // 客户端已发送 Version，状态转换
+      }
+
+      this.clientManager.updateClient(session_id, updates);
 
       logger.debug(
-        `Client ${session_id} version: ${version.release || 'unknown'} on ${version.os || 'unknown'}`
+        `Client ${session_id} version: ${version.release || 'unknown'} on ${version.os || 'unknown'}, state updated to ClientSentVersion`
       );
     } catch (error) {
       logger.error(`Error handling Version for session ${session_id}:`, error);

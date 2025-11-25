@@ -27,10 +27,15 @@ export class HubDatabase {
    */
   async init(): Promise<void> {
     // 初始化数据库
-    this.db = await open({
-      filename: this.config.path,
-      driver: sqlite3.Database,
-    });
+    try {
+      this.db = await open({
+        filename: this.config.path,
+        driver: sqlite3.Database,
+      });
+    } catch (error) {
+      console.error('cannot open database file:', this.config.path);
+      throw error;
+    }
 
     // 优化配置
     await this.db.run('PRAGMA journal_mode = WAL');
@@ -277,7 +282,7 @@ export class HubDatabase {
       // 检查 channels 表是否有旧的 description 列
       const pragma = await this.db.prepare('PRAGMA table_info(channels)');
       const columns = await pragma.all();
-      
+
       const hasDescription = columns.some((col: any) => col.name === 'description');
       const hasDescriptionBlob = columns.some((col: any) => col.name === 'description_blob');
 
@@ -346,7 +351,7 @@ export class HubDatabase {
   /**
    * 更新会话频道
    */
-  async updateSessionChannel( session_id: number,  channel_id: number): Promise<void> {
+  async updateSessionChannel(session_id: number, channel_id: number): Promise<void> {
     const stmt = await this.db.prepare(`
       UPDATE sessions
       SET channel_id = ?, last_active = ?
@@ -360,7 +365,7 @@ export class HubDatabase {
   /**
    * 删除会话
    */
-  async deleteSession( session_id: number): Promise<void> {
+  async deleteSession(session_id: number): Promise<void> {
     const stmt = await this.db.prepare('DELETE FROM sessions WHERE session_id = ?');
     await stmt.run(session_id);
   }
@@ -417,9 +422,9 @@ export class HubDatabase {
     const rows = await stmt.all();
 
     return rows.map((row) => ({
-       edge_id: row.edge_id,
-       client_session: row.client_session,
-       target_id: row.target_id,
+      edge_id: row.edge_id,
+      client_session: row.client_session,
+      target_id: row.target_id,
       config: row.target_type === 'delete' ? null : JSON.parse(row.target_value),
       timestamp: row.updated_at * 1000,
     }));
@@ -769,7 +774,7 @@ export class HubDatabase {
     const fields = Object.keys(updates)
       .map((key) => `${key} = ?`)
       .join(', ');
-    const values = Object.values(updates).map((value) => 
+    const values = Object.values(updates).map((value) =>
       typeof value === 'boolean' ? (value ? 1 : 0) : value
     );
 
@@ -791,7 +796,7 @@ export class HubDatabase {
   /**
    * 获取子频道
    */
-  async getChildChannels( parent_id: number): Promise<Array<any>> {
+  async getChildChannels(parent_id: number): Promise<Array<any>> {
     const stmt = await this.db.prepare(
       'SELECT * FROM channels WHERE parent_id = ? ORDER BY position ASC'
     );
@@ -801,7 +806,7 @@ export class HubDatabase {
   /**
    * 获取频道链接
    */
-  async getChannelLinks( channel_id: number): Promise<number[]> {
+  async getChannelLinks(channel_id: number): Promise<number[]> {
     const stmt = await this.db.prepare(`
       SELECT target_id FROM channel_links WHERE channel_id = ?
     `);
@@ -812,7 +817,7 @@ export class HubDatabase {
   /**
    * 链接两个频道
    */
-  async linkChannels( channel_id: number,  target_id: number): Promise<void> {
+  async linkChannels(channel_id: number, target_id: number): Promise<void> {
     const stmt = await this.db.prepare(`
       INSERT OR IGNORE INTO channel_links (channel_id, target_id)
       VALUES (?, ?), (?, ?)
@@ -823,7 +828,7 @@ export class HubDatabase {
   /**
    * 取消链接两个频道
    */
-  async unlinkChannels( channel_id: number,  target_id: number): Promise<void> {
+  async unlinkChannels(channel_id: number, target_id: number): Promise<void> {
     const stmt = await this.db.prepare(`
       DELETE FROM channel_links 
       WHERE (channel_id = ? AND target_id = ?)
@@ -836,7 +841,7 @@ export class HubDatabase {
    * 获取频道的所有 ACL
    * 如果 channel_id 为 0，则返回所有频道的 ACL
    */
-  async getChannelACLs( channel_id: number): Promise<ACLData[]> {
+  async getChannelACLs(channel_id: number): Promise<ACLData[]> {
     let query: string;
     let params: any[];
 
@@ -928,7 +933,7 @@ export class HubDatabase {
   /**
    * 清空频道的所有 ACL
    */
-  async clearChannelACLs( channel_id: number): Promise<void> {
+  async clearChannelACLs(channel_id: number): Promise<void> {
     const stmt = await this.db.prepare(`
       UPDATE acls SET deleted_at = datetime('now') WHERE channel_id = ?
     `);
@@ -938,7 +943,7 @@ export class HubDatabase {
   /**
    * 获取用户最后所在频道
    */
-  async getUserLastChannel( user_id: number): Promise<number> {
+  async getUserLastChannel(user_id: number): Promise<number> {
     const stmt = await this.db.prepare('SELECT last_channel FROM user_last_channels WHERE id = ?');
     const row = await stmt.get(user_id);
     return row ? row.last_channel : 0;
@@ -947,7 +952,7 @@ export class HubDatabase {
   /**
    * 设置用户最后所在频道
    */
-  async setUserLastChannel( user_id: number,  channel_id: number): Promise<void> {
+  async setUserLastChannel(user_id: number, channel_id: number): Promise<void> {
     const stmt = await this.db.prepare(`
       INSERT OR REPLACE INTO user_last_channels (id, last_channel)
       VALUES (?, ?)
@@ -983,7 +988,7 @@ export class HubDatabase {
    * 记录用户状态变更日志
    */
   async logUserStateChange(log: {
-     edge_id: number;
+    edge_id: number;
     actorSession: number;
     actorUsername: string;
     targetSession: number;
@@ -994,8 +999,8 @@ export class HubDatabase {
 
     await this.logAudit({
       type: 'user_state_change',
-       edge_id: log.edge_id,
-       session_id: log.actorSession,
+      edge_id: log.edge_id,
+      session_id: log.actorSession,
       message,
       metadata: {
         actorSession: log.actorSession,
@@ -1013,7 +1018,7 @@ export class HubDatabase {
    * 记录用户踢出/封禁日志
    */
   async logUserRemove(log: {
-     edge_id: number;
+    edge_id: number;
     actorSession: number;
     actorUsername: string;
     targetSession: number;
@@ -1026,8 +1031,8 @@ export class HubDatabase {
 
     await this.logAudit({
       type: log.isBan ? 'user_ban' : 'user_kick',
-       edge_id: log.edge_id,
-       session_id: log.actorSession,
+      edge_id: log.edge_id,
+      session_id: log.actorSession,
       message,
       metadata: {
         actorSession: log.actorSession,
@@ -1046,11 +1051,11 @@ export class HubDatabase {
    * 记录频道操作日志
    */
   async logChannelOperation(log: {
-     edge_id: number;
+    edge_id: number;
     actorSession: number;
     actorUsername: string;
     operation: 'create' | 'edit' | 'delete' | 'move';
-     channel_id: number;
+    channel_id: number;
     channelName: string;
     details?: string;
   }): Promise<void> {
@@ -1058,14 +1063,14 @@ export class HubDatabase {
 
     await this.logAudit({
       type: `channel_${log.operation}`,
-       edge_id: log.edge_id,
-       session_id: log.actorSession,
+      edge_id: log.edge_id,
+      session_id: log.actorSession,
       message,
       metadata: {
         actorSession: log.actorSession,
         actorUsername: log.actorUsername,
         operation: log.operation,
-         channel_id: log.channel_id,
+        channel_id: log.channel_id,
         channelName: log.channelName,
         details: log.details,
       },
@@ -1078,10 +1083,10 @@ export class HubDatabase {
    * 记录ACL操作日志
    */
   async logACLOperation(log: {
-     edge_id: number;
+    edge_id: number;
     actorSession: number;
     actorUsername: string;
-     channel_id: number;
+    channel_id: number;
     channelName: string;
     operation: 'query' | 'update';
     details?: string;
@@ -1090,13 +1095,13 @@ export class HubDatabase {
 
     await this.logAudit({
       type: `acl_${log.operation}`,
-       edge_id: log.edge_id,
-       session_id: log.actorSession,
+      edge_id: log.edge_id,
+      session_id: log.actorSession,
       message,
       metadata: {
         actorSession: log.actorSession,
         actorUsername: log.actorUsername,
-         channel_id: log.channel_id,
+        channel_id: log.channel_id,
         channelName: log.channelName,
         operation: log.operation,
         details: log.details,
@@ -1344,14 +1349,14 @@ export class HubDatabase {
 
     while (currentId !== -1 && currentId !== null) {
       hierarchy.unshift(currentId);
-      
+
       if (currentId === 0) {
         break;
       }
 
       const stmt = await this.db.prepare('SELECT parent_id FROM channels WHERE id = ?');
       const row = await stmt.get(currentId);
-      
+
       if (!row) {
         break;
       }
@@ -1434,10 +1439,10 @@ export class HubDatabase {
     try {
       // 优化数据库并等待所有操作完成
       await this.db.run('PRAGMA optimize');
-      
+
       // 短暂延迟以确保所有待处理的操作完成
       await new Promise(resolve => setTimeout(resolve, 100));
-      
+
       await this.db.close();
       logger.info('Database connection closed');
     } catch (error) {
