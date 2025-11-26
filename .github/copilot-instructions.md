@@ -48,6 +48,11 @@ enum PermissionFlag {
 }
 ```
 
+protobuf使用其标准属性，不要使用单字母内部属性(n f等)
+protobuf optional字段需要检查是否真的设置了值，不能仅凭默认值判断，使用has_xxx
+
+系统内一般不应使用any
+
 ### 命名约定
 - **类名**: PascalCase (如 `EdgeServer`, `HubClient`)
 - **接口**: PascalCase, 可选 `I` 前缀 (如 `IConfig`, `ClientState`)
@@ -160,6 +165,10 @@ async function updateUserState(session: number, state: Partial<UserState>) {
 ## 测试指导
 
 *** 只运行集成测试，本项目暂时不设置单元测试 ***
+
+*** 如果只需要运行少数几个测试，修改测试使用 it.only 节省时间 ***
+
+*** 测试时可以把输出写入到 ./tmp/ ，方便调试 ***
 
 ### 集成测试
 

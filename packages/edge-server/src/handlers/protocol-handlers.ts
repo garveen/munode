@@ -22,6 +22,7 @@ export class ProtocolHandlers {
   private get messageHandler() { return this.factory.messageHandler; }
   private get voiceRouter() { return this.factory.voiceRouter; }
   private get config() { return this.factory.config; }
+  private get hubClient() { return this.factory.hubClient; }
 
   /**
    * 处理 Version 消息
@@ -280,6 +281,18 @@ export class ProtocolHandlers {
       if (!voiceTarget.targets || voiceTarget.targets.length === 0) {
         this.voiceRouter.removeVoiceTarget(session_id, voiceTarget.id);
         logger.debug(`Removed voice target ${voiceTarget.id} for session ${session_id}`);
+        
+        // 向 Hub 同步删除
+        if (this.hubClient) {
+          this.hubClient.syncVoiceTarget({
+            client_session: session_id,
+            target_id: voiceTarget.id,
+            config: null,
+            timestamp: Date.now(),
+          }).catch((err) => {
+            logger.error(`Failed to sync voice target deletion to Hub:`, err);
+          });
+        }
         return;
       }
 
@@ -287,6 +300,31 @@ export class ProtocolHandlers {
       this.voiceRouter.setVoiceTarget(session_id, voiceTarget.id, voiceTarget.targets);
 
       logger.debug(`Set voice target ${voiceTarget.id} for session ${session_id}: ${voiceTarget.targets.length} targets`);
+      
+      // 向 Hub 同步 VoiceTarget 配置
+      // 重要：将protobuf对象转换为纯JSON，避免依赖内部字段（f、u等非公开API）
+      if (this.hubClient) {
+        // 提取targets为纯JSON数组
+        const normalizedTargets = voiceTarget.targets.map(target => ({
+          session: target.session || [],
+          channel_id: target.channel_id,
+          group: target.group,
+          links: target.links,
+          children: target.children
+        }));
+        
+        this.hubClient.syncVoiceTarget({
+          client_session: session_id,
+          target_id: voiceTarget.id,
+          config: {
+            id: voiceTarget.id,
+            targets: normalizedTargets
+          },
+          timestamp: Date.now(),
+        }).catch((err) => {
+          logger.error(`Failed to sync voice target to Hub:`, err);
+        });
+      }
     } catch (error) {
       logger.error(`Error handling VoiceTarget for session ${session_id}:`, error);
     }

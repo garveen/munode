@@ -340,6 +340,11 @@ export class EdgeControlClient extends EventEmitter {
           this.emit('voiceTargetUpdate', message.params);
           break;
 
+        case 'hub.syncVoiceTarget':
+          // VoiceTarget 同步通知
+          this.emit('syncVoiceTarget', message.params);
+          break;
+
         default:
           logger.debug('Notification forwarded to upper layer:', message.method);
       }
@@ -407,6 +412,7 @@ export class EdgeControlClient extends EventEmitter {
    * 同步语音目标配置
    */
   async syncVoiceTarget(config: {
+    client_session: number;
     target_id: number;
     config: any; // VoiceTarget | null
     timestamp: number;
@@ -418,7 +424,6 @@ export class EdgeControlClient extends EventEmitter {
     try {
       const params: RPCParams<'edge.syncVoiceTarget'> = {
         edge_id: this.config.server_id,
-        client_session: 0, // TODO: 获取当前会话ID
         ...config,
       };
       await this.client.call('edge.syncVoiceTarget', params);

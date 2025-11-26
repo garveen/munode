@@ -53,115 +53,70 @@ export class VoiceManager {
 
     logger.debug(`Setting up voice transport handlers for server ${this.config.server_id}`);
 
-    // 监听VoiceRouter的广播事件
-    this.handlerFactory.voiceRouter.on('broadcastToChannel', (channel_id: number, broadcast: any, _excludeSession: number) => {
-      logger.debug(`Received broadcastToChannel event for channel ${channel_id}, sender ${broadcast.sender_id}`);
+    // 监听VoiceRouter的统一广播事件
+    this.handlerFactory.voiceRouter.on('broadcastVoicePacket', (broadcast: any) => {
+      logger.debug(`Received broadcastVoicePacket event: sender=${broadcast.sender_id}, target=${broadcast.target}`);
 
-      // 在集群模式下，通过UDP直接转发语音包到其他Edge
-      // 获取所有目标频道（包括链接频道）中有用户的 Edge 列表
-      const targetChannels = new Set<number>();
-      targetChannels.add(channel_id);
-      
-      // 获取所有链接的频道（包括传递链接）
-      const linkedChannels = this.handlerFactory.channelManager.getAllLinkedChannels(channel_id);
-      for (const linkedId of linkedChannels) {
-        targetChannels.add(linkedId);
-      }
-      
-      logger.debug(`PTT broadcast: channel ${channel_id} + ${linkedChannels.size} linked channels: [${Array.from(targetChannels).join(', ')}]`);
-      
-      // 收集所有目标频道中有用户的Edge
-      const targetEdges = new Set<number>();
-      for (const channelId of targetChannels) {
-        const edgesInChannel = this.handlerFactory.stateManager.getEdgesInChannel(channelId);
-        for (const edgeId of edgesInChannel) {
-          targetEdges.add(edgeId);
-        }
-      }
-      
-      logger.debug(`Target edges for PTT in ${targetChannels.size} channels: ${Array.from(targetEdges)}`);
-
-      if (targetEdges.size === 0) {
-        logger.debug(`Skip voice broadcast: no remote users in channel ${channel_id}`);
-        return;
-      }
-
-      // 从 Mumble 语音包中提取 codec（第一个字节的高3位）
+      // 从 Mumble 语音包中提取 codec
       const header = broadcast.packet.readUInt8(0);
       const codec = (header >> 5) & 0x07;
+      const target = header & 0x1f;
 
       const voicePacket = {
         version: 1,
         senderId: broadcast.sender_id,
-        targetId: channel_id, // 使用频道ID作为targetId
-        sequence: 0, // 序列号在 Mumble 包内部
+        targetId: target,
+        sequence: 0,
         codec: codec,
       };
 
-      // 只向有该频道用户的 Edge 发送语音包
-      for (const targetEdgeId of targetEdges) {
-        if (targetEdgeId !== this.config.server_id) {
-          logger.debug(`Forwarding voice to edge ${targetEdgeId}`);
+      // 获取所有已注册的Edge
+      const allEdges = this.handlerFactory.stateManager.getAllEdges();
+      
+      // 广播到所有其他Edge
+      let sentCount = 0;
+      for (const edgeId of allEdges) {
+        // 跳过本地Edge（本地用户已经在routeVoicePacket中处理了）
+        if (edgeId !== this.config.server_id) {
           try {
-            this.voiceTransport.sendToEdge(targetEdgeId, voicePacket, broadcast.packet);
-            logger.debug(`Sent voice packet to edge ${targetEdgeId}`);
+            logger.debug(`Sending voice to edge ${edgeId}`);
+            this.voiceTransport.sendToEdge(edgeId, voicePacket, broadcast.packet);
+            sentCount++;
+            logger.debug(`Sent voice packet to edge ${edgeId}`);
           } catch (error) {
-            logger.error(`Failed to send voice to edge ${targetEdgeId}:`, error);
+            logger.error(`Failed to send voice to edge ${edgeId}:`, error);
           }
         } else {
-          logger.debug(`Skipping self edge ${targetEdgeId}`);
+          logger.debug(`Skipping local edge ${edgeId}`);
         }
       }
 
       logger.debug(
-        `Forwarded voice to ${targetEdges.size} edges in channel ${channel_id}: ` +
-        `sender=${broadcast.sender_id}, codec=${codec}, packet_size=${broadcast.packet.length}, ` +
-        `targets=[${Array.from(targetEdges).join(',')}]`
+        `Broadcasted voice to ${sentCount} edges: ` +
+        `sender=${broadcast.sender_id}, target=${target}, codec=${codec}, packet_size=${broadcast.packet.length}`
       );
-
-    });
-
-    this.handlerFactory.voiceRouter.on('broadcastToServer', (broadcast: any, excludeSession: number) => {
-      if (!this.voiceTransport) {
-        return;
-      }
-
-      // 广播到所有其他Edge（服务器广播）
-      logger.debug(`Broadcasting voice to server via UDP, excluding session ${excludeSession}`);
-
-      const voicePacket = {
-        version: 1,
-        senderId: broadcast.sender_id,
-        targetId: 0xFFFFFFFF, // 服务器广播标记
-        sequence: 0,
-        codec: 0,
-      };
-
-      this.voiceTransport.broadcast(voicePacket, broadcast.packet, this.config.server_id);
     });
 
     // 监听接收到的UDP语音包（来自其他Edge）
-    this.voiceTransport.on('voice-packet', (packetData: { header: any; voiceData: Buffer }) => {
-      // 将接收到的语音包路由到本地客户端
-      const { header, voiceData } = packetData;
+    this.voiceTransport.on('voice-packet', (packet: any, _rinfo: any) => {
+      const { header, voiceData } = packet;
       logger.debug(
-        `Received UDP voice packet: ` +
+        `[VOICE-REMOTE] Received voice packet: ` +
         `sender_edge=${header.senderId}, target=${header.targetId}, ` +
         `codec=${header.codec}, data_size=${voiceData.length}`
       );
 
       // voiceData是完整的Mumble语音包（header+session+sequence+voice_data）
-      // 需要根据targetId确定广播目标
-      if (header.targetId === 0xFFFFFFFF) {
-        // 服务器广播 - 转发给所有本地用户
-        this.handleRemoteServerVoiceBroadcast(voiceData);
-      } else if (header.targetId >= 0) {
-        // 频道广播（targetId 是频道ID）或普通广播（targetId=0）
-        // 转发给本地所有可以接收的客户端
-        this.handleRemoteChannelVoiceBroadcast(voiceData);
-      } else {
-        logger.warn(`Unexpected targetId: ${header.targetId}`);
+      // targetId 是 Mumble 原始 target 值：0=PTT, 1-30=whisper, 31=loopback
+      
+      // 忽略loopback包（远程用户的loopback不应该到达这里）
+      if (header.targetId === 31) {
+        logger.debug(`[VOICE-REMOTE] Ignoring remote loopback packet`);
+        return;
       }
+
+      // 统一处理所有远程语音包
+      this.handleRemoteVoicePacket(voiceData, header.targetId);
     });
 
     this.voiceTransport.on('error', (error: Error) => {
@@ -172,88 +127,62 @@ export class VoiceManager {
   }
 
   /**
-   * 处理来自其他Edge的频道语音广播（通过UDP）
-   * 
-   * 重要：不要在这里重复实现路由逻辑！
-   * 应该解析语音包，然后让VoiceRouter使用统一的路由逻辑处理。
+   * 处理来自其他Edge的语音包
    */
-  private handleRemoteChannelVoiceBroadcast(voiceData: Buffer): void {
+  private handleRemoteVoicePacket(voiceData: Buffer, targetId: number): void {
     try {
-      // voiceData格式: [header][session_varint][sequence_varint][voice_data]
-      // 这是完整的 Mumble 语音包格式
-
-      // 解析语音包以获取关键信息
-      if (voiceData.length < 2) {
-        logger.warn('Remote voice packet too short');
-        return;
-      }
-
-      // 解析header
-      const header = voiceData.readUInt8(0);
-      const codec = (header >> 5) & 0x07;
-      const target = header & 0x1f;
-
-      // 解析session（发送者）
+      logger.debug(`[VOICE-REMOTE] Processing remote voice packet, target=${targetId}, size=${voiceData.length}`);
+      
+      // 解析发送者session
       const senderSession = this.parseSessionFromVoicePacket(voiceData);
       if (senderSession === null) {
-        logger.warn('Failed to parse session from remote voice packet');
+        logger.warn('[VOICE-REMOTE] Failed to parse session from remote voice packet');
         return;
       }
 
-      // 从远程用户列表中获取发送者信息
-      const remoteUser = this.handlerFactory.stateManager.getRemoteUserInfo(senderSession);
-      if (!remoteUser) {
-        logger.warn(`Remote user ${senderSession} not found in state`);
-        return;
+      // 解析codec（从Mumble包头）
+      const header = voiceData.readUInt8(0);
+      const codec = (header >> 5) & 0x07;
+
+      // 对于PTT需要发送者频道信息来计算链接频道
+      let senderChannelId = 0;
+      
+      if (targetId === 0) {
+        const remoteUser = this.handlerFactory.stateManager.getRemoteUserInfo(senderSession);
+        if (!remoteUser) {
+          logger.warn(
+            `[VOICE-REMOTE] PTT packet from unknown remote user ${senderSession}, ` +
+            `cannot determine sender channel`
+          );
+          return;
+        }
+        senderChannelId = remoteUser.channel_id;
       }
 
-      logger.debug(`Received remote voice: session=${senderSession}, target=${target}, codec=${codec}, channel=${remoteUser.channel_id}`);
+      logger.info(
+        `[VOICE-REMOTE] Routing remote voice: ` +
+        `session=${senderSession}, target=${targetId}, channel=${senderChannelId}, codec=${codec}`
+      );
 
-      // 构造VoicePacket对象（仅用于携带元数据）
-      // 注意：远程语音包已经是完整的序列化格式 [header][session][sequence][data]
-      // 我们只需要提取元数据，实际转发时使用原始的 voiceData
+      // 构造VoicePacket对象
       const voicePacket = {
         sender_session: senderSession,
-        target,
-        sequence: 0, // VoiceRouter不使用这个字段
+        target: targetId,
+        sequence: 0,
         codec,
-        data: Buffer.alloc(0), // 远程包不需要这个字段，因为我们会传递serializedData
+        data: Buffer.alloc(0), // 不需要，因为我们传递了serializedData
         timestamp: Date.now(),
       };
 
       // 让VoiceRouter使用统一的路由逻辑处理
-      // 传递原始的 voiceData 作为已序列化的数据，避免重复序列化
-      this.handlerFactory.voiceRouter.routeRemoteVoicePacket(voicePacket, remoteUser.channel_id, voiceData);
+      // 传递voiceData作为已序列化的数据，避免重复序列化
+      this.handlerFactory.voiceRouter.routeRemoteVoicePacket(
+        voicePacket,
+        senderChannelId,
+        voiceData
+      );
     } catch (error) {
-      logger.error('Error handling remote channel voice broadcast:', error);
-    }
-  }
-
-  /**
-   * 处理来自其他Edge的服务器语音广播（通过UDP）
-   */
-  private handleRemoteServerVoiceBroadcast(voiceData: Buffer): void {
-    try {
-      logger.debug('Received remote server voice broadcast');
-
-      // 服务器广播：转发给所有本地用户
-      const allClients = this.handlerFactory.clientManager.getAllClients();
-
-      for (const client of allClients) {
-        if (client.deaf || client.self_deaf) {
-          continue;
-        }
-
-        if (!client.user_id || client.user_id <= 0) {
-          continue;
-        }
-
-        this.handlerFactory.voiceRouter.sendVoicePacketToClient(client, voiceData);
-      }
-
-      logger.debug(`Forwarded remote server broadcast to ${allClients.length} local clients`);
-    } catch (error) {
-      logger.error('Error handling remote server voice broadcast:', error);
+      logger.error('[VOICE-REMOTE] Error handling remote voice packet:', error);
     }
   }
 

@@ -194,7 +194,9 @@ export class MessageHandlers {
 
     // === 第一次循环：发送所有频道的基本信息，parent字段设为0（根频道除外不设parent） ===
     for (const channel of channels) {
-      const links = this.stateManager.getChannelLinks(channel.id);
+      // 从ChannelManager获取links（ChannelManager是实时更新的）
+      const channelObj = this.factory.channelManager.getChannel(channel.id);
+      const links = channelObj?.links || [];
 
       const channelState = new mumbleproto.ChannelState({
         channel_id: channel.id,
@@ -226,13 +228,17 @@ export class MessageHandlers {
       }
 
       const parentId = this.getChannelParentForProtocol(channel);
+      
+      // 从ChannelManager获取当前的links，避免覆盖
+      const channelObj = this.factory.channelManager.getChannel(channel.id);
+      const currentLinks = channelObj?.links || [];
 
       const channelState = new mumbleproto.ChannelState({
         channel_id: channel.id,
         parent: parentId,
         position: channel.position,
         temporary: channel.temporary,
-        links: [],
+        links: currentLinks || [], // 保留现有links
         links_add: [],
         links_remove: [],
       });

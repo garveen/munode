@@ -664,7 +664,9 @@ export class HubControlService {
         return;
       }
 
-      const isCreate = !channelStateObj.channel_id || channelStateObj.channel_id === 0;
+      // 判断是创建还是编辑：channel_id 未指定或为 undefined/null 时才是创建
+      // channel_id === 0 是 Root 频道，应该是编辑模式
+      const isCreate = channelStateObj.channel_id === undefined || channelStateObj.channel_id === null;
       
       let channel_id: number;
       
@@ -762,6 +764,8 @@ export class HubControlService {
           });
           return;
         }
+        
+        logger.info(`[HUB-DEBUG] Channel ${channel_id} found, checking Write permission`);
 
         // 检查Write权限
         if (this._permissionChecker) {
@@ -771,7 +775,9 @@ export class HubControlService {
             actorUserInfo,
             Permission.Write
           );
+          logger.info(`[HUB-DEBUG] Write permission check result: ${hasWrite}`);
           if (!hasWrite) {
+            logger.info(`[HUB-DEBUG] Permission denied, returning error`);
             this.notify(edge_id, 'hub.channelStateResponse', {
               success: false,
               actor_session,
@@ -827,8 +833,17 @@ export class HubControlService {
         
         // 父频道移动
         if (channelStateObj.parent !== undefined) {
+          logger.info(`[HUB-DEBUG] Checking parent move: current parent=${channel.parent_id}, new parent=${channelStateObj.parent}`);
           const newParentId = typeof channelStateObj.parent === 'number' && !isNaN(channelStateObj.parent) 
             ? channelStateObj.parent : 0;
+          
+          // 对于 Root 频道，parent=-1 和 parent=0 应该视为相同（不移动）
+          const isRootParent = (pid: number) => pid === -1 || pid === 0;
+          const isSameParent = (channel.parent_id === newParentId) || 
+                               (isRootParent(channel.parent_id) && isRootParent(newParentId));
+          
+          // 只有当父频道真正发生变化时才处理移动
+          if (!isSameParent) {
             
           // 检查新父频道是否存在
           if (newParentId > 0) {
@@ -898,7 +913,8 @@ export class HubControlService {
 
           updates.parent_id = newParentId;
           changes.push(`parent: ${newParentId}`);
-        }
+          } // 结束 if (!isSameParent)
+        } // 结束 if (channelStateObj.parent !== undefined)
         
         // 描述修改
         if (channelStateObj.description !== undefined) {
@@ -1027,6 +1043,7 @@ export class HubControlService {
       });
 
       // 广播ChannelState给所有Edge
+      logger.info(`[HUB-DEBUG] Broadcasting final ChannelState for channel ${channel_id}, links: [${channelStateObj.links?.join(', ') || 'none'}]`);
       this.broadcast('hub.channelStateBroadcast', {
         channelState: channelStateObj,
       });
@@ -1885,8 +1902,29 @@ export class HubControlService {
     _channel: RPCChannel,
     params: RPCParams<'edge.syncVoiceTarget'>
   ): Promise<RPCResult<'edge.syncVoiceTarget'>> {
-    // 同步语音目标配置
+    // 同步语音目标配置到本地存储
     this._voiceTargetSync.syncVoiceTarget(params);
+    
+    // 广播 VoiceTarget 更新到所有其他 Edge（除了发送者）
+    logger.info(
+      `Broadcasting VoiceTarget update: Edge ${params.edge_id}, Session ${params.client_session}, Target ${params.target_id}`
+    );
+    
+    // 直接广播params，因为Edge端已经规范化为纯JSON对象
+    // 不再需要访问protobuf内部字段（f、u等非公开API）
+    for (const [edgeId, channel] of this.edgeChannels.entries()) {
+      // 跳过发送者自己的 Edge
+      if (edgeId === params.edge_id) {
+        continue;
+      }
+      
+      try {
+        await channel.notify('hub.syncVoiceTarget', params);
+      } catch (error) {
+        logger.error(`Failed to broadcast VoiceTarget to Edge ${edgeId}:`, error);
+      }
+    }
+    
     return { success: true };
   }
 

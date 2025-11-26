@@ -314,7 +314,6 @@ function createEdgeConfig(server_id: number, port: number): EdgeConfig {
     name: `Edge Server ${server_id}`,
     mode: 'cluster',
     capacity: 100,
-    databasePath: path.join(__dirname, `data/edge-${server_id}-test.db`),
     network: {
       host: '0.0.0.0',
       port,
@@ -364,7 +363,6 @@ function createEdgeConfig(server_id: number, port: number): EdgeConfig {
       contextActions: false,
       packetPool: false,
       udpMonitor: false,
-      certObfuscation: false,
     },
     max_bandwidth: 1000000,
     defaultChannel: 0,

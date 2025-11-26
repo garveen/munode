@@ -4,6 +4,7 @@ import type { Logger } from 'winston';
 import { EdgeConfig, VoicePacket, VoiceBroadcast, ClientInfo } from '../types.js';
 import { OCB2AES128 } from '@munode/common';
 import type { Socket as UDPSocket } from 'dgram';
+import { mumbleproto } from '@munode/protocol';
 
 /**
  * 路由缓存条目
@@ -324,7 +325,10 @@ export class VoiceRouter extends EventEmitter {
    * @param serializedData 已序列化的语音数据（可选，如果提供则直接使用而不重新序列化）
    */
   routeRemoteVoicePacket(packet: VoicePacket, senderChannelId: number, serializedData?: Buffer): void {
-    this.logger.debug(`Routing remote voice: session=${packet.sender_session}, target=${packet.target}, channel=${senderChannelId}`);
+    this.logger.debug(
+      `Routing remote voice: session=${packet.sender_session}, ` +
+      `target=${packet.target}, channel=${senderChannelId}`
+    );
     
     // 根据目标类型路由
     if (packet.target === 0) {
@@ -332,8 +336,23 @@ export class VoiceRouter extends EventEmitter {
       this.routeToChannelById(packet, senderChannelId, serializedData);
     } else if (packet.target >= 1 && packet.target <= 30) {
       // Whisper: 使用与本地whisper相同的逻辑
-      // 注意：whisper需要voiceTarget信息，这里远程语音包可能没有，暂时使用本地逻辑
-      this.routeToVoiceTarget(packet);
+      // 检查是否有VoiceTarget配置
+      const voiceTarget = this.getVoiceTarget(packet.sender_session, packet.target);
+      if (!voiceTarget) {
+        this.logger.warn(
+          `[VOICE-REMOTE] No VoiceTarget configuration for remote whisper: ` +
+          `session=${packet.sender_session}, target=${packet.target}`
+        );
+        return;
+      }
+      
+      this.logger.info(
+        `[VOICE-REMOTE] Found VoiceTarget for session ${packet.sender_session}, ` +
+        `target ${packet.target}, config=${JSON.stringify(voiceTarget)}`
+      );
+      
+      // skipBroadcast=true 避免远程语音包被再次广播
+      this.routeToVoiceTarget(packet, true, serializedData);
     } else if (packet.target === 31) {
       // Loopback: 远程用户的loopback不应该到达这里，忽略
       this.logger.debug(`Ignoring remote loopback packet from session ${packet.sender_session}`);
@@ -405,7 +424,9 @@ export class VoiceRouter extends EventEmitter {
         timestamp: Date.now(),
       };
       this.routingCache.set(cacheKey, cached);
-      this.logger.debug(`[VOICE-CACHE] Remote PTT cache built for channel ${senderChannelId}`);
+      this.logger.debug(`[VOICE-CACHE] Remote PTT cache built for channel ${senderChannelId}, channels: ${Array.from(targetChannels).join(', ')}`);
+    } else {
+      this.logger.debug(`[VOICE-CACHE] Using cached PTT route for channel ${senderChannelId}`);
     }
     
     const targetChannels = cached.targetSessions;
@@ -573,7 +594,9 @@ export class VoiceRouter extends EventEmitter {
     
     this.logger.info(`[VOICE] Push-to-talk from ${sender.username} sent to ${sentCount} clients across ${targetChannels.size} channels (indexed lookup)`);
 
-    // 同时触发事件供外部处理（如集群模式下的跨Edge转发）
+    // 触发事件供VoiceManager进行跨Edge广播
+    // VoiceManager会将语音包广播到所有其他Edge
+    // 每个Edge（包括本地）都会独立计算应该接收的用户
     const broadcast: VoiceBroadcast = {
       sender_id: packet.sender_session,
       sender_edge_id: this.config.server_id,
@@ -586,7 +609,7 @@ export class VoiceRouter extends EventEmitter {
       },
     };
 
-    this.emit('broadcastToChannel', sender.channel_id, broadcast, packet.sender_session);
+    this.emit('broadcastVoicePacket', broadcast);
   }
 
   /**
@@ -603,7 +626,8 @@ export class VoiceRouter extends EventEmitter {
       for (const linkedId of linkedChannels) {
         targetChannels.add(linkedId);
       }
-      this.logger.debug(`[VOICE] Calculated target channels for ${channelId}: [${Array.from(targetChannels).join(', ')}]`);
+      this.logger.debug(`Calculated target channels for ${channelId}: [${Array.from(targetChannels).join(', ')}], linked=${linkedChannels.size}`);
+    } else {
     }
 
     return targetChannels;
@@ -657,24 +681,27 @@ export class VoiceRouter extends EventEmitter {
    * 用户只要在任一来源的组中，就可以收到语音
    * 
    * 性能优化：使用索引 + 缓存实现 O(1) 查找
+   * 
+   * @param packet 语音包
+   * @param skipBroadcast 是否跳过跨Edge广播（用于远程语音包，避免循环）
    */
-  private routeToVoiceTarget(packet: VoicePacket): void {
+  private routeToVoiceTarget(packet: VoicePacket, skipBroadcast: boolean = false, serializedData?: Buffer): void {
+    this.logger.debug(`routeToVoiceTarget: sender=${packet.sender_session}, target=${packet.target}`);
+    
     if (!this.clientManager) {
       this.logger.warn('ClientManager not set, cannot route voice packet');
       return;
     }
 
-    // 获取发送者信息
+    // 获取发送者信息（对于远程语音包，发送者可能不在本地）
     const sender = this.clientManager.getClient(packet.sender_session);
-    if (!sender) {
-      this.logger.warn(`Cannot route voice: sender ${packet.sender_session} not found`);
-      return;
-    }
-
-    // 检查发送者是否被mute或suppress
-    if (sender.mute || sender.self_mute || sender.suppress) {
-      this.logger.debug(`Voice packet from ${sender.username} dropped: muted or suppressed`);
-      return;
+    
+    // 对于本地发送者，检查mute/suppress状态
+    if (sender) {
+      if (sender.mute || sender.self_mute || sender.suppress) {
+        this.logger.debug(`Voice packet from ${sender.username} dropped: muted or suppressed`);
+        return;
+      }
     }
 
     // 获取语音目标配置
@@ -684,7 +711,7 @@ export class VoiceRouter extends EventEmitter {
       return;
     }
 
-    this.logger.debug(`Routing whisper from ${sender.username} using voice target ${packet.target} with ${voiceTarget.length} target(s)`);
+    this.logger.debug(`Routing whisper from ${sender ? sender.username : 'remote-' + packet.sender_session} using voice target ${packet.target} with ${voiceTarget.length} target(s)`);
 
     // 生成缓存键（VoiceTarget缓存需要考虑发送者和目标ID）
     const cacheKey = `whisper_${packet.sender_session}_${packet.target}`;
@@ -704,10 +731,10 @@ export class VoiceRouter extends EventEmitter {
     
     const targetSessions = cached.targetSessions;
 
-    // 准备广播的语音包
-    const broadcastPacket = this.serializeVoicePacket(packet);
+    // 准备广播的语音包：如果提供了serializedData则直接使用，否则重新序列化
+    const broadcastPacket = serializedData || this.serializeVoicePacket(packet);
 
-    // 发送语音包给所有目标用户
+    // 发送语音包给所有目标用户（只对本地连接的session）
     let sentCount = 0;
     for (const sessionId of targetSessions) {
       // 跳过发送者自己
@@ -717,6 +744,7 @@ export class VoiceRouter extends EventEmitter {
 
       const targetClient = this.clientManager.getClient(sessionId);
       if (!targetClient) {
+        // session不在本地，跳过（其他Edge会处理）
         continue;
       }
 
@@ -729,48 +757,57 @@ export class VoiceRouter extends EventEmitter {
       if (!targetClient.user_id || targetClient.user_id <= 0) {
         continue;
       }
-
-      this.logger.debug(`Sending whisper to ${targetClient.username} (session ${sessionId})`);
       this.sendVoicePacketToClient(targetClient, broadcastPacket);
       sentCount++;
     }
 
-    this.logger.info(`[VOICE] Whisper from ${sender.username} sent to ${sentCount} clients using voice target ${packet.target} (indexed lookup)`);
+    this.logger.info(`[VOICE] Whisper from ${sender ? sender.username : 'remote-' + packet.sender_session} sent to ${sentCount} clients using voice target ${packet.target} (indexed lookup)`);
 
-    // 触发事件供外部处理
-    const broadcast: VoiceBroadcast = {
-      sender_id: packet.sender_session,
-      sender_edge_id: this.config.server_id,
-      sender_username: sender.username,
-      target: packet.target,
-      packet: broadcastPacket,
-      timestamp: packet.timestamp,
-      routing_info: {
-        voice_target_id: packet.target,
-      },
-    };
+    // 触发事件供VoiceManager进行跨Edge广播
+    // 但如果是远程语音包处理（skipBroadcast=true），则跳过广播避免循环
+    if (!skipBroadcast) {
+      const broadcast: VoiceBroadcast = {
+        sender_id: packet.sender_session,
+        sender_edge_id: this.config.server_id,
+        sender_username: sender ? sender.username : 'remote-' + packet.sender_session,
+        target: packet.target,
+        packet: broadcastPacket,
+        timestamp: packet.timestamp,
+        routing_info: {
+          voice_target_id: packet.target,
+        },
+      };
 
-    this.emit('broadcastToVoiceTarget', voiceTarget, broadcast, packet.sender_session);
+      this.emit('broadcastVoicePacket', broadcast);
+    }
   }
 
   /**
    * 计算 VoiceTarget 的目标会话列表
    * 使用索引实现高效查找
    */
-  private calculateWhisperTargets(voiceTarget: any[]): Set<number> {
+  private calculateWhisperTargets(
+    voiceTarget: ReturnType<typeof mumbleproto.VoiceTarget.Target.deserialize>[]
+  ): Set<number> {
     const targetSessions = new Set<number>();
 
     // 处理每个目标
     for (const target of voiceTarget) {
-      // 情况1: 直接指定的会话ID
-      if (target.session && Array.isArray(target.session)) {
-        for (const sessionId of target.session) {
+      // 情况1: 基于session的目标 - 使用protobuf标准属性
+      const sessions: number[] = target.session || [];
+      
+      if (sessions.length > 0) {
+        for (const sessionId of sessions) {
           targetSessions.add(sessionId);
         }
       }
 
       // 情况2: 基于频道的目标
-      const hasChannelId = this.hasProtobufChannelId(target);
+      // protobuf optional字段的默认值是0，需要检查是否真的设置了channel_id
+      // 只有当channel_id > 0时才认为是频道目标（channel 0是root，不应该被包含）
+      const hasChannelId = target.channel_id !== undefined && 
+                          target.channel_id !== null && 
+                          target.channel_id > 0;
       if (hasChannelId) {
         const targetChannels = new Set<number>();
         targetChannels.add(target.channel_id);
@@ -898,10 +935,10 @@ export class VoiceRouter extends EventEmitter {
    * 最终包结构: [header][session][sequence][voice_data]
    */
   private serializeVoicePacket(packet: VoicePacket): Buffer {
-    // 创建新的header，保留codec类型但清除target（strip target bits）
-    // Go: outbuf[0] = buf[0] & 0xe0
-    // 注意：target必须清零，因为接收端会根据自己的whisper设置重新设置
-    const header = (packet.codec << 5) & 0xe0;
+    // 创建新的header，保留codec和target
+    // target信息对于跨Edge转发至关重要（1-30=whisper, 0=PTT, 31=loopback）
+    // Go中对于本地转发会清零target，但跨Edge转发需要保留
+    const header = (packet.codec << 5) | (packet.target & 0x1f);
     
     // 编码新的会话ID为varint格式（使用发送者的session ID）
     // Go: outgoing.PutUint32(client.Session())
@@ -1130,15 +1167,6 @@ export class VoiceRouter extends EventEmitter {
    * @param target VoiceTarget 目标对象
    * @returns 是否显式设置了 channel_id
    */
-  private hasProtobufChannelId(target: any): boolean {
-    // Protobuf 对象有 has_channel_id 布尔属性
-    if (typeof target.has_channel_id === 'boolean') {
-      return target.has_channel_id;
-    }
-    // 普通对象：检查 channel_id 是否存在且不为 undefined/null
-    return target.channel_id !== undefined && target.channel_id !== null;
-  }
-
   /**
    * 获取语音统计信息
    */
@@ -1321,13 +1349,14 @@ export class VoiceRouter extends EventEmitter {
    */
   private rebuildWhisperCache(session_id: number, target_id: number): void {
     const cacheKey = `whisper_${session_id}_${target_id}`;
+    const edgeId = this.config.server_id || 'unknown';
     
     // 获取 VoiceTarget 配置
     const voiceTarget = this.getVoiceTarget(session_id, target_id);
     if (!voiceTarget) {
       // 配置不存在，删除缓存
       this.routingCache.delete(cacheKey);
-      this.logger.debug(`[VOICE-CACHE] Removed whisper cache: ${cacheKey}`);
+      this.logger.debug(`[Edge${edgeId}][VOICE-CACHE] Removed whisper cache: ${cacheKey} (no config)`, { service: 'munode' });
       return;
     }
     
@@ -1337,7 +1366,7 @@ export class VoiceRouter extends EventEmitter {
       targetSessions,
       timestamp: Date.now(),
     });
-    this.logger.debug(`[VOICE-CACHE] Rebuilt whisper cache: ${cacheKey}, ${targetSessions.size} sessions`);
+    this.logger.debug(`[Edge${edgeId}][VOICE-CACHE] Rebuilt whisper cache: ${cacheKey}, ${targetSessions.size} sessions`, { service: 'munode' });
   }
   
   /**

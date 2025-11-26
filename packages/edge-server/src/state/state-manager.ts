@@ -626,6 +626,18 @@ export class EdgeStateManager {
     return this.remoteUsers.get(session_id);
   }
 
+  /**
+   * 获取所有已知的Edge ID列表
+   * 从remoteUsers中提取唯一的edge_id
+   */
+  getAllEdges(): Set<number> {
+    const edges = new Set<number>();
+    for (const user of this.remoteUsers.values()) {
+      edges.add(user.edge_id);
+    }
+    return edges;
+  }
+
   // ==================
   // 公共查询接口
   // ==================

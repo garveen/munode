@@ -412,6 +412,37 @@ export class EventSetupManager {
         logger.debug('Voice target update:', data);
       });
 
+      // 监听来自 Hub 的 VoiceTarget 同步
+      this.hubClient.on('syncVoiceTarget', (params: any) => {
+        logger.info(
+          `Received VoiceTarget sync from Hub: Edge ${params.edge_id}, Session ${params.client_session}, Target ${params.target_id}`
+        );
+        
+        // 更新本地 VoiceRouter 的配置
+        if (params.config === null) {
+          // 删除 VoiceTarget
+          logger.info(`Removing VoiceTarget: session=${params.client_session}, target=${params.target_id}`);
+          this.handlerFactory.voiceRouter.removeVoiceTarget(params.client_session, params.target_id);
+        } else if (params.config && params.config.targets) {
+          // params.config 已经是规范化的纯JSON对象（由发送端Edge规范化）
+          // 直接使用 config.targets，不需要访问protobuf内部字段
+          const targets = params.config.targets;
+          
+          if (targets.length > 0) {
+            logger.info(`Setting VoiceTarget: session=${params.client_session}, target=${params.target_id}, targets count=${targets.length}`);
+            this.handlerFactory.voiceRouter.setVoiceTarget(
+              params.client_session,
+              params.target_id,
+              targets
+            );
+          } else {
+            logger.warn(`VoiceTarget has no targets: ${JSON.stringify(params)}`);
+          }
+        } else {
+          logger.warn(`Invalid VoiceTarget config: ${JSON.stringify(params)}`);
+        }
+      });
+
       this.hubClient.on('voiceData', (data, respond) => {
         // 处理来自Hub的语音数据路由
         this.voiceManager!.handleVoiceDataFromHub(data, respond);

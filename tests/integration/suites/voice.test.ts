@@ -132,9 +132,11 @@ async function createClients(testEnv: TestEnvironment, configs: ClientConfig[]):
   
   for (const config of configs) {
     const client = new MumbleClient();
+    const targetPort = config.edge === 1 ? testEnv.edgePort : testEnv.edgePort2;
+    console.log(`[TEST] Connecting ${config.username} to Edge ${config.edge} on port ${targetPort}`);
     await client.connect({
       host: 'localhost',
-      port: config.edge === 1 ? testEnv.edgePort : testEnv.edgePort2,
+      port: targetPort,
       username: config.username,
       password: config.password,
       rejectUnauthorized: false,
