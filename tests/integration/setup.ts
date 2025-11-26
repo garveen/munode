@@ -177,6 +177,43 @@ class TestAuthServer {
       'whisper_sender': { password: 'password1', user_id: 90 },
       'whisper_target': { password: 'password2', user_id: 91 },
       'moderator': { password: 'mod123', user_id: 92, groups: ['moderator'] },
+      // Voice test users
+      'voice_sender': { password: 'pass1', user_id: 101 },
+      'voice_recv_e1_same': { password: 'pass2', user_id: 102 },
+      'voice_recv_e2_same': { password: 'pass3', user_id: 103 },
+      'voice_recv_e1_other': { password: 'pass4', user_id: 104 },
+      'voice_recv_e2_other': { password: 'pass5', user_id: 105 },
+      'voice_sender2': { password: 'pass1', user_id: 106 },
+      'voice_deaf_e1': { password: 'pass2', user_id: 107 },
+      'voice_deaf_e2': { password: 'pass3', user_id: 108 },
+      'voice_normal_e1': { password: 'pass4', user_id: 109 },
+      'voice_sender3': { password: 'pass1', user_id: 110 },
+      'voice_recv_e1_ch0': { password: 'pass2', user_id: 111 },
+      'voice_recv_e2_ch0': { password: 'pass3', user_id: 112 },
+      'voice_recv_e1_ch1': { password: 'pass4', user_id: 113 },
+      'voice_recv_e2_ch1': { password: 'pass5', user_id: 114 },
+      'voice_recv_e1_ch2': { password: 'pass6', user_id: 115 },
+      'voice_whisper_sender': { password: 'pass1', user_id: 116 },
+      'voice_target1_e1': { password: 'pass2', user_id: 117 },
+      'voice_target1_e2': { password: 'pass3', user_id: 118 },
+      'voice_non_target_e1': { password: 'pass4', user_id: 119 },
+      'voice_non_target_e2': { password: 'pass5', user_id: 120 },
+      'voice_ch_target_sender': { password: 'pass1', user_id: 121 },
+      'voice_recv_e1_tch1': { password: 'pass2', user_id: 122 },
+      'voice_recv_e2_tch1': { password: 'pass3', user_id: 123 },
+      'voice_recv_e1_tch0': { password: 'pass4', user_id: 124 },
+      'voice_recv_e1_tch2': { password: 'pass5', user_id: 125 },
+      'voice_loopback_sender': { password: 'pass1', user_id: 126 },
+      'voice_loopback_other': { password: 'pass2', user_id: 127 },
+      'voice_multi_sender': { password: 'pass1', user_id: 128 },
+      'voice_multi_recv_e1': { password: 'pass2', user_id: 129 },
+      'voice_multi_recv_e2': { password: 'pass3', user_id: 130 },
+      'voice_complex_sender': { password: 'pass1', user_id: 131 },
+      'voice_complex_e1_ch0': { password: 'pass2', user_id: 132 },
+      'voice_complex_e2_ch1': { password: 'pass3', user_id: 133 },
+      'voice_whisper_tgt_e2': { password: 'pass4', user_id: 134 },
+      'voice_deaf_e1_ch0': { password: 'pass5', user_id: 135 },
+      'voice_normal_e1_ch2': { password: 'pass6', user_id: 136 },
     };
 
     const user = users[req.username];
@@ -275,6 +312,11 @@ export async function startHubServer(configPath?: string): Promise<ChildProcess>
 
     hubProcess.stdout?.on('data', checkStartup);
     hubProcess.stderr?.on('data', checkStartup);
+    
+    // 持续输出stdout以便看到DEBUG日志
+    hubProcess.stdout?.on('data', (data: Buffer) => {
+      console.log('Hub stdout:', data.toString());
+    });
 
     hubProcess.stderr?.on('data', (data: Buffer) => {
       console.error('Hub stderr:', data.toString());
@@ -345,6 +387,21 @@ export async function startEdgeServer(configPath?: string, port?: number): Promi
 
     edgeProcess.stdout?.on('data', checkStartup);
     edgeProcess.stderr?.on('data', checkStartup);
+    
+    // 持续输出stdout以便看到DEBUG日志 (移除checkStartup重复监听，只保留一个)
+    edgeProcess.stdout?.removeListener('data', checkStartup);
+    edgeProcess.stdout?.on('data', (data: Buffer) => {
+      const message = data.toString();
+      console.log('Edge stdout:', message);
+      // 仍然检查启动状态
+      if (!startupDetected && (message.includes('Edge Server started successfully') || 
+          message.includes('listening') || 
+          message.includes('ready'))) {
+        startupDetected = true;
+        clearTimeout(timeout);
+        resolve();
+      }
+    });
 
     edgeProcess.stderr?.on('data', (data: Buffer) => {
       console.error('Edge stderr:', data.toString());
