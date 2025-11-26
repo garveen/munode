@@ -1576,7 +1576,8 @@ export class HubControlService {
             userStats.cert_hash = targetSession.cert_hash;
           }
           
-          // TODO: 从证书缓存获取完整证书链
+          // stats_only 模式下不添加证书链
+          // TODO: 从证书缓存获取完整证书链（仅在非 stats_only 模式）
         }
 
         // 添加IP地址

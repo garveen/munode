@@ -625,15 +625,23 @@ export class HubMessageHandlers {
         response.stats_only = userStats.stats_only;
       }
 
-      // 添加可选字段
-      if (userStats.strong_certificate !== undefined) {
-        response.strong_certificate = userStats.strong_certificate;
-      }
-      if (userStats.address) {
-        response.address = userStats.address;
-      }
-      if (userStats.version) {
-        response.version = new mumbleproto.Version(userStats.version);
+      // 仅在非 stats_only 模式下添加详细信息字段
+      if (!userStats.stats_only) {
+        // 添加可选字段
+        if (userStats.strong_certificate !== undefined) {
+          response.strong_certificate = userStats.strong_certificate;
+        }
+        if (userStats.address) {
+          response.address = userStats.address;
+        }
+        if (userStats.version) {
+          response.version = new mumbleproto.Version(userStats.version);
+        }
+        // 注意：证书链 (certificates) 由 protobuf 自动初始化为空数组
+        // 如果有证书数据需要添加，在这里处理
+        if (userStats.certificates && userStats.certificates.length > 0) {
+          response.certificates = userStats.certificates;
+        }
       }
 
       // 添加网络统计字段（需要转换为 protobuf 对象）
