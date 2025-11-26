@@ -134,7 +134,8 @@ export class MumbleClient extends EventEmitter {
       // 监听频道状态变化
       const onChannelState = (message: any) => {
         // 检查是否是我们刚创建的频道 (通过名称匹配)
-        if (message.name === name && message.parent === (parent || 0)) {
+        // 新创建的频道channel_id必须大于0（Root频道ID为0，不是新创建的）
+        if (message.name === name && message.parent === (parent || 0) && message.channel_id > 0) {
           clearTimeout(timeout);
           this.removeListener('channelState', onChannelState);
           resolve(message.channel_id);

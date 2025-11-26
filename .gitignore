@@ -41,6 +41,10 @@ Thumbs.db
 coverage/
 .nyc_output/
 
+# Temporary test config files
+tests/config/edge-test-*.js
+tests/config/hub-test-*.js
+
 # Temporary files
 tmp/
 temp/

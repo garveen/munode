@@ -43,7 +43,7 @@ describe('Channel Ninja Integration Tests', () => {
           host: 'localhost',
           port: testEnv.edgePort,
           username: 'admin',
-          password: 'admin_password',
+          password: 'admin123',
           rejectUnauthorized: false,
         });
 
@@ -86,7 +86,7 @@ describe('Channel Ninja Integration Tests', () => {
           host: 'localhost',
           port: testEnv.edgePort,
           username: 'user1',
-          password: 'user1_password',
+          password: 'password1',
           rejectUnauthorized: false,
         });
 
@@ -97,7 +97,7 @@ describe('Channel Ninja Integration Tests', () => {
           host: 'localhost',
           port: testEnv.edgePort,
           username: 'user2',
-          password: 'user2_password',
+          password: 'password2',
           rejectUnauthorized: false,
         });
 

@@ -82,7 +82,8 @@ describe('Ban System Integration Tests', () => {
       let permissionDenied = false;
       const deniedPromise = new Promise<void>((resolve) => {
         normalClient.on('permissionDenied', (denied: any) => {
-          if (denied.type === 'Permission') {
+          // DenyType.Permission = 1
+          if (denied.type === 1) {
             permissionDenied = true;
             resolve();
           }
