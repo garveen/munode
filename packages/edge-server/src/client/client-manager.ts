@@ -13,6 +13,10 @@ export class ClientManager extends EventEmitter {
   private logger: Logger;
   private clients: Map<number, ClientInfo> = new Map();
   private sockets: Map<number, Socket | TLSSocket> = new Map(); // 保存 socket 引用
+  
+  // 性能优化：频道用户索引，实现 O(1) 查找
+  private channelUsersIndex: Map<number, Set<number>> = new Map(); // channelId -> Set<sessionId>
+  private listeningUsersIndex: Map<number, Set<number>> = new Map(); // channelId -> Set<sessionId> (监听该频道的用户)
 
   constructor(config: EdgeConfig, logger: Logger) {
     super();
@@ -54,6 +58,10 @@ export class ClientManager extends EventEmitter {
 
     this.clients.set(sessionId, client);
     this.sockets.set(sessionId, socket); // 保存 socket 引用
+    
+    // 更新频道索引
+    this.addClientToChannelIndex(sessionId, client.channel_id);
+    
     this.logger.info(`Client connected: session=${sessionId}, ip=${clientAddress}`);
 
     // 设置 socket 事件处理器
@@ -69,6 +77,16 @@ export class ClientManager extends EventEmitter {
   removeClient(sessionId: number): void {
     const client = this.clients.get(sessionId);
     if (client) {
+      // 清理频道索引
+      this.removeClientFromChannelIndex(sessionId, client.channel_id);
+      
+      // 清理监听索引
+      if (client.listeningChannels) {
+        for (const channelId of client.listeningChannels) {
+          this.removeClientFromListeningIndex(sessionId, channelId);
+        }
+      }
+      
       this.clients.delete(sessionId);
       this.sockets.delete(sessionId); // 删除 socket 引用
       this.logger.info(`Client disconnected: session=${sessionId}, username=${client.username}`);
@@ -110,6 +128,31 @@ export class ClientManager extends EventEmitter {
   updateClient(sessionId: number, updates: Partial<ClientInfo>): void {
     const client = this.clients.get(sessionId);
     if (client) {
+      // 处理频道变化
+      if (updates.channel_id !== undefined && updates.channel_id !== client.channel_id) {
+        this.removeClientFromChannelIndex(sessionId, client.channel_id);
+        this.addClientToChannelIndex(sessionId, updates.channel_id);
+      }
+      
+      // 处理监听频道变化
+      if (updates.listeningChannels !== undefined) {
+        // 移除旧的监听索引
+        if (client.listeningChannels) {
+          for (const channelId of client.listeningChannels) {
+            if (!updates.listeningChannels.has(channelId)) {
+              this.removeClientFromListeningIndex(sessionId, channelId);
+            }
+          }
+        }
+        
+        // 添加新的监听索引
+        for (const channelId of updates.listeningChannels) {
+          if (!client.listeningChannels || !client.listeningChannels.has(channelId)) {
+            this.addClientToListeningIndex(sessionId, channelId);
+          }
+        }
+      }
+      
       Object.assign(client, updates);
       client.last_active = new Date();
       this.emit('clientUpdated', client);
@@ -130,9 +173,16 @@ export class ClientManager extends EventEmitter {
 
   /**
    * 获取频道中的所有客户端
+   * 优化：使用索引实现 O(1) 查找
    */
   getClientsInChannel(channelId: number): ClientInfo[] {
-    return Array.from(this.clients.values()).filter((client) => client.channel_id === channelId);
+    const sessionIds = this.channelUsersIndex.get(channelId);
+    if (!sessionIds) {
+      return [];
+    }
+    return Array.from(sessionIds)
+      .map(id => this.clients.get(id))
+      .filter(Boolean) as ClientInfo[];
   }
 
   /**
@@ -142,6 +192,11 @@ export class ClientManager extends EventEmitter {
     const client = this.clients.get(sessionId);
     if (client) {
       const oldChannelId = client.channel_id;
+      
+      // 更新频道索引
+      this.removeClientFromChannelIndex(sessionId, oldChannelId);
+      this.addClientToChannelIndex(sessionId, channelId);
+      
       client.channel_id = channelId;
       client.last_active = new Date();
       this.logger.info(
@@ -283,5 +338,73 @@ export class ClientManager extends EventEmitter {
       this.logger.info(`Removing inactive client: session=${sessionId}`);
       this.removeClient(sessionId);
     }
+  }
+  
+  // ===== 索引管理方法（性能优化） =====
+  
+  /**
+   * 添加客户端到频道索引
+   */
+  private addClientToChannelIndex(sessionId: number, channelId: number): void {
+    let users = this.channelUsersIndex.get(channelId);
+    if (!users) {
+      users = new Set();
+      this.channelUsersIndex.set(channelId, users);
+    }
+    users.add(sessionId);
+  }
+  
+  /**
+   * 从频道索引中移除客户端
+   */
+  private removeClientFromChannelIndex(sessionId: number, channelId: number): void {
+    const users = this.channelUsersIndex.get(channelId);
+    if (users) {
+      users.delete(sessionId);
+      if (users.size === 0) {
+        this.channelUsersIndex.delete(channelId);
+      }
+    }
+  }
+  
+  /**
+   * 添加客户端到监听索引
+   */
+  private addClientToListeningIndex(sessionId: number, channelId: number): void {
+    let listeners = this.listeningUsersIndex.get(channelId);
+    if (!listeners) {
+      listeners = new Set();
+      this.listeningUsersIndex.set(channelId, listeners);
+    }
+    listeners.add(sessionId);
+  }
+  
+  /**
+   * 从监听索引中移除客户端
+   */
+  private removeClientFromListeningIndex(sessionId: number, channelId: number): void {
+    const listeners = this.listeningUsersIndex.get(channelId);
+    if (listeners) {
+      listeners.delete(sessionId);
+      if (listeners.size === 0) {
+        this.listeningUsersIndex.delete(channelId);
+      }
+    }
+  }
+  
+  /**
+   * 获取频道中的用户会话ID集合（用于语音路由）
+   * O(1) 查找
+   */
+  getChannelUserSessions(channelId: number): Set<number> {
+    return this.channelUsersIndex.get(channelId) || new Set();
+  }
+  
+  /**
+   * 获取监听该频道的用户会话ID集合（用于语音路由）
+   * O(1) 查找
+   */
+  getListeningUserSessions(channelId: number): Set<number> {
+    return this.listeningUsersIndex.get(channelId) || new Set();
   }
 }

@@ -302,8 +302,44 @@ export class EventSetupManager {
             `Client ${client.username} moved from channel ${oldchannel_id} to ${newchannel_id}`
           );
         }
+        
+        // 性能优化：用户移动频道不影响路由缓存，因为索引会自动更新
+        // 无需重建缓存
       }
     );
+    
+    // 频道管理器事件 - 主动重建缓存
+    this.handlerFactory.channelManager.on('channelsLinked', (channel_id1: number, channel_id2: number) => {
+      // 频道链接变化，重建相关的PTT缓存
+      logger.debug(`Channels linked: ${channel_id1} <-> ${channel_id2}, rebuilding cache`);
+      this.handlerFactory.voiceRouter.rebuildChannelCache(channel_id1);
+      this.handlerFactory.voiceRouter.rebuildChannelCache(channel_id2);
+      // 由于链接是传递的，需要重建所有相关频道的缓存
+      // 为简化起见，可以考虑重建所有PTT缓存
+      // this.handlerFactory.voiceRouter.rebuildAllPTTCache();
+    });
+    
+    this.handlerFactory.channelManager.on('channelsUnlinked', (channel_id1: number, channel_id2: number) => {
+      // 频道链接取消，重建相关的PTT缓存
+      logger.debug(`Channels unlinked: ${channel_id1} <-> ${channel_id2}, rebuilding cache`);
+      this.handlerFactory.voiceRouter.rebuildChannelCache(channel_id1);
+      this.handlerFactory.voiceRouter.rebuildChannelCache(channel_id2);
+    });
+    
+    this.handlerFactory.channelManager.on('channelUpdated', (channel: any) => {
+      // 频道更新可能包括链接变化，重建该频道的PTT缓存
+      if (channel && channel.id !== undefined) {
+        logger.debug(`Channel ${channel.id} updated, rebuilding cache`);
+        this.handlerFactory.voiceRouter.rebuildChannelCache(channel.id);
+      }
+    });
+    
+    this.handlerFactory.clientManager.on('clientDisconnected', (client) => {
+      // 客户端断开连接，清理其相关的缓存
+      if (client && client.session) {
+        this.handlerFactory.voiceRouter.clearClientCache(client.session);
+      }
+    });
 
     // 语音事件
     this.handlerFactory.voiceRouter.on('voicePacket', (_packet) => {

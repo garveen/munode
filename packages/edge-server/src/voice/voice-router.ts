@@ -6,7 +6,16 @@ import { OCB2AES128 } from '@munode/common';
 import type { Socket as UDPSocket } from 'dgram';
 
 /**
+ * 路由缓存条目
+ */
+interface RouteCacheEntry {
+  targetSessions: Set<number>; // 目标会话ID集合
+  timestamp: number; // 缓存创建时间
+}
+
+/**
  * 语音路由器 - 处理语音包的路由和转发
+ * 性能优化：使用索引和缓存实现 O(1) 查找
  */
 export class VoiceRouter extends EventEmitter {
   private config: EdgeConfig;
@@ -16,11 +25,16 @@ export class VoiceRouter extends EventEmitter {
   private udpServer?: UDPSocket; // UDP 服务器引用，用于发送语音包
   private clientManager?: any; // ClientManager 引用，用于获取客户端信息
   private channelManager?: any; // ChannelManager 引用，用于获取频道链接信息
+  
+  // 性能优化：路由缓存（事件驱动，主动重建）
+  private routingCache: Map<string, RouteCacheEntry> = new Map(); // cacheKey -> RouteCacheEntry
+  private serializedPacketCache: Map<string, Buffer> = new Map(); // 序列化包缓存
 
   constructor(config: EdgeConfig, logger: Logger) {
     super();
     this.config = config;
     this.logger = logger;
+    this.logger.info('VoiceRouter initialized with event-driven cache');
   }
 
   /**
@@ -364,6 +378,8 @@ export class VoiceRouter extends EventEmitter {
    * @param packet 语音包
    * @param senderChannelId 发送者频道ID
    * @param serializedData 已序列化的数据（远程语音包已经是正确格式，无需重新序列化）
+   * 
+   * 性能优化：使用索引 + 缓存实现 O(1) 查找
    */
   private routeToChannelById(packet: VoicePacket, senderChannelId: number, serializedData?: Buffer): void {
     if (!this.clientManager) {
@@ -376,26 +392,50 @@ export class VoiceRouter extends EventEmitter {
     // 使用已序列化的数据，或者重新序列化（针对本地语音包）
     const broadcastPacket = serializedData || this.serializeVoicePacket(packet);
 
-    // 收集所有应该接收语音的频道ID
-    const targetChannels = new Set<number>();
-    targetChannels.add(senderChannelId); // 发送者所在频道
+    // 生成缓存键（与 routeToChannel 使用相同的缓存）
+    const cacheKey = `ptt_${senderChannelId}`;
+    
+    // 从缓存获取目标频道列表
+    let cached = this.routingCache.get(cacheKey);
+    if (!cached) {
+      // 缓存不存在，立即构建
+      const targetChannels = this.calculateTargetChannels(senderChannelId);
+      cached = {
+        targetSessions: targetChannels,
+        timestamp: Date.now(),
+      };
+      this.routingCache.set(cacheKey, cached);
+      this.logger.debug(`[VOICE-CACHE] Remote PTT cache built for channel ${senderChannelId}`);
+    }
+    
+    const targetChannels = cached.targetSessions;
 
-    // 获取所有链接的频道（包括传递链接）
-    if (this.channelManager) {
-      const linkedChannels = this.channelManager.getAllLinkedChannels(senderChannelId);
-      for (const linkedId of linkedChannels) {
-        targetChannels.add(linkedId);
+    // 使用索引快速收集目标用户
+    const targetSessions = new Set<number>();
+    for (const channelId of targetChannels) {
+      // 获取频道中的用户（O(1)）
+      const channelUsers = this.clientManager.getChannelUserSessions(channelId);
+      for (const sessionId of channelUsers) {
+        targetSessions.add(sessionId);
       }
-      this.logger.info(`[VOICE-DEBUG] Remote PTT: sender in channel ${senderChannelId}, linked channels: [${Array.from(linkedChannels).join(', ')}], total target channels: [${Array.from(targetChannels).join(', ')}]`);
+      
+      // 获取监听该频道的用户（O(1)）
+      const listeningUsers = this.clientManager.getListeningUserSessions(channelId);
+      for (const sessionId of listeningUsers) {
+        targetSessions.add(sessionId);
+      }
     }
 
     // 发送给目标频道中的所有客户端
     let sentCount = 0;
-    const allClients = this.clientManager.getAllClients();
-    
-    for (const targetClient of allClients) {
+    for (const sessionId of targetSessions) {
       // 跳过发送者自己（远程session可能与本地session冲突，这里也检查一下）
-      if (targetClient.session === packet.sender_session) {
+      if (sessionId === packet.sender_session) {
+        continue;
+      }
+
+      const targetClient = this.clientManager.getClient(sessionId);
+      if (!targetClient) {
         continue;
       }
 
@@ -409,32 +449,12 @@ export class VoiceRouter extends EventEmitter {
         continue;
       }
 
-      // 检查客户端是否在目标频道中，或者正在监听目标频道
-      let shouldReceive = false;
-      
-      // 情况1: 客户端在目标频道之一中
-      if (targetChannels.has(targetClient.channel_id)) {
-        shouldReceive = true;
-      }
-      
-      // 情况2: 客户端正在监听目标频道之一
-      if (!shouldReceive && targetClient.listeningChannels) {
-        for (const channelId of targetChannels) {
-          if (targetClient.listeningChannels.has(channelId)) {
-            shouldReceive = true;
-            break;
-          }
-        }
-      }
-
-      if (shouldReceive) {
-        this.logger.debug(`[VOICE-DEBUG] Sending remote voice to ${targetClient.username} (session ${targetClient.session}, channel ${targetClient.channel_id})`);
-        this.sendVoicePacketToClient(targetClient, broadcastPacket);
-        sentCount++;
-      }
+      this.logger.debug(`[VOICE-DEBUG] Sending remote voice to ${targetClient.username} (session ${targetClient.session}, channel ${targetClient.channel_id})`);
+      this.sendVoicePacketToClient(targetClient, broadcastPacket);
+      sentCount++;
     }
     
-    this.logger.info(`[VOICE] Remote PTT from session ${packet.sender_session} sent to ${sentCount} local clients across ${targetChannels.size} channels`);
+    this.logger.info(`[VOICE] Remote PTT from session ${packet.sender_session} sent to ${sentCount} local clients across ${targetChannels.size} channels (indexed lookup)`);
   }
 
   /**
@@ -447,6 +467,8 @@ export class VoiceRouter extends EventEmitter {
    * 4. 监听发送者所在频道的链接频道的所有用户
    * 
    * 注意: 链接是传递的，如果 A 链接 B，B 链接 C，则 A 也链接 C
+   * 
+   * 性能优化：使用索引 + 缓存实现 O(1) 查找
    */
   private routeToChannel(packet: VoicePacket): void {
     if (!this.clientManager) {
@@ -469,29 +491,68 @@ export class VoiceRouter extends EventEmitter {
       return;
     }
 
+    // 生成缓存键
+    const cacheKey = `ptt_${sender.channel_id}`;
+    
+    // 从缓存获取目标频道列表（缓存由事件系统维护）
+    let cached = this.routingCache.get(cacheKey);
+    if (!cached) {
+      // 缓存不存在，立即构建
+      const targetChannels = this.calculateTargetChannels(sender.channel_id);
+      cached = {
+        targetSessions: targetChannels,
+        timestamp: Date.now(),
+      };
+      this.routingCache.set(cacheKey, cached);
+      this.logger.debug(`[VOICE-CACHE] PTT cache built for channel ${sender.channel_id}: ${targetChannels.size} channels`);
+    }
+    
+    const targetChannels = cached.targetSessions;
+
     // 准备广播的语音包（包含发送者会话ID）
-    const broadcastPacket = this.serializeVoicePacket(packet);
-
-    // 收集所有应该接收语音的频道ID
-    const targetChannels = new Set<number>();
-    targetChannels.add(sender.channel_id); // 发送者所在频道
-
-    // 获取所有链接的频道（包括传递链接）
-    if (this.channelManager) {
-      const linkedChannels = this.channelManager.getAllLinkedChannels(sender.channel_id);
-      for (const linkedId of linkedChannels) {
-        targetChannels.add(linkedId);
+    // 优化：使用缓存避免重复序列化
+    const packetCacheKey = `${packet.sender_session}_${packet.timestamp}`;
+    let broadcastPacket: Buffer;
+    if (this.serializedPacketCache.has(packetCacheKey)) {
+      broadcastPacket = this.serializedPacketCache.get(packetCacheKey)!;
+      this.logger.debug(`[VOICE-CACHE] Using cached serialized packet`);
+    } else {
+      broadcastPacket = this.serializeVoicePacket(packet);
+      this.serializedPacketCache.set(packetCacheKey, broadcastPacket);
+      // 清理旧的序列化缓存（保持缓存大小）
+      if (this.serializedPacketCache.size > 1000) {
+        const firstKey = this.serializedPacketCache.keys().next().value;
+        this.serializedPacketCache.delete(firstKey);
       }
-      this.logger.debug(`[VOICE] Push-to-talk: sender ${sender.username} in channel ${sender.channel_id}, linked channels: [${Array.from(linkedChannels).join(', ')}], total target channels: [${Array.from(targetChannels).join(', ')}]`);
     }
 
-    // 发送给目标频道中的所有客户端
+    // 使用索引快速收集目标用户
+    // O(1) 查找每个频道的用户，而不是 O(n) 遍历所有用户
+    const targetSessions = new Set<number>();
+    for (const channelId of targetChannels) {
+      // 获取频道中的用户（O(1)）
+      const channelUsers = this.clientManager.getChannelUserSessions(channelId);
+      for (const sessionId of channelUsers) {
+        targetSessions.add(sessionId);
+      }
+      
+      // 获取监听该频道的用户（O(1)）
+      const listeningUsers = this.clientManager.getListeningUserSessions(channelId);
+      for (const sessionId of listeningUsers) {
+        targetSessions.add(sessionId);
+      }
+    }
+
+    // 发送语音包给所有目标用户
     let sentCount = 0;
-    const allClients = this.clientManager.getAllClients();
-    
-    for (const targetClient of allClients) {
+    for (const sessionId of targetSessions) {
       // 跳过发送者自己
-      if (targetClient.session === packet.sender_session) {
+      if (sessionId === packet.sender_session) {
+        continue;
+      }
+
+      const targetClient = this.clientManager.getClient(sessionId);
+      if (!targetClient) {
         continue;
       }
 
@@ -505,34 +566,12 @@ export class VoiceRouter extends EventEmitter {
         continue;
       }
 
-      // 检查客户端是否在目标频道中，或者正在监听目标频道
-      let shouldReceive = false;
-      
-      // 情况1: 客户端在目标频道之一中
-      if (targetChannels.has(targetClient.channel_id)) {
-        shouldReceive = true;
-      }
-      
-      // 情况2: 客户端正在监听目标频道之一
-      if (!shouldReceive && targetClient.listeningChannels) {
-        for (const channelId of targetChannels) {
-          if (targetClient.listeningChannels.has(channelId)) {
-            shouldReceive = true;
-            break;
-          }
-        }
-      }
-
-      if (shouldReceive) {
-        this.logger.debug(`[VOICE-DEBUG] Sending voice to ${targetClient.username} (session ${targetClient.session}, channel ${targetClient.channel_id}, listening: [${targetClient.listeningChannels ? Array.from(targetClient.listeningChannels).join(',') : 'none'}])`);
-        this.sendVoicePacketToClient(targetClient, broadcastPacket);
-        sentCount++;
-      } else {
-        this.logger.debug(`[VOICE-DEBUG] NOT sending voice to ${targetClient.username} (session ${targetClient.session}, channel ${targetClient.channel_id}, not in target channels or listening)`);
-      }
+      this.logger.debug(`[VOICE-DEBUG] Sending voice to ${targetClient.username} (session ${sessionId}, channel ${targetClient.channel_id})`);
+      this.sendVoicePacketToClient(targetClient, broadcastPacket);
+      sentCount++;
     }
     
-    this.logger.info(`[VOICE] Push-to-talk from ${sender.username} sent to ${sentCount} clients across ${targetChannels.size} channels`);
+    this.logger.info(`[VOICE] Push-to-talk from ${sender.username} sent to ${sentCount} clients across ${targetChannels.size} channels (indexed lookup)`);
 
     // 同时触发事件供外部处理（如集群模式下的跨Edge转发）
     const broadcast: VoiceBroadcast = {
@@ -548,6 +587,26 @@ export class VoiceRouter extends EventEmitter {
     };
 
     this.emit('broadcastToChannel', sender.channel_id, broadcast, packet.sender_session);
+  }
+
+  /**
+   * 计算目标频道列表（包括链接频道）
+   * 用于 PTT 路由缓存
+   */
+  private calculateTargetChannels(channelId: number): Set<number> {
+    const targetChannels = new Set<number>();
+    targetChannels.add(channelId); // 发送者所在频道
+
+    // 获取所有链接的频道（包括传递链接）
+    if (this.channelManager) {
+      const linkedChannels = this.channelManager.getAllLinkedChannels(channelId);
+      for (const linkedId of linkedChannels) {
+        targetChannels.add(linkedId);
+      }
+      this.logger.debug(`[VOICE] Calculated target channels for ${channelId}: [${Array.from(targetChannels).join(', ')}]`);
+    }
+
+    return targetChannels;
   }
 
   /**
@@ -596,6 +655,8 @@ export class VoiceRouter extends EventEmitter {
    * 1. 频道ACL组（channel.groups，基于 user_id 匹配）
    * 2. 用户认证组（client.groups，来自认证服务器）
    * 用户只要在任一来源的组中，就可以收到语音
+   * 
+   * 性能优化：使用索引 + 缓存实现 O(1) 查找
    */
   private routeToVoiceTarget(packet: VoicePacket): void {
     if (!this.clientManager) {
@@ -625,10 +686,78 @@ export class VoiceRouter extends EventEmitter {
 
     this.logger.debug(`Routing whisper from ${sender.username} using voice target ${packet.target} with ${voiceTarget.length} target(s)`);
 
+    // 生成缓存键（VoiceTarget缓存需要考虑发送者和目标ID）
+    const cacheKey = `whisper_${packet.sender_session}_${packet.target}`;
+    
+    // 从缓存获取目标会话列表
+    let cached = this.routingCache.get(cacheKey);
+    if (!cached) {
+      // 缓存不存在，立即构建
+      const targetSessions = this.calculateWhisperTargets(voiceTarget);
+      cached = {
+        targetSessions,
+        timestamp: Date.now(),
+      };
+      this.routingCache.set(cacheKey, cached);
+      this.logger.debug(`[VOICE-CACHE] Whisper cache built for session ${packet.sender_session} target ${packet.target}: ${targetSessions.size} sessions`);
+    }
+    
+    const targetSessions = cached.targetSessions;
+
     // 准备广播的语音包
     const broadcastPacket = this.serializeVoicePacket(packet);
 
-    // 收集所有应该接收语音的用户会话ID
+    // 发送语音包给所有目标用户
+    let sentCount = 0;
+    for (const sessionId of targetSessions) {
+      // 跳过发送者自己
+      if (sessionId === packet.sender_session) {
+        continue;
+      }
+
+      const targetClient = this.clientManager.getClient(sessionId);
+      if (!targetClient) {
+        continue;
+      }
+
+      // 跳过deaf或self_deaf的客户端
+      if (targetClient.deaf || targetClient.self_deaf) {
+        continue;
+      }
+
+      // 跳过未认证的客户端
+      if (!targetClient.user_id || targetClient.user_id <= 0) {
+        continue;
+      }
+
+      this.logger.debug(`Sending whisper to ${targetClient.username} (session ${sessionId})`);
+      this.sendVoicePacketToClient(targetClient, broadcastPacket);
+      sentCount++;
+    }
+
+    this.logger.info(`[VOICE] Whisper from ${sender.username} sent to ${sentCount} clients using voice target ${packet.target} (indexed lookup)`);
+
+    // 触发事件供外部处理
+    const broadcast: VoiceBroadcast = {
+      sender_id: packet.sender_session,
+      sender_edge_id: this.config.server_id,
+      sender_username: sender.username,
+      target: packet.target,
+      packet: broadcastPacket,
+      timestamp: packet.timestamp,
+      routing_info: {
+        voice_target_id: packet.target,
+      },
+    };
+
+    this.emit('broadcastToVoiceTarget', voiceTarget, broadcast, packet.sender_session);
+  }
+
+  /**
+   * 计算 VoiceTarget 的目标会话列表
+   * 使用索引实现高效查找
+   */
+  private calculateWhisperTargets(voiceTarget: any[]): Set<number> {
     const targetSessions = new Set<number>();
 
     // 处理每个目标
@@ -641,10 +770,6 @@ export class VoiceRouter extends EventEmitter {
       }
 
       // 情况2: 基于频道的目标
-      // 使用 has_channel_id 检查是否显式设置了 channel_id
-      // 直接检查 channel_id !== undefined/null 会在值为 0 (root channel) 时误判
-      // 因为 protobuf 默认返回 0 而不是 undefined
-      // 注意：protobuf 对象有 has_channel_id 属性（布尔值），普通对象没有
       const hasChannelId = this.hasProtobufChannelId(target);
       if (hasChannelId) {
         const targetChannels = new Set<number>();
@@ -692,51 +817,23 @@ export class VoiceRouter extends EventEmitter {
           this.logger.debug(`Channel ACL group '${groupName}' has ${channelGroupMembers.size} members in target channels`);
         }
 
-        // 收集这些频道中的所有用户
-        const allClients = this.clientManager.getAllClients();
-        for (const client of allClients) {
-          let isInTargetChannel = false;
-          
-          // 检查客户端是否在目标频道中
-          if (targetChannels.has(client.channel_id)) {
-            isInTargetChannel = true;
-          }
-          
-          // 检查客户端是否正在监听目标频道之一
-          if (!isInTargetChannel && client.listeningChannels) {
-            for (const channelId of targetChannels) {
-              if (client.listeningChannels.has(channelId)) {
-                isInTargetChannel = true;
-                break;
-              }
+        // 使用索引收集这些频道中的所有用户（O(1) 查找）
+        for (const channelId of targetChannels) {
+          // 获取频道中的用户（O(1)）
+          const channelUsers = this.clientManager.getChannelUserSessions(channelId);
+          for (const sessionId of channelUsers) {
+            const client = this.clientManager.getClient(sessionId);
+            if (client && this.shouldReceiveWhisper(client, groupName, channelGroupMembers)) {
+              targetSessions.add(sessionId);
             }
           }
           
-          // 如果在目标频道中或监听目标频道
-          if (isInTargetChannel) {
-            // 如果指定了组，检查用户是否在组中
-            if (groupName) {
-              // 检查两个来源：
-              // 1. 频道ACL组（基于 user_id）
-              // 2. 用户认证组（来自认证服务器，存储在 client.groups 中）
-              const inChannelGroup = channelGroupMembers && channelGroupMembers.has(client.user_id);
-              const inUserGroup = client.groups && client.groups.includes(groupName);
-              
-              if (inChannelGroup || inUserGroup) {
-                targetSessions.add(client.session);
-                if (inChannelGroup && inUserGroup) {
-                  this.logger.debug(`Client ${client.username} in group '${groupName}' (both channel ACL and user auth)`);
-                } else if (inChannelGroup) {
-                  this.logger.debug(`Client ${client.username} in group '${groupName}' (channel ACL)`);
-                } else {
-                  this.logger.debug(`Client ${client.username} in group '${groupName}' (user auth)`);
-                }
-              } else {
-                this.logger.debug(`Client ${client.username} not in group '${groupName}' (checked both channel ACL and user auth), skipping`);
-              }
-            } else {
-              // 没有组限制，添加所有用户
-              targetSessions.add(client.session);
+          // 获取监听该频道的用户（O(1)）
+          const listeningUsers = this.clientManager.getListeningUserSessions(channelId);
+          for (const sessionId of listeningUsers) {
+            const client = this.clientManager.getClient(sessionId);
+            if (client && this.shouldReceiveWhisper(client, groupName, channelGroupMembers)) {
+              targetSessions.add(sessionId);
             }
           }
         }
@@ -745,50 +842,42 @@ export class VoiceRouter extends EventEmitter {
       }
     }
 
-    // 发送语音包给所有目标用户
-    let sentCount = 0;
-    for (const sessionId of targetSessions) {
-      // 跳过发送者自己
-      if (sessionId === packet.sender_session) {
-        continue;
-      }
+    return targetSessions;
+  }
 
-      const targetClient = this.clientManager.getClient(sessionId);
-      if (!targetClient) {
-        continue;
-      }
-
-      // 跳过deaf或self_deaf的客户端
-      if (targetClient.deaf || targetClient.self_deaf) {
-        continue;
-      }
-
-      // 跳过未认证的客户端
-      if (!targetClient.user_id || targetClient.user_id <= 0) {
-        continue;
-      }
-
-      this.logger.debug(`Sending whisper to ${targetClient.username} (session ${sessionId})`);
-      this.sendVoicePacketToClient(targetClient, broadcastPacket);
-      sentCount++;
+  /**
+   * 检查客户端是否应该接收 whisper
+   * 如果指定了组，检查用户是否在组中
+   */
+  private shouldReceiveWhisper(
+    client: ClientInfo,
+    groupName: string | undefined,
+    channelGroupMembers: Set<number> | undefined
+  ): boolean {
+    if (!groupName) {
+      // 没有组限制，所有用户都可以接收
+      return true;
     }
 
-    this.logger.info(`[VOICE] Whisper from ${sender.username} sent to ${sentCount} clients using voice target ${packet.target}`);
-
-    // 触发事件供外部处理
-    const broadcast: VoiceBroadcast = {
-      sender_id: packet.sender_session,
-      sender_edge_id: this.config.server_id,
-      sender_username: sender.username,
-      target: packet.target,
-      packet: broadcastPacket,
-      timestamp: packet.timestamp,
-      routing_info: {
-        voice_target_id: packet.target,
-      },
-    };
-
-    this.emit('broadcastToVoiceTarget', voiceTarget, broadcast, packet.sender_session);
+    // 检查两个来源：
+    // 1. 频道ACL组（基于 user_id）
+    // 2. 用户认证组（来自认证服务器，存储在 client.groups 中）
+    const inChannelGroup = channelGroupMembers && channelGroupMembers.has(client.user_id);
+    const inUserGroup = client.groups && client.groups.includes(groupName);
+    
+    if (inChannelGroup || inUserGroup) {
+      if (inChannelGroup && inUserGroup) {
+        this.logger.debug(`Client ${client.username} in group '${groupName}' (both channel ACL and user auth)`);
+      } else if (inChannelGroup) {
+        this.logger.debug(`Client ${client.username} in group '${groupName}' (channel ACL)`);
+      } else {
+        this.logger.debug(`Client ${client.username} in group '${groupName}' (user auth)`);
+      }
+      return true;
+    } else {
+      this.logger.debug(`Client ${client.username} not in group '${groupName}' (checked both channel ACL and user auth), skipping`);
+      return false;
+    }
   }
 
   /**
@@ -1100,6 +1189,9 @@ export class VoiceRouter extends EventEmitter {
     this.logger.debug(
       `Set voice target ${target_id} for client ${session_id}: ${targets.length} entries`
     );
+    
+    // 主动重建缓存
+    this.rebuildWhisperCache(session_id, target_id);
   }
 
   /**
@@ -1116,6 +1208,9 @@ export class VoiceRouter extends EventEmitter {
         this.voiceTargets.delete(session_id);
       }
     }
+    
+    // 主动重建缓存（删除情况下会自动清除缓存）
+    this.rebuildWhisperCache(session_id, target_id);
   }
 
   /**
@@ -1216,5 +1311,117 @@ export class VoiceRouter extends EventEmitter {
     // 这样客户端接收时可以正确解析
     this.emit('sendTCPVoicePacket', client.session, encrypted);
     this.logger.debug(`Emitted sendTCPVoicePacket event for ${client.username} (${client.session}), encrypted size: ${encrypted.length}`);
+  }
+  
+  // ===== 缓存管理方法（事件驱动，主动重建） =====
+  
+  /**
+   * 重建 Whisper（VoiceTarget）缓存
+   * 当 VoiceTarget 配置变更时调用
+   */
+  private rebuildWhisperCache(session_id: number, target_id: number): void {
+    const cacheKey = `whisper_${session_id}_${target_id}`;
+    
+    // 获取 VoiceTarget 配置
+    const voiceTarget = this.getVoiceTarget(session_id, target_id);
+    if (!voiceTarget) {
+      // 配置不存在，删除缓存
+      this.routingCache.delete(cacheKey);
+      this.logger.debug(`[VOICE-CACHE] Removed whisper cache: ${cacheKey}`);
+      return;
+    }
+    
+    // 重新计算目标会话
+    const targetSessions = this.calculateWhisperTargets(voiceTarget);
+    this.routingCache.set(cacheKey, {
+      targetSessions,
+      timestamp: Date.now(),
+    });
+    this.logger.debug(`[VOICE-CACHE] Rebuilt whisper cache: ${cacheKey}, ${targetSessions.size} sessions`);
+  }
+  
+  /**
+   * 重建频道相关的 PTT 缓存
+   * 当频道链接关系变化时调用
+   */
+  rebuildChannelCache(channelId: number): void {
+    const cacheKey = `ptt_${channelId}`;
+    
+    // 重新计算目标频道
+    const targetChannels = this.calculateTargetChannels(channelId);
+    this.routingCache.set(cacheKey, {
+      targetSessions: targetChannels,
+      timestamp: Date.now(),
+    });
+    this.logger.debug(`[VOICE-CACHE] Rebuilt PTT cache for channel ${channelId}: ${targetChannels.size} channels`);
+  }
+  
+  /**
+   * 重建所有 PTT 缓存
+   * 当频道结构或链接发生大规模变化时调用
+   */
+  rebuildAllPTTCache(): void {
+    if (!this.channelManager) {
+      return;
+    }
+    
+    // 清除所有 PTT 缓存
+    const keys = Array.from(this.routingCache.keys());
+    for (const key of keys) {
+      if (key.startsWith('ptt_')) {
+        this.routingCache.delete(key);
+      }
+    }
+    
+    // 为所有频道重建缓存
+    const channels = this.channelManager.getAllChannels();
+    for (const channel of channels) {
+      this.rebuildChannelCache(channel.id);
+    }
+    
+    this.logger.info(`[VOICE-CACHE] Rebuilt PTT cache for ${channels.length} channels`);
+  }
+  
+  /**
+   * 清除所有缓存
+   * 用于系统重置或配置重载
+   */
+  clearAllCache(): void {
+    const count = this.routingCache.size;
+    this.routingCache.clear();
+    this.serializedPacketCache.clear();
+    
+    if (count > 0) {
+      this.logger.info(`[VOICE-CACHE] Cleared all caches: ${count} routing entries`);
+    }
+  }
+  
+  /**
+   * 清除客户端的所有缓存
+   * 当客户端断开连接时调用
+   */
+  clearClientCache(session_id: number): void {
+    let count = 0;
+    const keys = Array.from(this.routingCache.keys());
+    for (const key of keys) {
+      if (key.startsWith(`whisper_${session_id}_`)) {
+        this.routingCache.delete(key);
+        count++;
+      }
+    }
+    
+    if (count > 0) {
+      this.logger.debug(`[VOICE-CACHE] Cleared ${count} cache entries for session ${session_id}`);
+    }
+  }
+  
+  /**
+   * 获取缓存统计信息
+   */
+  getCacheStats(): { routingEntries: number; serializedPackets: number } {
+    return {
+      routingEntries: this.routingCache.size,
+      serializedPackets: this.serializedPacketCache.size,
+    };
   }
 }
