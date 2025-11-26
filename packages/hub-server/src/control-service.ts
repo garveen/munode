@@ -786,8 +786,8 @@ export class HubControlService {
         const updates: any = {};
         const changes: string[] = [];
         
-        // 名称修改
-        if (channelStateObj.name !== undefined) {
+        // 名称修改（只有当名称字段存在且非空时才处理）
+        if (channelStateObj.name !== undefined && channelStateObj.name !== '' && channelStateObj.name !== null) {
           // 检查同级频道名称是否重复
           if (this._permissionChecker) {
             const hasDuplicate = await this._permissionChecker.hasDuplicateSiblingName(
