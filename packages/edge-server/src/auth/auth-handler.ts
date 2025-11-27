@@ -157,13 +157,48 @@ export class AuthHandlers {
 
       this.messageHandler.sendMessage(session_id, MessageType.CodecVersion, Buffer.from(codecVersionMessage));
 
-      // 3. 发送频道树
+      // 3. 上报会话到 Hub（必须在发送用户列表之前！）
+      // 这样其他用户在调用 fullSync 时就能看到这个新用户
+      // 移到这里可以避免竞态条件：用户B登录时可能看不到刚登录的用户A
+      const clientBeforeSync = this.clientManager.getClient(session_id);
+      if (!clientBeforeSync) {
+        throw new Error(`Client ${session_id} not found before sync`);
+      }
+      
+      if (!this.hubClient) {
+        logger.warn(`hubClient is undefined, cannot report session ${session_id} to Hub`);
+      } else if (!this.hubClient.isConnected()) {
+        logger.warn(`hubClient is not connected, cannot report session ${session_id} to Hub`);
+      } else {
+        try {
+          await this.hubClient.reportSession({
+            session_id: session_id,
+            user_id: clientBeforeSync.user_id,
+            username: clientBeforeSync.username,
+            channel_id: clientBeforeSync.channel_id,
+            startTime: new Date(),
+            ip_address: clientBeforeSync.ip_address,
+            groups: clientBeforeSync.groups,
+            cert_hash: clientBeforeSync.cert_hash,
+            version: clientBeforeSync.version,
+            release: clientBeforeSync.client_name,
+            os: clientBeforeSync.os_name,
+            os_version: clientBeforeSync.os_version,
+          });
+          logger.info(`Reported session ${session_id} (${clientBeforeSync.username}) to Hub (before user list sync)`);
+        } catch (error) {
+          logger.error(`Failed to report session ${session_id} to Hub:`, error);
+          // Continue even if Hub report fails - local operations should still work
+        }
+      }
+
+      // 4. 发送频道树
       this.sendChannelTree(session_id);
 
-      // 4. 发送所有其他用户的状态
+      // 5. 发送所有其他用户的状态
       await this.sendUserListToClient(session_id);
 
-      // 5. 应用 PreConnectUserState
+      // 6. 应用 PreConnectUserState
       const preState = this.preConnectUserState.get(session_id);
       if (preState) {
         const updateFields: Partial<ClientInfo> = {};
@@ -189,18 +224,18 @@ export class AuthHandlers {
         this.preConnectUserState.delete(session_id);
       }
 
-      // 6. 标记客户端已接收完整用户列表
+      // 7. 标记客户端已接收完整用户列表
       this.clientManager.updateClient(session_id, {
         has_full_user_list: true,
       });
 
-      // 7. 获取更新后的客户端信息
+      // 8. 获取更新后的客户端信息
       const updatedClient = this.clientManager.getClient(session_id);
       if (!updatedClient) {
         throw new Error(`Client ${session_id} not found after update`);
       }
 
-      // 8. 发送当前用户的完整状态（必须在 ServerSync 之前）
+      // 9. 发送当前用户的完整状态（必须在 ServerSync 之前）
       // 这是协议握手的关键步骤，客户端期望先收到自己的状态再收到 ServerSync
       const currentUserState = new mumbleproto.UserState({
         session: session_id,
@@ -222,7 +257,7 @@ export class AuthHandlers {
       this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(currentUserState));
       logger.debug(`Sent UserState for session ${session_id}: username=${updatedClient.username}, channel_id=${updatedClient.channel_id}`);
 
-      // 9. 发送 ServerSync 消息（放在 UserState 之后）
+      // 10. 发送 ServerSync 消息（放在 UserState 之后）
       const serverSyncMessage = new mumbleproto.ServerSync({
         session: session_id,
         max_bandwidth: this.config.max_bandwidth || 128000,
@@ -242,7 +277,7 @@ export class AuthHandlers {
         `username=${updatedClient.username}, user_id=${updatedClient.user_id}, state=Ready`
       );
 
-      // 10. 广播新用户加入给其他已认证客户端
+      // 11. 广播新用户加入给其他已认证客户端
       // broadcastUserStateToAuthenticatedClients 会根据接收方是否为注册用户决定是否发送证书哈希
       const broadcastStateData: any = {
         session: session_id,
@@ -267,33 +302,6 @@ export class AuthHandlers {
       const broadcastState = new mumbleproto.UserState(broadcastStateData);
       this.broadcastUserState(broadcastState, session_id);
       logger.debug(`Broadcasted UserState for new user ${updatedClient.username} (session ${session_id})`);
-
-      // 11. 上报会话到 Hub（重要！让 Hub 知道这个用户已登录）
-      if (!this.hubClient) {
-        logger.warn(`hubClient is undefined, cannot report session ${session_id} to Hub`);
-      } else if (!this.hubClient.isConnected()) {
-        logger.warn(`hubClient is not connected, cannot report session ${session_id} to Hub`);
-      } else {
-        try {
-          await this.hubClient.reportSession({
-            session_id: session_id,
-            user_id: updatedClient.user_id,
-            username: updatedClient.username,
-            channel_id: updatedClient.channel_id,
-            startTime: new Date(),
-            ip_address: updatedClient.ip_address,
-            groups: updatedClient.groups,
-            cert_hash: updatedClient.cert_hash,
-            version: updatedClient.version,
-            release: updatedClient.client_name,
-            os: updatedClient.os_name,
-            os_version: updatedClient.os_version,
-          });
-          logger.info(`Reported session ${session_id} (${updatedClient.username}) to Hub`);
-        } catch (error) {
-          logger.error(`Failed to report session ${session_id} to Hub:`, error);
-        }
-      }
 
       // 12. 上报证书指纹
       if (updatedClient.cert_hash && authResult.user_id > 0) {
