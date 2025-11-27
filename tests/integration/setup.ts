@@ -127,6 +127,10 @@ class TestAuthServer {
       'admin_multi': { password: 'admin_password', user_id: 12, groups: ['admin'] },
       'admin_state': { password: 'admin_password', user_id: 13, groups: ['admin'] },
       'admin_no_ninja': { password: 'admin_password', user_id: 14, groups: ['admin'] },
+      // Ninja group users - have access to ninja channels
+      'ninja_user1': { password: 'ninja_password', user_id: 15, groups: ['ninja'] },
+      'ninja_user2': { password: 'ninja_password', user_id: 16, groups: ['ninja'] },
+      'ninja_cross': { password: 'ninja_password', user_id: 17, groups: ['ninja'] },
       'user1': { password: 'password1', user_id: 2 },
       'user1_password': { password: 'user1_password', user_id: 21 },
       'user2': { password: 'password2', user_id: 3 },
@@ -137,6 +141,9 @@ class TestAuthServer {
       'user_edge2': { password: 'user_password', user_id: 32 },
       'user_state': { password: 'user_password', user_id: 33 },
       'user_no_ninja': { password: 'user_password', user_id: 34 },
+      // Cross-edge ninja test users
+      'user_cross1': { password: 'user_password', user_id: 35 },
+      'user_cross2': { password: 'user_password', user_id: 36 },
       'mixed_tcp1': { password: 'password1', user_id: 41 },
       'mixed_tcp2': { password: 'password2', user_id: 42 },
       'mixed_udp': { password: 'password3', user_id: 43 },

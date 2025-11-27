@@ -270,10 +270,15 @@ export class MessageHandlers {
     // 只有已注册用户才能看到证书哈希
     const receiverIsRegistered = receiverClient.user_id > 0;
 
-    // 从Hub获取全部用户会话信息
+    // 从Hub获取全部用户会话信息，传递请求用户的信息用于ninja频道过滤
     if (this.hubClient && this.hubClient.isConnected()) {
       try {
-        const syncData = await this.hubClient.call('edge.fullSync', {});
+        const syncData = await this.hubClient.call('edge.fullSync', {
+          for_user_id: receiverClient.user_id,
+          for_user_groups: receiverClient.groups || [],
+          for_user_channel_id: receiverClient.channel_id,
+          for_user_cert_hash: receiverClient.cert_hash,
+        });
         const allSessions = syncData.sessions || [];
         
         let sentCount = 0;

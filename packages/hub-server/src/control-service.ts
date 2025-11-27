@@ -74,6 +74,7 @@ export class HubControlService {
     this._authManager = authManager;
     
     // Initialize ninja channels set from config
+    logger.info(`Channel Ninja config: channelNinja=${config.channelNinja}, ninjaChannels=${JSON.stringify(config.ninjaChannels)}`);
     this._ninjaChannels = new Set(config.ninjaChannels || []);
     if (this._ninjaChannels.size > 0) {
       logger.info(`Channel Ninja enabled with ${this._ninjaChannels.size} ninja channels: [${Array.from(this._ninjaChannels).join(', ')}]`);
@@ -213,6 +214,9 @@ export class HubControlService {
 
       const isActorTarget = actor_session === targetSession;
       let broadcast = false;
+      
+      // Save the old channel ID before any updates (for ninja channel logic)
+      const originalChannelId = targetGlobalSession.channel_id ?? 0;
 
       // 创建一个新的UserState对象，只包含实际变更的字段
       // 参考Edge废弃实现：只广播变更的字段，避免客户端显示不必要的消息
@@ -533,9 +537,11 @@ export class HubControlService {
 
       if (channelNinjaEnabled && hasNinjaChannels && this._permissionChecker && this._database) {
         // === Channel Ninja mode: Filter broadcasts based on ninja channel visibility ===
-        const oldChannelId = targetGlobalSession.channel_id ?? 0;
-        const newChannelId = isChannelChange ? broadcastUserState.channel_id : oldChannelId;
+        // Use originalChannelId (saved before any updates) for the old channel
+        const newChannelId = isChannelChange ? broadcastUserState.channel_id : originalChannelId;
         const allSessions = this._sessionManager.getAllSessions();
+
+        logger.debug(`Channel Ninja: Processing UserState for session ${targetSession}, oldChannel=${originalChannelId}, newChannel=${newChannelId}, isChannelChange=${isChannelChange}`);
 
         // Determine visibility changes for all other users
         const visibleToSessions = new Set<number>();
@@ -554,7 +560,7 @@ export class HubControlService {
             ? await this._permissionChecker.canUserSeeOtherUser(
                 otherUserInfo,
                 otherSession.channel_id ?? 0,
-                oldChannelId,
+                originalChannelId,
                 this._ninjaChannels
               )
             : true; // If no channel change, assume they could see before
@@ -2238,7 +2244,7 @@ export class HubControlService {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private async handleFullSync(
     _channel: RPCChannel,
-    _params: RPCParams<'edge.fullSync'>
+    params: RPCParams<'edge.fullSync'>
   ): Promise<RPCResult<'edge.fullSync'>> {
     // 获取所有频道
     const dbChannels = await this._database.getAllChannels();
@@ -2257,8 +2263,45 @@ export class HubControlService {
     }));
 
     // 获取所有会话（从内存中的 sessionManager 获取当前活跃会话）
-    // 注意：会话不再持久化，这里返回的是当前运行时的活跃会话
-    const sessions: GlobalSession[] = this._sessionManager.getAllSessions();
+    let sessions: GlobalSession[] = this._sessionManager.getAllSessions();
+    
+    // If ninja channels are configured and user info is provided, filter sessions
+    const channelNinjaEnabled = this.config.channelNinja ?? false;
+    const hasNinjaChannels = this._ninjaChannels.size > 0;
+    
+    if (channelNinjaEnabled && hasNinjaChannels && this._permissionChecker && 
+        params.for_user_id !== undefined && params.for_user_id > 0) {
+      logger.debug(`Channel Ninja: Filtering fullSync sessions for user_id=${params.for_user_id}`);
+      
+      // Create user info for the requesting user
+      const requestingUserInfo = {
+        session_id: 0, // Not important for permission check
+        user_id: params.for_user_id,
+        cert_hash: params.for_user_cert_hash,
+        channel_id: params.for_user_channel_id ?? 0,
+        groups: params.for_user_groups || [],
+      };
+      
+      // Filter sessions to only include users the requesting user can see
+      const filteredSessions: GlobalSession[] = [];
+      for (const session of sessions) {
+        const canSee = await this._permissionChecker.canUserSeeOtherUser(
+          requestingUserInfo,
+          requestingUserInfo.channel_id,
+          session.channel_id ?? 0,
+          this._ninjaChannels
+        );
+        
+        if (canSee) {
+          filteredSessions.push(session);
+        } else {
+          logger.debug(`Channel Ninja: Hiding session ${session.session_id} (${session.username}) from user ${params.for_user_id}`);
+        }
+      }
+      
+      logger.debug(`Channel Ninja: Filtered sessions for user ${params.for_user_id}: ${sessions.length} -> ${filteredSessions.length}`);
+      sessions = filteredSessions;
+    }
 
     // 获取所有Edge
     const dbEdges = await this._database.getActiveEdges();

@@ -213,7 +213,13 @@ export interface EdgeExchangeCertificatesMethod {
  */
 export interface EdgeFullSyncMethod {
   method: 'edge.fullSync';
-  params: Record<string, never>; // 空参数
+  params: {
+    // Optional: If provided, filter sessions based on ninja channel visibility for this user
+    for_user_id?: number;
+    for_user_groups?: string[];
+    for_user_channel_id?: number;
+    for_user_cert_hash?: string;
+  };
   result: {
     channels: ChannelData[];
     channelLinks?: Array<{ channel_id: number; target_id: number }>;
