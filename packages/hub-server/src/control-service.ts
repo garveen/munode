@@ -2077,7 +2077,7 @@ export class HubControlService {
     }));
 
     // 获取所有ACL
-    const dbAcls = await this._database.getChannelACLs(0); // 0表示获取所有频道的ACL
+    const dbAcls = await this._database.getAllChannelACLs();
     const acls: ACLData[] = dbAcls.map((acl) => ({
       id: acl.id,
       channel_id: acl.channel_id,

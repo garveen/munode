@@ -838,30 +838,34 @@ export class HubDatabase {
   }
 
   /**
-   * 获取频道的所有 ACL
-   * 如果 channel_id 为 0，则返回所有频道的 ACL
+   * 获取所有频道的 ACL（用于同步）
+   */
+  async getAllChannelACLs(): Promise<ACLData[]> {
+    const query = `
+      SELECT * FROM acls
+      WHERE deleted_at IS NULL
+      ORDER BY channel_id ASC, id ASC
+    `;
+    const stmt = await this.db.prepare(query);
+    const result = await stmt.all();
+    result.forEach((acl: ACLData) => {
+      if (acl.user_id === 0) {
+        delete acl.user_id;
+      }
+    });
+    return result;
+  }
+
+  /**
+   * 获取指定频道的 ACL
    */
   async getChannelACLs(channel_id: number): Promise<ACLData[]> {
-    let query: string;
-    let params: any[];
-
-    if (channel_id === 0) {
-      // 获取所有频道的ACL
-      query = `
-        SELECT * FROM acls
-        WHERE deleted_at IS NULL
-        ORDER BY channel_id ASC, id ASC
-      `;
-      params = [];
-    } else {
-      // 获取特定频道的ACL
-      query = `
-        SELECT * FROM acls
-        WHERE channel_id = ? AND deleted_at IS NULL
-        ORDER BY id ASC
-      `;
-      params = [channel_id];
-    }
+    const query = `
+      SELECT * FROM acls
+      WHERE channel_id = ? AND deleted_at IS NULL
+      ORDER BY id ASC
+    `;
+    const params = [channel_id];
 
     const stmt = await this.db.prepare(query);
     const result = await stmt.all(...params);

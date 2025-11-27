@@ -13,6 +13,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestEnvironment, setupTestEnvironment } from '../setup';
 import { mumbleproto } from '../../../packages/protocol/dist/index.js';
 import { MumbleClient } from '../../../packages/client/dist/index.js';
+import { PermissionFlag } from '../fixtures';
 
 describe('Channel Ninja Integration Tests', () => {
   let testEnv: TestEnvironment;
@@ -31,8 +32,7 @@ describe('Channel Ninja Integration Tests', () => {
   });
 
   describe('Basic Ninja Functionality', () => {
-    // Skip: requires ACL setup to restrict channel permissions
-    it.skip('should hide users in channels without Enter/Listen permission', async () => {
+    it('should hide users in channels without Enter/Listen permission', async () => {
       // Create three clients
       const admin = new MumbleClient();
       const user1 = new MumbleClient();
@@ -51,36 +51,39 @@ describe('Channel Ninja Integration Tests', () => {
         // Wait for sync to complete
         await new Promise(resolve => setTimeout(resolve, 500));
 
+        // Get admin's session ID
+        const adminSession = admin.getStateManager().getSession()?.session;
+        expect(adminSession).toBeDefined();
+
         // Create a restricted channel (only admin group can enter)
         const restrictedChannelName = `Restricted_${Date.now()}`;
-        let restrictedChannelId: number | undefined;
+        const restrictedChannelId = await admin.createChannel(restrictedChannelName, 0);
+        expect(restrictedChannelId).toBeGreaterThan(0);
 
-        const channelCreatePromise = new Promise<void>((resolve) => {
-          admin.on('channelState', (state: any) => {
-            if (state.name === restrictedChannelName) {
-              restrictedChannelId = state.channel_id;
-              resolve();
-            }
-          });
-        });
-
-        // Create channel
-        admin.sendChannelState({
-          parent: 0,
-          name: restrictedChannelName,
-          temporary: false,
-        });
-
-        await Promise.race([
-          channelCreatePromise,
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Channel create timeout')), 5000)),
+        // Set ACL to deny Enter and Listen permissions for non-admin users
+        // This will make the channel invisible to normal users when Channel Ninja is enabled
+        await admin.saveACL(restrictedChannelId, [
+          {
+            // Deny Enter and Listen for @all group
+            apply_here: true,
+            apply_subs: true,
+            inherited: false,
+            group: 'all',
+            allow: 0,
+            deny: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Listen,
+          },
+          {
+            // Grant Enter and Traverse for admin group
+            apply_here: true,
+            apply_subs: true,
+            inherited: false,
+            group: 'admin',
+            allow: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak,
+            deny: 0,
+          },
         ]);
 
-        expect(restrictedChannelId).toBeDefined();
-
-        // Set ACL so only admin group can enter
-        // Simplified test - assuming ACL is set through other means
-        // In actual tests, need to set ACL permissions via ACL messages
+        await new Promise(resolve => setTimeout(resolve, 500));
 
         // user1 connects (normal user)
         await user1.connect({
@@ -102,23 +105,23 @@ describe('Channel Ninja Integration Tests', () => {
           rejectUnauthorized: false,
         });
 
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
         // Track UserRemove messages received by user1
         let user1SawAdminRemove = false;
         user1.on('userRemove', (remove: any) => {
-          if (remove.session === admin.session) {
+          if (remove.session === adminSession) {
             user1SawAdminRemove = true;
           }
         });
 
         // Wait for initial state sync
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 2000));
 
         // user1 should be able to see admin (both in Root channel)
         // Check via getUsers() instead of event tracking since initial sync already happened
         const users = user1.getUsers();
-        const adminInUserList = users.some((u: any) => u.session === admin.session);
+        const adminInUserList = users.some((u: any) => u.session === adminSession);
         expect(adminInUserList).toBe(true);
 
         // admin moves to restricted channel
@@ -132,8 +135,8 @@ describe('Channel Ninja Integration Tests', () => {
         });
 
         admin.sendUserState({
-          session: admin.session,
-          channelId: restrictedChannelId,
+          session: adminSession,
+          channel_id: restrictedChannelId,
         });
 
         // Wait for UserRemove message
@@ -151,7 +154,7 @@ describe('Channel Ninja Integration Tests', () => {
 
         const userReturnPromise = new Promise<void>((resolve) => {
           user1.on('userState', (state: any) => {
-            if (state.session === admin.session && state.channel_id === 0) {
+            if (state.session === adminSession && state.channel_id === 0) {
               user1SawAdminReturn = true;
               resolve();
             }
@@ -159,8 +162,8 @@ describe('Channel Ninja Integration Tests', () => {
         });
 
         admin.sendUserState({
-          session: admin.session,
-          channelId: 0,
+          session: adminSession,
+          channel_id: 0,
         });
 
         // Wait for admin's return UserState message
@@ -178,8 +181,7 @@ describe('Channel Ninja Integration Tests', () => {
       }
     }, 30000);
 
-    // Skip: requires ACL setup to restrict channel permissions
-    it.skip('should work across multiple Edge servers', async () => {
+    it('should work across multiple Edge servers', async () => {
       // Create three clients connecting to different Edges
       const admin = new MumbleClient();
       const userEdge1 = new MumbleClient();
@@ -196,6 +198,10 @@ describe('Channel Ninja Integration Tests', () => {
         });
 
         await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Get admin's session ID
+        const adminSession = admin.getStateManager().getSession()?.session;
+        expect(adminSession).toBeDefined();
 
         // userEdge1 connects to Edge1
         await userEdge1.connect({
@@ -222,36 +228,37 @@ describe('Channel Ninja Integration Tests', () => {
         // Listen for UserRemove received by userEdge2
         let userEdge2SawAdminRemove = false;
         userEdge2.on('userRemove', (remove: any) => {
-          if (remove.session === admin.session) {
+          if (remove.session === adminSession) {
             userEdge2SawAdminRemove = true;
           }
         });
 
-        // Create restricted channel
+        // Create restricted channel with ACL
         const restrictedChannelName = `Restricted_Multi_${Date.now()}`;
-        let restrictedChannelId: number | undefined;
+        const restrictedChannelId = await admin.createChannel(restrictedChannelName, 0);
+        expect(restrictedChannelId).toBeGreaterThan(0);
 
-        const channelCreatePromise = new Promise<void>((resolve) => {
-          admin.on('channelState', (state: any) => {
-            if (state.name === restrictedChannelName) {
-              restrictedChannelId = state.channel_id;
-              resolve();
-            }
-          });
-        });
-
-        admin.sendChannelState({
-          parent: 0,
-          name: restrictedChannelName,
-          temporary: false,
-        });
-
-        await Promise.race([
-          channelCreatePromise,
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Channel create timeout')), 5000)),
+        // Set ACL to deny Enter and Traverse for non-admin users
+        await admin.saveACL(restrictedChannelId, [
+          {
+            apply_here: true,
+            apply_subs: true,
+            inherited: false,
+            group: 'all',
+            allow: 0,
+            deny: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Listen,
+          },
+          {
+            apply_here: true,
+            apply_subs: true,
+            inherited: false,
+            group: 'admin',
+            allow: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak,
+            deny: 0,
+          },
         ]);
 
-        expect(restrictedChannelId).toBeDefined();
+        await new Promise(resolve => setTimeout(resolve, 500));
 
         // admin moves to restricted channel
         const userRemovePromise = new Promise<void>((resolve) => {
@@ -264,8 +271,8 @@ describe('Channel Ninja Integration Tests', () => {
         });
 
         admin.sendUserState({
-          session: admin.session,
-          channelId: restrictedChannelId,
+          session: adminSession,
+          channel_id: restrictedChannelId,
         });
 
         // Wait for cross-Edge UserRemove message
@@ -301,36 +308,41 @@ describe('Channel Ninja Integration Tests', () => {
 
         await new Promise(resolve => setTimeout(resolve, 500));
 
-        // Create restricted channel
+        // Get admin's session ID
+        const adminSession = admin.getStateManager().getSession()?.session;
+        expect(adminSession).toBeDefined();
+
+        // Create restricted channel with ACL
         const restrictedChannelName = `Restricted_State_${Date.now()}`;
-        let restrictedChannelId: number | undefined;
+        const restrictedChannelId = await admin.createChannel(restrictedChannelName, 0);
+        expect(restrictedChannelId).toBeGreaterThan(0);
 
-        const channelCreatePromise = new Promise<void>((resolve) => {
-          admin.on('channelState', (state: any) => {
-            if (state.name === restrictedChannelName) {
-              restrictedChannelId = state.channel_id;
-              resolve();
-            }
-          });
-        });
-
-        admin.sendChannelState({
-          parent: 0,
-          name: restrictedChannelName,
-          temporary: false,
-        });
-
-        await Promise.race([
-          channelCreatePromise,
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Channel create timeout')), 5000)),
+        // Set ACL to deny Enter and Traverse for non-admin users
+        await admin.saveACL(restrictedChannelId, [
+          {
+            apply_here: true,
+            apply_subs: true,
+            inherited: false,
+            group: 'all',
+            allow: 0,
+            deny: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Listen,
+          },
+          {
+            apply_here: true,
+            apply_subs: true,
+            inherited: false,
+            group: 'admin',
+            allow: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak,
+            deny: 0,
+          },
         ]);
 
-        expect(restrictedChannelId).toBeDefined();
+        await new Promise(resolve => setTimeout(resolve, 500));
 
         // admin moves to restricted channel
         admin.sendUserState({
-          session: admin.session,
-          channelId: restrictedChannelId,
+          session: adminSession,
+          channel_id: restrictedChannelId,
         });
 
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -349,14 +361,14 @@ describe('Channel Ninja Integration Tests', () => {
         // Listen for UserState updates received by user
         let userSawAdminMuteChange = false;
         user.on('userState', (state: any) => {
-          if (state.session === admin.session && state.mute !== undefined) {
+          if (state.session === adminSession && state.mute !== undefined) {
             userSawAdminMuteChange = true;
           }
         });
 
         // admin toggles mute state in restricted channel
         admin.sendUserState({
-          session: admin.session,
+          session: adminSession,
           mute: true,
         });
 
@@ -389,8 +401,7 @@ describe('Channel Ninja Disabled Tests', () => {
     await testEnv?.cleanup();
   });
 
-  // Skip: requires ACL setup to restrict channel permissions
-  it.skip('should not hide users when ninja is disabled', async () => {
+  it('should not hide users when ninja is disabled', async () => {
     const admin = new MumbleClient();
     const user = new MumbleClient();
 
@@ -406,31 +417,37 @@ describe('Channel Ninja Disabled Tests', () => {
 
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      // Create a channel
+      // Get admin's session ID
+      const adminSession = admin.getStateManager().getSession()?.session;
+      expect(adminSession).toBeDefined();
+
+      // Create a restricted channel with ACL
       const channelName = `Channel_No_Ninja_${Date.now()}`;
-      let channelId: number | undefined;
+      const channelId = await admin.createChannel(channelName, 0);
+      expect(channelId).toBeGreaterThan(0);
 
-      const channelCreatePromise = new Promise<void>((resolve) => {
-        admin.on('channelState', (state: any) => {
-          if (state.name === channelName) {
-            channelId = state.channel_id;
-            resolve();
-          }
-        });
-      });
-
-      admin.sendChannelState({
-        parent: 0,
-        name: channelName,
-        temporary: false,
-      });
-
-      await Promise.race([
-        channelCreatePromise,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Channel create timeout')), 5000)),
+      // Set ACL to deny Enter and Traverse for non-admin users
+      // Even with restricted ACL, when ninja is disabled, users should still see moves
+      await admin.saveACL(channelId, [
+        {
+          apply_here: true,
+          apply_subs: true,
+          inherited: false,
+          group: 'all',
+          allow: 0,
+          deny: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Listen,
+        },
+        {
+          apply_here: true,
+          apply_subs: true,
+          inherited: false,
+          group: 'admin',
+          allow: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak,
+          deny: 0,
+        },
       ]);
 
-      expect(channelId).toBeDefined();
+      await new Promise(resolve => setTimeout(resolve, 500));
 
       // user connects
       await user.connect({
@@ -448,13 +465,13 @@ describe('Channel Ninja Disabled Tests', () => {
       let userSawAdminRemove = false;
 
       user.on('userState', (state: any) => {
-        if (state.session === admin.session && state.channel_id === channelId) {
+        if (state.session === adminSession && state.channel_id === channelId) {
           userSawAdminMove = true;
         }
       });
 
       user.on('userRemove', (remove: any) => {
-        if (remove.session === admin.session) {
+        if (remove.session === adminSession) {
           userSawAdminRemove = true;
         }
       });
@@ -470,8 +487,8 @@ describe('Channel Ninja Disabled Tests', () => {
       });
 
       admin.sendUserState({
-        session: admin.session,
-        channelId: channelId,
+        session: adminSession,
+        channel_id: channelId,
       });
 
       await Promise.race([
