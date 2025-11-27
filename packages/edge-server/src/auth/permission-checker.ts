@@ -195,6 +195,38 @@ export class PermissionHandlers {
         return;
       }
 
+      // Reload ACLs from Hub for this channel
+      if (this.hubClient && this.hubClient.isConnected()) {
+        try {
+          const aclData = await this.hubClient.getACLs(channel_id);
+          
+          // Update local aclMap with new ACL data
+          const aclMap = this.aclMap;
+          aclMap.delete(channel_id); // Clear existing ACLs for this channel
+          
+          if (aclData.length > 0) {
+            aclMap.set(channel_id, []);
+            for (const acl of aclData) {
+              aclMap.get(channel_id)!.push({
+                user_id: acl.user_id,
+                group: acl.group || '',
+                apply_here: acl.apply_here,
+                apply_subs: acl.apply_subs,
+                allow: acl.allow,
+                deny: acl.deny,
+              });
+            }
+          }
+          
+          logger.debug(`Reloaded ${aclData.length} ACL entries for channel ${channel_id}`);
+          
+          // Clear permission cache
+          this.permissionManager.clearCache();
+        } catch (error) {
+          logger.error(`Failed to reload ACLs from Hub for channel ${channel_id}:`, error);
+        }
+      }
+
       // 获取所有已认证的客户端，向他们发送 flush PermissionQuery
       const allClients = this.clientManager.getAllClients();
       const authenticatedClients = allClients.filter(c => c.user_id && c.user_id > 0);

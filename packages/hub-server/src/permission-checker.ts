@@ -477,38 +477,201 @@ export class HubPermissionChecker {
   }
 
   /**
-   * Check if a user can see a specified channel (for Channel Ninja feature)
-   * A channel is visible to a user if and only if:
-   * 1. User has Enter permission on the channel, or
-   * 2. User has Listen permission on the channel, or
-   * 3. User has Enter or Listen permission on any linked channel of this channel
-   * 
+   * Check if a user can access a channel (has Enter OR Listen permission)
    * @param channelId - Channel ID to check
    * @param user - User info
-   * @returns Whether the user can see the channel
+   * @returns Whether the user can access the channel
    */
-  async canUserSeeChannel(channelId: number, user: UserInfo): Promise<boolean> {
-    // Check Enter or Listen permissions on the channel itself
+  async canUserAccessChannel(channelId: number, user: UserInfo): Promise<boolean> {
     const hasEnter = await this.hasPermission(channelId, user, Permission.Enter);
     if (hasEnter) {
       return true;
     }
 
     const hasListen = await this.hasPermission(channelId, user, Permission.Listen);
-    if (hasListen) {
+    return hasListen;
+  }
+
+  /**
+   * Get all transitively linked channels from a channel
+   * This includes direct links and links of links (contagious linking)
+   * @param channelId - Starting channel ID
+   * @returns Set of all transitively linked channel IDs (including the starting channel)
+   */
+  async getTransitivelyLinkedChannels(channelId: number): Promise<Set<number>> {
+    const visited = new Set<number>();
+    const queue: number[] = [channelId];
+
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      if (visited.has(currentId)) {
+        continue;
+      }
+      visited.add(currentId);
+
+      const linkedChannels = await this.database.getChannelLinks(currentId);
+      for (const linkedId of linkedChannels) {
+        if (!visited.has(linkedId)) {
+          queue.push(linkedId);
+        }
+      }
+    }
+
+    return visited;
+  }
+
+  /**
+   * Check if a user can see users in a ninja channel
+   * 
+   * A user can see users in a ninja channel if ANY of the following is true:
+   * 1. User has Enter permission on the ninja channel, or
+   * 2. User has Listen permission on the ninja channel, or
+   * 3. User has Enter permission on any transitively linked channel, or
+   * 4. User has Listen permission on any transitively linked channel
+   * 
+   * Note: This does NOT check if the user is currently in the channel (that's handled separately)
+   * 
+   * @param ninjaChannelId - The ninja channel ID to check
+   * @param user - User info
+   * @returns Whether the user can see users in this ninja channel
+   */
+  async canUserSeeNinjaChannel(ninjaChannelId: number, user: UserInfo): Promise<boolean> {
+    // Check permissions on the ninja channel itself
+    if (await this.canUserAccessChannel(ninjaChannelId, user)) {
       return true;
     }
 
-    // Check permissions on linked channels
-    const linkedChannels = await this.database.getChannelLinks(channelId);
-    for (const linkedChannelId of linkedChannels) {
-      const hasEnterOnLinked = await this.hasPermission(linkedChannelId, user, Permission.Enter);
-      if (hasEnterOnLinked) {
+    // Get all transitively linked channels (contagious linking)
+    const linkedChannels = await this.getTransitivelyLinkedChannels(ninjaChannelId);
+    
+    // Check permissions on all linked channels
+    for (const linkedId of linkedChannels) {
+      if (linkedId === ninjaChannelId) continue; // Already checked
+      if (await this.canUserAccessChannel(linkedId, user)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if a user can see a specified channel (for Channel Ninja feature)
+   * 
+   * For ninja-enabled channels:
+   * - User can see if they have Enter/Listen permission on the channel
+   * - User can see if they have Enter/Listen permission on any transitively linked channel
+   * - User in the channel (moved by admin) can always see it
+   * 
+   * For non-ninja channels:
+   * - All users can see the channel (traditional Mumble behavior)
+   * 
+   * @param channelId - Channel ID to check
+   * @param user - User info
+   * @param ninjaChannels - Set of channel IDs that are ninja channels
+   * @param userCurrentChannelId - The channel the user is currently in (optional)
+   * @returns Whether the user can see the channel
+   */
+  async canUserSeeChannel(
+    channelId: number, 
+    user: UserInfo, 
+    ninjaChannels?: Set<number>,
+    userCurrentChannelId?: number
+  ): Promise<boolean> {
+    // If no ninja channels configured, all channels are visible
+    if (!ninjaChannels || ninjaChannels.size === 0) {
+      // Legacy behavior: check Enter/Listen on channel and linked channels
+      if (await this.canUserAccessChannel(channelId, user)) {
         return true;
       }
 
-      const hasListenOnLinked = await this.hasPermission(linkedChannelId, user, Permission.Listen);
-      if (hasListenOnLinked) {
+      const linkedChannels = await this.database.getChannelLinks(channelId);
+      for (const linkedChannelId of linkedChannels) {
+        if (await this.canUserAccessChannel(linkedChannelId, user)) {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    // Check if the target channel or any of its transitive links is a ninja channel
+    const transitiveLinks = await this.getTransitivelyLinkedChannels(channelId);
+    
+    // Check if any channel in the transitive group is a ninja channel
+    let isNinjaRelated = false;
+    for (const chId of transitiveLinks) {
+      if (ninjaChannels.has(chId)) {
+        isNinjaRelated = true;
+        break;
+      }
+    }
+
+    // If not related to any ninja channel, use traditional visibility
+    if (!isNinjaRelated) {
+      return true; // Non-ninja channels are always visible
+    }
+
+    // User is currently in this channel (moved by admin) - they can see it
+    if (userCurrentChannelId !== undefined && transitiveLinks.has(userCurrentChannelId)) {
+      return true;
+    }
+
+    // Check if user has Enter/Listen on any channel in the transitive group
+    for (const chId of transitiveLinks) {
+      if (await this.canUserAccessChannel(chId, user)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if a user should see another user based on ninja channel rules
+   * 
+   * @param observerUser - The user who is observing
+   * @param observerChannelId - The channel the observer is in
+   * @param targetChannelId - The channel the target user is in
+   * @param ninjaChannels - Set of channel IDs that are ninja channels
+   * @returns Whether the observer can see the target user
+   */
+  async canUserSeeOtherUser(
+    observerUser: UserInfo,
+    observerChannelId: number,
+    targetChannelId: number,
+    ninjaChannels?: Set<number>
+  ): Promise<boolean> {
+    // If ninja mode is not enabled or no ninja channels, everyone sees everyone
+    if (!ninjaChannels || ninjaChannels.size === 0) {
+      return true;
+    }
+
+    // Get all channels transitively linked to the target channel
+    const targetTransitiveLinks = await this.getTransitivelyLinkedChannels(targetChannelId);
+
+    // Check if the target channel (or its links) involves any ninja channel
+    let isTargetInNinjaGroup = false;
+    for (const chId of targetTransitiveLinks) {
+      if (ninjaChannels.has(chId)) {
+        isTargetInNinjaGroup = true;
+        break;
+      }
+    }
+
+    // If target is not in a ninja channel group, they are visible to everyone
+    if (!isTargetInNinjaGroup) {
+      return true;
+    }
+
+    // Observer is also in the same ninja channel group (e.g., moved by admin)
+    if (targetTransitiveLinks.has(observerChannelId)) {
+      return true;
+    }
+
+    // Check if observer has permission to access any channel in the ninja group
+    for (const chId of targetTransitiveLinks) {
+      if (await this.canUserAccessChannel(chId, observerUser)) {
         return true;
       }
     }
