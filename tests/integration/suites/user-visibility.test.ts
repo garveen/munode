@@ -63,15 +63,11 @@ describe('User Visibility Integration Tests', () => {
       const usersSeenByB = clientB.getUsers();
       const userAVisible = usersSeenByB.some(u => u.name === 'user1');
       
-      console.log('Users seen by B:', usersSeenByB.map(u => ({ session: u.session, name: u.name })));
-      
       expect(userAVisible).toBe(true);
       
       // 用户 A 也应该能看到用户 B（双向可见性）
       const usersSeenByA = clientA.getUsers();
       const userBVisible = usersSeenByA.some(u => u.name === 'user2');
-      
-      console.log('Users seen by A:', usersSeenByA.map(u => ({ session: u.session, name: u.name })));
       
       expect(userBVisible).toBe(true);
       
@@ -110,8 +106,6 @@ describe('User Visibility Integration Tests', () => {
       // 验证每个用户都能看到所有其他用户
       for (let i = 0; i < clients.length; i++) {
         const users = clients[i].getUsers();
-        console.log(`Client ${i} (${userCredentials[i].username}) sees users:`, 
-          users.map(u => u.name));
         
         // 应该能看到所有用户（包括自己）
         expect(users.length).toBeGreaterThanOrEqual(clients.length);
@@ -160,14 +154,12 @@ describe('User Visibility Integration Tests', () => {
       
       // Edge 2 上的用户应该能看到 Edge 1 上的用户
       const usersOnEdge2 = clientEdge2.getUsers();
-      console.log('Users seen by Edge2 client:', usersOnEdge2.map(u => u.name));
       
       const edge1UserVisible = usersOnEdge2.some(u => u.name === 'sender_edge1');
       expect(edge1UserVisible).toBe(true);
       
       // Edge 1 上的用户也应该能看到 Edge 2 上的用户
       const usersOnEdge1 = clientEdge1.getUsers();
-      console.log('Users seen by Edge1 client:', usersOnEdge1.map(u => u.name));
       
       const edge2UserVisible = usersOnEdge1.some(u => u.name === 'sender_edge2');
       expect(edge2UserVisible).toBe(true);

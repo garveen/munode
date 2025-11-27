@@ -176,7 +176,7 @@ export class AuthHandlers {
             user_id: clientBeforeSync.user_id,
             username: clientBeforeSync.username,
             channel_id: clientBeforeSync.channel_id,
-            startTime: new Date(),
+            startTime: clientBeforeSync.connected_at || new Date(),
             ip_address: clientBeforeSync.ip_address,
             groups: clientBeforeSync.groups,
             cert_hash: clientBeforeSync.cert_hash,
