@@ -48,6 +48,7 @@ export class HubControlService {
   private _blobStore?: BlobStore;
   private _authManager?: HubAuthManager;
   private edgeChannels = new Map<number, RPCChannel>(); // edge_id -> channel
+  private _ninjaChannels: Set<number>; // Set of channel IDs that are ninja channels
 
   constructor(
     config: HubConfig,
@@ -71,6 +72,12 @@ export class HubControlService {
     this._channelGroupManager = channelGroupManager;
     this._blobStore = blobStore;
     this._authManager = authManager;
+    
+    // Initialize ninja channels set from config
+    this._ninjaChannels = new Set(config.ninjaChannels || []);
+    if (this._ninjaChannels.size > 0) {
+      logger.info(`Channel Ninja enabled with ${this._ninjaChannels.size} ninja channels: [${Array.from(this._ninjaChannels).join(', ')}]`);
+    }
     
     // 初始化权限检查器
     if (database) {
@@ -519,45 +526,62 @@ export class HubControlService {
 
       logger.info(`Hub: Broadcasting UserState for session ${targetSession} to all edges, fields: ${Object.keys(broadcastUserState).join(', ')}`);
       
-      // Check if Channel Ninja feature is enabled
+      // Check if Channel Ninja feature is enabled and we have ninja channels configured
       const channelNinjaEnabled = this.config.channelNinja ?? false;
+      const hasNinjaChannels = this._ninjaChannels.size > 0;
       const isChannelChange = broadcastUserState.channel_id !== undefined;
 
-      if (channelNinjaEnabled && this._permissionChecker && this._database) {
-        // === Channel Ninja mode: Filter broadcasts based on channel visibility ===
-        // Determine current channel (use new channel if changing, otherwise use current channel, default to 0)
-        const currentChannelId = isChannelChange 
-          ? broadcastUserState.channel_id 
-          : (targetGlobalSession.channel_id ?? 0);
+      if (channelNinjaEnabled && hasNinjaChannels && this._permissionChecker && this._database) {
+        // === Channel Ninja mode: Filter broadcasts based on ninja channel visibility ===
+        const oldChannelId = targetGlobalSession.channel_id ?? 0;
+        const newChannelId = isChannelChange ? broadcastUserState.channel_id : oldChannelId;
         const allSessions = this._sessionManager.getAllSessions();
 
-        // Group sessions: which can see target user channel, which cannot
+        // Determine visibility changes for all other users
         const visibleToSessions = new Set<number>();
-        const invisibleToSessions = new Set<number>();
-        
-        // Check visibility for each other user
+        const becameInvisibleToSessions = new Set<number>(); // Users who could see before but can't see now
+        const becameVisibleToSessions = new Set<number>(); // Users who couldn't see before but can see now
+
         for (const otherSession of allSessions) {
           if (otherSession.session_id === targetSession) {
             continue; // Skip target user themselves
           }
           
           const otherUserInfo = HubPermissionChecker.sessionToUserInfo(otherSession, otherSession.channel_id ?? 0);
-          const canSeeChannel = await this._permissionChecker.canUserSeeChannel(currentChannelId, otherUserInfo);
           
-          if (canSeeChannel) {
+          // Check if observer can see target in old and new channels
+          const couldSeeBefore = isChannelChange
+            ? await this._permissionChecker.canUserSeeOtherUser(
+                otherUserInfo,
+                otherSession.channel_id ?? 0,
+                oldChannelId,
+                this._ninjaChannels
+              )
+            : true; // If no channel change, assume they could see before
+          
+          const canSeeNow = await this._permissionChecker.canUserSeeOtherUser(
+            otherUserInfo,
+            otherSession.channel_id ?? 0,
+            newChannelId,
+            this._ninjaChannels
+          );
+
+          if (canSeeNow) {
             visibleToSessions.add(otherSession.session_id);
-          } else {
-            invisibleToSessions.add(otherSession.session_id);
+            if (!couldSeeBefore) {
+              becameVisibleToSessions.add(otherSession.session_id);
+            }
+          } else if (couldSeeBefore) {
+            becameInvisibleToSessions.add(otherSession.session_id);
           }
         }
 
-        // If channel change, send UserRemove (user left server) to users who cannot see new channel
-        if (isChannelChange && invisibleToSessions.size > 0) {
-          logger.info(`Channel Ninja: Sending UserRemove for session ${targetSession} to ${invisibleToSessions.size} users who cannot see channel ${currentChannelId}`);
+        // Send UserRemove to users who can no longer see the target (they appear to go offline)
+        if (becameInvisibleToSessions.size > 0) {
+          logger.info(`Channel Ninja: Sending UserRemove for session ${targetSession} to ${becameInvisibleToSessions.size} users who can no longer see channel ${newChannelId}`);
           
-          // Send UserRemove grouped by Edge
           const sessionsByEdge = new Map<number, number[]>();
-          for (const sessionId of invisibleToSessions) {
+          for (const sessionId of becameInvisibleToSessions) {
             const session = this._sessionManager.getSession(sessionId);
             if (session) {
               if (!sessionsByEdge.has(session.edge_id)) {
@@ -575,13 +599,48 @@ export class HubControlService {
           }
         }
 
-        // For users who can see channel, normally broadcast UserState
-        if (visibleToSessions.size > 0) {
-          logger.info(`Channel Ninja: Broadcasting UserState for session ${targetSession} to ${visibleToSessions.size} users who can see channel ${currentChannelId}`);
+        // Send full UserState (as if user just connected) to users who can now see the target
+        if (becameVisibleToSessions.size > 0) {
+          logger.info(`Channel Ninja: Sending full UserState for session ${targetSession} to ${becameVisibleToSessions.size} users who can now see channel ${newChannelId}`);
           
-          // Send UserState grouped by Edge
+          // Build full user state for users who just became able to see this user
+          const fullUserState = this.buildFullUserState(targetGlobalSession, newChannelId);
+          
           const sessionsByEdge = new Map<number, number[]>();
-          for (const sessionId of visibleToSessions) {
+          for (const sessionId of becameVisibleToSessions) {
+            const session = this._sessionManager.getSession(sessionId);
+            if (session) {
+              if (!sessionsByEdge.has(session.edge_id)) {
+                sessionsByEdge.set(session.edge_id, []);
+              }
+              sessionsByEdge.get(session.edge_id)!.push(sessionId);
+            }
+          }
+
+          for (const [targetEdgeId, sessions] of sessionsByEdge.entries()) {
+            this.notify(targetEdgeId, 'hub.userStateBroadcast', {
+              session_id: targetSession,
+              edge_id: targetGlobalSession.edge_id,
+              userState: fullUserState,
+              target_sessions: sessions,
+            });
+          }
+        }
+
+        // Send normal UserState update to users who could already see the target
+        // (excluding those who just became visible, as they got full state)
+        const alreadyVisibleSessions = new Set<number>();
+        for (const sessionId of visibleToSessions) {
+          if (!becameVisibleToSessions.has(sessionId)) {
+            alreadyVisibleSessions.add(sessionId);
+          }
+        }
+
+        if (alreadyVisibleSessions.size > 0) {
+          logger.info(`Channel Ninja: Broadcasting UserState for session ${targetSession} to ${alreadyVisibleSessions.size} users who can still see channel ${newChannelId}`);
+          
+          const sessionsByEdge = new Map<number, number[]>();
+          for (const sessionId of alreadyVisibleSessions) {
             const session = this._sessionManager.getSession(sessionId);
             if (session) {
               if (!sessionsByEdge.has(session.edge_id)) {
@@ -596,7 +655,7 @@ export class HubControlService {
               session_id: targetSession,
               edge_id: targetGlobalSession.edge_id,
               userState: broadcastUserState,
-              target_sessions: sessions, // Broadcast only to these sessions
+              target_sessions: sessions,
             });
           }
         }
@@ -615,6 +674,30 @@ export class HubControlService {
     } catch (error) {
       logger.error('Error handling UserState notification:', error);
     }
+  }
+
+  /**
+   * Build a full UserState object for a session (used when user becomes visible to someone)
+   */
+  private buildFullUserState(session: GlobalSession, channelId: number): any {
+    const fullState: any = {
+      session: session.session_id,
+      name: session.username,
+      user_id: session.user_id,
+      channel_id: channelId,
+    };
+
+    // Add state flags if they are set
+    const anySession = session as any;
+    if (anySession.mute !== undefined) fullState.mute = anySession.mute;
+    if (anySession.deaf !== undefined) fullState.deaf = anySession.deaf;
+    if (anySession.suppress !== undefined) fullState.suppress = anySession.suppress;
+    if (anySession.self_mute !== undefined) fullState.self_mute = anySession.self_mute;
+    if (anySession.self_deaf !== undefined) fullState.self_deaf = anySession.self_deaf;
+    if (anySession.priority_speaker !== undefined) fullState.priority_speaker = anySession.priority_speaker;
+    if (anySession.recording !== undefined) fullState.recording = anySession.recording;
+
+    return fullState;
   }
 
   /**
@@ -1858,6 +1941,50 @@ export class HubControlService {
     _channel: RPCChannel,
     params: RPCParams<'edge.reportSession'>
   ): Promise<RPCResult<'edge.reportSession'>> {
+    // Determine the actual channel for this user
+    let actualChannelId = params.channel_id;
+    
+    // Check if Channel Ninja is enabled and the requested channel is in a ninja group
+    if (this.config.channelNinja && this._ninjaChannels.size > 0 && this._permissionChecker) {
+      // Check if the channel is related to a ninja channel
+      const transitiveLinks = await this._permissionChecker.getTransitivelyLinkedChannels(actualChannelId);
+      let isNinjaRelated = false;
+      for (const chId of transitiveLinks) {
+        if (this._ninjaChannels.has(chId)) {
+          isNinjaRelated = true;
+          break;
+        }
+      }
+
+      if (isNinjaRelated) {
+        // Create a temporary user info to check permissions
+        const tempUserInfo = {
+          session_id: params.session_id,
+          user_id: params.user_id,
+          cert_hash: params.cert_hash,
+          channel_id: actualChannelId,
+          groups: params.groups || [],
+        };
+
+        // Check if user has permission to access any channel in the ninja group
+        let hasPermission = false;
+        for (const chId of transitiveLinks) {
+          if (await this._permissionChecker.canUserAccessChannel(chId, tempUserInfo)) {
+            hasPermission = true;
+            break;
+          }
+        }
+
+        if (!hasPermission) {
+          // User was in a hidden channel but no longer has permission
+          // Move them to the default channel
+          const defaultChannel = this.config.defaultChannel ?? 0;
+          logger.info(`Channel Ninja: User ${params.username} was in ninja channel ${actualChannelId} but has no permission, moving to default channel ${defaultChannel}`);
+          actualChannelId = defaultChannel;
+        }
+      }
+    }
+
     // 将RPC参数转换为GlobalSession对象
     const session: GlobalSession = {
       session_id: params.session_id,
@@ -1867,7 +1994,7 @@ export class HubControlService {
       ip_address: params.ip_address,
       cert_hash: params.cert_hash || '',
       is_authenticated: true,
-      channel_id: params.channel_id,
+      channel_id: actualChannelId, // Use the adjusted channel
       connected_at: Math.floor(params.startTime.getTime() / 1000),
       last_active: Math.floor(Date.now() / 1000),
       groups: params.groups || [], // 传递用户组信息
@@ -1877,23 +2004,92 @@ export class HubControlService {
       os_version: params.os_version,
     };
     
-    logger.info(`Session reported: ${params.username} (user_id: ${params.user_id}), groups: ${JSON.stringify(session.groups)}`);
+    logger.info(`Session reported: ${params.username} (user_id: ${params.user_id}), groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);
 
     // 上报会话
     this._sessionManager.reportSession(session);
     
-    // 广播新用户加入通知到所有Edge（包括发起者）
-    // Edge通过edge_id判断是否需要过滤（不要处理来自自己Edge的用户）
-    this.broadcast('hub.userJoined', {
-      session_id: params.session_id,
-      edge_id: params.edge_server_id,
-      user_id: params.user_id,
-      username: params.username,
-      channel_id: params.channel_id,
-      cert_hash: session.cert_hash,
-    });
-    
-    logger.info(`Session ${params.session_id} reported from Edge ${params.edge_server_id}, broadcasted to all edges`);
+    // Handle ninja channel visibility for the userJoined broadcast
+    if (this.config.channelNinja && this._ninjaChannels.size > 0 && this._permissionChecker) {
+      // Filter which existing users should see this new user
+      const allSessions = this._sessionManager.getAllSessions();
+      const visibleToSessions = new Map<number, number[]>(); // edge_id -> session_ids
+      const newUserInfo = HubPermissionChecker.sessionToUserInfo(session, actualChannelId);
+
+      for (const otherSession of allSessions) {
+        if (otherSession.session_id === session.session_id) continue;
+        
+        const otherUserInfo = HubPermissionChecker.sessionToUserInfo(otherSession, otherSession.channel_id ?? 0);
+        
+        // Check if other user can see this new user
+        const canSee = await this._permissionChecker.canUserSeeOtherUser(
+          otherUserInfo,
+          otherSession.channel_id ?? 0,
+          actualChannelId,
+          this._ninjaChannels
+        );
+
+        if (canSee) {
+          if (!visibleToSessions.has(otherSession.edge_id)) {
+            visibleToSessions.set(otherSession.edge_id, []);
+          }
+          visibleToSessions.get(otherSession.edge_id)!.push(otherSession.session_id);
+        }
+      }
+
+      // Send userJoined to visible sessions only
+      for (const [edgeId, sessionIds] of visibleToSessions.entries()) {
+        this.notify(edgeId, 'hub.userJoined', {
+          session_id: params.session_id,
+          edge_id: params.edge_server_id,
+          user_id: params.user_id,
+          username: params.username,
+          channel_id: actualChannelId,
+          cert_hash: session.cert_hash,
+          target_sessions: sessionIds,
+        });
+      }
+
+      // Also check which users the new user can see (they need to send their state to the new user)
+      const usersNewUserCanSee: number[] = [];
+      for (const otherSession of allSessions) {
+        if (otherSession.session_id === session.session_id) continue;
+        
+        const canSee = await this._permissionChecker.canUserSeeOtherUser(
+          newUserInfo,
+          actualChannelId,
+          otherSession.channel_id ?? 0,
+          this._ninjaChannels
+        );
+
+        if (canSee) {
+          usersNewUserCanSee.push(otherSession.session_id);
+        }
+      }
+
+      // Notify the new user's edge about which existing users they should know about
+      if (usersNewUserCanSee.length > 0) {
+        this.notify(params.edge_server_id, 'hub.visibleUsers', {
+          new_session_id: session.session_id,
+          visible_sessions: usersNewUserCanSee,
+        });
+      }
+
+      logger.info(`Session ${params.session_id} reported with ninja filtering: visible to ${Array.from(visibleToSessions.values()).flat().length} users, can see ${usersNewUserCanSee.length} users`);
+    } else {
+      // 广播新用户加入通知到所有Edge（包括发起者）
+      // Edge通过edge_id判断是否需要过滤（不要处理来自自己Edge的用户）
+      this.broadcast('hub.userJoined', {
+        session_id: params.session_id,
+        edge_id: params.edge_server_id,
+        user_id: params.user_id,
+        username: params.username,
+        channel_id: actualChannelId,
+        cert_hash: session.cert_hash,
+      });
+      
+      logger.info(`Session ${params.session_id} reported from Edge ${params.edge_server_id}, broadcasted to all edges`);
+    }
     
     return { success: true };
   }

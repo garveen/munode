@@ -74,6 +74,7 @@ export interface HubConfig {
   allowPing?: boolean; // 允许ping，默认: true
   hideCertHashes?: boolean; // 混淆证书哈希，返回用户ID哈希代替真实证书哈希，默认: false
   channelNinja?: boolean; // Enable channel Ninja functionality to hide users in channels without view permissions, default: false
+  ninjaChannels?: number[]; // Array of channel IDs that are ninja channels. Users without Enter/Listen permission cannot see users in these channels.
   
   // 日志配置
   logDays?: number; // 数据库日志保留天数，默认: 31
