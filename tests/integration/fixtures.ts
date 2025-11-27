@@ -126,7 +126,6 @@ export enum PermissionFlag {
   Whisper = 1 << 8,
   TextMessage = 1 << 9,
   TempChannel = 1 << 10,
-  MakeTempChannel = 1 << 10, // Alias for TempChannel
   Listen = 1 << 11, // 0x800
 
   // Root channel only
@@ -134,4 +133,7 @@ export enum PermissionFlag {
   Ban = 1 << 17,
   Register = 1 << 18,
   SelfRegister = 1 << 19,
+
+  // Alias for backwards compatibility (same value as TempChannel)
+  MakeTempChannel = TempChannel,
 }
