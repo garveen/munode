@@ -649,7 +649,7 @@ export class HubControlService {
    */
   private async handleChannelStateNotification(params: any): Promise<void> {
     try {
-      const { edge_id, actor_session, actor_username, channelState: channelStateObj } = params;
+      const { edge_id, actor_session, actor_username, channelState: channelStateObj, has_channel_id } = params;
 
       logger.info(`Hub received ChannelState from Edge ${edge_id}, actor: ${actor_username}(${actor_session})`);
 
@@ -664,9 +664,10 @@ export class HubControlService {
         return;
       }
 
-      // 判断是创建还是编辑：channel_id 未指定或为 undefined/null 时才是创建
-      // channel_id === 0 是 Root 频道，应该是编辑模式
-      const isCreate = channelStateObj.channel_id === undefined || channelStateObj.channel_id === null;
+      // 判断是创建还是编辑：
+      // - 如果 has_channel_id 为 false，则是创建模式
+      // - 如果 has_channel_id 为 true，则是编辑模式（包括 channel_id === 0 的 Root 频道）
+      const isCreate = has_channel_id === false;
       
       let channel_id: number;
       
@@ -2076,7 +2077,7 @@ export class HubControlService {
     }));
 
     // 获取所有ACL
-    const dbAcls = await this._database.getChannelACLs(0); // 0表示获取所有频道的ACL
+    const dbAcls = await this._database.getAllChannelACLs();
     const acls: ACLData[] = dbAcls.map((acl) => ({
       id: acl.id,
       channel_id: acl.channel_id,

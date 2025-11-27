@@ -119,15 +119,21 @@ export enum PermissionFlag {
   Traverse = 1 << 1,
   Enter = 1 << 2,
   Speak = 1 << 3,
-  Whisper = 1 << 4,
-  MuteDeafen = 1 << 5,
-  Move = 1 << 6,
-  MakeChannel = 1 << 7,
-  MakeTempChannel = 1 << 8,
-  LinkChannel = 1 << 9,
-  TextMessage = 1 << 10,
-  Kick = 1 << 11,
-  Ban = 1 << 12,
-  Register = 1 << 13,
-  SelfRegister = 1 << 14,
+  MuteDeafen = 1 << 4,
+  Move = 1 << 5,
+  MakeChannel = 1 << 6,
+  LinkChannel = 1 << 7,
+  Whisper = 1 << 8,
+  TextMessage = 1 << 9,
+  TempChannel = 1 << 10,
+  Listen = 1 << 11, // 0x800
+
+  // Root channel only
+  Kick = 1 << 16,
+  Ban = 1 << 17,
+  Register = 1 << 18,
+  SelfRegister = 1 << 19,
+
+  // Alias for backwards compatibility (same value as TempChannel)
+  MakeTempChannel = TempChannel,
 }
