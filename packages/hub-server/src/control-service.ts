@@ -109,6 +109,9 @@ export class HubControlService {
         if (ch === channel) {
           this.edgeChannels.delete(edge_id);
           logger.info(`Edge ${edge_id} disconnected from control channel`);
+          
+          // 清理该Edge上的所有用户会话，并通知其它Edge
+          this.cleanupEdgeSessions(edge_id);
           break;
         }
       }
@@ -729,6 +732,46 @@ export class HubControlService {
       }
     } catch (error) {
       logger.error('Error handling user left notification:', error);
+    }
+  }
+
+  /**
+   * 清理断开连接的Edge上的所有用户会话
+   * 当Edge断开连接时（如Edge重启或网络断开），需要清理该Edge上的所有用户会话
+   * 并通知其它Edge这些用户已离线
+   */
+  private cleanupEdgeSessions(edge_id: number): void {
+    try {
+      // 获取该Edge上的所有会话
+      const edgeSessions = this._sessionManager.getEdgeSessions(edge_id);
+      
+      if (edgeSessions.length === 0) {
+        logger.debug(`No sessions to cleanup for disconnected Edge ${edge_id}`);
+        return;
+      }
+      
+      logger.info(`Cleaning up ${edgeSessions.length} sessions from disconnected Edge ${edge_id}`);
+      
+      // 移除每个会话并广播给其它Edge
+      for (const session of edgeSessions) {
+        const removedSession = this._sessionManager.removeSession(session.session_id);
+        
+        if (removedSession) {
+          // 广播用户离开给所有其它Edge
+          this.broadcast('hub.userLeft', {
+            session_id: session.session_id,
+            edge_id: edge_id,
+            user_id: removedSession.user_id,
+            username: removedSession.username,
+          });
+          
+          logger.debug(`Cleaned up session ${session.session_id} (${removedSession.username}) from Edge ${edge_id}`);
+        }
+      }
+      
+      logger.info(`Completed cleanup of ${edgeSessions.length} sessions from Edge ${edge_id}`);
+    } catch (error) {
+      logger.error(`Error cleaning up sessions for Edge ${edge_id}:`, error);
     }
   }
 
