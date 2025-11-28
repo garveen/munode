@@ -102,22 +102,22 @@ export class HubControlService {
       logger.info('Edge connected to control channel');
     });
 
-    // 监听断开
+    // Handle disconnect
     this.server.on('disconnect', (channel: RPCChannel) => {
-      // 找到对应的edge_id并移除
+      // Find the corresponding edge_id and remove it
       for (const [edge_id, ch] of this.edgeChannels) {
         if (ch === channel) {
           this.edgeChannels.delete(edge_id);
           logger.info(`Edge ${edge_id} disconnected from control channel`);
           
-          // 清理该Edge上的所有用户会话，并通知其它Edge
+          // Clean up all user sessions on this Edge and notify other Edges
           this.cleanupEdgeSessions(edge_id);
           break;
         }
       }
     });
 
-    // 监听请求
+    // Handle requests
     this.server.on('request', (channel: RPCChannel, message: Message, respond: (result?: any, error?: any) => void) => {
       if (message.method) {
         this.typedServer.handleRequest(channel, { method: message.method, params: message.params }, respond);
@@ -736,13 +736,13 @@ export class HubControlService {
   }
 
   /**
-   * 清理断开连接的Edge上的所有用户会话
-   * 当Edge断开连接时（如Edge重启或网络断开），需要清理该Edge上的所有用户会话
-   * 并通知其它Edge这些用户已离线
+   * Cleanup all user sessions on the disconnected Edge
+   * When an Edge disconnects (e.g., Edge restart or network disconnect),
+   * cleanup all user sessions on that Edge and notify other Edges that these users are offline
    */
   private cleanupEdgeSessions(edge_id: number): void {
     try {
-      // 获取该Edge上的所有会话
+      // Get all sessions on this Edge
       const edgeSessions = this._sessionManager.getEdgeSessions(edge_id);
       
       if (edgeSessions.length === 0) {
@@ -752,12 +752,12 @@ export class HubControlService {
       
       logger.info(`Cleaning up ${edgeSessions.length} sessions from disconnected Edge ${edge_id}`);
       
-      // 移除每个会话并广播给其它Edge
+      // Remove each session and broadcast to other Edges
       for (const session of edgeSessions) {
         const removedSession = this._sessionManager.removeSession(session.session_id);
         
         if (removedSession) {
-          // 广播用户离开给所有其它Edge
+          // Broadcast user left to all other Edges
           this.broadcast('hub.userLeft', {
             session_id: session.session_id,
             edge_id: edge_id,
