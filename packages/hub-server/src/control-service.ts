@@ -102,19 +102,22 @@ export class HubControlService {
       logger.info('Edge connected to control channel');
     });
 
-    // 监听断开
+    // Handle disconnect
     this.server.on('disconnect', (channel: RPCChannel) => {
-      // 找到对应的edge_id并移除
+      // Find the corresponding edge_id and remove it
       for (const [edge_id, ch] of this.edgeChannels) {
         if (ch === channel) {
           this.edgeChannels.delete(edge_id);
           logger.info(`Edge ${edge_id} disconnected from control channel`);
+          
+          // Clean up all user sessions on this Edge and notify other Edges
+          this.cleanupEdgeSessions(edge_id);
           break;
         }
       }
     });
 
-    // 监听请求
+    // Handle requests
     this.server.on('request', (channel: RPCChannel, message: Message, respond: (result?: any, error?: any) => void) => {
       if (message.method) {
         this.typedServer.handleRequest(channel, { method: message.method, params: message.params }, respond);
@@ -729,6 +732,46 @@ export class HubControlService {
       }
     } catch (error) {
       logger.error('Error handling user left notification:', error);
+    }
+  }
+
+  /**
+   * Cleanup all user sessions on the disconnected Edge
+   * When an Edge disconnects (e.g., Edge restart or network disconnect),
+   * cleanup all user sessions on that Edge and notify other Edges that these users are offline
+   */
+  private cleanupEdgeSessions(edge_id: number): void {
+    try {
+      // Get all sessions on this Edge
+      const edgeSessions = this._sessionManager.getEdgeSessions(edge_id);
+      
+      if (edgeSessions.length === 0) {
+        logger.debug(`No sessions to cleanup for disconnected Edge ${edge_id}`);
+        return;
+      }
+      
+      logger.info(`Cleaning up ${edgeSessions.length} sessions from disconnected Edge ${edge_id}`);
+      
+      // Remove each session and broadcast to other Edges
+      for (const session of edgeSessions) {
+        const removedSession = this._sessionManager.removeSession(session.session_id);
+        
+        if (removedSession) {
+          // Broadcast user left to all other Edges
+          this.broadcast('hub.userLeft', {
+            session_id: session.session_id,
+            edge_id: edge_id,
+            user_id: removedSession.user_id,
+            username: removedSession.username,
+          });
+          
+          logger.debug(`Cleaned up session ${session.session_id} (${removedSession.username}) from Edge ${edge_id}`);
+        }
+      }
+      
+      logger.info(`Completed cleanup of ${edgeSessions.length} sessions from Edge ${edge_id}`);
+    } catch (error) {
+      logger.error(`Error cleaning up sessions for Edge ${edge_id}:`, error);
     }
   }
 

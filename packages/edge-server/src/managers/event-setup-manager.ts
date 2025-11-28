@@ -394,6 +394,10 @@ export class EventSetupManager {
 
       this.hubClient.on('registered', (response) => {
         logger.info('Successfully registered with Hub:', response);
+        
+        // 重连后重新报告所有本地已认证用户到Hub
+        // 这解决了Edge断线重连后，Hub丢失用户会话信息的问题
+        void this.reReportLocalUsersToHub();
       });
 
       this.hubClient.on('heartbeat', (response) => {
@@ -539,5 +543,51 @@ export class EventSetupManager {
     } catch (error) {
       logger.error(`Failed to send server version to session ${session_id}:`, error);
     }
+  }
+
+  /**
+   * 重新报告所有本地已认证用户到Hub
+   * 当Edge重连到Hub后调用，确保Hub有完整的用户会话信息
+   * 这解决了：用户A登录很久后，用户B登录看不到用户A的问题
+   */
+  private async reReportLocalUsersToHub(): Promise<void> {
+    if (!this.hubClient || !this.hubClient.isConnected()) {
+      logger.warn('Cannot re-report users: Hub client not connected');
+      return;
+    }
+
+    const allClients = this.handlerFactory.clientManager.getAllClients();
+    const authenticatedClients = allClients.filter(client => client.user_id > 0);
+
+    if (authenticatedClients.length === 0) {
+      logger.debug('No authenticated users to re-report to Hub');
+      return;
+    }
+
+    logger.info(`Re-reporting ${authenticatedClients.length} local users to Hub after reconnection`);
+
+    for (const client of authenticatedClients) {
+      try {
+        await this.hubClient.reportSession({
+          session_id: client.session,
+          user_id: client.user_id,
+          username: client.username,
+          channel_id: client.channel_id,
+          startTime: client.connected_at || new Date(),
+          ip_address: client.ip_address,
+          groups: client.groups,
+          cert_hash: client.cert_hash,
+          version: client.version,
+          release: client.client_name,
+          os: client.os_name,
+          os_version: client.os_version,
+        });
+        logger.debug(`Re-reported session ${client.session} (${client.username}) to Hub`);
+      } catch (error) {
+        logger.error(`Failed to re-report session ${client.session} to Hub:`, error);
+      }
+    }
+
+    logger.info(`Completed re-reporting ${authenticatedClients.length} users to Hub`);
   }
 }
