@@ -379,6 +379,12 @@ export class EventSetupManager {
             logger.error('Failed to sync with Hub:', error);
           }
 
+          // 重要：重新上报所有本地已认证的会话到Hub
+          // 这确保了在Hub重启后，Edge上的现有用户能被Hub正确追踪
+          // 问题场景：Hub重启后，只有重新连接的客户端会被上报，
+          // 而未断开的客户端不会被Hub知道，导致用户列表不完整
+          await this.reReportLocalSessionsToHub();
+
           // Edge的语音端口注册会在Hub通知时处理（edgeJoined事件）
           // 无需在这里手动注册
         })();
@@ -538,6 +544,55 @@ export class EventSetupManager {
       logger.debug(`Sent server version to session ${session_id}, state updated to ServerSentVersion`);
     } catch (error) {
       logger.error(`Failed to send server version to session ${session_id}:`, error);
+    }
+  }
+
+  /**
+   * 重新上报所有本地已认证的会话到Hub
+   * 
+   * 这个方法在Edge重新连接到Hub后调用，确保Hub知道Edge上所有现有的用户。
+   * 场景：Hub重启后，Edge上可能有未断开的客户端，这些客户端不会主动重新认证，
+   * 因此需要Edge主动告诉Hub这些用户的存在。
+   */
+  private async reReportLocalSessionsToHub(): Promise<void> {
+    if (!this.hubClient || !this.hubClient.isConnected()) {
+      logger.warn('Cannot re-report sessions: Hub client not connected');
+      return;
+    }
+
+    const clients = this.handlerFactory.clientManager.getAllClients();
+    let reportedCount = 0;
+
+    for (const client of clients) {
+      // 只上报已认证的客户端（user_id > 0）
+      if (client.user_id > 0) {
+        try {
+          await this.hubClient.reportSession({
+            session_id: client.session,
+            user_id: client.user_id,
+            username: client.username,
+            channel_id: client.channel_id,
+            startTime: new Date(client.connected_at || Date.now()),
+            ip_address: client.ip_address,
+            groups: client.groups,
+            cert_hash: client.cert_hash,
+            version: client.version,
+            release: client.client_name,
+            os: client.os_name,
+            os_version: client.os_version,
+          });
+          reportedCount++;
+          logger.debug(`Re-reported session ${client.session} (${client.username}) to Hub`);
+        } catch (error) {
+          logger.error(`Failed to re-report session ${client.session} to Hub:`, error);
+        }
+      }
+    }
+
+    if (reportedCount > 0) {
+      logger.info(`Re-reported ${reportedCount} local sessions to Hub after reconnection`);
+    } else {
+      logger.debug('No authenticated local sessions to re-report to Hub');
     }
   }
 }
