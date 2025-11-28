@@ -372,21 +372,21 @@ export class EventSetupManager {
           try {
             logger.info('Requesting full sync from Hub...');
             const syncData = await this.hubClient.requestFullSync();
-            // 处理同步数据
+            // Process sync data
             this.handlerFactory.stateManager.loadSnapshot(syncData);
             logger.info('Full sync completed successfully');
           } catch (error) {
             logger.error('Failed to sync with Hub:', error);
           }
 
-          // 重要：重新上报所有本地已认证的会话到Hub
-          // 这确保了在Hub重启后，Edge上的现有用户能被Hub正确追踪
-          // 问题场景：Hub重启后，只有重新连接的客户端会被上报，
-          // 而未断开的客户端不会被Hub知道，导致用户列表不完整
+          // Important: Re-report all authenticated local sessions to Hub
+          // This ensures that after Hub restarts, existing users on Edge are properly tracked by Hub
+          // Problem scenario: After Hub restart, only reconnecting clients get reported,
+          // while clients that stayed connected won't be known to Hub, causing incomplete user lists
           await this.reReportLocalSessionsToHub();
 
-          // Edge的语音端口注册会在Hub通知时处理（edgeJoined事件）
-          // 无需在这里手动注册
+          // Edge voice port registration is handled via Hub notification (edgeJoined event)
+          // No need to manually register here
         })();
       });
 
@@ -548,11 +548,11 @@ export class EventSetupManager {
   }
 
   /**
-   * 重新上报所有本地已认证的会话到Hub
+   * Re-report all authenticated local sessions to Hub
    * 
-   * 这个方法在Edge重新连接到Hub后调用，确保Hub知道Edge上所有现有的用户。
-   * 场景：Hub重启后，Edge上可能有未断开的客户端，这些客户端不会主动重新认证，
-   * 因此需要Edge主动告诉Hub这些用户的存在。
+   * This method is called after Edge reconnects to Hub, ensuring Hub knows about all existing users on Edge.
+   * Scenario: After Hub restarts, there may be clients on Edge that haven't disconnected. These clients
+   * won't re-authenticate automatically, so Edge needs to proactively inform Hub about their existence.
    */
   private async reReportLocalSessionsToHub(): Promise<void> {
     if (!this.hubClient || !this.hubClient.isConnected()) {
@@ -564,7 +564,7 @@ export class EventSetupManager {
     let reportedCount = 0;
 
     for (const client of clients) {
-      // 只上报已认证的客户端（user_id > 0）
+      // Only report authenticated clients (user_id > 0)
       if (client.user_id > 0) {
         try {
           await this.hubClient.reportSession({

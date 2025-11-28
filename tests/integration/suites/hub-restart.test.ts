@@ -1,15 +1,15 @@
 /**
- * Hub 重启场景集成测试
+ * Hub Restart Integration Tests
  * 
- * 测试场景：Hub重启后用户同步问题
- * - 两个客户端A和B都连接到同一个Edge
- * - Hub重启
- * - A重新连接Edge
- * - B不动
+ * Test scenario: User synchronization after Hub restart
+ * - Two clients A and B are connected to the same Edge
+ * - Hub restarts
+ * - A reconnects to Edge
+ * - B stays connected (doesn't reconnect)
  * 
- * 预期结果：
- * - A同时看到自己和B
- * - B同时看到自己和A
+ * Expected results:
+ * - A sees both itself and B
+ * - B sees both itself and A (no duplicates)
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -24,11 +24,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROJECT_ROOT = join(__dirname, '../../..');
 
+// Test port configuration
+const TEST_BASE_PORT = 8095;
+
 describe('Hub Restart User Sync Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {
-    testEnv = await setupTestEnvironment(8095);
+    testEnv = await setupTestEnvironment(TEST_BASE_PORT);
     // Give servers time to fully start
     await sleep(1000);
   }, 60000);
@@ -93,17 +96,17 @@ describe('Hub Restart User Sync Tests', () => {
 
     // Restart Hub with the same config
     console.log('Restarting Hub...');
-    const hubConfigPath = join(PROJECT_ROOT, `tests/config/hub-test-8095.js`);
+    const hubConfigPath = join(PROJECT_ROOT, `tests/config/hub-test-${TEST_BASE_PORT}.js`);
     // Recreate the temp config file if it doesn't exist
     if (!fs.existsSync(hubConfigPath)) {
       const hubConfigSourcePath = join(PROJECT_ROOT, 'tests/config/hub-test.js');
       const hubConfigModule = await import(`file://${hubConfigSourcePath}?v=${Date.now()}`);
       const hubConfig = { ...(hubConfigModule.default || hubConfigModule) };
-      hubConfig.port = 8095 + 1000;
-      hubConfig.controlPort = 8095 + 3000;
-      hubConfig.webApi.port = 8095 + 100;
+      hubConfig.port = TEST_BASE_PORT + 1000;
+      hubConfig.controlPort = TEST_BASE_PORT + 3000;
+      hubConfig.webApi.port = TEST_BASE_PORT + 100;
       hubConfig.auth = hubConfig.auth || {};
-      hubConfig.auth.apiUrl = `http://127.0.0.1:8095/auth`;
+      hubConfig.auth.apiUrl = `http://127.0.0.1:${TEST_BASE_PORT}/auth`;
       fs.writeFileSync(hubConfigPath, `export default ${JSON.stringify(hubConfig, null, 2)};`);
     }
     
