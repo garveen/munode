@@ -372,15 +372,21 @@ export class EventSetupManager {
           try {
             logger.info('Requesting full sync from Hub...');
             const syncData = await this.hubClient.requestFullSync();
-            // 处理同步数据
+            // Process sync data
             this.handlerFactory.stateManager.loadSnapshot(syncData);
             logger.info('Full sync completed successfully');
           } catch (error) {
             logger.error('Failed to sync with Hub:', error);
           }
 
-          // Edge的语音端口注册会在Hub通知时处理（edgeJoined事件）
-          // 无需在这里手动注册
+          // Important: Re-report all authenticated local sessions to Hub
+          // This ensures that after Hub restarts, existing users on Edge are properly tracked by Hub
+          // Problem scenario: After Hub restart, only reconnecting clients get reported,
+          // while clients that stayed connected won't be known to Hub, causing incomplete user lists
+          await this.reReportLocalSessionsToHub();
+
+          // Edge voice port registration is handled via Hub notification (edgeJoined event)
+          // No need to manually register here
         })();
       });
 
@@ -397,7 +403,7 @@ export class EventSetupManager {
         
         // 重连后重新报告所有本地已认证用户到Hub
         // 这解决了Edge断线重连后，Hub丢失用户会话信息的问题
-        void this.reReportLocalUsersToHub();
+        this.reReportLocalSessionsToHub();
       });
 
       this.hubClient.on('heartbeat', (response) => {
@@ -546,13 +552,19 @@ export class EventSetupManager {
   }
 
   /**
+   * Re-report all authenticated local sessions to Hub
+   * 
+   * This method is called after Edge reconnects to Hub, ensuring Hub knows about all existing users on Edge.
+   * Scenario: After Hub restarts, there may be clients on Edge that haven't disconnected. These clients
+   * won't re-authenticate automatically, so Edge needs to proactively inform Hub about their existence.
+   * 
    * 重新报告所有本地已认证用户到Hub
    * 当Edge重连到Hub后调用，确保Hub有完整的用户会话信息
    * 这解决了：用户A登录很久后，用户B登录看不到用户A的问题
    */
-  private async reReportLocalUsersToHub(): Promise<void> {
+  private async reReportLocalSessionsToHub(): Promise<void> {
     if (!this.hubClient || !this.hubClient.isConnected()) {
-      logger.warn('Cannot re-report users: Hub client not connected');
+      logger.warn('Cannot re-report sessions: Hub client not connected');
       return;
     }
 
