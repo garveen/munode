@@ -135,7 +135,13 @@ export class MessageHandlers {
       return undefined;
     }
     
-    if (channel.parent_id === undefined || channel.parent_id === null || channel.parent_id === channel.id) {
+    // 处理无效的 parent_id：-1, null, undefined, 自引用
+    if (
+      channel.parent_id === undefined || 
+      channel.parent_id === null || 
+      channel.parent_id === -1 ||
+      channel.parent_id === channel.id
+    ) {
       // 如果 parent_id 无效或指向自己，使用根频道作为父频道
       logger.warn(
         `Channel ${channel.id} (${channel.name}) has invalid parent_id=${channel.parent_id}, using root channel (0) as parent`
