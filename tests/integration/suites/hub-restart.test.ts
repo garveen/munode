@@ -110,7 +110,7 @@ describe('Hub Restart User Sync Tests', () => {
       fs.writeFileSync(hubConfigPath, `export default ${JSON.stringify(hubConfig, null, 2)};`);
     }
     
-    testEnv.hubProcess = await startHubServer(hubConfigPath);
+    testEnv.hubProcess = await startHubServer(hubConfigPath, 3, true);
     
     // Wait for Hub to restart and Edge to reconnect
     console.log('Waiting for Hub to restart and Edge to reconnect...');

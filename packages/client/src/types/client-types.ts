@@ -9,8 +9,11 @@ export interface ConnectOptions {
   /** 服务器地址 */
   host: string;
   
-  /** 服务器端口 */
+  /** 服务器 TCP/TLS 端口 */
   port?: number;
+  
+  /** UDP 端口（如果未指定，默认使用 TCP 端口；某些实现使用 TCP+1） */
+  udpPort?: number;
   
   /** 用户名 */
   username: string;

@@ -7,7 +7,7 @@
     "munode": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "node esbuild.config.mjs && tsc --emitDeclarationOnly --outDir dist",
     "dev": "tsx watch src/index.ts",
     "clean": "rm -rf dist *.tsbuildinfo",
     "test": "vitest run"

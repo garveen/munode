@@ -35,3 +35,4 @@ export { ContextActions } from './handlers/context-action.js';
 export { GeoIPManager } from './util/geoip-manager.js';
 export { PacketConnPool } from './network/packet-pool.js';
 export { UDPMonitor } from './network/udp-monitor.js';
+export { ClientMessageRelayHandler } from './relay/client-message-relay-handler.js';

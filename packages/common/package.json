@@ -12,8 +12,8 @@
     }
   },
   "scripts": {
-    "build": "tsc -b",
-    "dev": "tsc -b --watch",
+    "build": "node esbuild.config.mjs && tsc --emitDeclarationOnly --outDir dist",
+    "dev": "node esbuild.config.mjs --watch",
     "clean": "rm -rf dist *.tsbuildinfo",
     "test": "vitest run",
     "test:watch": "vitest"

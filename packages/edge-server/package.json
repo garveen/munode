@@ -8,7 +8,7 @@
     "edge-server": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "node esbuild.config.mjs && tsc --emitDeclarationOnly --outDir dist",
     "dev": "tsx watch src/cli.ts",
     "start": "node dist/cli.js",
     "clean": "rm -rf dist *.tsbuildinfo",

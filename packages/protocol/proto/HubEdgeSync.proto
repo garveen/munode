@@ -1,0 +1,485 @@
+syntax = "proto2";
+
+package hubedge;
+
+// ============================================================================
+// 数据同步消息
+// ============================================================================
+
+/**
+ * SyncData - 同步消息的包装
+ */
+message SyncData {
+  // 同步类型
+  required SyncType type = 1;
+  
+  // 同步序列号（用于追踪同步顺序）
+  required uint64 sequence = 2;
+  
+  // 时间戳
+  required int64 timestamp = 3;
+  
+  // 同步数据（根据 type 选择其中一个）
+  optional UserStateSync user_state = 10;
+  optional ChannelStateSync channel_state = 11;
+  optional ACLSync acl = 12;
+  optional BatchSync batch = 13;
+  optional FullSyncRequest full_sync_request = 20;
+  optional FullSyncResponse full_sync_response = 21;
+  optional VoiceTargetSync voice_target = 30;
+  optional PermissionQuery permission_query = 40;
+  optional PermissionResult permission_result = 41;
+  optional ConnectionEvent connection_event = 50;
+}
+
+/**
+ * 同步类型
+ */
+enum SyncType {
+  SYNC_TYPE_UNKNOWN = 0;
+  SYNC_TYPE_USER_STATE = 1;
+  SYNC_TYPE_CHANNEL_STATE = 2;
+  SYNC_TYPE_ACL = 3;
+  SYNC_TYPE_BATCH = 4;
+  SYNC_TYPE_FULL_SYNC_REQUEST = 5;
+  SYNC_TYPE_FULL_SYNC_RESPONSE = 6;
+  SYNC_TYPE_VOICE_TARGET = 7;
+  SYNC_TYPE_PERMISSION_QUERY = 8;
+  SYNC_TYPE_PERMISSION_RESULT = 9;
+  SYNC_TYPE_CONNECTION_EVENT = 10;
+}
+
+// ============================================================================
+// 用户状态同步
+// ============================================================================
+
+/**
+ * 用户状态同步
+ * 
+ * 注意：session_id 由 Hub 统一分配和管理，Edge 不能自行生成
+ */
+message UserStateSync {
+  // 操作类型
+  required UserOperation operation = 1;
+  
+  // 会话 ID（由 Hub 分配的全局唯一 ID）
+  required uint32 session_id = 2;
+  
+  // Edge ID
+  required uint32 edge_id = 3;
+  
+  // 用户信息（根据操作类型，可能只包含部分字段）
+  // proto2 的 optional 字段可以通过 has_user() 方法检查是否设置
+  optional UserInfo user = 4;
+  
+  // 变更的字段掩码（用于增量更新）
+  repeated string changed_fields = 5;
+}
+
+/**
+ * 用户操作类型
+ */
+enum UserOperation {
+  USER_OPERATION_UNKNOWN = 0;
+  USER_OPERATION_JOINED = 1;      // 用户加入
+  USER_OPERATION_LEFT = 2;        // 用户离开
+  USER_OPERATION_UPDATED = 3;     // 用户信息更新
+  USER_OPERATION_MOVED = 4;       // 用户移动频道
+  USER_OPERATION_KICKED = 5;      // 用户被踢出
+  USER_OPERATION_BANNED = 6;      // 用户被封禁
+}
+
+/**
+ * 用户信息
+ * 
+ * proto2 的 optional 字段优势：
+ * - 可以通过 has_xxx() 方法明确判断字段是否被设置
+ * - 避免了 proto3 中无法区分"未设置"和"默认值"的问题
+ * - 例如：has_channel_id() 可以判断用户是否在频道中，而不是依赖 channel_id == 0
+ */
+message UserInfo {
+  // 基础信息
+  required uint32 session_id = 1;  // Hub 分配的全局唯一会话 ID
+  required uint32 user_id = 2;
+  required string username = 3;
+  
+  // 状态信息
+  optional uint32 channel_id = 4;  // 使用 has_channel_id() 检查用户是否在频道中
+  optional bool mute = 5;
+  optional bool deaf = 6;
+  optional bool self_mute = 7;
+  optional bool self_deaf = 8;
+  optional bool suppress = 9;
+  optional bool priority_speaker = 10;
+  optional bool recording = 11;
+  
+  // 用户组
+  repeated string groups = 12;
+  
+  // 额外信息
+  optional string comment = 13;
+  optional string cert_hash = 14;
+  optional string ip_address = 15;
+  
+  // 连接信息
+  optional int64 connected_at = 16;
+  optional int64 last_active = 17;
+  
+  // 客户端信息
+  optional string version = 18;
+  optional string client_name = 19;
+  optional string os_name = 20;
+  optional string os_version = 21;
+}
+
+// ============================================================================
+// 频道状态同步
+// ============================================================================
+
+/**
+ * 频道状态同步
+ */
+message ChannelStateSync {
+  // 操作类型
+  required ChannelOperation operation = 1;
+  
+  // 频道 ID
+  required uint32 channel_id = 2;
+  
+  // 频道信息
+  optional ChannelInfo channel = 3;
+  
+  // 变更的字段掩码
+  repeated string changed_fields = 4;
+}
+
+/**
+ * 频道操作类型
+ */
+enum ChannelOperation {
+  CHANNEL_OPERATION_UNKNOWN = 0;
+  CHANNEL_OPERATION_CREATED = 1;    // 频道创建
+  CHANNEL_OPERATION_REMOVED = 2;    // 频道删除
+  CHANNEL_OPERATION_UPDATED = 3;    // 频道信息更新
+  CHANNEL_OPERATION_MOVED = 4;      // 频道移动
+  CHANNEL_OPERATION_LINKED = 5;     // 频道链接
+  CHANNEL_OPERATION_UNLINKED = 6;   // 频道取消链接
+}
+
+/**
+ * 频道信息
+ */
+message ChannelInfo {
+  // 基础信息
+  required uint32 channel_id = 1;
+  required string name = 2;
+  optional uint32 parent_id = 3;  // 根频道没有 parent_id，使用 has_parent_id() 检查
+  
+  // 频道配置
+  optional string description = 4;
+  optional int32 position = 5;
+  optional uint32 max_users = 6;
+  optional bool temporary = 7 [default = false];
+  optional bool inherit_acl = 8 [default = true];
+  
+  // 频道关系
+  repeated uint32 children = 9;
+  repeated uint32 links = 10;
+}
+
+// ============================================================================
+// ACL 同步
+// ============================================================================
+
+/**
+ * ACL 同步
+ */
+message ACLSync {
+  // 频道 ID
+  required uint32 channel_id = 1;
+  
+  // ACL 列表
+  repeated ACLEntry acl_entries = 2;
+  
+  // 频道组
+  repeated ChannelGroup groups = 3;
+  
+  // 是否继承父频道 ACL
+  required bool inherit_acl = 4;
+}
+
+/**
+ * ACL 条目
+ * 
+ * 应用目标：user_id 和 group 二选一，使用 has_user_id() 和 has_group() 判断
+ */
+message ACLEntry {
+  // 应用目标
+  optional uint32 user_id = 1;      // 用户 ID（与 group 二选一）
+  optional string group = 2;         // 用户组名（与 user_id 二选一）
+  
+  // 权限
+  required uint32 allow = 3;         // 允许的权限位掩码
+  required uint32 deny = 4;          // 拒绝的权限位掩码
+  
+  // 继承设置
+  required bool apply_here = 5;      // 是否应用于当前频道
+  required bool apply_subs = 6;      // 是否应用于子频道
+}
+
+/**
+ * 频道组
+ */
+message ChannelGroup {
+  // 组名
+  required string name = 1;
+  
+  // 继承设置
+  required bool inherited = 2;       // 是否继承自父频道（只读）
+  required bool inherit = 3;         // 是否继承成员
+  required bool inheritable = 4;     // 子频道是否可继承
+  
+  // 成员
+  repeated uint32 add = 5;              // 明确添加的用户 ID
+  repeated uint32 remove = 6;           // 明确移除的用户 ID
+  repeated uint32 inherited_members = 7; // 继承的成员 ID
+}
+
+// ============================================================================
+// 批量同步
+// ============================================================================
+
+/**
+ * 批量同步（用于一次传输多个变更）
+ */
+message BatchSync {
+  // 批次 ID
+  required string batch_id = 1;
+  
+  // 用户状态变更
+  repeated UserStateSync user_updates = 2;
+  
+  // 频道状态变更
+  repeated ChannelStateSync channel_updates = 3;
+  
+  // ACL 变更
+  repeated ACLSync acl_updates = 4;
+}
+
+// ============================================================================
+// 完整同步
+// ============================================================================
+
+/**
+ * 完整同步请求（Edge 启动时或重连后请求）
+ */
+message FullSyncRequest {
+  // Edge ID
+  required uint32 edge_id = 1;
+  
+  // 请求的数据类型
+  repeated FullSyncDataType data_types = 2;
+  
+  // 上次同步的序列号（用于增量同步）
+  optional uint64 last_sync_sequence = 3;
+}
+
+/**
+ * 完整同步响应
+ */
+message FullSyncResponse {
+  // 请求的 Edge ID
+  required uint32 edge_id = 1;
+  
+  // 当前同步序列号
+  required uint64 sync_sequence = 2;
+  
+  // 所有用户
+  repeated UserInfo users = 3;
+  
+  // 所有频道
+  repeated ChannelInfo channels = 4;
+  
+  // 所有 ACL
+  repeated ACLSync acls = 5;
+  
+  // 全局配置
+  optional GlobalConfig config = 6;
+  
+  // 分片信息（如果数据太大，可能分多个响应）
+  optional ShardInfo shard = 7;
+}
+
+/**
+ * 完整同步数据类型
+ */
+enum FullSyncDataType {
+  FULL_SYNC_DATA_TYPE_UNKNOWN = 0;
+  FULL_SYNC_DATA_TYPE_USERS = 1;
+  FULL_SYNC_DATA_TYPE_CHANNELS = 2;
+  FULL_SYNC_DATA_TYPE_ACLS = 3;
+  FULL_SYNC_DATA_TYPE_CONFIG = 4;
+}
+
+/**
+ * 分片信息
+ */
+message ShardInfo {
+  // 当前分片索引
+  required uint32 shard_index = 1;
+  
+  // 总分片数
+  required uint32 total_shards = 2;
+  
+  // 分片 ID（用于标识同一批分片）
+  required string shard_id = 3;
+}
+
+/**
+ * 全局配置
+ */
+message GlobalConfig {
+  // 配置项
+  repeated ConfigEntry entries = 1;
+  
+  // 配置版本
+  required uint32 version = 2;
+}
+
+message ConfigEntry {
+  required string key = 1;
+  required string value = 2;
+}
+
+// ============================================================================
+// 语音目标同步
+// ============================================================================
+
+/**
+ * 语音目标同步
+ */
+message VoiceTargetSync {
+  // 客户端会话 ID
+  required uint32 session_id = 1;
+  
+  // 目标 ID（0-30）
+  required uint32 target_id = 2;
+  
+  // 语音目标配置
+  repeated VoiceTarget targets = 3;
+  
+  // 时间戳
+  required int64 timestamp = 4;
+}
+
+/**
+ * 语音目标
+ */
+message VoiceTarget {
+  // 频道目标
+  optional ChannelTarget channel = 1;
+  
+  // 用户目标
+  optional UserTarget user = 2;
+}
+
+/**
+ * 频道目标
+ */
+message ChannelTarget {
+  // 频道 ID
+  required uint32 channel_id = 1;
+  
+  // 是否包含子频道
+  required bool include_children = 2;
+  
+  // 是否只发送给链接的频道
+  required bool links = 3;
+  
+  // 用户组过滤
+  optional string group = 4;
+}
+
+/**
+ * 用户目标
+ */
+message UserTarget {
+  // 会话 ID
+  required uint32 session_id = 1;
+}
+
+// ============================================================================
+// 权限查询
+// ============================================================================
+
+/**
+ * 权限查询
+ */
+message PermissionQuery {
+  // 查询 ID（用于匹配响应）
+  required string query_id = 1;
+  
+  // 用户会话 ID
+  required uint32 session_id = 2;
+  
+  // 频道 ID
+  required uint32 channel_id = 3;
+  
+  // 查询的权限
+  repeated uint32 permissions = 4;
+}
+
+/**
+ * 权限查询结果
+ */
+message PermissionResult {
+  // 查询 ID
+  required string query_id = 1;
+  
+  // 用户会话 ID
+  required uint32 session_id = 2;
+  
+  // 频道 ID
+  required uint32 channel_id = 3;
+  
+  // 权限结果
+  repeated PermissionResultEntry results = 4;
+}
+
+message PermissionResultEntry {
+  required uint32 permission = 1;
+  required bool allowed = 2;
+}
+
+// ============================================================================
+// 连接事件
+// ============================================================================
+
+/**
+ * 连接事件（用于通知 Edge 连接/断开等事件）
+ */
+message ConnectionEvent {
+  // 事件类型
+  required ConnectionEventType event_type = 1;
+  
+  // Edge ID
+  required uint32 edge_id = 2;
+  
+  // 事件时间戳
+  required int64 timestamp = 3;
+  
+  // 事件详情
+  optional string details = 4;
+}
+
+/**
+ * 连接事件类型
+ */
+enum ConnectionEventType {
+  CONNECTION_EVENT_TYPE_UNKNOWN = 0;
+  CONNECTION_EVENT_TYPE_EDGE_CONNECTED = 1;
+  CONNECTION_EVENT_TYPE_EDGE_DISCONNECTED = 2;
+  CONNECTION_EVENT_TYPE_EDGE_RECONNECTED = 3;
+  CONNECTION_EVENT_TYPE_HUB_SHUTDOWN = 4;
+  CONNECTION_EVENT_TYPE_EDGE_SHUTDOWN = 5;
+}

@@ -6,17 +6,18 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -b",
-    "dev": "tsc -b --watch",
-    "clean": "rm -rf dist *.tsbuildinfo",
-    "generate:proto": "protoc --proto_path=./proto --js_out=import_style=commonjs,binary:./src/generated/proto --ts_out=service=grpc-node:./src/generated/proto ./proto/Mumble.proto",
+    "build": "node esbuild.config.mjs && tsc --emitDeclarationOnly --outDir dist",
+    "dev": "node esbuild.config.mjs --watch",
+    "clean": "rm -rf dist *.tsbuildinfo src/generated/proto",
+    "generate:proto": "protoc --proto_path=./proto --ts_out=service=grpc-node:./src/generated/proto ./proto/Mumble.proto ./proto/HubEdgeSync.proto ./proto/HubEdge.proto",
     "test": "vitest run"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.10.1",
     "@munode/common": "workspace:*",
-    "google-protobuf": "^3.21.4",
+    "google-protobuf": "^4.0.1",
     "msgpackr": "^1.11.5",
+    "protoc": "^33.1.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {

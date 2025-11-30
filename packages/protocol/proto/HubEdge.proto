@@ -1,0 +1,282 @@
+syntax = "proto2";
+
+package hubedge;
+
+import "Mumble.proto";
+import "HubEdgeSync.proto";
+
+// ============================================================================
+// 顶层包装消息 - 所有 Edge-Hub 通信的统一格式
+// ============================================================================
+
+/**
+ * EdgeHubPacket - Edge 和 Hub 之间传输的所有数据包的顶层包装
+ * 
+ * 每个通过 WebSocket 发送的消息都必须是这个格式
+ */
+message EdgeHubPacket {
+  // 包类型，用于快速判断消息类型
+  required PacketType type = 1;
+  
+  // 实际的消息内容（根据 type 选择其中一个）
+  // RPC 调用相关
+  optional RPCRequest rpc_request = 10;
+  optional RPCResponse rpc_response = 11;
+  optional RPCError rpc_error = 12;
+  
+  // 客户端消息中转
+  optional ClientMessageRelay relay = 20;
+  
+  // 数据同步（直接使用 HubEdgeSync.proto 中定义的消息）
+  optional SyncData sync_data = 30;
+  
+  // 心跳
+  optional Heartbeat heartbeat = 40;
+  optional HeartbeatAck heartbeat_ack = 41;
+}
+
+/**
+ * 包类型枚举
+ */
+enum PacketType {
+  PACKET_TYPE_UNKNOWN = 0;
+  
+  // RPC 相关
+  PACKET_TYPE_RPC_REQUEST = 1;
+  PACKET_TYPE_RPC_RESPONSE = 2;
+  PACKET_TYPE_RPC_ERROR = 3;
+  
+  // 客户端消息中转
+  PACKET_TYPE_CLIENT_RELAY = 10;
+  
+  // 数据同步
+  PACKET_TYPE_SYNC = 20;
+  
+  // 心跳
+  PACKET_TYPE_HEARTBEAT = 30;
+  PACKET_TYPE_HEARTBEAT_ACK = 31;
+}
+
+// ============================================================================
+// RPC 消息定义
+// ============================================================================
+
+/**
+ * RPC 请求
+ */
+message RPCRequest {
+  // 请求 ID，用于匹配响应
+  required string request_id = 1;
+  
+  // RPC 方法名（例如："edge.register", "edge.authenticateUser"）
+  required string method = 2;
+  
+  // 请求参数（JSON 序列化）
+  required bytes params = 3;
+  
+  // 超时时间（毫秒）
+  optional uint32 timeout_ms = 4;
+}
+
+/**
+ * RPC 响应
+ */
+message RPCResponse {
+  // 请求 ID，与请求匹配
+  required string request_id = 1;
+  
+  // 响应结果（JSON 序列化）
+  required bytes result = 2;
+  
+  // 处理时间（毫秒）
+  optional uint32 processing_time_ms = 3;
+}
+
+/**
+ * RPC 错误
+ */
+message RPCError {
+  // 请求 ID
+  required string request_id = 1;
+  
+  // 错误码
+  required int32 code = 2;
+  
+  // 错误消息
+  required string message = 3;
+  
+  // 错误详情（JSON 序列化）
+  optional bytes details = 4;
+}
+
+// ============================================================================
+// 客户端消息中转
+// ============================================================================
+
+/**
+ * ClientMessageRelay - 客户端消息的中转包装
+ * 
+ * 用于 Edge 将客户端的 Mumble 协议消息转发给 Hub，
+ * 或 Hub 将消息转发给 Edge 再发送给客户端
+ * 
+ * 注意：直接引用 Mumble.proto 中的消息定义，避免二次序列化
+ */
+message ClientMessageRelay {
+  // 客户端的会话 ID（全局唯一，由 Hub 分配）
+  required uint32 session_id = 1;
+  
+  // 消息来源/目标的 Edge ID
+  required uint32 edge_id = 2;
+  
+  // 消息方向
+  required RelayDirection direction = 3;
+  
+  // 可选的路由信息（用于多播）
+  optional RelayRouting routing = 4;
+  
+  // 消息时间戳（客户端发送时间或服务器接收时间）
+  required int64 timestamp = 5;
+  
+  // Mumble 协议消息（直接引用，根据消息类型选择其中一个）
+  // 注意：proto2 不支持 oneof，使用 optional 字段，发送时只设置一个
+  optional mumbleproto.Version version = 10;
+  optional mumbleproto.UDPTunnel udp_tunnel = 11;
+  optional mumbleproto.Authenticate authenticate = 12;
+  optional mumbleproto.Ping ping = 13;
+  optional mumbleproto.Reject reject = 14;
+  optional mumbleproto.ServerSync server_sync = 15;
+  optional mumbleproto.ChannelRemove channel_remove = 16;
+  optional mumbleproto.ChannelState channel_state = 17;
+  optional mumbleproto.UserRemove user_remove = 18;
+  optional mumbleproto.UserState user_state = 19;
+  optional mumbleproto.BanList ban_list = 20;
+  optional mumbleproto.TextMessage text_message = 21;
+  optional mumbleproto.PermissionDenied permission_denied = 22;
+  optional mumbleproto.ACL acl = 23;
+  optional mumbleproto.QueryUsers query_users = 24;
+  optional mumbleproto.CryptSetup crypt_setup = 25;
+  optional mumbleproto.ContextActionModify context_action_modify = 26;
+  optional mumbleproto.ContextAction context_action = 27;
+  optional mumbleproto.UserList user_list = 28;
+  optional mumbleproto.VoiceTarget voice_target = 29;
+  optional mumbleproto.PermissionQuery permission_query = 30;
+  optional mumbleproto.CodecVersion codec_version = 31;
+  optional mumbleproto.UserStats user_stats = 32;
+  optional mumbleproto.RequestBlob request_blob = 33;
+  optional mumbleproto.ServerConfig server_config = 34;
+  optional mumbleproto.SuggestConfig suggest_config = 35;
+}
+
+/**
+ * 中继方向
+ */
+enum RelayDirection {
+  RELAY_DIRECTION_UNKNOWN = 0;
+  RELAY_DIRECTION_CLIENT_TO_HUB = 1;   // 客户端 -> Edge -> Hub
+  RELAY_DIRECTION_HUB_TO_CLIENT = 2;   // Hub -> Edge -> 客户端
+}
+
+/**
+ * 路由信息（用于广播和多播）
+ */
+message RelayRouting {
+  // 路由类型
+  required RoutingType type = 1;
+  
+  // 目标会话 ID 列表（用于单播和多播）
+  repeated uint32 target_sessions = 2;
+  
+  // 目标频道 ID（用于频道广播）
+  optional uint32 target_channel = 3;
+  
+  // 排除的会话 ID 列表（用于广播时排除某些客户端）
+  repeated uint32 exclude_sessions = 4;
+}
+
+/**
+ * 路由类型
+ */
+enum RoutingType {
+  ROUTING_TYPE_UNKNOWN = 0;
+  ROUTING_TYPE_UNICAST = 1;      // 单播：发送给特定会话
+  ROUTING_TYPE_MULTICAST = 2;    // 多播：发送给多个特定会话
+  ROUTING_TYPE_CHANNEL = 3;      // 频道广播：发送给频道内所有用户
+  ROUTING_TYPE_BROADCAST = 4;    // 全局广播：发送给所有用户
+}
+
+// ============================================================================
+// 心跳消息
+// ============================================================================
+
+/**
+ * 心跳请求
+ */
+message Heartbeat {
+  // Edge ID
+  required uint32 edge_id = 1;
+  
+  // 心跳序列号
+  required uint64 sequence = 2;
+  
+  // Edge 服务器统计信息
+  optional ServerStats stats = 3;
+}
+
+/**
+ * 心跳响应
+ */
+message HeartbeatAck {
+  // Edge ID
+  required uint32 edge_id = 1;
+  
+  // 心跳序列号（与请求匹配）
+  required uint64 sequence = 2;
+  
+  // Hub 时间戳（用于时钟同步）
+  required int64 hub_timestamp = 3;
+  
+  // 可选的配置更新
+  optional ConfigUpdate config_update = 4;
+}
+
+/**
+ * 服务器统计信息
+ */
+message ServerStats {
+  // 当前在线用户数
+  required uint32 user_count = 1;
+  
+  // 当前频道数
+  required uint32 channel_count = 2;
+  
+  // CPU 使用率（百分比）
+  optional float cpu_usage = 3;
+  
+  // 内存使用（MB）
+  optional uint64 memory_usage_mb = 4;
+  
+  // 网络发送速率（KB/s）
+  optional float network_send_kbps = 5;
+  
+  // 网络接收速率（KB/s）
+  optional float network_recv_kbps = 6;
+  
+  // 运行时间（秒）
+  optional uint64 uptime_seconds = 7;
+}
+
+/**
+ * 配置更新
+ */
+message ConfigUpdate {
+  // 需要更新的配置项
+  repeated ConfigItem items = 1;
+  
+  // 配置版本号
+  required uint32 version = 2;
+}
+
+message ConfigItem {
+  required string key = 1;
+  required string value = 2;
+}

@@ -17,7 +17,7 @@ describe('Authentication Integration Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {
-    testEnv = await setupTestEnvironment(8080, { 
+    testEnv = await setupTestEnvironment(9180, { 
       startHub: false, 
       startEdge: false, 
       startAuth: true 
@@ -37,7 +37,7 @@ describe('Authentication Integration Tests', () => {
         server_id: 1,
       };
 
-      const response = await fetch('http://localhost:8080/auth', {
+      const response = await fetch(`http://localhost:${testEnv.authPort}/auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(authRequest),
@@ -59,7 +59,7 @@ describe('Authentication Integration Tests', () => {
         server_id: 1,
       };
 
-      const response = await fetch('http://localhost:8080/auth', {
+      const response = await fetch(`http://localhost:${testEnv.authPort}/auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(authRequest),
@@ -78,7 +78,7 @@ describe('Authentication Integration Tests', () => {
         server_id: 1,
       };
 
-      const response = await fetch('http://localhost:8080/auth', {
+      const response = await fetch(`http://localhost:${testEnv.authPort}/auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(authRequest),
@@ -105,7 +105,7 @@ describe('Authentication Integration Tests', () => {
           server_id: 1,
         };
 
-        const response = await fetch('http://localhost:8080/auth', {
+        const response = await fetch(`http://localhost:${testEnv.authPort}/auth`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(authRequest),
@@ -121,7 +121,7 @@ describe('Authentication Integration Tests', () => {
     });
 
     it('should handle malformed authentication requests', async () => {
-      const response = await fetch('http://localhost:8080/auth', {
+      const response = await fetch(`http://localhost:${testEnv.authPort}/auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: 'invalid json',
@@ -140,7 +140,7 @@ describe('Authentication Integration Tests', () => {
         server_id: 1,
       };
 
-      const response = await fetch('http://localhost:8080/auth', {
+      const response = await fetch(`http://localhost:${testEnv.authPort}/auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(authRequest),
@@ -161,7 +161,7 @@ describe('Authentication Integration Tests', () => {
 
       const responses = await Promise.all(
         authRequests.map(req =>
-          fetch('http://localhost:8080/auth', {
+          fetch(`http://localhost:${testEnv.authPort}/auth`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(req),
@@ -246,7 +246,7 @@ describe('Authentication Integration Tests', () => {
     });
 
     it('should handle OPTIONS requests (CORS preflight)', async () => {
-      const response = await fetch('http://localhost:8080/auth', {
+      const response = await fetch(`http://localhost:${testEnv.authPort}/auth`, {
         method: 'OPTIONS',
       });
 
@@ -255,7 +255,7 @@ describe('Authentication Integration Tests', () => {
     });
 
     it('should return 404 for unknown routes', async () => {
-      const response = await fetch('http://localhost:8080/unknown', {
+      const response = await fetch(`http://localhost:${testEnv.authPort}/unknown`, {
         method: 'GET',
       });
 
@@ -270,7 +270,7 @@ describe('Authentication Integration Tests', () => {
         server_id: 1,
       };
 
-      const response = await fetch('http://localhost:8080/auth', {
+      const response = await fetch(`http://localhost:${testEnv.authPort}/auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(authRequest),
@@ -290,7 +290,7 @@ describe('Authentication Integration Tests', () => {
       // 添加 tokens 数组
       params.append('tokens[]', '');
 
-      const response = await fetch('http://localhost:8080/auth', {
+      const response = await fetch(`http://localhost:${testEnv.authPort}/auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: params.toString(),
@@ -313,7 +313,7 @@ describe('Authentication Integration Tests', () => {
       params.append('tokens[]', 'token2');
       params.append('tokens[]', 'token3');
 
-      const response = await fetch('http://localhost:8080/auth', {
+      const response = await fetch(`http://localhost:${testEnv.authPort}/auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: params.toString(),
@@ -338,7 +338,7 @@ describe('Authentication Integration Tests', () => {
       });
       params.append('tokens[]', '');
 
-      const response = await fetch('http://localhost:8080/auth', {
+      const response = await fetch(`http://localhost:${testEnv.authPort}/auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: params.toString(),

@@ -690,4 +690,28 @@ export class EdgeControlClient extends EventEmitter {
   async setUserComment(user_id: number, data: Buffer): Promise<RPCResult<'blob.setUserComment'>> {
     return await this.client.call('blob.setUserComment', { user_id, data }) as RPCResult<'blob.setUserComment'>;
   }
+
+  // ============================================================================
+  // Client Message Relay Methods
+  // ============================================================================
+
+  /**
+   * 发送客户端消息中转到 Hub
+   */
+  async sendRelay(relay: any): Promise<void> {
+    // TODO: 实现通过 WebSocket 发送 ClientMessageRelay
+    // 当前暂时通过 RPC 模拟
+    logger.debug(`Sending relay to Hub: session=${relay.session_id}`);
+    this.emit('relay', relay);
+  }
+
+  /**
+   * 批量发送客户端消息中转到 Hub
+   */
+  async sendRelayBatch(relays: any[]): Promise<void> {
+    // TODO: 实现批量发送优化
+    for (const relay of relays) {
+      await this.sendRelay(relay);
+    }
+  }
 }

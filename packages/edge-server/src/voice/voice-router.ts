@@ -106,6 +106,8 @@ export class VoiceRouter extends EventEmitter {
    * @param alreadyDecrypted 是否已经解密过（用于地址匹配）
    */
   handleUDPPacket(session_id: number, data: Buffer, rinfo: any, alreadyDecrypted: boolean = false): void {
+    this.logger.debug(`[UDP] handleUDPPacket: session=${session_id}, size=${data.length}, alreadyDecrypted=${alreadyDecrypted}`);
+    this.logger.debug(`[UDP] handleUDPPacket: session=${session_id}, size=${data.length}, alreadyDecrypted=${alreadyDecrypted}`);
     try {
       let decrypted;
 
@@ -146,6 +148,7 @@ export class VoiceRouter extends EventEmitter {
       // 检查是否是UDP Ping包 (type = 1)
       const header = decrypted.readUInt8(0);
       const type = (header >> 5) & 0x07;
+      this.logger.debug(`[UDP] Packet type: ${type}, header: 0x${header.toString(16)}`);
       
       if (type === 1) {
         // UDP Ping packet (type=1) - 回显明文数据（会在 handleUDPPing 中重新加密）
@@ -183,7 +186,9 @@ export class VoiceRouter extends EventEmitter {
    * 这样可以在第一次 UDP Ping 时就建立 UDP 连接
    */
   private handleUDPPing(session_id: number, plaintextData: Buffer, rinfo: any): void {
+    this.logger.info(`[UDP] Handling ping from session ${session_id}, data size: ${plaintextData.length}`);
     if (!this.udpServer) {
+      this.logger.warn('[UDP] No UDP server available for ping response');
       return;
     }
 
@@ -803,12 +808,7 @@ export class VoiceRouter extends EventEmitter {
       }
 
       // 情况2: 基于频道的目标
-      // protobuf optional字段的默认值是0，需要检查是否真的设置了channel_id
-      // 只有当channel_id > 0时才认为是频道目标（channel 0是root，不应该被包含）
-      const hasChannelId = target.channel_id !== undefined && 
-                          target.channel_id !== null && 
-                          target.channel_id > 0;
-      if (hasChannelId) {
+      if (target.has_channel_id) {
         const targetChannels = new Set<number>();
         targetChannels.add(target.channel_id);
 

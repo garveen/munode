@@ -32,8 +32,6 @@ export class CryptoManager {
     // 重置加密历史
     this.encryptHistory = [];
     this.decryptHistory = [];
-
-    console.debug('Cryptographic keys initialized');
   }
 
   /**

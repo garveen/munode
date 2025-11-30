@@ -8,9 +8,9 @@
     "munode-client": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "node esbuild.config.mjs && tsc --emitDeclarationOnly --outDir dist",
     "dev": "tsx watch src/cli.ts",
-    "start": "node dist/cli.js start",
+    "start": "node --experimental-loader dist/cli.js start",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage"

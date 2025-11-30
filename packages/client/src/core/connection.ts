@@ -44,6 +44,9 @@ export class ConnectionManager {
   private receiveBuffer: Buffer = Buffer.alloc(0);
   private useTcpVoice: boolean = false; // 是否使用TCP传输语音
   private udpFailed: boolean = false; // UDP是否失败
+  private serverHost: string = '';
+  private serverPort: number = 0;
+  private udpPort: number = 0; // UDP 端口（通常是 TCP 端口，但在某些实现中可能是 TCP+1）
 
   constructor(client: MumbleClient) {
     this.client = client;
@@ -77,6 +80,12 @@ export class ConnectionManager {
 
       this.tcpSocket.on('secureConnect', () => {
         this.setState(ConnectionState.Connected);
+        // 保存服务器信息用于后续 UDP 连接
+        this.serverHost = options.host;
+        this.serverPort = options.port || 64738;
+        // UDP 端口：如果指定了 udpPort，使用它；否则使用 TCP 端口
+        // 注意：Go/C 实现使用相同端口，但我们的实现使用 TCP+1
+        this.udpPort = options.udpPort || this.serverPort;
         resolve();
       });
 
@@ -114,7 +123,22 @@ export class ConnectionManager {
       const dgram = await import('dgram');
       this.udpSocket = dgram.createSocket('udp4');
 
-      // 设置消息接收处理器
+      // 先绑定到随机本地端口
+      await new Promise<void>((resolve, reject) => {
+        const errorHandler = (error: Error) => {
+          reject(error);
+        };
+        
+        this.udpSocket!.once('error', errorHandler);
+        
+        this.udpSocket!.bind(0, () => {
+          // bind 成功，移除临时错误处理器
+          this.udpSocket!.removeListener('error', errorHandler);
+          resolve();
+        });
+      });
+
+      // bind 成功后设置持久事件处理器
       this.udpSocket.on('message', (msg, _rinfo) => {
         this.handleUDPMessage(msg);
         this.udpFailed = false; // UDP 工作正常
@@ -130,14 +154,10 @@ export class ConnectionManager {
         }
       });
 
-      // 绑定到随机本地端口
-      return new Promise((resolve, reject) => {
-        this.udpSocket!.bind(0, () => {
-          resolve();
-        });
-
-        this.udpSocket!.on('error', reject);
-      });
+      // 给 UDP socket 一点时间完全初始化
+      // 在某些系统上，bind 回调返回后 socket 可能还没完全准备好发送数据
+      await new Promise(resolve => setTimeout(resolve, 10));
+      
     } catch (error) {
       console.error('Failed to create UDP socket:', error);
       this.udpFailed = true;
@@ -209,16 +229,13 @@ export class ConnectionManager {
       throw new Error('UDP socket not connected');
     }
 
-    // 获取服务器地址和端口 (从TCP连接中获取)
-    const address = this.tcpSocket?.remoteAddress;
-    const port = this.tcpSocket?.remotePort;
-
-    if (!address || !port) {
-      throw new Error('TCP connection not established');
+    // 使用保存的服务器主机和 UDP 端口
+    if (!this.serverHost || !this.udpPort) {
+      throw new Error('Server connection not established');
     }
 
     return new Promise((resolve, reject) => {
-      this.udpSocket!.send(message, 0, message.length, port, address, (error) => {
+      this.udpSocket!.send(message, 0, message.length, this.udpPort, this.serverHost, (error) => {
         if (error) {
           // UDP发送失败，标记UDP为不可用
           this.udpFailed = true;
@@ -238,19 +255,25 @@ export class ConnectionManager {
    * 发送语音包（自动选择UDP或TCP）
    */
   async sendVoicePacket(packet: Buffer): Promise<void> {
+    // 加密语音包（如果加密已初始化）
+    let encryptedPacket = packet;
+    if (this.client.getCryptoManager().isInitialized()) {
+      encryptedPacket = this.client.getCryptoManager().encrypt(packet);
+    }
+
     if (this.isUsingTcpVoice()) {
       // 使用TCP隧道发送语音包
-      return this.sendTCPVoicePacket(packet);
+      return this.sendTCPVoicePacket(encryptedPacket);
     } else {
       try {
         // 尝试使用UDP发送
-        return await this.sendUDP(packet);
+        return await this.sendUDP(encryptedPacket);
       } catch (error) {
         // UDP失败，降级到TCP
         console.warn('UDP voice send failed, falling back to TCP:', error);
         this.udpFailed = true;
         this.useTcpVoice = true;
-        return this.sendTCPVoicePacket(packet);
+        return this.sendTCPVoicePacket(encryptedPacket);
       }
     }
   }
@@ -391,7 +414,11 @@ export class ConnectionManager {
         case MessageType.CryptSetup:
           // 加密设置消息
           const cryptSetupMessage = mumbleproto.CryptSetup.deserialize(payload);
-          this.handleCryptSetup(cryptSetupMessage);
+          // 异步处理，但不阻塞消息处理循环
+          console.log('Received CryptSetup message, initializing cryptography');
+          this.handleCryptSetup(cryptSetupMessage).catch(error => {
+            console.error('Failed to handle CryptSetup:', error);
+          });
           break;
 
         case MessageType.ContextActionModify:
@@ -483,12 +510,31 @@ export class ConnectionManager {
         decryptedData = decryptResult;
       }
 
+      // 检查是否是 UDP Ping 响应 (type = 1)
+      if (decryptedData.length >= 1) {
+        const header = decryptedData[0];
+        const type = (header >> 5) & 0x07;
+        if (type === 1) {
+          // UDP Ping 响应，表示 UDP 连接已就绪
+          console.debug('UDP Ping response received, UDP ready');
+          this.client.emit('udpReady');
+          return;
+        }
+      }
+
       // 2. 解析音频包
       const packetInfo = this.parseVoicePacket(decryptedData);
       if (!packetInfo) {
         console.warn('Failed to parse voice packet');
         return;
       }
+
+      // 触发 voice 事件供测试使用
+      this.client.emit('voice', {
+        session: packetInfo.sessionId,
+        sequence: packetInfo.sequence,
+        data: packetInfo.audioData
+      });
 
       // 3. 路由到音频处理器
       this.client.getAudioManager().handleAudioPacket(
@@ -686,17 +732,90 @@ export class ConnectionManager {
   /**
    * 处理加密设置消息
    */
-  private handleCryptSetup(message: any): void {
+  private async handleCryptSetup(message: any): Promise<void> {
     // 从CryptSetup消息中提取加密参数
-    if (message.key && message.client_nonce && message.server_nonce) {
+    // 注意：protobuf optional字段需要使用 has_xxx 方法检查是否设置
+    if (message.has_key && message.has_client_nonce && message.has_server_nonce) {
       this.client.getCryptoManager().setKey(
         Buffer.from(message.key),
         Buffer.from(message.client_nonce),
         Buffer.from(message.server_nonce)
       );
-      console.debug('Cryptographic setup completed');
+      console.log('[ConnectionManager] Cryptographic setup completed');
+      
+      // 初始化 UDP 连接（如果未强制使用 TCP 语音）
+      if (!this.useTcpVoice && !this.udpSocket) {
+        try {
+          await this.connectUDP(this.serverHost, this.udpPort);
+          console.log('[ConnectionManager] UDP socket established');
+          
+          // 发送 UDP Ping 包来建立地址映射
+          await this.sendUDPPing();
+          console.log('[ConnectionManager] UDP Ping sent');
+        } catch (error) {
+          console.warn('[ConnectionManager] Failed to establish UDP connection, will use TCP for voice:', error);
+          this.udpFailed = true;
+          this.useTcpVoice = true;
+        }
+      }
     } else {
-      console.warn('Incomplete cryptographic setup message');
+      console.warn('[ConnectionManager] Incomplete cryptographic setup message', {
+        has_key: message.has_key,
+        has_client_nonce: message.has_client_nonce,
+        has_server_nonce: message.has_server_nonce
+      });
     }
+  }
+
+  /**
+   * 发送 UDP Ping 包
+   * UDP Ping 包格式: [type (1 byte)] + [varint timestamp]
+   * type = 0x20 (001 << 5, ping type is 1)
+   * 参考 C 实现的 encodePingPacket_legacy
+   */
+  private async sendUDPPing(): Promise<void> {
+    if (!this.udpSocket || !this.client.getCryptoManager().isInitialized()) {
+      return;
+    }
+
+    try {
+      // 创建 UDP Ping 包
+      // Header: type = 1 (ping) << 5 = 0x20
+      const header = 0x20; // 001 00000 (type=1, target=0)
+      const timestamp = Date.now(); // 毫秒时间戳
+      
+      // 编码 timestamp 为 varint
+      const timestampVarint = this.encodeVarint(timestamp);
+      
+      // 构建 ping 包: [header] + [varint timestamp]
+      const pingPacket = Buffer.alloc(1 + timestampVarint.length);
+      pingPacket.writeUInt8(header, 0);
+      timestampVarint.copy(pingPacket, 1);
+      
+      // 加密并发送
+      const encrypted = this.client.getCryptoManager().encrypt(pingPacket);
+      await this.sendUDP(encrypted);
+      
+      console.debug('UDP Ping sent');
+    } catch (error) {
+      console.warn('Failed to send UDP Ping:', error);
+    }
+  }
+
+  /**
+   * 编码可变长度整数 (Varint)
+   * 与 AudioStreamManager.encodeVarint 相同
+   */
+  private encodeVarint(value: number): Buffer {
+    const bytes: number[] = [];
+    do {
+      let byte = value & 0x7F;
+      value >>= 7;
+      if (value > 0) {
+        byte |= 0x80;
+      }
+      bytes.push(byte);
+    } while (value > 0);
+    return Buffer.from(bytes);
   }
 }

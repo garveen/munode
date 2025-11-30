@@ -81,9 +81,10 @@ export class ConnectionHandlers {
    */
   handleUDPMessage(msg: Buffer, rinfo: RemoteInfo): void {
     const addressKey = `${rinfo.address}:${rinfo.port}`;
+    logger.debug(`[UDP] Received ${msg.length} bytes from ${addressKey}`);
     let session_id: number | undefined;
     let needsUpdate = false;
-    let alreadyDecrypted = false; // 标记是否已经解密过
+    let decryptedData: Buffer | null = null; // 存储解密后的数据
 
     // 1. 首先查找精确的IP:Port映射
     session_id = this.udpAddressToSession.get(addressKey);
@@ -114,7 +115,7 @@ export class ConnectionHandlers {
             // 注意：此时 crypto 的 decryptIV 已经被修改了
             // 所以后续不应该再次调用 decrypt
             matchedClient = client;
-            alreadyDecrypted = true;
+            decryptedData = decrypted.data; // 保存解密后的数据
             logger.info(`UDP address matched by decryption: ${addressKey} -> session ${client.session} (${client.username})`);
             break;
           }
@@ -165,8 +166,12 @@ export class ConnectionHandlers {
     }
 
     // 6. 转发消息到 VoiceRouter
-    // 如果在匹配阶段已经解密过，通知 VoiceRouter 跳过解密
-    this.voiceRouter.handleUDPPacket(session_id, msg, rinfo, alreadyDecrypted);
+    // 如果在匹配阶段已经解密过，传递解密后的数据
+    if (decryptedData) {
+      this.voiceRouter.handleUDPPacket(session_id, decryptedData, rinfo, true);
+    } else {
+      this.voiceRouter.handleUDPPacket(session_id, msg, rinfo, false);
+    }
   }
 
   /**

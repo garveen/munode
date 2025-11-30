@@ -20,6 +20,13 @@ export default defineConfig({
         isolate: true, // 确保完全隔离
       },
     },
+    // 减少日志输出
+    silent: false, // 保留测试输出
+    reporters: process.env.CI ? ['dot'] : ['default'], // CI 环境使用简洁输出
+    outputFile: undefined, // 不写入文件
+    logHeapUsage: false, // 禁用堆使用日志
+    // 减少标准输出冗余
+    printConsoleTrace: false,
     coverage: {
       reporter: ['text', 'json', 'html'],
       exclude: [

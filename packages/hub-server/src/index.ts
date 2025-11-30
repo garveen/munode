@@ -6,3 +6,6 @@ export * from './certificate-exchange.js';
 export * from './control-service.js';
 export * from './config-defaults.js';
 export * from './config-validator.js';
+
+// Export relay components
+export { ClientMessageRouter } from './relay/client-message-router.js';

@@ -1,6 +1,103 @@
 // Mumble protocol types
 export { mumbleproto } from './generated/proto/Mumble.js';
 
+// Hub-Edge protocol types
+export { hubedge } from './generated/proto/HubEdge.js';
+
+// RPC layer - New Protobuf-based implementation
+export {
+  ProtobufRPCClient,
+} from './rpc/rpc-client.js';
+
+export {
+  ProtobufRPCServer,
+  type RPCHandler as ProtobufRPCHandler,
+} from './rpc/rpc-server.js';
+
+export {
+  type EdgeToHubMethods as ProtobufEdgeToHubMethods,
+  type HubToEdgeMethods,
+  type RPCParams as ProtobufRPCParams,
+  type RPCResult as ProtobufRPCResult,
+  type RPCCallOptions,
+  RPCError, // Export as RPCError (this is the new Protobuf version)
+  RPCErrorCode,
+  type EdgeRegisterMethod as ProtobufEdgeRegisterMethod,
+  type EdgeAllocateSessionIdMethod,
+  type EdgeAuthenticateUserMethod,
+  type EdgeQueryPermissionMethod,
+  type EdgeQueryUserMethod,
+  type EdgeQueryChannelACLMethod,
+  type EdgeQueryChannelTreeMethod,
+  type EdgeQueryOnlineUsersMethod,
+  type HubDisconnectClientMethod,
+  type HubReloadConfigMethod,
+  type HubRequestStatsMethod,
+} from './rpc/rpc-methods.js';
+
+// WebSocket transport layer
+export {
+  EdgeHubWebSocketClient,
+  type WebSocketClientConfig,
+} from './transport/websocket-client.js';
+
+export {
+  EdgeHubWebSocketServer,
+  type EdgeClient,
+  type WebSocketServerConfig,
+} from './transport/websocket-server.js';
+
+export {
+  PacketCodec,
+} from './transport/packet-codec.js';
+
+// Generated Protobuf types (for direct usage if needed)
+// These will be available after build
+// export {
+//   EdgeHubPacket,
+//   PacketType,
+//   RPCRequest,
+//   RPCResponse,
+//   RPCError as ProtoRPCError,
+//   ClientMessageRelay,
+//   RelayDirection,
+//   RelayRouting,
+//   RoutingType,
+//   Heartbeat,
+//   HeartbeatAck,
+//   ServerStats as ProtoServerStats,
+//   ConfigUpdate,
+//   ConfigItem,
+// } from './generated/HubEdge.js';
+
+// export {
+//   SyncData,
+//   SyncType,
+//   UserStateSync,
+//   UserOperation,
+//   UserInfo,
+//   ChannelStateSync,
+//   ChannelOperation,
+//   ChannelInfo as SyncChannelInfo,
+//   ACLSync,
+//   ACLEntry as ProtoACLEntry,
+//   ChannelGroup as SyncChannelGroup,
+//   BatchSync,
+//   FullSyncRequest,
+//   FullSyncResponse,
+//   FullSyncDataType,
+//   ShardInfo,
+//   GlobalConfig,
+//   VoiceTargetSync,
+//   VoiceTarget as ProtoVoiceTarget,
+//   ChannelTarget as ProtoChannelTarget,
+//   UserTarget,
+//   PermissionQuery as SyncPermissionQuery,
+//   PermissionResult,
+//   ConnectionEvent,
+//   ConnectionEventType,
+// } from './generated/HubEdgeSync.js';
+
 // Re-export types for convenience
 import { mumbleproto } from './generated/proto/Mumble.js';
 export type Version = mumbleproto.Version;
@@ -51,10 +148,11 @@ export { ClientState } from './shared-types.js';
 export { RPCChannel } from './rpc/rpc-channel.js';
 export type { Message, PendingRequest } from './rpc/rpc-channel.js';
 
-// Typed RPC
+// Typed RPC (Legacy - will be deprecated)
 export { TypedRPCClient, createTypedRPCClient } from './rpc/typed-rpc-client.js';
 export { TypedRPCServer, createTypedRPCServer } from './rpc/typed-rpc-server.js';
-export type { RPCHandler, RPCError } from './rpc/typed-rpc-server.js';
+export type { RPCHandler } from './rpc/typed-rpc-server.js';
+// Note: RPCError is now exported from rpc-methods.js (new Protobuf version)
 export type {
   EdgeToHubMethods,
   HubToEdgeNotifications,
@@ -145,3 +243,6 @@ export type {
   SaveChannelRequest,
   SaveACLRequest,
 } from './hub-edge-types.js';
+
+// Transport layer
+export * from './transport/index.js';

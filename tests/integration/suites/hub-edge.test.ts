@@ -29,7 +29,7 @@ describe('Hub-Edge Communication Integration Tests', () => {
     });
 
     it('should be able to connect to auth server', async () => {
-      const response = await fetch('http://localhost:8084/auth', {
+      const response = await fetch(`http://localhost:${testEnv.authPort}/auth`, {
         method: 'OPTIONS',
       });
       expect(response.status).toBe(200);

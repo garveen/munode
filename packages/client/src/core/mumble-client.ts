@@ -51,6 +51,32 @@ export class MumbleClient extends EventEmitter {
   }
 
   /**
+   * 等待 UDP 连接就绪
+   * @param timeout 超时时间（毫秒），默认 5000ms
+   */
+  waitForUDP(timeout: number = 5000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      // 如果已经使用 TCP 语音，直接 resolve
+      if (this.connection.isUsingTcpVoice()) {
+        resolve();
+        return;
+      }
+
+      const timer = setTimeout(() => {
+        this.removeListener('udpReady', onReady);
+        reject(new Error('UDP connection timeout'));
+      }, timeout);
+
+      const onReady = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+
+      this.once('udpReady', onReady);
+    });
+  }
+
+  /**
    * 连接到 Mumble 服务器
    */
   async connect(options: ConnectOptions): Promise<void> {
