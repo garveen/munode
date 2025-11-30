@@ -89,21 +89,21 @@ export class AudioStreamManager {
 
   /**
    * 处理接收到的音频包
+   * 注意：audioData 已经由 ConnectionManager 解密过，不需要再次解密
    */
   handleAudioPacket(session: number, audioData: Buffer): void {
-    // 1. 解密音频包
-    const decryptedData = this.client.getCryptoManager().decrypt(audioData);
+    // audioData 已经是解密后的数据，直接使用
     
-    // 2. 获取输出流
+    // 1. 获取输出流
     const outputStream = this.outputStreams.get(session);
     if (outputStream) {
       // 发送到输出流 (暂不解码)
-      outputStream.receiveAudio(decryptedData);
+      outputStream.receiveAudio(audioData);
     }
     
-    // 3. 如果有混音器，也发送到混音器
+    // 2. 如果有混音器，也发送到混音器
     if (this.mixer) {
-      this.mixer.addInput(session, decryptedData);
+      this.mixer.addInput(session, audioData);
     }
   }
 
