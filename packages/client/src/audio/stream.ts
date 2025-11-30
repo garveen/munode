@@ -88,20 +88,20 @@ export class AudioStreamManager {
   }
 
   /**
-   * 处理接收到的音频包
-   * 注意：audioData 已经由 ConnectionManager 解密过，不需要再次解密
+   * Handle received audio packet
+   * Note: audioData is already decrypted by ConnectionManager, no need to decrypt again
    */
   handleAudioPacket(session: number, audioData: Buffer): void {
-    // audioData 已经是解密后的数据，直接使用
+    // audioData is already decrypted, use directly
     
-    // 1. 获取输出流
+    // 1. Get output stream
     const outputStream = this.outputStreams.get(session);
     if (outputStream) {
-      // 发送到输出流 (暂不解码)
+      // Send to output stream (no decoding for now)
       outputStream.receiveAudio(audioData);
     }
     
-    // 2. 如果有混音器，也发送到混音器
+    // 2. If mixer exists, also add to mixer
     if (this.mixer) {
       this.mixer.addInput(session, audioData);
     }
