@@ -133,7 +133,13 @@ describe('Plugin Integration Tests', () => {
         rejectUnauthorized: false,
       });
 
+      // Wait for all sessions to be established
+      await new Promise(resolve => setTimeout(resolve, 500));
+
       const session2 = client2.getStateManager().getSession()?.session;
+      if (!session2) {
+        throw new Error('Session2 is undefined - client2 may not be properly authenticated');
+      }
       const pluginId = 'com.example.privateplugin';
       const pluginData = Buffer.from('private plugin data');
 
