@@ -825,7 +825,9 @@ export class VoiceRouter extends EventEmitter {
       }
 
       // 情况2: 基于频道的目标
-      if (target.has_channel_id) {
+      // 兼容两种情况：protobuf对象（has_channel_id）和普通JSON对象（channel_id !== undefined）
+      const hasChannelId = target.has_channel_id || (target.channel_id !== undefined && target.channel_id !== null);
+      if (hasChannelId) {
         const targetChannels = new Set<number>();
         targetChannels.add(target.channel_id);
 
