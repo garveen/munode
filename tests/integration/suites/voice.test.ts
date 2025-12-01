@@ -141,7 +141,7 @@ async function createClients(testEnv: TestEnvironment, configs: ClientConfig[]):
       username: config.username,
       password: config.password,
       rejectUnauthorized: false,
-      forceTcpVoice: true,
+      forceTcpVoice: false,
     });
     
     // 等待 UDP 连接就绪
