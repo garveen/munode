@@ -3218,6 +3218,8 @@ export class HubControlService {
    */
   async start(): Promise<void> {
     logger.info(`Starting Hub control channel server on port ${this.config.controlPort || 8443}`);
+    // 启动网络拓扑管理器
+    this._networkTopologyManager.start();
     // 服务器在构造函数中已经启动
   }
 
@@ -3226,6 +3228,8 @@ export class HubControlService {
    */
   async stop(): Promise<void> {
     logger.info('Stopping Hub control channel server');
+    // 停止网络拓扑管理器
+    this._networkTopologyManager.stop();
     this.server.close();
   }
 
