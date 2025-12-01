@@ -274,6 +274,26 @@ class TestAuthServer {
       'udp_ping_test': { password: 'password123', user_id: 205 },
       'udp_multi_sender': { password: 'password123', user_id: 206 },
       'udp_multi_receiver': { password: 'password123', user_id: 207 },
+      // Voice routing test users
+      'routing_config_test': { password: 'pass1', user_id: 301 },
+      'rtt_sender': { password: 'pass1', user_id: 302 },
+      'rtt_receiver': { password: 'pass2', user_id: 303 },
+      'loss_sender': { password: 'pass1', user_id: 304 },
+      'loss_receiver': { password: 'pass2', user_id: 305 },
+      'direct_sender': { password: 'pass1', user_id: 306 },
+      'direct_receiver': { password: 'pass2', user_id: 307 },
+      'tcp_fallback_sender': { password: 'pass1', user_id: 308 },
+      'tcp_fallback_receiver': { password: 'pass2', user_id: 309 },
+      'route_table_test': { password: 'pass1', user_id: 310 },
+      'cross_edge_sender': { password: 'pass1', user_id: 311 },
+      'cross_edge_receiver': { password: 'pass2', user_id: 312 },
+      'deaf_test_sender': { password: 'pass1', user_id: 313 },
+      'deaf_test_deaf': { password: 'pass2', user_id: 314 },
+      'deaf_test_normal': { password: 'pass3', user_id: 315 },
+      'hub_bypass_sender': { password: 'pass1', user_id: 316 },
+      'hub_bypass_receiver': { password: 'pass2', user_id: 317 },
+      'stress_sender': { password: 'pass1', user_id: 318 },
+      'stress_receiver': { password: 'pass2', user_id: 319 },
     };
 
     const user = users[req.username];
