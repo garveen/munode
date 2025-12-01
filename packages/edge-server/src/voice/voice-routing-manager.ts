@@ -11,23 +11,23 @@
 
 import { EventEmitter } from 'events';
 import { createLogger } from '@munode/common';
+import {
+  DEFAULT_ROUTING_POLICY,
+  DEFAULT_LOCAL_DECISION_CONFIG,
+  DEFAULT_EDGE_RELAY_CONFIG,
+  DEFAULT_PROBE_CONFIG,
+  DEFAULT_FALLBACK_CONFIG,
+} from '@munode/protocol';
 import type {
   EdgeConfig,
   EdgeVoiceRoutingConfig,
   EdgeRoutingPolicy,
   RouteEntry,
-  RouteType,
   EdgeConnectionQuality,
 } from '../types.js';
+import { RouteType } from '../types.js';
 
 const logger = createLogger({ service: 'voice-routing-manager' });
-
-// 路由类型常量
-const RouteTypes = {
-  DIRECT: 'direct' as RouteType,
-  RELAY: 'relay' as RouteType,
-  FALLBACK: 'fallback' as RouteType,
-};
 
 /**
  * 中转统计信息
@@ -51,56 +51,15 @@ interface QualitySample {
 }
 
 /**
- * 默认路由策略配置
- */
-const DEFAULT_ROUTING_POLICY: EdgeRoutingPolicy = {
-  directRttThreshold: 200,
-  directLossThreshold: 0.05,
-  enableRelay: true,
-  maxRelayHops: 1,
-  relayCostFactor: 1.2,
-  routeSwitchHysteresis: 5000,
-  routeSwitchCostDelta: 0.3,
-  maxRelayLoadPerEdge: 0.7,
-  probeInterval: 10000,
-  routeTableUpdateInterval: 30000,
-};
-
-/**
- * 默认 Edge 语音路由配置
+ * 默认 Edge 语音路由配置（使用共享常量）
  */
 const DEFAULT_VOICE_ROUTING_CONFIG: Required<EdgeVoiceRoutingConfig> = {
   enabled: false,
-  hubPolicy: DEFAULT_ROUTING_POLICY,
-  localDecision: {
-    enabled: true,
-    updateInterval: 5000,
-    qualityCheckInterval: 10000,
-    directRttThreshold: 200,
-    directLossThreshold: 0.05,
-  },
-  relay: {
-    enabled: true,
-    maxRelayCpuLoad: 0.7,
-    maxRelayBandwidth: 10000,
-    softLimitThreshold: 0.7,
-    hardLimitThreshold: 0.9,
-    recoveryThreshold: 0.6,
-    priority: 1,
-  },
-  probe: {
-    enabled: true,
-    method: 'passive',
-    updateInterval: 10000,
-    lossWindowSize: 100,
-    rttSmoothFactor: 0.2,
-    metricsTTL: 30000,
-  },
-  fallback: {
-    enableTcpFallback: true,
-    tcpFallbackDelay: 10000,
-    udpRecoveryCheckInterval: 30000,
-  },
+  hubPolicy: { ...DEFAULT_ROUTING_POLICY },
+  localDecision: { ...DEFAULT_LOCAL_DECISION_CONFIG },
+  relay: { ...DEFAULT_EDGE_RELAY_CONFIG },
+  probe: { ...DEFAULT_PROBE_CONFIG },
+  fallback: { ...DEFAULT_FALLBACK_CONFIG },
 };
 
 export class VoiceRoutingManager extends EventEmitter {
@@ -512,7 +471,7 @@ export class VoiceRoutingManager extends EventEmitter {
     if (this.isDirectRouteFeasible(quality)) {
       return {
         targetEdgeId,
-        type: RouteTypes.DIRECT,
+        type: RouteType.DIRECT,
         cost: this.calculateDirectCost(quality),
         timestamp: Date.now(),
         source: 'local',
@@ -531,7 +490,7 @@ export class VoiceRoutingManager extends EventEmitter {
     if (this.voiceRoutingConfig.fallback.enableTcpFallback) {
       return {
         targetEdgeId,
-        type: RouteTypes.FALLBACK,
+        type: RouteType.FALLBACK,
         cost: 1000, // TCP 成本很高
         timestamp: Date.now(),
         source: 'local',
@@ -591,7 +550,7 @@ export class VoiceRoutingManager extends EventEmitter {
         bestCost = relayCost;
         bestRoute = {
           targetEdgeId,
-          type: RouteTypes.RELAY,
+          type: RouteType.RELAY,
           nextHop: relayEdgeId,
           cost: relayCost,
           timestamp: Date.now(),

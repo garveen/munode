@@ -208,7 +208,7 @@ describe('Voice Routing Integration Tests', () => {
       for (let i = 0; i < 10; i++) {
         const voicePacket = createVoicePacket(4, 0, i);
         await sender.getConnectionManager().sendVoicePacket(voicePacket);
-        await sleep(50); // 20ms 间隔模拟真实语音流
+        await sleep(50); // 50ms 间隔
       }
       
       await sleep(1500);
@@ -601,7 +601,7 @@ describe('Voice Routing Stress Tests', () => {
     for (let i = 0; i < 100; i++) {
       const voicePacket = createVoicePacket(4, 0, i);
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
-      await sleep(20); // 50 pps
+      await sleep(20); // 20ms 间隔 = 50 pps
     }
     const sendTime = Date.now() - startTime;
     

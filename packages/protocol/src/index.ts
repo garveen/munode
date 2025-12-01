@@ -246,3 +246,13 @@ export type {
 
 // Transport layer
 export * from './transport/index.js';
+
+// Voice routing constants
+export {
+  DEFAULT_ROUTING_POLICY,
+  DEFAULT_HUB_RELAY_CONFIG,
+  DEFAULT_LOCAL_DECISION_CONFIG,
+  DEFAULT_EDGE_RELAY_CONFIG,
+  DEFAULT_PROBE_CONFIG,
+  DEFAULT_FALLBACK_CONFIG,
+} from './voice/voice-routing-constants.js';

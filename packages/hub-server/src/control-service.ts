@@ -12,6 +12,8 @@ import {
   ChannelData,
   ACLData,
   GlobalSession,
+  DEFAULT_ROUTING_POLICY,
+  DEFAULT_HUB_RELAY_CONFIG,
 } from '@munode/protocol';
 import { mumbleproto } from '@munode/protocol';
 import type { HubConfig } from './types.js';
@@ -1947,24 +1949,9 @@ export class HubControlService {
     
     const configToPush = {
       enabled: voiceRoutingConfig.enabled,
-      policy: voiceRoutingConfig.policy || {
-        directRttThreshold: 200,
-        directLossThreshold: 0.05,
-        enableRelay: true,
-        maxRelayHops: 1,
-        relayCostFactor: 1.2,
-        routeSwitchHysteresis: 5000,
-        routeSwitchCostDelta: 0.3,
-        maxRelayLoadPerEdge: 0.7,
-        probeInterval: 10000,
-        routeTableUpdateInterval: 30000,
-      },
+      policy: voiceRoutingConfig.policy || DEFAULT_ROUTING_POLICY,
       preferredRelayEdges: voiceRoutingConfig.preferredRelayEdges || [],
-      hubRelay: voiceRoutingConfig.hubRelay || {
-        enableUdpRelay: false,
-        enableTcpFallback: true,
-        tcpRelayPriority: 'last',
-      },
+      hubRelay: voiceRoutingConfig.hubRelay || DEFAULT_HUB_RELAY_CONFIG,
     };
     
     logger.info(`Pushing voice routing config to Edge ${edgeId}:`, {
