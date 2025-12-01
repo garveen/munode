@@ -539,6 +539,8 @@ export class ConnectionManager {
       // 触发 voice 事件供测试使用
       this.client.emit('voice', {
         session: packetInfo.sessionId,
+        codec: packetInfo.codec,
+        target: packetInfo.target,
         sequence: packetInfo.sequence,
         data: packetInfo.audioData
       });
@@ -710,30 +712,88 @@ export class ConnectionManager {
   }
 
   /**
-   * 读取可变长度整数 (Varint)
+   * 读取可变长度整数 (Mumble varint, 不是 protobuf varint)
+   * 参照 Go 实现: packetdata/packetdata.go getVarint
+   * 
+   * Mumble 的 varint 编码规则:
+   * - 0x00-0x7F: 单字节（最高位为0）
+   * - 0x80-0xBF: 双字节（最高2位为10，后14位是值）
+   * - 0xC0-0xDF: 3字节（最高3位为110，后21位是值）
+   * - 0xE0-0xEF: 4字节（最高4位为1110，后28位是值）
+   * - 0xF0: 后续4字节完整32位整数
+   * - 0xF4: 后续8字节完整64位整数
+   * - 0xF8: 负数（后续varint取反）
+   * - 0xFC-0xFF: 小负数 -1 到 -4
    */
   private readVarint(buffer: Buffer, offset: number): { value: number; newOffset: number } | null {
-    let value = 0;
-    let shift = 0;
-    let bytesRead = 0;
-
-    while (offset + bytesRead < buffer.length) {
-      const byte = buffer[offset + bytesRead];
-      value |= (byte & 0x7F) << shift;
-      bytesRead++;
-
-      if ((byte & 0x80) === 0) {
-        return { value, newOffset: offset + bytesRead };
-      }
-
-      shift += 7;
-      if (shift >= 32) {
-        // 防止溢出
-        return null;
-      }
+    if (offset >= buffer.length) {
+      return null;
     }
 
-    return null; // 数据不完整
+    const v = buffer[offset];
+    offset++;
+
+    if ((v & 0x80) === 0x00) {
+      // 单字节: 0x00-0x7F
+      return { value: v & 0x7f, newOffset: offset };
+    } else if ((v & 0xc0) === 0x80) {
+      // 双字节: 0x80-0xBF
+      if (offset >= buffer.length) return null;
+      const value = ((v & 0x3f) << 8) | buffer[offset];
+      return { value, newOffset: offset + 1 };
+    } else if ((v & 0xf0) === 0xf0) {
+      // 特殊格式
+      switch (v & 0xfc) {
+        case 0xf0: {
+          // 完整32位整数
+          if (offset + 3 >= buffer.length) return null;
+          const value =
+            (buffer[offset] << 24) |
+            (buffer[offset + 1] << 16) |
+            (buffer[offset + 2] << 8) |
+            buffer[offset + 3];
+          return { value: value >>> 0, newOffset: offset + 4 };
+        }
+        case 0xf4: {
+          // 64位整数（我们只支持低32位）
+          if (offset + 7 >= buffer.length) return null;
+          // 跳过高32位，只读取低32位
+          const value =
+            (buffer[offset + 4] << 24) |
+            (buffer[offset + 5] << 16) |
+            (buffer[offset + 6] << 8) |
+            buffer[offset + 7];
+          return { value: value >>> 0, newOffset: offset + 8 };
+        }
+        case 0xf8: {
+          // 负数（反转），递归解码
+          const result = this.readVarint(buffer, offset);
+          if (!result) return null;
+          return { value: ~result.value, newOffset: result.newOffset };
+        }
+        case 0xfc:
+          // 小负数: -1 to -4
+          return { value: ~(v & 0x03), newOffset: offset };
+        default:
+          return null;
+      }
+    } else if ((v & 0xe0) === 0xc0) {
+      // 3字节: 0xC0-0xDF
+      if (offset + 1 >= buffer.length) return null;
+      const value = ((v & 0x1f) << 16) | (buffer[offset] << 8) | buffer[offset + 1];
+      return { value, newOffset: offset + 2 };
+    } else if ((v & 0xf0) === 0xe0) {
+      // 4字节: 0xE0-0xEF
+      if (offset + 2 >= buffer.length) return null;
+      const value =
+        ((v & 0x0f) << 24) |
+        (buffer[offset] << 16) |
+        (buffer[offset + 1] << 8) |
+        buffer[offset + 2];
+      return { value: value >>> 0, newOffset: offset + 3 };
+    }
+
+    return null;
   }
 
   /**
@@ -814,19 +874,56 @@ export class ConnectionManager {
   }
 
   /**
-   * 编码可变长度整数 (Varint)
-   * 与 AudioStreamManager.encodeVarint 相同
+   * 编码整数为 Mumble varint 格式（不是 protobuf varint）
+   * 参照 Go 实现: packetdata/packetdata.go addVarint
+   * 
+   * Mumble 的 varint 编码规则:
+   * - 0x00-0x7F: 单字节（最高位为0）
+   * - 0x80-0x3FFF: 双字节（最高2位为10）
+   * - 0xC0-0x1FFFFF: 3字节（最高3位为110）
+   * - 0xE0-0xFFFFFFF: 4字节（最高4位为1110）
+   * - 0xF0: 4字节完整32位整数前缀
+   * - 0xF4: 8字节完整64位整数前缀
    */
   private encodeVarint(value: number): Buffer {
-    const bytes: number[] = [];
-    do {
-      let byte = value & 0x7F;
-      value >>= 7;
-      if (value > 0) {
-        byte |= 0x80;
-      }
-      bytes.push(byte);
-    } while (value > 0);
-    return Buffer.from(bytes);
+    const i = value >>> 0; // 确保是无符号32位整数
+    
+    if (i < 0x80) {
+      // 单字节: 0x00-0x7F
+      return Buffer.from([i]);
+    } else if (i < 0x4000) {
+      // 双字节: 0x80-0x3FFF
+      // 最高2位为10，后14位存储值
+      return Buffer.from([
+        (i >> 8) | 0x80,
+        i & 0xff
+      ]);
+    } else if (i < 0x200000) {
+      // 3字节: 0xC0-0x1FFFFF
+      // 最高3位为110，后21位存储值
+      return Buffer.from([
+        (i >> 16) | 0xc0,
+        (i >> 8) & 0xff,
+        i & 0xff
+      ]);
+    } else if (i < 0x10000000) {
+      // 4字节: 0xE0-0xFFFFFFF
+      // 最高4位为1110，后28位存储值
+      return Buffer.from([
+        (i >> 24) | 0xe0,
+        (i >> 16) & 0xff,
+        (i >> 8) & 0xff,
+        i & 0xff
+      ]);
+    } else {
+      // 完整32位整数: 前缀0xF0 + 4字节数据
+      return Buffer.from([
+        0xf0,
+        (i >> 24) & 0xff,
+        (i >> 16) & 0xff,
+        (i >> 8) & 0xff,
+        i & 0xff
+      ]);
+    }
   }
 }
