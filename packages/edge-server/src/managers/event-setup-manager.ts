@@ -523,6 +523,9 @@ export class EventSetupManager {
         } else if (message.method === 'hub.userStatsResponse') {
           // UserStats 响应
           this.handlerFactory.hubMessageHandlers.handleUserStatsResponseFromHub(message.params);
+        } else if (message.method === 'hub.channelRemoveBroadcast') {
+          // ChannelRemove广播处理
+          this.handlerFactory.hubMessageHandlers.handleChannelRemoveBroadcastFromHub(message.params);
         }
       });
     }

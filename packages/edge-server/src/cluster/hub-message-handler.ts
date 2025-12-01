@@ -449,18 +449,20 @@ export class HubMessageHandlers {
         }
       }
       
-      // 3. 构造ChannelRemove消息并广播给所有本地客户端
-      const channelRemoveMessage = {
-        channel_id,
-      };
-      const channelRemoveBuffer = Buffer.from(
-        new mumbleproto.ChannelRemove(channelRemoveMessage).serialize()
-      );
-      
+      // 3. 为每个被删除的频道构造ChannelRemove消息并广播给所有本地客户端
       const allClients = this.clientManager.getAllClients();
-      for (const client of allClients) {
-        if (client.user_id > 0) {
-          this.messageHandler.sendMessage(client.session, MessageType.ChannelRemove, channelRemoveBuffer);
+      for (const removed_id of channels_removed) {
+        const channelRemoveMessage = {
+          channel_id: removed_id,
+        };
+        const channelRemoveBuffer = Buffer.from(
+          new mumbleproto.ChannelRemove(channelRemoveMessage).serialize()
+        );
+        
+        for (const client of allClients) {
+          if (client.user_id > 0) {
+            this.messageHandler.sendMessage(client.session, MessageType.ChannelRemove, channelRemoveBuffer);
+          }
         }
       }
       
