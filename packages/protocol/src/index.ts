@@ -192,6 +192,7 @@ export type {
   VoiceUDPConfig,
   VoicePacketHeader,
   RemoteEndpoint,
+  NetworkSimulation,
 } from './voice/voice-udp-transport.js';
 
 // Control Channel
