@@ -11,6 +11,11 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestEnvironment, setupTestEnvironment } from '../setup';
 import { MumbleClient } from '../../../packages/client/src/index.js';
 
+// Helper function for async delays
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 describe('User Visibility Integration Tests', () => {
   let testEnv: TestEnvironment;
 
