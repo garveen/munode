@@ -57,10 +57,12 @@ describe('Plugin Integration Tests', () => {
 
       // 本 Edge 用户监听
       let dataReceivedLocal = false;
+      let receivedDataLocal: any = null;
       const dataPromiseLocal = new Promise<void>((resolve) => {
         client2.on('pluginData', (data: any) => {
           if (data.dataID === pluginId) {
             dataReceivedLocal = true;
+            receivedDataLocal = data;
             resolve();
           }
         });
@@ -68,10 +70,12 @@ describe('Plugin Integration Tests', () => {
 
       // 跨 Edge 用户监听
       let dataReceivedRemote = false;
+      let receivedDataRemote: any = null;
       const dataPromiseRemote = new Promise<void>((resolve) => {
         client3.on('pluginData', (data: any) => {
           if (data.dataID === pluginId) {
             dataReceivedRemote = true;
+            receivedDataRemote = data;
             resolve();
           }
         });
@@ -88,6 +92,12 @@ describe('Plugin Integration Tests', () => {
 
       expect(dataReceivedLocal).toBe(true);
       expect(dataReceivedRemote).toBe(true);
+      // 验证数据内容正确传输
+      expect(receivedDataLocal?.data?.length).toBe(pluginData.length);
+      expect(receivedDataRemote?.data?.length).toBe(pluginData.length);
+      // 验证接收者列表已清除（符合 Mumble 协议规范）
+      expect(receivedDataLocal?.receiverSessions?.length ?? 0).toBe(0);
+      expect(receivedDataRemote?.receiverSessions?.length ?? 0).toBe(0);
 
       await client1.disconnect();
       await client2.disconnect();
@@ -192,10 +202,12 @@ describe('Plugin Integration Tests', () => {
 
       // 用户2监听插件数据
       let dataReceived = false;
+      let receivedPluginData: any = null;
       const dataPromise = new Promise<void>((resolve) => {
         client2.on('pluginData', (data: any) => {
           if (data.dataID === pluginId && data.data.length === largeData.length) {
             dataReceived = true;
+            receivedPluginData = data;
             resolve();
           }
         });
@@ -211,6 +223,8 @@ describe('Plugin Integration Tests', () => {
       ]);
 
       expect(dataReceived).toBe(true);
+      // 验证接收者列表已清除（符合 Mumble 协议规范）
+      expect(receivedPluginData?.receiverSessions?.length ?? 0).toBe(0);
 
       await client1.disconnect();
       await client2.disconnect();

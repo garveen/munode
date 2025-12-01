@@ -532,6 +532,10 @@ export class HubMessageHandlers {
 
   /**
    * 处理来自Hub的插件数据广播
+   * 
+   * 注意：遵循 Mumble 官方实现，发送给客户端时清除 receiverSessions 字段
+   * 客户端不需要知道其他接收者列表
+   * 参考：mumble-voip/mumble/src/murmur/Messages.cpp msgPluginDataTransmission
    */
   handlePluginDataBroadcastFromHub(params: any): void {
     try {
@@ -541,12 +545,30 @@ export class HubMessageHandlers {
         `Received PluginData broadcast from Hub: from ${pluginData.senderSession}, targets: ${target_sessions.length}`
       );
 
+      // 确保 data 字段是正确的 Uint8Array/Buffer 类型
+      let dataField: Uint8Array;
+      if (pluginData.data) {
+        if (Buffer.isBuffer(pluginData.data)) {
+          dataField = pluginData.data;
+        } else if (pluginData.data instanceof Uint8Array) {
+          dataField = pluginData.data;
+        } else if (typeof pluginData.data === 'object' && pluginData.data.type === 'Buffer' && Array.isArray(pluginData.data.data)) {
+          // Handle serialized Buffer object from msgpack
+          dataField = Buffer.from(pluginData.data.data);
+        } else {
+          dataField = new Uint8Array(0);
+        }
+      } else {
+        dataField = new Uint8Array(0);
+      }
+
       // 构建PluginDataTransmission消息
+      // 注意：根据 Mumble 协议，发送给客户端时应清除 receiverSessions
       const pluginDataMsg = new mumbleproto.PluginDataTransmission({
         senderSession: pluginData.senderSession,
         dataID: pluginData.dataID || '',
-        data: pluginData.data || Buffer.alloc(0),
-        receiverSessions: target_sessions, // 使用target_sessions作为接收者
+        data: dataField,
+        receiverSessions: [], // 清除接收者列表，客户端不需要知道
       });
 
       const pluginDataBuffer = Buffer.from(pluginDataMsg.serialize());
