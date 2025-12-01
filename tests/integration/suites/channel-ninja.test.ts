@@ -26,6 +26,11 @@ import { TestEnvironment, setupTestEnvironment } from '../setup';
 import { MumbleClient } from '../../../packages/client/src/index.js';
 import { PermissionFlag } from '../fixtures';
 
+// Helper function for async delays
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // Use channel ID 1 (General) as the ninja channel for testing
 const NINJA_CHANNEL_ID = 1;
 

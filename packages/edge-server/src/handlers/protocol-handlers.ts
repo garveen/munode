@@ -305,13 +305,20 @@ export class ProtocolHandlers {
       // 重要：将protobuf对象转换为纯JSON，避免依赖内部字段（f、u等非公开API）
       if (this.hubClient) {
         // 提取targets为纯JSON数组
-        const normalizedTargets = voiceTarget.targets.map(target => ({
-          session: target.session || [],
-          channel_id: target.channel_id,
-          group: target.group,
-          links: target.links,
-          children: target.children
-        }));
+        // 注意：只有当 channel_id 被显式设置时才包含它（使用 has_channel_id 检查）
+        const normalizedTargets = voiceTarget.targets.map(target => {
+          const normalized: any = {
+            session: target.session || [],
+            group: target.group,
+            links: target.links,
+            children: target.children
+          };
+          // 只有当 channel_id 被显式设置时才包含它
+          if (target.has_channel_id) {
+            normalized.channel_id = target.channel_id;
+          }
+          return normalized;
+        });
         
         this.hubClient.syncVoiceTarget({
           client_session: session_id,

@@ -129,9 +129,9 @@ interface ClientConfig {
 }
 
 async function createClients(testEnv: TestEnvironment, configs: ClientConfig[]): Promise<MumbleClient[]> {
-  const clients: MumbleClient[] = [];
+  const clients: (MumbleClient | null)[] = new Array(configs.length).fill(null);
   
-  await Promise.all(configs.map(async (config) => {
+  await Promise.all(configs.map(async (config, index) => {
     const client = new MumbleClient();
     const targetPort = config.edge === 1 ? testEnv.edgePort : testEnv.edgePort2;
     console.log(`[TEST] Connecting ${config.username} to Edge ${config.edge} on port ${targetPort}`);
@@ -157,10 +157,11 @@ async function createClients(testEnv: TestEnvironment, configs: ClientConfig[]):
       await new Promise(resolve => setTimeout(resolve, 200));
     }
     
-    clients.push(client);
+    // Use index to preserve order
+    clients[index] = client;
   }));
   
-  return clients;
+  return clients as MumbleClient[];
 }
 
 /**
@@ -547,7 +548,7 @@ describe('Voice Integration Tests', () => {
   });
 
   describe('Loopback', () => {
-    it.only('should send voice back to sender when using loopback target (31)', async () => {
+    it('should send voice back to sender when using loopback target (31)', async () => {
       // 测试 loopback (target=31)
       const clients = await createClients(testEnv, [
         { username: 'voice_loopback_sender', password: 'pass1', edge: 1, channelId: 0 },
