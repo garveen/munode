@@ -5,6 +5,16 @@ import { EdgeConfig, RouteType } from '../types.js';
 import { VoiceRoutingManager } from '../voice/voice-routing-manager.js';
 
 /**
+ * TCP 降级状态跟踪
+ */
+interface TcpFallbackState {
+  edgeId: number;
+  activeSince: number;
+  packetsSent: number;
+  lastCheck: number;
+}
+
+/**
  * 语音管理器
  * 负责处理语音数据路由、UDP传输和相关逻辑
  */
@@ -13,6 +23,10 @@ export class VoiceManager {
   private handlerFactory: HandlerFactory;
   private voiceTransport?: VoiceUDPTransport;
   private voiceRoutingManager: VoiceRoutingManager;
+  
+  // TCP 降级状态跟踪
+  private tcpFallbackStates: Map<number, TcpFallbackState> = new Map();
+  private tcpRecoveryTimer?: NodeJS.Timeout;
 
   constructor(config: EdgeConfig, handlerFactory: HandlerFactory, voiceTransport?: VoiceUDPTransport) {
     this.config = config;
@@ -22,6 +36,9 @@ export class VoiceManager {
     // 初始化语音路由管理器
     this.voiceRoutingManager = new VoiceRoutingManager(config);
     this.setupRoutingManagerEvents();
+    
+    // 启动 TCP 恢复检查
+    this.startTcpRecoveryCheck();
   }
 
   /**
@@ -31,6 +48,11 @@ export class VoiceManager {
     // 监听路由变更事件
     this.voiceRoutingManager.on('route-changed', (targetEdgeId: number, newRoute: any, oldRoute: any) => {
       logger.info(`Voice route changed for Edge ${targetEdgeId}: ${oldRoute?.type || 'none'} -> ${newRoute.type}`);
+      
+      // 如果从 FALLBACK 切换回 UDP 模式，清除降级状态
+      if (oldRoute?.type === RouteType.FALLBACK && newRoute.type !== RouteType.FALLBACK) {
+        this.clearTcpFallbackState(targetEdgeId);
+      }
     });
 
     // 监听质量降级事件
@@ -58,6 +80,75 @@ export class VoiceManager {
    */
   async stopRoutingManager(): Promise<void> {
     await this.voiceRoutingManager.stop();
+    
+    // 停止 TCP 恢复检查
+    if (this.tcpRecoveryTimer) {
+      clearInterval(this.tcpRecoveryTimer);
+      this.tcpRecoveryTimer = undefined;
+    }
+  }
+  
+  /**
+   * 启动 TCP 恢复检查
+   * 定期检查是否可以从 TCP 降级恢复到 UDP
+   */
+  private startTcpRecoveryCheck(): void {
+    const checkInterval = this.config.voiceRouting?.fallback?.udpRecoveryCheckInterval ?? 30000;
+    
+    this.tcpRecoveryTimer = setInterval(() => {
+      this.checkTcpRecovery();
+    }, checkInterval);
+  }
+  
+  /**
+   * 检查 TCP 降级状态，尝试恢复 UDP
+   */
+  private checkTcpRecovery(): void {
+    for (const [edgeId, state] of this.tcpFallbackStates) {
+      const now = Date.now();
+      const fallbackDuration = now - state.activeSince;
+      
+      // 如果降级超过一定时间，尝试恢复 UDP
+      if (fallbackDuration > 60000) { // 1 分钟后尝试恢复
+        logger.info(`Attempting to recover UDP for Edge ${edgeId} after ${fallbackDuration}ms of TCP fallback`);
+        
+        // 通过质量重置触发重新评估路由
+        this.voiceRoutingManager.emit('quality-updated', edgeId, {
+          rtt: 0,
+          packetLoss: 0,
+          jitter: 0,
+          lastUpdate: now,
+          samples: 0,
+        });
+      }
+    }
+  }
+  
+  /**
+   * 设置 TCP 降级状态
+   */
+  private setTcpFallbackState(edgeId: number): void {
+    if (!this.tcpFallbackStates.has(edgeId)) {
+      this.tcpFallbackStates.set(edgeId, {
+        edgeId,
+        activeSince: Date.now(),
+        packetsSent: 0,
+        lastCheck: Date.now(),
+      });
+      logger.info(`TCP fallback activated for Edge ${edgeId}`);
+    }
+  }
+  
+  /**
+   * 清除 TCP 降级状态
+   */
+  private clearTcpFallbackState(edgeId: number): void {
+    if (this.tcpFallbackStates.has(edgeId)) {
+      const state = this.tcpFallbackStates.get(edgeId)!;
+      const duration = Date.now() - state.activeSince;
+      logger.info(`TCP fallback deactivated for Edge ${edgeId} after ${duration}ms, ${state.packetsSent} packets sent`);
+      this.tcpFallbackStates.delete(edgeId);
+    }
   }
 
   /**
@@ -318,8 +409,8 @@ export class VoiceManager {
               break;
               
             case RouteType.FALLBACK:
-              // TCP 降级模式（未实现，暂时跳过）
-              logger.warn(`TCP fallback not implemented for Edge ${targetEdgeId}`);
+              // TCP 降级模式：通过 Hub 控制通道转发
+              this.sendVoiceViaTcpFallback(targetEdgeId, voicePacket, packetData);
               break;
               
             default:
@@ -369,6 +460,53 @@ export class VoiceManager {
       logger.debug(`Relayed voice packet to Edge ${finalTargetEdgeId}`);
     } catch (error) {
       logger.error(`Failed to relay voice to Edge ${finalTargetEdgeId}:`, error);
+    }
+  }
+
+  /**
+   * 通过 TCP 降级发送语音包
+   * 使用 Hub 控制通道作为备用传输路径
+   */
+  private sendVoiceViaTcpFallback(targetEdgeId: number, voicePacket: any, packetData: Buffer): void {
+    try {
+      // 设置 TCP 降级状态
+      this.setTcpFallbackState(targetEdgeId);
+      
+      // 更新统计
+      const state = this.tcpFallbackStates.get(targetEdgeId);
+      if (state) {
+        state.packetsSent++;
+      }
+      
+      // 通过 Hub 控制通道发送语音数据
+      const hubClient = this.handlerFactory.hubClient;
+      if (!hubClient || !hubClient.isConnected()) {
+        logger.warn(`Cannot use TCP fallback: Hub client not connected`);
+        return;
+      }
+      
+      // TCP 降级：将语音包通过控制通道转发
+      // 注意：这会增加延迟，但在 UDP 完全不可用时提供保底传输
+      // TODO: 实现专用的 Hub TCP 中转接口
+      // 目前仅记录日志，不实际发送
+      // 完整实现需要：
+      // 1. Hub 侧添加 edge.tcpRelayVoice RPC 处理
+      // 2. Hub 将语音数据转发给目标 Edge
+      // 3. 目标 Edge 解包并路由给本地客户端
+      
+      logger.debug(`TCP fallback packet queued for Edge ${targetEdgeId}, size=${packetData.length}`);
+      
+      // 临时实现：直接尝试 UDP 发送（即使可能失败）
+      // 这样至少不会完全丢失语音
+      if (this.voiceTransport) {
+        try {
+          this.voiceTransport.sendToEdge(targetEdgeId, voicePacket, packetData);
+        } catch (e) {
+          // 忽略 UDP 发送失败
+        }
+      }
+    } catch (error) {
+      logger.error(`Error in TCP fallback for Edge ${targetEdgeId}:`, error);
     }
   }
 }

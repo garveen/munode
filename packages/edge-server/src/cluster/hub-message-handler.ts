@@ -762,4 +762,42 @@ export class HubMessageHandlers {
       logger.error('Error handling voice routing config from Hub:', error);
     }
   }
+
+  /**
+   * 处理来自 Hub 的路由表更新
+   * 
+   * Hub 会定期推送全局计算的路由表给每个 Edge
+   * Edge 应该使用这些路由来决定如何发送语音包
+   */
+  handleRouteTableUpdateFromHub(params: {
+    routes: Array<{
+      targetEdgeId: number;
+      type: 'direct' | 'relay' | 'fallback';
+      nextHop?: number;
+      cost: number;
+      timestamp: number;
+      source: 'hub' | 'local';
+    }>;
+  }): void {
+    try {
+      logger.info(`Received route table update from Hub: ${params.routes.length} routes`);
+
+      // 通知 hubClient 触发 routeTableUpdate 事件
+      const hubClient = this.factory.hubClient;
+      if (hubClient) {
+        hubClient.emit('routeTableUpdateReceived', params.routes);
+      }
+      
+      logger.debug('Route table update details:', {
+        routes: params.routes.map(r => ({
+          target: r.targetEdgeId,
+          type: r.type,
+          nextHop: r.nextHop,
+          cost: r.cost.toFixed(2),
+        })),
+      });
+    } catch (error) {
+      logger.error('Error handling route table update from Hub:', error);
+    }
+  }
 }

@@ -26,6 +26,7 @@ import type { ACLManager } from './acl-manager.js';
 import type { ChannelGroupManager } from './channel-group-manager.js';
 import type { HubAuthManager } from './auth-manager.js';
 import { HubPermissionChecker, Permission } from './permission-checker.js';
+import { NetworkTopologyManager, type RouteEntry } from './network-topology-manager.js';
 
 const logger = createLogger({ service: 'hub-control' });
 
@@ -51,6 +52,7 @@ export class HubControlService {
   private _authManager?: HubAuthManager;
   private edgeChannels = new Map<number, RPCChannel>(); // edge_id -> channel
   private _ninjaChannels: Set<number>; // Set of channel IDs that are ninja channels
+  private _networkTopologyManager: NetworkTopologyManager; // 网络拓扑管理器
 
   constructor(
     config: HubConfig,
@@ -86,6 +88,10 @@ export class HubControlService {
     if (database) {
       this._permissionChecker = new HubPermissionChecker(database, channelGroupManager);
     }
+    
+    // 初始化网络拓扑管理器
+    this._networkTopologyManager = new NetworkTopologyManager(config.voiceRouting);
+    this.setupNetworkTopologyEvents();
 
     const controlConfig: ControlChannelConfig = {
       port: config.controlPort || 8443,
@@ -96,6 +102,43 @@ export class HubControlService {
     this.typedServer = createTypedRPCServer();
     this.setupEventHandlers();
     this.registerHandlers();
+  }
+  
+  /**
+   * 设置网络拓扑管理器事件处理
+   */
+  private setupNetworkTopologyEvents(): void {
+    // 监听路由表更新事件，推送到对应的 Edge
+    this._networkTopologyManager.on('routeTableUpdated', (edgeId: number, routes: RouteEntry[]) => {
+      this.pushRouteTable(edgeId, routes);
+    });
+  }
+  
+  /**
+   * 推送路由表到指定 Edge
+   */
+  private pushRouteTable(edgeId: number, routes: RouteEntry[]): void {
+    if (!this.config.voiceRouting?.enabled) {
+      return;
+    }
+    
+    logger.info(`Pushing route table to Edge ${edgeId}:`, {
+      routeCount: routes.length,
+      routes: routes.map(r => ({
+        target: r.targetEdgeId,
+        type: r.type,
+        nextHop: r.nextHop,
+      })),
+    });
+    
+    this.notify(edgeId, 'hub.routeTableUpdate', { routes });
+  }
+  
+  /**
+   * 获取网络拓扑管理器
+   */
+  getNetworkTopologyManager(): NetworkTopologyManager {
+    return this._networkTopologyManager;
   }
 
   private setupEventHandlers(): void {
@@ -744,6 +787,9 @@ export class HubControlService {
    */
   private cleanupEdgeSessions(edge_id: number): void {
     try {
+      // 从网络拓扑中移除 Edge
+      this._networkTopologyManager.removeEdge(edge_id);
+      
       // Get all sessions on this Edge
       const edgeSessions = this._sessionManager.getEdgeSessions(edge_id);
       
@@ -1885,6 +1931,10 @@ export class HubControlService {
       return this.handleEdgeReportPeerDisconnect(channel, params);
     });
 
+    this.typedServer.handle('edge.reportQuality', async (channel, params) => {
+      return this.handleEdgeReportQuality(channel, params);
+    });
+
     this.typedServer.handle('cluster.getStatus', async (channel, params) => {
       return this.handleGetClusterStatus(channel, params);
     });
@@ -1927,6 +1977,9 @@ export class HubControlService {
       // 将Edge与RPCChannel关联
       this.edgeChannels.set(params.server_id, _channel);
       logger.info(`Edge ${params.server_id} registered successfully`);
+      
+      // 添加 Edge 到网络拓扑
+      this._networkTopologyManager.addEdge(params.server_id);
       
       // 推送语音路由配置给新注册的 Edge
       this.pushVoiceRoutingConfig(params.server_id);
@@ -2946,6 +2999,36 @@ export class HubControlService {
         });
         return { action: 'wait' };
       }
+    }
+  }
+
+  /**
+   * 处理 Edge 上报的网络质量信息
+   */
+  private async handleEdgeReportQuality(
+    _channel: RPCChannel,
+    params: { edge_id: number; target_edge_id: number; quality: { rtt: number; packetLoss: number; jitter: number; samples: number } }
+  ): Promise<{ success: boolean }> {
+    try {
+      logger.debug(`Edge ${params.edge_id} reported quality to Edge ${params.target_edge_id}:`, params.quality);
+      
+      // 更新网络拓扑中的链接质量
+      this._networkTopologyManager.handleQualityReport(
+        params.edge_id,
+        params.target_edge_id,
+        {
+          rtt: params.quality.rtt,
+          packetLoss: params.quality.packetLoss,
+          jitter: params.quality.jitter,
+          samples: params.quality.samples,
+          lastUpdate: Date.now(),
+        }
+      );
+      
+      return { success: true };
+    } catch (error) {
+      logger.error('Error handling quality report:', error);
+      return { success: false };
     }
   }
 
