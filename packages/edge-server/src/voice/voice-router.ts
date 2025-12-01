@@ -825,21 +825,12 @@ export class VoiceRouter extends EventEmitter {
       }
 
       // 情况2: 基于频道的目标
-      // 兼容两种情况：protobuf对象（有 has_channel_id 属性）和普通JSON对象（检查属性存在性）
-      // 对于protobuf对象：使用 has_channel_id 判断是否显式设置了 channel_id
-      // 对于JSON对象：检查 'channel_id' 属性是否存在
-      const targetAny = target as any;
-      let hasChannelId = false;
-      if ('has_channel_id' in target) {
-        // protobuf 对象 - 使用 has_channel_id 标志
-        hasChannelId = targetAny.has_channel_id === true;
-      } else if ('channel_id' in target) {
-        // JSON 对象 - 只有当 channel_id 属性存在时才认为设置了
-        hasChannelId = targetAny.channel_id !== undefined;
-      }
+      // protobuf对象：使用 has_channel_id 判断是否显式设置了 channel_id
+      const hasChannelId = target.has_channel_id;
+
       if (hasChannelId) {
         const targetChannels = new Set<number>();
-        targetChannels.add(targetAny.channel_id);
+        targetChannels.add(target.channel_id);
 
         // 是否包含链接的频道
         const includeLinks = target.links === true;
