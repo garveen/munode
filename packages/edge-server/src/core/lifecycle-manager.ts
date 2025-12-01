@@ -79,8 +79,22 @@ export class ServerLifecycleManager {
         try {
           await this.clusterManager.joinCluster();
           logger.info('Successfully joined cluster');
-          // 注意：不再在加入时立即注册所有 peer 的语音端点
-          // 语音端点将在需要时按需注册（通过 Hub 路由表或首次通信时）
+
+          // 尝试注册已有 peers 的语音端点（非强制，允许部分失败）
+          if (this.voiceTransport) {
+            const peers = this.clusterManager.getPeers();
+            for (const peer of peers) {
+              if (peer.id !== this.config.server_id && peer.voicePort) {
+                try {
+                  this.voiceTransport.registerEndpoint(peer.id, peer.host, peer.voicePort);
+                  logger.info(`Registered voice endpoint for peer ${peer.id}: ${peer.host}:${peer.voicePort}`);
+                } catch (endpointError) {
+                  // 单个端点注册失败不影响其他端点
+                  logger.warn(`Failed to register voice endpoint for peer ${peer.id}:`, endpointError);
+                }
+              }
+            }
+          }
         } catch (error) {
           logger.error('Failed to join cluster:', error);
           // 不抛出错误，允许服务器在standalone模式下运行

@@ -253,6 +253,7 @@ export interface BlobStoreConfig {
 // Web API 配置
 export interface WebApiConfig {
   enabled: boolean;
+  host?: string;       // 监听地址，默认 '0.0.0.0'
   port: number;
   cors: boolean;
 }

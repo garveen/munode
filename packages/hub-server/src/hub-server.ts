@@ -15,6 +15,7 @@ import { HubAuthManager } from './auth-manager.js';
 import { VoiceUDPTransport } from '@munode/protocol';
 import { validateHubConfig } from './config-validator.js';
 import { applyConfigDefaults } from './config-defaults.js';
+import { WebApiService } from './web-api-service.js';
 
 const logger = createLogger({ service: 'hub-server' });
 
@@ -38,6 +39,7 @@ export class HubServer {
   private authManager!: HubAuthManager;
   private blobStore?: BlobStore;
   private voiceTransport?: VoiceUDPTransport;
+  private webApiService?: WebApiService;
   private started = false;
 
   constructor(config: HubConfig) {
@@ -102,6 +104,16 @@ export class HubServer {
       this.authManager
     );
 
+    // 初始化 Web API 服务
+    if (this.config.webApi?.enabled) {
+      this.webApiService = new WebApiService(
+        this.config.webApi,
+        this.config.server_id,
+        this.registry,
+        this.sessionManager
+      );
+    }
+
     // 初始化语音 UDP 传输（如果配置了端口）
     if (this.config.voicePort) {
       this.voiceTransport = new VoiceUDPTransport({
@@ -125,6 +137,7 @@ export class HubServer {
       host: this.config.host,
       port: this.config.port,
       voicePort: this.config.voicePort,
+      webApiPort: this.config.webApi?.enabled ? this.config.webApi.port : undefined,
     });
   }
 
@@ -156,6 +169,16 @@ export class HubServer {
         });
       }
 
+      // 启动 Web API 服务
+      if (this.webApiService) {
+        // 将 NetworkTopologyManager 传递给 Web API 服务（在 controlService 启动后获取）
+        const networkTopologyManager = this.controlService.getNetworkTopologyManager();
+        if (networkTopologyManager) {
+          this.webApiService.setNetworkTopologyManager(networkTopologyManager);
+        }
+        await this.webApiService.start();
+      }
+
       // 启动定期清理任务
       this.startCleanupTasks();
 
@@ -179,6 +202,11 @@ export class HubServer {
 
     try {
       logger.info('Stopping Hub Server...');
+
+      // 停止 Web API 服务
+      if (this.webApiService) {
+        await this.webApiService.stop();
+      }
 
       // 停止控制信道服务
       await this.controlService.stop();
