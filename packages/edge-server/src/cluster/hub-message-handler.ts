@@ -22,6 +22,7 @@ export class HubMessageHandlers {
 
   private get clientManager() { return this.factory.clientManager; }
   private get channelManager() { return this.factory.channelManager; }
+  private get stateManager() { return this.factory.stateManager; }
   private get messageHandler() { return this.factory.messageHandler; }
   private get config() { return this.factory.config; }
 
@@ -276,10 +277,15 @@ export class HubMessageHandlers {
           // 应用更新
           if (Object.keys(updates).length > 0) {
             this.channelManager.updateChannel(existingChannel.id, updates);
+            
+            // 更新stateManager
+            const updatedChannel = { ...existingChannel, ...updates };
+            this.stateManager.addOrUpdateChannel(updatedChannel);
           }
         } else {
           // 创建新频道
-          const newChannel = this.channelManager.createChannel({
+          const newChannelData = {
+            id: channelState.channel_id,
             name: channelState.name || 'Unnamed Channel',
             parent_id: channelState.parent || 0,
             description: channelState.description || '',
@@ -289,12 +295,10 @@ export class HubMessageHandlers {
             inherit_acl: channelState.inherit_acl !== undefined ? channelState.inherit_acl : true,
             children: [],
             links: [],
-          });
+          };
 
-          // 如果有指定channel_id，需要更新
-          if (channelState.channel_id !== newChannel.id) {
-            logger.warn(`Channel ID mismatch: expected ${channelState.channel_id}, got ${newChannel.id}`);
-          }
+          this.channelManager.addOrUpdateChannel(newChannelData);
+          this.stateManager.addOrUpdateChannel(newChannelData);
         }
       }
 
@@ -436,7 +440,8 @@ export class HubMessageHandlers {
       // 1. 更新本地频道镜像 - 删除所有被移除的频道
       for (const removed_id of channels_removed) {
         this.channelManager.removeChannel(removed_id);
-        logger.debug(`Removed channel ${removed_id} from local mirror`);
+        this.stateManager.removeChannel(removed_id);
+        logger.debug(`Removed channel ${removed_id} from local mirrors`);
       }
       
       // 2. 更新受影响用户的频道位置（他们已被Hub移动到父频道）

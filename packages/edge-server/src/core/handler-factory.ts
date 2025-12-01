@@ -81,7 +81,7 @@ export class HandlerFactory {
     this.voiceRouter.setChannelManager(this.channelManager);
     
     // 初始化状态管理器（集群模式）
-    this.stateManager = new EdgeStateManager();
+    this.stateManager = new EdgeStateManager(this.channelManager);
 
     // 初始化处理器
     this.protocolHandlers = new ProtocolHandlers(this);
