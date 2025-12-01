@@ -403,6 +403,26 @@ export interface EdgeReportPeerDisconnectMethod {
 }
 
 /**
+ * Edge 上报网络质量信息到 Hub
+ */
+export interface EdgeReportQualityMethod {
+  method: 'edge.reportQuality';
+  params: {
+    edge_id: number;
+    target_edge_id: number;
+    quality: {
+      rtt: number;
+      packetLoss: number;
+      jitter: number;
+      samples: number;
+    };
+  };
+  result: {
+    success: boolean;
+  };
+}
+
+/**
  * 获取集群状态
  */
 export interface ClusterGetStatusMethod {
@@ -604,6 +624,7 @@ export type EdgeToHubMethods =
   | EdgeJoinMethod
   | EdgeJoinCompleteMethod
   | EdgeReportPeerDisconnectMethod
+  | EdgeReportQualityMethod
   | ClusterGetStatusMethod
   | BlobPutMethod
   | BlobGetMethod

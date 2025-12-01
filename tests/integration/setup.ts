@@ -62,6 +62,8 @@ export interface TestEnvironment {
   hubProcess?: ChildProcess;
   edgeProcess?: ChildProcess;
   edgeProcess2?: ChildProcess; // 第二个 Edge 服务器用于跨 Edge 测试
+  edgeProcess3?: ChildProcess; // 第三个 Edge 服务器用于多 Edge 路由测试
+  edgeProcess4?: ChildProcess; // 第四个 Edge 服务器用于完整路由测试
   authServer?: http.Server;
   authPort: number;
   hubPort: number;
@@ -69,6 +71,10 @@ export interface TestEnvironment {
   edgeUdpPort: number; // Edge1 的 UDP 端口
   edgePort2: number; // 第二个 Edge 服务器端口
   edgeUdpPort2: number; // Edge2 的 UDP 端口
+  edgePort3: number; // 第三个 Edge 服务器端口
+  edgeUdpPort3: number; // Edge3 的 UDP 端口
+  edgePort4: number; // 第四个 Edge 服务器端口
+  edgeUdpPort4: number; // Edge4 的 UDP 端口
   cleanup: () => Promise<void>;
 }
 
@@ -274,6 +280,45 @@ class TestAuthServer {
       'udp_ping_test': { password: 'password123', user_id: 205 },
       'udp_multi_sender': { password: 'password123', user_id: 206 },
       'udp_multi_receiver': { password: 'password123', user_id: 207 },
+      // Voice routing test users
+      'routing_config_test': { password: 'pass1', user_id: 301 },
+      'rtt_sender': { password: 'pass1', user_id: 302 },
+      'rtt_receiver': { password: 'pass2', user_id: 303 },
+      'loss_sender': { password: 'pass1', user_id: 304 },
+      'loss_receiver': { password: 'pass2', user_id: 305 },
+      'direct_sender': { password: 'pass1', user_id: 306 },
+      'direct_receiver': { password: 'pass2', user_id: 307 },
+      'tcp_fallback_sender': { password: 'pass1', user_id: 308 },
+      'tcp_fallback_receiver': { password: 'pass2', user_id: 309 },
+      'route_table_test': { password: 'pass1', user_id: 310 },
+      'cross_edge_sender': { password: 'pass1', user_id: 311 },
+      'cross_edge_receiver': { password: 'pass2', user_id: 312 },
+      'deaf_test_sender': { password: 'pass1', user_id: 313 },
+      'deaf_test_deaf': { password: 'pass2', user_id: 314 },
+      'deaf_test_normal': { password: 'pass3', user_id: 315 },
+      'hub_bypass_sender': { password: 'pass1', user_id: 316 },
+      'hub_bypass_receiver': { password: 'pass2', user_id: 317 },
+      'stress_sender': { password: 'pass1', user_id: 318 },
+      'stress_receiver': { password: 'pass2', user_id: 319 },
+      // 4-Edge routing test users
+      'relay_sender_e1': { password: 'pass1', user_id: 401 },
+      'relay_receiver_e4': { password: 'pass2', user_id: 402 },
+      'relay_test_e2': { password: 'pass3', user_id: 403 },
+      'relay_test_e3': { password: 'pass4', user_id: 404 },
+      'multi_hop_sender': { password: 'pass1', user_id: 405 },
+      'multi_hop_receiver': { password: 'pass2', user_id: 406 },
+      'quality_test_e1': { password: 'pass1', user_id: 407 },
+      'quality_test_e2': { password: 'pass2', user_id: 408 },
+      'quality_test_e3': { password: 'pass3', user_id: 409 },
+      'quality_test_e4': { password: 'pass4', user_id: 410 },
+      'packet_loss_sender': { password: 'pass1', user_id: 411 },
+      'packet_loss_receiver': { password: 'pass2', user_id: 412 },
+      'network_sim_sender': { password: 'pass1', user_id: 413 },
+      'network_sim_receiver': { password: 'pass2', user_id: 414 },
+      'relay_compute_user': { password: 'pass1', user_id: 415 },
+      'route_push_user': { password: 'pass1', user_id: 416 },
+      'relay_sender': { password: 'pass1', user_id: 417 },
+      'relay_receiver': { password: 'pass2', user_id: 418 },
     };
 
     const user = users[req.username];
@@ -496,11 +541,13 @@ export async function setupTestEnvironment(
     startHub?: boolean;
     startEdge?: boolean;
     startEdge2?: boolean; // Whether to start the second Edge server
+    startEdge3?: boolean; // Whether to start the third Edge server
+    startEdge4?: boolean; // Whether to start the fourth Edge server
     startAuth?: boolean;
     hubConfig?: Record<string, any>; // Custom Hub configuration
     reuse?: boolean; // Whether to reuse existing global test environment
     silent?: boolean; // Whether to suppress server output logs (default: true for speed)
-  } = { startHub: true, startEdge: true, startEdge2: true, startAuth: true, reuse: true, silent: true }
+  } = { startHub: true, startEdge: true, startEdge2: true, startEdge3: false, startEdge4: false, startAuth: true, reuse: true, silent: true }
 ): Promise<TestEnvironment> {
   // Check if we should reuse the global test environment
   if (globalTestEnvironment && options.reuse !== false) {
@@ -518,6 +565,8 @@ export async function setupTestEnvironment(
   let hubProcess: ChildProcess | undefined;
   let edgeProcess: ChildProcess | undefined;
   let edgeProcess2: ChildProcess | undefined;
+  let edgeProcess3: ChildProcess | undefined;
+  let edgeProcess4: ChildProcess | undefined;
   
   // 动态分配端口 - 每个 Edge 需要两个连续端口 (TLS + UDP)
   const authPort = options.startAuth !== false ? await findAvailablePort(basePort) : 0;
@@ -535,7 +584,16 @@ export async function setupTestEnvironment(
   const edgePort2 = (options.startEdge2 === true && edgePort > 0) ? await findAvailablePort(edgeUdpPort + 1) : 0;
   const edgeUdpPort2 = edgePort2 > 0 ? edgePort2 + 1 : 0;
   
-  console.log(`Allocated ports - Auth: ${authPort}, Hub: ${hubPort}(TCP)/${hubVoicePort}(UDP), Control: ${controlPort}, WebAPI: ${webApiPort}, Edge1: ${edgePort}(TLS)/${edgeUdpPort}(UDP), Edge2: ${edgePort2}(TLS)/${edgeUdpPort2}(UDP)`);
+  // Edge3: TLS port and UDP port (consecutive, after Edge2)
+  const edgePort3 = (options.startEdge3 === true && edgePort2 > 0) ? await findAvailablePort(edgeUdpPort2 + 1) : 0;
+  const edgeUdpPort3 = edgePort3 > 0 ? edgePort3 + 1 : 0;
+  
+  // Edge4: TLS port and UDP port (consecutive, after Edge3)
+  const edgePort4 = (options.startEdge4 === true && edgePort3 > 0) ? await findAvailablePort(edgeUdpPort3 + 1) : 0;
+  const edgeUdpPort4 = edgePort4 > 0 ? edgePort4 + 1 : 0;
+  
+  console.log(`Allocated ports - Auth: ${authPort}, Hub: ${hubPort}(TCP)/${hubVoicePort}(UDP), Control: ${controlPort}, WebAPI: ${webApiPort}`);
+  console.log(`Edge ports - Edge1: ${edgePort}(TLS)/${edgeUdpPort}(UDP), Edge2: ${edgePort2}(TLS)/${edgeUdpPort2}(UDP), Edge3: ${edgePort3}(TLS)/${edgeUdpPort3}(UDP), Edge4: ${edgePort4}(TLS)/${edgeUdpPort4}(UDP)`);
 
   // 1. Start auth server (if needed)
   if (options.startAuth !== false) {
@@ -755,6 +813,114 @@ export async function setupTestEnvironment(
     }
   }
 
+  // 5. 启动第三个 Edge 服务器（如果需要，用于多 Edge 路由测试）
+  if (options.startEdge3 === true) {
+    try {
+      const edgeConfigPath = join(PROJECT_ROOT, 'tests/config/edge-test.js');
+      if (fs.existsSync(edgeConfigPath)) {
+        const actualEdgePort3 = edgePort3;
+        
+        const edgeConfigModule3 = await import(`file://${edgeConfigPath}?v=${++importCounter}`);
+        const edgeConfig3 = { ...(edgeConfigModule3.default || edgeConfigModule3) };
+        
+        edgeConfig3.server_id = 3;
+        edgeConfig3.network = edgeConfig3.network || {};
+        edgeConfig3.network.port = actualEdgePort3;
+        edgeConfig3.server = edgeConfig3.server || {};
+        edgeConfig3.server.name = 'MuNode Edge Server 3 (Test)';
+        edgeConfig3.server.serverId = 3;
+        
+        const certsDir = join(__dirname, 'certs');
+        edgeConfig3.tls = {
+          cert: join(certsDir, 'server.pem'),
+          key: join(certsDir, 'server.key'),
+          ca: join(certsDir, 'ca.pem'),
+          requireClientCert: false,
+          rejectUnauthorized: false
+        };
+        
+        edgeConfig3.hubServer = edgeConfig3.hubServer || {};
+        edgeConfig3.hubServer.host = '127.0.0.1';
+        edgeConfig3.hubServer.port = hubPort;
+        edgeConfig3.hubServer.controlPort = controlPort;
+        
+        edgeConfig3.auth = edgeConfig3.auth || {};
+        delete edgeConfig3.auth.apiUrl;
+        
+        const tempEdgeConfigPath3 = join(PROJECT_ROOT, `tests/config/edge-test-${basePort}-3.js`);
+        fs.writeFileSync(tempEdgeConfigPath3, `export default ${JSON.stringify(edgeConfig3, null, 2)};`);
+        console.log(`Created temp edge config 3 at ${tempEdgeConfigPath3} with port ${actualEdgePort3}`);
+        
+        edgeProcess3 = await startEdgeServer(tempEdgeConfigPath3, actualEdgePort3, 3, silent);
+        await sleep(500);
+        
+        setTimeout(() => {
+          try {
+            fs.unlinkSync(tempEdgeConfigPath3);
+          } catch (error) {
+            // 忽略清理错误
+          }
+        }, 2000);
+      }
+    } catch (error) {
+      console.warn('Failed to start Edge server 3:', error);
+    }
+  }
+
+  // 6. 启动第四个 Edge 服务器（如果需要，用于完整路由测试）
+  if (options.startEdge4 === true) {
+    try {
+      const edgeConfigPath = join(PROJECT_ROOT, 'tests/config/edge-test.js');
+      if (fs.existsSync(edgeConfigPath)) {
+        const actualEdgePort4 = edgePort4;
+        
+        const edgeConfigModule4 = await import(`file://${edgeConfigPath}?v=${++importCounter}`);
+        const edgeConfig4 = { ...(edgeConfigModule4.default || edgeConfigModule4) };
+        
+        edgeConfig4.server_id = 4;
+        edgeConfig4.network = edgeConfig4.network || {};
+        edgeConfig4.network.port = actualEdgePort4;
+        edgeConfig4.server = edgeConfig4.server || {};
+        edgeConfig4.server.name = 'MuNode Edge Server 4 (Test)';
+        edgeConfig4.server.serverId = 4;
+        
+        const certsDir = join(__dirname, 'certs');
+        edgeConfig4.tls = {
+          cert: join(certsDir, 'server.pem'),
+          key: join(certsDir, 'server.key'),
+          ca: join(certsDir, 'ca.pem'),
+          requireClientCert: false,
+          rejectUnauthorized: false
+        };
+        
+        edgeConfig4.hubServer = edgeConfig4.hubServer || {};
+        edgeConfig4.hubServer.host = '127.0.0.1';
+        edgeConfig4.hubServer.port = hubPort;
+        edgeConfig4.hubServer.controlPort = controlPort;
+        
+        edgeConfig4.auth = edgeConfig4.auth || {};
+        delete edgeConfig4.auth.apiUrl;
+        
+        const tempEdgeConfigPath4 = join(PROJECT_ROOT, `tests/config/edge-test-${basePort}-4.js`);
+        fs.writeFileSync(tempEdgeConfigPath4, `export default ${JSON.stringify(edgeConfig4, null, 2)};`);
+        console.log(`Created temp edge config 4 at ${tempEdgeConfigPath4} with port ${actualEdgePort4}`);
+        
+        edgeProcess4 = await startEdgeServer(tempEdgeConfigPath4, actualEdgePort4, 3, silent);
+        await sleep(500);
+        
+        setTimeout(() => {
+          try {
+            fs.unlinkSync(tempEdgeConfigPath4);
+          } catch (error) {
+            // 忽略清理错误
+          }
+        }, 2000);
+      }
+    } catch (error) {
+      console.warn('Failed to start Edge server 4:', error);
+    }
+  }
+
   const realCleanup = async () => {
     console.log('Cleaning up test environment...');
 
@@ -794,6 +960,8 @@ export async function setupTestEnvironment(
       }
     };
 
+    await killProcess(edgeProcess4, 'Edge4');
+    await killProcess(edgeProcess3, 'Edge3');
     await killProcess(edgeProcess2, 'Edge2');
     await killProcess(edgeProcess, 'Edge');
     await killProcess(hubProcess, 'Hub');
@@ -802,7 +970,7 @@ export async function setupTestEnvironment(
     await sleep(500);
     
     // 验证端口是否已释放（可选，用于调试）
-    const portsToCheck = [authPort, hubPort, edgePort, edgePort2, controlPort, webApiPort].filter(p => p > 0);
+    const portsToCheck = [authPort, hubPort, edgePort, edgePort2, edgePort3, edgePort4, controlPort, webApiPort].filter(p => p > 0);
     for (const port of portsToCheck) {
       let attempts = 0;
       while (attempts < 10 && !(await isPortAvailable(port))) {
@@ -820,7 +988,9 @@ export async function setupTestEnvironment(
   globalTestEnvironment = { 
     hubProcess, 
     edgeProcess,
-    edgeProcess2, 
+    edgeProcess2,
+    edgeProcess3,
+    edgeProcess4,
     authServer: authServer?.getServer(),
     authPort,
     hubPort,
@@ -828,6 +998,10 @@ export async function setupTestEnvironment(
     edgeUdpPort,
     edgePort2,
     edgeUdpPort2,
+    edgePort3,
+    edgeUdpPort3,
+    edgePort4,
+    edgeUdpPort4,
     cleanup: async () => {
       refCount--;
       console.log(`Test environment cleanup called (refCount: ${refCount})`);

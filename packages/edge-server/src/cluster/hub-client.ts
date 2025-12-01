@@ -345,6 +345,16 @@ export class EdgeControlClient extends EventEmitter {
           this.emit('syncVoiceTarget', message.params);
           break;
 
+        case 'hub.voiceRoutingConfig':
+          // 语音路由配置通知
+          this.emit('voiceRoutingConfig', message.params);
+          break;
+
+        case 'hub.routeTableUpdate':
+          // 路由表更新通知
+          this.emit('routeTableUpdate', message.params);
+          break;
+
         default:
           logger.debug('Notification forwarded to upper layer:', message.method);
       }

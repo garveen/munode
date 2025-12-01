@@ -258,6 +258,13 @@ export class ServiceRegistry {
   }
 
   /**
+   * 获取所有已注册的 Edge（包含完整信息和统计数据）
+   */
+  getAllEdges(): RegisteredEdge[] {
+    return Array.from(this.edges.values());
+  }
+
+  /**
    * 清理超时的 Edge
    */
   cleanup(): void {

@@ -34,6 +34,7 @@ export interface EdgeConfig {
   hubServer?: HubServerConfig;
   peerServers: PeerServersConfig;
   relay: RelayConfig;
+  voiceRouting?: EdgeVoiceRoutingConfig;  // 语音路由配置
   auth: AuthConfig;
   capacity: number;
   max_bandwidth: number;
@@ -109,6 +110,91 @@ export interface RelayConfig {
   enabled: boolean;
   preferredRelay?: number;
   fallbackRelays?: number[];
+}
+
+// 语音路由配置 (Edge 侧)
+export interface EdgeVoiceRoutingConfig {
+  // 由 Hub 推送控制的配置
+  enabled?: boolean;                   // 功能总开关，由 Hub 控制
+  hubPolicy?: EdgeRoutingPolicy;       // Hub 推送的路由策略
+  
+  // 本地路由决策配置
+  localDecision?: {
+    enabled: boolean;                  // 启用本地决策
+    updateInterval: number;            // 本地路由更新间隔 (ms)
+    qualityCheckInterval: number;      // 质量检查间隔 (ms)
+    directRttThreshold: number;        // 本地直连 RTT 阈值
+    directLossThreshold: number;       // 本地直连丢包率阈值
+  };
+  
+  // 中转功能配置
+  relay?: {
+    enabled: boolean;                  // 允许作为中转节点
+    maxRelayCpuLoad: number;           // CPU 上限
+    maxRelayBandwidth: number;         // 带宽上限 (kbps)
+    softLimitThreshold: number;        // 软限制阈值
+    hardLimitThreshold: number;        // 硬限制阈值
+    recoveryThreshold: number;         // 恢复阈值
+    priority: number;                  // 中转优先级 (1-10)
+  };
+  
+  // 网络质量探测配置
+  probe?: {
+    enabled: boolean;
+    method: 'passive';                 // 被动探测
+    updateInterval: number;            // 质量指标更新间隔 (ms)
+    lossWindowSize: number;            // 丢包率统计窗口
+    rttSmoothFactor: number;           // RTT 平滑参数
+    metricsTTL: number;                // 质量指标过期时间 (ms)
+  };
+  
+  // 降级策略配置
+  fallback?: {
+    enableTcpFallback: boolean;        // 启用 TCP 降级
+    tcpFallbackDelay: number;          // 切换到 TCP 的延迟 (ms)
+    udpRecoveryCheckInterval: number;  // UDP 恢复检查间隔 (ms)
+  };
+}
+
+// Hub 推送的路由策略
+export interface EdgeRoutingPolicy {
+  directRttThreshold: number;
+  directLossThreshold: number;
+  enableRelay: boolean;
+  maxRelayHops: number;
+  relayCostFactor: number;
+  routeSwitchHysteresis: number;
+  routeSwitchCostDelta: number;
+  maxRelayLoadPerEdge: number;
+  probeInterval: number;
+  routeTableUpdateInterval: number;
+}
+
+// 路由类型枚举
+export enum RouteType {
+  DIRECT = 'direct',       // 直连
+  RELAY = 'relay',         // Edge 中转
+  FALLBACK = 'fallback',   // TCP 降级
+}
+
+// 路由表条目
+export interface RouteEntry {
+  targetEdgeId: number;
+  type: RouteType;
+  nextHop?: number;        // 中转时的下一跳 Edge ID
+  cost: number;            // 路由成本
+  timestamp: number;       // 更新时间戳
+  source: 'hub' | 'local'; // 路由来源
+  ttl?: number;            // 生存时间 (ms)
+}
+
+// Edge 间连接质量
+export interface EdgeConnectionQuality {
+  rtt: number;             // RTT (ms)
+  packetLoss: number;      // 丢包率 (0-1)
+  jitter: number;          // 抖动 (ms)
+  lastUpdate: number;      // 最后更新时间戳
+  samples: number;         // 样本数量
 }
 
 // 认证配置

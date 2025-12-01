@@ -466,10 +466,15 @@ export class EventSetupManager {
           const data = message.params;
           logger.info('Edge joined cluster:', data);
 
-          // 注册新Edge的语音端口
+          // 尝试注册新Edge的语音端口（非强制，允许失败）
           if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.voicePort && data.id !== this.config.server_id) {
-            this.voiceManager.getVoiceTransport()!.registerEndpoint(data.id, data.host, data.voicePort);
-            logger.info(`Registered voice endpoint for new Edge ${data.id}: ${data.host}:${data.voicePort}`);
+            try {
+              this.voiceManager.getVoiceTransport()!.registerEndpoint(data.id, data.host, data.voicePort);
+              logger.info(`Registered voice endpoint for new Edge ${data.id}: ${data.host}:${data.voicePort}`);
+            } catch (error) {
+              // 端点注册失败不影响其他功能
+              logger.warn(`Failed to register voice endpoint for Edge ${data.id}:`, error);
+            }
           }
         } else if (message.method === 'edge.peerLeft') {
           const data = message.params;
