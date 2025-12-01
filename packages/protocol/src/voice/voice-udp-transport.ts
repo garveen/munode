@@ -30,18 +30,6 @@ export interface RemoteEndpoint {
   port: number;
 }
 
-/**
- * 网络模拟配置（用于测试）
- */
-export interface NetworkSimulation {
-  /** 模拟的丢包率 (0-1)，0 表示不丢包，1 表示全部丢弃 */
-  packetLossRate?: number;
-  /** 模拟的延迟 (ms) */
-  latencyMs?: number;
-  /** 目标 Edge ID，如果指定则只对该 Edge 应用模拟 */
-  targetEdgeId?: number;
-}
-
 export class VoiceUDPTransport extends EventEmitter {
   private socket: dgram.Socket | null = null;
   private config: VoiceUDPConfig;
@@ -54,9 +42,6 @@ export class VoiceUDPTransport extends EventEmitter {
     bytesReceived: 0,
     errors: 0,
   };
-  
-  // 网络模拟（用于测试）
-  private networkSimulations: NetworkSimulation[] = [];
 
   constructor(config: VoiceUDPConfig) {
     super();
@@ -69,54 +54,6 @@ export class VoiceUDPTransport extends EventEmitter {
         key: config.encryptionKey,
       });
     }
-  }
-  
-  /**
-   * 添加网络模拟（用于测试）
-   * @param simulation 网络模拟配置
-   */
-  addNetworkSimulation(simulation: NetworkSimulation): void {
-    this.networkSimulations.push(simulation);
-  }
-  
-  /**
-   * 清除所有网络模拟
-   */
-  clearNetworkSimulations(): void {
-    this.networkSimulations = [];
-  }
-  
-  /**
-   * 检查是否应该丢弃包（根据模拟配置）
-   */
-  private shouldDropPacket(targetEdgeId: number): boolean {
-    for (const sim of this.networkSimulations) {
-      if (sim.targetEdgeId !== undefined && sim.targetEdgeId !== targetEdgeId) {
-        continue;
-      }
-      if (sim.packetLossRate !== undefined && sim.packetLossRate > 0) {
-        if (Math.random() < sim.packetLossRate) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-  
-  /**
-   * 获取模拟延迟（根据模拟配置）
-   */
-  private getSimulatedLatency(targetEdgeId: number): number {
-    let maxLatency = 0;
-    for (const sim of this.networkSimulations) {
-      if (sim.targetEdgeId !== undefined && sim.targetEdgeId !== targetEdgeId) {
-        continue;
-      }
-      if (sim.latencyMs !== undefined && sim.latencyMs > maxLatency) {
-        maxLatency = sim.latencyMs;
-      }
-    }
-    return maxLatency;
   }
 
   /**
@@ -186,12 +123,6 @@ export class VoiceUDPTransport extends EventEmitter {
       console.warn(`No endpoint registered for edge ${edgeId}`);
       return;
     }
-    
-    // 网络模拟：检查是否应该丢弃包
-    if (this.shouldDropPacket(edgeId)) {
-      // 模拟丢包，静默丢弃
-      return;
-    }
 
     // 编码包头
     const headerBuffer = this.encodePacketHeader(packet);
@@ -208,16 +139,8 @@ export class VoiceUDPTransport extends EventEmitter {
       finalPacket = fullPacket;
     }
 
-    // 网络模拟：应用延迟
-    const latency = this.getSimulatedLatency(edgeId);
-    if (latency > 0) {
-      setTimeout(() => {
-        this.sendPacket(finalPacket, endpoint.host, endpoint.port);
-      }, latency);
-    } else {
-      // 发送
-      this.sendPacket(finalPacket, endpoint.host, endpoint.port);
-    }
+    // 发送
+    this.sendPacket(finalPacket, endpoint.host, endpoint.port);
   }
 
   /**

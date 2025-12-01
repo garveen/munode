@@ -465,12 +465,8 @@ export class EventSetupManager {
         if (message.method === 'edge.peerJoined') {
           const data = message.params;
           logger.info('Edge joined cluster:', data);
-
-          // 注册新Edge的语音端口
-          if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.voicePort && data.id !== this.config.server_id) {
-            this.voiceManager.getVoiceTransport()!.registerEndpoint(data.id, data.host, data.voicePort);
-            logger.info(`Registered voice endpoint for new Edge ${data.id}: ${data.host}:${data.voicePort}`);
-          }
+          // 注意：不再在 peer 加入时立即注册语音端点
+          // 语音端点将在需要时按需注册（通过 Hub 路由表推送或首次通信时）
         } else if (message.method === 'edge.peerLeft') {
           const data = message.params;
           logger.info('Edge left cluster:', data);
