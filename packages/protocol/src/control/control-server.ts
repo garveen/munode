@@ -59,11 +59,22 @@ export class ControlChannelServer extends EventEmitter {
 
   /**
    * 广播通知给所有连接的客户端
+   * 使用 Promise.allSettled 确保单个 Edge 失败不影响其他 Edge
    */
-  broadcast(method: string, params?: any): void {
-    for (const channel of this.channels.values()) {
-      channel.notify(method, params);
-    }
+  async broadcast(method: string, params?: any): Promise<void> {
+    const promises = Array.from(this.channels.values()).map(channel => 
+      Promise.resolve().then(() => {
+        try {
+          channel.notify(method, params);
+        } catch (error) {
+          // 记录错误但不中断其他广播
+          console.error(`Broadcast to channel failed:`, error);
+          throw error;
+        }
+      })
+    );
+    
+    await Promise.allSettled(promises);
   }
 
   /**

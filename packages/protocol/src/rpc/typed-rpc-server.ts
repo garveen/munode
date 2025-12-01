@@ -112,18 +112,28 @@ export class TypedRPCServer {
 
   /**
    * 广播类型安全的通知到所有客户端
+   * 使用 Promise.allSettled 确保单个客户端失败不影响其他客户端
    * @param channels RPC 通道列表
    * @param method 通知方法名
    * @param params 通知参数
    */
-  broadcast<M extends HubToEdgeNotifications['method']>(
+  async broadcast<M extends HubToEdgeNotifications['method']>(
     channels: RPCChannel[],
     method: M,
     params: NotificationParams<M>
-  ): void {
-    for (const channel of channels) {
-      this.notify(channel, method, params);
-    }
+  ): Promise<void> {
+    const promises = channels.map(channel => 
+      Promise.resolve().then(() => {
+        try {
+          this.notify(channel, method, params);
+        } catch (error) {
+          // 记录错误但不中断其他广播
+          throw error;
+        }
+      })
+    );
+    
+    await Promise.allSettled(promises);
   }
 }
 
