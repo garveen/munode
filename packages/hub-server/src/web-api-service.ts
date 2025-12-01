@@ -116,7 +116,7 @@ export class WebApiService {
       this.handleRequest(req, res);
     });
 
-    const host = this.config.host || '0.0.0.0';
+    const host = this.config.host || '127.0.0.1';
     const port = this.config.port;
 
     return new Promise((resolve, reject) => {

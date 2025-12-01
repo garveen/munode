@@ -110,9 +110,7 @@ export interface VoiceRoutingConfig {
   
   // Hub 自身中转配置
   hubRelay?: {
-    enableUdpRelay: boolean;      // 完全移除 Hub 的 UDP 中转功能
     enableTcpFallback: boolean;   // 仅保留 TCP 降级功能（通过 WebSocket）
-    tcpRelayPriority: 'last' | 'fallback';  // TCP 中转优先级
   };
   
   // 路由优化调试
@@ -253,7 +251,7 @@ export interface BlobStoreConfig {
 // Web API 配置
 export interface WebApiConfig {
   enabled: boolean;
-  host?: string;       // 监听地址，默认 '0.0.0.0'
+  host?: string;
   port: number;
   cors: boolean;
 }

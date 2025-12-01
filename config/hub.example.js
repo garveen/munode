@@ -56,6 +56,7 @@ export default {
   // Web API configuration
   webApi: {
     enabled: false,
+    host: '127.0.0.1',
     port: 8080,
     cors: true,
   },
@@ -124,6 +125,7 @@ export default {
   allowPing: true,
   hideCertHashes: false,
   channelNinja: false, // Hide users in channels without view permission
+  ninjaChannels: [], // Array of channel IDs that are ninja channels. Users without Enter/Listen permission cannot see users in these channels.
 
   // Database log retention
   logDays: 31,
@@ -182,4 +184,50 @@ export default {
   // Logging configuration
   logLevel: 'info',
   logFile: './logs/hub.log',
+
+  // Voice routing configuration (Edge-to-Edge relay routing feature)
+  voiceRouting: {
+    enabled: false, // Global feature switch
+
+    // Routing policy
+    policy: {
+      // Direct connection thresholds
+      directRttThreshold: 500, // Direct RTT limit (ms), default: 500
+      directLossThreshold: 0.05, // Direct packet loss limit, default: 0.05
+
+      // Relay conditions
+      enableRelay: true, // Enable relay, default: true
+      maxRelayHops: 1, // Maximum relay hops, default: 1
+      relayCostFactor: 1.2, // Relay cost factor, default: 1.2 (20% higher than direct)
+
+      // Route switching
+      routeSwitchHysteresis: 5000, // Switching hysteresis time (ms), default: 5000
+      routeSwitchCostDelta: 0.3, // Switching cost difference threshold, default: 0.3 (30%)
+
+      // Load balancing
+      maxRelayLoadPerEdge: 0.7, // Maximum relay load per Edge, default: 0.7
+
+      // Quality probing
+      probeInterval: 10000, // Probe interval (ms), default: 10000
+      probeTimeout: 5000, // Probe timeout (ms), default: 5000
+
+      // Route table updates
+      routeTableUpdateInterval: 30000, // Hub pushes route table interval (ms), default: 30000
+    },
+
+    // Preferred relay nodes (optional, auto-selected if empty)
+    preferredRelayEdges: [],
+
+    // Hub relay configuration
+    hubRelay: {
+      enableTcpFallback: false, // use edge-hub tcp websocket link for voice relay as last choice
+    },
+
+    // Routing optimization debugging
+    debug: {
+      logRouteChanges: false, // Log route changes
+      logQualityMetrics: false, // Log quality metrics
+      logRelayStats: false, // Log relay statistics
+    },
+  },
 };

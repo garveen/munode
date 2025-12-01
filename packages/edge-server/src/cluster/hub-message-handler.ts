@@ -736,9 +736,7 @@ export class HubMessageHandlers {
     };
     preferredRelayEdges?: number[];
     hubRelay?: {
-      enableUdpRelay: boolean;
       enableTcpFallback: boolean;
-      tcpRelayPriority: 'last' | 'fallback';
     };
   }): void {
     try {

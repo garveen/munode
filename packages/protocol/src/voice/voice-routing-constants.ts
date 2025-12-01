@@ -8,7 +8,7 @@
  * 默认路由策略配置
  */
 export const DEFAULT_ROUTING_POLICY = {
-  directRttThreshold: 200,        // 直连 RTT 上限 (ms)
+  directRttThreshold: 500,        // 直连 RTT 上限 (ms)
   directLossThreshold: 0.05,      // 直连丢包率上限
   enableRelay: true,              // 是否启用中转
   maxRelayHops: 1,                // 最大中转跳数
@@ -24,9 +24,7 @@ export const DEFAULT_ROUTING_POLICY = {
  * 默认 Hub 中转配置
  */
 export const DEFAULT_HUB_RELAY_CONFIG = {
-  enableUdpRelay: false,          // 完全移除 Hub 的 UDP 中转功能
   enableTcpFallback: true,        // 仅保留 TCP 降级功能
-  tcpRelayPriority: 'last' as const,  // TCP 中转作为最后手段
 } as const;
 
 /**
@@ -36,7 +34,7 @@ export const DEFAULT_LOCAL_DECISION_CONFIG = {
   enabled: true,
   updateInterval: 5000,
   qualityCheckInterval: 10000,
-  directRttThreshold: 200,
+  directRttThreshold: 500,
   directLossThreshold: 0.05,
 } as const;
 
