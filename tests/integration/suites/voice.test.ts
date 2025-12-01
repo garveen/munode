@@ -547,7 +547,7 @@ describe('Voice Integration Tests', () => {
   });
 
   describe('Loopback', () => {
-    it.only('should send voice back to sender when using loopback target (31)', async () => {
+    it('should send voice back to sender when using loopback target (31)', async () => {
       // 测试 loopback (target=31)
       const clients = await createClients(testEnv, [
         { username: 'voice_loopback_sender', password: 'pass1', edge: 1, channelId: 0 },
