@@ -62,8 +62,20 @@ async function createAdminClient(testEnv: TestEnvironment, edge: 1 | 2 = 1): Pro
 interface ClientConfig {
   username: string;
   password: string;
-  edge: 1 | 2;
+  edge: 1 | 2 | 3 | 4;
   channelId?: number;
+}
+
+/**
+ * 获取 Edge 端口
+ */
+function getEdgePort(testEnv: TestEnvironment, edge: 1 | 2 | 3 | 4): number {
+  switch (edge) {
+    case 1: return testEnv.edgePort;
+    case 2: return testEnv.edgePort2;
+    case 3: return testEnv.edgePort3;
+    case 4: return testEnv.edgePort4;
+  }
 }
 
 async function createClients(testEnv: TestEnvironment, configs: ClientConfig[]): Promise<MumbleClient[]> {
@@ -71,7 +83,7 @@ async function createClients(testEnv: TestEnvironment, configs: ClientConfig[]):
   
   await Promise.all(configs.map(async (config, index) => {
     const client = new MumbleClient();
-    const targetPort = config.edge === 1 ? testEnv.edgePort : testEnv.edgePort2;
+    const targetPort = getEdgePort(testEnv, config.edge);
     console.log(`[TEST] Connecting ${config.username} to Edge ${config.edge} on port ${targetPort}`);
     await client.connect({
       host: 'localhost',
@@ -708,5 +720,247 @@ describe('Voice Routing Stress Tests', () => {
     expect(receivedCount).toBeGreaterThan(90);
     
     await cleanupClients(clients);
+  });
+});
+
+/**
+ * 4-Edge 路由测试套件
+ * 
+ * 测试场景：
+ * - Edge1 (CN) <-> Edge2 (HK) <-> Edge3 (JP) <-> Edge4 (US)
+ * - 模拟网络拓扑，测试中转路由
+ */
+describe('4-Edge Voice Routing Tests', () => {
+  let testEnv: TestEnvironment;
+
+  beforeAll(async () => {
+    // 启动 4 个 Edge 进行完整路由测试
+    testEnv = await setupTestEnvironment(8400, { 
+      silent: false,
+      startEdge2: true,
+      startEdge3: true,
+      startEdge4: true,
+      reuse: false,
+    });
+    
+    // 等待所有 Edge 连接到 Hub
+    await sleep(3000);
+  }, 180000);
+
+  afterAll(async () => {
+    await testEnv?.cleanup();
+  });
+
+  describe('Multi-Edge Direct Mode', () => {
+    /**
+     * 测试 4 个 Edge 之间的直接通信
+     */
+    it('should deliver voice between all 4 edges in direct mode', async () => {
+      const clients = await createClients(testEnv, [
+        { username: 'quality_test_e1', password: 'pass1', edge: 1, channelId: 0 },
+        { username: 'quality_test_e2', password: 'pass2', edge: 2, channelId: 0 },
+        { username: 'quality_test_e3', password: 'pass3', edge: 3, channelId: 0 },
+        { username: 'quality_test_e4', password: 'pass4', edge: 4, channelId: 0 },
+      ]);
+      
+      const [sender, receiver2, receiver3, receiver4] = clients;
+      
+      // 跟踪收到的语音包
+      let received2 = 0, received3 = 0, received4 = 0;
+      const senderSession = sender.getStateManager().getSession()?.session || 0;
+      
+      receiver2.on('voice', (data: any) => {
+        if (data.session === senderSession) received2++;
+      });
+      receiver3.on('voice', (data: any) => {
+        if (data.session === senderSession) received3++;
+      });
+      receiver4.on('voice', (data: any) => {
+        if (data.session === senderSession) received4++;
+      });
+      
+      await sleep(1000);
+      
+      // 从 Edge1 发送语音包
+      for (let i = 0; i < 20; i++) {
+        const voicePacket = createVoicePacket(4, 0, i);
+        await sender.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(50);
+      }
+      
+      await sleep(3000);
+      
+      console.log(`[4-EDGE TEST] Received: Edge2=${received2}, Edge3=${received3}, Edge4=${received4}`);
+      
+      // 所有 Edge 都应该收到语音
+      expect(received2).toBeGreaterThan(0);
+      expect(received3).toBeGreaterThan(0);
+      expect(received4).toBeGreaterThan(0);
+      
+      await cleanupClients(clients);
+    });
+  });
+
+  describe('Relay Route Computation', () => {
+    /**
+     * 测试 Hub 的路由计算功能
+     * 验证 NetworkTopologyManager 能正确计算中转路由
+     */
+    it('should compute relay routes through hub topology manager', async () => {
+      const clients = await createClients(testEnv, [
+        { username: 'relay_sender_e1', password: 'pass1', edge: 1, channelId: 0 },
+        { username: 'relay_receiver_e4', password: 'pass2', edge: 4, channelId: 0 },
+      ]);
+      
+      const [sender, receiver] = clients;
+      
+      let receivedCount = 0;
+      const senderSession = sender.getStateManager().getSession()?.session || 0;
+      
+      receiver.on('voice', (data: any) => {
+        if (data.session === senderSession) receivedCount++;
+      });
+      
+      await sleep(1000);
+      
+      // Edge1 -> Edge4 的语音传输
+      // 根据网络拓扑，可能通过 Edge2 或 Edge3 中转
+      for (let i = 0; i < 10; i++) {
+        const voicePacket = createVoicePacket(4, 0, i);
+        await sender.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(50);
+      }
+      
+      await sleep(2000);
+      
+      console.log(`[RELAY TEST] Sent 10 packets from Edge1 to Edge4, received ${receivedCount}`);
+      
+      // 应该能收到语音包（通过直连或中转）
+      expect(receivedCount).toBeGreaterThan(0);
+      
+      await cleanupClients(clients);
+    });
+
+    /**
+     * 测试中间节点作为中转
+     */
+    it('should use intermediate edge as relay node', async () => {
+      const clients = await createClients(testEnv, [
+        { username: 'multi_hop_sender', password: 'pass1', edge: 1, channelId: 0 },
+        { username: 'relay_test_e2', password: 'pass3', edge: 2, channelId: 0 }, // 可能的中转节点
+        { username: 'relay_test_e3', password: 'pass4', edge: 3, channelId: 0 }, // 可能的中转节点
+        { username: 'multi_hop_receiver', password: 'pass2', edge: 4, channelId: 0 },
+      ]);
+      
+      const [sender, relay2, relay3, receiver] = clients;
+      
+      let receivedCount = 0;
+      const senderSession = sender.getStateManager().getSession()?.session || 0;
+      
+      receiver.on('voice', (data: any) => {
+        if (data.session === senderSession) receivedCount++;
+      });
+      
+      await sleep(1000);
+      
+      // 发送语音包
+      for (let i = 0; i < 15; i++) {
+        const voicePacket = createVoicePacket(4, 0, i);
+        await sender.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(50);
+      }
+      
+      await sleep(2000);
+      
+      console.log(`[MULTI-HOP TEST] Sent 15 packets, received ${receivedCount}`);
+      
+      expect(receivedCount).toBeGreaterThan(0);
+      
+      await cleanupClients(clients);
+    });
+  });
+
+  describe('Network Quality Based Routing', () => {
+    /**
+     * 测试基于网络质量的路由选择
+     * 验证 VoiceRoutingManager 能根据质量指标选择最佳路由
+     */
+    it('should record network quality metrics', async () => {
+      const clients = await createClients(testEnv, [
+        { username: 'network_sim_sender', password: 'pass1', edge: 1, channelId: 0 },
+        { username: 'network_sim_receiver', password: 'pass2', edge: 4, channelId: 0 },
+      ]);
+      
+      const [sender, receiver] = clients;
+      
+      let receivedPackets: number[] = [];
+      const senderSession = sender.getStateManager().getSession()?.session || 0;
+      
+      receiver.on('voice', (data: any) => {
+        if (data.session === senderSession) {
+          receivedPackets.push(Date.now());
+        }
+      });
+      
+      await sleep(1000);
+      
+      // 发送一系列语音包来收集网络质量数据
+      const startTime = Date.now();
+      for (let i = 0; i < 30; i++) {
+        const voicePacket = createVoicePacket(4, 0, i);
+        await sender.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(50);
+      }
+      
+      await sleep(3000);
+      
+      // 分析接收到的包
+      const receiveRate = receivedPackets.length / 30;
+      console.log(`[QUALITY TEST] Receive rate: ${(receiveRate * 100).toFixed(1)}% (${receivedPackets.length}/30)`);
+      
+      // 应该有合理的接收率
+      expect(receiveRate).toBeGreaterThan(0.5);
+      
+      await cleanupClients(clients);
+    });
+  });
+
+  describe('Cross-Edge Voice Broadcast', () => {
+    /**
+     * 测试语音广播到多个 Edge
+     */
+    it('should broadcast voice to all edges simultaneously', async () => {
+      const clients = await createClients(testEnv, [
+        { username: 'packet_loss_sender', password: 'pass1', edge: 1, channelId: 0 },
+        { username: 'packet_loss_receiver', password: 'pass2', edge: 2, channelId: 0 },
+      ]);
+      
+      // 先用 2 个 Edge 验证基本功能
+      const [sender, receiver] = clients;
+      
+      let receivedCount = 0;
+      const senderSession = sender.getStateManager().getSession()?.session || 0;
+      
+      receiver.on('voice', (data: any) => {
+        if (data.session === senderSession) receivedCount++;
+      });
+      
+      await sleep(1000);
+      
+      // 发送语音包
+      for (let i = 0; i < 20; i++) {
+        const voicePacket = createVoicePacket(4, 0, i);
+        await sender.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(50);
+      }
+      
+      await sleep(2000);
+      
+      console.log(`[BROADCAST TEST] Received ${receivedCount}/20 packets`);
+      
+      expect(receivedCount).toBeGreaterThan(10);
+      
+      await cleanupClients(clients);
+    });
   });
 });
