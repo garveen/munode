@@ -89,6 +89,66 @@ export interface HubConfig {
   webApi: WebApiConfig;
   logLevel: string;
   logFile?: string;
+  
+  // 语音路由配置（Edge间中转路由功能）
+  voiceRouting?: VoiceRoutingConfig;
+}
+
+/**
+ * 语音路由配置
+ * Hub 启动时会将此配置推送给所有 Edge
+ */
+export interface VoiceRoutingConfig {
+  // 全局功能开关
+  enabled: boolean;
+  
+  // 路由策略
+  policy?: RoutingPolicy;
+  
+  // 优选中转节点（可选，留空则自动选择）
+  preferredRelayEdges?: number[];
+  
+  // Hub 自身中转配置
+  hubRelay?: {
+    enableUdpRelay: boolean;      // 完全移除 Hub 的 UDP 中转功能
+    enableTcpFallback: boolean;   // 仅保留 TCP 降级功能（通过 WebSocket）
+    tcpRelayPriority: 'last' | 'fallback';  // TCP 中转优先级
+  };
+  
+  // 路由优化调试
+  debug?: {
+    logRouteChanges: boolean;     // 记录路由变化
+    logQualityMetrics: boolean;   // 记录质量指标
+    logRelayStats: boolean;       // 记录中转统计
+  };
+}
+
+/**
+ * 路由策略配置
+ */
+export interface RoutingPolicy {
+  // 直连阈值
+  directRttThreshold?: number;        // 直连 RTT 上限 (ms), 默认 200
+  directLossThreshold?: number;       // 直连丢包率上限, 默认 0.05
+  
+  // 中转条件
+  enableRelay?: boolean;              // 是否启用中转, 默认 true
+  maxRelayHops?: number;              // 最大中转跳数, 默认 1
+  relayCostFactor?: number;           // 中转成本因子, 默认 1.2 (比直连高 20%)
+  
+  // 路由切换
+  routeSwitchHysteresis?: number;     // 切换滞后时间 (ms), 默认 5000
+  routeSwitchCostDelta?: number;      // 切换成本差异阈值, 默认 0.3 (30%)
+  
+  // 负载均衡
+  maxRelayLoadPerEdge?: number;       // 单 Edge 最大中转负载, 默认 0.7
+  
+  // 质量探测
+  probeInterval?: number;             // 探测间隔 (ms), 默认 10000
+  probeTimeout?: number;              // 探测超时 (ms), 默认 5000
+  
+  // 路由表更新
+  routeTableUpdateInterval?: number;  // Hub 推送路由表间隔 (ms), 默认 30000
 }
 
 /**

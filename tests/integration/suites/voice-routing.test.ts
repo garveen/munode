@@ -139,7 +139,7 @@ describe('Voice Routing Integration Tests', () => {
      * 测试 Hub 配置推送机制
      * 验证：Edge 连接时从 Hub 接收路由配置
      */
-    it.only('should receive voice routing config from Hub on connection', async () => {
+    it('should receive voice routing config from Hub on connection', async () => {
       // 这个测试验证 Edge 在连接 Hub 时接收配置
       // 由于我们还没实现配置推送，这个测试会失败
       // 这就是 TDD 的目的：先写测试，再实现功能
