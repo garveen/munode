@@ -1925,9 +1925,73 @@ export class HubControlService {
       // 将Edge与RPCChannel关联
       this.edgeChannels.set(params.server_id, _channel);
       logger.info(`Edge ${params.server_id} registered successfully`);
+      
+      // 推送语音路由配置给新注册的 Edge
+      this.pushVoiceRoutingConfig(params.server_id);
     }
 
     return result;
+  }
+  
+  /**
+   * 推送语音路由配置给特定 Edge
+   */
+  private pushVoiceRoutingConfig(edgeId: number): void {
+    const voiceRoutingConfig = this.config.voiceRouting;
+    
+    // 只在启用时推送配置
+    if (!voiceRoutingConfig?.enabled) {
+      logger.debug(`Voice routing disabled, not pushing config to Edge ${edgeId}`);
+      return;
+    }
+    
+    const configToPush = {
+      enabled: voiceRoutingConfig.enabled,
+      policy: voiceRoutingConfig.policy || {
+        directRttThreshold: 200,
+        directLossThreshold: 0.05,
+        enableRelay: true,
+        maxRelayHops: 1,
+        relayCostFactor: 1.2,
+        routeSwitchHysteresis: 5000,
+        routeSwitchCostDelta: 0.3,
+        maxRelayLoadPerEdge: 0.7,
+        probeInterval: 10000,
+        routeTableUpdateInterval: 30000,
+      },
+      preferredRelayEdges: voiceRoutingConfig.preferredRelayEdges || [],
+      hubRelay: voiceRoutingConfig.hubRelay || {
+        enableUdpRelay: false,
+        enableTcpFallback: true,
+        tcpRelayPriority: 'last',
+      },
+    };
+    
+    logger.info(`Pushing voice routing config to Edge ${edgeId}:`, {
+      enabled: configToPush.enabled,
+      policyThresholds: {
+        directRttThreshold: configToPush.policy.directRttThreshold,
+        directLossThreshold: configToPush.policy.directLossThreshold,
+      },
+    });
+    
+    this.notify(edgeId, 'hub.voiceRoutingConfig', configToPush);
+  }
+  
+  /**
+   * 广播语音路由配置给所有 Edge
+   */
+  broadcastVoiceRoutingConfig(): void {
+    const voiceRoutingConfig = this.config.voiceRouting;
+    
+    if (!voiceRoutingConfig?.enabled) {
+      logger.debug('Voice routing disabled, not broadcasting config');
+      return;
+    }
+    
+    for (const edgeId of this.edgeChannels.keys()) {
+      this.pushVoiceRoutingConfig(edgeId);
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars

@@ -706,4 +706,60 @@ export class HubMessageHandlers {
       logger.error('Error handling UserStats response from Hub:', error);
     }
   }
+
+  /**
+   * 处理来自Hub的语音路由配置推送
+   * 
+   * Hub 会在以下情况推送配置：
+   * 1. Edge 首次注册到 Hub
+   * 2. Hub 配置发生变化（热更新）
+   * 
+   * 配置内容包括：
+   * - enabled: 功能总开关
+   * - policy: 路由策略参数
+   * - preferredRelayEdges: 优选中转节点
+   * - hubRelay: Hub 中转配置
+   */
+  handleVoiceRoutingConfigFromHub(params: {
+    enabled: boolean;
+    policy?: {
+      directRttThreshold: number;
+      directLossThreshold: number;
+      enableRelay: boolean;
+      maxRelayHops: number;
+      relayCostFactor: number;
+      routeSwitchHysteresis: number;
+      routeSwitchCostDelta: number;
+      maxRelayLoadPerEdge: number;
+      probeInterval: number;
+      routeTableUpdateInterval: number;
+    };
+    preferredRelayEdges?: number[];
+    hubRelay?: {
+      enableUdpRelay: boolean;
+      enableTcpFallback: boolean;
+      tcpRelayPriority: 'last' | 'fallback';
+    };
+  }): void {
+    try {
+      logger.info('Received voice routing config from Hub:', {
+        enabled: params.enabled,
+        policy: params.policy ? {
+          directRttThreshold: params.policy.directRttThreshold,
+          directLossThreshold: params.policy.directLossThreshold,
+        } : undefined,
+      });
+
+      // 通知 hubClient 触发 voiceRoutingConfig 事件
+      // hubClient 的监听器会处理这个配置
+      const hubClient = this.factory.hubClient;
+      if (hubClient) {
+        hubClient.emit('voiceRoutingConfigReceived', params);
+      }
+      
+      logger.info(`Voice routing ${params.enabled ? 'enabled' : 'disabled'} by Hub configuration`);
+    } catch (error) {
+      logger.error('Error handling voice routing config from Hub:', error);
+    }
+  }
 }
