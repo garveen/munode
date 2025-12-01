@@ -170,6 +170,7 @@ export class ConnectionManager {
    * 设置强制使用TCP语音模式
    */
   setForceTcpVoice(force: boolean): void {
+    console.log(`[ConnectionManager] setForceTcpVoice: ${force}`);
     this.useTcpVoice = force;
   }
 
@@ -255,14 +256,18 @@ export class ConnectionManager {
    * 发送语音包（自动选择UDP或TCP）
    */
   async sendVoicePacket(packet: Buffer): Promise<void> {
+    console.log(`[ConnectionManager] sendVoicePacket: size=${packet.length}, isUsingTcpVoice=${this.isUsingTcpVoice()}`);
+    
     // 加密语音包（如果加密已初始化）
     let encryptedPacket = packet;
     if (this.client.getCryptoManager().isInitialized()) {
       encryptedPacket = this.client.getCryptoManager().encrypt(packet);
+      console.log(`[ConnectionManager] Voice packet encrypted: ${packet.length} -> ${encryptedPacket.length} bytes`);
     }
 
     if (this.isUsingTcpVoice()) {
       // 使用TCP隧道发送语音包
+      console.log('[ConnectionManager] Using TCP tunnel for voice');
       return this.sendTCPVoicePacket(encryptedPacket);
     } else {
       try {
@@ -282,8 +287,10 @@ export class ConnectionManager {
    * 通过TCP隧道发送语音包
    */
   async sendTCPVoicePacket(packet: Buffer): Promise<void> {
+    console.log(`[ConnectionManager] sendTCPVoicePacket: wrapping ${packet.length} bytes as UDPTunnel message`);
     // 使用 UDPTunnel 消息类型 (MessageType = 1)
     const message = this.wrapMessage(MessageType.UDPTunnel, packet);
+    console.log(`[ConnectionManager] sendTCPVoicePacket: sending ${message.length} bytes via TCP`);
     return this.sendTCP(message);
   }
 
@@ -516,7 +523,7 @@ export class ConnectionManager {
         const type = (header >> 5) & 0x07;
         if (type === 1) {
           // UDP Ping 响应，表示 UDP 连接已就绪
-          console.debug('UDP Ping response received, UDP ready');
+          console.log(`[ConnectionManager] UDP Ping response received, useTcpVoice=${this.useTcpVoice}`);
           this.client.emit('udpReady');
           return;
         }
@@ -742,9 +749,11 @@ export class ConnectionManager {
         Buffer.from(message.server_nonce)
       );
       console.log('[ConnectionManager] Cryptographic setup completed');
+      console.log(`[ConnectionManager] useTcpVoice=${this.useTcpVoice}, udpSocket=${!!this.udpSocket}`);
       
       // 初始化 UDP 连接（如果未强制使用 TCP 语音）
       if (!this.useTcpVoice && !this.udpSocket) {
+        console.log('[ConnectionManager] Initializing UDP connection...');
         try {
           await this.connectUDP(this.serverHost, this.udpPort);
           console.log('[ConnectionManager] UDP socket established');
@@ -757,6 +766,8 @@ export class ConnectionManager {
           this.udpFailed = true;
           this.useTcpVoice = true;
         }
+      } else {
+        console.log(`[ConnectionManager] Skipping UDP initialization: useTcpVoice=${this.useTcpVoice}, udpSocket=${!!this.udpSocket}`);
       }
     } else {
       console.warn('[ConnectionManager] Incomplete cryptographic setup message', {

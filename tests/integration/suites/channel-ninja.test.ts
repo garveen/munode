@@ -22,8 +22,8 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { TestEnvironment, setupTestEnvironment, sleep } from '../setup';
-import { MumbleClient } from '../../../packages/client/dist/index.js';
+import { TestEnvironment, setupTestEnvironment } from '../setup';
+import { MumbleClient } from '../../../packages/client/src/index.js';
 import { PermissionFlag } from '../fixtures';
 
 // Use channel ID 1 (General) as the ninja channel for testing

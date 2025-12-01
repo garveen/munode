@@ -352,8 +352,9 @@ export class EventSetupManager {
         // 通过TCP隧道（UDPTunnel消息）发送语音包
         // 注意：根据 Mumble 协议，UDPTunnel 消息的 payload 直接就是语音包数据
         // 不需要 protobuf 包装，这是一个性能优化
-        logger.debug(`Sending voice data (${voiceData.length} bytes) as UDPTunnel to session ${session_id}`);
+        logger.info(`[TCP-VOICE] Sending voice data (${voiceData.length} bytes) as UDPTunnel to session ${session_id}`);
         this.messageManager!.sendMessageToClient(session_id, MessageType.UDPTunnel, voiceData);
+        logger.info(`[TCP-VOICE] UDPTunnel message sent successfully to session ${session_id}`);
       } catch (error) {
         logger.error(`Failed to send UDPTunnel message for session ${session_id}:`, error);
       }

@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestEnvironment, setupTestEnvironment } from '../setup';
-import { MumbleClient } from '../../../packages/client/dist/index.js';
+import { MumbleClient } from '../../../packages/client/src/index.js';
 import * as crypto from 'crypto';
 
 let testEnv: TestEnvironment;

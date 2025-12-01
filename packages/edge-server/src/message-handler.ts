@@ -37,6 +37,14 @@ export class MessageHandler extends EventEmitter {
         `Handling message: session=${session_id}, type=${messageType}, size=${messageData.length}, state=${clientState}`
       );
 
+      // UDPTunnel 消息不受状态检查限制（与 Mumble 官方实现保持一致）
+      // 这是性能优化：语音包是高优先级数据，不应该通过同步路径
+      // 参考：murmur/Server.cpp line 1712 和 go-implement/client.go line 869
+      if (messageType === MessageType.UDPTunnel) {
+        this.handleUDPTunnel(session_id, messageData);
+        return;
+      }
+
       // 根据客户端状态检查消息是否合法
       if (!this.isMessageAllowedInState(messageType, clientState)) {
         this.logger.warn(
@@ -48,9 +56,6 @@ export class MessageHandler extends EventEmitter {
       switch (messageType) {
         case MessageType.Version:
           this.handleVersion(session_id, messageData);
-          break;
-        case MessageType.UDPTunnel:
-          this.handleUDPTunnel(session_id, messageData);
           break;
         case MessageType.Authenticate:
           this.handleAuthenticate(session_id, messageData);
@@ -192,8 +197,11 @@ export class MessageHandler extends EventEmitter {
    * 处理 UDP 隧道消息
    */
   private handleUDPTunnel( session_id: number, data: Buffer): void {
+    // 添加日志便于调试
+    this.logger.info(`[MESSAGE-HANDLER] Received UDPTunnel from session ${session_id}, data length: ${data.length}`);
     // 转发给语音路由器
     this.emit('udpTunnel', session_id, data);
+    this.logger.info(`[MESSAGE-HANDLER] UDPTunnel event emitted for session ${session_id}`);
   }
 
   /**

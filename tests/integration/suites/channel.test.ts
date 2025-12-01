@@ -11,8 +11,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestEnvironment, setupTestEnvironment } from '../setup';
 import { TEST_CHANNELS, MessageType, PermissionFlag } from '../fixtures';
-import { mumbleproto } from '../../../packages/protocol/dist/index.js';
-import { MumbleClient } from '../../../packages/client/dist/index.js';
+import { mumbleproto } from '../../../packages/protocol/src/index.js';
+import { MumbleClient } from '../../../packages/client/src/index.js';
 
 describe('Channel Management Integration Tests', () => {
   let testEnv: TestEnvironment;

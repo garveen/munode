@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import { join } from 'path';
 import { mumbleproto } from '@munode/protocol';
 import { MessageType } from './fixtures';
-import { MumbleClient } from '../../../packages/client/dist/index.js';
+import { MumbleClient } from '../../../packages/client/src/index.js';
 
 export interface MumbleConnection {
   socket: tls.TLSSocket;

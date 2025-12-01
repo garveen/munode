@@ -348,9 +348,9 @@ export async function startHubServer(configPath?: string, maxRetries: number = 3
         env: {
           ...process.env,
           NODE_ENV: 'test',
-          LOG_LEVEL: 'debug', // 减少日志输出
+          LOG_LEVEL: 'info', // 设置为 info 级别以查看关键日志
         },
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: silent ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'], // 始终使用 pipe 以捕获启动信息
       });
 
       // 等待服务器启动
@@ -365,11 +365,10 @@ export async function startHubServer(configPath?: string, maxRetries: number = 3
           const message = data.toString();
           // 只在非 silent 模式下输出日志
           if (!silent) {
-            console.log('Hub output:', message);
+            process.stdout.write(data); // 转发到控制台
           }
           if (message.includes('Hub Server started successfully') || 
-              message.includes('listening') || 
-              message.includes('ready')) {
+              message.includes('Control channel server listening')) {
             if (!startupDetected) {
               startupDetected = true;
               clearTimeout(timeout);
@@ -431,9 +430,9 @@ export async function startEdgeServer(configPath?: string, port?: number, maxRet
         env: {
           ...process.env,
           NODE_ENV: 'test',
-          LOG_LEVEL: 'warn', // 减少日志输出
+          LOG_LEVEL: 'info', // 设置为 info 级别以查看关键日志
         },
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: silent ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'], // 始终使用 pipe 以捕获启动信息
       });
 
       // 等待服务器启动
@@ -448,11 +447,11 @@ export async function startEdgeServer(configPath?: string, port?: number, maxRet
           const message = data.toString();
           // 只在非 silent 模式下输出日志
           if (!silent) {
-            console.log('Edge output:', message);
+            process.stdout.write(data); // 转发到控制台
           }
           if (message.includes('Edge Server started successfully') || 
-              message.includes('listening') || 
-              message.includes('ready')) {
+              message.includes('TLS Server listening') || 
+              message.includes('UDP Server listening')) {
             if (!startupDetected) {
               startupDetected = true;
               clearTimeout(timeout);
@@ -500,7 +499,7 @@ export async function setupTestEnvironment(
     startAuth?: boolean;
     hubConfig?: Record<string, any>; // Custom Hub configuration
     reuse?: boolean; // Whether to reuse existing global test environment
-    silent?: boolean; // Whether to suppress server output logs (default: true)
+    silent?: boolean; // Whether to suppress server output logs (default: true for speed)
   } = { startHub: true, startEdge: true, startEdge2: true, startAuth: true, reuse: true, silent: true }
 ): Promise<TestEnvironment> {
   // Check if we should reuse the global test environment
@@ -525,9 +524,10 @@ export async function setupTestEnvironment(
   const hubPort = options.startHub !== false ? await findAvailablePort(authPort + 1) : 0;
   const controlPort = options.startHub !== false ? await findAvailablePort(hubPort + 1) : 0;
   const webApiPort = options.startHub !== false ? await findAvailablePort(controlPort + 1) : 0;
+  const hubVoicePort = options.startHub !== false ? await findAvailablePort(webApiPort + 1) : 0;
   
   // Edge1: TLS port and UDP port (consecutive)
-  const edgeBasePort = Math.max(webApiPort, basePort - 1);
+  const edgeBasePort = Math.max(hubVoicePort, basePort - 1);
   const edgePort = options.startEdge !== false ? await findAvailablePort(edgeBasePort + 1) : 0;
   const edgeUdpPort = edgePort > 0 ? edgePort + 1 : 0;
   
@@ -535,7 +535,7 @@ export async function setupTestEnvironment(
   const edgePort2 = (options.startEdge2 === true && edgePort > 0) ? await findAvailablePort(edgeUdpPort + 1) : 0;
   const edgeUdpPort2 = edgePort2 > 0 ? edgePort2 + 1 : 0;
   
-  console.log(`Allocated ports - Auth: ${authPort}, Hub: ${hubPort}, Control: ${controlPort}, WebAPI: ${webApiPort}, Edge1: ${edgePort}(TLS)/${edgeUdpPort}(UDP), Edge2: ${edgePort2}(TLS)/${edgeUdpPort2}(UDP)`);
+  console.log(`Allocated ports - Auth: ${authPort}, Hub: ${hubPort}(TCP)/${hubVoicePort}(UDP), Control: ${controlPort}, WebAPI: ${webApiPort}, Edge1: ${edgePort}(TLS)/${edgeUdpPort}(UDP), Edge2: ${edgePort2}(TLS)/${edgeUdpPort2}(UDP)`);
 
   // 1. Start auth server (if needed)
   if (options.startAuth !== false) {
@@ -561,6 +561,7 @@ export async function setupTestEnvironment(
         hubConfig.port = actualHubPort;
         hubConfig.controlPort = actualControlPort; // Set dynamic control port
         hubConfig.webApi.port = webApiPort; // Web API uses dynamic port
+        hubConfig.voicePort = hubVoicePort; // Set dynamic voice port
         
         // Configure auth (pointing to test auth server)
         hubConfig.auth = hubConfig.auth || {};

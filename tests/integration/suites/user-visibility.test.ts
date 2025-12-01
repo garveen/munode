@@ -8,8 +8,8 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { TestEnvironment, setupTestEnvironment, sleep } from '../setup';
-import { MumbleClient } from '../../../packages/client/dist/index.js';
+import { TestEnvironment, setupTestEnvironment } from '../setup';
+import { MumbleClient } from '../../../packages/client/src/index.js';
 
 describe('User Visibility Integration Tests', () => {
   let testEnv: TestEnvironment;

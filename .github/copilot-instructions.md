@@ -15,6 +15,7 @@ MuNode 是一个基于 Node.js/TypeScript 的 Mumble 服务器实现，采用 Hu
 
 ### 核心技术栈
 - **语言**: TypeScript (严格模式)
+- **风格**: ESModule，不是 CommonJS
 - **运行时**: Node.js
 - **包管理**: pnpm workspace
 - **协议**: Protocol Buffers, Mumble Protocol
@@ -163,6 +164,8 @@ async function updateUserState(session: number, state: Partial<UserState>) {
 ```
 
 ## 测试指导
+
+*** 绝大部分测试需要先编译项目 ***
 
 *** 只运行集成测试，本项目暂时不设置单元测试 ***
 
@@ -351,6 +354,9 @@ pnpm --filter @munode/hub-server run build
 - 实现状态: 根目录 `*_IMPLEMENTATION*.md` 文件
 - API 文档: 各 package 的 README.md
 - RPC 使用: `packages/protocol/TYPED_RPC_USAGE.md`
+
+## 读取文件
+尽量直接读取文件而不是用sed
 
 ## 常见问题
 

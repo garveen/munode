@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestEnvironment, setupTestEnvironment } from '../setup';
-import { MumbleClient } from '../../../packages/client/dist/index.js';
+import { MumbleClient } from '../../../packages/client/src/index.js';
 
 describe('Moderation Integration Tests', () => {
   let testEnv: TestEnvironment;

@@ -14,7 +14,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestEnvironment, setupTestEnvironment, sleep, startHubServer } from '../setup.js';
-import { MumbleClient } from '../../../packages/client/dist/index.js';
+import { MumbleClient } from '../../../packages/client/src/index.js';
 import { spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import { join, dirname } from 'path';

@@ -287,7 +287,7 @@ export class ClientManager extends EventEmitter {
    */
   private setupSocketHandlers(socket: Socket | TLSSocket, sessionId: number): void {
     socket.on('data', (data: Buffer) => {
-      console.log('Received data from client:', { sessionId, length: data.length });
+      this.logger.info(`[CLIENT-MANAGER] Received data from client: sessionId=${sessionId}, length=${data.length}`);
       this.handleClientData(sessionId, data);
     });
 

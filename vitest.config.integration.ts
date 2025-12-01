@@ -26,7 +26,6 @@ export default defineConfig({
     outputFile: undefined, // 不写入文件
     logHeapUsage: false, // 禁用堆使用日志
     // 减少标准输出冗余
-    printConsoleTrace: false,
     coverage: {
       reporter: ['text', 'json', 'html'],
       exclude: [

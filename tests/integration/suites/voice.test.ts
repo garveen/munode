@@ -16,7 +16,7 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { TestEnvironment, setupTestEnvironment } from '../setup';
-import { MumbleClient } from '../../../packages/client/dist/index.js';
+import { MumbleClient } from '../../../packages/client/src/index.js';
 import * as crypto from 'crypto';
 
 /**
@@ -141,6 +141,7 @@ async function createClients(testEnv: TestEnvironment, configs: ClientConfig[]):
       username: config.username,
       password: config.password,
       rejectUnauthorized: false,
+      forceTcpVoice: true,
     });
     
     // 等待 UDP 连接就绪
@@ -180,7 +181,7 @@ describe('Voice Integration Tests', () => {
   let adminForCleanup: MumbleClient | null = null;
 
   beforeAll(async () => {
-    testEnv = await setupTestEnvironment(8088);
+    testEnv = await setupTestEnvironment(8089, { silent: false }); // 启用日志输出用于调试
   }, 60000);
 
   afterAll(async () => {
@@ -546,7 +547,7 @@ describe('Voice Integration Tests', () => {
   });
 
   describe('Loopback', () => {
-    it('should send voice back to sender when using loopback target (31)', async () => {
+    it.only('should send voice back to sender when using loopback target (31)', async () => {
       // 测试 loopback (target=31)
       const clients = await createClients(testEnv, [
         { username: 'voice_loopback_sender', password: 'pass1', edge: 1, channelId: 0 },
