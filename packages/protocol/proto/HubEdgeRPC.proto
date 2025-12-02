@@ -685,6 +685,17 @@ message HubChannelUpdatedParams {
   required ChannelDataProto channel = 1;
 }
 
+// ---------------------------------------------------------------------------
+// hub.syncVoiceTarget - Hub 同步 Voice Target 配置到其他 Edge
+// ---------------------------------------------------------------------------
+message HubSyncVoiceTargetParams {
+  required uint32 edge_id = 1;
+  required uint32 client_session = 2;
+  required uint32 target_id = 3;
+  required string config_json = 4;  // VoiceTarget config as JSON (complex nested structure)
+  required int64 timestamp = 5;
+}
+
 // ============================================================================
 // 类型安全的 RPC 请求/响应包装
 // ============================================================================
@@ -787,4 +798,5 @@ message TypedRPCNotification {
   optional HubChannelCreatedParams channel_created = 17;
   optional HubChannelRemovedParams channel_removed = 18;
   optional HubChannelUpdatedParams channel_updated = 19;
+  optional HubSyncVoiceTargetParams sync_voice_target = 20;
 }

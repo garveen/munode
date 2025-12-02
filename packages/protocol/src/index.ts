@@ -139,7 +139,23 @@ export { ClientState } from './shared-types.js';
 
 // RPC Channel
 export { RPCChannel } from './rpc/rpc-channel.js';
-export type { Message, PendingRequest } from './rpc/rpc-channel.js';
+export type { 
+  Message, 
+  PendingRequest,
+  NotificationParams as ChannelNotificationParams,
+  VoiceDataParams,
+  ForceDisconnectParams,
+  PeerJoinedParams,
+  ACLResponseParams,
+  UserJoinedParams,
+  UserLeftParams,
+  UserMovedParams,
+  ChannelCreatedParams,
+  ChannelRemovedParams,
+  ChannelUpdatedParams,
+  SyncVoiceTargetParams,
+  ChannelDataInput,
+} from './rpc/rpc-channel.js';
 
 // Typed RPC (Legacy - will be deprecated)
 export { TypedRPCClient, createTypedRPCClient } from './rpc/typed-rpc-client.js';

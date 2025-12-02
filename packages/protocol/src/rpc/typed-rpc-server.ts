@@ -86,10 +86,12 @@ export class TypedRPCServer {
 
   /**
    * 批量注册处理器（使用列表+循环方式）
+   * Accepts handlers with looser types for flexibility
    */
-  registerHandlers(definitions: Array<{ method: string; handler: RPCHandler<EdgeToHubMethods['method']> }>): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  registerHandlers(definitions: Array<{ method: string; handler: (channel: RPCChannel, params: any) => Promise<any> }>): void {
     for (const def of definitions) {
-      this.handlers.set(def.method, def.handler);
+      this.handlers.set(def.method, def.handler as RPCHandler<EdgeToHubMethods['method']>);
     }
   }
 

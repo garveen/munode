@@ -5289,7 +5289,7 @@ export namespace hubedge {
             pb_1.Message.initialize(this, Array.isArray(data) ? data : [], 0, -1, [], this.#one_of_decls);
             if (!Array.isArray(data) && typeof data == "object") { }
         }
-        static fromObject(data: {}): EdgeGetChannelsParams {
+        static fromObject(_data: {}): EdgeGetChannelsParams {
             const message = new EdgeGetChannelsParams({});
             return message;
         }
@@ -8158,7 +8158,7 @@ export namespace hubedge {
             pb_1.Message.initialize(this, Array.isArray(data) ? data : [], 0, -1, [], this.#one_of_decls);
             if (!Array.isArray(data) && typeof data == "object") { }
         }
-        static fromObject(data: {}): ClusterGetStatusParams {
+        static fromObject(_data: {}): ClusterGetStatusParams {
             const message = new ClusterGetStatusParams({});
             return message;
         }
@@ -10892,6 +10892,161 @@ export namespace hubedge {
             return HubChannelUpdatedParams.deserialize(bytes);
         }
     }
+    export class HubSyncVoiceTargetParams extends pb_1.Message {
+        #one_of_decls: number[][] = [];
+        constructor(data?: any[] | {
+            edge_id: number;
+            client_session: number;
+            target_id: number;
+            config_json: string;
+            timestamp: number;
+        }) {
+            super();
+            pb_1.Message.initialize(this, Array.isArray(data) ? data : [], 0, -1, [], this.#one_of_decls);
+            if (!Array.isArray(data) && typeof data == "object") {
+                this.edge_id = data.edge_id;
+                this.client_session = data.client_session;
+                this.target_id = data.target_id;
+                this.config_json = data.config_json;
+                this.timestamp = data.timestamp;
+            }
+        }
+        get edge_id() {
+            return pb_1.Message.getField(this, 1) as number;
+        }
+        set edge_id(value: number) {
+            pb_1.Message.setField(this, 1, value);
+        }
+        get has_edge_id() {
+            return pb_1.Message.getField(this, 1) != null;
+        }
+        get client_session() {
+            return pb_1.Message.getField(this, 2) as number;
+        }
+        set client_session(value: number) {
+            pb_1.Message.setField(this, 2, value);
+        }
+        get has_client_session() {
+            return pb_1.Message.getField(this, 2) != null;
+        }
+        get target_id() {
+            return pb_1.Message.getField(this, 3) as number;
+        }
+        set target_id(value: number) {
+            pb_1.Message.setField(this, 3, value);
+        }
+        get has_target_id() {
+            return pb_1.Message.getField(this, 3) != null;
+        }
+        get config_json() {
+            return pb_1.Message.getField(this, 4) as string;
+        }
+        set config_json(value: string) {
+            pb_1.Message.setField(this, 4, value);
+        }
+        get has_config_json() {
+            return pb_1.Message.getField(this, 4) != null;
+        }
+        get timestamp() {
+            return pb_1.Message.getField(this, 5) as number;
+        }
+        set timestamp(value: number) {
+            pb_1.Message.setField(this, 5, value);
+        }
+        get has_timestamp() {
+            return pb_1.Message.getField(this, 5) != null;
+        }
+        static fromObject(data: {
+            edge_id?: number;
+            client_session?: number;
+            target_id?: number;
+            config_json?: string;
+            timestamp?: number;
+        }): HubSyncVoiceTargetParams {
+            const message = new HubSyncVoiceTargetParams({
+                edge_id: data.edge_id,
+                client_session: data.client_session,
+                target_id: data.target_id,
+                config_json: data.config_json,
+                timestamp: data.timestamp
+            });
+            return message;
+        }
+        toObject() {
+            const data: {
+                edge_id?: number;
+                client_session?: number;
+                target_id?: number;
+                config_json?: string;
+                timestamp?: number;
+            } = {};
+            if (this.edge_id != null) {
+                data.edge_id = this.edge_id;
+            }
+            if (this.client_session != null) {
+                data.client_session = this.client_session;
+            }
+            if (this.target_id != null) {
+                data.target_id = this.target_id;
+            }
+            if (this.config_json != null) {
+                data.config_json = this.config_json;
+            }
+            if (this.timestamp != null) {
+                data.timestamp = this.timestamp;
+            }
+            return data;
+        }
+        serialize(): Uint8Array;
+        serialize(w: pb_1.BinaryWriter): void;
+        serialize(w?: pb_1.BinaryWriter): Uint8Array | void {
+            const writer = w || new pb_1.BinaryWriter();
+            if (this.has_edge_id)
+                writer.writeUint32(1, this.edge_id);
+            if (this.has_client_session)
+                writer.writeUint32(2, this.client_session);
+            if (this.has_target_id)
+                writer.writeUint32(3, this.target_id);
+            if (this.has_config_json && this.config_json.length)
+                writer.writeString(4, this.config_json);
+            if (this.has_timestamp)
+                writer.writeInt64(5, this.timestamp);
+            if (!w)
+                return writer.getResultBuffer();
+        }
+        static deserialize(bytes: Uint8Array | pb_1.BinaryReader): HubSyncVoiceTargetParams {
+            const reader = bytes instanceof pb_1.BinaryReader ? bytes : new pb_1.BinaryReader(bytes), message = new HubSyncVoiceTargetParams();
+            while (reader.nextField()) {
+                if (reader.isEndGroup())
+                    break;
+                switch (reader.getFieldNumber()) {
+                    case 1:
+                        message.edge_id = reader.readUint32();
+                        break;
+                    case 2:
+                        message.client_session = reader.readUint32();
+                        break;
+                    case 3:
+                        message.target_id = reader.readUint32();
+                        break;
+                    case 4:
+                        message.config_json = reader.readString();
+                        break;
+                    case 5:
+                        message.timestamp = reader.readInt64();
+                        break;
+                    default: reader.skipField();
+                }
+            }
+            return message;
+        }
+        serializeBinary(): Uint8Array {
+            return this.serialize();
+        }
+        static deserializeBinary(bytes: Uint8Array): HubSyncVoiceTargetParams {
+            return HubSyncVoiceTargetParams.deserialize(bytes);
+        }
+    }
     export class TypedRPCRequest extends pb_1.Message {
         #one_of_decls: number[][] = [];
         constructor(data?: any[] | {
@@ -12597,6 +12752,7 @@ export namespace hubedge {
             channel_created?: HubChannelCreatedParams;
             channel_removed?: HubChannelRemovedParams;
             channel_updated?: HubChannelUpdatedParams;
+            sync_voice_target?: HubSyncVoiceTargetParams;
         }) {
             super();
             pb_1.Message.initialize(this, Array.isArray(data) ? data : [], 0, -1, [], this.#one_of_decls);
@@ -12634,6 +12790,9 @@ export namespace hubedge {
                 }
                 if ("channel_updated" in data && data.channel_updated != undefined) {
                     this.channel_updated = data.channel_updated;
+                }
+                if ("sync_voice_target" in data && data.sync_voice_target != undefined) {
+                    this.sync_voice_target = data.sync_voice_target;
                 }
             }
         }
@@ -12745,6 +12904,15 @@ export namespace hubedge {
         get has_channel_updated() {
             return pb_1.Message.getField(this, 19) != null;
         }
+        get sync_voice_target() {
+            return pb_1.Message.getWrapperField(this, HubSyncVoiceTargetParams, 20) as HubSyncVoiceTargetParams;
+        }
+        set sync_voice_target(value: HubSyncVoiceTargetParams) {
+            pb_1.Message.setWrapperField(this, 20, value);
+        }
+        get has_sync_voice_target() {
+            return pb_1.Message.getField(this, 20) != null;
+        }
         static fromObject(data: {
             method?: string;
             timestamp?: number;
@@ -12758,6 +12926,7 @@ export namespace hubedge {
             channel_created?: ReturnType<typeof HubChannelCreatedParams.prototype.toObject>;
             channel_removed?: ReturnType<typeof HubChannelRemovedParams.prototype.toObject>;
             channel_updated?: ReturnType<typeof HubChannelUpdatedParams.prototype.toObject>;
+            sync_voice_target?: ReturnType<typeof HubSyncVoiceTargetParams.prototype.toObject>;
         }): TypedRPCNotification {
             const message = new TypedRPCNotification({
                 method: data.method
@@ -12795,6 +12964,9 @@ export namespace hubedge {
             if (data.channel_updated != null) {
                 message.channel_updated = HubChannelUpdatedParams.fromObject(data.channel_updated);
             }
+            if (data.sync_voice_target != null) {
+                message.sync_voice_target = HubSyncVoiceTargetParams.fromObject(data.sync_voice_target);
+            }
             return message;
         }
         toObject() {
@@ -12811,6 +12983,7 @@ export namespace hubedge {
                 channel_created?: ReturnType<typeof HubChannelCreatedParams.prototype.toObject>;
                 channel_removed?: ReturnType<typeof HubChannelRemovedParams.prototype.toObject>;
                 channel_updated?: ReturnType<typeof HubChannelUpdatedParams.prototype.toObject>;
+                sync_voice_target?: ReturnType<typeof HubSyncVoiceTargetParams.prototype.toObject>;
             } = {};
             if (this.method != null) {
                 data.method = this.method;
@@ -12848,6 +13021,9 @@ export namespace hubedge {
             if (this.channel_updated != null) {
                 data.channel_updated = this.channel_updated.toObject();
             }
+            if (this.sync_voice_target != null) {
+                data.sync_voice_target = this.sync_voice_target.toObject();
+            }
             return data;
         }
         serialize(): Uint8Array;
@@ -12878,6 +13054,8 @@ export namespace hubedge {
                 writer.writeMessage(18, this.channel_removed, () => this.channel_removed.serialize(writer));
             if (this.has_channel_updated)
                 writer.writeMessage(19, this.channel_updated, () => this.channel_updated.serialize(writer));
+            if (this.has_sync_voice_target)
+                writer.writeMessage(20, this.sync_voice_target, () => this.sync_voice_target.serialize(writer));
             if (!w)
                 return writer.getResultBuffer();
         }
@@ -12922,6 +13100,9 @@ export namespace hubedge {
                         break;
                     case 19:
                         reader.readMessage(message.channel_updated, () => message.channel_updated = HubChannelUpdatedParams.deserialize(reader));
+                        break;
+                    case 20:
+                        reader.readMessage(message.sync_voice_target, () => message.sync_voice_target = HubSyncVoiceTargetParams.deserialize(reader));
                         break;
                     default: reader.skipField();
                 }

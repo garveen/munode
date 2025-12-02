@@ -14,6 +14,7 @@ import {
   GlobalSession,
   DEFAULT_ROUTING_POLICY,
   DEFAULT_HUB_RELAY_CONFIG,
+  hubedgeRpc,
 } from '@munode/protocol';
 import { mumbleproto } from '@munode/protocol';
 import type { HubConfig } from './types.js';
@@ -27,6 +28,9 @@ import type { ChannelGroupManager } from './channel-group-manager.js';
 import type { HubAuthManager } from './auth-manager.js';
 import { HubPermissionChecker, Permission } from './permission-checker.js';
 import { NetworkTopologyManager, type RouteEntry } from './network-topology-manager.js';
+
+// Import TypedRPCResponse type
+type TypedRPCResponse = hubedgeRpc.TypedRPCResponse;
 
 const logger = createLogger({ service: 'hub-control' });
 
@@ -163,11 +167,12 @@ export class HubControlService {
     });
 
     // Handle requests
-    this.server.on('request', (channel: RPCChannel, message: Message, respond: (result?: any, error?: any) => void) => {
-      if (message.method) {
-        this.typedServer.handleRequest(channel, { method: message.method, params: message.params }, respond);
+    this.server.on('request', (channel: RPCChannel, message: Message, respond: (result?: TypedRPCResponse, error?: { code: number; message: string }) => void) => {
+      if (message.params) {
+        this.typedServer.handleRequest(channel, message.params, respond);
       } else {
-        respond(undefined, { code: -32600, message: 'Invalid request: missing method' });
+        const { TypedRPCResponse } = require('@munode/protocol').hubedgeRpc;
+        respond(new TypedRPCResponse({}), { code: -32600, message: 'Invalid request: missing params' });
       }
     });
 

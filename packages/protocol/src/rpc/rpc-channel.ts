@@ -8,6 +8,129 @@ const { EdgeHubPacket, PacketType, RPCError: ProtoRPCError, Heartbeat, Heartbeat
 // Re-export the RPC types for external use
 export { hubedgeRpc };
 
+// ============================================================================
+// Notification Parameter Types
+// ============================================================================
+
+export interface VoiceDataParams {
+  fromSessionId: number;
+  targetSessionId: number;
+  voiceData: Uint8Array;
+  timestamp: number;
+}
+
+export interface ForceDisconnectParams {
+  reason: string;
+}
+
+export interface PeerJoinedParams {
+  id: number;
+  name: string;
+  host: string;
+  port: number;
+  voicePort: number;
+}
+
+export interface ACLResponseParams {
+  edge_id: number;
+  actor_session: number;
+  success: boolean;
+  channel_id?: number;
+  raw_data?: string;
+  error?: string;
+  permission_denied?: boolean;
+}
+
+export interface UserJoinedParams {
+  session_id: number;
+  edge_id: number;
+  user_id?: number;
+  username: string;
+  channel_id: number;
+  groups?: string[];
+  cert_hash?: string;
+}
+
+export interface UserLeftParams {
+  session_id: number;
+  edge_id: number;
+  reason?: string;
+}
+
+export interface UserMovedParams {
+  session_id: number;
+  edge_id: number;
+  channel_id: number;
+  actor_session?: number;
+}
+
+export interface ChannelDataInput {
+  channel_id: number;
+  parent_id: number;
+  name: string;
+  description?: string;
+  position?: number;
+  max_users?: number;
+  is_temporary?: boolean;
+  temporary?: boolean;
+  inherit_acl?: boolean;
+  links?: number[];
+}
+
+export interface ChannelCreatedParams {
+  channel: ChannelDataInput;
+}
+
+export interface ChannelRemovedParams {
+  channel_id: number;
+}
+
+export interface ChannelUpdatedParams {
+  channel: ChannelDataInput;
+}
+
+export interface SyncVoiceTargetParams {
+  edge_id: number;
+  client_session: number;
+  target_id: number;
+  config: unknown;
+  timestamp: number;
+}
+
+export type NotificationParams =
+  | VoiceDataParams
+  | ForceDisconnectParams
+  | PeerJoinedParams
+  | ACLResponseParams
+  | UserJoinedParams
+  | UserLeftParams
+  | UserMovedParams
+  | ChannelCreatedParams
+  | ChannelRemovedParams
+  | ChannelUpdatedParams
+  | SyncVoiceTargetParams;
+
+// Internal type for notification data construction
+interface NotificationDataType {
+  method: string;
+  timestamp: number;
+  voice_data?: hubedgeRpc.HubVoiceDataParams;
+  force_disconnect?: hubedgeRpc.HubForceDisconnectParams;
+  peer_joined?: hubedgeRpc.HubPeerJoinedParams;
+  acl_response?: hubedgeRpc.HubACLResponseParams;
+  user_joined?: hubedgeRpc.HubUserJoinedParams;
+  user_left?: hubedgeRpc.HubUserLeftParams;
+  user_moved?: hubedgeRpc.HubUserMovedParams;
+  channel_created?: hubedgeRpc.HubChannelCreatedParams;
+  channel_removed?: hubedgeRpc.HubChannelRemovedParams;
+  channel_updated?: hubedgeRpc.HubChannelUpdatedParams;
+  sync_voice_target?: hubedgeRpc.HubSyncVoiceTargetParams;
+}
+
+// ============================================================================
+// Core Types
+// ============================================================================
+
 export interface PendingRequest {
   resolve: (result: hubedgeRpc.TypedRPCResponse) => void;
   reject: (error: Error) => void;
@@ -87,17 +210,162 @@ export class RPCChannel extends EventEmitter {
 
   /**
    * Send typed notification (no response expected)
+   * Accepts either a TypedRPCNotification directly or plain object params
    */
-  notify(method: string, notification: hubedgeRpc.TypedRPCNotification): void {
-    notification.method = method;
-    notification.timestamp = Date.now();
-
+  notify(method: string, params: hubedgeRpc.TypedRPCNotification | NotificationParams): void {
+    let notification: hubedgeRpc.TypedRPCNotification;
+    
+    // If params is already a TypedRPCNotification, use it directly
+    if (params instanceof hubedgeRpc.TypedRPCNotification) {
+      notification = params;
+      notification.method = method;
+      notification.timestamp = Date.now();
+    } else {
+      // Create TypedRPCNotification from plain object based on method
+      notification = this.createNotification(method, params);
+    }
+    
     const packet = new EdgeHubPacket({
       type: PacketType.PACKET_TYPE_RPC_NOTIFICATION,
       rpc_notification: notification,
     });
 
     this.sendPacket(packet);
+  }
+
+  /**
+   * Create TypedRPCNotification from method and params
+   */
+  private createNotification(method: string, params: NotificationParams): hubedgeRpc.TypedRPCNotification {
+    const { TypedRPCNotification, HubVoiceDataParams, HubForceDisconnectParams, 
+            HubPeerJoinedParams, HubACLResponseParams, HubUserJoinedParams,
+            HubUserLeftParams, HubUserMovedParams, HubChannelCreatedParams,
+            HubChannelRemovedParams, HubChannelUpdatedParams, HubSyncVoiceTargetParams,
+            ChannelDataProto } = hubedgeRpc;
+
+    const notificationData: NotificationDataType = {
+      method,
+      timestamp: Date.now(),
+    };
+
+    switch (method) {
+      case 'hub.voiceData': {
+        const p = params as VoiceDataParams;
+        notificationData.voice_data = new HubVoiceDataParams({
+          from_session_id: p.fromSessionId,
+          target_session_id: p.targetSessionId,
+          voice_data: p.voiceData,
+          timestamp: p.timestamp,
+        });
+        break;
+      }
+      case 'hub.forceDisconnect': {
+        const p = params as ForceDisconnectParams;
+        notificationData.force_disconnect = new HubForceDisconnectParams({
+          reason: p.reason,
+        });
+        break;
+      }
+      case 'hub.peerJoined': {
+        const p = params as PeerJoinedParams;
+        notificationData.peer_joined = new HubPeerJoinedParams({
+          id: p.id,
+          name: p.name,
+          host: p.host,
+          port: p.port,
+          voice_port: p.voicePort,
+        });
+        break;
+      }
+      case 'hub.aclResponse': {
+        const p = params as ACLResponseParams;
+        notificationData.acl_response = new HubACLResponseParams({
+          edge_id: p.edge_id,
+          actor_session: p.actor_session,
+          success: p.success,
+          channel_id: p.channel_id,
+          raw_data: p.raw_data ? new TextEncoder().encode(p.raw_data) : undefined,
+          error: p.error,
+          permission_denied: p.permission_denied,
+        });
+        break;
+      }
+      case 'hub.userJoined': {
+        const p = params as UserJoinedParams;
+        notificationData.user_joined = new HubUserJoinedParams({
+          session_id: p.session_id,
+          edge_id: p.edge_id,
+          user_id: p.user_id ?? 0,
+          username: p.username,
+          channel_id: p.channel_id,
+          groups: p.groups ?? [],
+          cert_hash: p.cert_hash,
+        });
+        break;
+      }
+      case 'hub.userLeft': {
+        const p = params as UserLeftParams;
+        notificationData.user_left = new HubUserLeftParams({
+          session_id: p.session_id,
+          edge_id: p.edge_id,
+          reason: p.reason,
+        });
+        break;
+      }
+      case 'hub.userMoved': {
+        const p = params as UserMovedParams;
+        notificationData.user_moved = new HubUserMovedParams({
+          session_id: p.session_id,
+          edge_id: p.edge_id,
+          channel_id: p.channel_id,
+          actor_session: p.actor_session,
+        });
+        break;
+      }
+      case 'hub.channelCreated': {
+        const p = params as ChannelCreatedParams;
+        notificationData.channel_created = new HubChannelCreatedParams({
+          channel: new ChannelDataProto({
+            ...p.channel,
+            links: p.channel.links ?? [],
+          }),
+        });
+        break;
+      }
+      case 'hub.channelRemoved': {
+        const p = params as ChannelRemovedParams;
+        notificationData.channel_removed = new HubChannelRemovedParams({
+          channel_id: p.channel_id,
+        });
+        break;
+      }
+      case 'hub.channelUpdated': {
+        const p = params as ChannelUpdatedParams;
+        notificationData.channel_updated = new HubChannelUpdatedParams({
+          channel: new ChannelDataProto({
+            ...p.channel,
+            links: p.channel.links ?? [],
+          }),
+        });
+        break;
+      }
+      case 'hub.syncVoiceTarget': {
+        const p = params as SyncVoiceTargetParams;
+        notificationData.sync_voice_target = new HubSyncVoiceTargetParams({
+          edge_id: p.edge_id,
+          client_session: p.client_session,
+          target_id: p.target_id,
+          config_json: typeof p.config === 'string' ? p.config : JSON.stringify(p.config),
+          timestamp: p.timestamp,
+        });
+        break;
+      }
+      default:
+        // For unknown methods, just set method and timestamp
+        break;
+    }
+
+    return new TypedRPCNotification(notificationData);
   }
 
   /**
@@ -200,8 +468,17 @@ export class RPCChannel extends EventEmitter {
     const requestId = request.request_id;
     const method = request.method;
 
-    // Emit request event with the typed request object
-    this.emit('request', request, (response: hubedgeRpc.TypedRPCResponse, error?: { code: number; message: string; data?: string }) => {
+    // Wrap in Message for compatibility with control-server
+    const message: Message = {
+      id: requestId,
+      type: 'request',
+      method: method,
+      params: request,
+      timestamp: Date.now(),
+    };
+
+    // Emit request event with Message object for control-server compatibility
+    this.emit('request', message, (response: hubedgeRpc.TypedRPCResponse, error?: { code: number; message: string; data?: string }) => {
       this.respond(requestId, method, response, error);
     });
   }
