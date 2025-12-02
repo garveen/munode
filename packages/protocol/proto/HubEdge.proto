@@ -4,6 +4,7 @@ package hubedge;
 
 import "Mumble.proto";
 import "HubEdgeSync.proto";
+import "HubEdgeRPC.proto";
 
 // ============================================================================
 // 顶层包装消息 - 所有 Edge-Hub 通信的统一格式
@@ -19,10 +20,11 @@ message EdgeHubPacket {
   required PacketType type = 1;
   
   // 实际的消息内容（根据 type 选择其中一个）
-  // RPC 调用相关
-  optional RPCRequest rpc_request = 10;
-  optional RPCResponse rpc_response = 11;
+  // 类型安全的 RPC 调用
+  optional TypedRPCRequest rpc_request = 10;
+  optional TypedRPCResponse rpc_response = 11;
   optional RPCError rpc_error = 12;
+  optional TypedRPCNotification rpc_notification = 13;
   
   // 客户端消息中转
   optional ClientMessageRelay relay = 20;
@@ -45,6 +47,7 @@ enum PacketType {
   PACKET_TYPE_RPC_REQUEST = 1;
   PACKET_TYPE_RPC_RESPONSE = 2;
   PACKET_TYPE_RPC_ERROR = 3;
+  PACKET_TYPE_RPC_NOTIFICATION = 4;
   
   // 客户端消息中转
   PACKET_TYPE_CLIENT_RELAY = 10;
@@ -58,39 +61,8 @@ enum PacketType {
 }
 
 // ============================================================================
-// RPC 消息定义
+// RPC 错误消息
 // ============================================================================
-
-/**
- * RPC 请求
- */
-message RPCRequest {
-  // 请求 ID，用于匹配响应
-  required string request_id = 1;
-  
-  // RPC 方法名（例如："edge.register", "edge.authenticateUser"）
-  required string method = 2;
-  
-  // 请求参数（JSON 序列化）
-  required bytes params = 3;
-  
-  // 超时时间（毫秒）
-  optional uint32 timeout_ms = 4;
-}
-
-/**
- * RPC 响应
- */
-message RPCResponse {
-  // 请求 ID，与请求匹配
-  required string request_id = 1;
-  
-  // 响应结果（JSON 序列化）
-  required bytes result = 2;
-  
-  // 处理时间（毫秒）
-  optional uint32 processing_time_ms = 3;
-}
 
 /**
  * RPC 错误
@@ -105,8 +77,8 @@ message RPCError {
   // 错误消息
   required string message = 3;
   
-  // 错误详情（JSON 序列化）
-  optional bytes details = 4;
+  // 错误详情
+  optional string details = 4;
 }
 
 // ============================================================================

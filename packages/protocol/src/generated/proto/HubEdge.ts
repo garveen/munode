@@ -10,10 +10,10 @@ import * as pb_1 from "google-protobuf";
 export namespace hubedge {
     export enum PacketType {
         PACKET_TYPE_UNKNOWN = 0,
-        PACKET_TYPE_TYPED_RPC_REQUEST = 4,
-        PACKET_TYPE_TYPED_RPC_RESPONSE = 5,
-        PACKET_TYPE_TYPED_RPC_NOTIFICATION = 6,
+        PACKET_TYPE_RPC_REQUEST = 1,
+        PACKET_TYPE_RPC_RESPONSE = 2,
         PACKET_TYPE_RPC_ERROR = 3,
+        PACKET_TYPE_RPC_NOTIFICATION = 4,
         PACKET_TYPE_CLIENT_RELAY = 10,
         PACKET_TYPE_SYNC = 20,
         PACKET_TYPE_HEARTBEAT = 30,
@@ -35,10 +35,10 @@ export namespace hubedge {
         #one_of_decls: number[][] = [];
         constructor(data?: any[] | {
             type: PacketType;
-            typed_rpc_request?: dependency_3.hubedge.TypedRPCRequest;
-            typed_rpc_response?: dependency_3.hubedge.TypedRPCResponse;
-            typed_rpc_notification?: dependency_3.hubedge.TypedRPCNotification;
+            rpc_request?: dependency_3.hubedge.TypedRPCRequest;
+            rpc_response?: dependency_3.hubedge.TypedRPCResponse;
             rpc_error?: RPCError;
+            rpc_notification?: dependency_3.hubedge.TypedRPCNotification;
             relay?: ClientMessageRelay;
             sync_data?: dependency_2.hubedge.SyncData;
             heartbeat?: Heartbeat;
@@ -48,17 +48,17 @@ export namespace hubedge {
             pb_1.Message.initialize(this, Array.isArray(data) ? data : [], 0, -1, [], this.#one_of_decls);
             if (!Array.isArray(data) && typeof data == "object") {
                 this.type = data.type;
-                if ("typed_rpc_request" in data && data.typed_rpc_request != undefined) {
-                    this.typed_rpc_request = data.typed_rpc_request;
+                if ("rpc_request" in data && data.rpc_request != undefined) {
+                    this.rpc_request = data.rpc_request;
                 }
-                if ("typed_rpc_response" in data && data.typed_rpc_response != undefined) {
-                    this.typed_rpc_response = data.typed_rpc_response;
-                }
-                if ("typed_rpc_notification" in data && data.typed_rpc_notification != undefined) {
-                    this.typed_rpc_notification = data.typed_rpc_notification;
+                if ("rpc_response" in data && data.rpc_response != undefined) {
+                    this.rpc_response = data.rpc_response;
                 }
                 if ("rpc_error" in data && data.rpc_error != undefined) {
                     this.rpc_error = data.rpc_error;
+                }
+                if ("rpc_notification" in data && data.rpc_notification != undefined) {
+                    this.rpc_notification = data.rpc_notification;
                 }
                 if ("relay" in data && data.relay != undefined) {
                     this.relay = data.relay;
@@ -83,32 +83,23 @@ export namespace hubedge {
         get has_type() {
             return pb_1.Message.getField(this, 1) != null;
         }
-        get typed_rpc_request() {
-            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCRequest, 5) as dependency_3.hubedge.TypedRPCRequest;
+        get rpc_request() {
+            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCRequest, 10) as dependency_3.hubedge.TypedRPCRequest;
         }
-        set typed_rpc_request(value: dependency_3.hubedge.TypedRPCRequest) {
-            pb_1.Message.setWrapperField(this, 5, value);
+        set rpc_request(value: dependency_3.hubedge.TypedRPCRequest) {
+            pb_1.Message.setWrapperField(this, 10, value);
         }
-        get has_typed_rpc_request() {
-            return pb_1.Message.getField(this, 5) != null;
+        get has_rpc_request() {
+            return pb_1.Message.getField(this, 10) != null;
         }
-        get typed_rpc_response() {
-            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCResponse, 6) as dependency_3.hubedge.TypedRPCResponse;
+        get rpc_response() {
+            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCResponse, 11) as dependency_3.hubedge.TypedRPCResponse;
         }
-        set typed_rpc_response(value: dependency_3.hubedge.TypedRPCResponse) {
-            pb_1.Message.setWrapperField(this, 6, value);
+        set rpc_response(value: dependency_3.hubedge.TypedRPCResponse) {
+            pb_1.Message.setWrapperField(this, 11, value);
         }
-        get has_typed_rpc_response() {
-            return pb_1.Message.getField(this, 6) != null;
-        }
-        get typed_rpc_notification() {
-            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCNotification, 7) as dependency_3.hubedge.TypedRPCNotification;
-        }
-        set typed_rpc_notification(value: dependency_3.hubedge.TypedRPCNotification) {
-            pb_1.Message.setWrapperField(this, 7, value);
-        }
-        get has_typed_rpc_notification() {
-            return pb_1.Message.getField(this, 7) != null;
+        get has_rpc_response() {
+            return pb_1.Message.getField(this, 11) != null;
         }
         get rpc_error() {
             return pb_1.Message.getWrapperField(this, RPCError, 12) as RPCError;
@@ -118,6 +109,15 @@ export namespace hubedge {
         }
         get has_rpc_error() {
             return pb_1.Message.getField(this, 12) != null;
+        }
+        get rpc_notification() {
+            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCNotification, 13) as dependency_3.hubedge.TypedRPCNotification;
+        }
+        set rpc_notification(value: dependency_3.hubedge.TypedRPCNotification) {
+            pb_1.Message.setWrapperField(this, 13, value);
+        }
+        get has_rpc_notification() {
+            return pb_1.Message.getField(this, 13) != null;
         }
         get relay() {
             return pb_1.Message.getWrapperField(this, ClientMessageRelay, 20) as ClientMessageRelay;
@@ -157,10 +157,10 @@ export namespace hubedge {
         }
         static fromObject(data: {
             type?: PacketType;
-            typed_rpc_request?: ReturnType<typeof dependency_3.hubedge.TypedRPCRequest.prototype.toObject>;
-            typed_rpc_response?: ReturnType<typeof dependency_3.hubedge.TypedRPCResponse.prototype.toObject>;
-            typed_rpc_notification?: ReturnType<typeof dependency_3.hubedge.TypedRPCNotification.prototype.toObject>;
+            rpc_request?: ReturnType<typeof dependency_3.hubedge.TypedRPCRequest.prototype.toObject>;
+            rpc_response?: ReturnType<typeof dependency_3.hubedge.TypedRPCResponse.prototype.toObject>;
             rpc_error?: ReturnType<typeof RPCError.prototype.toObject>;
+            rpc_notification?: ReturnType<typeof dependency_3.hubedge.TypedRPCNotification.prototype.toObject>;
             relay?: ReturnType<typeof ClientMessageRelay.prototype.toObject>;
             sync_data?: ReturnType<typeof dependency_2.hubedge.SyncData.prototype.toObject>;
             heartbeat?: ReturnType<typeof Heartbeat.prototype.toObject>;
@@ -169,17 +169,17 @@ export namespace hubedge {
             const message = new EdgeHubPacket({
                 type: data.type
             });
-            if (data.typed_rpc_request != null) {
-                message.typed_rpc_request = dependency_3.hubedge.TypedRPCRequest.fromObject(data.typed_rpc_request);
+            if (data.rpc_request != null) {
+                message.rpc_request = dependency_3.hubedge.TypedRPCRequest.fromObject(data.rpc_request);
             }
-            if (data.typed_rpc_response != null) {
-                message.typed_rpc_response = dependency_3.hubedge.TypedRPCResponse.fromObject(data.typed_rpc_response);
-            }
-            if (data.typed_rpc_notification != null) {
-                message.typed_rpc_notification = dependency_3.hubedge.TypedRPCNotification.fromObject(data.typed_rpc_notification);
+            if (data.rpc_response != null) {
+                message.rpc_response = dependency_3.hubedge.TypedRPCResponse.fromObject(data.rpc_response);
             }
             if (data.rpc_error != null) {
                 message.rpc_error = RPCError.fromObject(data.rpc_error);
+            }
+            if (data.rpc_notification != null) {
+                message.rpc_notification = dependency_3.hubedge.TypedRPCNotification.fromObject(data.rpc_notification);
             }
             if (data.relay != null) {
                 message.relay = ClientMessageRelay.fromObject(data.relay);
@@ -198,10 +198,10 @@ export namespace hubedge {
         toObject() {
             const data: {
                 type?: PacketType;
-                typed_rpc_request?: ReturnType<typeof dependency_3.hubedge.TypedRPCRequest.prototype.toObject>;
-                typed_rpc_response?: ReturnType<typeof dependency_3.hubedge.TypedRPCResponse.prototype.toObject>;
-                typed_rpc_notification?: ReturnType<typeof dependency_3.hubedge.TypedRPCNotification.prototype.toObject>;
+                rpc_request?: ReturnType<typeof dependency_3.hubedge.TypedRPCRequest.prototype.toObject>;
+                rpc_response?: ReturnType<typeof dependency_3.hubedge.TypedRPCResponse.prototype.toObject>;
                 rpc_error?: ReturnType<typeof RPCError.prototype.toObject>;
+                rpc_notification?: ReturnType<typeof dependency_3.hubedge.TypedRPCNotification.prototype.toObject>;
                 relay?: ReturnType<typeof ClientMessageRelay.prototype.toObject>;
                 sync_data?: ReturnType<typeof dependency_2.hubedge.SyncData.prototype.toObject>;
                 heartbeat?: ReturnType<typeof Heartbeat.prototype.toObject>;
@@ -210,17 +210,17 @@ export namespace hubedge {
             if (this.type != null) {
                 data.type = this.type;
             }
-            if (this.typed_rpc_request != null) {
-                data.typed_rpc_request = this.typed_rpc_request.toObject();
+            if (this.rpc_request != null) {
+                data.rpc_request = this.rpc_request.toObject();
             }
-            if (this.typed_rpc_response != null) {
-                data.typed_rpc_response = this.typed_rpc_response.toObject();
-            }
-            if (this.typed_rpc_notification != null) {
-                data.typed_rpc_notification = this.typed_rpc_notification.toObject();
+            if (this.rpc_response != null) {
+                data.rpc_response = this.rpc_response.toObject();
             }
             if (this.rpc_error != null) {
                 data.rpc_error = this.rpc_error.toObject();
+            }
+            if (this.rpc_notification != null) {
+                data.rpc_notification = this.rpc_notification.toObject();
             }
             if (this.relay != null) {
                 data.relay = this.relay.toObject();
@@ -242,14 +242,14 @@ export namespace hubedge {
             const writer = w || new pb_1.BinaryWriter();
             if (this.has_type)
                 writer.writeEnum(1, this.type);
-            if (this.has_typed_rpc_request)
-                writer.writeMessage(5, this.typed_rpc_request, () => this.typed_rpc_request.serialize(writer));
-            if (this.has_typed_rpc_response)
-                writer.writeMessage(6, this.typed_rpc_response, () => this.typed_rpc_response.serialize(writer));
-            if (this.has_typed_rpc_notification)
-                writer.writeMessage(7, this.typed_rpc_notification, () => this.typed_rpc_notification.serialize(writer));
+            if (this.has_rpc_request)
+                writer.writeMessage(10, this.rpc_request, () => this.rpc_request.serialize(writer));
+            if (this.has_rpc_response)
+                writer.writeMessage(11, this.rpc_response, () => this.rpc_response.serialize(writer));
             if (this.has_rpc_error)
                 writer.writeMessage(12, this.rpc_error, () => this.rpc_error.serialize(writer));
+            if (this.has_rpc_notification)
+                writer.writeMessage(13, this.rpc_notification, () => this.rpc_notification.serialize(writer));
             if (this.has_relay)
                 writer.writeMessage(20, this.relay, () => this.relay.serialize(writer));
             if (this.has_sync_data)
@@ -270,17 +270,17 @@ export namespace hubedge {
                     case 1:
                         message.type = reader.readEnum();
                         break;
-                    case 5:
-                        reader.readMessage(message.typed_rpc_request, () => message.typed_rpc_request = dependency_3.hubedge.TypedRPCRequest.deserialize(reader));
+                    case 10:
+                        reader.readMessage(message.rpc_request, () => message.rpc_request = dependency_3.hubedge.TypedRPCRequest.deserialize(reader));
                         break;
-                    case 6:
-                        reader.readMessage(message.typed_rpc_response, () => message.typed_rpc_response = dependency_3.hubedge.TypedRPCResponse.deserialize(reader));
-                        break;
-                    case 7:
-                        reader.readMessage(message.typed_rpc_notification, () => message.typed_rpc_notification = dependency_3.hubedge.TypedRPCNotification.deserialize(reader));
+                    case 11:
+                        reader.readMessage(message.rpc_response, () => message.rpc_response = dependency_3.hubedge.TypedRPCResponse.deserialize(reader));
                         break;
                     case 12:
                         reader.readMessage(message.rpc_error, () => message.rpc_error = RPCError.deserialize(reader));
+                        break;
+                    case 13:
+                        reader.readMessage(message.rpc_notification, () => message.rpc_notification = dependency_3.hubedge.TypedRPCNotification.deserialize(reader));
                         break;
                     case 20:
                         reader.readMessage(message.relay, () => message.relay = ClientMessageRelay.deserialize(reader));

@@ -4,7 +4,8 @@
  * 负责 EdgeHubPacket 的序列化和反序列化
  */
 
-import { hubedge } from '../generated/proto/HubEdge';
+import { hubedge } from '../generated/proto/HubEdge.js';
+import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
 
 export class PacketCodec {
   /**
@@ -27,18 +28,26 @@ export class PacketCodec {
   static createPacket(
     type: hubedge.PacketType,
     payload: {
-      rpcRequest?: hubedge.RPCRequest;
-      rpcResponse?: hubedge.RPCResponse;
+      rpcRequest?: hubedgeRpc.TypedRPCRequest;
+      rpcResponse?: hubedgeRpc.TypedRPCResponse;
       rpcError?: hubedge.RPCError;
+      rpcNotification?: hubedgeRpc.TypedRPCNotification;
       relay?: hubedge.ClientMessageRelay;
-      syncData?: any;
+      syncData?: hubedge.SyncData;
       heartbeat?: hubedge.Heartbeat;
       heartbeatAck?: hubedge.HeartbeatAck;
     }
   ): hubedge.EdgeHubPacket {
     return new hubedge.EdgeHubPacket({
       type,
-      ...payload,
+      rpc_request: payload.rpcRequest,
+      rpc_response: payload.rpcResponse,
+      rpc_error: payload.rpcError,
+      rpc_notification: payload.rpcNotification,
+      relay: payload.relay,
+      sync_data: payload.syncData,
+      heartbeat: payload.heartbeat,
+      heartbeat_ack: payload.heartbeatAck,
     });
   }
 
@@ -46,18 +55,8 @@ export class PacketCodec {
    * 创建 RPC 请求包
    */
   static createRPCRequest(
-    requestId: string,
-    method: string,
-    params: Uint8Array,
-    timeoutMs?: number
+    request: hubedgeRpc.TypedRPCRequest
   ): hubedge.EdgeHubPacket {
-    const request = new hubedge.RPCRequest({
-      request_id: requestId,
-      method,
-      params,
-      timeout_ms: timeoutMs,
-    });
-
     return new hubedge.EdgeHubPacket({
       type: hubedge.PacketType.PACKET_TYPE_RPC_REQUEST,
       rpc_request: request,
@@ -68,16 +67,8 @@ export class PacketCodec {
    * 创建 RPC 响应包
    */
   static createRPCResponse(
-    requestId: string,
-    result: Uint8Array,
-    processingTimeMs?: number
+    response: hubedgeRpc.TypedRPCResponse
   ): hubedge.EdgeHubPacket {
-    const response = new hubedge.RPCResponse({
-      request_id: requestId,
-      result,
-      processing_time_ms: processingTimeMs,
-    });
-
     return new hubedge.EdgeHubPacket({
       type: hubedge.PacketType.PACKET_TYPE_RPC_RESPONSE,
       rpc_response: response,
@@ -91,7 +82,7 @@ export class PacketCodec {
     requestId: string,
     code: number,
     message: string,
-    details?: Uint8Array
+    details?: string
   ): hubedge.EdgeHubPacket {
     const error = new hubedge.RPCError({
       request_id: requestId,
@@ -103,6 +94,18 @@ export class PacketCodec {
     return new hubedge.EdgeHubPacket({
       type: hubedge.PacketType.PACKET_TYPE_RPC_ERROR,
       rpc_error: error,
+    });
+  }
+
+  /**
+   * 创建 RPC 通知包
+   */
+  static createRPCNotification(
+    notification: hubedgeRpc.TypedRPCNotification
+  ): hubedge.EdgeHubPacket {
+    return new hubedge.EdgeHubPacket({
+      type: hubedge.PacketType.PACKET_TYPE_RPC_NOTIFICATION,
+      rpc_notification: notification,
     });
   }
 

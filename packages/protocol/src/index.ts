@@ -4,15 +4,8 @@ export { mumbleproto } from './generated/proto/Mumble.js';
 // Hub-Edge protocol types
 export { hubedge } from './generated/proto/HubEdge.js';
 
-// RPC layer - New Protobuf-based implementation
-export {
-  ProtobufRPCClient,
-} from './rpc/rpc-client.js';
-
-export {
-  ProtobufRPCServer,
-  type RPCHandler as ProtobufRPCHandler,
-} from './rpc/rpc-server.js';
+// Hub-Edge RPC types (typed protobuf messages)
+export { hubedge as hubedgeRpc } from './generated/proto/HubEdgeRPC.js';
 
 export {
   type EdgeToHubMethods as ProtobufEdgeToHubMethods,

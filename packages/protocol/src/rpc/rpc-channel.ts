@@ -1,31 +1,44 @@
 import WebSocket from 'ws';
-import { pack, unpack } from 'msgpackr';
 import { EventEmitter } from 'events';
+import { hubedge } from '../generated/proto/HubEdge.js';
+import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
 
-export interface Message {
-  id?: string;           // 请求ID（响应时必填，通知时可选）
-  type: string;          // 消息类型
-  method?: string;       // RPC 方法名（请求时必填）
-  params?: any;          // 参数
-  result?: any;          // 结果（响应时使用）
-  error?: {              // 错误（响应时使用）
-    code: number;
-    message: string;
-    data?: any;
-  };
-  timestamp: number;     // 时间戳
-}
+const { EdgeHubPacket, PacketType, RPCError: ProtoRPCError, Heartbeat, HeartbeatAck } = hubedge;
+
+// Re-export the RPC types for external use
+export { hubedgeRpc };
 
 export interface PendingRequest {
-  resolve: (result: any) => void;
+  resolve: (result: hubedgeRpc.TypedRPCResponse) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  method: string;
 }
 
+export interface Message {
+  id?: string;
+  type: string;
+  method?: string;
+  params?: hubedgeRpc.TypedRPCRequest;
+  result?: hubedgeRpc.TypedRPCResponse;
+  error?: {
+    code: number;
+    message: string;
+    data?: string;
+  };
+  timestamp: number;
+}
+
+/**
+ * RPCChannel - Protobuf-based RPC communication channel
+ * 
+ * Uses typed protobuf messages for all communication - NO JSON serialization.
+ */
 export class RPCChannel extends EventEmitter {
   private ws: WebSocket;
   private pendingRequests = new Map<string, PendingRequest>();
-  private requestTimeout = 30000; // 30秒
+  private requestTimeout = 30000;
+  private heartbeatSeq = 0;
 
   constructor(ws: WebSocket) {
     super();
@@ -40,133 +53,244 @@ export class RPCChannel extends EventEmitter {
   }
 
   /**
-   * 发送 RPC 请求
+   * Send typed RPC request
    */
-  async call(method: string, params?: any, timeout?: number): Promise<any> {
+  async call(method: string, request: hubedgeRpc.TypedRPCRequest, timeout?: number): Promise<hubedgeRpc.TypedRPCResponse> {
     const id = this.generateId();
-    const message: Message = {
-      id,
-      type: 'request',
-      method,
-      params,
-      timestamp: Date.now(),
-    };
+    const effectiveTimeout = timeout || this.requestTimeout;
+
+    // Set request metadata
+    request.request_id = id;
+    request.method = method;
+    request.timeout_ms = effectiveTimeout;
+
+    const packet = new EdgeHubPacket({
+      type: PacketType.PACKET_TYPE_RPC_REQUEST,
+      rpc_request: request,
+    });
 
     return new Promise((resolve, reject) => {
-      // 设置超时
       const timer = setTimeout(() => {
         this.pendingRequests.delete(id);
         reject(new Error(`RPC timeout: ${method}`));
-      }, timeout || this.requestTimeout);
+      }, effectiveTimeout);
 
-      this.pendingRequests.set(id, { resolve, reject, timer });
-      this.send(message);
+      this.pendingRequests.set(id, { 
+        resolve,
+        reject, 
+        timer,
+        method,
+      });
+      this.sendPacket(packet);
     });
   }
 
   /**
-   * 发送通知（无需响应）
+   * Send typed notification (no response expected)
    */
-  notify(method: string, params?: any): void {
-    const message: Message = {
-      type: 'notification',
-      method,
-      params,
-      timestamp: Date.now(),
-    };
-    this.send(message);
+  notify(method: string, notification: hubedgeRpc.TypedRPCNotification): void {
+    notification.method = method;
+    notification.timestamp = Date.now();
+
+    const packet = new EdgeHubPacket({
+      type: PacketType.PACKET_TYPE_RPC_NOTIFICATION,
+      rpc_notification: notification,
+    });
+
+    this.sendPacket(packet);
   }
 
   /**
-   * 发送响应
+   * Send typed response
    */
-  respond(id: string, result?: any, error?: any): void {
-    const message: Message = {
-      id,
-      type: 'response',
-      result,
-      error,
-      timestamp: Date.now(),
-    };
-    this.send(message);
+  respond(id: string, method: string, response: hubedgeRpc.TypedRPCResponse, error?: { code: number; message: string; data?: string }): void {
+    if (error) {
+      const packet = new EdgeHubPacket({
+        type: PacketType.PACKET_TYPE_RPC_ERROR,
+        rpc_error: new ProtoRPCError({
+          request_id: id,
+          code: error.code,
+          message: error.message,
+          details: error.data,
+        }),
+      });
+      this.sendPacket(packet);
+    } else {
+      response.request_id = id;
+      response.method = method;
+
+      const packet = new EdgeHubPacket({
+        type: PacketType.PACKET_TYPE_RPC_RESPONSE,
+        rpc_response: response,
+      });
+      this.sendPacket(packet);
+    }
   }
 
   /**
-   * 发送心跳
+   * Send heartbeat
    */
   ping(): void {
-    const message: Message = {
-      type: 'ping',
-      timestamp: Date.now(),
-    };
-    this.send(message);
+    const seq = ++this.heartbeatSeq;
+    const packet = new EdgeHubPacket({
+      type: PacketType.PACKET_TYPE_HEARTBEAT,
+      heartbeat: new Heartbeat({
+        edge_id: 0,
+        sequence: seq,
+      }),
+    });
+    this.sendPacket(packet);
   }
 
   /**
-   * 处理接收到的消息
+   * Handle incoming message
    */
   private handleMessage(data: Buffer): void {
     try {
-      const message: Message = unpack(data);
+      const packet = EdgeHubPacket.deserializeBinary(new Uint8Array(data));
 
-      switch (message.type) {
-        case 'request':
-          this.handleRequest(message);
+      switch (packet.type) {
+        case PacketType.PACKET_TYPE_RPC_REQUEST:
+          this.handleRPCRequest(packet);
           break;
 
-        case 'response':
-          this.handleResponse(message);
+        case PacketType.PACKET_TYPE_RPC_RESPONSE:
+          this.handleRPCResponse(packet);
           break;
 
-        case 'notification':
-          this.handleNotification(message);
+        case PacketType.PACKET_TYPE_RPC_ERROR:
+          this.handleRPCError(packet);
           break;
 
-        case 'ping':
-          this.handlePing(message);
+        case PacketType.PACKET_TYPE_RPC_NOTIFICATION:
+          this.handleRPCNotification(packet);
           break;
 
-        case 'pong':
-          this.handlePong(message);
+        case PacketType.PACKET_TYPE_HEARTBEAT:
+          this.handleHeartbeat(packet);
           break;
+
+        case PacketType.PACKET_TYPE_HEARTBEAT_ACK:
+          this.handleHeartbeatAck(packet);
+          break;
+
+        case PacketType.PACKET_TYPE_CLIENT_RELAY:
+          this.handleClientRelay(packet);
+          break;
+
+        case PacketType.PACKET_TYPE_SYNC:
+          this.handleSync(packet);
+          break;
+
+        default:
+          console.warn(`Unknown packet type: ${packet.type}`);
       }
     } catch (error) {
       this.emit('error', error);
     }
   }
 
-  private handleRequest(message: Message): void {
-    this.emit('request', message, (result?: any, error?: any) => {
-      this.respond(message.id!, result, error);
+  private handleRPCRequest(packet: hubedge.EdgeHubPacket): void {
+    if (!packet.has_rpc_request || !packet.rpc_request) {
+      console.warn('Received RPC_REQUEST packet without rpc_request field');
+      return;
+    }
+
+    const request = packet.rpc_request;
+    const requestId = request.request_id;
+    const method = request.method;
+
+    // Emit request event with the typed request object
+    this.emit('request', request, (response: hubedgeRpc.TypedRPCResponse, error?: { code: number; message: string; data?: string }) => {
+      this.respond(requestId, method, response, error);
     });
   }
 
-  private handleResponse(message: Message): void {
-    const pending = this.pendingRequests.get(message.id!);
+  private handleRPCResponse(packet: hubedge.EdgeHubPacket): void {
+    if (!packet.has_rpc_response || !packet.rpc_response) {
+      console.warn('Received RPC_RESPONSE packet without rpc_response field');
+      return;
+    }
+
+    const response = packet.rpc_response;
+    const requestId = response.request_id;
+    const pending = this.pendingRequests.get(requestId);
+
     if (pending) {
       clearTimeout(pending.timer);
-      this.pendingRequests.delete(message.id!);
-
-      if (message.error) {
-        pending.reject(new Error(message.error.message));
-      } else {
-        pending.resolve(message.result);
-      }
+      this.pendingRequests.delete(requestId);
+      pending.resolve(response);
     }
   }
 
-  private handleNotification(message: Message): void {
-    this.emit('notification', message);
+  private handleRPCError(packet: hubedge.EdgeHubPacket): void {
+    if (!packet.has_rpc_error || !packet.rpc_error) {
+      console.warn('Received RPC_ERROR packet without rpc_error field');
+      return;
+    }
+
+    const { request_id: requestId, code, message } = packet.rpc_error;
+    const pending = this.pendingRequests.get(requestId);
+
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingRequests.delete(requestId);
+      pending.reject(new Error(`RPC Error (${code}): ${message}`));
+    }
   }
 
-  private handlePing(message: Message): void {
-    this.send({ type: 'pong', timestamp: Date.now() });
-    this.emit('ping', message.timestamp);
+  private handleRPCNotification(packet: hubedge.EdgeHubPacket): void {
+    if (!packet.has_rpc_notification || !packet.rpc_notification) {
+      console.warn('Received RPC_NOTIFICATION packet without rpc_notification field');
+      return;
+    }
+
+    // Emit notification event with the typed notification object
+    this.emit('notification', packet.rpc_notification);
   }
 
-  private handlePong(message: Message): void {
-    const latency = Date.now() - message.timestamp;
+  private handleHeartbeat(packet: hubedge.EdgeHubPacket): void {
+    if (!packet.has_heartbeat || !packet.heartbeat) {
+      return;
+    }
+
+    const { edge_id: edgeId, sequence } = packet.heartbeat;
+    
+    const ackPacket = new EdgeHubPacket({
+      type: PacketType.PACKET_TYPE_HEARTBEAT_ACK,
+      heartbeat_ack: new HeartbeatAck({
+        edge_id: edgeId,
+        sequence,
+        hub_timestamp: Date.now(),
+      }),
+    });
+    this.sendPacket(ackPacket);
+    
+    this.emit('ping', Date.now());
+  }
+
+  private handleHeartbeatAck(packet: hubedge.EdgeHubPacket): void {
+    if (!packet.has_heartbeat_ack || !packet.heartbeat_ack) {
+      return;
+    }
+
+    const { hub_timestamp: hubTimestamp } = packet.heartbeat_ack;
+    const latency = Date.now() - Number(hubTimestamp);
     this.emit('pong', latency);
+  }
+
+  private handleClientRelay(packet: hubedge.EdgeHubPacket): void {
+    if (!packet.has_relay || !packet.relay) {
+      return;
+    }
+    this.emit('relay', packet.relay);
+  }
+
+  private handleSync(packet: hubedge.EdgeHubPacket): void {
+    if (!packet.has_sync_data || !packet.sync_data) {
+      return;
+    }
+    this.emit('sync', packet.sync_data);
   }
 
   private handleClose(code: number, reason: Buffer): void {
@@ -178,9 +302,9 @@ export class RPCChannel extends EventEmitter {
     this.emit('error', error);
   }
 
-  private send(message: Message): void {
+  private sendPacket(packet: hubedge.EdgeHubPacket): void {
     if (this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(pack(message));
+      this.ws.send(packet.serializeBinary());
     } else {
       throw new Error('WebSocket not open');
     }
@@ -191,7 +315,6 @@ export class RPCChannel extends EventEmitter {
   }
 
   private cleanup(): void {
-    // 清理所有待处理的请求
     for (const [, pending] of this.pendingRequests) {
       clearTimeout(pending.timer);
       pending.reject(new Error('Connection closed'));
@@ -199,9 +322,6 @@ export class RPCChannel extends EventEmitter {
     this.pendingRequests.clear();
   }
 
-  /**
-   * 关闭连接
-   */
   close(): void {
     this.cleanup();
     if (this.ws.readyState === WebSocket.OPEN) {
@@ -209,9 +329,6 @@ export class RPCChannel extends EventEmitter {
     }
   }
 
-  /**
-   * 检查连接是否打开
-   */
   isConnected(): boolean {
     return this.ws.readyState === WebSocket.OPEN;
   }
