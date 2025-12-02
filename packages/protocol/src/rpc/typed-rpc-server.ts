@@ -15,6 +15,11 @@ import type {
   NotificationParams,
 } from './rpc-types.js';
 
+// Import protobuf types for typed conversions
+type TypedRPCRequest = hubedgeRpc.TypedRPCRequest;
+type TypedRPCResponse = hubedgeRpc.TypedRPCResponse;
+type TypedRPCNotification = hubedgeRpc.TypedRPCNotification;
+
 /**
  * RPC 方法处理器类型
  */
@@ -29,7 +34,7 @@ export type RPCHandler<M extends EdgeToHubMethods['method']> = (
 export interface RPCError {
   code: number;
   message: string;
-  data?: unknown;
+  data?: string;
 }
 
 /**
@@ -40,35 +45,40 @@ export interface HandlerDefinition<M extends EdgeToHubMethods['method']> {
   handler: RPCHandler<M>;
 }
 
+// TypeScript interface types for Hub->Edge notifications
+interface HubVoiceDataParamsTS {
+  fromSessionId: number;
+  targetSessionId: number;
+  voiceData: Buffer;
+  timestamp: number;
+}
+
+interface HubPeerJoinedParamsTS {
+  id: number;
+  name: string;
+  host: string;
+  port: number;
+  voicePort: number;
+}
+
+interface HubACLResponseParamsTS {
+  edge_id: number;
+  actor_session: number;
+  success: boolean;
+  channel_id?: number;
+  raw_data?: string;
+  error?: string;
+  permission_denied?: boolean;
+}
+
 /**
  * 类型安全的 RPC 服务器
- *
- * 使用方法：
- * ```typescript
- * const server = new TypedRPCServer();
- *
- * // 方式1：单个注册
- * server.handle('edge.register', async (channel, params) => {
- *   return { success: true, hubServerId: 1, edgeList: [] };
- * });
- *
- * // 方式2：批量注册（推荐）
- * server.registerHandlers([
- *   { method: 'edge.register', handler: async (channel, params) => { ... } },
- *   { method: 'edge.heartbeat', handler: async (channel, params) => { ... } },
- * ]);
- *
- * // 在收到请求时调用
- * server.handleRequest(channel, message, respond);
- * ```
  */
 export class TypedRPCServer {
   private handlers = new Map<string, RPCHandler<EdgeToHubMethods['method']>>();
 
   /**
    * 注册类型安全的处理器
-   * @param method RPC 方法名
-   * @param handler 处理函数（参数和返回值类型自动推断）
    */
   handle<M extends EdgeToHubMethods['method']>(method: M, handler: RPCHandler<M>): void {
     this.handlers.set(method, handler);
@@ -76,18 +86,15 @@ export class TypedRPCServer {
 
   /**
    * 批量注册处理器（使用列表+循环方式）
-   * @param definitions 处理器定义列表
    */
-  registerHandlers(definitions: Array<{ method: string; handler: (channel: RPCChannel, params: unknown) => Promise<unknown> }>): void {
+  registerHandlers(definitions: Array<{ method: string; handler: RPCHandler<EdgeToHubMethods['method']> }>): void {
     for (const def of definitions) {
-      // Cast to the expected type since we're accepting a more flexible handler signature
-      this.handlers.set(def.method, def.handler as RPCHandler<EdgeToHubMethods['method']>);
+      this.handlers.set(def.method, def.handler);
     }
   }
 
   /**
    * 取消注册处理器
-   * @param method RPC 方法名
    */
   unregister(method: string): void {
     this.handlers.delete(method);
@@ -109,24 +116,18 @@ export class TypedRPCServer {
 
   /**
    * 处理 RPC 请求
-   * 
-   * This method handles TypedRPCRequest and extracts params based on method name.
-   * 
-   * @param channel RPC 通道
-   * @param request TypedRPCRequest 消息
-   * @param respond 响应函数，接收 TypedRPCResponse
    */
   async handleRequest(
     channel: RPCChannel,
-    request: hubedgeRpc.TypedRPCRequest,
-    respond: (response: hubedgeRpc.TypedRPCResponse, error?: RPCError) => void
+    request: TypedRPCRequest,
+    respond: (response: TypedRPCResponse, error?: RPCError) => void
   ): Promise<void> {
     const method = request.method;
     const handler = this.handlers.get(method);
 
     if (!handler) {
-      const { TypedRPCResponse } = require('../generated/proto/HubEdgeRPC.js').hubedge;
-      respond(new TypedRPCResponse({ request_id: request.request_id }), {
+      const { TypedRPCResponse: Resp } = require('../generated/proto/HubEdgeRPC.js').hubedge;
+      respond(new Resp({ request_id: request.request_id }) as TypedRPCResponse, {
         code: -32601,
         message: `Method not found: ${method}`,
       });
@@ -136,17 +137,16 @@ export class TypedRPCServer {
     try {
       // Extract params from request based on method
       const params = this.extractRequestParams(request);
-      const result = await handler(channel, params);
+      const result = await handler(channel, params as RPCParams<EdgeToHubMethods['method']>);
       
       // Create typed response
       const response = this.createTypedResponse(method, request.request_id, result);
       respond(response, undefined);
     } catch (error) {
-      const { TypedRPCResponse } = require('../generated/proto/HubEdgeRPC.js').hubedge;
-      respond(new TypedRPCResponse({ request_id: request.request_id }), {
+      const { TypedRPCResponse: Resp } = require('../generated/proto/HubEdgeRPC.js').hubedge;
+      respond(new Resp({ request_id: request.request_id }) as TypedRPCResponse, {
         code: -32603,
         message: error instanceof Error ? error.message : 'Internal error',
-        data: error,
       });
     }
   }
@@ -154,58 +154,71 @@ export class TypedRPCServer {
   /**
    * Extract params from TypedRPCRequest based on method
    */
-  private extractRequestParams(request: hubedgeRpc.TypedRPCRequest): unknown {
+  private extractRequestParams(request: TypedRPCRequest): RPCParams<EdgeToHubMethods['method']> {
     const method = request.method;
     
     switch (method) {
       case 'edge.register':
-        return request.edge_register?.toObject();
+        return request.edge_register?.toObject() as RPCParams<'edge.register'>;
       case 'edge.heartbeat':
-        return request.edge_heartbeat?.toObject();
+        return request.edge_heartbeat?.toObject() as RPCParams<'edge.heartbeat'>;
       case 'edge.allocateSessionId':
-        return request.edge_allocate_session_id?.toObject();
+        return request.edge_allocate_session_id?.toObject() as RPCParams<'edge.allocateSessionId'>;
       case 'edge.authenticateUser':
-        return request.edge_authenticate_user?.toObject();
-      case 'edge.reportSession':
+        return request.edge_authenticate_user?.toObject() as RPCParams<'edge.authenticateUser'>;
+      case 'edge.reportSession': {
         const reportSession = request.edge_report_session?.toObject();
         if (reportSession) {
           return {
-            ...reportSession,
+            session_id: reportSession.session_id,
+            user_id: reportSession.user_id,
+            username: reportSession.username,
+            edge_server_id: reportSession.edge_server_id,
+            channel_id: reportSession.channel_id,
             startTime: new Date(reportSession.start_time),
-          };
+            ip_address: reportSession.ip_address,
+            groups: reportSession.groups,
+            cert_hash: reportSession.cert_hash,
+            version: reportSession.version,
+            release: reportSession.release,
+            os: reportSession.os,
+            os_version: reportSession.os_version,
+          } as RPCParams<'edge.reportSession'>;
         }
-        return reportSession;
+        throw new Error('Missing edge.reportSession params');
+      }
       case 'edge.syncVoiceTarget':
-        return request.edge_sync_voice_target?.toObject();
+        return request.edge_sync_voice_target?.toObject() as RPCParams<'edge.syncVoiceTarget'>;
       case 'edge.getVoiceTargets':
-        return request.edge_get_voice_targets?.toObject();
-      case 'edge.routeVoice':
+        return request.edge_get_voice_targets?.toObject() as RPCParams<'edge.getVoiceTargets'>;
+      case 'edge.routeVoice': {
         const routeVoice = request.edge_route_voice?.toObject();
         if (routeVoice) {
           return {
             fromEdgeId: routeVoice.from_edge_id,
             fromSessionId: routeVoice.from_session_id,
             target_id: routeVoice.target_id,
-            voiceData: routeVoice.voice_data,
+            voiceData: Buffer.from(routeVoice.voice_data),
             timestamp: routeVoice.timestamp,
-          };
+          } as RPCParams<'edge.routeVoice'>;
         }
-        return routeVoice;
+        throw new Error('Missing edge.routeVoice params');
+      }
       case 'edge.adminOperation':
-        return request.edge_admin_operation?.toObject();
+        return request.edge_admin_operation?.toObject() as RPCParams<'edge.adminOperation'>;
       case 'edge.exchangeCertificates':
-        return request.edge_exchange_certificates?.toObject();
+        return request.edge_exchange_certificates?.toObject() as RPCParams<'edge.exchangeCertificates'>;
       case 'edge.fullSync':
-        return request.edge_full_sync?.toObject();
+        return request.edge_full_sync?.toObject() as RPCParams<'edge.fullSync'>;
       case 'edge.getChannels':
-        return {};
+        return {} as RPCParams<'edge.getChannels'>;
       case 'edge.getACLs':
-        return request.edge_get_acls?.toObject();
+        return request.edge_get_acls?.toObject() as RPCParams<'edge.getACLs'>;
       case 'edge.saveChannel':
-        return { channel: request.edge_save_channel?.toObject() };
+        return { channel: request.edge_save_channel?.toObject() } as RPCParams<'edge.saveChannel'>;
       case 'edge.saveACL':
-        return request.edge_save_acl?.toObject();
-      case 'edge.join':
+        return request.edge_save_acl?.toObject() as RPCParams<'edge.saveACL'>;
+      case 'edge.join': {
         const join = request.edge_join?.toObject();
         if (join) {
           return {
@@ -215,60 +228,67 @@ export class TypedRPCServer {
             port: join.port,
             voicePort: join.voice_port,
             capacity: join.capacity,
-          };
+          } as RPCParams<'edge.join'>;
         }
-        return join;
-      case 'edge.joinComplete':
+        throw new Error('Missing edge.join params');
+      }
+      case 'edge.joinComplete': {
         const joinComplete = request.edge_join_complete?.toObject();
         if (joinComplete) {
           return {
             server_id: joinComplete.server_id,
             token: joinComplete.token,
             connectedPeers: joinComplete.connected_peers,
-          };
+          } as RPCParams<'edge.joinComplete'>;
         }
-        return joinComplete;
-      case 'edge.handleACL':
+        throw new Error('Missing edge.joinComplete params');
+      }
+      case 'edge.handleACL': {
         const handleACL = request.edge_handle_acl?.toObject();
         if (handleACL) {
           return {
-            ...handleACL,
-            raw_data: handleACL.raw_data 
-              ? Buffer.from(handleACL.raw_data).toString('base64')
-              : undefined,
-          };
+            edge_id: handleACL.edge_id,
+            actor_session: handleACL.actor_session,
+            actor_user_id: handleACL.actor_user_id,
+            actor_username: handleACL.actor_username,
+            channel_id: handleACL.channel_id,
+            query: handleACL.query,
+            raw_data: Buffer.from(handleACL.raw_data).toString('base64'),
+          } as RPCParams<'edge.handleACL'>;
         }
-        return handleACL;
+        throw new Error('Missing edge.handleACL params');
+      }
       case 'edge.handlePermissionQuery':
-        return request.edge_handle_permission_query?.toObject();
-      case 'edge.reportPeerDisconnect':
+        return request.edge_handle_permission_query?.toObject() as RPCParams<'edge.handlePermissionQuery'>;
+      case 'edge.reportPeerDisconnect': {
         const peerDisconnect = request.edge_report_peer_disconnect?.toObject();
         if (peerDisconnect) {
           return {
             localEdgeId: peerDisconnect.local_edge_id,
             remoteEdgeId: peerDisconnect.remote_edge_id,
             localClientCount: peerDisconnect.local_client_count,
-          };
+          } as RPCParams<'edge.reportPeerDisconnect'>;
         }
-        return peerDisconnect;
+        throw new Error('Missing edge.reportPeerDisconnect params');
+      }
       case 'edge.reportQuality':
-        return request.edge_report_quality?.toObject();
+        return request.edge_report_quality?.toObject() as RPCParams<'edge.reportQuality'>;
       case 'cluster.getStatus':
-        return {};
+        return {} as RPCParams<'cluster.getStatus'>;
       case 'blob.put':
-        return request.blob_put?.toObject();
+        return request.blob_put?.toObject() as RPCParams<'blob.put'>;
       case 'blob.get':
-        return request.blob_get?.toObject();
+        return request.blob_get?.toObject() as RPCParams<'blob.get'>;
       case 'blob.getUserTexture':
-        return request.blob_get_user_texture?.toObject();
+        return request.blob_get_user_texture?.toObject() as RPCParams<'blob.getUserTexture'>;
       case 'blob.getUserComment':
-        return request.blob_get_user_comment?.toObject();
+        return request.blob_get_user_comment?.toObject() as RPCParams<'blob.getUserComment'>;
       case 'blob.setUserTexture':
-        return request.blob_set_user_texture?.toObject();
+        return request.blob_set_user_texture?.toObject() as RPCParams<'blob.setUserTexture'>;
       case 'blob.setUserComment':
-        return request.blob_set_user_comment?.toObject();
+        return request.blob_set_user_comment?.toObject() as RPCParams<'blob.setUserComment'>;
       default:
-        return {};
+        return {} as RPCParams<EdgeToHubMethods['method']>;
     }
   }
 
@@ -278,15 +298,15 @@ export class TypedRPCServer {
   private createTypedResponse(
     method: string,
     requestId: string,
-    result: unknown
-  ): hubedgeRpc.TypedRPCResponse {
-    const { TypedRPCResponse } = require('../generated/proto/HubEdgeRPC.js').hubedge;
+    result: RPCResult<EdgeToHubMethods['method']>
+  ): TypedRPCResponse {
+    const { TypedRPCResponse: Resp } = require('../generated/proto/HubEdgeRPC.js').hubedge;
     const rpc = require('../generated/proto/HubEdgeRPC.js').hubedge;
     
-    const response = new TypedRPCResponse({
+    const response = new Resp({
       request_id: requestId,
       method,
-    });
+    }) as TypedRPCResponse;
 
     switch (method) {
       case 'edge.register':
@@ -380,9 +400,6 @@ export class TypedRPCServer {
 
   /**
    * 发送类型安全的通知到客户端
-   * @param channel RPC 通道
-   * @param method 通知方法名
-   * @param params 通知参数
    */
   notify<M extends HubToEdgeNotifications['method']>(
     channel: RPCChannel,
@@ -399,48 +416,54 @@ export class TypedRPCServer {
   private createTypedNotification<M extends HubToEdgeNotifications['method']>(
     method: M,
     params: NotificationParams<M>
-  ): hubedgeRpc.TypedRPCNotification {
-    const { TypedRPCNotification } = require('../generated/proto/HubEdgeRPC.js').hubedge;
+  ): TypedRPCNotification {
+    const { TypedRPCNotification: Notif } = require('../generated/proto/HubEdgeRPC.js').hubedge;
     const rpc = require('../generated/proto/HubEdgeRPC.js').hubedge;
-    const notification = new TypedRPCNotification({
+    const notification = new Notif({
       method,
       timestamp: Date.now(),
-    });
+    }) as TypedRPCNotification;
 
     switch (method) {
-      case 'voice.data':
+      case 'voice.data': {
+        const p = params as HubVoiceDataParamsTS;
         notification.voice_data = rpc.HubVoiceDataParams.fromObject({
-          from_session_id: (params as NotificationParams<'voice.data'>).fromSessionId,
-          target_session_id: (params as NotificationParams<'voice.data'>).targetSessionId,
-          voice_data: (params as NotificationParams<'voice.data'>).voiceData,
-          timestamp: (params as NotificationParams<'voice.data'>).timestamp,
+          from_session_id: p.fromSessionId,
+          target_session_id: p.targetSessionId,
+          voice_data: p.voiceData,
+          timestamp: p.timestamp,
         });
         break;
+      }
       case 'edge.forceDisconnect':
         notification.force_disconnect = rpc.HubForceDisconnectParams.fromObject(params);
         break;
-      case 'edge.peerJoined':
+      case 'edge.peerJoined': {
+        const p = params as HubPeerJoinedParamsTS;
         notification.peer_joined = rpc.HubPeerJoinedParams.fromObject({
-          id: (params as NotificationParams<'edge.peerJoined'>).id,
-          name: (params as NotificationParams<'edge.peerJoined'>).name,
-          host: (params as NotificationParams<'edge.peerJoined'>).host,
-          port: (params as NotificationParams<'edge.peerJoined'>).port,
-          voice_port: (params as NotificationParams<'edge.peerJoined'>).voicePort,
+          id: p.id,
+          name: p.name,
+          host: p.host,
+          port: p.port,
+          voice_port: p.voicePort,
         });
         break;
-      case 'hub.aclResponse':
+      }
+      case 'hub.aclResponse': {
+        const p = params as HubACLResponseParamsTS;
         notification.acl_response = rpc.HubACLResponseParams.fromObject({
-          edge_id: (params as NotificationParams<'hub.aclResponse'>).edge_id,
-          actor_session: (params as NotificationParams<'hub.aclResponse'>).actor_session,
-          success: (params as NotificationParams<'hub.aclResponse'>).success,
-          channel_id: (params as NotificationParams<'hub.aclResponse'>).channel_id,
-          raw_data: (params as NotificationParams<'hub.aclResponse'>).raw_data 
-            ? Buffer.from((params as NotificationParams<'hub.aclResponse'>).raw_data!, 'base64')
+          edge_id: p.edge_id,
+          actor_session: p.actor_session,
+          success: p.success,
+          channel_id: p.channel_id,
+          raw_data: p.raw_data 
+            ? Buffer.from(p.raw_data, 'base64')
             : undefined,
-          error: (params as NotificationParams<'hub.aclResponse'>).error,
-          permission_denied: (params as NotificationParams<'hub.aclResponse'>).permission_denied,
+          error: p.error,
+          permission_denied: p.permission_denied,
         });
         break;
+      }
     }
 
     return notification;
@@ -448,10 +471,6 @@ export class TypedRPCServer {
 
   /**
    * 广播类型安全的通知到所有客户端
-   * 使用 Promise.allSettled 确保单个客户端失败不影响其他客户端
-   * @param channels RPC 通道列表
-   * @param method 通知方法名
-   * @param params 通知参数
    */
   async broadcast<M extends HubToEdgeNotifications['method']>(
     channels: RPCChannel[],
@@ -460,12 +479,7 @@ export class TypedRPCServer {
   ): Promise<void> {
     const promises = channels.map(channel => 
       Promise.resolve().then(() => {
-        try {
-          this.notify(channel, method, params);
-        } catch (error) {
-          // 记录错误但不中断其他广播
-          throw error;
-        }
+        this.notify(channel, method, params);
       })
     );
     

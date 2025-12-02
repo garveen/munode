@@ -5,6 +5,7 @@
  */
 
 import { hubedge } from '../generated/proto/HubEdge.js';
+import { hubedge as hubedgeSync } from '../generated/proto/HubEdgeSync.js';
 import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
 
 export class PacketCodec {
@@ -33,7 +34,7 @@ export class PacketCodec {
       rpcError?: hubedge.RPCError;
       rpcNotification?: hubedgeRpc.TypedRPCNotification;
       relay?: hubedge.ClientMessageRelay;
-      syncData?: hubedge.SyncData;
+      syncData?: hubedgeSync.SyncData;
       heartbeat?: hubedge.Heartbeat;
       heartbeatAck?: hubedge.HeartbeatAck;
     }
