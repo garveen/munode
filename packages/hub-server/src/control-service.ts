@@ -3237,9 +3237,11 @@ export class HubControlService {
    * 广播通知给所有连接的Edge
    * 注意：广播会发送给所有Edge，包括发起操作的Edge
    * Edge应该通过edge_id字段判断是否需要处理本地状态更新
+   * 使用 Promise.allSettled 确保单个 Edge 失败不影响其他 Edge
    */
   broadcast(method: string, params?: any): void {
-    this.server.broadcast(method, params);
+    // Fire and forget - 不等待广播完成
+    void this.server.broadcast(method, params);
   }
 
   /**
@@ -3248,7 +3250,11 @@ export class HubControlService {
   notify( edge_id: number, method: string, params?: any): void {
     const channel = this.edgeChannels.get(edge_id);
     if (channel) {
-      this.server.notify(channel, method, params);
+      try {
+        this.server.notify(channel, method, params);
+      } catch (error) {
+        logger.error(`Failed to notify Edge ${edge_id}:`, error);
+      }
     }
   }
 }

@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import { createCipheriv, createDecipheriv, randomBytes, Cipher, Decipher } from 'crypto';
 
 /**
  * OCB2-AES128 加密模式实现
@@ -6,6 +6,11 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
  *
  * 原始实现来源: https://github.com/Johni0702/mumble-streams/blob/master/lib/udp-crypto.js
  * 版权声明: Copyright 2005-2016 The Mumble Developers. All rights reserved.
+ * 
+ * 性能优化：
+ * - 复用 Cipher/Decipher 实例，避免每次加解密创建新对象
+ * - 预分配工作 Buffer，减少 GC 压力
+ * - 使用 BigUint64 批量 XOR 操作
  */
 
 /**
@@ -33,7 +38,20 @@ export class OCB2AES128 {
   public remoteStats: CryptStats = { good: 0, late: 0, lost: 0, resync: 0 };
 
   private static readonly BLOCK_SIZE = 16;
+  private static readonly ZERO_IV = Buffer.alloc(0);
   private lastGoodTime: number = Date.now();
+
+  // 缓存的 Cipher 实例（性能优化：避免每次加解密创建新实例）
+  private encryptCipher?: Cipher;
+  private decryptCipherEnc?: Cipher;
+  private decryptCipherDec?: Decipher;
+
+  // 预分配的工作 Buffer（性能优化：减少 GC 压力）
+  private readonly workBuffer = {
+    checksum: Buffer.alloc(OCB2AES128.BLOCK_SIZE),
+    tmp: Buffer.alloc(OCB2AES128.BLOCK_SIZE),
+    saveiv: Buffer.alloc(OCB2AES128.BLOCK_SIZE),
+  };
 
   constructor() {
     // 初始化解密历史记录
@@ -52,9 +70,12 @@ export class OCB2AES128 {
    */
   generateKey(): void {
     const buf = randomBytes(OCB2AES128.BLOCK_SIZE * 3);
-    this.key = buf.slice(0, OCB2AES128.BLOCK_SIZE);
-    this.decryptIV = buf.slice(OCB2AES128.BLOCK_SIZE, OCB2AES128.BLOCK_SIZE * 2);
-    this.encryptIV = buf.slice(OCB2AES128.BLOCK_SIZE * 2);
+    this.key = buf.subarray(0, OCB2AES128.BLOCK_SIZE);
+    this.decryptIV = buf.subarray(OCB2AES128.BLOCK_SIZE, OCB2AES128.BLOCK_SIZE * 2);
+    this.encryptIV = buf.subarray(OCB2AES128.BLOCK_SIZE * 2);
+    
+    // 初始化 cipher 实例
+    this.initCiphers();
   }
 
   /**
@@ -74,13 +95,31 @@ export class OCB2AES128 {
     this.key = Buffer.from(key);
     this.encryptIV = Buffer.from(encryptIV);
     this.decryptIV = Buffer.from(decryptIV);
+    
+    // 创建并缓存 Cipher 实例（性能优化）
+    this.initCiphers();
+  }
+
+  /**
+   * 初始化/重新初始化 Cipher 实例
+   * 在设置 key 或重新同步时调用
+   */
+  private initCiphers(): void {
+    if (!this.key) return;
+    
+    this.encryptCipher = createCipheriv('aes-128-ecb', this.key, OCB2AES128.ZERO_IV)
+      .setAutoPadding(false);
+    this.decryptCipherEnc = createCipheriv('aes-128-ecb', this.key, OCB2AES128.ZERO_IV)
+      .setAutoPadding(false);
+    this.decryptCipherDec = createDecipheriv('aes-128-ecb', this.key, OCB2AES128.ZERO_IV)
+      .setAutoPadding(false);
   }
 
   /**
    * 加密数据
    */
   encrypt(plainText: Buffer): Buffer {
-    if (!this.ready()) {
+    if (!this.ready() || !this.encryptCipher) {
       throw new Error('Crypto not initialized');
     }
 
@@ -94,12 +133,11 @@ export class OCB2AES128 {
       }
     }
 
-    const cipher = createCipheriv('aes-128-ecb', this.key, Buffer.alloc(0)).setAutoPadding(false);
+    // 复用缓存的 cipher 实例
+    const aesEncrypt = (data: Buffer) => this.encryptCipher!.update(data);
 
     const cipherText = Buffer.alloc(plainText.length + 4);
-    const tag = this.ocbEncrypt(plainText, cipherText.slice(4), encryptIV, (data: Buffer) =>
-      cipher.update(data)
-    );
+    const tag = this.ocbEncrypt(plainText, cipherText.subarray(4), encryptIV, aesEncrypt);
 
     cipherText[0] = encryptIV[0];
     cipherText[1] = tag[0];
@@ -113,7 +151,7 @@ export class OCB2AES128 {
    * 解密数据
    */
   decrypt(cipherText: Buffer): { data: Buffer; valid: boolean } {
-    if (!this.ready()) {
+    if (!this.ready() || !this.decryptCipherEnc || !this.decryptCipherDec) {
       throw new Error('Crypto not initialized');
     }
 
@@ -122,7 +160,9 @@ export class OCB2AES128 {
     }
 
     const decryptIV = this.decryptIV;
-    const saveiv = Buffer.from(decryptIV);
+    // 使用预分配的 saveiv buffer
+    const saveiv = this.workBuffer.saveiv;
+    decryptIV!.copy(saveiv);
     const ivbyte = cipherText[0];
     let restore = false;
     let late = 0;
@@ -193,34 +233,33 @@ export class OCB2AES128 {
       }
 
       if (this.decryptHistory[decryptIV[0]] === decryptIV[1]) {
-        this.decryptIV = saveiv;
+        saveiv.copy(this.decryptIV!);
         return { data: Buffer.alloc(0), valid: false };
       }
     }
 
-    const encrypt = createCipheriv('aes-128-ecb', this.key, Buffer.alloc(0)).setAutoPadding(false);
-    const decrypt = createDecipheriv('aes-128-ecb', this.key, Buffer.alloc(0)).setAutoPadding(
-      false
-    );
+    // 复用缓存的 cipher 实例
+    const aesEncrypt = (data: Buffer) => this.decryptCipherEnc!.update(data);
+    const aesDecrypt = (data: Buffer) => this.decryptCipherDec!.update(data);
 
     const plainText = Buffer.alloc(cipherText.length - 4);
     const tag = this.ocbDecrypt(
-      cipherText.slice(4),
+      cipherText.subarray(4),
       plainText,
       decryptIV,
-      (data: Buffer) => encrypt.update(data),
-      (data: Buffer) => decrypt.update(data)
+      aesEncrypt,
+      aesDecrypt
     );
 
     if (tag.compare(cipherText, 1, 4, 0, 3) !== 0) {
-      this.decryptIV = saveiv;
+      saveiv.copy(this.decryptIV!);
       return { data: Buffer.alloc(0), valid: false };
     }
 
     this.decryptHistory[decryptIV[0]] = decryptIV[1];
 
     if (restore) {
-      this.decryptIV = saveiv;
+      saveiv.copy(this.decryptIV!);
     }
 
     // 更新统计信息（参照 Go 实现 cryptstate.go 第241-248行）

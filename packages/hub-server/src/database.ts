@@ -1346,29 +1346,28 @@ export class HubDatabase {
 
   /**
    * 获取频道层级（从根到当前频道）
+   * 使用 CTE 递归查询优化，将 N 次查询减少为 1 次
    */
   async getChannelHierarchy(channel_id: number): Promise<number[]> {
-    const hierarchy: number[] = [];
-    let currentId = channel_id;
-
-    while (currentId !== -1 && currentId !== null) {
-      hierarchy.unshift(currentId);
-
-      if (currentId === 0) {
-        break;
-      }
-
-      const stmt = await this.db.prepare('SELECT parent_id FROM channels WHERE id = ?');
-      const row = await stmt.get(currentId);
-
-      if (!row) {
-        break;
-      }
-
-      currentId = row.parent_id;
-    }
-
-    return hierarchy;
+    // 使用 CTE 递归查询（SQLite 3.8.3+ 支持）
+    const query = `
+      WITH RECURSIVE channel_hierarchy AS (
+        SELECT id, parent_id, 0 as depth
+        FROM channels
+        WHERE id = ?
+        UNION ALL
+        SELECT c.id, c.parent_id, ch.depth + 1
+        FROM channels c
+        JOIN channel_hierarchy ch ON c.id = ch.parent_id
+        WHERE ch.parent_id > 0 AND ch.depth < 100
+      )
+      SELECT id FROM channel_hierarchy ORDER BY depth DESC
+    `;
+    
+    const stmt = await this.db.prepare(query);
+    const rows = await stmt.all(channel_id);
+    
+    return rows.map((row: { id: number }) => row.id);
   }
 
   // ====================

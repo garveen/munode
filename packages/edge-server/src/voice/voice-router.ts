@@ -5,6 +5,7 @@ import { EdgeConfig, VoicePacket, VoiceBroadcast, ClientInfo } from '../types.js
 import { OCB2AES128 } from '@munode/common';
 import type { Socket as UDPSocket } from 'dgram';
 import { mumbleproto } from '@munode/protocol';
+import { LRUCache } from 'lru-cache';
 
 /**
  * 路由缓存条目
@@ -29,7 +30,13 @@ export class VoiceRouter extends EventEmitter {
   
   // 性能优化：路由缓存（事件驱动，主动重建）
   private routingCache: Map<string, RouteCacheEntry> = new Map(); // cacheKey -> RouteCacheEntry
-  private serializedPacketCache: Map<string, Buffer> = new Map(); // 序列化包缓存
+  
+  // 性能优化：使用 LRU 缓存替代 Map，自动淘汰旧条目
+  private serializedPacketCache = new LRUCache<string, Buffer>({
+    max: 500, // 最多缓存 500 个序列化包
+    ttl: 1000, // 1秒 TTL，语音包时效性很强
+    updateAgeOnGet: false, // 获取时不更新 TTL
+  });
 
   constructor(config: EdgeConfig, logger: Logger) {
     super();
@@ -553,20 +560,16 @@ export class VoiceRouter extends EventEmitter {
     const targetChannels = cached.targetSessions;
 
     // 准备广播的语音包（包含发送者会话ID）
-    // 优化：使用缓存避免重复序列化
+    // 优化：使用 LRU 缓存避免重复序列化（自动淘汰旧条目）
     const packetCacheKey = `${packet.sender_session}_${packet.timestamp}`;
     let broadcastPacket: Buffer;
-    if (this.serializedPacketCache.has(packetCacheKey)) {
-      broadcastPacket = this.serializedPacketCache.get(packetCacheKey)!;
+    const cachedPacket = this.serializedPacketCache.get(packetCacheKey);
+    if (cachedPacket) {
+      broadcastPacket = cachedPacket;
       this.logger.debug(`[VOICE-CACHE] Using cached serialized packet`);
     } else {
       broadcastPacket = this.serializeVoicePacket(packet);
       this.serializedPacketCache.set(packetCacheKey, broadcastPacket);
-      // 清理旧的序列化缓存（保持缓存大小）
-      if (this.serializedPacketCache.size > 1000) {
-        const firstKey = this.serializedPacketCache.keys().next().value;
-        this.serializedPacketCache.delete(firstKey);
-      }
     }
 
     // 使用索引快速收集目标用户
