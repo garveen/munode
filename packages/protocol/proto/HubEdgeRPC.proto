@@ -3,6 +3,22 @@ syntax = "proto2";
 package hubedge;
 
 // ============================================================================
+// Common Types
+// ============================================================================
+
+message EdgeInfo {
+  required uint32 server_id = 1;
+  required string name = 2;
+  required string host = 3;
+  required uint32 port = 4;
+  optional string region = 5;
+  required uint32 current_load = 6;
+  required uint32 capacity = 7;
+  required string certificate = 8;
+  required int64 last_seen = 9;
+}
+
+// ============================================================================
 // RPC 方法参数和结果的类型安全定义
 // ============================================================================
 
@@ -23,9 +39,11 @@ message EdgeRegisterParams {
 
 message EdgeRegisterResult {
   required bool success = 1;
-  optional string challenge = 2;
-  optional string error = 3;
-  optional uint32 edge_id = 4;
+  optional uint32 hub_server_id = 2;
+  repeated EdgeInfo edge_list = 3;
+  optional string challenge = 4;
+  optional uint32 challenge_timeout = 5;
+  optional string error = 6;
 }
 
 // ---------------------------------------------------------------------------
@@ -47,7 +65,8 @@ message EdgeServerStats {
 
 message EdgeHeartbeatResult {
   required bool success = 1;
-  optional int64 timestamp = 2;
+  repeated EdgeInfo updated_edges = 2;
+  optional string error = 3;
 }
 
 // ---------------------------------------------------------------------------
