@@ -115,7 +115,7 @@ export class VoiceUDPTransport extends EventEmitter {
   }
 
   /**
-   * 获取所有已注册的远程Edge ID列表
+   * Get list of all registered remote Edge IDs
    */
   getRegisteredEdgeIds(): number[] {
     return Array.from(this.remoteEndpoints.keys());
