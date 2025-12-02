@@ -204,8 +204,9 @@ export class VoiceManager {
         timestamp: Date.now(), // 添加时间戳用于 RTT 计算
       };
 
-      // 获取所有已注册的Edge
-      const allEdges = this.handlerFactory.stateManager.getAllEdges();
+      // 获取所有已注册的Edge端点（从VoiceUDPTransport获取，而不是从StateManager获取）
+      // 这确保即使Edge还没有用户，只要voice endpoint已注册，就会收到语音包
+      const allEdges = this.voiceTransport?.getRegisteredEdgeIds() || [];
       
       // 广播到所有其他Edge，使用路由决策
       let sentCount = 0;
