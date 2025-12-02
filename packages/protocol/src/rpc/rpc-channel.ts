@@ -4,6 +4,52 @@ import { hubedge } from '../generated/proto/HubEdge.js';
 
 const { EdgeHubPacket, PacketType, RPCRequest, RPCResponse, RPCError: ProtoRPCError, Heartbeat, HeartbeatAck } = hubedge;
 
+/**
+ * Custom JSON replacer that handles Buffer serialization
+ * Buffers are converted to { __buffer__: true, data: <base64> }
+ */
+function jsonReplacer(_key: string, value: unknown): unknown {
+  if (Buffer.isBuffer(value)) {
+    return { __buffer__: true, data: value.toString('base64') };
+  }
+  if (value instanceof Uint8Array) {
+    return { __buffer__: true, data: Buffer.from(value).toString('base64') };
+  }
+  return value;
+}
+
+/**
+ * Custom JSON reviver that handles Buffer deserialization
+ */
+function jsonReviver(_key: string, value: unknown): unknown {
+  if (value && typeof value === 'object' && 
+      '__buffer__' in value && (value as { __buffer__: boolean; data: string }).__buffer__ === true &&
+      'data' in value && typeof (value as { data: string }).data === 'string') {
+    return Buffer.from((value as { data: string }).data, 'base64');
+  }
+  // Also handle the standard { type: 'Buffer', data: [...] } format from JSON.stringify(Buffer)
+  if (value && typeof value === 'object' &&
+      'type' in value && (value as { type: string }).type === 'Buffer' &&
+      'data' in value && Array.isArray((value as { data: number[] }).data)) {
+    return Buffer.from((value as { data: number[] }).data);
+  }
+  return value;
+}
+
+/**
+ * Serialize params to JSON with Buffer support
+ */
+function serializeParams(params: unknown): string {
+  return JSON.stringify(params ?? {}, jsonReplacer);
+}
+
+/**
+ * Parse JSON with Buffer support
+ */
+function parseParams(json: string): unknown {
+  return JSON.parse(json, jsonReviver);
+}
+
 export interface Message {
   id?: string;           // 请求ID（响应时必填，通知时可选）
   type: string;          // 消息类型
@@ -61,7 +107,7 @@ export class RPCChannel extends EventEmitter {
       rpc_request: new RPCRequest({
         request_id: id,
         method,
-        params: Buffer.from(JSON.stringify(params ?? {})),
+        params: Buffer.from(serializeParams(params)),
         timeout_ms: effectiveTimeout,
       }),
     });
@@ -91,7 +137,7 @@ export class RPCChannel extends EventEmitter {
       rpc_request: new RPCRequest({
         request_id: id,
         method,
-        params: Buffer.from(JSON.stringify(params ?? {})),
+        params: Buffer.from(serializeParams(params)),
         timeout_ms: 0, // 0 indicates notification (no response expected)
       }),
     });
@@ -117,7 +163,7 @@ export class RPCChannel extends EventEmitter {
       };
       
       if (error.data !== undefined) {
-        errorData.details = Buffer.from(JSON.stringify(error.data));
+        errorData.details = Buffer.from(serializeParams(error.data));
       }
       
       const packet = new EdgeHubPacket({
@@ -131,7 +177,7 @@ export class RPCChannel extends EventEmitter {
         type: PacketType.PACKET_TYPE_RPC_RESPONSE,
         rpc_response: new RPCResponse({
           request_id: id,
-          result: Buffer.from(JSON.stringify(result ?? {})),
+          result: Buffer.from(serializeParams(result)),
         }),
       });
       this.sendPacket(packet);
@@ -205,10 +251,10 @@ export class RPCChannel extends EventEmitter {
 
     const { request_id: requestId, method, params: paramsBuffer, timeout_ms: timeoutMs } = packet.rpc_request;
     
-    // Parse params
+    // Parse params with Buffer support
     let params: unknown;
     try {
-      params = JSON.parse(Buffer.from(paramsBuffer).toString());
+      params = parseParams(Buffer.from(paramsBuffer).toString());
     } catch {
       params = {};
     }
@@ -246,10 +292,10 @@ export class RPCChannel extends EventEmitter {
       clearTimeout(pending.timer);
       this.pendingRequests.delete(requestId);
 
-      // Parse result
+      // Parse result with Buffer support
       let result: unknown;
       try {
-        result = JSON.parse(Buffer.from(resultBuffer).toString());
+        result = parseParams(Buffer.from(resultBuffer).toString());
       } catch {
         result = {};
       }
