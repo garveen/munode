@@ -6,7 +6,8 @@
  * The RPC channel now uses TypedRPCRequest/TypedRPCResponse protobuf messages.
  */
 
-import type { RPCChannel, hubedgeRpc } from './rpc-channel.js';
+import type { RPCChannel } from './rpc-channel.js';
+import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
 import type {
   EdgeToHubMethods,
   RPCParams,
@@ -139,10 +140,7 @@ export class TypedRPCClient {
     method: M,
     params: RPCParams<M>
   ): TypedRPCRequest {
-    const { TypedRPCRequest: Req } = require('../generated/proto/HubEdgeRPC.js').hubedge;
-    const rpc = require('../generated/proto/HubEdgeRPC.js').hubedge;
-    
-    const request = new Req({
+    const request = new hubedgeRpc.TypedRPCRequest({
       request_id: '',
       method,
     }) as TypedRPCRequest;
@@ -150,34 +148,34 @@ export class TypedRPCClient {
     // Set the appropriate params field based on method
     switch (method) {
       case 'edge.register':
-        request.edge_register = rpc.EdgeRegisterParams.fromObject(params);
+        request.edge_register = hubedgeRpc.EdgeRegisterParams.fromObject(params);
         break;
       case 'edge.heartbeat':
-        request.edge_heartbeat = rpc.EdgeHeartbeatParams.fromObject(params);
+        request.edge_heartbeat = hubedgeRpc.EdgeHeartbeatParams.fromObject(params);
         break;
       case 'edge.allocateSessionId':
-        request.edge_allocate_session_id = rpc.EdgeAllocateSessionIdParams.fromObject(params);
+        request.edge_allocate_session_id = hubedgeRpc.EdgeAllocateSessionIdParams.fromObject(params);
         break;
       case 'edge.authenticateUser':
-        request.edge_authenticate_user = rpc.EdgeAuthenticateUserParams.fromObject(params);
+        request.edge_authenticate_user = hubedgeRpc.EdgeAuthenticateUserParams.fromObject(params);
         break;
       case 'edge.reportSession': {
         const p = params as EdgeReportSessionParamsTS;
-        request.edge_report_session = rpc.EdgeReportSessionParams.fromObject({
+        request.edge_report_session = hubedgeRpc.EdgeReportSessionParams.fromObject({
           ...p,
           start_time: p.startTime instanceof Date ? p.startTime.getTime() : p.startTime,
         });
         break;
       }
       case 'edge.syncVoiceTarget':
-        request.edge_sync_voice_target = rpc.EdgeSyncVoiceTargetParams.fromObject(params);
+        request.edge_sync_voice_target = hubedgeRpc.EdgeSyncVoiceTargetParams.fromObject(params);
         break;
       case 'edge.getVoiceTargets':
-        request.edge_get_voice_targets = rpc.EdgeGetVoiceTargetsParams.fromObject(params);
+        request.edge_get_voice_targets = hubedgeRpc.EdgeGetVoiceTargetsParams.fromObject(params);
         break;
       case 'edge.routeVoice': {
         const p = params as EdgeRouteVoiceParamsTS;
-        request.edge_route_voice = rpc.EdgeRouteVoiceParams.fromObject({
+        request.edge_route_voice = hubedgeRpc.EdgeRouteVoiceParams.fromObject({
           from_edge_id: p.fromEdgeId,
           from_session_id: p.fromSessionId,
           target_id: p.target_id,
@@ -187,31 +185,31 @@ export class TypedRPCClient {
         break;
       }
       case 'edge.adminOperation':
-        request.edge_admin_operation = rpc.EdgeAdminOperationParams.fromObject(params);
+        request.edge_admin_operation = hubedgeRpc.EdgeAdminOperationParams.fromObject(params);
         break;
       case 'edge.exchangeCertificates':
-        request.edge_exchange_certificates = rpc.EdgeExchangeCertificatesParams.fromObject(params);
+        request.edge_exchange_certificates = hubedgeRpc.EdgeExchangeCertificatesParams.fromObject(params);
         break;
       case 'edge.fullSync':
-        request.edge_full_sync = rpc.EdgeFullSyncParams.fromObject(params);
+        request.edge_full_sync = hubedgeRpc.EdgeFullSyncParams.fromObject(params);
         break;
       case 'edge.getChannels':
-        request.edge_get_channels = rpc.EdgeGetChannelsParams.fromObject({});
+        request.edge_get_channels = hubedgeRpc.EdgeGetChannelsParams.fromObject({});
         break;
       case 'edge.getACLs':
-        request.edge_get_acls = rpc.EdgeGetACLsParams.fromObject(params);
+        request.edge_get_acls = hubedgeRpc.EdgeGetACLsParams.fromObject(params);
         break;
       case 'edge.saveChannel': {
         const p = params as EdgeSaveChannelParamsTS;
-        request.edge_save_channel = rpc.EdgeSaveChannelParams.fromObject(p.channel || p);
+        request.edge_save_channel = hubedgeRpc.EdgeSaveChannelParams.fromObject(p.channel || p);
         break;
       }
       case 'edge.saveACL':
-        request.edge_save_acl = rpc.EdgeSaveACLParams.fromObject(params);
+        request.edge_save_acl = hubedgeRpc.EdgeSaveACLParams.fromObject(params);
         break;
       case 'edge.join': {
         const p = params as EdgeJoinParamsTS;
-        request.edge_join = rpc.EdgeJoinParams.fromObject({
+        request.edge_join = hubedgeRpc.EdgeJoinParams.fromObject({
           server_id: p.server_id,
           name: p.name,
           host: p.host,
@@ -223,7 +221,7 @@ export class TypedRPCClient {
       }
       case 'edge.joinComplete': {
         const p = params as EdgeJoinCompleteParamsTS;
-        request.edge_join_complete = rpc.EdgeJoinCompleteParams.fromObject({
+        request.edge_join_complete = hubedgeRpc.EdgeJoinCompleteParams.fromObject({
           server_id: p.server_id,
           token: p.token,
           connected_peers: p.connectedPeers,
@@ -232,7 +230,7 @@ export class TypedRPCClient {
       }
       case 'edge.handleACL': {
         const p = params as EdgeHandleACLParamsTS;
-        request.edge_handle_acl = rpc.EdgeHandleACLParams.fromObject({
+        request.edge_handle_acl = hubedgeRpc.EdgeHandleACLParams.fromObject({
           ...p,
           raw_data: typeof p.raw_data === 'string' 
             ? Buffer.from(p.raw_data, 'base64')
@@ -241,11 +239,11 @@ export class TypedRPCClient {
         break;
       }
       case 'edge.handlePermissionQuery':
-        request.edge_handle_permission_query = rpc.EdgeHandlePermissionQueryParams.fromObject(params);
+        request.edge_handle_permission_query = hubedgeRpc.EdgeHandlePermissionQueryParams.fromObject(params);
         break;
       case 'edge.reportPeerDisconnect': {
         const p = params as EdgeReportPeerDisconnectParamsTS;
-        request.edge_report_peer_disconnect = rpc.EdgeReportPeerDisconnectParams.fromObject({
+        request.edge_report_peer_disconnect = hubedgeRpc.EdgeReportPeerDisconnectParams.fromObject({
           local_edge_id: p.localEdgeId,
           remote_edge_id: p.remoteEdgeId,
           local_client_count: p.localClientCount,
@@ -253,28 +251,28 @@ export class TypedRPCClient {
         break;
       }
       case 'edge.reportQuality':
-        request.edge_report_quality = rpc.EdgeReportQualityParams.fromObject(params);
+        request.edge_report_quality = hubedgeRpc.EdgeReportQualityParams.fromObject(params);
         break;
       case 'cluster.getStatus':
-        request.cluster_get_status = rpc.ClusterGetStatusParams.fromObject({});
+        request.cluster_get_status = hubedgeRpc.ClusterGetStatusParams.fromObject({});
         break;
       case 'blob.put':
-        request.blob_put = rpc.BlobPutParams.fromObject(params);
+        request.blob_put = hubedgeRpc.BlobPutParams.fromObject(params);
         break;
       case 'blob.get':
-        request.blob_get = rpc.BlobGetParams.fromObject(params);
+        request.blob_get = hubedgeRpc.BlobGetParams.fromObject(params);
         break;
       case 'blob.getUserTexture':
-        request.blob_get_user_texture = rpc.BlobGetUserTextureParams.fromObject(params);
+        request.blob_get_user_texture = hubedgeRpc.BlobGetUserTextureParams.fromObject(params);
         break;
       case 'blob.getUserComment':
-        request.blob_get_user_comment = rpc.BlobGetUserCommentParams.fromObject(params);
+        request.blob_get_user_comment = hubedgeRpc.BlobGetUserCommentParams.fromObject(params);
         break;
       case 'blob.setUserTexture':
-        request.blob_set_user_texture = rpc.BlobSetUserTextureParams.fromObject(params);
+        request.blob_set_user_texture = hubedgeRpc.BlobSetUserTextureParams.fromObject(params);
         break;
       case 'blob.setUserComment':
-        request.blob_set_user_comment = rpc.BlobSetUserCommentParams.fromObject(params);
+        request.blob_set_user_comment = hubedgeRpc.BlobSetUserCommentParams.fromObject(params);
         break;
     }
     
