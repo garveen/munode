@@ -30,22 +30,30 @@ export interface RPCError {
 }
 
 /**
+ * Handler definition for batch registration
+ */
+export interface HandlerDefinition<M extends EdgeToHubMethods['method']> {
+  method: M;
+  handler: RPCHandler<M>;
+}
+
+/**
  * 类型安全的 RPC 服务器
  *
  * 使用方法：
  * ```typescript
  * const server = new TypedRPCServer();
  *
- * // 注册处理器，TypeScript 会自动推断参数和返回值类型
+ * // 方式1：单个注册
  * server.handle('edge.register', async (channel, params) => {
- *   // params 类型自动推断为 EdgeRegisterMethod['params']
- *   // 返回值必须符合 EdgeRegisterMethod['result']
- *   return {
- *     success: true,
- *     hubServerId: 1,
- *     edgeList: [],
- *   };
+ *   return { success: true, hubServerId: 1, edgeList: [] };
  * });
+ *
+ * // 方式2：批量注册（推荐）
+ * server.registerHandlers([
+ *   { method: 'edge.register', handler: async (channel, params) => { ... } },
+ *   { method: 'edge.heartbeat', handler: async (channel, params) => { ... } },
+ * ]);
  *
  * // 在收到请求时调用
  * server.handleRequest(channel, message, respond);
@@ -61,6 +69,38 @@ export class TypedRPCServer {
    */
   handle<M extends EdgeToHubMethods['method']>(method: M, handler: RPCHandler<M>): void {
     this.handlers.set(method, handler);
+  }
+
+  /**
+   * 批量注册处理器（使用列表+循环方式）
+   * @param definitions 处理器定义列表
+   */
+  registerHandlers(definitions: Array<{ method: string; handler: RPCHandler<EdgeToHubMethods['method']> }>): void {
+    for (const def of definitions) {
+      this.handlers.set(def.method, def.handler);
+    }
+  }
+
+  /**
+   * 取消注册处理器
+   * @param method RPC 方法名
+   */
+  unregister(method: string): void {
+    this.handlers.delete(method);
+  }
+
+  /**
+   * 获取所有已注册的方法名
+   */
+  getRegisteredMethods(): string[] {
+    return Array.from(this.handlers.keys());
+  }
+
+  /**
+   * 检查方法是否已注册
+   */
+  hasHandler(method: string): boolean {
+    return this.handlers.has(method);
   }
 
   /**
