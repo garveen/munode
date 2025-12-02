@@ -75,9 +75,10 @@ export class TypedRPCServer {
    * 批量注册处理器（使用列表+循环方式）
    * @param definitions 处理器定义列表
    */
-  registerHandlers(definitions: Array<{ method: string; handler: RPCHandler<EdgeToHubMethods['method']> }>): void {
+  registerHandlers(definitions: Array<{ method: string; handler: (channel: RPCChannel, params: unknown) => Promise<unknown> }>): void {
     for (const def of definitions) {
-      this.handlers.set(def.method, def.handler);
+      // Cast to the expected type since we're accepting a more flexible handler signature
+      this.handlers.set(def.method, def.handler as RPCHandler<EdgeToHubMethods['method']>);
     }
   }
 
