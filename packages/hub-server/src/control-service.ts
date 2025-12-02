@@ -15,6 +15,7 @@ import {
   DEFAULT_ROUTING_POLICY,
   DEFAULT_HUB_RELAY_CONFIG,
   hubedgeRpc,
+  EdgeToHubMethods,
 } from '@munode/protocol';
 import { mumbleproto } from '@munode/protocol';
 import type { HubConfig } from './types.js';
@@ -1856,13 +1857,13 @@ export class HubControlService {
 
   private registerHandlers(): void {
     // 使用批量注册方式注册所有处理器（列表+循环模式）
-    const handlers: Array<{ method: string; handler: (channel: RPCChannel, params: unknown) => Promise<unknown> }> = [
+    const handlers = [
       // Edge 核心操作
-      { method: 'edge.register', handler: (channel, params) => this.handleEdgeRegister(channel, params as RPCParams<'edge.register'>) },
-      { method: 'edge.heartbeat', handler: (channel, params) => this.handleEdgeHeartbeat(channel, params as RPCParams<'edge.heartbeat'>) },
-      { method: 'edge.allocateSessionId', handler: (channel, params) => this.handleAllocateSessionId(channel, params as RPCParams<'edge.allocateSessionId'>) },
-      { method: 'edge.authenticateUser', handler: (channel, params) => this.handleAuthenticateUser(channel, params as RPCParams<'edge.authenticateUser'>) },
-      { method: 'edge.reportSession', handler: (channel, params) => this.handleReportSession(channel, params as RPCParams<'edge.reportSession'>) },
+      { method: 'edge.register', handler: (channel: RPCChannel, params: RPCParams<EdgeToHubMethods['method']>) => this.handleEdgeRegister(channel, params as RPCParams<'edge.register'>) },
+      { method: 'edge.heartbeat', handler: (channel: RPCChannel, params: RPCParams<EdgeToHubMethods['method']>) => this.handleEdgeHeartbeat(channel, params as RPCParams<'edge.heartbeat'>) },
+      { method: 'edge.allocateSessionId', handler: (channel: RPCChannel, params: RPCParams<EdgeToHubMethods['method']>) => this.handleAllocateSessionId(channel, params as RPCParams<'edge.allocateSessionId'>) },
+      { method: 'edge.authenticateUser', handler: (channel: RPCChannel, params: RPCParams<EdgeToHubMethods['method']>) => this.handleAuthenticateUser(channel, params as RPCParams<'edge.authenticateUser'>) },
+      { method: 'edge.reportSession', handler: (channel: RPCChannel, params: RPCParams<EdgeToHubMethods['method']>) => this.handleReportSession(channel, params as RPCParams<'edge.reportSession'>) },
       
       // VoiceTarget 同步
       { method: 'edge.syncVoiceTarget', handler: (channel, params) => this.handleSyncVoiceTarget(channel, params as RPCParams<'edge.syncVoiceTarget'>) },

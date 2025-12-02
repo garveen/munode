@@ -87,10 +87,13 @@ export class TypedRPCServer {
 
   /**
    * 批量注册处理器（使用列表+循环方式）
-   * Uses generic handler type for flexibility while maintaining type safety
+   * Uses a flexible type to allow any string method names
    */
-  registerHandlers<M extends EdgeToHubMethods['method']>(
-    definitions: Array<HandlerDefinition<M>>
+  registerHandlers(
+    definitions: Array<{
+      method: string;
+      handler: (channel: RPCChannel, params: RPCParams<EdgeToHubMethods['method']>) => Promise<RPCResult<EdgeToHubMethods['method']>>;
+    }>
   ): void {
     for (const def of definitions) {
       this.handlers.set(def.method, def.handler as RPCHandler<EdgeToHubMethods['method']>);
@@ -371,7 +374,21 @@ export class TypedRPCServer {
       case 'edge.getVoiceTargets': {
         const r = result as RPCResult<'edge.getVoiceTargets'>;
         response.edge_get_voice_targets = hubedgeRpc.EdgeGetVoiceTargetsResult.fromObject({
-          voice_targets: r.voiceTargets,
+          voice_targets: r.voiceTargets?.map(vt => ({
+            edge_id: vt.edge_id,
+            client_session: vt.client_session,
+            target_id: vt.target_id,
+            config: vt.config ? {
+              sessions: vt.config.sessions?.map((s: number) => ({ session: s })),
+              channels: vt.config.channels?.map((c: { channel_id: number; include_subchannels?: boolean; include_links?: boolean; group?: string }) => ({
+                channel_id: c.channel_id,
+                children: c.include_subchannels,
+                links: c.include_links,
+                group: c.group,
+              })),
+            } : undefined,
+            timestamp: vt.timestamp,
+          })),
         });
         break;
       }
@@ -391,7 +408,12 @@ export class TypedRPCServer {
         response.edge_admin_operation = hubedgeRpc.EdgeAdminOperationResult.fromObject({
           success: r.success,
           message: r.message,
-          error: r.error,
+          stats: r.stats ? {
+            edges: r.stats.edges,
+            sessions: r.stats.sessions,
+            voice_targets: r.stats.voiceTargets,
+            channels: r.stats.channels,
+          } : undefined,
         });
         break;
       }
@@ -406,28 +428,95 @@ export class TypedRPCServer {
       case 'edge.fullSync': {
         const r = result as RPCResult<'edge.fullSync'>;
         response.edge_full_sync = hubedgeRpc.EdgeFullSyncResult.fromObject({
-          channels: r.channels,
-          channel_links: r.channelLinks,
-          acls: r.acls,
-          bans: r.bans,
-          sessions: r.sessions,
+          channels: r.channels?.map(c => ({
+            channel_id: c.id,
+            name: c.name,
+            parent_id: c.parent_id,
+            description: c.description,
+            position: c.position,
+            max_users: c.max_users,
+            temporary: c.temporary,
+            inherit_acl: c.inherit_acl,
+            links: c.links || [],
+          })),
+          channel_links: r.channelLinks?.map(l => ({
+            channel_id: l.channel_id,
+            target_id: l.target_id,
+          })),
+          acls: r.acls?.map(a => ({
+            id: a.id,
+            channel_id: a.channel_id,
+            user_id: a.user_id,
+            group: a.group,
+            apply_here: a.apply_here,
+            apply_subs: a.apply_subs,
+            allow: a.allow,
+            deny: a.deny,
+          })),
+          bans: r.bans?.map(b => ({
+            address: b.address,
+            mask: b.mask,
+            username: b.name,
+            cert_hash: b.hash,
+            reason: b.reason,
+            start: b.start,
+            duration: b.duration,
+          })),
+          sessions: r.sessions?.map(s => ({
+            session_id: s.session_id,
+            edge_id: s.edge_id,
+            user_id: s.user_id,
+            username: s.username,
+            channel_id: s.channel_id || 0,
+            ip_address: s.ip_address,
+            cert_hash: s.cert_hash,
+            connected_at: s.connected_at,
+            groups: s.groups || [],
+          })),
           timestamp: r.timestamp,
           sequence: r.sequence,
-          edges: r.edges,
+          edges: r.edges?.map(e => ({
+            server_id: e.server_id,
+            name: e.name,
+            host: e.host,
+            port: e.port,
+            region: e.region,
+            current_load: e.current_load,
+            capacity: e.capacity,
+          })),
         });
         break;
       }
       case 'edge.getChannels': {
         const r = result as RPCResult<'edge.getChannels'>;
         response.edge_get_channels = hubedgeRpc.EdgeGetChannelsResult.fromObject({
-          channels: r.channels,
+          channels: r.channels?.map(c => ({
+            channel_id: c.id,
+            name: c.name,
+            parent_id: c.parent_id,
+            description: c.description,
+            position: c.position,
+            max_users: c.max_users,
+            temporary: c.temporary,
+            inherit_acl: c.inherit_acl,
+            links: c.links || [],
+          })),
         });
         break;
       }
       case 'edge.getACLs': {
         const r = result as RPCResult<'edge.getACLs'>;
         response.edge_get_acls = hubedgeRpc.EdgeGetACLsResult.fromObject({
-          acls: r.acls,
+          acls: r.acls?.map(a => ({
+            id: a.id,
+            channel_id: a.channel_id,
+            user_id: a.user_id,
+            group: a.group,
+            apply_here: a.apply_here,
+            apply_subs: a.apply_subs,
+            allow: a.allow,
+            deny: a.deny,
+          })),
         });
         break;
       }

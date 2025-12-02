@@ -207,7 +207,7 @@ export class TypedRPCClient {
       case 'edge.saveChannel': {
         const p = params as RPCParams<'edge.saveChannel'>;
         request.edge_save_channel = hubedgeRpc.EdgeSaveChannelParams.fromObject({
-          channel_id: p.channel?.id,
+          id: p.channel?.id,
           name: p.channel?.name,
           position: p.channel?.position,
           max_users: p.channel?.max_users,
