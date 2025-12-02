@@ -2075,6 +2075,8 @@ export class HubControlService {
     }
 
     // 将RPC参数转换为GlobalSession对象
+    // Note: params.startTime may be a Date object or ISO string (from JSON serialization)
+    const startTime = params.startTime instanceof Date ? params.startTime : new Date(params.startTime);
     const session: GlobalSession = {
       session_id: params.session_id,
       edge_id: params.edge_server_id,
@@ -2084,7 +2086,7 @@ export class HubControlService {
       cert_hash: params.cert_hash || '',
       is_authenticated: true,
       channel_id: actualChannelId, // Use the adjusted channel
-      connected_at: Math.floor(params.startTime.getTime() / 1000),
+      connected_at: Math.floor(startTime.getTime() / 1000),
       last_active: Math.floor(Date.now() / 1000),
       groups: params.groups || [], // 传递用户组信息
       version: params.version,
