@@ -9,7 +9,7 @@
     "build": "node esbuild.config.mjs && tsc --emitDeclarationOnly --outDir dist",
     "dev": "node esbuild.config.mjs --watch",
     "clean": "rm -rf dist *.tsbuildinfo src/generated/proto",
-    "generate:proto": "protoc --proto_path=./proto --ts_out=service=grpc-node:./src/generated/proto ./proto/Mumble.proto ./proto/HubEdgeSync.proto ./proto/HubEdge.proto",
+    "generate:proto": "protoc --proto_path=./proto --ts_out=service=grpc-node:./src/generated/proto ./proto/Mumble.proto ./proto/HubEdgeSync.proto ./proto/HubEdgeRPC.proto ./proto/HubEdge.proto",
     "test": "vitest run"
   },
   "dependencies": {
