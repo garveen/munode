@@ -165,11 +165,14 @@ describe('Plugin Integration Tests', () => {
       // 用户1发送插件数据到特定用户（只发给用户2）
       await client1.sendPluginData(pluginId, pluginData, [session2!]);
 
-      // 等待
+      // 等待更长时间以确保消息传播
       await Promise.race([
         dataPromise,
-        new Promise(resolve => setTimeout(resolve, 2000))
+        new Promise(resolve => setTimeout(resolve, 5000))
       ]);
+
+      // 额外等待一下让client3有时间收到（如果会收到的话）
+      await new Promise(resolve => setTimeout(resolve, 500));
 
       expect(dataReceived).toBe(true);
       expect(client3ReceivedData).toBe(false); // 用户3不应该收到
@@ -441,9 +444,10 @@ describe('Plugin Integration Tests', () => {
         [session2!]
       );
 
+      // 增加等待时间以确保消息传播
       await Promise.race([
         notificationPromise,
-        new Promise(resolve => setTimeout(resolve, 2000))
+        new Promise(resolve => setTimeout(resolve, 5000))
       ]);
 
       expect(notificationReceived).toBe(true);

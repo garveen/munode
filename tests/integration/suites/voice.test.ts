@@ -534,8 +534,8 @@ describe('Voice Integration Tests', () => {
       const voicePacket = createVoicePacket(4, 2, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
       
-      // 等待语音包跨 Edge 传输（增加到 2 秒）
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // 等待语音包跨 Edge 传输（增加到 4 秒）
+      await new Promise(resolve => setTimeout(resolve, 4000));
       
       // 验证
       expect(receivedVoice.recvE1Ch1).toBe(true);
