@@ -373,6 +373,9 @@ export class ConnectionManager {
         case MessageType.ChannelState:
           // 频道状态消息
           const channelStateMessage = mumbleproto.ChannelState.deserialize(payload);
+          if (channelStateMessage.channel_id === 0) {
+            console.log(`[CLIENT-DESERIALIZE] Channel 0: links=${JSON.stringify(channelStateMessage.links)}, links_add=${JSON.stringify(channelStateMessage.links_add)}, links_remove=${JSON.stringify(channelStateMessage.links_remove)}`);
+          }
           this.client.getStateManager().handleChannelState(channelStateMessage);
           break;
 

@@ -154,6 +154,11 @@ export class StateManager {
 
     this.channels.set(channelId, channel);
 
+    if (channelId === 0) {
+      const stored = this.channels.get(0);
+      console.log(`[CLIENT-STORED-FINAL] Channel 0: stored.links=${JSON.stringify(stored?.links)}, from message.links=${JSON.stringify(message.links)}, message.links_add=${JSON.stringify(message.links_add)}`);
+    }
+
     // 触发频道状态更新事件
     this.client.emit('channelState', message);
   }

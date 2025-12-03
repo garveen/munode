@@ -209,9 +209,7 @@ export class MessageHandlers {
         logger.debug(`[sendChannelTree-DEBUG] Channel 0: channelManager.links=[${links.join(', ')}]`);
       }
 
-      // 构建 ChannelState
-      // 根据 Mumble 协议，发送完整的 links 列表
-      const channelStateInit: any = {
+      const channelState = new mumbleproto.ChannelState({
         channel_id: channel.id,
         name: channel.name,
         description: channel.description || '',
@@ -219,13 +217,15 @@ export class MessageHandlers {
         temporary: channel.temporary,
         max_users: channel.max_users || 0,
         links: links, // 发送完整链接列表
-        links_add: [], // 必须提供以满足类型要求
-        links_remove: [], // 必须提供以满足类型要求
+        links_add: [], // TypeScript需要，但protobuf会忽略空数组
+        links_remove: [], // TypeScript需要，但protobuf会忽略空数组
         // 第一次：根频道(id=0)不设parent，其他频道parent都设为0
         parent: channel.id === 0 ? undefined : 0,
-      };
+      });
 
-      const channelState = new mumbleproto.ChannelState(channelStateInit);
+      if (channel.id === 0) {
+        logger.info(`[SERVER-SERIALIZE-PASS1] Channel 0: links=${JSON.stringify(channelState.links)}`);
+      }
 
       logger.debug(
         `[sendChannelTree] Pass 1: channel ${channel.id} (${channel.name}), parent=${channel.id === 0 ? 'undefined' : 0}`
@@ -257,6 +257,10 @@ export class MessageHandlers {
         links_add: [], // 必须提供，但为空表示不添加
         links_remove: [], // 必须提供，但为空表示不删除
       });
+
+      if (channel.id === 0) {
+        logger.info(`[SERVER-SERIALIZE-PASS2] Channel 0: THIS SHOULD NOT HAPPEN! links=${JSON.stringify(currentLinks)}`);
+      }
 
       logger.debug(
         `[sendChannelTree] Pass 2: channel ${channel.id} parent relationship, parent=${parentId}`
