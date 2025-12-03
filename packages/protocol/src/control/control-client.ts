@@ -1,5 +1,7 @@
 import WebSocket from 'ws';
-import { RPCChannel } from '../rpc/rpc-channel.js';
+import { RPCChannel, type NotificationParams } from '../rpc/rpc-channel.js';
+import { TypedRPCClient, createTypedRPCClient } from '../rpc/typed-rpc-client.js';
+import type { RPCParams, RPCResult, EdgeToHubMethods } from '../rpc/rpc-types.js';
 import { EventEmitter } from 'events';
 
 export interface ControlChannelClientConfig {
@@ -11,6 +13,7 @@ export interface ControlChannelClientConfig {
 export class ControlChannelClient extends EventEmitter {
   private ws: WebSocket | null = null;
   private channel: RPCChannel | null = null;
+  private typedClient: TypedRPCClient | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private isConnecting = false;
 
@@ -37,6 +40,7 @@ export class ControlChannelClient extends EventEmitter {
       this.ws.on('open', () => {
         this.isConnecting = false;
         this.channel = new RPCChannel(this.ws!);
+        this.typedClient = createTypedRPCClient(this.channel);
         this.setupChannel();
         this.emit('connect');
         resolve();
@@ -51,6 +55,7 @@ export class ControlChannelClient extends EventEmitter {
       this.ws.on('close', () => {
         this.isConnecting = false;
         this.channel = null;
+        this.typedClient = null;
         this.emit('disconnect');
       });
     });
@@ -71,23 +76,29 @@ export class ControlChannelClient extends EventEmitter {
   }
 
   /**
-   * 发送RPC请求
+   * 发送RPC请求 - 使用TypedRPCClient进行protobuf转换
    */
-  async call(method: string, params?: any, timeout?: number): Promise<any> {
-    if (!this.channel) {
+  async call<M extends EdgeToHubMethods['method']>(
+    method: M,
+    params?: RPCParams<M>,
+    timeout?: number
+  ): Promise<RPCResult<M>> {
+    if (!this.typedClient) {
       throw new Error('Not connected');
     }
-    return this.channel.call(method, params, timeout);
+    return this.typedClient.call(method, params as RPCParams<M>);
   }
 
   /**
    * 发送通知
    */
-  notify(method: string, params?: any): void {
+  notify(method: string, params?: NotificationParams): void {
     if (!this.channel) {
       throw new Error('Not connected');
     }
-    this.channel.notify(method, params);
+    if (params) {
+      this.channel.notify(method, params);
+    }
   }
 
   /**
@@ -102,6 +113,7 @@ export class ControlChannelClient extends EventEmitter {
     if (this.channel) {
       this.channel.close();
       this.channel = null;
+      this.typedClient = null;
     }
 
     if (this.ws) {

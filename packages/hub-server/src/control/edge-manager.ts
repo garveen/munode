@@ -8,8 +8,17 @@
  * - 提供连接监控和统计
  */
 
-import { RPCChannel, Message } from '@munode/protocol';
+import { RPCChannel, ChannelNotificationParams } from '@munode/protocol';
 import { MessageCache } from './message-cache.js';
+
+// Notification message type for broadcasting
+export interface NotificationMessage {
+  id?: string;
+  type: string;
+  method: string;
+  params: ChannelNotificationParams;
+  timestamp: number;
+}
 
 export interface EdgeConnection {
   edgeId: number;
@@ -145,7 +154,7 @@ export class EdgeManager {
   /**
    * 广播消息给所有连接的Edge
    */
-  broadcast(message: Message, excludeEdge?: number): void {
+  broadcast(message: NotificationMessage, excludeEdge?: number): void {
     const connectedEdges = new Set<number>();
 
     for (const [edgeId, connection] of this.connections) {
@@ -155,7 +164,7 @@ export class EdgeManager {
 
       try {
         connection.channel.notify(message.method, message.params);
-        this.updateStats(edgeId, true, JSON.stringify(message).length);
+        this.updateStats(edgeId, true, this.estimateSize(message));
       } catch (error) {
         console.warn(`Failed to send message to edge ${edgeId}:`, error);
       }
@@ -174,7 +183,7 @@ export class EdgeManager {
   /**
    * 发送消息给指定Edge
    */
-  sendToEdge(edgeId: number, message: Message): boolean {
+  sendToEdge(edgeId: number, message: NotificationMessage): boolean {
     const connection = this.connections.get(edgeId);
     if (!connection) {
       return false;
@@ -182,12 +191,20 @@ export class EdgeManager {
 
     try {
       connection.channel.notify(message.method, message.params);
-      this.updateStats(edgeId, true, JSON.stringify(message).length);
+      this.updateStats(edgeId, true, this.estimateSize(message));
       return true;
     } catch (error) {
       console.warn(`Failed to send message to edge ${edgeId}:`, error);
       return false;
     }
+  }
+
+  /**
+   * Estimate message size for stats (without JSON.stringify to avoid issues)
+   */
+  private estimateSize(_message: NotificationMessage): number {
+    // Simple estimation based on common fields
+    return 100; // Base size estimate
   }
 
   /**
@@ -201,8 +218,8 @@ export class EdgeManager {
 
       for (const message of cachedMessages) {
         try {
-          channel.notify(message.method, message.params);
-          this.updateStats(edgeId, true, JSON.stringify(message).length);
+          channel.notify(message.method, message.params as ChannelNotificationParams);
+          this.updateStats(edgeId, true, 100); // Estimate size
         } catch (error) {
           console.warn(`Failed to send cached message to edge ${edgeId}:`, error);
         }

@@ -14,6 +14,8 @@ import {
   GlobalSession,
   DEFAULT_ROUTING_POLICY,
   DEFAULT_HUB_RELAY_CONFIG,
+  hubedgeRpc,
+  EdgeToHubMethods,
 } from '@munode/protocol';
 import { mumbleproto } from '@munode/protocol';
 import type { HubConfig } from './types.js';
@@ -27,6 +29,9 @@ import type { ChannelGroupManager } from './channel-group-manager.js';
 import type { HubAuthManager } from './auth-manager.js';
 import { HubPermissionChecker, Permission } from './permission-checker.js';
 import { NetworkTopologyManager, type RouteEntry } from './network-topology-manager.js';
+
+// Import TypedRPCResponse type
+type TypedRPCResponse = hubedgeRpc.TypedRPCResponse;
 
 const logger = createLogger({ service: 'hub-control' });
 
@@ -163,11 +168,12 @@ export class HubControlService {
     });
 
     // Handle requests
-    this.server.on('request', (channel: RPCChannel, message: Message, respond: (result?: any, error?: any) => void) => {
-      if (message.method) {
-        this.typedServer.handleRequest(channel, { method: message.method, params: message.params }, respond);
+    this.server.on('request', (channel: RPCChannel, message: Message, respond: (result?: TypedRPCResponse, error?: { code: number; message: string }) => void) => {
+      if (message.params) {
+        this.typedServer.handleRequest(channel, message.params, respond);
       } else {
-        respond(undefined, { code: -32600, message: 'Invalid request: missing method' });
+        const { TypedRPCResponse } = require('@munode/protocol').hubedgeRpc;
+        respond(new TypedRPCResponse({}), { code: -32600, message: 'Invalid request: missing params' });
       }
     });
 
@@ -1850,119 +1856,55 @@ export class HubControlService {
   }
 
   private registerHandlers(): void {
-    // 注册所有类型安全的处理器
-    this.typedServer.handle('edge.register', async (channel, params) => {
-      return this.handleEdgeRegister(channel, params);
-    });
+    // 使用批量注册方式注册所有处理器（列表+循环模式）
+    const handlers = [
+      // Edge 核心操作
+      { method: 'edge.register', handler: (channel: RPCChannel, params: RPCParams<EdgeToHubMethods['method']>) => this.handleEdgeRegister(channel, params as RPCParams<'edge.register'>) },
+      { method: 'edge.heartbeat', handler: (channel: RPCChannel, params: RPCParams<EdgeToHubMethods['method']>) => this.handleEdgeHeartbeat(channel, params as RPCParams<'edge.heartbeat'>) },
+      { method: 'edge.allocateSessionId', handler: (channel: RPCChannel, params: RPCParams<EdgeToHubMethods['method']>) => this.handleAllocateSessionId(channel, params as RPCParams<'edge.allocateSessionId'>) },
+      { method: 'edge.authenticateUser', handler: (channel: RPCChannel, params: RPCParams<EdgeToHubMethods['method']>) => this.handleAuthenticateUser(channel, params as RPCParams<'edge.authenticateUser'>) },
+      { method: 'edge.reportSession', handler: (channel: RPCChannel, params: RPCParams<EdgeToHubMethods['method']>) => this.handleReportSession(channel, params as RPCParams<'edge.reportSession'>) },
+      
+      // VoiceTarget 同步
+      { method: 'edge.syncVoiceTarget', handler: (channel, params) => this.handleSyncVoiceTarget(channel, params as RPCParams<'edge.syncVoiceTarget'>) },
+      { method: 'edge.getVoiceTargets', handler: (channel, params) => this.handleGetVoiceTargets(channel, params as RPCParams<'edge.getVoiceTargets'>) },
+      { method: 'edge.routeVoice', handler: (channel, params) => this.handleRouteVoice(channel, params as RPCParams<'edge.routeVoice'>) },
+      
+      // 管理操作
+      { method: 'edge.adminOperation', handler: (channel, params) => this.handleAdminOperation(channel, params as RPCParams<'edge.adminOperation'>) },
+      { method: 'edge.exchangeCertificates', handler: (channel, params) => this.handleExchangeCertificates(channel, params as RPCParams<'edge.exchangeCertificates'>) },
+      
+      // 同步操作
+      { method: 'edge.fullSync', handler: (channel, params) => this.handleFullSync(channel, params as RPCParams<'edge.fullSync'>) },
+      { method: 'edge.getChannels', handler: (channel, params) => this.handleGetChannels(channel, params as RPCParams<'edge.getChannels'>) },
+      { method: 'edge.getACLs', handler: (channel, params) => this.handleGetACLs(channel, params as RPCParams<'edge.getACLs'>) },
+      { method: 'edge.saveChannel', handler: (channel, params) => this.handleSaveChannel(channel, params as RPCParams<'edge.saveChannel'>) },
+      { method: 'edge.saveACL', handler: (channel, params) => this.handleSaveACL(channel, params as RPCParams<'edge.saveACL'>) },
+      
+      // ACL 和权限
+      { method: 'edge.handleACL', handler: (channel, params) => this.handleACLRequest(channel, params as RPCParams<'edge.handleACL'>) },
+      { method: 'edge.handlePermissionQuery', handler: (channel, params) => this.handlePermissionQueryRequest(channel, params as RPCParams<'edge.handlePermissionQuery'>) },
+      
+      // 集群操作
+      { method: 'edge.join', handler: (channel, params) => this.handleEdgeJoin(channel, params as RPCParams<'edge.join'>) },
+      { method: 'edge.joinComplete', handler: (channel, params) => this.handleEdgeJoinComplete(channel, params as RPCParams<'edge.joinComplete'>) },
+      { method: 'edge.reportPeerDisconnect', handler: (channel, params) => this.handleEdgeReportPeerDisconnect(channel, params as RPCParams<'edge.reportPeerDisconnect'>) },
+      { method: 'edge.reportQuality', handler: (channel, params) => this.handleEdgeReportQuality(channel, params as { edge_id: number; target_edge_id: number; quality: { rtt: number; packetLoss: number; jitter: number; samples: number } }) },
+      { method: 'cluster.getStatus', handler: (channel, params) => this.handleGetClusterStatus(channel, params as RPCParams<'cluster.getStatus'>) },
+      
+      // Blob 存储
+      { method: 'blob.put', handler: (channel, params) => this.handleBlobPut(channel, params as RPCParams<'blob.put'>) },
+      { method: 'blob.get', handler: (channel, params) => this.handleBlobGet(channel, params as RPCParams<'blob.get'>) },
+      { method: 'blob.getUserTexture', handler: (channel, params) => this.handleGetUserTexture(channel, params as RPCParams<'blob.getUserTexture'>) },
+      { method: 'blob.getUserComment', handler: (channel, params) => this.handleGetUserComment(channel, params as RPCParams<'blob.getUserComment'>) },
+      { method: 'blob.setUserTexture', handler: (channel, params) => this.handleSetUserTexture(channel, params as RPCParams<'blob.setUserTexture'>) },
+      { method: 'blob.setUserComment', handler: (channel, params) => this.handleSetUserComment(channel, params as RPCParams<'blob.setUserComment'>) },
+    ];
 
-    this.typedServer.handle('edge.heartbeat', async (channel, params) => {
-      return this.handleEdgeHeartbeat(channel, params);
-    });
-
-    this.typedServer.handle('edge.allocateSessionId', async (channel, params) => {
-      return this.handleAllocateSessionId(channel, params);
-    });
-
-    this.typedServer.handle('edge.authenticateUser', async (channel, params) => {
-      return this.handleAuthenticateUser(channel, params);
-    });
-
-    this.typedServer.handle('edge.reportSession', async (channel, params) => {
-      return this.handleReportSession(channel, params);
-    });
-
-    this.typedServer.handle('edge.syncVoiceTarget', async (channel, params) => {
-      return this.handleSyncVoiceTarget(channel, params);
-    });
-
-    this.typedServer.handle('edge.getVoiceTargets', async (channel, params) => {
-      return this.handleGetVoiceTargets(channel, params);
-    });
-
-    this.typedServer.handle('edge.routeVoice', async (channel, params) => {
-      return this.handleRouteVoice(channel, params);
-    });
-
-    this.typedServer.handle('edge.adminOperation', async (channel, params) => {
-      return this.handleAdminOperation(channel, params);
-    });
-
-    this.typedServer.handle('edge.exchangeCertificates', async (channel, params) => {
-      return this.handleExchangeCertificates(channel, params);
-    });
-
-    this.typedServer.handle('edge.fullSync', async (channel, params) => {
-      return this.handleFullSync(channel, params);
-    });
-
-    this.typedServer.handle('edge.getChannels', async (channel, params) => {
-      return this.handleGetChannels(channel, params);
-    });
-
-    this.typedServer.handle('edge.getACLs', async (channel, params) => {
-      return this.handleGetACLs(channel, params);
-    });
-
-    this.typedServer.handle('edge.saveChannel', async (channel, params) => {
-      return this.handleSaveChannel(channel, params);
-    });
-
-    this.typedServer.handle('edge.saveACL', async (channel, params) => {
-      return this.handleSaveACL(channel, params);
-    });
-
-    this.typedServer.handle('edge.handleACL', async (channel, params) => {
-      return this.handleACLRequest(channel, params);
-    });
-
-    this.typedServer.handle('edge.handlePermissionQuery', async (channel, params) => {
-      return this.handlePermissionQueryRequest(channel, params);
-    });
-
-    this.typedServer.handle('edge.join', async (channel, params) => {
-      return this.handleEdgeJoin(channel, params);
-    });
-
-    this.typedServer.handle('edge.joinComplete', async (channel, params) => {
-      return this.handleEdgeJoinComplete(channel, params);
-    });
-
-    this.typedServer.handle('edge.reportPeerDisconnect', async (channel, params) => {
-      return this.handleEdgeReportPeerDisconnect(channel, params);
-    });
-
-    this.typedServer.handle('edge.reportQuality', async (channel, params) => {
-      return this.handleEdgeReportQuality(channel, params);
-    });
-
-    this.typedServer.handle('cluster.getStatus', async (channel, params) => {
-      return this.handleGetClusterStatus(channel, params);
-    });
-
-    // Blob 存储相关处理器
-    this.typedServer.handle('blob.put', async (channel, params) => {
-      return this.handleBlobPut(channel, params);
-    });
-
-    this.typedServer.handle('blob.get', async (channel, params) => {
-      return this.handleBlobGet(channel, params);
-    });
-
-    this.typedServer.handle('blob.getUserTexture', async (channel, params) => {
-      return this.handleGetUserTexture(channel, params);
-    });
-
-    this.typedServer.handle('blob.getUserComment', async (channel, params) => {
-      return this.handleGetUserComment(channel, params);
-    });
-
-    this.typedServer.handle('blob.setUserTexture', async (channel, params) => {
-      return this.handleSetUserTexture(channel, params);
-    });
-
-    this.typedServer.handle('blob.setUserComment', async (channel, params) => {
-      return this.handleSetUserComment(channel, params);
-    });
+    // 使用批量注册方法
+    this.typedServer.registerHandlers(handlers);
+    
+    logger.info(`Registered ${handlers.length} RPC handlers: ${handlers.map(h => h.method).join(', ')}`);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -2139,6 +2081,8 @@ export class HubControlService {
     }
 
     // 将RPC参数转换为GlobalSession对象
+    // Note: params.startTime may be a Date object or ISO string (from JSON serialization)
+    const startTime = params.startTime instanceof Date ? params.startTime : new Date(params.startTime);
     const session: GlobalSession = {
       session_id: params.session_id,
       edge_id: params.edge_server_id,
@@ -2148,7 +2092,7 @@ export class HubControlService {
       cert_hash: params.cert_hash || '',
       is_authenticated: true,
       channel_id: actualChannelId, // Use the adjusted channel
-      connected_at: Math.floor(params.startTime.getTime() / 1000),
+      connected_at: Math.floor(startTime.getTime() / 1000),
       last_active: Math.floor(Date.now() / 1000),
       groups: params.groups || [], // 传递用户组信息
       version: params.version,

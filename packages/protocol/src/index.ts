@@ -4,15 +4,8 @@ export { mumbleproto } from './generated/proto/Mumble.js';
 // Hub-Edge protocol types
 export { hubedge } from './generated/proto/HubEdge.js';
 
-// RPC layer - New Protobuf-based implementation
-export {
-  ProtobufRPCClient,
-} from './rpc/rpc-client.js';
-
-export {
-  ProtobufRPCServer,
-  type RPCHandler as ProtobufRPCHandler,
-} from './rpc/rpc-server.js';
+// Hub-Edge RPC types (typed protobuf messages)
+export { hubedge as hubedgeRpc } from './generated/proto/HubEdgeRPC.js';
 
 export {
   type EdgeToHubMethods as ProtobufEdgeToHubMethods,
@@ -146,7 +139,23 @@ export { ClientState } from './shared-types.js';
 
 // RPC Channel
 export { RPCChannel } from './rpc/rpc-channel.js';
-export type { Message, PendingRequest } from './rpc/rpc-channel.js';
+export type { 
+  Message, 
+  PendingRequest,
+  NotificationParams as ChannelNotificationParams,
+  VoiceDataParams,
+  ForceDisconnectParams,
+  PeerJoinedParams,
+  ACLResponseParams,
+  UserJoinedParams,
+  UserLeftParams,
+  UserMovedParams,
+  ChannelCreatedParams,
+  ChannelRemovedParams,
+  ChannelUpdatedParams,
+  SyncVoiceTargetParams,
+  ChannelDataInput,
+} from './rpc/rpc-channel.js';
 
 // Typed RPC (Legacy - will be deprecated)
 export { TypedRPCClient, createTypedRPCClient } from './rpc/typed-rpc-client.js';

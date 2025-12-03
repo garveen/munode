@@ -115,6 +115,13 @@ export class VoiceUDPTransport extends EventEmitter {
   }
 
   /**
+   * Get list of all registered remote Edge IDs
+   */
+  getRegisteredEdgeIds(): number[] {
+    return Array.from(this.remoteEndpoints.keys());
+  }
+
+  /**
    * 发送语音包到指定Edge
    */
   sendToEdge(edgeId: number, packet: VoicePacketHeader, voiceData: Buffer): void {

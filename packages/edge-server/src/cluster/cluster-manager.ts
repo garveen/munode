@@ -204,13 +204,17 @@ export class EdgeClusterManager {
       // 3. 发起 join 请求
       const joinRequest = {
          server_id: this.config.server_id,
-        serverName: this.config.name,
+        name: this.config.name,
+        host: this.config.network.host,
+        port: this.config.network.port,
+        voicePort: this.config.network.port + 1, // Voice port is main port + 1 by convention
+        capacity: this.config.capacity,
       };
 
       const joinResponse = await this.hubClient.call('edge.join', joinRequest);
 
       if (!joinResponse.success) {
-        throw new Error(`Join failed: ${joinResponse.error || 'Unknown error'}`);
+        throw new Error(`Join failed: ${(joinResponse as { error?: string }).error || 'Unknown error'}`);
       }
 
       this.logger.info(`Join request accepted, token: ${joinResponse.token}`);
