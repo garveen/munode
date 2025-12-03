@@ -205,19 +205,31 @@ export class MessageHandlers {
       const channelObj = this.factory.channelManager.getChannel(channel.id);
       const links = channelObj?.links || [];
 
-      const channelState = new mumbleproto.ChannelState({
+      // 构建 ChannelState，只在有链接时才包含 links 字段
+      const channelStateInit: any = {
         channel_id: channel.id,
         name: channel.name,
         description: channel.description || '',
         position: channel.position,
         temporary: channel.temporary,
         max_users: channel.max_users || 0,
-        links: links || [],
-        links_add: [], // 必须提供，但为空表示不添加
-        links_remove: [], // 必须提供，但为空表示不删除
         // 第一次：根频道(id=0)不设parent，其他频道parent都设为0
         parent: channel.id === 0 ? undefined : 0,
-      });
+      };
+      
+      // 只在有链接时才包含 links 字段
+      if (links.length > 0) {
+        channelStateInit.links = links;
+        channelStateInit.links_add = [];
+        channelStateInit.links_remove = [];
+      } else {
+        // 没有链接时，也要提供空数组以满足类型要求
+        channelStateInit.links = [];
+        channelStateInit.links_add = [];
+        channelStateInit.links_remove = [];
+      }
+
+      const channelState = new mumbleproto.ChannelState(channelStateInit);
 
       logger.debug(
         `[sendChannelTree] Pass 1: channel ${channel.id} (${channel.name}), parent=${channel.id === 0 ? 'undefined' : 0}`
