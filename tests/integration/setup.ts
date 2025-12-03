@@ -438,6 +438,14 @@ export async function startHubServer(configPath?: string, maxRetries: number = 3
         });
       });
 
+      // Add continuous logging after startup completes
+      hubProcess.stderr?.on('data', (data: Buffer) => {
+        const message = data.toString();
+        if (message.includes('CROSS-EDGE-DEBUG') || message.includes('BROADCAST') || message.includes('RPC-DEBUG') || message.includes('CONTROL-SERVICE-DEBUG')) {
+          console.error('[HUB-STDERR]', message.trim());
+        }
+      });
+
       return hubProcess;
     } catch (error) {
       lastError = error as Error;
@@ -519,6 +527,14 @@ export async function startEdgeServer(configPath?: string, port?: number, maxRet
             reject(new Error(`Edge process exited with code ${code}`));
           }
         });
+      });
+
+      // Add continuous logging after startup completes
+      edgeProcess.stderr?.on('data', (data: Buffer) => {
+        const message = data.toString();
+        if (message.includes('CROSS-EDGE-DEBUG') || message.includes('EDGE-DEBUG') || message.includes('BROADCAST') || message.includes('RPC-DEBUG')) {
+          console.error(`[EDGE-${port || 'unknown'}-STDERR]`, message.trim());
+        }
       });
 
       return edgeProcess;

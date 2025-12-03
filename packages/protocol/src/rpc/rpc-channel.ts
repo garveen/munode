@@ -214,6 +214,7 @@ export class RPCChannel extends EventEmitter {
    * Accepts either a TypedRPCNotification directly or plain object params
    */
   notify(method: string, params: hubedgeRpc.TypedRPCNotification | NotificationParams): void {
+    console.error(`[RPC-DEBUG] RPCChannel.notify called: method=${method}`);
     let notification: hubedgeRpc.TypedRPCNotification;
     
     // If params is already a TypedRPCNotification, use it directly
@@ -293,6 +294,7 @@ export class RPCChannel extends EventEmitter {
       }
       case 'hub.userJoined': {
         const p = params as UserJoinedParams;
+        console.error(`[NOTIFY-DEBUG] Creating hub.userJoined notification for user=${p.username}, session=${p.session_id}, edge=${p.edge_id}`);
         notificationData.user_joined = new HubUserJoinedParams({
           session_id: p.session_id,
           edge_id: p.edge_id,

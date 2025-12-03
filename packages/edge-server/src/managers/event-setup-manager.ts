@@ -485,6 +485,7 @@ export class EventSetupManager {
 
       // 监听来自Hub的所有通知消息（合并多个监听器）
       this.hubClient.on('notification', (message) => {
+        console.error(`[EDGE-DEBUG] Received notification method=${message.method}`);
         // 处理集群事件
         if (message.method === 'edge.peerJoined') {
           const data = message.params;
@@ -512,6 +513,7 @@ export class EventSetupManager {
         }
         // 处理用户事件
         else if (message.method === 'hub.userJoined') {
+          console.error(`[EDGE-DEBUG] Received hub.userJoined notification: ${JSON.stringify(message.params)}`);
           this.hubDataManager!.handleRemoteUserJoined(message.params);
         } else if (message.method === 'hub.userLeft') {
           this.hubDataManager!.handleRemoteUserLeft(message.params);

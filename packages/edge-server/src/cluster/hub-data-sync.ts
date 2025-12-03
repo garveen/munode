@@ -101,6 +101,11 @@ export class HubDataManager {
    */
   handleRemoteUserJoined(params: any): void {
     try {
+      const thisEdgeId = this.handlerFactory.config.server_id;
+      const fs = require('fs');
+      fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] EDGE ${thisEdgeId} received userJoined: ${params.username} (session=${params.session_id}, from_edge=${params.edge_id})\n`);
+      
+      logger.info(`[CROSS-EDGE-DEBUG] Edge ${thisEdgeId} received userJoined: ${params.username} (session=${params.session_id}, from_edge=${params.edge_id})`);
       logger.info(`Remote user joined: ${params.username} (session ${params.session_id}) from Edge ${params.edge_id}`);
 
       // 不要处理来自本Edge的用户
@@ -112,6 +117,10 @@ export class HubDataManager {
 
       // 广播给所有本地已认证的客户端
       const allClients = this.handlerFactory.clientManager.getAllClients();
+      const clientsWithFullList = allClients.filter(c => c.user_id > 0 && c.has_full_user_list);
+      fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] EDGE ${thisEdgeId} has ${allClients.length} local clients, ${clientsWithFullList.length} with full user list: ${JSON.stringify(clientsWithFullList.map(c => ({u: c.username, s: c.session})))}\n`);
+      
+      logger.info(`[CROSS-EDGE-DEBUG] Edge ${thisEdgeId} has ${allClients.length} local clients, ${allClients.filter(c => c.user_id > 0 && c.has_full_user_list).length} with full user list`);
       let broadcastCount = 0;
       
       for (const client of allClients) {

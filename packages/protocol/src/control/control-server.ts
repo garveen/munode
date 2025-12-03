@@ -62,6 +62,7 @@ export class ControlChannelServer extends EventEmitter {
    * 使用 Promise.allSettled 确保单个 Edge 失败不影响其他 Edge
    */
   async broadcast(method: string, params?: any): Promise<void> {
+    console.error(`[BROADCAST-DEBUG] Broadcasting method=${method} to ${this.channels.size} channels`);
     const promises = Array.from(this.channels.values()).map(channel => 
       Promise.resolve().then(() => {
         try {

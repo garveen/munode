@@ -2106,8 +2106,19 @@ export class HubControlService {
     // 上报会话
     this._sessionManager.reportSession(session);
     
+    // Debug logging  
+    console.error(`[CROSS-EDGE-DEBUG] HUB reportSession: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id}, user_id=${params.user_id})`);
+    try {
+      const fs = require('fs');
+      fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] HUB reportSession: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id}, user_id=${params.user_id})\n`);
+    } catch (e) {}
+    
+    logger.info(`[CROSS-EDGE-DEBUG] Session reported: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id}, user_id=${params.user_id})`);
+    
     // Handle ninja channel visibility for the userJoined broadcast
+    console.error(`[CROSS-EDGE-DEBUG] channelNinja=${this.config.channelNinja}, ninjaChannels=${this._ninjaChannels.size}, hasPermissionChecker=${!!this._permissionChecker}`);
     if (this.config.channelNinja && this._ninjaChannels.size > 0 && this._permissionChecker) {
+      console.error(`[CROSS-EDGE-DEBUG] Using ninja channel filtering for ${params.username}`);
       // Filter which existing users should see this new user
       const allSessions = this._sessionManager.getAllSessions();
       const visibleToSessions = new Map<number, number[]>(); // edge_id -> session_ids
@@ -2176,14 +2187,26 @@ export class HubControlService {
     } else {
       // 广播新用户加入通知到所有Edge（包括发起者）
       // Edge通过edge_id判断是否需要过滤（不要处理来自自己Edge的用户）
-      this.broadcast('hub.userJoined', {
-        session_id: params.session_id,
-        edge_id: params.edge_server_id,
-        user_id: params.user_id,
-        username: params.username,
-        channel_id: actualChannelId,
-        cert_hash: session.cert_hash,
-      });
+      console.error(`[CROSS-EDGE-DEBUG] Broadcasting userJoined (no ninja) to ${this.edgeChannels.size} edges: ${params.username}`);
+      const fs = require('fs');
+      fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] HUB broadcasting userJoined to ${this.edgeChannels.size} edges: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id})\n`);
+      
+      logger.info(`[CROSS-EDGE-DEBUG] Broadcasting userJoined to ${this.edgeChannels.size} edges: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id})`);
+      
+      console.error(`[PRE-BROADCAST] About to call this.broadcast for hub.userJoined`);
+      try {
+        this.broadcast('hub.userJoined', {
+          session_id: params.session_id,
+          edge_id: params.edge_server_id,
+          user_id: params.user_id,
+          username: params.username,
+          channel_id: actualChannelId,
+          cert_hash: session.cert_hash,
+        });
+        console.error(`[POST-BROADCAST] this.broadcast called successfully`);
+      } catch (e) {
+        console.error(`[BROADCAST-ERROR]`, e);
+      }
       
       logger.info(`Session ${params.session_id} reported from Edge ${params.edge_server_id}, broadcasted to all edges`);
     }
@@ -2355,6 +2378,11 @@ export class HubControlService {
 
     // 获取所有会话（从内存中的 sessionManager 获取当前活跃会话）
     let sessions: GlobalSession[] = this._sessionManager.getAllSessions();
+    
+    const fs = require('fs');
+    fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] HUB fullSync for user_id=${params.for_user_id}, returning ${sessions.length} sessions: ${JSON.stringify(sessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}\n`);
+    
+    logger.info(`[CROSS-EDGE-DEBUG] fullSync called for user_id=${params.for_user_id}, returning ${sessions.length} sessions: ${JSON.stringify(sessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}`);
     
     // If ninja channels are configured and user info is provided, filter sessions
     const channelNinjaEnabled = this.config.channelNinja ?? false;
@@ -3184,8 +3212,10 @@ export class HubControlService {
    * 使用 Promise.allSettled 确保单个 Edge 失败不影响其他 Edge
    */
   broadcast(method: string, params?: any): void {
+    console.error(`[CONTROL-SERVICE-DEBUG] broadcast() called for method=${method}`);
     // Fire and forget - 不等待广播完成
     void this.server.broadcast(method, params);
+    console.error(`[CONTROL-SERVICE-DEBUG] this.server.broadcast() called`);
   }
 
   /**
