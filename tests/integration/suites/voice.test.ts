@@ -37,7 +37,10 @@ interface ChannelInfo {
   channel_id: number;
   name: string;
   parent?: number;
-  [key: string]: unknown;
+  links?: number[];
+  description?: string;
+  position?: number;
+  temporary?: boolean;
 }
 
 /**
