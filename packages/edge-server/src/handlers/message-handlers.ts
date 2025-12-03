@@ -287,6 +287,11 @@ export class MessageHandlers {
         });
         const allSessions = syncData.sessions || [];
         
+        const fs = require('fs');
+        fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] EDGE ${this.config.server_id} Client ${receiverClient.username} (session=${session_id}) received ${allSessions.length} sessions from fullSync\n`);
+        
+        logger.info(`[CROSS-EDGE-DEBUG] Client ${receiverClient.username} (session=${session_id}) received ${allSessions.length} sessions from fullSync: ${JSON.stringify(allSessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}`);
+        
         let sentCount = 0;
         for (const session of allSessions) {
           // 发送所有其他已认证用户的状态（不包括自己）

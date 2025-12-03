@@ -302,30 +302,41 @@ export class ProtocolHandlers {
       logger.debug(`Set voice target ${voiceTarget.id} for session ${session_id}: ${voiceTarget.targets.length} targets`);
       
       // 向 Hub 同步 VoiceTarget 配置
-      // 重要：将protobuf对象转换为纯JSON，避免依赖内部字段（f、u等非公开API）
+      // 将Mumble protocol格式转换为Hub-Edge proto格式
       if (this.hubClient) {
-        // 提取targets为纯JSON数组
-        // 注意：只有当 channel_id 被显式设置时才包含它（使用 has_channel_id 检查）
-        const normalizedTargets = voiceTarget.targets.map(target => {
-          const normalized: any = {
-            session: target.session || [],
-            group: target.group,
-            links: target.links,
-            children: target.children
-          };
-          // 只有当 channel_id 被显式设置时才包含它
-          if (target.has_channel_id) {
-            normalized.channel_id = target.channel_id;
+        // 收集所有session targets和channel targets
+        const sessions: number[] = [];
+        const channels: Array<{
+          channel_id: number;
+          include_subchannels: boolean;
+          include_links: boolean;
+          group?: string;
+        }> = [];
+        
+        for (const target of voiceTarget.targets) {
+          // 如果有session数组，添加到sessions
+          if (target.session && target.session.length > 0) {
+            sessions.push(...target.session);
           }
-          return normalized;
-        });
+          
+          // 如果有channel_id，添加到channels
+          if (target.has_channel_id) {
+            channels.push({
+              channel_id: target.channel_id!,
+              include_subchannels: !!target.children,
+              include_links: !!target.links,
+              group: target.group,
+            });
+          }
+        }
         
         this.hubClient.syncVoiceTarget({
           client_session: session_id,
           target_id: voiceTarget.id,
           config: {
             id: voiceTarget.id,
-            targets: normalizedTargets
+            sessions,
+            channels,
           },
           timestamp: Date.now(),
         }).catch((err) => {
