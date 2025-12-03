@@ -125,6 +125,7 @@ interface NotificationDataType {
   channel_removed?: hubedgeRpc.HubChannelRemovedParams;
   channel_updated?: hubedgeRpc.HubChannelUpdatedParams;
   sync_voice_target?: hubedgeRpc.HubSyncVoiceTargetParams;
+  unknown_params_json?: string;
 }
 
 // ============================================================================
@@ -361,7 +362,8 @@ export class RPCChannel extends EventEmitter {
         break;
       }
       default:
-        // For unknown methods, just set method and timestamp
+        // For unknown methods, store params as JSON
+        notificationData.unknown_params_json = JSON.stringify(params);
         break;
     }
 
@@ -645,7 +647,14 @@ export class RPCChannel extends EventEmitter {
         }
         break;
       default:
-        // For unknown methods, params will be undefined
+        // For unknown methods, try to parse from unknown_params_json
+        if (typedNotification.unknown_params_json) {
+          try {
+            result.params = JSON.parse(typedNotification.unknown_params_json);
+          } catch (error) {
+            console.warn(`Failed to parse unknown_params_json for method ${typedNotification.method}:`, error);
+          }
+        }
         break;
     }
 

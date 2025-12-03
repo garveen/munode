@@ -818,4 +818,7 @@ message TypedRPCNotification {
   optional HubChannelRemovedParams channel_removed = 18;
   optional HubChannelUpdatedParams channel_updated = 19;
   optional HubSyncVoiceTargetParams sync_voice_target = 20;
+  
+  // For unknown notification types, store params as JSON string
+  optional string unknown_params_json = 99;
 }
