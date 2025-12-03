@@ -259,14 +259,14 @@ export class RPCChannel extends EventEmitter {
         });
         break;
       }
-      case 'hub.forceDisconnect': {
+      case 'edge.forceDisconnect': {
         const p = params as ForceDisconnectParams;
         notificationData.force_disconnect = new HubForceDisconnectParams({
           reason: p.reason,
         });
         break;
       }
-      case 'hub.peerJoined': {
+      case 'edge.peerJoined': {
         const p = params as PeerJoinedParams;
         notificationData.peer_joined = new HubPeerJoinedParams({
           id: p.id,
@@ -522,8 +522,134 @@ export class RPCChannel extends EventEmitter {
       return;
     }
 
-    // Emit notification event with the typed notification object
-    this.emit('notification', packet.rpc_notification);
+    // Convert typed notification to simple format for backward compatibility
+    const notification = this.convertNotificationToSimple(packet.rpc_notification);
+    
+    // Emit notification event with the converted object
+    this.emit('notification', notification);
+  }
+
+  /**
+   * Convert TypedRPCNotification to simple format with method and params
+   */
+  private convertNotificationToSimple(typedNotification: hubedgeRpc.TypedRPCNotification): { method: string; params?: any } {
+    const result: { method: string; params?: any } = {
+      method: typedNotification.method,
+    };
+
+    // Extract params from the appropriate field based on method
+    switch (typedNotification.method) {
+      case 'hub.voiceData':
+        if (typedNotification.voice_data) {
+          result.params = {
+            fromSessionId: typedNotification.voice_data.from_session_id,
+            targetSessionId: typedNotification.voice_data.target_session_id,
+            voiceData: typedNotification.voice_data.voice_data,
+            timestamp: typedNotification.voice_data.timestamp,
+          };
+        }
+        break;
+      case 'edge.forceDisconnect':
+        if (typedNotification.force_disconnect) {
+          result.params = {
+            reason: typedNotification.force_disconnect.reason,
+          };
+        }
+        break;
+      case 'edge.peerJoined':
+        if (typedNotification.peer_joined) {
+          result.params = {
+            id: typedNotification.peer_joined.id,
+            name: typedNotification.peer_joined.name,
+            host: typedNotification.peer_joined.host,
+            port: typedNotification.peer_joined.port,
+            voicePort: typedNotification.peer_joined.voice_port,
+          };
+        }
+        break;
+      case 'hub.aclResponse':
+        if (typedNotification.acl_response) {
+          result.params = {
+            edge_id: typedNotification.acl_response.edge_id,
+            actor_session: typedNotification.acl_response.actor_session,
+            success: typedNotification.acl_response.success,
+            channel_id: typedNotification.acl_response.channel_id,
+            raw_data: typedNotification.acl_response.raw_data ? new TextDecoder().decode(typedNotification.acl_response.raw_data) : undefined,
+            error: typedNotification.acl_response.error,
+            permission_denied: typedNotification.acl_response.permission_denied,
+          };
+        }
+        break;
+      case 'hub.userJoined':
+        if (typedNotification.user_joined) {
+          result.params = {
+            session_id: typedNotification.user_joined.session_id,
+            edge_id: typedNotification.user_joined.edge_id,
+            user_id: typedNotification.user_joined.user_id,
+            username: typedNotification.user_joined.username,
+            channel_id: typedNotification.user_joined.channel_id,
+            groups: typedNotification.user_joined.groups,
+            cert_hash: typedNotification.user_joined.cert_hash,
+          };
+        }
+        break;
+      case 'hub.userLeft':
+        if (typedNotification.user_left) {
+          result.params = {
+            session_id: typedNotification.user_left.session_id,
+            edge_id: typedNotification.user_left.edge_id,
+            reason: typedNotification.user_left.reason,
+          };
+        }
+        break;
+      case 'hub.userMoved':
+        if (typedNotification.user_moved) {
+          result.params = {
+            session_id: typedNotification.user_moved.session_id,
+            edge_id: typedNotification.user_moved.edge_id,
+            channel_id: typedNotification.user_moved.channel_id,
+            actor_session: typedNotification.user_moved.actor_session,
+          };
+        }
+        break;
+      case 'hub.channelCreated':
+        if (typedNotification.channel_created && typedNotification.channel_created.channel) {
+          result.params = {
+            channel: typedNotification.channel_created.channel,
+          };
+        }
+        break;
+      case 'hub.channelRemoved':
+        if (typedNotification.channel_removed) {
+          result.params = {
+            channel_id: typedNotification.channel_removed.channel_id,
+          };
+        }
+        break;
+      case 'hub.channelUpdated':
+        if (typedNotification.channel_updated && typedNotification.channel_updated.channel) {
+          result.params = {
+            channel: typedNotification.channel_updated.channel,
+          };
+        }
+        break;
+      case 'hub.syncVoiceTarget':
+        if (typedNotification.sync_voice_target) {
+          result.params = {
+            edge_id: typedNotification.sync_voice_target.edge_id,
+            client_session: typedNotification.sync_voice_target.client_session,
+            target_id: typedNotification.sync_voice_target.target_id,
+            config: typedNotification.sync_voice_target.config_json,
+            timestamp: typedNotification.sync_voice_target.timestamp,
+          };
+        }
+        break;
+      default:
+        // For unknown methods, params will be undefined
+        break;
+    }
+
+    return result;
   }
 
   private handleHeartbeat(packet: hubedge.EdgeHubPacket): void {
