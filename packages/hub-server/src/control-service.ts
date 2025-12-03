@@ -1,5 +1,6 @@
 import { createLogger, BlobStore } from '@munode/common';
 import { createHash } from 'crypto';
+import * as fs from 'fs';
 import {
   ControlChannelServer,
   ControlChannelConfig,
@@ -2109,7 +2110,6 @@ export class HubControlService {
     // Debug logging  
     console.error(`[CROSS-EDGE-DEBUG] HUB reportSession: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id}, user_id=${params.user_id})`);
     try {
-      const fs = require('fs');
       fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] HUB reportSession: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id}, user_id=${params.user_id})\n`);
     } catch (e) {}
     
@@ -2373,7 +2373,7 @@ export class HubControlService {
     const channels: ChannelData[] = dbChannels.map((ch) => ({
       id: ch.id,
       name: ch.name,
-      parent_id: ch.parent_id,
+      parent_id: ch.parent_id >= 0 ? ch.parent_id : undefined, // Skip negative parent_ids (root channel)
       position: ch.position,
       max_users: ch.max_users,
       inherit_acl: ch.inherit_acl,
@@ -2385,8 +2385,11 @@ export class HubControlService {
     // 获取所有会话（从内存中的 sessionManager 获取当前活跃会话）
     let sessions: GlobalSession[] = this._sessionManager.getAllSessions();
     
-    const fs = require('fs');
-    fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] HUB fullSync for user_id=${params.for_user_id}, returning ${sessions.length} sessions: ${JSON.stringify(sessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}\n`);
+    try {
+      fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] HUB fullSync for user_id=${params.for_user_id}, returning ${sessions.length} sessions: ${JSON.stringify(sessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}\n`);
+    } catch (e) {
+      logger.warn('Failed to write to debug log:', e);
+    }
     
     logger.info(`[CROSS-EDGE-DEBUG] fullSync called for user_id=${params.for_user_id}, returning ${sessions.length} sessions: ${JSON.stringify(sessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}`);
     
@@ -2445,7 +2448,7 @@ export class HubControlService {
     const acls: ACLData[] = dbAcls.map((acl) => ({
       id: acl.id,
       channel_id: acl.channel_id,
-      user_id: acl.user_id,
+      user_id: acl.user_id !== undefined && acl.user_id >= 0 ? acl.user_id : undefined, // Skip negative user_ids
       group: acl.group,
       apply_here: acl.apply_here,
       apply_subs: acl.apply_subs,

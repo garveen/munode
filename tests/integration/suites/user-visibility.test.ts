@@ -162,12 +162,14 @@ describe('User Visibility Integration Tests', () => {
       const usersOnEdge2 = clientEdge2.getUsers();
       
       const edge1UserVisible = usersOnEdge2.some(u => u.name === 'sender_edge1');
-      expect(edge1UserVisible).toBe(true);
       
       // Edge 1 上的用户也应该能看到 Edge 2 上的用户
       const usersOnEdge1 = clientEdge1.getUsers();
       
       const edge2UserVisible = usersOnEdge1.some(u => u.name === 'sender_edge2');
+      
+      // Test both to see which one fails
+      expect(edge1UserVisible).toBe(true);
       expect(edge2UserVisible).toBe(true);
       
       // 清理
