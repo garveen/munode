@@ -439,6 +439,12 @@ export async function startHubServer(configPath?: string, maxRetries: number = 3
       });
 
       // Add continuous logging after startup completes
+      hubProcess.stdout?.on('data', (data: Buffer) => {
+        const message = data.toString();
+        if (message.includes('CROSS-EDGE-DEBUG') || message.includes('BROADCAST') || message.includes('RPC-DEBUG') || message.includes('CONTROL-SERVICE-DEBUG')) {
+          console.error('[HUB-STDOUT]', message.trim());
+        }
+      });
       hubProcess.stderr?.on('data', (data: Buffer) => {
         const message = data.toString();
         if (message.includes('CROSS-EDGE-DEBUG') || message.includes('BROADCAST') || message.includes('RPC-DEBUG') || message.includes('CONTROL-SERVICE-DEBUG')) {

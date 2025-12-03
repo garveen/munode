@@ -2188,12 +2188,13 @@ export class HubControlService {
       // 广播新用户加入通知到所有Edge（包括发起者）
       // Edge通过edge_id判断是否需要过滤（不要处理来自自己Edge的用户）
       console.error(`[CROSS-EDGE-DEBUG] Broadcasting userJoined (no ninja) to ${this.edgeChannels.size} edges: ${params.username}`);
-      const fs = require('fs');
-      fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] HUB broadcasting userJoined to ${this.edgeChannels.size} edges: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id})\n`);
+      process.stderr.write(`[STDERR-DIRECT] About to broadcast userJoined for ${params.username}\n`);
       
       logger.info(`[CROSS-EDGE-DEBUG] Broadcasting userJoined to ${this.edgeChannels.size} edges: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id})`);
       
+      process.stderr.write(`[DIRECT] Before console.error\n`);
       console.error(`[PRE-BROADCAST] About to call this.broadcast for hub.userJoined`);
+      process.stderr.write(`[DIRECT] Calling this.broadcast now\n`);
       try {
         this.broadcast('hub.userJoined', {
           session_id: params.session_id,
@@ -2203,10 +2204,15 @@ export class HubControlService {
           channel_id: actualChannelId,
           cert_hash: session.cert_hash,
         });
+        process.stderr.write(`[DIRECT] broadcast returned\n`);
         console.error(`[POST-BROADCAST] this.broadcast called successfully`);
+        process.stderr.write(`[STDERR-DIRECT] broadcast completed\n`);
       } catch (e) {
+        process.stderr.write(`[DIRECT] broadcast threw error: ${e}\n`);
         console.error(`[BROADCAST-ERROR]`, e);
+        process.stderr.write(`[STDERR-DIRECT] broadcast error: ${e}\n`);
       }
+      process.stderr.write(`[DIRECT] After broadcast try-catch\n`);
       
       logger.info(`Session ${params.session_id} reported from Edge ${params.edge_server_id}, broadcasted to all edges`);
     }
