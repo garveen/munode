@@ -110,9 +110,12 @@ async function clearAllChannelLinks(adminClient: MumbleClient, channels: Channel
 async function createAdminClient(testEnv: TestEnvironment, edge: 1 | 2 = 1): Promise<MumbleClient> {
   const admin = new MumbleClient();
   const port = edge === 1 ? testEnv.edgePort : testEnv.edgePort2;
+  // UDP port is the same as TCP port for client-to-Edge communication
+  const udpPort = port;
   await admin.connect({
     host: 'localhost',
     port: port,
+    udpPort: udpPort,
     username: 'admin',
     password: 'admin123',
     rejectUnauthorized: false,
@@ -158,10 +161,13 @@ async function createClients(testEnv: TestEnvironment, configs: ClientConfig[]):
   await Promise.all(configs.map(async (config, index) => {
     const client = new MumbleClient();
     const targetPort = config.edge === 1 ? testEnv.edgePort : testEnv.edgePort2;
-    console.log(`[TEST] Connecting ${config.username} to Edge ${config.edge} on port ${targetPort}`);
+    // UDP port is the same as TCP port for client-to-Edge communication
+    const targetUdpPort = targetPort;
+    console.log(`[TEST] Connecting ${config.username} to Edge ${config.edge} on port ${targetPort} (UDP: ${targetUdpPort})`);
     await client.connect({
       host: 'localhost',
       port: targetPort,
+      udpPort: targetUdpPort,
       username: config.username,
       password: config.password,
       rejectUnauthorized: false,
