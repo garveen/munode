@@ -173,8 +173,7 @@ export class HubControlService {
       if (message.params) {
         this.typedServer.handleRequest(channel, message.params, respond);
       } else {
-        const { TypedRPCResponse } = require('@munode/protocol').hubedgeRpc;
-        respond(new TypedRPCResponse({}), { code: -32600, message: 'Invalid request: missing params' });
+        respond(new hubedgeRpc.TypedRPCResponse({ request_id: message.id || '' }), { code: -32600, message: 'Invalid request: missing params' });
       }
     });
 
