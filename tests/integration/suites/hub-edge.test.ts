@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestEnvironment, setupTestEnvironment } from '../setup';
 import { MumbleClient } from '../../../packages/client/src/index.js';
+import type { UserState } from '../../../packages/protocol/src/index.js';
 
 describe('Hub-Edge Communication Integration Tests', () => {
   let testEnv: TestEnvironment;
@@ -150,7 +151,7 @@ describe('Hub-Edge Communication Integration Tests', () => {
         
         // 等待频道切换完成
         const channelChanged = new Promise<void>((resolve) => {
-          client.on('userState', (userState: any) => {
+          client.on('userState', (userState: UserState) => {
             if (userState.channel_id === targetChannel.channel_id) {
               resolve();
             }

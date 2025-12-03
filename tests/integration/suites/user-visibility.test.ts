@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestEnvironment, setupTestEnvironment } from '../setup';
 import { MumbleClient } from '../../../packages/client/src/index.js';
+import type { UserState } from '../../../packages/protocol/src/index.js';
 
 // Helper function for async delays
 function sleep(ms: number): Promise<void> {
@@ -161,12 +162,14 @@ describe('User Visibility Integration Tests', () => {
       const usersOnEdge2 = clientEdge2.getUsers();
       
       const edge1UserVisible = usersOnEdge2.some(u => u.name === 'sender_edge1');
-      expect(edge1UserVisible).toBe(true);
       
       // Edge 1 上的用户也应该能看到 Edge 2 上的用户
       const usersOnEdge1 = clientEdge1.getUsers();
       
       const edge2UserVisible = usersOnEdge1.some(u => u.name === 'sender_edge2');
+      
+      // Test both to see which one fails
+      expect(edge1UserVisible).toBe(true);
       expect(edge2UserVisible).toBe(true);
       
       // 清理
@@ -204,7 +207,7 @@ describe('User Visibility Integration Tests', () => {
       
       // 监听用户状态更新
       let userStateReceived = false;
-      client1.on('userState', (userState: any) => {
+      client1.on('userState', (userState: UserState) => {
         if (userState.session === client2Session && userState.self_mute !== undefined) {
           userStateReceived = true;
         }

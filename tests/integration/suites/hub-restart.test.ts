@@ -102,11 +102,13 @@ describe('Hub Restart User Sync Tests', () => {
       const hubConfigSourcePath = join(PROJECT_ROOT, 'tests/config/hub-test.js');
       const hubConfigModule = await import(`file://${hubConfigSourcePath}?v=${Date.now()}`);
       const hubConfig = { ...(hubConfigModule.default || hubConfigModule) };
-      hubConfig.port = TEST_BASE_PORT + 1000;
-      hubConfig.controlPort = TEST_BASE_PORT + 3000;
-      hubConfig.webApi.port = TEST_BASE_PORT + 100;
+      hubConfig.port = testEnv.hubPort;
+      hubConfig.controlPort = testEnv.hubPort + 1;
+      hubConfig.webApi = hubConfig.webApi || {};
+      hubConfig.webApi.port = testEnv.hubPort + 2;
+      hubConfig.voicePort = testEnv.hubPort + 3;
       hubConfig.auth = hubConfig.auth || {};
-      hubConfig.auth.apiUrl = `http://127.0.0.1:${TEST_BASE_PORT}/auth`;
+      hubConfig.auth.apiUrl = `http://127.0.0.1:${testEnv.authPort}/auth`;
       fs.writeFileSync(hubConfigPath, `export default ${JSON.stringify(hubConfig, null, 2)};`);
     }
     

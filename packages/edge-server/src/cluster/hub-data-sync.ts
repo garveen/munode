@@ -4,6 +4,7 @@ import { mumbleproto } from '@munode/protocol';
 import { HandlerFactory } from '../core/handler-factory.js';
 import { EdgeControlClient } from './hub-client.js';
 import { ChannelInfo } from '../types.js';
+import * as fs from 'fs';
 
 /**
  * Hub数据管理器
@@ -102,7 +103,6 @@ export class HubDataManager {
   handleRemoteUserJoined(params: any): void {
     try {
       const thisEdgeId = this.handlerFactory.config.server_id;
-      const fs = require('fs');
       fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] EDGE ${thisEdgeId} received userJoined: ${params.username} (session=${params.session_id}, from_edge=${params.edge_id})\n`);
       
       logger.info(`[CROSS-EDGE-DEBUG] Edge ${thisEdgeId} received userJoined: ${params.username} (session=${params.session_id}, from_edge=${params.edge_id})`);
