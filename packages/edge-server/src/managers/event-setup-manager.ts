@@ -434,10 +434,34 @@ export class EventSetupManager {
           // 删除 VoiceTarget
           logger.info(`Removing VoiceTarget: session=${params.client_session}, target=${params.target_id}`);
           this.handlerFactory.voiceRouter.removeVoiceTarget(params.client_session, params.target_id);
-        } else if (params.config && params.config.targets) {
-          // params.config 已经是规范化的纯JSON对象（由发送端Edge规范化）
-          // 直接使用 config.targets，不需要访问protobuf内部字段
-          const targets = params.config.targets;
+        } else if (params.config) {
+          // 将Hub-Edge格式转换回Mumble protocol格式
+          // Hub-Edge格式: { sessions: VoiceTargetSession[], channels: ChannelTarget[] }
+          // Mumble格式: targets数组，每个target有session/channel_id/links/children/group
+          const targets: any[] = [];
+          
+          // 转换sessions - 从VoiceTargetSession对象数组提取session ID
+          if (params.config.sessions && params.config.sessions.length > 0) {
+            const sessionIds = params.config.sessions.map((s: any) => s.session);
+            targets.push({
+              session: sessionIds,
+              has_channel_id: false,
+            });
+          }
+          
+          // 转换channels
+          if (params.config.channels && params.config.channels.length > 0) {
+            for (const channel of params.config.channels) {
+              targets.push({
+                session: [],
+                has_channel_id: true,
+                channel_id: channel.channel_id,
+                children: channel.include_subchannels || false,
+                links: channel.include_links || false,
+                group: channel.group,
+              });
+            }
+          }
           
           if (targets.length > 0) {
             logger.info(`Setting VoiceTarget: session=${params.client_session}, target=${params.target_id}, targets count=${targets.length}`);

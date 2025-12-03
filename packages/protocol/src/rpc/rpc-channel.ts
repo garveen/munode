@@ -637,11 +637,22 @@ export class RPCChannel extends EventEmitter {
         break;
       case 'hub.syncVoiceTarget':
         if (typedNotification.sync_voice_target) {
+          // Parse config_json back to object if it's a string
+          let config = typedNotification.sync_voice_target.config_json;
+          if (typeof config === 'string') {
+            try {
+              config = JSON.parse(config);
+            } catch (error) {
+              console.warn('Failed to parse config_json:', error);
+              config = null;
+            }
+          }
+          
           result.params = {
             edge_id: typedNotification.sync_voice_target.edge_id,
             client_session: typedNotification.sync_voice_target.client_session,
             target_id: typedNotification.sync_voice_target.target_id,
-            config: typedNotification.sync_voice_target.config_json,
+            config: config,
             timestamp: typedNotification.sync_voice_target.timestamp,
           };
         }
