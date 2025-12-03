@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestEnvironment, setupTestEnvironment } from '../setup';
 import { MumbleClient } from '../../../packages/client/src/index.js';
+import type { UserState } from '../../../packages/protocol/src/index.js';
 
 // Helper function for async delays
 function sleep(ms: number): Promise<void> {
@@ -204,7 +205,7 @@ describe('User Visibility Integration Tests', () => {
       
       // 监听用户状态更新
       let userStateReceived = false;
-      client1.on('userState', (userState: any) => {
+      client1.on('userState', (userState: UserState) => {
         if (userState.session === client2Session && userState.self_mute !== undefined) {
           userStateReceived = true;
         }

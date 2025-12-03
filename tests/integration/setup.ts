@@ -666,7 +666,6 @@ export async function setupTestEnvironment(
         console.log('Initializing test database...');
         const initScript = join(PROJECT_ROOT, 'scripts/init-test-db.ts');
         if (fs.existsSync(initScript)) {
-          const { spawn } = require('child_process');
           const initProcess = spawn('tsx', [initScript], {
             stdio: 'inherit',
             cwd: PROJECT_ROOT,
