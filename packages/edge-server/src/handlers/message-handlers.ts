@@ -183,7 +183,7 @@ export class MessageHandlers {
         temporary: ch.temporary || false,
         inherit_acl: ch.inheritAcl !== false, // 默认 true
         children: [],
-        links: [],
+        links: ch.links || [],
       }));
       logger.info(
         `[sendChannelTree] Cluster mode: sending ${channels.length} channels from stateManager to session ${session_id}`
@@ -213,8 +213,8 @@ export class MessageHandlers {
         temporary: channel.temporary,
         max_users: channel.max_users || 0,
         links: links || [],
-        links_add: [],
-        links_remove: [],
+        links_add: [], // 必须提供，但为空表示不添加
+        links_remove: [], // 必须提供，但为空表示不删除
         // 第一次：根频道(id=0)不设parent，其他频道parent都设为0
         parent: channel.id === 0 ? undefined : 0,
       });
@@ -246,8 +246,8 @@ export class MessageHandlers {
         position: channel.position,
         temporary: channel.temporary,
         links: currentLinks || [], // 保留现有links
-        links_add: [],
-        links_remove: [],
+        links_add: [], // 必须提供，但为空表示不添加
+        links_remove: [], // 必须提供，但为空表示不删除
       });
 
       logger.debug(
