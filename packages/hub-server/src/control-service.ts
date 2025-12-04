@@ -277,6 +277,8 @@ export class HubControlService {
       const broadcastUserState: any = {
         session: targetSession,
         actor: actor_session,
+        name: targetGlobalSession.username,
+        user_id: targetGlobalSession.user_id,
       };
 
       // 设置actor字段（保留在原对象中用于后续处理）
