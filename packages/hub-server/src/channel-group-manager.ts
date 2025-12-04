@@ -1,6 +1,5 @@
 import { createLogger } from '@munode/common';
 import type { HubDatabase } from './database.js';
-import type { SyncBroadcaster } from './sync-broadcaster.js';
 
 const logger = createLogger({ service: 'hub-channel-group-manager' });
 
@@ -63,12 +62,10 @@ export interface FullChannelGroupInfo extends ChannelGroupData {
  */
 export class ChannelGroupManager {
   private database: HubDatabase;
-  private syncBroadcaster: SyncBroadcaster;
   private channelGroupCache: Map<number, Map<string, FullChannelGroupInfo>> = new Map(); // channel_id -> channel_group_name -> ChannelGroupInfo
 
-  constructor(database: HubDatabase, syncBroadcaster: SyncBroadcaster) {
+  constructor(database: HubDatabase) {
     this.database = database;
-    this.syncBroadcaster = syncBroadcaster;
   }
 
   /**
@@ -149,10 +146,6 @@ export class ChannelGroupManager {
     this.invalidateCache(request.channel_id);
 
     logger.info(`Channel group created: ${request.name} in channel ${request.channel_id}`);
-
-    // 广播组变更
-    await this.broadcastChannelGroupUpdate(request.channel_id);
-
     return channelGroupId;
   }
 
@@ -204,9 +197,6 @@ export class ChannelGroupManager {
     this.invalidateCache(channel_id);
 
     logger.info(`Channel group updated: ${channelGroupName} in channel ${channel_id}`);
-
-    // 广播组变更
-    await this.broadcastChannelGroupUpdate(channel_id);
   }
 
   /**
@@ -224,9 +214,6 @@ export class ChannelGroupManager {
     this.invalidateCache(channel_id);
 
     logger.info(`Channel group deleted: ${channelGroupName} from channel ${channel_id}`);
-
-    // 广播组变更
-    await this.broadcastChannelGroupUpdate(channel_id);
   }
 
   /**
@@ -245,9 +232,6 @@ export class ChannelGroupManager {
     this.invalidateCache(channel_id);
 
     logger.info(`Saved ${channelGroups.length} channel groups for channel ${channel_id}`);
-
-    // 广播组变更
-    await this.broadcastChannelGroupUpdate(channel_id);
   }
 
   /**
@@ -371,24 +355,5 @@ export class ChannelGroupManager {
    */
   refreshCache(): void {
     this.channelGroupCache.clear();
-  }
-
-  /**
-   * 广播频道组更新
-   */
-  private async broadcastChannelGroupUpdate(channel_id: number): Promise<void> {
-    const channelGroups = await this.getChannelGroups(channel_id, false);
-    
-    this.syncBroadcaster.broadcastChannelGroupUpdate(
-      channel_id,
-      channelGroups.map(g => ({
-        channel_id: g.channel_id,
-        name: g.name,
-        inherit: g.inherit,
-        inheritable: g.inheritable,
-        add_members: g.add_members,
-        remove_members: g.remove_members,
-      }))
-    );
   }
 }

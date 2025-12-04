@@ -3,19 +3,13 @@ import type { HubConfig } from './types.js';
 import { ServiceRegistry } from './registry.js';
 import { GlobalSessionManager } from './session-manager.js';
 import { VoiceTargetSyncService } from './voice-target-sync.js';
-import { CertificateExchangeService } from './certificate-exchange.js';
 import { HubControlService } from './control-service.js';
 import { HubDatabase } from './database.js';
-import { SyncBroadcaster } from './sync-broadcaster.js';
-import { ChannelManager } from './channel-manager.js';
-import { ACLManager } from './acl-manager.js';
-import { ChannelGroupManager } from './channel-group-manager.js';
-import { BanManager } from './ban-manager.js';
-import { HubAuthManager } from './auth-manager.js';
 import { VoiceUDPTransport } from '@munode/protocol';
 import { validateHubConfig } from './config-validator.js';
 import { applyConfigDefaults } from './config-defaults.js';
 import { WebApiService } from './web-api-service.js';
+import { HubHandlerFactory } from './factory.js';
 
 const logger = createLogger({ service: 'hub-server' });
 
@@ -25,21 +19,15 @@ const logger = createLogger({ service: 'hub-server' });
  */
 export class HubServer {
   private config: HubConfig;
-  private registry!: ServiceRegistry;
+  private registry: ServiceRegistry;
   private sessionManager!: GlobalSessionManager;
   private voiceTargetSync!: VoiceTargetSyncService;
-  private certExchange!: CertificateExchangeService;
-  private controlService!: HubControlService;
-  private database!: HubDatabase;
-  private syncBroadcaster!: SyncBroadcaster;
-  private channelManager!: ChannelManager;
-  private aclManager!: ACLManager;
-  private channelGroupManager!: ChannelGroupManager;
-  private banManager!: BanManager;
-  private authManager!: HubAuthManager;
+  private controlService: HubControlService;
+  private database: HubDatabase;
   private blobStore?: BlobStore;
   private voiceTransport?: VoiceUDPTransport;
   private webApiService?: WebApiService;
+  private factory: HubHandlerFactory;
   private started = false;
 
   constructor(config: HubConfig) {
@@ -59,6 +47,16 @@ export class HubServer {
     // 初始化数据库
     this.database = new HubDatabase(this.config.database);
     await this.database.init();
+    this.controlService = new HubControlService(
+      this.config,
+    );
+    this.factory = await HubHandlerFactory.getInstance(this.config, this.database, this.controlService);
+    await this.controlService.initialize(this.factory);
+
+    this.registry = this.factory.getRegistry();
+    this.sessionManager = this.factory.getSessionManager();
+    this.voiceTargetSync = this.factory.getVoiceTargetSync();
+    
 
     // 初始化 BlobStore（如果启用）
     if (this.config.blobStore.enabled) {
@@ -69,42 +67,7 @@ export class HubServer {
       logger.info('BlobStore disabled');
     }
 
-    // 初始化同步广播器
-    this.syncBroadcaster = new SyncBroadcaster(this.database);
-    await this.syncBroadcaster.init();
 
-    // 初始化业务逻辑层
-    this.channelManager = new ChannelManager(this.database, this.syncBroadcaster);
-    await this.channelManager.init();
-    this.aclManager = new ACLManager(this.database, this.syncBroadcaster);
-    await this.aclManager.init();
-    this.channelGroupManager = new ChannelGroupManager(this.database, this.syncBroadcaster);
-    await this.channelGroupManager.init();
-    this.banManager = new BanManager(this.database, this.syncBroadcaster);
-    await this.banManager.init();
-
-    // 初始化核心服务
-    this.registry = new ServiceRegistry(this.config.registry, this.database);
-    this.sessionManager = new GlobalSessionManager(); // 不再传递 database
-    this.voiceTargetSync = new VoiceTargetSyncService(this.sessionManager);
-    this.certExchange = new CertificateExchangeService(this.registry);
-    this.authManager = new HubAuthManager(this.config);
-
-    // 初始化控制信道服务
-    this.controlService = new HubControlService(
-      this.config,
-      this.registry,
-      this.sessionManager,
-      this.voiceTargetSync,
-      this.certExchange,
-      this.database,
-      this.aclManager,
-      this.channelManager,
-      this.channelGroupManager,
-      this.banManager,
-      this.blobStore,
-      this.authManager
-    );
 
     // 初始化 Web API 服务
     if (this.config.webApi?.enabled) {

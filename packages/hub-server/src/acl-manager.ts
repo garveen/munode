@@ -1,6 +1,5 @@
 import { createLogger } from '@munode/common';
 import type { HubDatabase } from './database.js';
-import type { SyncBroadcaster } from './sync-broadcaster.js';
 
 const logger = createLogger({ service: 'hub-acl-manager' });
 
@@ -31,12 +30,10 @@ export interface CreateACLRequest {
  */
 export class ACLManager {
   private database: HubDatabase;
-  private syncBroadcaster: SyncBroadcaster;
   private aclCache: Map<number, ACLData[]> = new Map(); // key: channel_id
 
-  constructor(database: HubDatabase, syncBroadcaster: SyncBroadcaster) {
+  constructor(database: HubDatabase) {
     this.database = database;
-    this.syncBroadcaster = syncBroadcaster;
   }
 
   /**
@@ -75,20 +72,7 @@ export class ACLManager {
 
     logger.info(`ACL added: ${id} for channel ${request.channel_id}`);
     // 广播变更到 Edge Servers
-    const allAcls = await this.getChannelACLs(request.channel_id);
-    this.syncBroadcaster.broadcastACLUpdate(
-      request.channel_id,
-      allAcls.map((a) => ({
-        id: a.id,
-         channel_id: a.channel_id,
-         user_id: a.user_id,
-        group: a.group || '',
-        applyHere: a.apply_here,
-        applySubs: a.apply_subs,
-        allow: a.allow,
-        deny: a.deny,
-      }))
-    );
+    await this.getChannelACLs(request.channel_id);
 
     return id;
   }
@@ -106,20 +90,7 @@ export class ACLManager {
 
       logger.info(`ACL updated: ${id}`, updates);
       // 广播变更到 Edge Servers
-      const allAcls = await this.getChannelACLs(channel_id);
-      this.syncBroadcaster.broadcastACLUpdate(
-        channel_id,
-        allAcls.map((a) => ({
-          id: a.id,
-           channel_id: a.channel_id,
-           user_id: a.user_id,
-          group: a.group || '',
-          applyHere: a.apply_here,
-          applySubs: a.apply_subs,
-          allow: a.allow,
-          deny: a.deny,
-        }))
-      );
+      await this.getChannelACLs(channel_id);
     }
   }
 
@@ -134,8 +105,6 @@ export class ACLManager {
       this.invalidateCache(channel_id);
 
       logger.info(`ACL deleted: ${id}`);
-      // 广播变更到 Edge Servers
-      this.syncBroadcaster.broadcastACLDelete(id);
     }
   }
 
@@ -166,22 +135,6 @@ export class ACLManager {
     this.aclCache.set(channel_id, allAcls);
 
     logger.info(`ACLs saved for channel ${channel_id}: ${acls.length} entries, IDs: ${aclIds.join(',')}`);
-
-    // 广播变更到 Edge Servers
-    this.syncBroadcaster.broadcastACLUpdate(
-      channel_id,
-      allAcls.map((a) => ({
-        id: a.id,
-         channel_id: a.channel_id,
-         user_id: a.user_id,
-        group: a.group || '',
-        applyHere: a.apply_here,
-        applySubs: a.apply_subs,
-        allow: a.allow,
-        deny: a.deny,
-      }))
-    );
-
     return aclIds;
   }
 

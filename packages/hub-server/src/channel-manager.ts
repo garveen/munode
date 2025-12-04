@@ -1,6 +1,5 @@
 import { createLogger } from '@munode/common';
 import type { HubDatabase } from './database.js';
-import type { SyncBroadcaster } from './sync-broadcaster.js';
 
 const logger = createLogger({ service: 'hub-channel-manager' });
 
@@ -29,13 +28,10 @@ export interface CreateChannelRequest {
  */
 export class ChannelManager {
   private database: HubDatabase;
-  private syncBroadcaster: SyncBroadcaster;
   private channelCache: Map<number, ChannelData> = new Map();
 
-  constructor(database: HubDatabase, syncBroadcaster: SyncBroadcaster) {
+  constructor(database: HubDatabase) {
     this.database = database;
-    this.syncBroadcaster = syncBroadcaster;
-    // 异步初始化将在外部调用
   }
 
   /**
@@ -66,16 +62,6 @@ export class ChannelManager {
     if (created) {
       this.channelCache.set(id, created);
       logger.info(`Channel created: ${id} (${created.name})`);
-      // 广播变更到 Edge Servers
-      this.syncBroadcaster.broadcastChannelCreate({
-        id: created.id,
-        name: created.name,
-        position: created.position,
-        maxUsers: created.max_users,
-         parent_id: created.parent_id,
-        inheritAcl: created.inherit_acl,
-        descriptionBlob: created.description_blob || '',
-      });
     }
 
     return id;
@@ -91,16 +77,6 @@ export class ChannelManager {
     if (updated) {
       this.channelCache.set(id, updated);
       logger.info(`Channel updated: ${id}`, updates);
-      // 广播变更到 Edge Servers
-      this.syncBroadcaster.broadcastChannelUpdate({
-        id: updated.id,
-        name: updated.name,
-        position: updated.position,
-        maxUsers: updated.max_users,
-         parent_id: updated.parent_id,
-        inheritAcl: updated.inherit_acl,
-        descriptionBlob: updated.description_blob || '',
-      });
     }
   }
 
@@ -111,8 +87,6 @@ export class ChannelManager {
     await this.database.deleteChannel(id);
     this.channelCache.delete(id);
     logger.info(`Channel deleted: ${id}`);
-    // 广播变更到 Edge Servers
-    this.syncBroadcaster.broadcastChannelDelete(id);
   }
 
   /**
@@ -142,8 +116,6 @@ export class ChannelManager {
   async linkChannels( channel_id: number,  target_id: number): Promise<void> {
     await this.database.linkChannels(channel_id, target_id);
     logger.info(`Channels linked: ${channel_id} <-> ${target_id}`);
-    // 广播变更到 Edge Servers
-    this.syncBroadcaster.broadcastChannelLink(channel_id, target_id);
   }
 
   /**
@@ -152,8 +124,6 @@ export class ChannelManager {
   async unlinkChannels( channel_id: number,  target_id: number): Promise<void> {
     await this.database.unlinkChannels(channel_id, target_id);
     logger.info(`Channels unlinked: ${channel_id} <-> ${target_id}`);
-    // 广播变更到 Edge Servers
-    this.syncBroadcaster.broadcastChannelUnlink(channel_id, target_id);
   }
 
   /**

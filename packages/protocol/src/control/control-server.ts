@@ -79,13 +79,6 @@ export class ControlChannelServer extends EventEmitter {
   }
 
   /**
-   * 发送通知给特定客户端
-   */
-  notify(channel: RPCChannel, method: string, params?: any): void {
-    channel.notify(method, params);
-  }
-
-  /**
    * 关闭服务器
    */
   close(): void {

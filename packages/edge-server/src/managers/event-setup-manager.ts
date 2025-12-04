@@ -485,7 +485,6 @@ export class EventSetupManager {
 
       // 监听来自Hub的所有通知消息（合并多个监听器）
       this.hubClient.on('notification', (message) => {
-        console.error(`[EDGE-DEBUG] Received notification method=${message.method}`);
         // 处理集群事件
         if (message.method === 'edge.peerJoined') {
           const data = message.params;

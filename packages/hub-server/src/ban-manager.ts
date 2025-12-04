@@ -1,6 +1,5 @@
 import { createLogger } from '@munode/common';
 import type { HubDatabase } from './database.js';
-import type { SyncBroadcaster } from './sync-broadcaster.js';
 
 const logger = createLogger({ service: 'hub-ban-manager' });
 
@@ -38,14 +37,12 @@ export interface BanCheckResult {
  */
 export class BanManager {
   private database: HubDatabase;
-  private syncBroadcaster: SyncBroadcaster;
   private banCache: Map<number, BanData> = new Map();
   private certBanIndex: Map<string, number> = new Map(); // hash -> ban.id
   private ipBans: BanData[] = []; // 需要遍历检查的 IP 封禁
 
-  constructor(database: HubDatabase, syncBroadcaster: SyncBroadcaster) {
+  constructor(database: HubDatabase) {
     this.database = database;
-    this.syncBroadcaster = syncBroadcaster;
     // 异步初始化将在外部调用
   }
 
@@ -122,18 +119,6 @@ export class BanManager {
         hasAddress: !!created.address,
         reason: created.reason,
       });
-
-      // 广播变更到 Edge Servers
-      this.syncBroadcaster.broadcastBanAdd({
-        id: created.id,
-        address: created.address || Buffer.alloc(0),
-        mask: created.mask,
-        name: created.name || '',
-        hash: created.hash || '',
-        reason: created.reason || '',
-        start: created.start || 0,
-        duration: created.duration || 0,
-      });
     }
 
     return id;
@@ -158,8 +143,6 @@ export class BanManager {
     }
 
     logger.info(`Ban removed: ${id}`);
-    // 广播变更到 Edge Servers
-    this.syncBroadcaster.broadcastBanRemove(id);
   }
 
   /**

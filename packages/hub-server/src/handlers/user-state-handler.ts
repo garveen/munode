@@ -1,0 +1,476 @@
+import { createLogger } from '@munode/common';
+import { HubPermissionChecker, Permission } from '../permission-checker.js';
+import { HubHandlerFactory } from '../factory.js';
+
+const logger = createLogger({ service: 'hub-user-state-handler' });
+
+/**
+ * 用户状态处理器接口
+ */
+export interface IUserStateHandler {
+  /**
+   * 处理用户状态通知
+   */
+  handleUserStateNotification(params: any): Promise<void>;
+
+  /**
+   * 处理用户离开通知
+   */
+  handleUserLeftNotification(params: any): Promise<void>;
+}
+
+/**
+ * 用户状态处理器实现
+ */
+export class UserStateHandler implements IUserStateHandler {
+  private factory: HubHandlerFactory;
+  private permissionChecker: HubPermissionChecker;
+
+  constructor(factory: HubHandlerFactory) {
+    this.factory = factory;
+    this.permissionChecker = factory.getPermissionChecker();
+  }
+
+  async handleUserStateNotification(params: any): Promise<void> {
+    try {
+      const { edge_id, actor_session, actor_username, userState: userStateObj } = params;
+
+      logger.info(`Hub received UserState from Edge ${edge_id}, actor: ${actor_username}(${actor_session}), target: ${userStateObj.session || actor_session}`);
+
+      const sessionManager = this.factory.getSessionManager();
+      const controlService = this.factory.getControlService();
+      const config = this.factory.getConfig();
+
+      // 确定目标会话
+      const targetSession = userStateObj.session || actor_session;
+
+      // 获取目标会话
+      const targetGlobalSession = sessionManager.getSession(targetSession);
+      if (!targetGlobalSession) {
+        logger.warn(`Target session ${targetSession} not found in Hub`);
+
+        // 向发起Edge回复错误
+        controlService.notify(edge_id, 'hub.userStateResponse', {
+          success: false,
+          actor_session,
+          error: 'Target session not found',
+        });
+        return;
+      }
+
+      // 获取actor会话（用于权限检查）
+      const actorSession = sessionManager.getSession(actor_session);
+      if (!actorSession) {
+        logger.warn(`Actor session ${actor_session} not found in Hub`);
+        controlService.notify(edge_id, 'hub.userStateResponse', {
+          success: false,
+          actor_session,
+          error: 'Actor session not found',
+        });
+        return;
+      }
+
+      const isActorTarget = actor_session === targetSession;
+      let broadcast = false;
+
+      // Save the old channel ID before any updates (for ninja channel logic)
+      const originalChannelId = targetGlobalSession.channel_id ?? 0;
+
+      // 创建一个新的UserState对象，只包含实际变更的字段
+      // 参考Edge废弃实现：只广播变更的字段，避免客户端显示不必要的消息
+      const broadcastUserState: any = {
+        session: targetSession,
+        actor: actor_session,
+        name: targetGlobalSession.username,
+        user_id: targetGlobalSession.user_id,
+      };
+
+      // 设置actor字段（保留在原对象中用于后续处理）
+      userStateObj.actor = actor_session;
+      userStateObj.session = targetSession;
+
+      // 处理频道移动
+      if (userStateObj.channel_id !== undefined) {
+        const oldChannelId = targetGlobalSession.channel_id;
+        const newChannelId = userStateObj.channel_id;
+
+        // 将channel_id添加到广播对象
+        broadcastUserState.channel_id = newChannelId;
+
+        // 权限检查：移动其他用户需要特殊权限
+        if (!isActorTarget) {
+          const database = this.factory.getDatabase();
+          if (database) {
+            // 检查目标用户是否对新频道有EnterPermission
+            const targetUserInfo = this.permissionChecker.sessionToUserInfo(targetGlobalSession, oldChannelId);
+            const targetHasEnter = await this.permissionChecker.hasPermission(
+              newChannelId,
+              targetUserInfo,
+              Permission.Enter
+            );
+
+            // 检查actor是否对目标用户当前频道有MovePermission
+            const actorUserInfo = this.permissionChecker.sessionToUserInfo(actorSession, actorSession.channel_id);
+            const actorHasMove = oldChannelId !== undefined
+              ? await this.permissionChecker.hasPermission(oldChannelId, actorUserInfo, Permission.Move)
+              : false;
+
+            // 如果目标没有Enter权限，actor必须在目标当前频道有Move权限
+            if (!targetHasEnter && !actorHasMove) {
+              controlService.notify(edge_id, 'hub.userStateResponse', {
+                success: false,
+                actor_session,
+                error: 'Permission denied: MovePermission required',
+                permission_denied: true,
+                permission_type: 'Move',
+              });
+              return;
+            }
+
+            // 如果目标有Enter权限，actor需要在新频道有Move权限
+            if (targetHasEnter) {
+              const actorHasMoveInDest = await this.permissionChecker.hasPermission(
+                newChannelId,
+                actorUserInfo,
+                Permission.Move
+              );
+              if (!actorHasMoveInDest) {
+                controlService.notify(edge_id, 'hub.userStateResponse', {
+                  success: false,
+                  actor_session,
+                  error: 'Permission denied: MovePermission required in destination channel',
+                  permission_denied: true,
+                  permission_type: 'Move',
+                });
+                return;
+              }
+            }
+
+            // 检查目标用户是否对新频道有TraversePermission
+            const targetHasTraverse = await this.permissionChecker.hasPermission(
+              newChannelId,
+              targetUserInfo,
+              Permission.Traverse
+            );
+            if (!targetHasTraverse) {
+              controlService.notify(edge_id, 'hub.userStateResponse', {
+                success: false,
+                actor_session,
+                error: 'Permission denied: target lacks TraversePermission',
+                permission_denied: true,
+                permission_type: 'Traverse',
+              });
+              return;
+            }
+
+            logger.debug(`User ${actor_username} moving user ${targetGlobalSession.username} with permission check passed`);
+          }
+        } else if (isActorTarget) {
+          // 自己移动自己：需要EnterPermission
+          const actorUserInfo = this.permissionChecker.sessionToUserInfo(actorSession, oldChannelId);
+          const hasEnter = await this.permissionChecker.hasPermission(
+            newChannelId,
+            actorUserInfo,
+            Permission.Enter
+          );
+          if (!hasEnter) {
+            controlService.notify(edge_id, 'hub.userStateResponse', {
+              success: false,
+              actor_session,
+              error: 'Permission denied: EnterPermission required',
+              permission_denied: true,
+              permission_type: 'Enter',
+            });
+            return;
+          }
+        }
+
+        // TODO: 检查目标频道是否存在
+
+        // 更新会话的频道
+        sessionManager.updateSessionChannel(targetSession, userStateObj.channel_id);
+        broadcast = true;
+
+        logger.info(`User ${targetGlobalSession.username} moved from channel ${oldChannelId} to ${userStateObj.channel_id}`);
+      }
+
+      // 防止actor != target时应用自我操作字段
+      if (!isActorTarget &&
+          (userStateObj.self_deaf !== undefined || userStateObj.self_mute !== undefined ||
+           userStateObj.texture !== undefined || userStateObj.plugin_context !== undefined ||
+           userStateObj.plugin_identity !== undefined)) {
+        logger.warn(`Invalid UserState: actor ${actor_session} trying to set self-fields for target ${targetSession}`);
+        controlService.notify(edge_id, 'hub.userStateResponse', {
+          success: false,
+          actor_session,
+          error: 'Cannot set self-fields for other users',
+        });
+        return;
+      }
+
+      // 处理SelfDeaf/SelfMute（用户自己控制）
+      if (userStateObj.self_deaf !== undefined) {
+        const stateUpdates: any = { self_deaf: userStateObj.self_deaf };
+        broadcastUserState.self_deaf = userStateObj.self_deaf;
+
+        if (userStateObj.self_deaf) {
+          // SelfDeaf 会自动 SelfMute
+          userStateObj.self_mute = true;
+          broadcastUserState.self_mute = true;
+          stateUpdates.self_mute = true;
+        }
+
+        sessionManager.updateSessionState(targetSession, stateUpdates);
+        broadcast = true;
+      }
+
+      if (userStateObj.self_mute !== undefined) {
+        const stateUpdates: any = { self_mute: userStateObj.self_mute };
+        broadcastUserState.self_mute = userStateObj.self_mute;
+
+        if (!userStateObj.self_mute) {
+          // Un-SelfMute 会自动 Un-SelfDeaf
+          userStateObj.self_deaf = false;
+          broadcastUserState.self_deaf = false;
+          stateUpdates.self_deaf = false;
+        }
+
+        sessionManager.updateSessionState(targetSession, stateUpdates);
+        broadcast = true;
+      }
+
+      // 处理Mute/Deaf/Suppress/PrioritySpeaker（管理员操作）
+      if (userStateObj.mute !== undefined || userStateObj.deaf !== undefined ||
+          userStateObj.suppress !== undefined || userStateObj.priority_speaker !== undefined) {
+
+        // 权限检查：操作其他用户需要MuteDeafenPermission
+        if (!isActorTarget && targetGlobalSession.channel_id !== undefined) {
+          const actorUserInfo = this.permissionChecker.sessionToUserInfo(actorSession, actorSession.channel_id);
+          const hasMuteDeafen = await this.permissionChecker.hasPermission(
+            targetGlobalSession.channel_id,
+            actorUserInfo,
+            Permission.MuteDeafen
+          );
+          if (!hasMuteDeafen) {
+            controlService.notify(edge_id, 'hub.userStateResponse', {
+              success: false,
+              actor_session,
+              error: 'Permission denied: MuteDeafenPermission required',
+              permission_denied: true,
+              permission_type: 'MuteDeafen',
+            });
+            return;
+          }
+          logger.debug(`User ${actor_username} has MuteDeafenPermission for user ${targetGlobalSession.username}`);
+        }
+
+        // Suppress只能由服务器设置（拒绝客户端设置为true）
+        if (userStateObj.suppress === true) {
+          controlService.notify(edge_id, 'hub.userStateResponse', {
+            success: false,
+            actor_session,
+            error: 'Permission denied: only server can suppress users',
+            permission_denied: true,
+            permission_type: 'suppress',
+          });
+          return;
+        }
+
+        const stateUpdates: any = {};
+
+        if (userStateObj.deaf !== undefined) {
+          stateUpdates.deaf = userStateObj.deaf;
+          broadcastUserState.deaf = userStateObj.deaf;
+          if (userStateObj.deaf) {
+            // Deaf会自动Mute
+            userStateObj.mute = true;
+            broadcastUserState.mute = true;
+            stateUpdates.mute = true;
+          }
+        }
+
+        if (userStateObj.mute !== undefined) {
+          stateUpdates.mute = userStateObj.mute;
+          broadcastUserState.mute = userStateObj.mute;
+          if (!userStateObj.mute && stateUpdates.deaf === undefined) {
+            // Un-Mute会自动Un-Deaf（如果deaf没有被显式设置）
+            userStateObj.deaf = false;
+            broadcastUserState.deaf = false;
+            stateUpdates.deaf = false;
+          }
+        }
+
+        if (userStateObj.suppress !== undefined) {
+          stateUpdates.suppress = userStateObj.suppress;
+          broadcastUserState.suppress = userStateObj.suppress;
+        }
+
+        if (userStateObj.priority_speaker !== undefined) {
+          stateUpdates.priority_speaker = userStateObj.priority_speaker;
+          broadcastUserState.priority_speaker = userStateObj.priority_speaker;
+        }
+
+        sessionManager.updateSessionState(targetSession, stateUpdates);
+        broadcast = true;
+      }
+
+      // 处理Recording状态变化
+      if (userStateObj.recording !== undefined) {
+        sessionManager.updateSessionState(targetSession, { recording: userStateObj.recording });
+        broadcastUserState.recording = userStateObj.recording;
+        broadcast = true;
+
+        const recordingMessage = userStateObj.recording
+          ? `User '${targetGlobalSession.username}' started recording`
+          : `User '${targetGlobalSession.username}' stopped recording`;
+        logger.info(recordingMessage);
+      }
+
+      // 处理监听频道（listening_channel_add/remove）
+      if (userStateObj.listening_channel_add && userStateObj.listening_channel_add.length > 0) {
+        // 权限检查：需要对每个频道有Listen权限
+        const actorUserInfo = this.permissionChecker.sessionToUserInfo(actorSession, actorSession.channel_id);
+        const allowedChannels: number[] = [];
+
+        for (const channelId of userStateObj.listening_channel_add) {
+          const hasListen = await this.permissionChecker.hasPermission(
+            channelId,
+            actorUserInfo,
+            Permission.Listen
+          );
+
+          if (hasListen) {
+            allowedChannels.push(channelId);
+          } else {
+            logger.warn(`User ${actor_username} denied Listen permission for channel ${channelId}`);
+            // 发送权限被拒绝的消息给客户端
+            controlService.notify(edge_id, 'hub.permissionDenied', {
+              session_id: actor_session,
+              channel_id: channelId,
+              permission_type: 'Listen',
+              reason: 'No Listen permission for this channel',
+            });
+          }
+        }
+
+        if (allowedChannels.length > 0) {
+          broadcastUserState.listening_channel_add = allowedChannels;
+          broadcast = true;
+          logger.info(`User ${actor_username} started listening to channels: ${allowedChannels.join(', ')}`);
+        }
+
+      }
+
+      if (userStateObj.listening_channel_remove && userStateObj.listening_channel_remove.length > 0) {
+        // 移除监听不需要权限检查
+        broadcastUserState.listening_channel_remove = userStateObj.listening_channel_remove;
+        broadcast = true;
+        logger.info(`User ${actor_username} stopped listening to channels: ${userStateObj.listening_channel_remove.join(', ')}`);
+      }
+
+      if (!broadcast) {
+        // 没有任何变化，但仍然回复成功
+        controlService.notify(edge_id, 'hub.userStateResponse', {
+          success: true,
+          actor_session,
+          target_session: targetSession,
+        });
+        return;
+      }
+
+      // 向发起Edge回复成功
+      controlService.notify(edge_id, 'hub.userStateResponse', {
+        success: true,
+        actor_session,
+        target_session: targetSession,
+      });
+
+      logger.info(`Hub: Broadcasting UserState for session ${targetSession} to all edges, fields: ${Object.keys(broadcastUserState).join(', ')}`);
+
+      // Check if Channel Ninja feature is enabled and we have ninja channels configured
+      const channelNinjaEnabled = config.channelNinja ?? false;
+      const hasNinjaChannels = config.ninjaChannels?.length > 0;
+
+      if (channelNinjaEnabled && hasNinjaChannels && broadcastUserState.channel_id !== undefined) {
+        // 频道忍者逻辑 - 过滤广播目标
+        const ninjaChannels = new Set(config.ninjaChannels);
+        const isLeavingNinjaChannel = ninjaChannels.has(originalChannelId);
+        const isEnteringNinjaChannel = ninjaChannels.has(broadcastUserState.channel_id);
+
+        if (isLeavingNinjaChannel || isEnteringNinjaChannel) {
+          // 获取所有连接的Edge ID
+          const allEdgeIds = Array.from(this.factory.getRegistry().getAllEdges()).map(edge => edge.server_id);
+
+          // 确定哪些Edge应该接收广播
+          const targetEdgeIds: number[] = allEdgeIds.filter(edgeId => {
+            if (isLeavingNinjaChannel && !isEnteringNinjaChannel) {
+              // 从忍者频道离开 - 只广播给非忍者频道用户所在的Edge
+              return !this.isEdgeInNinjaChannel(edgeId, ninjaChannels);
+            } else if (!isLeavingNinjaChannel && isEnteringNinjaChannel) {
+              // 进入忍者频道 - 只广播给忍者频道用户所在的Edge
+              return this.isEdgeInNinjaChannel(edgeId, ninjaChannels);
+            } else {
+              // 在忍者频道之间移动 - 只广播给忍者频道用户所在的Edge
+              return this.isEdgeInNinjaChannel(edgeId, ninjaChannels);
+            }
+          });
+
+          // 向选定的Edge广播
+          for (const targetEdgeId of targetEdgeIds) {
+            controlService.notify(targetEdgeId, 'hub.userStateBroadcast', broadcastUserState);
+          }
+
+          logger.info(`Channel Ninja: Broadcasted UserState to ${targetEdgeIds.length} edges (filtered from ${allEdgeIds.length})`);
+        } else {
+          // 普通频道移动 - 广播给所有Edge
+          controlService.broadcast('hub.userStateBroadcast', broadcastUserState);
+        }
+      } else {
+        // 没有频道忍者功能或不是频道移动 - 广播给所有Edge
+        controlService.broadcast('hub.userStateBroadcast', broadcastUserState);
+      }
+
+    } catch (error) {
+      logger.error('Error handling user state notification:', error);
+      // 向发起Edge回复错误
+      const controlService = this.factory.getControlService();
+      controlService.notify(params.edge_id, 'hub.userStateResponse', {
+        success: false,
+        actor_session: params.actor_session,
+        error: 'Internal server error',
+      });
+    }
+  }
+
+  async handleUserLeftNotification(params: any): Promise<void> {
+    const { edge_id, session_id, username } = params;
+    const sessionManager = this.factory.getSessionManager();
+    const controlService = this.factory.getControlService();
+
+    logger.info(`User ${username}(${session_id}) left from Edge ${edge_id}`);
+
+    // 从会话管理器中移除会话
+    sessionManager.removeSession(session_id);
+
+    // 广播用户离开消息给所有Edge
+    controlService.broadcast('hub.userLeft', {
+      session_id,
+      username,
+    });
+  }
+
+  /**
+   * 检查Edge是否在忍者频道中
+   */
+  private isEdgeInNinjaChannel(edgeId: number, ninjaChannels: Set<number>): boolean {
+    const sessionManager = this.factory.getSessionManager();
+    const sessions = sessionManager.getEdgeSessions(edgeId);
+
+    for (const session of sessions) {
+      if (session.channel_id && ninjaChannels.has(session.channel_id)) {
+        return true;
+      }
+    }
+    return false;
+  }
+}

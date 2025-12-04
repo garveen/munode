@@ -1,0 +1,243 @@
+import { BlobStore } from '@munode/common';
+import type { HubConfig } from './types.js';
+import { ServiceRegistry } from './registry.js';
+import { GlobalSessionManager } from './session-manager.js';
+import { VoiceTargetSyncService } from './voice-target-sync.js';
+import { CertificateExchangeService } from './certificate-exchange.js';
+import type { HubDatabase } from './database.js';
+import { ACLManager } from './acl-manager.js';
+import { ChannelManager } from './channel-manager.js';
+import { ChannelGroupManager } from './channel-group-manager.js';
+import { BanManager } from './ban-manager.js';
+import { HubAuthManager } from './auth-manager.js';
+import { HubPermissionChecker } from './permission-checker.js';
+import { NetworkTopologyManager } from './network-topology-manager.js';
+import { UserStateHandler, type IUserStateHandler } from './handlers/user-state-handler.js';
+import { ChannelStateHandler, type IChannelStateHandler } from './handlers/channel-state-handler.js';
+import { AuthenticationHandler, type IAuthenticationHandler } from './handlers/authentication-handler.js';
+import { DatabaseOperations, type IDatabaseOperations } from './database-operations.js';
+import { VoiceRoutingHandler, type IVoiceRoutingHandler } from './handlers/voice-routing-handler.js';
+import { TextMessageHandler, type ITextMessageHandler } from './handlers/text-message-handler.js';
+import { NotificationHandler, type INotificationHandler } from './handlers/notification-handler.js';
+import { AdminOperationHandler, type IAdminOperationHandler } from './handlers/admin-operation-handler.js';
+import { CertificateExchangeHandler, type ICertificateExchangeHandler } from './handlers/certificate-exchange-handler.js';
+import { SyncHandler, type ISyncHandler } from './handlers/sync-handler.js';
+import { ACLHandler, type IACLHandler } from './handlers/acl-handler.js';
+import { ChannelHandler, type IChannelHandler } from './handlers/channel-handler.js';
+import { ClusterHandler, type IClusterHandler } from './handlers/cluster-handler.js';
+import { BlobHandler, type IBlobHandler } from './handlers/blob-handler.js';
+import { EdgeHandler, type IEdgeHandler } from './handlers/edge-handler.js';
+import { HubControlService } from './control-service.js';
+
+
+/**
+ * Hub处理器工厂 - 使用单例模式管理各种处理器实例
+ */
+export class HubHandlerFactory {
+  private static instance: HubHandlerFactory;
+
+  // 核心服务实例
+  private config: HubConfig;
+  private registry: ServiceRegistry;
+  private sessionManager: GlobalSessionManager;
+  private voiceTargetSync: VoiceTargetSyncService;
+  private certExchange: CertificateExchangeService;
+  private database: HubDatabase;
+  private aclManager: ACLManager;
+  private channelManager: ChannelManager;
+  private channelGroupManager: ChannelGroupManager;
+  private banManager: BanManager;
+  private blobStore: BlobStore;
+  private authManager: HubAuthManager;
+
+  // 处理器实例
+  private permissionChecker: HubPermissionChecker;
+  private networkTopologyManager: NetworkTopologyManager;
+  private userStateHandler: IUserStateHandler;
+  private channelStateHandler: IChannelStateHandler;
+  private databaseOperations: IDatabaseOperations;
+  private authenticationHandler: IAuthenticationHandler;
+  private voiceRoutingHandler: IVoiceRoutingHandler;
+  private textMessageHandler: ITextMessageHandler;
+  private notificationHandler: INotificationHandler;
+  private adminOperationHandler: IAdminOperationHandler;
+  private certificateExchangeHandler: ICertificateExchangeHandler;
+  private syncHandler: ISyncHandler;
+  private aclHandler: IACLHandler;
+  private channelHandler: IChannelHandler;
+  private clusterHandler: IClusterHandler;
+  private blobHandler: IBlobHandler;
+  private edgeHandler: IEdgeHandler;
+
+  private controlService: HubControlService;
+
+  private constructor(config: HubConfig, database: HubDatabase) {
+    this.config = config;
+    this.database = database;
+
+    // 初始化同步广播器
+
+    // 初始化业务逻辑层
+    this.channelManager = new ChannelManager(this.database);
+    this.aclManager = new ACLManager(this.database);
+    this.channelGroupManager = new ChannelGroupManager(this.database);
+    this.banManager = new BanManager(this.database);
+
+    // 初始化核心服务
+    this.registry = new ServiceRegistry(this.config.registry, this.database);
+    this.sessionManager = new GlobalSessionManager(); // 不再传递 database
+    this.voiceTargetSync = new VoiceTargetSyncService(this.sessionManager);
+    this.certExchange = new CertificateExchangeService(this.registry);
+    this.authManager = new HubAuthManager(this.config);
+    this.syncHandler = new SyncHandler(this);
+    this.authenticationHandler = new AuthenticationHandler(this);
+    this.permissionChecker = new HubPermissionChecker(this);
+    this.networkTopologyManager = new NetworkTopologyManager(this.config.voiceRouting);
+    this.userStateHandler = new UserStateHandler(this);
+    this.channelStateHandler = new ChannelStateHandler(this);
+    this.databaseOperations = new DatabaseOperations(this.database);
+    this.voiceRoutingHandler = new VoiceRoutingHandler(this);
+    this.textMessageHandler = new TextMessageHandler(this);
+    this.notificationHandler = new NotificationHandler(this);
+    this.adminOperationHandler = new AdminOperationHandler(this);
+    this.certificateExchangeHandler = new CertificateExchangeHandler(this);
+    this.aclHandler = new ACLHandler(this);
+    this.channelHandler = new ChannelHandler(this);
+    this.clusterHandler = new ClusterHandler(this);
+    this.blobHandler = new BlobHandler(this);
+    this.edgeHandler = new EdgeHandler(this);
+  }
+
+  static async getInstance(config: HubConfig, database: HubDatabase, controlService: HubControlService): Promise<HubHandlerFactory> {
+    if (!HubHandlerFactory.instance) {
+      HubHandlerFactory.instance = new HubHandlerFactory(config, database);
+      HubHandlerFactory.instance.controlService = controlService;
+      await HubHandlerFactory.instance.channelManager.init();
+      await HubHandlerFactory.instance.aclManager.init();
+      await HubHandlerFactory.instance.channelGroupManager.init();
+      await HubHandlerFactory.instance.banManager.init();
+    }
+    return HubHandlerFactory.instance;
+  }
+
+  getControlService(): HubControlService {
+    return this.controlService;
+  }
+
+  /**
+   * 获取用户状态处理器
+   */
+  getUserStateHandler(): IUserStateHandler {
+    return this.userStateHandler;
+  }
+
+  /**
+   * 获取频道状态处理器
+   */
+  getChannelStateHandler(): IChannelStateHandler {
+    return this.channelStateHandler;
+  }
+
+  /**
+   * 获取认证处理器
+   */
+  getAuthenticationHandler(): IAuthenticationHandler {
+
+    return this.authenticationHandler;
+  }
+
+  /**
+   * 获取语音路由处理器
+   */
+  getVoiceRoutingHandler(): IVoiceRoutingHandler {
+
+    return this.voiceRoutingHandler;
+  }
+
+  /**
+   * 获取文本消息处理器
+   */
+  getTextMessageHandler(): ITextMessageHandler {
+    return this.textMessageHandler;
+  }
+
+  /**
+   * 获取通知处理器
+   */
+  getNotificationHandler(): INotificationHandler {
+    return this.notificationHandler;
+  }
+
+  /**
+   * 获取管理操作处理器
+   */
+  getAdminOperationHandler(): IAdminOperationHandler {
+    return this.adminOperationHandler;
+  }
+
+  /**
+   * 获取证书交换处理器
+   */
+  getCertificateExchangeHandler(): ICertificateExchangeHandler {
+    return this.certificateExchangeHandler;
+  }
+
+  /**
+   * 获取同步处理器
+   */
+  getSyncHandler(): ISyncHandler {
+    return this.syncHandler;
+  }
+
+  /**
+   * 获取ACL处理器
+   */
+  getACLHandler(): IACLHandler {
+    return this.aclHandler;
+  }
+
+  /**
+   * 获取频道处理器
+   */
+  getChannelHandler(): IChannelHandler {
+    return this.channelHandler;
+  }
+
+  /**
+   * 获取集群处理器
+   */
+  getClusterHandler(): IClusterHandler {
+    return this.clusterHandler;
+  }
+
+  /**
+   * 获取Blob处理器
+   */
+  getBlobHandler(): IBlobHandler {
+    return this.blobHandler;
+  }
+
+  /**
+   * 获取Edge处理器
+   */
+  getEdgeHandler(): IEdgeHandler {
+    return this.edgeHandler;
+  }
+
+  // 其他getter方法用于访问核心服务
+  getConfig(): HubConfig { return this.config; }
+  getRegistry(): ServiceRegistry { return this.registry; }
+  getSessionManager(): GlobalSessionManager { return this.sessionManager; }
+  getVoiceTargetSync(): VoiceTargetSyncService { return this.voiceTargetSync; }
+  getCertExchange(): CertificateExchangeService { return this.certExchange; }
+  getDatabase(): HubDatabase { return this.database; }
+  getAclManager(): ACLManager { return this.aclManager; }
+  getChannelManager(): ChannelManager { return this.channelManager; }
+  getChannelGroupManager(): ChannelGroupManager { return this.channelGroupManager; }
+  getBanManager(): BanManager { return this.banManager; }
+  getBlobStore(): BlobStore { return this.blobStore; }
+  getAuthManager(): HubAuthManager { return this.authManager; }
+  getPermissionChecker(): HubPermissionChecker { return this.permissionChecker; }
+  getNetworkTopologyManager(): NetworkTopologyManager { return this.networkTopologyManager!; }
+  getDatabaseOperations(): IDatabaseOperations { return this.databaseOperations!; }
+}

@@ -2,6 +2,7 @@ import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import { hubedge } from '../generated/proto/HubEdge.js';
 import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
+import { logger } from '@munode/common';
 
 const { EdgeHubPacket, PacketType, RPCError: ProtoRPCError, Heartbeat, HeartbeatAck } = hubedge;
 
@@ -214,7 +215,6 @@ export class RPCChannel extends EventEmitter {
    * Accepts either a TypedRPCNotification directly or plain object params
    */
   notify(method: string, params: hubedgeRpc.TypedRPCNotification | NotificationParams): void {
-    console.error(`[RPC-DEBUG] RPCChannel.notify called: method=${method}`);
     let notification: hubedgeRpc.TypedRPCNotification;
     
     // If params is already a TypedRPCNotification, use it directly
@@ -377,6 +377,7 @@ export class RPCChannel extends EventEmitter {
    */
   respond(id: string, method: string, response: hubedgeRpc.TypedRPCResponse, error?: { code: number; message: string; data?: string }): void {
     if (error) {
+      logger.error(`RPC Error response for ${method}:`, error);
       const packet = new EdgeHubPacket({
         type: PacketType.PACKET_TYPE_RPC_ERROR,
         rpc_error: new ProtoRPCError({

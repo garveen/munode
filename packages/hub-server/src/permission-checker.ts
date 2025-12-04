@@ -7,6 +7,7 @@ import { logger } from '@munode/common';
 import type { HubDatabase } from './database.js';
 import type { GlobalSession } from '@munode/protocol';
 import type { ChannelGroupManager } from './channel-group-manager.js';
+import { HubHandlerFactory } from './factory.js';
 
 /**
  * 权限位掩码定义
@@ -75,7 +76,7 @@ export interface UserInfo {
  */
 export class HubPermissionChecker {
   private database: HubDatabase;
-  private channelGroupManager?: ChannelGroupManager;
+  private channelGroupManager: ChannelGroupManager;
   private aclCache: Map<string, Permission> = new Map();
   private channelTreeCache: Map<number, ChannelInfo> | null = null;
   private channelACLCache: Map<number, ACLEntry[]> = new Map();
@@ -90,9 +91,9 @@ export class HubPermissionChecker {
     Permission.TextMessage |
     Permission.Listen;
 
-  constructor(database: HubDatabase, channelGroupManager?: ChannelGroupManager) {
-    this.database = database;
-    this.channelGroupManager = channelGroupManager;
+  constructor(factory: HubHandlerFactory) {
+    this.database = factory.getDatabase();
+    this.channelGroupManager = factory.getChannelGroupManager();
   }
 
   /**
@@ -466,7 +467,7 @@ export class HubPermissionChecker {
   /**
    * 从GlobalSession创建UserInfo
    */
-  static sessionToUserInfo(session: GlobalSession, channelId?: number): UserInfo {
+  sessionToUserInfo(session: GlobalSession, channelId?: number): UserInfo {
     return {
       session_id: session.session_id,
       user_id: session.user_id,

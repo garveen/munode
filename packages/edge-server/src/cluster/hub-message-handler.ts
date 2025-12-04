@@ -33,11 +33,12 @@ export class HubMessageHandlers {
     try {
       logger.info(`Edge: Received UserState broadcast from Hub: ${JSON.stringify(params)}`);
       
-      const { session_id, edge_id, userState: userStateObj } = params;
+      // params 直接就是 userState 对象，包含 session, actor, name 等字段
+      const userStateObj = params;
 
       // 重构UserState对象，只包含实际存在的字段
       const userStateInit: any = {
-        session: userStateObj.session || session_id,
+        session: userStateObj.session,
         actor: userStateObj.actor,
       };
       
@@ -86,12 +87,11 @@ export class HubMessageHandlers {
       
       const userState = new mumbleproto.UserState(userStateInit);
 
-      const targetSession = userState.session || session_id;
+      const targetSession = userState.session;
 
       // 更新本地用户状态镜像（如果是本Edge的用户）
-      if (edge_id === this.config.server_id) {
-        const client = this.clientManager.getClient(targetSession);
-        if (client) {
+      const client = this.clientManager.getClient(targetSession);
+      if (client) {
           const updates: Partial<ClientInfo> = {};
           
           if (userState.has_channel_id && userState.channel_id !== undefined) {
@@ -144,7 +144,6 @@ export class HubMessageHandlers {
             this.clientManager.updateClient(targetSession, updates);
           }
         }
-      }
 
       // Broadcast to all local authenticated clients (if target_sessions provided, only broadcast to these clients)
       const userStateMessage = userState.serialize();
