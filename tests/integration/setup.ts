@@ -67,6 +67,7 @@ export interface TestEnvironment {
   authServer?: http.Server;
   authPort: number;
   hubPort: number;
+  controlPort: number; // Hub 控制端口
   edgePort: number;
   edgeUdpPort: number; // Edge1 的 UDP 端口
   edgePort2: number; // 第二个 Edge 服务器端口
@@ -319,6 +320,9 @@ class TestAuthServer {
       'route_push_user': { password: 'pass1', user_id: 416 },
       'relay_sender': { password: 'pass1', user_id: 417 },
       'relay_receiver': { password: 'pass2', user_id: 418 },
+      // Edge join timing test users
+      'edge_timing_userA': { password: 'password1', user_id: 501 },
+      'edge_timing_userB': { password: 'password2', user_id: 502 },
     };
 
     const user = users[req.username];
@@ -1015,6 +1019,7 @@ export async function setupTestEnvironment(
     authServer: authServer?.getServer(),
     authPort,
     hubPort,
+    controlPort,
     edgePort,
     edgeUdpPort,
     edgePort2,
