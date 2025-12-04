@@ -2439,32 +2439,7 @@ export class HubControlService {
 
     // 映射数据库字段到protocol字段，并加载每个频道的链接
     const channels: ChannelData[] = await Promise.all(
-      dbChannels.map(async (ch) => {
-        // 获取频道的链接信息
-        let links: number[] = [];
-        try {
-          if (this._channelManager) {
-            links = await this._channelManager.getChannelLinks(ch.id);
-          } else {
-            links = await this._database!.getChannelLinks(ch.id);
-          }
-        } catch (error) {
-          logger.warn(`Failed to get links for channel ${ch.id}:`, error);
-          links = [];
-        }
-
-        return {
-          id: ch.id,
-          name: ch.name,
-          parent_id: ch.parent_id >= 0 ? ch.parent_id : undefined, // Skip negative parent_ids (root channel)
-          position: ch.position,
-          max_users: ch.max_users,
-          inherit_acl: ch.inherit_acl,
-          description: ch.description_blob,
-          temporary: false, // 从数据库加载的频道都不是临时频道
-          links, // 从数据库加载的链接信息
-        };
-      })
+      dbChannels.map(ch => this.mapChannelToProtocol(ch, false))
     );
 
     // 获取所有会话（从内存中的 sessionManager 获取当前活跃会话）
@@ -2554,6 +2529,43 @@ export class HubControlService {
     };
   }
 
+  /**
+   * Helper method to load channel links for a single channel
+   * @private
+   */
+  private async loadChannelLinks(channelId: number): Promise<number[]> {
+    try {
+      if (this._channelManager) {
+        return await this._channelManager.getChannelLinks(channelId);
+      } else {
+        return await this._database!.getChannelLinks(channelId);
+      }
+    } catch (error) {
+      logger.warn(`Failed to get links for channel ${channelId}:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Helper method to convert database channel to protocol ChannelData with links
+   * @private
+   */
+  private async mapChannelToProtocol(ch: any, includeRegisterName: boolean = false): Promise<ChannelData> {
+    const links = await this.loadChannelLinks(ch.id);
+    
+    return {
+      id: ch.id,
+      name: includeRegisterName && ch.id === 0 ? (this.config.registerName || 'Root') : ch.name,
+      parent_id: ch.parent_id >= 0 ? ch.parent_id : undefined, // Skip negative parent_ids (root channel)
+      position: ch.position,
+      max_users: ch.max_users,
+      inherit_acl: ch.inherit_acl,
+      description: ch.description_blob,
+      temporary: false, // 从数据库加载的频道都不是临时频道
+      links,
+    };
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private async handleGetChannels(
     _channel: RPCChannel,
@@ -2569,33 +2581,7 @@ export class HubControlService {
 
     // 映射数据库字段到protocol字段，并加载每个频道的链接
     const channels: ChannelData[] = await Promise.all(
-      dbChannels.map(async (ch) => {
-        // 获取频道的链接信息
-        let links: number[] = [];
-        try {
-          if (this._channelManager) {
-            links = await this._channelManager.getChannelLinks(ch.id);
-          } else {
-            links = await this._database!.getChannelLinks(ch.id);
-          }
-        } catch (error) {
-          logger.warn(`Failed to get links for channel ${ch.id}:`, error);
-          links = [];
-        }
-
-        return {
-          id: ch.id,
-          // 对于 root 频道（id=0），使用 registerName 配置或默认值 "Root"
-          name: ch.id === 0 ? (this.config.registerName || 'Root') : ch.name,
-          parent_id: ch.parent_id >= 0 ? ch.parent_id : undefined, // Skip negative parent_ids (root channel)
-          position: ch.position,
-          max_users: ch.max_users,
-          inherit_acl: ch.inherit_acl,
-          description: ch.description_blob,
-          temporary: false, // 从数据库加载的频道都不是临时频道
-          links, // 从数据库加载的链接信息
-        };
-      })
+      dbChannels.map(ch => this.mapChannelToProtocol(ch, true))
     );
 
     return { success: true, channels };
