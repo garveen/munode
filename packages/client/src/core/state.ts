@@ -96,15 +96,41 @@ export class StateManager {
     const channelId = message.channel_id;
     const existingChannel = this.channels.get(channelId);
 
+    // 处理频道链接
+    // 如果提供了 links_add 或 links_remove，进行增量更新
+    // 否则使用 links 字段（可能为空数组）
+    let channelLinks: number[];
+    if (message.links_add !== undefined && message.links_add.length > 0 ||
+        message.links_remove !== undefined && message.links_remove.length > 0) {
+      // 增量更新模式
+      channelLinks = [...(existingChannel?.links || [])];
+      if (message.links_add) {
+        for (const linkId of message.links_add) {
+          if (!channelLinks.includes(linkId)) {
+            channelLinks.push(linkId);
+          }
+        }
+      }
+      if (message.links_remove) {
+        channelLinks = channelLinks.filter(id => !message.links_remove.includes(id));
+      }
+    } else if (message.links !== undefined) {
+      // 完整替换模式
+      channelLinks = message.links;
+    } else {
+      // links 字段未提供，保留现有值
+      channelLinks = existingChannel?.links || [];
+    }
+
     const channel: Channel = {
       channel_id: channelId,
-      parent: message.parent || 0,
-      name: message.name || '',
-      description: message.description || '',
-      temporary: message.temporary || false,
-      position: message.position || 0,
-      links: message.links || [],
-      max_users: message.max_users || 0,
+      parent: message.parent !== undefined ? message.parent : (existingChannel?.parent || 0),
+      name: message.name !== undefined ? message.name : (existingChannel?.name || ''),
+      description: message.description !== undefined ? message.description : (existingChannel?.description || ''),
+      temporary: message.temporary !== undefined ? message.temporary : (existingChannel?.temporary || false),
+      position: message.position !== undefined ? message.position : (existingChannel?.position || 0),
+      links: channelLinks,
+      max_users: message.max_users !== undefined ? message.max_users : (existingChannel?.max_users || 0),
       children: existingChannel?.children || []
     };
 

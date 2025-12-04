@@ -281,6 +281,10 @@ export class HubMessageHandlers {
             // 更新stateManager
             const updatedChannel = { ...existingChannel, ...updates };
             this.stateManager.addOrUpdateChannel(updatedChannel);
+            
+            if (existingChannel.id === 0 && updates.links) {
+              logger.info(`[HUB-HANDLER] Updated stateManager channel 0 with links: [${updates.links.join(', ')}]`);
+            }
           }
         } else {
           // 创建新频道
@@ -294,9 +298,10 @@ export class HubMessageHandlers {
             temporary: channelState.temporary || false,
             inherit_acl: channelState.inherit_acl !== undefined ? channelState.inherit_acl : true,
             children: [],
-            links: [],
+            links: channelState.links || [], // 使用广播中的链接，而不是硬编码为空数组
           };
 
+          logger.debug(`[CHANNEL-LINKS] Created new channel ${channelState.channel_id} with links: [${newChannelData.links.join(', ')}]`);
           this.channelManager.addOrUpdateChannel(newChannelData);
           this.stateManager.addOrUpdateChannel(newChannelData);
         }

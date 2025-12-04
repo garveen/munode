@@ -183,8 +183,9 @@ export class MessageHandlers {
         temporary: ch.temporary || false,
         inherit_acl: ch.inheritAcl !== false, // 默认 true
         children: [],
-        links: [],
+        links: ch.links || [],
       }));
+      
       logger.info(
         `[sendChannelTree] Cluster mode: sending ${channels.length} channels from stateManager to session ${session_id}`
       );
@@ -197,14 +198,11 @@ export class MessageHandlers {
       return;
     }
 
-    logger.debug(`[sendChannelTree] Starting two-pass channel tree sync for session ${session_id}`);
+    logger.debug(`[sendChannelTree] Starting three-pass channel tree sync for session ${session_id}`);
 
-    // === 第一次循环：发送所有频道的基本信息，parent字段设为0（根频道除外不设parent） ===
+    // === Pass 1: Send all channels with basic info, parent=0 (except root which has no parent) ===
+    // Following Mumble protocol: DON'T include links in Pass 1
     for (const channel of channels) {
-      // 从ChannelManager获取links（ChannelManager是实时更新的）
-      const channelObj = this.factory.channelManager.getChannel(channel.id);
-      const links = channelObj?.links || [];
-
       const channelState = new mumbleproto.ChannelState({
         channel_id: channel.id,
         name: channel.name,
@@ -212,10 +210,10 @@ export class MessageHandlers {
         position: channel.position,
         temporary: channel.temporary,
         max_users: channel.max_users || 0,
-        links: links || [],
+        links: [], // Mumble sends links in a separate pass
         links_add: [],
         links_remove: [],
-        // 第一次：根频道(id=0)不设parent，其他频道parent都设为0
+        // Pass 1: root has no parent, others have parent=0
         parent: channel.id === 0 ? undefined : 0,
       });
 
@@ -227,25 +225,21 @@ export class MessageHandlers {
       this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(channelStateMessage));
     }
 
-    // === 第二次循环：仅发送parent关系 ===
+    // === Pass 2: Send parent relationships ===
     for (const channel of channels) {
-      // 根频道跳过（根频道没有parent）
+      // Skip root channel (no parent)
       if (channel.id === 0) {
         continue;
       }
 
       const parentId = this.getChannelParentForProtocol(channel);
-      
-      // 从ChannelManager获取当前的links，避免覆盖
-      const channelObj = this.factory.channelManager.getChannel(channel.id);
-      const currentLinks = channelObj?.links || [];
 
       const channelState = new mumbleproto.ChannelState({
         channel_id: channel.id,
         parent: parentId,
         position: channel.position,
         temporary: channel.temporary,
-        links: currentLinks || [], // 保留现有links
+        links: [], // Mumble doesn't send links in Pass 2 either
         links_add: [],
         links_remove: [],
       });
@@ -258,8 +252,28 @@ export class MessageHandlers {
       this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(channelStateMessage));
     }
 
+    // === Pass 3: Send channel links ===
+    // Following Mumble protocol: Send links in a SEPARATE pass AFTER tree structure
+    for (const channel of channels) {
+      if (channel.links && channel.links.length > 0) {
+        const channelState = new mumbleproto.ChannelState({
+          channel_id: channel.id,
+          links: channel.links, // Send complete link list
+          links_add: [],
+          links_remove: [],
+        });
+
+        logger.debug(
+          `[sendChannelTree] Pass 3: channel ${channel.id} links: [${channel.links.join(', ')}]`
+        );
+
+        const channelStateMessage = new mumbleproto.ChannelState(channelState).serialize();
+        this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(channelStateMessage));
+      }
+    }
+
     logger.info(
-      `[sendChannelTree] Completed two-pass channel tree sync. Sent ${channels.length} channels to session ${session_id}`
+      `[sendChannelTree] Completed three-pass channel tree sync. Sent ${channels.length} channels to session ${session_id}`
     );
   }
 
