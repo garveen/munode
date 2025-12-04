@@ -18,6 +18,8 @@
     "test": "pnpm -r test",
     "test:watch": "pnpm -r test:watch",
     "test:coverage": "pnpm -r test:coverage",
+    "test:unit": "vitest run --config vitest.config.unit.ts",
+    "test:unit:watch": "vitest watch --config vitest.config.unit.ts",
     "test:integration": "vitest run --config vitest.config.integration.ts",
     "test:integration:watch": "vitest watch --config vitest.config.integration.ts",
     "test:integration:ui": "vitest --ui --config vitest.config.integration.ts",
