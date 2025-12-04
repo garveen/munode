@@ -2437,18 +2437,35 @@ export class HubControlService {
       dbChannels = await this._database!.getAllChannels();
     }
 
-    // 映射数据库字段到protocol字段
-    const channels: ChannelData[] = dbChannels.map((ch) => ({
-      id: ch.id,
-      name: ch.name,
-      parent_id: ch.parent_id >= 0 ? ch.parent_id : undefined, // Skip negative parent_ids (root channel)
-      position: ch.position,
-      max_users: ch.max_users,
-      inherit_acl: ch.inherit_acl,
-      description: ch.description_blob,
-      temporary: false, // 从数据库加载的频道都不是临时频道
-      links: [], // TODO: 从数据库获取链接信息
-    }));
+    // 映射数据库字段到protocol字段，并加载每个频道的链接
+    const channels: ChannelData[] = await Promise.all(
+      dbChannels.map(async (ch) => {
+        // 获取频道的链接信息
+        let links: number[] = [];
+        try {
+          if (this._channelManager) {
+            links = await this._channelManager.getChannelLinks(ch.id);
+          } else {
+            links = await this._database!.getChannelLinks(ch.id);
+          }
+        } catch (error) {
+          logger.warn(`Failed to get links for channel ${ch.id}:`, error);
+          links = [];
+        }
+
+        return {
+          id: ch.id,
+          name: ch.name,
+          parent_id: ch.parent_id >= 0 ? ch.parent_id : undefined, // Skip negative parent_ids (root channel)
+          position: ch.position,
+          max_users: ch.max_users,
+          inherit_acl: ch.inherit_acl,
+          description: ch.description_blob,
+          temporary: false, // 从数据库加载的频道都不是临时频道
+          links, // 从数据库加载的链接信息
+        };
+      })
+    );
 
     // 获取所有会话（从内存中的 sessionManager 获取当前活跃会话）
     let sessions: GlobalSession[] = this._sessionManager.getAllSessions();
