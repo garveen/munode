@@ -99,7 +99,9 @@ export class HubServer {
       this.certExchange,
       this.database,
       this.aclManager,
+      this.channelManager,
       this.channelGroupManager,
+      this.banManager,
       this.blobStore,
       this.authManager
     );

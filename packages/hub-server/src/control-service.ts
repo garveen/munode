@@ -27,6 +27,8 @@ import type { CertificateExchangeService } from './certificate-exchange.js';
 import type { HubDatabase } from './database.js';
 import type { ACLManager } from './acl-manager.js';
 import type { ChannelGroupManager } from './channel-group-manager.js';
+import type { ChannelManager } from './channel-manager.js';
+import type { BanManager } from './ban-manager.js';
 import type { HubAuthManager } from './auth-manager.js';
 import { HubPermissionChecker, Permission } from './permission-checker.js';
 import { NetworkTopologyManager, type RouteEntry } from './network-topology-manager.js';
@@ -52,7 +54,9 @@ export class HubControlService {
   private _certExchange: CertificateExchangeService;
   private _database?: HubDatabase;
   private _aclManager?: ACLManager;
+  private _channelManager?: ChannelManager;
   private _channelGroupManager?: ChannelGroupManager;
+  private _banManager?: BanManager;
   private _permissionChecker?: HubPermissionChecker;
   private _blobStore?: BlobStore;
   private _authManager?: HubAuthManager;
@@ -68,7 +72,9 @@ export class HubControlService {
     certExchange: CertificateExchangeService,
     database?: HubDatabase,
     aclManager?: ACLManager,
+    channelManager?: ChannelManager,
     channelGroupManager?: ChannelGroupManager,
+    banManager?: BanManager,
     blobStore?: BlobStore,
     authManager?: HubAuthManager
   ) {
@@ -79,7 +85,9 @@ export class HubControlService {
     this._certExchange = certExchange;
     this._database = database;
     this._aclManager = aclManager;
+    this._channelManager = channelManager;
     this._channelGroupManager = channelGroupManager;
+    this._banManager = banManager;
     this._blobStore = blobStore;
     this._authManager = authManager;
     
@@ -874,8 +882,10 @@ export class HubControlService {
         const parent_id = channelStateObj.parent !== undefined ? channelStateObj.parent : 0;
         
         // 检查父频道是否存在
-        if (parent_id > 0 && this._database) {
-          const parentChannel = await this._database.getChannel(parent_id);
+        if (parent_id > 0) {
+          const parentChannel = this._channelManager
+            ? this._channelManager.getChannel(parent_id)
+            : await this._database!.getChannel(parent_id);
           if (!parentChannel) {
             this.notify(edge_id, 'hub.channelStateResponse', {
               success: false,
@@ -924,14 +934,23 @@ export class HubControlService {
         }
 
         // 创建频道
-        channel_id = await this._database.createChannel({
-          name: channelStateObj.name,
-          parent_id: parent_id,
-          position: channelStateObj.position || 0,
-          max_users: channelStateObj.max_users || 0,
-          inherit_acl: true,
-          description_blob: channelStateObj.description || '',
-        });
+        channel_id = this._channelManager 
+          ? await this._channelManager.createChannel({
+              name: channelStateObj.name,
+              parent_id: parent_id,
+              position: channelStateObj.position || 0,
+              max_users: channelStateObj.max_users || 0,
+              inherit_acl: true,
+              description_blob: channelStateObj.description || '',
+            })
+          : await this._database!.createChannel({
+              name: channelStateObj.name,
+              parent_id: parent_id,
+              position: channelStateObj.position || 0,
+              max_users: channelStateObj.max_users || 0,
+              inherit_acl: true,
+              description_blob: channelStateObj.description || '',
+            });
 
         // 更新channelState对象的channel_id（用于广播）
         channelStateObj.channel_id = channel_id;
@@ -944,7 +963,9 @@ export class HubControlService {
         channel_id = channelStateObj.channel_id;
         
         // 检查频道是否存在
-        const channel = await this._database.getChannel(channel_id);
+        const channel = this._channelManager
+          ? this._channelManager.getChannel(channel_id)
+          : await this._database!.getChannel(channel_id);
         if (!channel) {
           this.notify(edge_id, 'hub.channelStateResponse', {
             success: false,
@@ -1036,7 +1057,9 @@ export class HubControlService {
             
           // 检查新父频道是否存在
           if (newParentId > 0) {
-            const newParent = await this._database.getChannel(newParentId);
+            const newParent = this._channelManager
+              ? this._channelManager.getChannel(newParentId)
+              : await this._database!.getChannel(newParentId);
             if (!newParent) {
               this.notify(edge_id, 'hub.channelStateResponse', {
                 success: false,
@@ -1112,7 +1135,11 @@ export class HubControlService {
         }
         
         if (Object.keys(updates).length > 0) {
-          await this._database.updateChannel(channel_id, updates);
+          if (this._channelManager) {
+            await this._channelManager.updateChannel(channel_id, updates);
+          } else {
+            await this._database!.updateChannel(channel_id, updates);
+          }
           logger.info(`Channel ${channel_id} updated by ${actor_username}: ${changes.join(', ')}`);
           
           // 清除权限缓存
@@ -1127,7 +1154,9 @@ export class HubControlService {
         if (channelStateObj.links_add && Array.isArray(channelStateObj.links_add) && channelStateObj.links_add.length > 0) {
           for (const linkChannelId of channelStateObj.links_add) {
             // 检查链接目标频道是否存在
-            const linkChannel = await this._database.getChannel(linkChannelId);
+            const linkChannel = this._channelManager
+              ? this._channelManager.getChannel(linkChannelId)
+              : await this._database!.getChannel(linkChannelId);
             if (!linkChannel) {
               logger.warn(`Link target channel ${linkChannelId} not found, skipping`);
               continue;
@@ -1162,8 +1191,12 @@ export class HubControlService {
             }
 
             // 添加双向链接
-            await this._database.linkChannels(channel_id, linkChannelId);
-            await this._database.linkChannels(linkChannelId, channel_id);
+            if (this._channelManager) {
+              await this._channelManager.linkChannels(channel_id, linkChannelId);
+            } else {
+              // database.linkChannels already handles bidirectional linking
+              await this._database!.linkChannels(channel_id, linkChannelId);
+            }
             
             affectedChannels.add(linkChannelId);
             logger.info(`Channel ${channel_id} linked to ${linkChannelId} by ${actor_username}`);
@@ -1195,8 +1228,12 @@ export class HubControlService {
             }
 
             // 移除双向链接
-            await this._database.unlinkChannels(channel_id, unlinkChannelId);
-            await this._database.unlinkChannels(unlinkChannelId, channel_id);
+            if (this._channelManager) {
+              await this._channelManager.unlinkChannels(channel_id, unlinkChannelId);
+            } else {
+              // database.unlinkChannels already handles bidirectional removal
+              await this._database!.unlinkChannels(channel_id, unlinkChannelId);
+            }
             
             affectedChannels.add(unlinkChannelId);
             logger.info(`Channel ${channel_id} unlinked from ${unlinkChannelId} by ${actor_username}`);
@@ -1204,15 +1241,21 @@ export class HubControlService {
         }
 
         // 更新channelState对象的links字段（用于广播）
-        if (this._database) {
+        if (this._channelManager) {
+          channelStateObj.links = await this._channelManager.getChannelLinks(channel_id);
+        } else if (this._database) {
           channelStateObj.links = await this._database.getChannelLinks(channel_id);
         }
 
         // 广播受影响频道的状态更新
         for (const affectedChannelId of affectedChannels) {
-          const affectedChannel = await this._database.getChannel(affectedChannelId);
+          const affectedChannel = this._channelManager
+            ? this._channelManager.getChannel(affectedChannelId)
+            : await this._database!.getChannel(affectedChannelId);
           if (affectedChannel) {
-            const affectedLinks = await this._database.getChannelLinks(affectedChannelId);
+            const affectedLinks = this._channelManager
+              ? await this._channelManager.getChannelLinks(affectedChannelId)
+              : await this._database!.getChannelLinks(affectedChannelId);
             this.broadcast('hub.channelStateBroadcast', {
               channelState: {
                 channel_id: affectedChannelId,
@@ -1299,20 +1342,31 @@ export class HubControlService {
       }
 
       // 如果是ban，记录到数据库
-      if (ban && this._database) {
+      if (ban) {
         // 将IP地址转换为Buffer
         // 简化处理：使用IP字符串的hash作为标识
         const ipBuffer = Buffer.from(targetSession.ip_address || '0.0.0.0');
         
         // 添加ban记录
-        await this._database.addBan({
-          address: ipBuffer,
-          mask: 32, // 精确匹配单个IP
-          hash: targetSession.cert_hash,
-          reason: reason || 'No reason provided',
-          start: Math.floor(Date.now() / 1000), // Unix timestamp in seconds
-          duration: 0, // 0表示永久ban
-        });
+        if (this._banManager) {
+          await this._banManager.addBan({
+            address: ipBuffer,
+            mask: 32, // 精确匹配单个IP
+            hash: targetSession.cert_hash,
+            reason: reason || 'No reason provided',
+            start: Math.floor(Date.now() / 1000), // Unix timestamp in seconds
+            duration: 0, // 0表示永久ban
+          });
+        } else if (this._database) {
+          await this._database.addBan({
+            address: ipBuffer,
+            mask: 32,
+            hash: targetSession.cert_hash,
+            reason: reason || 'No reason provided',
+            start: Math.floor(Date.now() / 1000),
+            duration: 0,
+          });
+        }
         logger.info(`User ${targetSession.username} (session ${target_session}) banned by ${actor_username}, reason: ${reason}`);
       } else {
         logger.info(`User ${targetSession.username} (session ${target_session}) kicked by ${actor_username}, reason: ${reason}`);
@@ -1374,7 +1428,9 @@ export class HubControlService {
       }
 
       // 获取频道
-      const channel = await this._database.getChannel(channel_id);
+      const channel = this._channelManager
+        ? this._channelManager.getChannel(channel_id)
+        : await this._database!.getChannel(channel_id);
       if (!channel) {
         this.notify(edge_id, 'hub.channelRemoveResponse', {
           success: false,
@@ -1438,7 +1494,11 @@ export class HubControlService {
 
       // 删除频道（递归删除）
       for (const cid of channelsToRemove) {
-        await this._database.deleteChannel(cid);
+        if (this._channelManager) {
+          await this._channelManager.deleteChannel(cid);
+        } else {
+          await this._database!.deleteChannel(cid);
+        }
         // 清除权限缓存
         if (this._permissionChecker) {
           this._permissionChecker.clearCacheForChannel(cid);
@@ -1569,13 +1629,15 @@ export class HubControlService {
           const channelsInTree: number[] = [];
           const collectChannels = async (channel_id: number) => {
             channelsInTree.push(channel_id);
-            if (this._database) {
-              const channel = await this._database.getChannel(channel_id);
-              if (channel) {
-                const children = await this._database.getChildChannels(channel_id);
-                for (const child of children) {
-                  await collectChannels(child.id);
-                }
+            const channel = this._channelManager
+              ? this._channelManager.getChannel(channel_id)
+              : this._database ? await this._database.getChannel(channel_id) : null;
+            if (channel) {
+              const children = this._channelManager
+                ? await this._channelManager.getChildChannels(channel_id)
+                : this._database ? await this._database.getChildChannels(channel_id) : [];
+              for (const child of children) {
+                await collectChannels(child.id);
               }
             }
           };
@@ -2368,7 +2430,12 @@ export class HubControlService {
     params: RPCParams<'edge.fullSync'>
   ): Promise<RPCResult<'edge.fullSync'>> {
     // 获取所有频道
-    const dbChannels = await this._database.getAllChannels();
+    let dbChannels;
+    if (this._channelManager) {
+      dbChannels = this._channelManager.getAllChannels();
+    } else {
+      dbChannels = await this._database!.getAllChannels();
+    }
 
     // 映射数据库字段到protocol字段
     const channels: ChannelData[] = dbChannels.map((ch) => ({
@@ -2475,7 +2542,13 @@ export class HubControlService {
     _channel: RPCChannel,
     _params: RPCParams<'edge.getChannels'>
   ): Promise<RPCResult<'edge.getChannels'>> {
-    const dbChannels = await this._database.getAllChannels();
+    // Use ChannelManager if available, otherwise fall back to direct database access
+    let dbChannels;
+    if (this._channelManager) {
+      dbChannels = this._channelManager.getAllChannels();
+    } else {
+      dbChannels = await this._database!.getAllChannels();
+    }
 
     // 映射数据库字段到protocol字段
     const channels: ChannelData[] = dbChannels.map((ch) => ({
@@ -2499,7 +2572,9 @@ export class HubControlService {
     _channel: RPCChannel,
     params: RPCParams<'edge.getACLs'>
   ): Promise<RPCResult<'edge.getACLs'>> {
-    const dbAcls = await this._database.getChannelACLs(params.channel_id);
+    const dbAcls = this._aclManager
+      ? await this._aclManager.getChannelACLs(params.channel_id)
+      : await this._database!.getChannelACLs(params.channel_id);
     const acls: ACLData[] = dbAcls.map((acl) => ({
       id: acl.id,
       channel_id: acl.channel_id,
@@ -2537,7 +2612,9 @@ export class HubControlService {
       const acl = mumbleproto.ACL.deserialize(aclData);
 
       // 获取频道信息
-      const channel = await this._database.getChannel(channel_id);
+      const channel = this._channelManager
+        ? this._channelManager.getChannel(channel_id)
+        : await this._database!.getChannel(channel_id);
       if (!channel) {
         logger.warn(`ACL for non-existent channel: ${channel_id}`);
         return { success: false, error: 'Channel not found' };
@@ -2604,7 +2681,9 @@ export class HubControlService {
         let currentChannelId: number | null = channel_id;
         
         while (currentChannelId !== null && currentChannelId >= 0) {
-          const ch = await this._database.getChannel(currentChannelId);
+          const ch = this._channelManager
+            ? this._channelManager.getChannel(currentChannelId)
+            : await this._database!.getChannel(currentChannelId);
           if (!ch) break;
           
           channelsInChain.unshift({ id: ch.id, inherit_acl: ch.inherit_acl, parent_id: ch.parent_id });
@@ -2623,7 +2702,9 @@ export class HubControlService {
         const allACLs: mumbleproto.ACL.ChanACL[] = [];
 
         for (const iterChannel of channelsInChain) {
-          const channelACLs = await this._database.getChannelACLs(iterChannel.id);
+          const channelACLs = this._aclManager
+            ? await this._aclManager.getChannelACLs(iterChannel.id)
+            : await this._database!.getChannelACLs(iterChannel.id);
           logger.debug(`Channel ${iterChannel.id} has ${channelACLs.length} ACL entries`);
           
           for (const aclEntry of channelACLs) {
@@ -2711,7 +2792,11 @@ export class HubControlService {
 
         // 更新频道的 inherit_acl 设置
         if (acl.inherit_acls !== undefined && acl.inherit_acls !== channel.inherit_acl) {
-          await this._database.updateChannel(channel_id, { inherit_acl: acl.inherit_acls });
+          if (this._channelManager) {
+            await this._channelManager.updateChannel(channel_id, { inherit_acl: acl.inherit_acls });
+          } else {
+            await this._database!.updateChannel(channel_id, { inherit_acl: acl.inherit_acls });
+          }
           logger.info(`Channel ${channel_id} inherit_acl updated to ${acl.inherit_acls}`);
         }
 
@@ -2840,7 +2925,9 @@ export class HubControlService {
         updates.description_blob = params.channel.description_blob || params.channel.description;
       }
 
-      await this._database.updateChannel(params.channel.id, updates);
+      await (this._channelManager 
+        ? this._channelManager.updateChannel(params.channel.id, updates)
+        : this._database!.updateChannel(params.channel.id, updates));
       channel_id = params.channel.id;
     } else {
       // 创建新频道 - 必须提供所有必需字段的默认值
@@ -2856,7 +2943,9 @@ export class HubControlService {
         description_blob: params.channel.description_blob || params.channel.description || '',
       };
       
-      channel_id = await this._database.createChannel(channelData);
+      channel_id = this._channelManager 
+        ? await this._channelManager.createChannel(channelData)
+        : await this._database!.createChannel(channelData);
     }
 
     return { success: true, channel_id };
