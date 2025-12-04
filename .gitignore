@@ -53,3 +53,4 @@ temp/
 # PM2
 .pm2/
 pm2.log
+test-channel-persistence.mjs
