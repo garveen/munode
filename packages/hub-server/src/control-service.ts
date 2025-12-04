@@ -1194,8 +1194,8 @@ export class HubControlService {
             if (this._channelManager) {
               await this._channelManager.linkChannels(channel_id, linkChannelId);
             } else {
+              // database.linkChannels already handles bidirectional linking
               await this._database!.linkChannels(channel_id, linkChannelId);
-              await this._database!.linkChannels(linkChannelId, channel_id);
             }
             
             affectedChannels.add(linkChannelId);
@@ -1231,8 +1231,8 @@ export class HubControlService {
             if (this._channelManager) {
               await this._channelManager.unlinkChannels(channel_id, unlinkChannelId);
             } else {
+              // database.unlinkChannels already handles bidirectional removal
               await this._database!.unlinkChannels(channel_id, unlinkChannelId);
-              await this._database!.unlinkChannels(unlinkChannelId, channel_id);
             }
             
             affectedChannels.add(unlinkChannelId);
