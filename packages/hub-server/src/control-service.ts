@@ -2555,7 +2555,7 @@ export class HubControlService {
       id: ch.id,
       // 对于 root 频道（id=0），使用 registerName 配置或默认值 "Root"
       name: ch.id === 0 ? (this.config.registerName || 'Root') : ch.name,
-      parent_id: ch.parent_id,
+      parent_id: ch.parent_id >= 0 ? ch.parent_id : undefined, // Skip negative parent_ids (root channel)
       position: ch.position,
       max_users: ch.max_users,
       inherit_acl: ch.inherit_acl,
