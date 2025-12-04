@@ -133,7 +133,7 @@ export class PermissionHandlers {
         return;
       }
 
-      logger.info(`Forwarding PermissionQuery from session ${session_id} to Hub, channel: ${permQuery.channel_id}`);
+      logger.debug(`Forwarding PermissionQuery from session ${session_id} to Hub, channel: ${permQuery.channel_id}`);
 
       // 转发到 Hub（使用 RPC call）
       const result = await this.hubClient.call('edge.handlePermissionQuery', {
@@ -174,7 +174,7 @@ export class PermissionHandlers {
         Buffer.from(permissionQueryResponse.serialize())
       );
 
-      logger.info(`Sent permission query response for channel ${permQuery.channel_id} to session ${session_id}: ${result.permissions}`);
+      logger.debug(`Sent permission query response for channel ${permQuery.channel_id} to session ${session_id}: ${result.permissions}`);
     } catch (error) {
       logger.error(`Error handling PermissionQuery for session ${session_id}:`, error);
     }

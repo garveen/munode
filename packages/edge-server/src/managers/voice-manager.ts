@@ -297,7 +297,7 @@ export class VoiceManager {
         senderChannelId = remoteUser.channel_id;
       }
 
-      logger.info(
+      logger.debug(
         `[VOICE-REMOTE] Routing remote voice: ` +
         `session=${senderSession}, target=${targetId}, channel=${senderChannelId}, codec=${codec}`
       );

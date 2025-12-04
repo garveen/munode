@@ -3,6 +3,8 @@ import type { BanData } from '@munode/protocol';
 import * as crypto from 'crypto';
 import * as ipaddr from 'ipaddr.js';
 import type { ChannelManager } from '../models/channel.js';
+import type {ChannelData} from '@munode/protocol';
+import type { ChannelInfo } from '@munode/protocol';
 
 const logger = createLogger({ service: 'edge-state-manager' });
 
@@ -11,17 +13,6 @@ const logger = createLogger({ service: 'edge-state-manager' });
 // ==================
 
 // Channel 数据类型
-export interface ChannelData {
-  id: number;
-  name?: string;
-  parent_id?: number;
-  position?: number;
-  maxUsers?: number;
-  inheritAcl?: boolean;
-  description?: string;
-  temporary?: boolean;
-  links?: number[];
-}
 
 // ==================
 // Helper Functions
@@ -30,14 +21,14 @@ export interface ChannelData {
 /**
  * Convert ChannelInfo to ChannelData
  */
-function channelInfoToData(info: import('../types.ts').ChannelInfo): ChannelData {
+function channelInfoToData(info: ChannelInfo): ChannelData {
   return {
-    id: info.id,
+    channel_id: info.id,
     name: info.name,
     parent_id: info.parent_id,
     position: info.position,
-    maxUsers: info.max_users,
-    inheritAcl: info.inherit_acl,
+    max_users: info.max_users,
+    inherit_acl: info.inherit_acl,
     description: info.description,
     temporary: info.temporary,
     links: info.links,
@@ -47,14 +38,14 @@ function channelInfoToData(info: import('../types.ts').ChannelInfo): ChannelData
 /**
  * Convert ChannelData to ChannelInfo (for add/update operations)
  */
-function channelDataToInfo(data: ChannelData): import('../types.ts').ChannelInfo {
+function channelDataToInfo(data: ChannelData): ChannelInfo {
   return {
-    id: data.id,
+    id: data.channel_id,
     name: data.name || '',
-    parent_id: data.id === 0 ? undefined : (data.parent_id ?? 0),
+    parent_id: data.channel_id === 0 ? undefined : (data.parent_id ?? 0),
     position: data.position || 0,
-    max_users: data.maxUsers || 0,
-    inherit_acl: data.inheritAcl ?? true,
+    max_users: data.max_users || 0,
+    inherit_acl: data.inherit_acl ?? true,
     description: data.description || '',
     temporary: data.temporary || false,
     children: [], // ChannelManager manages this
@@ -668,9 +659,8 @@ export class EdgeStateManager {
   /**
    * 添加或更新频道（用于本地操作）
    */
-  addOrUpdateChannel(channel: ChannelData): void {
-    const channelInfo = channelDataToInfo(channel);
-    this.channelManager.addOrUpdateChannel(channelInfo);
+  addOrUpdateChannel(channel: ChannelInfo): void {
+    this.channelManager.addOrUpdateChannel(channel);
   }
 
   /**
@@ -709,7 +699,7 @@ export class EdgeStateManager {
     bans: string;
   } {
     const channelsData = this.getAllChannels()
-      .map(ch => [ch.id, ch] as [number, ChannelData])
+      .map(ch => [ch.channel_id, ch] as [number, ChannelData])
       .sort((a, b) => a[0] - b[0]);
     const aclsData = Array.from(this.acls.entries()).sort((a, b) => a[0] - b[0]);
     const bansData = this.bans.getAll().sort((a, b) => a.id - b.id);
@@ -736,7 +726,7 @@ export class EdgeStateManager {
     lastSyncTimestamp: number;
     lastSyncSequence: number;
   } {
-    const channelEntries = this.getAllChannels().map(ch => [ch.id, ch] as [number, ChannelData]);
+    const channelEntries = this.getAllChannels().map(ch => [ch.channel_id, ch] as [number, ChannelData]);
     return {
       channels: channelEntries,
       acls: Array.from(this.acls.entries()),

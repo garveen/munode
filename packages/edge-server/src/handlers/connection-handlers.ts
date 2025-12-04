@@ -116,7 +116,7 @@ export class ConnectionHandlers {
             // 所以后续不应该再次调用 decrypt
             matchedClient = client;
             decryptedData = decrypted.data; // 保存解密后的数据
-            logger.info(`UDP address matched by decryption: ${addressKey} -> session ${client.session} (${client.username})`);
+            logger.debug(`UDP address matched by decryption: ${addressKey} -> session ${client.session} (${client.username})`);
             break;
           }
         } catch (error) {
@@ -142,7 +142,7 @@ export class ConnectionHandlers {
     const client = this.clientManager.getClient(session_id);
     if (client && (client.udp_ip !== rinfo.address || client.udp_port !== rinfo.port)) {
       needsUpdate = true;
-      logger.info(`UDP address changed for session ${session_id}: ${client.udp_ip}:${client.udp_port} -> ${rinfo.address}:${rinfo.port}`);
+      logger.debug(`UDP address changed for session ${session_id}: ${client.udp_ip}:${client.udp_port} -> ${rinfo.address}:${rinfo.port}`);
     }
 
     // 5. 更新映射和客户端信息（如果需要）

@@ -233,12 +233,6 @@ export class VoiceUDPTransport extends EventEmitter {
         return;
       }
 
-      console.debug(
-        `Received voice packet from ${rinfo.address}:${rinfo.port}: ` +
-        `sender=${packet.header.senderId}, target=${packet.header.targetId}, ` +
-        `codec=${packet.header.codec}, voice_data_size=${packet.voiceData.length}`
-      );
-
       // 发出事件
       // voiceData 是去除了自定义header后的完整 Mumble 语音包
       this.emit('voice-packet', packet, rinfo);

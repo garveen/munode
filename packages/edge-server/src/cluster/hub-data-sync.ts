@@ -34,11 +34,16 @@ export class HubDataManager {
       // 从Hub获取所有频道
       const channels = await this.hubClient.getChannels();
       logger.info(`Loaded ${channels.length} channels from Hub`);
+      
+      // DEBUG: 打印每个从Hub收到的频道数据
+      for (const ch of channels) {
+        logger.info(`[hub-data-sync] Hub returned channel: id=${ch.channel_id}, name=${ch.name}, parent_id=${ch.parent_id}`);
+      }
 
       // 重建频道树结构
       for (const channelData of channels) {
         const channel: ChannelInfo = {
-          id: channelData.id,
+          id: channelData.channel_id,
           name: channelData.name,
           // Hub返回的是parent_id，需要转换为parent_id
           parent_id: channelData.parent_id === null || channelData.parent_id === undefined ? 0 : channelData.parent_id,

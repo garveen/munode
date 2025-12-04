@@ -12,9 +12,9 @@
  */
 
 import { logger } from '@munode/common';
-import { mumbleproto } from '@munode/protocol';
+import {  mumbleproto } from '@munode/protocol';
 import { MessageType } from '@munode/protocol';
-import type { ClientInfo } from '../types.js';
+import type { ChannelInfo, ClientInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
 export class HubMessageHandlers {
@@ -288,7 +288,7 @@ export class HubMessageHandlers {
           }
         } else {
           // 创建新频道
-          const newChannelData = {
+          const newChannelData: ChannelInfo = {
             id: channelState.channel_id,
             name: channelState.name || 'Unnamed Channel',
             parent_id: channelState.parent || 0,

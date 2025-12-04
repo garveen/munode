@@ -156,15 +156,14 @@ export class MessageHandlers {
   /**
    * 发送频道树给客户端
    * 
-   * 重要：模仿Go服务器的两次发送策略，避免客户端报错
-   * "Server asked to move a channel into itself or one of its children"
+   * 实现方式：模仿官方C实现（Murmur）的BFS遍历方式
    * 
-   * 原因：Mumble客户端在收到包含parent字段的ChannelState时会立即执行移动操作，
-   * 如果一次性发送所有频道信息（包含parent），可能导致循环引用检查失败。
+   * 官方实现策略：
+   * 1. 使用BFS（广度优先搜索）遍历频道树
+   * 2. 在第一次遍历中，发送所有频道的完整信息（包括正确的parent、name、description等）
+   * 3. 在第二次遍历中，单独发送频道链接（links）
    * 
-   * 解决方案：
-   * 1. 第一次：发送所有频道的基本信息（name、description等），但parent设为0（根频道除外）
-   * 2. 第二次：仅发送频道的parent关系，此时所有频道都已在客户端创建完毕
+   * 注意：Go实现使用了两次发送parent的策略，但C实现不需要
    */
   sendChannelTree(session_id: number): void {
     let channels: ChannelInfo[];
@@ -172,21 +171,27 @@ export class MessageHandlers {
     // 在集群模式下，从stateManager获取频道（Hub同步的数据）
     if (this.stateManager) {
       const stateChannels = this.stateManager.getAllChannels();
+      
+      logger.debug(`[sendChannelTree] DEBUG: stateManager.getAllChannels() returned ${stateChannels.length} channels`);
+      stateChannels.forEach(ch => {
+        logger.debug(`[sendChannelTree] DEBUG: Channel from state: id=${ch.channel_id}, name=${ch.name}, parent_id=${ch.parent_id}`);
+      });
+      
       // 转换ChannelData为ChannelInfo
       channels = stateChannels.map((ch) => ({
-        id: ch.id,
+        id: ch.channel_id,
         name: ch.name,
-        parent_id: ch.id === 0 ? -1 : (ch.parent_id ?? 0),
+        parent_id: ch.channel_id === 0 ? -1 : (ch.parent_id ?? 0),
         description: ch.description || '',
         position: ch.position || 0,
-        max_users: ch.maxUsers || 0,
+        max_users: ch.max_users || 0,
         temporary: ch.temporary || false,
-        inherit_acl: ch.inheritAcl !== false, // 默认 true
+        inherit_acl: ch.inherit_acl !== false, // 默认 true
         children: [],
         links: ch.links || [],
       }));
       
-      logger.info(
+      logger.debug(
         `[sendChannelTree] Cluster mode: sending ${channels.length} channels from stateManager to session ${session_id}`
       );
     } else {
@@ -198,82 +203,118 @@ export class MessageHandlers {
       return;
     }
 
-    logger.debug(`[sendChannelTree] Starting three-pass channel tree sync for session ${session_id}`);
-
-    // === Pass 1: Send all channels with basic info, parent=0 (except root which has no parent) ===
-    // Following Mumble protocol: DON'T include links in Pass 1
+    // 构建频道映射和父子关系
+    const channelMap = new Map<number, ChannelInfo>();
+    const childrenMap = new Map<number, ChannelInfo[]>();
+    
     for (const channel of channels) {
-      const channelState = new mumbleproto.ChannelState({
+      channelMap.set(channel.id, channel);
+      
+      // 初始化children数组
+      if (!childrenMap.has(channel.id)) {
+        childrenMap.set(channel.id, []);
+      }
+      
+      // 添加到父频道的children列表
+      const parentId = channel.id === 0 ? -1 : (channel.parent_id ?? 0);
+      if (parentId >= 0 && parentId !== channel.id) {
+        if (!childrenMap.has(parentId)) {
+          childrenMap.set(parentId, []);
+        }
+        childrenMap.get(parentId)!.push(channel);
+      }
+    }
+
+    logger.debug(`[sendChannelTree] Starting BFS channel tree traversal for session ${session_id}`);
+
+    // === Pass 1: BFS遍历发送所有频道的完整信息 ===
+    const queue: ChannelInfo[] = [];
+    const visited = new Set<number>();
+    const channelsToSendLinks: ChannelInfo[] = [];
+    
+    // 从根频道开始
+    const rootChannel = channelMap.get(0);
+    if (!rootChannel) {
+      logger.error('[sendChannelTree] Root channel (ID=0) not found!');
+      return;
+    }
+    
+    queue.push(rootChannel);
+    visited.add(0);
+    
+    while (queue.length > 0) {
+      const channel = queue.shift()!;
+      
+      // 准备ChannelState消息
+      const parentId = this.getChannelParentForProtocol(channel);
+      
+      // 构造ChannelState对象 - 注意：根频道不应该设置parent字段
+      const channelStateData: any = {
         channel_id: channel.id,
         name: channel.name,
         description: channel.description || '',
         position: channel.position,
         temporary: channel.temporary,
         max_users: channel.max_users || 0,
-        links: [], // Mumble sends links in a separate pass
+        // 不在第一遍发送links
+        links: [],
         links_add: [],
         links_remove: [],
-        // Pass 1: root has no parent, others have parent=0
-        parent: channel.id === 0 ? undefined : 0,
-      });
+      };
+      
+      // 只有非根频道才设置parent
+      if (parentId !== undefined) {
+        channelStateData.parent = parentId;
+      }
+      
+      const channelState = new mumbleproto.ChannelState(channelStateData);
 
       logger.debug(
-        `[sendChannelTree] Pass 1: channel ${channel.id} (${channel.name}), parent=${channel.id === 0 ? 'undefined' : 0}`
+        `[sendChannelTree] BFS: channel ${channel.id} (${channel.name}), ` +
+        `parent=${parentId === undefined ? 'NONE' : parentId}, ` +
+        `has_parent=${channelState.has_parent}, ` +
+        `pos=${channel.position}`
       );
 
-      const channelStateMessage = new mumbleproto.ChannelState(channelState).serialize();
+      const channelStateMessage = channelState.serialize();
       this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(channelStateMessage));
+      
+      // 如果有links，记录下来稍后发送
+      if (channel.links && channel.links.length > 0) {
+        channelsToSendLinks.push(channel);
+      }
+      
+      // 将子频道加入队列（按position排序）
+      const children = childrenMap.get(channel.id) || [];
+      children.sort((a, b) => (a.position || 0) - (b.position || 0));
+      
+      for (const child of children) {
+        if (!visited.has(child.id)) {
+          visited.add(child.id);
+          queue.push(child);
+        }
+      }
     }
 
-    // === Pass 2: Send parent relationships ===
-    for (const channel of channels) {
-      // Skip root channel (no parent)
-      if (channel.id === 0) {
-        continue;
-      }
-
-      const parentId = this.getChannelParentForProtocol(channel);
-
+    // === Pass 2: 发送频道链接 ===
+    for (const channel of channelsToSendLinks) {
       const channelState = new mumbleproto.ChannelState({
         channel_id: channel.id,
-        parent: parentId,
-        position: channel.position,
-        temporary: channel.temporary,
-        links: [], // Mumble doesn't send links in Pass 2 either
+        links: channel.links, // 发送完整链接列表
         links_add: [],
         links_remove: [],
       });
 
       logger.debug(
-        `[sendChannelTree] Pass 2: channel ${channel.id} parent relationship, parent=${parentId}`
+        `[sendChannelTree] Links: channel ${channel.id} links: [${channel.links.join(', ')}]`
       );
 
-      const channelStateMessage = new mumbleproto.ChannelState(channelState).serialize();
+      const channelStateMessage = channelState.serialize();
       this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(channelStateMessage));
-    }
-
-    // === Pass 3: Send channel links ===
-    // Following Mumble protocol: Send links in a SEPARATE pass AFTER tree structure
-    for (const channel of channels) {
-      if (channel.links && channel.links.length > 0) {
-        const channelState = new mumbleproto.ChannelState({
-          channel_id: channel.id,
-          links: channel.links, // Send complete link list
-          links_add: [],
-          links_remove: [],
-        });
-
-        logger.debug(
-          `[sendChannelTree] Pass 3: channel ${channel.id} links: [${channel.links.join(', ')}]`
-        );
-
-        const channelStateMessage = new mumbleproto.ChannelState(channelState).serialize();
-        this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(channelStateMessage));
-      }
     }
 
     logger.info(
-      `[sendChannelTree] Completed three-pass channel tree sync. Sent ${channels.length} channels to session ${session_id}`
+      `[sendChannelTree] Completed BFS channel tree traversal. Sent ${visited.size} channels (${channelsToSendLinks.length} with links) to session ${session_id}`
     );
   }
 

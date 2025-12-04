@@ -193,7 +193,7 @@ export class VoiceRouter extends EventEmitter {
    * 这样可以在第一次 UDP Ping 时就建立 UDP 连接
    */
   private handleUDPPing(session_id: number, plaintextData: Buffer, rinfo: any): void {
-    this.logger.info(`[UDP] Handling ping from session ${session_id}, data size: ${plaintextData.length}`);
+    this.logger.debug(`[UDP] Handling ping from session ${session_id}, data size: ${plaintextData.length}`);
     if (!this.udpServer) {
       this.logger.warn('[UDP] No UDP server available for ping response');
       return;
@@ -227,7 +227,7 @@ export class VoiceRouter extends EventEmitter {
         if (err) {
           this.logger.error(`Failed to send UDP ping response to session ${session_id}:`, err);
         } else {
-          this.logger.info(`Sent UDP ping response to session ${session_id} at ${address}:${port}`);
+          this.logger.debug(`Sent UDP ping response to session ${session_id} at ${address}:${port}`);
         }
       });
     } catch (error) {
@@ -504,7 +504,6 @@ export class VoiceRouter extends EventEmitter {
       sentCount++;
     }
     
-    this.logger.info(`[VOICE] Remote PTT from session ${packet.sender_session} sent to ${sentCount} local clients across ${targetChannels.size} channels (indexed lookup)`);
   }
 
   /**
@@ -617,8 +616,6 @@ export class VoiceRouter extends EventEmitter {
       sentCount++;
     }
     
-    this.logger.info(`[VOICE] Push-to-talk from ${sender.username} sent to ${sentCount} clients across ${targetChannels.size} channels (indexed lookup)`);
-
     // 触发事件供VoiceManager进行跨Edge广播
     // VoiceManager会将语音包广播到所有其他Edge
     // 每个Edge（包括本地）都会独立计算应该接收的用户

@@ -303,10 +303,6 @@ export class AuthHandlers {
       this.broadcastUserState(broadcastState, session_id);
       logger.debug(`Broadcasted UserState for new user ${updatedClient.username} (session ${session_id})`);
 
-      // 12. 上报证书指纹
-      if (updatedClient.cert_hash && authResult.user_id > 0) {
-        void this.reportCertificateFingerprint(authResult.user_id, updatedClient.cert_hash);
-      }
     } catch (error) {
       logger.error(`Error in handleAuthSuccess for session ${session_id}:`, error);
       this.sendReject(session_id, 'Authentication setup failed');
@@ -350,37 +346,6 @@ export class AuthHandlers {
    */
   clearPreConnectUserState(session_id: number): void {
     this.preConnectUserState.delete(session_id);
-  }
-
-  /**
-   * 上报证书指纹到外部API
-   */
-  private async reportCertificateFingerprint(user_id: number, cert_hash: string): Promise<void> {
-    if (!this.config.auth.apiUrl) {
-      return;
-    }
-
-    try {
-      const response = await fetch(`${this.config.auth.apiUrl}/fingerprint`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.config.auth.apiKey}`,
-        },
-        body: JSON.stringify({
-          user_id: user_id,
-          cert_hash: cert_hash,
-          timestamp: Date.now(),
-        }),
-        signal: AbortSignal.timeout(this.config.auth.timeout),
-      });
-
-      if (!response.ok) {
-        logger.warn(`Failed to report certificate fingerprint: ${response.status}`);
-      }
-    } catch (error) {
-      logger.error('Error reporting certificate fingerprint:', error);
-    }
   }
 
   /**

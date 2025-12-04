@@ -9,7 +9,7 @@ export interface RPCResponse {
 
 // Channel data structure
 export interface ChannelData {
-  id: number;
+  channel_id: number; // 修改：与protobuf字段名一致
   name?: string;
   parent_id?: number;
   position?: number;

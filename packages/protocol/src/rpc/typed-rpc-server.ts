@@ -429,7 +429,7 @@ export class TypedRPCServer {
         const r = result as RPCResult<'edge.fullSync'>;
         response.edge_full_sync = hubedgeRpc.EdgeFullSyncResult.fromObject({
           channels: r.channels?.map(c => ({
-            channel_id: c.id,
+            channel_id: c.channel_id,
             name: c.name,
             parent_id: c.parent_id,
             description: c.description,
@@ -491,7 +491,7 @@ export class TypedRPCServer {
         const r = result as RPCResult<'edge.getChannels'>;
         response.edge_get_channels = hubedgeRpc.EdgeGetChannelsResult.fromObject({
           channels: r.channels?.map(c => ({
-            channel_id: c.id,
+            channel_id: c.channel_id,
             name: c.name,
             parent_id: c.parent_id,
             description: c.description,

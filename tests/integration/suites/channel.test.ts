@@ -18,7 +18,7 @@ describe('Channel Management Integration Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {
-    testEnv = await setupTestEnvironment(8082);
+    testEnv = await setupTestEnvironment(8082, { silent: false }); // 启用详细日志
   }, 60000);
 
   afterAll(async () => {
@@ -43,6 +43,70 @@ describe('Channel Management Integration Tests', () => {
       const uniqueIds = new Set(ids);
       expect(uniqueIds.size).toBe(ids.length);
     });
+
+    it('should receive default channels from server', async () => {
+      const client = new MumbleClient();
+      
+      try {
+        await client.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'admin',
+          password: 'admin123',
+          rejectUnauthorized: false,
+        });
+
+        // 等待接收频道状态和ServerSync
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        const channels = client.getChannels();
+        console.log(`Received ${channels.length} channels from server`);
+        channels.forEach(ch => {
+          console.log(`  - Channel ${ch.channel_id}: ${ch.name}, parent=${ch.parent}`);
+        });
+        
+        // 验证至少收到了频道
+        expect(channels.length).toBeGreaterThan(0);
+        
+        // 检查是否有ID为0的频道
+        const channelById0 = channels.find(ch => ch.channel_id === 0);
+        console.log('Channel with ID 0:', channelById0);
+        
+        // 查找Root频道（不管ID）
+        const rootChannel = channels.find(ch => ch.name === 'Root');
+        console.log('Channel named Root:', rootChannel);
+        expect(rootChannel).toBeDefined();
+        expect(rootChannel?.name).toBe('Root');
+        expect(rootChannel?.parent).toBe(0);
+
+        // 验证默认频道存在（如果数据库初始化正确）
+        const lobbyChannel = channels.find(ch => ch.name === 'Lobby');
+        if (lobbyChannel) {
+          expect(lobbyChannel.parent).toBe(0);
+        } else {
+          console.warn('Lobby channel not found - may need to re-initialize test database');
+        }
+
+        const generalChannel = channels.find(ch => ch.name === 'General');
+        if (generalChannel) {
+          expect(generalChannel.parent).toBe(0);
+        } else {
+          console.warn('General channel not found - may need to re-initialize test database');
+        }
+
+        const privateChannel = channels.find(ch => ch.name === 'Private');
+        if (privateChannel) {
+          expect(privateChannel.parent).toBe(0);
+        } else {
+          console.warn('Private channel not found - may need to re-initialize test database');
+        }
+
+        await client.disconnect();
+      } catch (error) {
+        console.error('Test error:', error);
+        throw error;
+      }
+    }, 30000);
   });
 
   describe('Channel Naming', () => {

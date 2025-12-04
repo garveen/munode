@@ -2554,7 +2554,7 @@ export class HubControlService {
     const links = await this.loadChannelLinks(ch.id);
     
     return {
-      id: ch.id,
+      channel_id: ch.id,
       name: includeRegisterName && ch.id === 0 ? (this.config.registerName || 'Root') : ch.name,
       parent_id: ch.parent_id >= 0 ? ch.parent_id : undefined, // Skip negative parent_ids (root channel)
       position: ch.position,
@@ -2578,11 +2578,22 @@ export class HubControlService {
     } else {
       dbChannels = await this._database!.getAllChannels();
     }
+    
+    // DEBUG: 打印从数据库/ChannelManager获取的原始数据
+    logger.info(`[handleGetChannels] Got ${dbChannels.length} channels from ${this._channelManager ? 'ChannelManager' : 'Database'}`);
+    for (const ch of dbChannels) {
+      logger.info(`[handleGetChannels] Raw channel: id=${ch.id}, name=${ch.name}, parent_id=${ch.parent_id}, keys=${Object.keys(ch).join(',')}`);
+    }
 
     // 映射数据库字段到protocol字段，并加载每个频道的链接
     const channels: ChannelData[] = await Promise.all(
       dbChannels.map(ch => this.mapChannelToProtocol(ch, true))
     );
+    
+    // DEBUG: 打印映射后的数据
+    for (const ch of channels) {
+      logger.info(`[handleGetChannels] Mapped channel: channel_id=${ch.channel_id}, name=${ch.name}, parent_id=${ch.parent_id}`);
+    }
 
     return { success: true, channels };
   }
@@ -2870,7 +2881,7 @@ export class HubControlService {
     try {
       const { edge_id, actor_session, channel_id } = params;
       
-      logger.info(`Hub received PermissionQuery from Edge ${edge_id}, actor: ${actor_session}, channel: ${channel_id}`);
+      logger.debug(`Hub received PermissionQuery from Edge ${edge_id}, actor: ${actor_session}, channel: ${channel_id}`);
 
       // 获取会话信息
       if (!this._sessionManager) {
@@ -2890,7 +2901,7 @@ export class HubControlService {
       // 转换为 UserInfo
       const actorUserInfo = HubPermissionChecker.sessionToUserInfo(actorGlobalSession, actorGlobalSession.channel_id);
       
-      logger.info(`PermissionQuery for user ${actorUserInfo.user_id} (${actorGlobalSession.username}), groups: ${JSON.stringify(actorUserInfo.groups)}, channel: ${channel_id}`);
+      logger.debug(`PermissionQuery for user ${actorUserInfo.user_id} (${actorGlobalSession.username}), groups: ${JSON.stringify(actorUserInfo.groups)}, channel: ${channel_id}`);
 
       // 计算权限
       if (!this._permissionChecker) {
@@ -2900,7 +2911,7 @@ export class HubControlService {
 
       const permissions = await this._permissionChecker.calculatePermission(channel_id, actorUserInfo);
       
-      logger.info(`PermissionQuery result for session ${actor_session} on channel ${channel_id}: ${permissions} (0x${permissions.toString(16)})`);
+      logger.debug(`PermissionQuery result for session ${actor_session} on channel ${channel_id}: ${permissions} (0x${permissions.toString(16)})`);
 
       return {
         success: true,
