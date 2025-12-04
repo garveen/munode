@@ -176,7 +176,7 @@ export class MessageHandlers {
       channels = stateChannels.map((ch) => ({
         id: ch.id,
         name: ch.name,
-        parent_id: ch.id === 0 ? -1 : ch.parent_id,
+        parent_id: ch.id === 0 ? -1 : (ch.parent_id ?? 0),
         description: ch.description || '',
         position: ch.position || 0,
         max_users: ch.maxUsers || 0,
