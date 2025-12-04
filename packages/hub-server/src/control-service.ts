@@ -2497,9 +2497,12 @@ export class HubControlService {
     _params: RPCParams<'edge.getChannels'>
   ): Promise<RPCResult<'edge.getChannels'>> {
     // Use ChannelManager if available, otherwise fall back to direct database access
-    const dbChannels = this._channelManager 
-      ? this._channelManager.getAllChannels()
-      : await this._database!.getAllChannels();
+    let dbChannels;
+    if (this._channelManager) {
+      dbChannels = this._channelManager.getAllChannels();
+    } else {
+      dbChannels = await this._database!.getAllChannels();
+    }
 
     // 映射数据库字段到protocol字段
     const channels: ChannelData[] = dbChannels.map((ch) => ({
