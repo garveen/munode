@@ -281,6 +281,10 @@ export class HubMessageHandlers {
             // 更新stateManager
             const updatedChannel = { ...existingChannel, ...updates };
             this.stateManager.addOrUpdateChannel(updatedChannel);
+            
+            if (existingChannel.id === 0 && updates.links) {
+              logger.info(`[HUB-HANDLER] Updated stateManager channel 0 with links: [${updates.links.join(', ')}]`);
+            }
           }
         } else {
           // 创建新频道

@@ -185,6 +185,7 @@ export class MessageHandlers {
         children: [],
         links: ch.links || [],
       }));
+      
       logger.info(
         `[sendChannelTree] Cluster mode: sending ${channels.length} channels from stateManager to session ${session_id}`
       );
@@ -201,13 +202,9 @@ export class MessageHandlers {
 
     // === 第一次循环：发送所有频道的基本信息，parent字段设为0（根频道除外不设parent） ===
     for (const channel of channels) {
-      // 从ChannelManager获取links（ChannelManager是实时更新的）
-      const channelObj = this.factory.channelManager.getChannel(channel.id);
-      const links = channelObj?.links || [];
-
-      if (channel.id === 0) {
-        logger.debug(`[sendChannelTree-DEBUG] Channel 0: channelManager.links=[${links.join(', ')}]`);
-      }
+      // 使用已从stateManager获取的links，而不是再次从channelManager查询
+      // stateManager由Hub同步，是权威数据源
+      const links = channel.links;
 
       const channelState = new mumbleproto.ChannelState({
         channel_id: channel.id,
@@ -222,10 +219,6 @@ export class MessageHandlers {
         // 第一次：根频道(id=0)不设parent，其他频道parent都设为0
         parent: channel.id === 0 ? undefined : 0,
       });
-
-      if (channel.id === 0) {
-        logger.info(`[SERVER-SERIALIZE-PASS1] Channel 0: links=${JSON.stringify(channelState.links)}`);
-      }
 
       logger.debug(
         `[sendChannelTree] Pass 1: channel ${channel.id} (${channel.name}), parent=${channel.id === 0 ? 'undefined' : 0}`
@@ -244,23 +237,18 @@ export class MessageHandlers {
 
       const parentId = this.getChannelParentForProtocol(channel);
       
-      // 从ChannelManager获取当前的links，避免覆盖
-      const channelObj = this.factory.channelManager.getChannel(channel.id);
-      const currentLinks = channelObj?.links || [];
+      // 使用已从stateManager获取的links
+      const currentLinks = channel.links;
 
       const channelState = new mumbleproto.ChannelState({
         channel_id: channel.id,
         parent: parentId,
         position: channel.position,
         temporary: channel.temporary,
-        links: currentLinks || [], // 保留现有links
+        links: currentLinks, // 保留现有links
         links_add: [], // 必须提供，但为空表示不添加
         links_remove: [], // 必须提供，但为空表示不删除
       });
-
-      if (channel.id === 0) {
-        logger.info(`[SERVER-SERIALIZE-PASS2] Channel 0: THIS SHOULD NOT HAPPEN! links=${JSON.stringify(currentLinks)}`);
-      }
 
       logger.debug(
         `[sendChannelTree] Pass 2: channel ${channel.id} parent relationship, parent=${parentId}`
