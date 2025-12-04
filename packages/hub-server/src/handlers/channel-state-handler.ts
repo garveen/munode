@@ -166,6 +166,35 @@ export class ChannelStateHandler implements IChannelStateHandler {
           updateData.max_users = channelStateObj.max_users;
         }
 
+        // 处理频道链接
+        if (channelStateObj.links_add || channelStateObj.links_remove) {
+          const database = this.factory.getDatabase();
+          
+          // 添加链接
+          if (channelStateObj.links_add && Array.isArray(channelStateObj.links_add)) {
+            for (const targetId of channelStateObj.links_add) {
+              try {
+                await database.linkChannels(channelId, targetId);
+                logger.info(`Linked channels: ${channelId} <-> ${targetId}`);
+              } catch (error) {
+                logger.error(`Failed to link channels ${channelId} and ${targetId}:`, error);
+              }
+            }
+          }
+          
+          // 移除链接
+          if (channelStateObj.links_remove && Array.isArray(channelStateObj.links_remove)) {
+            for (const targetId of channelStateObj.links_remove) {
+              try {
+                await database.unlinkChannels(channelId, targetId);
+                logger.info(`Unlinked channels: ${channelId} <-> ${targetId}`);
+              } catch (error) {
+                logger.error(`Failed to unlink channels ${channelId} and ${targetId}:`, error);
+              }
+            }
+          }
+        }
+
         try {
           await channelManager.updateChannel(channelId, updateData);
           logger.info(`Updated channel: ${updateData.name || channelId} (ID: ${channelId})`);
@@ -187,15 +216,42 @@ export class ChannelStateHandler implements IChannelStateHandler {
         channel_id: channelId,
       });
 
+      // 获取最新的频道链接信息（如果有变更）
+      let currentLinks: number[] | undefined;
+      if (channelStateObj.links_add || channelStateObj.links_remove) {
+        try {
+          const database = this.factory.getDatabase();
+          currentLinks = await database.getChannelLinks(channelId);
+          logger.info(`Current links for channel ${channelId}: [${currentLinks.join(', ')}]`);
+        } catch (error) {
+          logger.error(`Failed to get channel links for ${channelId}:`, error);
+        }
+      }
+
       // 广播频道状态变化给所有Edge
-      this.factory.getControlService().broadcast('hub.channelStateBroadcast', {
+      const broadcastData: any = {
         channel_id: channelId,
         name: channelStateObj.name,
         parent: channelStateObj.parent,
         description: channelStateObj.description,
         temporary: channelStateObj.temporary,
         position: channelStateObj.position,
-      });
+      };
+      
+      // 如果有链接变更，广播links字段
+      if (currentLinks !== undefined) {
+        broadcastData.links = currentLinks;
+      }
+      
+      // 如果有links_add或links_remove，也包含它们以便Edge进行增量更新
+      if (channelStateObj.links_add) {
+        broadcastData.links_add = channelStateObj.links_add;
+      }
+      if (channelStateObj.links_remove) {
+        broadcastData.links_remove = channelStateObj.links_remove;
+      }
+
+      this.factory.getControlService().broadcast('hub.channelStateBroadcast', broadcastData);
 
       logger.info(`Hub: Broadcasting ChannelState for channel ${channelId} to all edges`);
 
