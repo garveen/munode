@@ -51,7 +51,7 @@ function channelDataToInfo(data: ChannelData): import('../types.ts').ChannelInfo
   return {
     id: data.id,
     name: data.name || '',
-    parent_id: data.parent_id,
+    parent_id: data.id === 0 ? undefined : (data.parent_id ?? 0),
     position: data.position || 0,
     max_users: data.maxUsers || 0,
     inherit_acl: data.inheritAcl ?? true,
