@@ -101,6 +101,7 @@ export class HubServer {
       this.aclManager,
       this.channelManager,
       this.channelGroupManager,
+      this.banManager,
       this.blobStore,
       this.authManager
     );
