@@ -323,6 +323,13 @@ class TestAuthServer {
       // Edge join timing test users
       'edge_timing_userA': { password: 'password1', user_id: 501 },
       'edge_timing_userB': { password: 'password2', user_id: 502 },
+      // Multi-user test users
+      'multi_user_e1_1': { password: 'password1', user_id: 511 },
+      'multi_user_e1_2': { password: 'password2', user_id: 512 },
+      'multi_user_e1_3': { password: 'password3', user_id: 513 },
+      'multi_user_e2_1': { password: 'password1', user_id: 521 },
+      'multi_user_e2_2': { password: 'password2', user_id: 522 },
+      'multi_user_e2_3': { password: 'password3', user_id: 523 },
     };
 
     const user = users[req.username];
