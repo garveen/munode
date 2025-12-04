@@ -24,13 +24,13 @@ export interface ChannelData {
 }
 
 // ==================
-// 辅助函数
+// Helper Functions
 // ==================
 
 /**
- * 将 ChannelInfo 转换为 ChannelData
+ * Convert ChannelInfo to ChannelData
  */
-function channelInfoToData(info: import('../types.js').ChannelInfo): ChannelData {
+function channelInfoToData(info: import('../types.ts').ChannelInfo): ChannelData {
   return {
     id: info.id,
     name: info.name,
@@ -45,9 +45,9 @@ function channelInfoToData(info: import('../types.js').ChannelInfo): ChannelData
 }
 
 /**
- * 将 ChannelData 转换为 ChannelInfo（用于添加/更新）
+ * Convert ChannelData to ChannelInfo (for add/update operations)
  */
-function channelDataToInfo(data: ChannelData): import('../types.js').ChannelInfo {
+function channelDataToInfo(data: ChannelData): import('../types.ts').ChannelInfo {
   return {
     id: data.id,
     name: data.name || '',
@@ -57,7 +57,7 @@ function channelDataToInfo(data: ChannelData): import('../types.js').ChannelInfo
     inherit_acl: data.inheritAcl ?? true,
     description: data.description || '',
     temporary: data.temporary || false,
-    children: [], // ChannelManager 会管理这个
+    children: [], // ChannelManager manages this
     links: data.links || [],
   };
 }
@@ -258,11 +258,11 @@ export class EdgeStateManager {
   private lastSyncTimestamp: number = 0;
   private lastSyncSequence: number = 0;
   
-  // 远程用户追踪（用于优化语音广播）
+  // Remote user tracking (for voice broadcast optimization)
   private remoteUsers: Map<number, { edge_id: number; channel_id: number }> = new Map(); // session -> {edge_id, channel_id}
   private channelRemoteUsers: Map<number, Set<number>> = new Map(); // channel_id -> Set<edge_id>
 
-  // 频道管理器引用（必需，所有频道数据由 ChannelManager 管理）
+  // ChannelManager reference (required, all channel data managed by ChannelManager)
   private channelManager: ChannelManager;
 
   constructor(channelManager: ChannelManager) {
@@ -284,7 +284,7 @@ export class EdgeStateManager {
     // 清空现有数据
     this.clear();
 
-    // 加载频道 - 通过 ChannelManager
+    // Load channels - through ChannelManager
     if (snapshot.channels && Array.isArray(snapshot.channels)) {
       for (const channel of snapshot.channels) {
         logger.debug(`Loading channel from snapshot: ${JSON.stringify(channel)}`);
@@ -293,9 +293,9 @@ export class EdgeStateManager {
       }
     }
 
-    // 注意：频道链接已经包含在 channel.links 中，不需要单独处理
+    // Note: Channel links are already included in channel.links, no need to handle separately
 
-    // 注意：不再构建频道树，因为频道数据现在由 ChannelManager 管理
+    // Note: No longer building channel tree, as channel data is now managed by ChannelManager
 
     // 加载 ACL
     if (snapshot.acls && Array.isArray(snapshot.acls)) {
@@ -466,10 +466,10 @@ export class EdgeStateManager {
   // }
 
   /**
-   * 清空所有数据
+   * Clear all data
    */
   clear(): void {
-    // 注意：不清空频道数据，因为频道数据现在由 ChannelManager 管理
+    // Note: Not clearing channel data, as channel data is now managed by ChannelManager
     this.channelTree = null;
     this.acls.clear();
     this.bans.clear();
@@ -726,7 +726,7 @@ export class EdgeStateManager {
   }
 
   /**
-   * 导出状态（用于调试）
+   * Export state (for debugging)
    */
   exportState(): {
     channels: Array<[number, ChannelData]>;
@@ -736,9 +736,9 @@ export class EdgeStateManager {
     lastSyncTimestamp: number;
     lastSyncSequence: number;
   } {
-    const channels = this.getAllChannels().map(ch => [ch.id, ch] as [number, ChannelData]);
+    const channelEntries = this.getAllChannels().map(ch => [ch.id, ch] as [number, ChannelData]);
     return {
-      channels,
+      channels: channelEntries,
       acls: Array.from(this.acls.entries()),
       bans: this.bans.getAll(),
       configs: Array.from(this.configs.entries()),
