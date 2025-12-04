@@ -221,7 +221,7 @@ export class HubMessageHandlers {
    */
   handleChannelStateBroadcastFromHub(params: any): void {
     try {
-      const { channelState } = params;
+      const channelState = params;
 
       logger.debug(`Received ChannelState broadcast from Hub: channel ${channelState.channel_id}`);
 

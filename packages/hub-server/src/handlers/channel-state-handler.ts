@@ -52,26 +52,44 @@ export class ChannelStateHandler implements IChannelStateHandler {
         return;
       }
 
-      // 确定频道ID
+      // 确定频道ID和操作类型
       let channelId: number;
+      let isNewChannel: boolean;
+      
       if (has_channel_id && channelStateObj.channel_id !== undefined) {
+        // 指定了channel_id - 这是更新现有频道或链接操作
         channelId = channelStateObj.channel_id;
+        const existingChannel = channelManager?.getChannel(channelId);
+        isNewChannel = !existingChannel;
       } else {
-        // 如果没有提供channel_id，使用actor的当前频道
-        channelId = actorSession.channel_id ?? 0;
+        // 没有指定channel_id
+        // 如果提供了name，这是创建新频道的请求
+        if (channelStateObj.name) {
+          // 生成新的频道ID
+          const allChannels = channelManager?.getAllChannels() || [];
+          const maxId = allChannels.reduce((max, ch) => Math.max(max, ch.id), 0);
+          channelId = maxId + 1;
+          isNewChannel = true;
+        } else {
+          // 没有name也没有channel_id，这是对当前频道的更新（如移动用户）
+          channelId = actorSession.channel_id ?? 0;
+          isNewChannel = false;
+        }
       }
-
-      // 检查频道是否存在
-      const existingChannel = channelManager?.getChannel(channelId);
-      const isNewChannel = !existingChannel;
 
       // 权限检查
       if (permissionChecker) {
         const actorUserInfo = this.permissionChecker.sessionToUserInfo(actorSession, actorSession.channel_id);
+        
+        // 对于新频道，检查parent的MakeChannel权限
+        // 对于现有频道，检查该频道的TempChannel权限
+        const channelToCheck = isNewChannel ? (channelStateObj.parent || 0) : channelId;
+        const requiredPermission = isNewChannel ? Permission.MakeChannel : Permission.TempChannel;
+        
         const hasPermission = await permissionChecker.hasPermission(
-          channelId,
+          channelToCheck,
           actorUserInfo,
-          isNewChannel ? Permission.MakeChannel : Permission.TempChannel
+          requiredPermission
         );
 
         if (!hasPermission) {
@@ -86,16 +104,6 @@ export class ChannelStateHandler implements IChannelStateHandler {
         }
       }
 
-      // 准备频道数据
-      const channelData: any = {
-        channel_id: channelId,
-        name: channelStateObj.name || '',
-        parent: channelStateObj.parent || 0,
-        description: channelStateObj.description || '',
-        temporary: channelStateObj.temporary || false,
-        position: channelStateObj.position || 0,
-      };
-
       // 如果是新频道，创建它
       if (isNewChannel) {
         if (!channelManager) {
@@ -106,6 +114,16 @@ export class ChannelStateHandler implements IChannelStateHandler {
           });
           return;
         }
+
+        // 准备新频道数据（用于创建）
+        const channelData: any = {
+          channel_id: channelId,
+          name: channelStateObj.name || '',
+          parent: channelStateObj.parent || 0,
+          description: channelStateObj.description || '',
+          temporary: channelStateObj.temporary || false,
+          position: channelStateObj.position || 0,
+        };
 
         try {
           await channelManager.createChannel(channelData);
@@ -130,9 +148,27 @@ export class ChannelStateHandler implements IChannelStateHandler {
           return;
         }
 
+        // 准备更新数据（使用数据库列名）
+        const updateData: any = {};
+        if (channelStateObj.name !== undefined) {
+          updateData.name = channelStateObj.name;
+        }
+        if (channelStateObj.parent !== undefined) {
+          updateData.parent_id = channelStateObj.parent;
+        }
+        if (channelStateObj.description !== undefined) {
+          updateData.description_blob = channelStateObj.description;
+        }
+        if (channelStateObj.position !== undefined) {
+          updateData.position = channelStateObj.position;
+        }
+        if (channelStateObj.max_users !== undefined) {
+          updateData.max_users = channelStateObj.max_users;
+        }
+
         try {
-          await channelManager.updateChannel(channelId, channelData);
-          logger.info(`Updated channel: ${channelData.name} (ID: ${channelId})`);
+          await channelManager.updateChannel(channelId, updateData);
+          logger.info(`Updated channel: ${updateData.name || channelId} (ID: ${channelId})`);
         } catch (error) {
           logger.error(`Failed to update channel ${channelId}:`, error);
           this.factory.getControlService().notify(edge_id, 'hub.channelStateResponse', {
@@ -154,11 +190,11 @@ export class ChannelStateHandler implements IChannelStateHandler {
       // 广播频道状态变化给所有Edge
       this.factory.getControlService().broadcast('hub.channelStateBroadcast', {
         channel_id: channelId,
-        name: channelData.name,
-        parent: channelData.parent,
-        description: channelData.description,
-        temporary: channelData.temporary,
-        position: channelData.position,
+        name: channelStateObj.name,
+        parent: channelStateObj.parent,
+        description: channelStateObj.description,
+        temporary: channelStateObj.temporary,
+        position: channelStateObj.position,
       });
 
       logger.info(`Hub: Broadcasting ChannelState for channel ${channelId} to all edges`);
