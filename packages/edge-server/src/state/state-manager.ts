@@ -48,10 +48,11 @@ function channelInfoToData(info: import('../types.ts').ChannelInfo): ChannelData
  * Convert ChannelData to ChannelInfo (for add/update operations)
  */
 function channelDataToInfo(data: ChannelData): import('../types.ts').ChannelInfo {
+  const ROOT_CHANNEL_ID = 0;  // 根频道ID
   return {
     id: data.id,
     name: data.name || '',
-    parent_id: data.id === 0 ? undefined : (data.parent_id ?? 0),
+    parent_id: data.id === ROOT_CHANNEL_ID ? undefined : (data.parent_id ?? ROOT_CHANNEL_ID),
     position: data.position || 0,
     max_users: data.maxUsers || 0,
     inherit_acl: data.inheritAcl ?? true,

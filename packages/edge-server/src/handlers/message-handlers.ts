@@ -173,10 +173,13 @@ export class MessageHandlers {
     if (this.stateManager) {
       const stateChannels = this.stateManager.getAllChannels();
       // 转换ChannelData为ChannelInfo
+      // 注意：parent_id 为 -1 是临时值，稍后在 Pass 1/2 中会被正确处理
+      //   - 根频道(id=0): parent_id=-1 会转换为 parent=undefined (不发送parent字段)
+      //   - 其他频道: undefined 的 parent_id 默认为 0 (根频道)
       channels = stateChannels.map((ch) => ({
         id: ch.id,
         name: ch.name,
-        parent_id: ch.id === 0 ? -1 : (ch.parent_id ?? 0),
+        parent_id: ch.id === 0 ? -1 : (ch.parent_id ?? 0),  // 0 是根频道ID
         description: ch.description || '',
         position: ch.position || 0,
         max_users: ch.maxUsers || 0,
