@@ -23,6 +23,45 @@ export interface ChannelData {
   links?: number[];
 }
 
+// ==================
+// 辅助函数
+// ==================
+
+/**
+ * 将 ChannelInfo 转换为 ChannelData
+ */
+function channelInfoToData(info: import('../types.js').ChannelInfo): ChannelData {
+  return {
+    id: info.id,
+    name: info.name,
+    parent_id: info.parent_id,
+    position: info.position,
+    maxUsers: info.max_users,
+    inheritAcl: info.inherit_acl,
+    description: info.description,
+    temporary: info.temporary,
+    links: info.links,
+  };
+}
+
+/**
+ * 将 ChannelData 转换为 ChannelInfo（用于添加/更新）
+ */
+function channelDataToInfo(data: ChannelData): import('../types.js').ChannelInfo {
+  return {
+    id: data.id,
+    name: data.name || '',
+    parent_id: data.parent_id,
+    position: data.position || 0,
+    max_users: data.maxUsers || 0,
+    inherit_acl: data.inheritAcl ?? true,
+    description: data.description || '',
+    temporary: data.temporary || false,
+    children: [], // ChannelManager 会管理这个
+    links: data.links || [],
+  };
+}
+
 export interface ChannelNode extends ChannelData {
   children: ChannelNode[];
   links: number[]; // 链接的频道 ID
@@ -212,9 +251,7 @@ class BanCache {
 // ==================
 
 export class EdgeStateManager {
-  private channels: Map<number, ChannelData> = new Map();
   private channelTree: ChannelNode | null = null;
-  private channelLinks: Map<number, Set<number>> = new Map(); // channel_id -> Set<target_id>
   private acls: Map<number, ACLData[]> = new Map(); // channel_id -> ACLs
   private bans: BanCache;
   private configs: Map<string, string> = new Map();
@@ -225,10 +262,10 @@ export class EdgeStateManager {
   private remoteUsers: Map<number, { edge_id: number; channel_id: number }> = new Map(); // session -> {edge_id, channel_id}
   private channelRemoteUsers: Map<number, Set<number>> = new Map(); // channel_id -> Set<edge_id>
 
-  // 频道管理器引用（用于获取频道数据，避免重复缓存）
-  private channelManager?: ChannelManager;
+  // 频道管理器引用（必需，所有频道数据由 ChannelManager 管理）
+  private channelManager: ChannelManager;
 
-  constructor(channelManager?: ChannelManager) {
+  constructor(channelManager: ChannelManager) {
     this.bans = new BanCache();
     this.channelManager = channelManager;
   }
@@ -251,39 +288,12 @@ export class EdgeStateManager {
     if (snapshot.channels && Array.isArray(snapshot.channels)) {
       for (const channel of snapshot.channels) {
         logger.debug(`Loading channel from snapshot: ${JSON.stringify(channel)}`);
-        if (this.channelManager) {
-          const channelInfo = {
-            id: channel.id,
-            name: channel.name || '',
-            parent_id: channel.parent_id,
-            position: channel.position || 0,
-            max_users: channel.maxUsers || 0,
-            inherit_acl: channel.inheritAcl ?? true,
-            description: channel.description || '',
-            temporary: channel.temporary || false,
-            children: [], // ChannelManager 会管理这个
-            links: channel.links || [],
-          };
-          this.channelManager.addOrUpdateChannel(channelInfo);
-        } else {
-          // 回退到自己的缓存（用于独立模式）
-          this.channels.set(channel.id, channel);
-        }
+        const channelInfo = channelDataToInfo(channel);
+        this.channelManager.addOrUpdateChannel(channelInfo);
       }
     }
 
-    // 加载频道链接
-    if (snapshot.channelLinks && Array.isArray(snapshot.channelLinks)) {
-      for (const link of snapshot.channelLinks) {
-        if (!this.channelLinks.has(link.channel_id)) {
-          this.channelLinks.set(link.channel_id, new Set());
-        }
-        const links = this.channelLinks.get(link.channel_id);
-        if (links) {
-          links.add(link.target_id);
-        }
-      }
-    }
+    // 注意：频道链接已经包含在 channel.links 中，不需要单独处理
 
     // 注意：不再构建频道树，因为频道数据现在由 ChannelManager 管理
 
@@ -318,8 +328,7 @@ export class EdgeStateManager {
     this.lastSyncSequence = snapshot.sequence || 0;
 
     logger.info('Snapshot loaded successfully', {
-      channels: this.channels.size,
-      channelLinks: this.channelLinks.size,
+      channels: this.channelManager.getChannelCount(),
       acls: this.acls.size,
       bans: this.bans.size(),
       sequence: this.lastSyncSequence,
@@ -428,58 +437,21 @@ export class EdgeStateManager {
   // ==================
 
   private handleChannelUpdate(channel: ChannelData): void {
-    if (this.channelManager) {
-      const channelInfo = {
-        id: channel.id,
-        name: channel.name || '',
-        parent_id: channel.parent_id,
-        position: channel.position || 0,
-        max_users: channel.maxUsers || 0,
-        inherit_acl: channel.inheritAcl ?? true,
-        description: channel.description || '',
-        temporary: channel.temporary || false,
-        children: [],
-        links: channel.links || [],
-      };
-      this.channelManager.addOrUpdateChannel(channelInfo);
-    } else {
-      this.channels.set(channel.id, channel);
-    }
+    const channelInfo = channelDataToInfo(channel);
+    this.channelManager.addOrUpdateChannel(channelInfo);
   }
 
   private handleChannelDelete(channel_id: number): void {
-    if (this.channelManager) {
-      this.channelManager.removeChannel(channel_id);
-    } else {
-      this.channels.delete(channel_id);
-    }
+    this.channelManager.removeChannel(channel_id);
     this.acls.delete(channel_id);
-    this.channelLinks.delete(channel_id);
-
-    // 移除指向该频道的链接
-    for (const links of this.channelLinks.values()) {
-      links.delete(channel_id);
-    }
   }
 
   private handleChannelLink(channel_id: number,  target_id: number): void {
-    if (!this.channelLinks.has(channel_id)) {
-      this.channelLinks.set(channel_id, new Set());
-    }
-    this.channelLinks.get(channel_id).add(target_id);
-
-    if (!this.channelLinks.has(target_id)) {
-      this.channelLinks.set(target_id, new Set());
-    }
-    this.channelLinks.get(target_id).add(channel_id);
-
-    // 注意：不再重建频道树
+    this.channelManager.linkChannels(channel_id, target_id);
   }
 
   private handleChannelUnlink(channel_id: number,  target_id: number): void {
-    this.channelLinks.get(channel_id)?.delete(target_id);
-    this.channelLinks.get(target_id)?.delete(channel_id);
-    // 注意：不再重建频道树
+    this.channelManager.unlinkChannels(channel_id, target_id);
   }
 
   private handleACLUpdate(channel_id: number, acls: ACLData[]): void {
@@ -497,9 +469,8 @@ export class EdgeStateManager {
    * 清空所有数据
    */
   clear(): void {
-    // 注意：不再清空频道缓存，因为频道数据现在由 ChannelManager 管理
+    // 注意：不清空频道数据，因为频道数据现在由 ChannelManager 管理
     this.channelTree = null;
-    this.channelLinks.clear();
     this.acls.clear();
     this.bans.clear();
     this.configs.clear();
@@ -639,7 +610,8 @@ export class EdgeStateManager {
    * 获取频道
    */
   getChannel(channel_id: number): ChannelData | undefined {
-    return this.channels.get(channel_id);
+    const channelInfo = this.channelManager.getChannel(channel_id);
+    return channelInfo ? channelInfoToData(channelInfo) : undefined;
   }
 
   /**
@@ -653,16 +625,15 @@ export class EdgeStateManager {
    * 获取子频道
    */
   getChildChannels( parent_id: number): ChannelData[] {
-    return Array.from(this.channels.values())
-      .filter((ch) => ch.parent_id === parent_id)
-      .sort((a, b) => a.position - b.position);
+    const channelInfos = this.channelManager.getChildChannels(parent_id);
+    return channelInfos.map(channelInfoToData);
   }
 
   /**
    * 获取频道链接
    */
   getChannelLinks(channel_id: number): number[] {
-    return Array.from(this.channelLinks.get(channel_id) || []);
+    return this.channelManager.getChannelLinks(channel_id);
   }
 
   /**
@@ -690,75 +661,24 @@ export class EdgeStateManager {
    * 获取所有频道
    */
   getAllChannels(): ChannelData[] {
-    if (this.channelManager) {
-      // 从 ChannelManager 获取频道数据并转换格式
-      const channelInfos = this.channelManager.getAllChannels();
-      return channelInfos.map(info => ({
-        id: info.id,
-        name: info.name,
-        parent_id: info.parent_id,
-        position: info.position,
-        maxUsers: info.max_users,
-        inheritAcl: info.inherit_acl,
-        description: info.description,
-        temporary: info.temporary,
-        links: info.links,
-      }));
-    } else {
-      // 回退到自己的缓存（用于独立模式）
-      return Array.from(this.channels.values());
-    }
+    const channelInfos = this.channelManager.getAllChannels();
+    return channelInfos.map(channelInfoToData);
   }
 
   /**
    * 添加或更新频道（用于本地操作）
    */
   addOrUpdateChannel(channel: ChannelData): void {
-    if (this.channelManager) {
-      // 委托给 ChannelManager
-      const channelInfo = {
-        id: channel.id,
-        name: channel.name || '',
-        parent_id: channel.parent_id,
-        position: channel.position || 0,
-        max_users: channel.maxUsers || 0,
-        inherit_acl: channel.inheritAcl ?? true,
-        description: channel.description || '',
-        temporary: channel.temporary || false,
-        children: [], // ChannelManager 会管理这个
-        links: channel.links || [],
-      };
-      this.channelManager.addOrUpdateChannel(channelInfo);
-    } else {
-      // 回退到自己的缓存
-      this.channels.set(channel.id, channel);
-      logger.info(
-        `Channel ${channel.id} (${channel.name}) added/updated in stateManager. Total channels: ${this.channels.size}`
-      );
-      logger.debug(`Channel data: ${JSON.stringify(channel)}`);
-    }
+    const channelInfo = channelDataToInfo(channel);
+    this.channelManager.addOrUpdateChannel(channelInfo);
   }
 
   /**
    * 删除频道（用于本地操作）
    */
   removeChannel(channel_id: number): void {
-    if (this.channelManager) {
-      // 委托给 ChannelManager
-      this.channelManager.removeChannel(channel_id);
-    } else {
-      // 回退到自己的缓存
-      this.channels.delete(channel_id);
-      this.acls.delete(channel_id);
-      this.channelLinks.delete(channel_id);
-
-      // 移除指向该频道的链接
-      for (const links of this.channelLinks.values()) {
-        links.delete(channel_id);
-      }
-
-      logger.debug(`Channel ${channel_id} removed from stateManager`);
-    }
+    this.channelManager.removeChannel(channel_id);
+    this.acls.delete(channel_id);
   }
 
   /**
@@ -774,7 +694,7 @@ export class EdgeStateManager {
     return {
       lastTimestamp: this.lastSyncTimestamp,
       lastSequence: this.lastSyncSequence,
-       channel_count: this.channels.size,
+       channel_count: this.channelManager.getChannelCount(),
       aclCount: this.acls.size,
       banCount: this.bans.size(),
     };
@@ -788,7 +708,9 @@ export class EdgeStateManager {
     acls: string;
     bans: string;
   } {
-    const channelsData = Array.from(this.channels.entries()).sort((a, b) => a[0] - b[0]);
+    const channelsData = this.getAllChannels()
+      .map(ch => [ch.id, ch] as [number, ChannelData])
+      .sort((a, b) => a[0] - b[0]);
     const aclsData = Array.from(this.acls.entries()).sort((a, b) => a[0] - b[0]);
     const bansData = this.bans.getAll().sort((a, b) => a.id - b.id);
 
@@ -808,16 +730,15 @@ export class EdgeStateManager {
    */
   exportState(): {
     channels: Array<[number, ChannelData]>;
-    channelLinks: Array<[number, Set<number>]>;
     acls: Array<[number, ACLData[]]>;
     bans: BanData[];
     configs: Array<[string, string]>;
     lastSyncTimestamp: number;
     lastSyncSequence: number;
   } {
+    const channels = this.getAllChannels().map(ch => [ch.id, ch] as [number, ChannelData]);
     return {
-      channels: Array.from(this.channels.entries()),
-      channelLinks: Array.from(this.channelLinks.entries()),
+      channels,
       acls: Array.from(this.acls.entries()),
       bans: this.bans.getAll(),
       configs: Array.from(this.configs.entries()),
