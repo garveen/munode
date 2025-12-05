@@ -26,6 +26,10 @@ MuNode 是一个基于 Node.js/TypeScript 的 Mumble 服务器实现，采用 Hu
 ## 编码规范
 
 ### TypeScript 风格
+
+重要！系统内禁止使用any！！谨慎使用unknown！
+重要！系统内禁止使用any！！谨慎使用unknown！
+重要！系统内禁止使用any！！谨慎使用unknown！
 ```typescript
 // 使用严格类型定义
 interface UserState {
@@ -51,8 +55,6 @@ enum PermissionFlag {
 
 protobuf使用其标准属性，不要使用单字母内部属性(n f等)
 protobuf optional字段需要检查是否真的设置了值，不能仅凭默认值判断，使用has_xxx
-
-系统内一般不应使用any
 
 ### 命名约定
 - **类名**: PascalCase (如 `EdgeServer`, `HubClient`)
