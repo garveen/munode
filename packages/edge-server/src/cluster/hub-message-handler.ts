@@ -274,8 +274,32 @@ export class HubMessageHandlers {
             updates.description = channelState.description;
           }
           
-          // Note: Channel links are not included in hub.channelStateBroadcast notification.
-          // Links should be managed through separate RPC calls or included in edge.fullSync.
+          // 处理频道链接
+          if (channelState.links !== undefined && Array.isArray(channelState.links)) {
+            // 完整替换链接列表
+            updates.links = [...channelState.links];
+            logger.debug(`Updated channel ${existingChannel.id} links to: [${updates.links.join(', ')}]`);
+          } else if (channelState.links_add !== undefined || channelState.links_remove !== undefined) {
+            // 基于当前链接进行增量更新
+            let newLinks = [...(existingChannel.links || [])];
+            
+            if (channelState.links_add !== undefined && Array.isArray(channelState.links_add)) {
+              for (const linkId of channelState.links_add) {
+                if (!newLinks.includes(linkId)) {
+                  newLinks.push(linkId);
+                }
+              }
+              logger.debug(`Added links to channel ${existingChannel.id}: [${channelState.links_add.join(', ')}]`);
+            }
+            
+            if (channelState.links_remove !== undefined && Array.isArray(channelState.links_remove)) {
+              newLinks = newLinks.filter(linkId => !channelState.links_remove.includes(linkId));
+              logger.debug(`Removed links from channel ${existingChannel.id}: [${channelState.links_remove.join(', ')}]`);
+            }
+            
+            updates.links = newLinks;
+            logger.debug(`Channel ${existingChannel.id} final links: [${newLinks.join(', ')}]`);
+          }
           
           // 应用更新
           if (Object.keys(updates).length > 0) {
@@ -284,6 +308,10 @@ export class HubMessageHandlers {
             // 更新stateManager
             const updatedChannel = { ...existingChannel, ...updates };
             this.stateManager.addOrUpdateChannel(updatedChannel);
+            
+            if (existingChannel.id === 0 && updates.links) {
+              logger.info(`[HUB-HANDLER] Updated stateManager channel 0 with links: [${updates.links.join(', ')}]`);
+            }
           }
         } else {
           // 创建新频道
@@ -295,17 +323,19 @@ export class HubMessageHandlers {
             position: channelState.position || 0,
             max_users: channelState.max_users || 0,
             temporary: channelState.temporary || false,
-            inherit_acl: true, // Default value, as it's not in the broadcast
+            inherit_acl: channelState.inherit_acl !== undefined ? channelState.inherit_acl : true,
             children: [],
-            links: [], // Links not included in broadcast, will be synced via fullSync
+            links: channelState.links || [], // 使用广播中的链接，而不是硬编码为空数组
           };
+
+          logger.debug(`[CHANNEL-LINKS] Created new channel ${channelState.channel_id} with links: [${newChannelData.links.join(', ')}]`);
           this.channelManager.addOrUpdateChannel(newChannelData);
           this.stateManager.addOrUpdateChannel(newChannelData);
         }
       }
 
       // 广播给所有本地已认证的客户端
-      // Construct ChannelState message with only the fields present in the notification
+      // Construct ChannelState message with the fields present in the notification
       const channelStateInit: {
         channel_id: number;
         parent?: number;
@@ -322,9 +352,9 @@ export class HubMessageHandlers {
         links_remove: number[];
       } = {
         channel_id: channelState.channel_id,
-        links: [],
-        links_add: [],
-        links_remove: [],
+        links: channelState.links || [],
+        links_add: channelState.links_add || [],
+        links_remove: channelState.links_remove || [],
       };
       
       if (channelState.parent !== undefined) channelStateInit.parent = channelState.parent;
