@@ -484,10 +484,8 @@ export interface EdgeUserLeftNotification {
   method: 'edge.userLeftNotification';
   params: {
     edge_id: number;
-    session: number;
-    actor: number;
+    session_id: number;
     reason?: string;
-    ban?: boolean;
   };
 }
 
