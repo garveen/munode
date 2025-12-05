@@ -833,6 +833,11 @@ export interface HubChannelStateBroadcastNotification {
     max_users?: number;
     is_enter_restricted?: boolean;
     can_enter?: boolean;
+    // Channel link fields for managing linked channels
+    links?: number[];        // Complete list of linked channels (replaces current links)
+    links_add?: number[];    // Channels to add to current links (incremental update)
+    links_remove?: number[]; // Channels to remove from current links (incremental update)
+    inherit_acl?: boolean;   // Whether the channel inherits ACL from parent
   };
 }
 
