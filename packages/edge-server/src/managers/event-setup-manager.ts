@@ -280,6 +280,9 @@ export class EventSetupManager {
         this.handlerFactory.connectionHandlers.clearUDPMapping(client.session);
       }
 
+      // 清理消息缓冲区
+      this.messageManager!.clearClientBuffer(client.session);
+
       // 在集群模式下，通知Hub用户已离开
       // 通知Hub用户离开（Hub会广播给所有Edge，包括本Edge）
       this.hubClient!.notify('hub.userLeft', {
