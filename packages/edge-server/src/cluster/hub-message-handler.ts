@@ -36,7 +36,8 @@ export class HubMessageHandlers {
       
       // params is the userState object directly, use the type from HubNotificationParams
       // Build UserState protobuf message with only the fields that are set
-      const userStateInit: Record<string, unknown> = {
+      // Use any here since we're building a protobuf message dynamically
+      const userStateInit: any = {
         session: params.session,
         actor: params.actor,
       };
@@ -174,8 +175,42 @@ export class HubMessageHandlers {
       if (userState) {
         logger.debug(`Sending UserState response to session ${actor_session}`);
         
+        // Build UserState protobuf message with only the fields that are set
+        // Use the same pattern as handleUserStateBroadcastFromHub
+        // Use any here since we're building a protobuf message dynamically
+        const userStateInit: any = {
+          session: userState.session,
+          actor: userState.actor,
+        };
+        
+        // Only set fields that are defined
+        if (userState.name !== undefined) userStateInit.name = userState.name;
+        if (userState.user_id !== undefined) userStateInit.user_id = userState.user_id;
+        if (userState.channel_id !== undefined) userStateInit.channel_id = userState.channel_id;
+        if (userState.mute !== undefined) userStateInit.mute = userState.mute;
+        if (userState.deaf !== undefined) userStateInit.deaf = userState.deaf;
+        if (userState.suppress !== undefined) userStateInit.suppress = userState.suppress;
+        if (userState.self_mute !== undefined) userStateInit.self_mute = userState.self_mute;
+        if (userState.self_deaf !== undefined) userStateInit.self_deaf = userState.self_deaf;
+        if (userState.priority_speaker !== undefined) userStateInit.priority_speaker = userState.priority_speaker;
+        if (userState.recording !== undefined) userStateInit.recording = userState.recording;
+        if (userState.texture !== undefined) userStateInit.texture = userState.texture;
+        if (userState.plugin_context !== undefined) userStateInit.plugin_context = userState.plugin_context;
+        if (userState.plugin_identity !== undefined) userStateInit.plugin_identity = userState.plugin_identity;
+        
+        // Only set repeated fields when they have values
+        if (userState.listening_channel_add && userState.listening_channel_add.length > 0) {
+          userStateInit.listening_channel_add = userState.listening_channel_add;
+        }
+        if (userState.listening_channel_remove && userState.listening_channel_remove.length > 0) {
+          userStateInit.listening_channel_remove = userState.listening_channel_remove;
+        }
+        if (userState.temporary_access_tokens && userState.temporary_access_tokens.length > 0) {
+          userStateInit.temporary_access_tokens = userState.temporary_access_tokens;
+        }
+        
         // 构建UserState消息
-        const userStateMsg = new mumbleproto.UserState(userState);
+        const userStateMsg = new mumbleproto.UserState(userStateInit);
         const userStateBuffer = Buffer.from(userStateMsg.serialize());
         
         // 发送给客户端
@@ -632,16 +667,91 @@ export class HubMessageHandlers {
    */
   handleUserStatsResponseFromHub(params: HubNotificationParams<'hub.userStatsResponse'>): void {
     try {
-      const { actor_session, error } = params;
+      const { actor_session, error, userStats } = params;
 
       if (error) {
         logger.warn(`UserStats request from session ${actor_session} failed: ${error}`);
-        // 发送空响应or错误提示
+        // 发送空响应或错误提示
         return;
       }
 
-      // For now, just log success. The actual UserStats data would need to be sent differently
-      logger.debug(`UserStats response for session ${actor_session}: success`);
+      // 如果有userStats数据，发送给请求的客户端
+      if (userStats) {
+        logger.debug(`Sending UserStats response to session ${actor_session}`);
+        
+        // 构建 UserStats protobuf 对象
+        // Use any here since we're building a protobuf message dynamically
+        const response: any = {
+          session: userStats.session,
+        };
+
+        // 添加基本统计字段
+        if (userStats.onlinesecs !== undefined) {
+          response.onlinesecs = userStats.onlinesecs;
+        }
+        if (userStats.idlesecs !== undefined) {
+          response.idlesecs = userStats.idlesecs;
+        }
+
+        // 添加 stats_only 标志（如果在请求中设置）
+        if (userStats.stats_only !== undefined) {
+          response.stats_only = userStats.stats_only;
+        }
+
+        // 仅在非 stats_only 模式下添加详细信息字段
+        if (!userStats.stats_only) {
+          // 添加可选字段
+          if (userStats.strong_certificate !== undefined) {
+            response.strong_certificate = userStats.strong_certificate;
+          }
+          if (userStats.address) {
+            response.address = userStats.address;
+          }
+          if (userStats.version) {
+            response.version = new mumbleproto.Version(userStats.version as any);
+          }
+          // 注意：证书链 (certificates) 由 protobuf 自动初始化为空数组
+          // 如果有证书数据需要添加，在这里处理
+          if (userStats.certificates && userStats.certificates.length > 0) {
+            response.certificates = userStats.certificates;
+          }
+        }
+
+        // 添加网络统计字段（需要转换为 protobuf 对象）
+        if (userStats.from_client) {
+          response.from_client = new mumbleproto.UserStats.Stats(userStats.from_client);
+        }
+        if (userStats.from_server) {
+          response.from_server = new mumbleproto.UserStats.Stats(userStats.from_server);
+        }
+        if (userStats.udp_packets !== undefined) {
+          response.udp_packets = userStats.udp_packets;
+        }
+        if (userStats.tcp_packets !== undefined) {
+          response.tcp_packets = userStats.tcp_packets;
+        }
+        if (userStats.udp_ping_avg !== undefined) {
+          response.udp_ping_avg = userStats.udp_ping_avg;
+        }
+        if (userStats.udp_ping_var !== undefined) {
+          response.udp_ping_var = userStats.udp_ping_var;
+        }
+        if (userStats.tcp_ping_avg !== undefined) {
+          response.tcp_ping_avg = userStats.tcp_ping_avg;
+        }
+        if (userStats.tcp_ping_var !== undefined) {
+          response.tcp_ping_var = userStats.tcp_ping_var;
+        }
+
+        const userStatsMessage = new mumbleproto.UserStats(response);
+        const responseMessage = userStatsMessage.serialize();
+        
+        this.messageHandler.sendMessage(actor_session, MessageType.UserStats, Buffer.from(responseMessage));
+        
+        logger.debug(`Sent UserStats response to session ${actor_session}`);
+      } else {
+        logger.debug(`UserStats response for session ${actor_session}: success (no stats data)`);
+      }
     } catch (error) {
       logger.error('Error handling UserStats response from Hub:', error);
     }

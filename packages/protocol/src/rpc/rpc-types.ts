@@ -845,6 +845,7 @@ export interface HubChannelStateResponseNotification {
     success: boolean;
     actor_session: number;
     error?: string;
+    permission_denied?: boolean;
   };
 }
 
@@ -954,6 +955,39 @@ export interface HubUserStatsResponseNotification {
     success: boolean;
     actor_session: number;
     error?: string;
+    // The actual UserStats data to send back to the client
+    userStats?: {
+      session: number;
+      onlinesecs?: number;
+      idlesecs?: number;
+      stats_only?: boolean;
+      strong_certificate?: boolean;
+      address?: string;
+      version?: {
+        major?: number;
+        minor?: number;
+        patch?: number;
+      };
+      certificates?: Buffer[];
+      from_client?: {
+        good?: number;
+        late?: number;
+        lost?: number;
+        resync?: number;
+      };
+      from_server?: {
+        good?: number;
+        late?: number;
+        lost?: number;
+        resync?: number;
+      };
+      udp_packets?: number;
+      tcp_packets?: number;
+      udp_ping_avg?: number;
+      udp_ping_var?: number;
+      tcp_ping_avg?: number;
+      tcp_ping_var?: number;
+    };
   };
 }
 
