@@ -470,6 +470,9 @@ export interface EdgeUserStateNotification {
       listening_channel_add?: number[];
       listening_channel_remove?: number[];
       temporary_access_tokens?: string[];
+      texture?: Buffer;
+      plugin_context?: Buffer;
+      plugin_identity?: string;
     };
   };
 }
@@ -507,6 +510,8 @@ export interface EdgeChannelStateNotification {
       temporary?: boolean;
       position?: number;
       max_users?: number;
+      links_add?: number[];
+      links_remove?: number[];
     };
   };
 }
@@ -565,10 +570,16 @@ export interface EdgePluginDataTransmissionNotification {
   method: 'edge.pluginDataTransmissionNotification';
   params: {
     edge_id: number;
+    actor_session: number;
+    actor_username: string;
     sender_session: number;
     dataID: string;
     data: Buffer;
     receiver_sessions?: number[];
+    pluginData?: {
+      dataID: string;
+      data: Buffer;
+    };
   };
 }
 
@@ -763,6 +774,9 @@ export interface HubUserStateBroadcastNotification {
     listening_channel_add?: number[];
     listening_channel_remove?: number[];
     temporary_access_tokens?: string[];
+    texture?: Buffer;
+    plugin_context?: Buffer;
+    plugin_identity?: string;
   };
 }
 

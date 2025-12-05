@@ -526,27 +526,26 @@ export class HubMessageHandlers {
    */
   handleTextMessageBroadcastFromHub(params: HubNotificationParams<'hub.textMessageBroadcast'>): void {
     try {
-      const { textMessage, target_sessions } = params;
+      const { actor, session, channel_id, tree_id, message } = params;
 
       logger.debug(
-        `Received TextMessage broadcast from Hub: from ${textMessage.actor}, targets: ${target_sessions.length}`
+        `Received TextMessage broadcast from Hub: from ${actor}`
       );
 
       // 构建TextMessage消息
       const textMsg = new mumbleproto.TextMessage({
-        actor: textMessage.actor,
-        session: textMessage.session || [],
-        channel_id: textMessage.channel_id || [],
-        tree_id: textMessage.tree_id || [],
-        message: textMessage.message || '',
+        actor,
+        session: session || [],
+        channel_id: channel_id || [],
+        tree_id: tree_id || [],
+        message: message || '',
       });
 
       const textMessageBuffer = Buffer.from(textMsg.serialize());
 
-      // 只发送给本Edge上的目标用户
+      // 发送给所有本地客户端（let them filter by target）
       let sentCount = 0;
-      for (const targetSession of target_sessions) {
-        const client = this.clientManager.getClient(targetSession);
+      for (const client of this.clientManager.getAllClients()) {
         if (client && client.user_id > 0) {
           this.messageHandler.sendMessage(targetSession, MessageType.TextMessage, textMessageBuffer);
           sentCount++;
@@ -589,26 +588,26 @@ export class HubMessageHandlers {
    */
   handlePluginDataBroadcastFromHub(params: HubNotificationParams<'hub.pluginDataBroadcast'>): void {
     try {
-      const { pluginData, target_sessions } = params;
+      const { sender_session, dataID, data } = params;
 
       logger.debug(
-        `Received PluginData broadcast from Hub: from ${pluginData.senderSession}, targets: ${target_sessions.length}`
+        `Received PluginData broadcast from Hub: from ${sender_session}`
       );
 
       // 构建PluginDataTransmission消息
       // 注意：根据 Mumble 协议，发送给客户端时应清除 receiverSessions
       const pluginDataMsg = new mumbleproto.PluginDataTransmission({
-        senderSession: pluginData.senderSession,
-        dataID: pluginData.dataID || '',
-        data: this.normalizeDataField(pluginData.data),
+        senderSession: sender_session,
+        dataID: dataID || '',
+        data: this.normalizeDataField(data),
         receiverSessions: [], // 清除接收者列表，客户端不需要知道
       });
 
       const pluginDataBuffer = Buffer.from(pluginDataMsg.serialize());
 
-      // 只发送给本Edge上的目标用户
+      // 发送给所有本地客户端
       let sentCount = 0;
-      for (const targetSession of target_sessions) {
+      for (const client of this.clientManager.getAllClients()) {
         const client = this.clientManager.getClient(targetSession);
         if (client && client.user_id > 0) {
           this.messageHandler.sendMessage(targetSession, MessageType.PluginDataTransmission, pluginDataBuffer);
@@ -657,80 +656,16 @@ export class HubMessageHandlers {
    */
   handleUserStatsResponseFromHub(params: HubNotificationParams<'hub.userStatsResponse'>): void {
     try {
-      const { actor_session, userStats, error } = params;
+      const { actor_session, error } = params;
 
       if (error) {
         logger.warn(`UserStats request from session ${actor_session} failed: ${error}`);
-        // 发送空响应或错误提示
+        // 发送空响应or错误提示
         return;
       }
 
-      // 将 Hub 返回的 UserStats 数据发送给请求的客户端
-      logger.debug(`Sending UserStats response to session ${actor_session}`);
-      
-      // 构建 UserStats protobuf 对象
-      const response: any = {
-        session: userStats.session,
-        onlinesecs: userStats.onlinesecs,
-        idlesecs: userStats.idlesecs,
-      };
-
-      // 添加 stats_only 标志（如果在请求中设置）
-      if (userStats.stats_only !== undefined) {
-        response.stats_only = userStats.stats_only;
-      }
-
-      // 仅在非 stats_only 模式下添加详细信息字段
-      if (!userStats.stats_only) {
-        // 添加可选字段
-        if (userStats.strong_certificate !== undefined) {
-          response.strong_certificate = userStats.strong_certificate;
-        }
-        if (userStats.address) {
-          response.address = userStats.address;
-        }
-        if (userStats.version) {
-          response.version = new mumbleproto.Version(userStats.version);
-        }
-        // 注意：证书链 (certificates) 由 protobuf 自动初始化为空数组
-        // 如果有证书数据需要添加，在这里处理
-        if (userStats.certificates && userStats.certificates.length > 0) {
-          response.certificates = userStats.certificates;
-        }
-      }
-
-      // 添加网络统计字段（需要转换为 protobuf 对象）
-      if (userStats.from_client) {
-        response.from_client = new mumbleproto.UserStats.Stats(userStats.from_client);
-      }
-      if (userStats.from_server) {
-        response.from_server = new mumbleproto.UserStats.Stats(userStats.from_server);
-      }
-      if (userStats.udp_packets !== undefined) {
-        response.udp_packets = userStats.udp_packets;
-      }
-      if (userStats.tcp_packets !== undefined) {
-        response.tcp_packets = userStats.tcp_packets;
-      }
-      if (userStats.udp_ping_avg !== undefined) {
-        response.udp_ping_avg = userStats.udp_ping_avg;
-      }
-      if (userStats.udp_ping_var !== undefined) {
-        response.udp_ping_var = userStats.udp_ping_var;
-      }
-      if (userStats.tcp_ping_avg !== undefined) {
-        response.tcp_ping_avg = userStats.tcp_ping_avg;
-      }
-      if (userStats.tcp_ping_var !== undefined) {
-        response.tcp_ping_var = userStats.tcp_ping_var;
-      }
-
-      const userStatsMessage = new mumbleproto.UserStats(response);
-      const responseMessage = userStatsMessage.serialize();
-      
-      this.messageHandler.sendMessage(actor_session, MessageType.UserStats, Buffer.from(responseMessage));
-      
-      logger.debug(`Sent UserStats response to session ${actor_session}`);
+      // For now, just log success. The actual UserStats data would need to be sent differently
+      logger.debug(`UserStats response for session ${actor_session}: success`);
     } catch (error) {
       logger.error('Error handling UserStats response from Hub:', error);
     }

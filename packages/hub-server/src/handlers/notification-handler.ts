@@ -147,7 +147,7 @@ export class NotificationHandler implements INotificationHandler {
    */
   async handlePluginDataTransmissionNotification(params: EdgeNotificationParams<'edge.pluginDataTransmissionNotification'>): Promise<void> {
     try {
-      const { edge_id, actor_session, actor_username, pluginData } = params;
+      const { edge_id, actor_session, actor_username, pluginData, receiver_sessions, dataID, data } = params;
 
       logger.info(`Hub received PluginDataTransmission from Edge ${edge_id}, actor: ${actor_username}(${actor_session})`);
 
@@ -164,9 +164,14 @@ export class NotificationHandler implements INotificationHandler {
       const targetSessions: number[] = [];
       const targetSessionsByEdge = new Map<number, number[]>(); // edge_id -> session_ids
 
+      // Support both pluginData structure and direct fields
+      const actualReceiverSessions = receiver_sessions;
+      const actualDataID = pluginData?.dataID || dataID;
+      const actualData = pluginData?.data || data;
+
       // 1. 处理直接指定的接收者
-      if (pluginData.receiverSessions && pluginData.receiverSessions.length > 0) {
-        for (const targetSession of pluginData.receiverSessions) {
+      if (actualReceiverSessions && actualReceiverSessions.length > 0) {
+        for (const targetSession of actualReceiverSessions) {
           const session = sessionManager.getSession(targetSession);
           if (session) {
             targetSessions.push(targetSession);
@@ -198,15 +203,11 @@ export class NotificationHandler implements INotificationHandler {
       }
 
       // 按Edge广播（每个Edge只发送其本地用户的session列表）
-      for (const [target_edge_id, sessions] of targetSessionsByEdge.entries()) {
+      for (const [target_edge_id] of targetSessionsByEdge.entries()) {
         this.factory.getControlService().notify(target_edge_id, 'hub.pluginDataBroadcast', {
-          pluginData: {
-            senderSession: pluginData.senderSession,
-            dataID: pluginData.dataID || '',
-            data: pluginData.data || Buffer.alloc(0),
-            receiverSessions: sessions, // 只发送该Edge需要接收的用户列表
-          },
-          target_sessions: sessions,
+          sender_session: params.sender_session,
+          dataID: actualDataID || '',
+          data: actualData || Buffer.alloc(0),
         });
       }
 

@@ -280,6 +280,6 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       logger.info(`Session ${params.session_id} reported from Edge ${params.edge_server_id}, broadcasted to all edges`);
     }
 
-    return {}; // Success response
+    return { success: true }; // Success response
   }
 }
