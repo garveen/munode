@@ -34,73 +34,37 @@ export class HubMessageHandlers {
     try {
       logger.info(`Edge: Received UserState broadcast from Hub: ${JSON.stringify(params)}`);
       
-      // params 直接就是 userState 对象，包含 session, actor, name 等字段
-      const userStateObj = params;
-
-      // 重构UserState对象，只包含实际存在的字段
-      interface UserStateInit {
-        session: number;
-        actor: number;
-        name?: string;
-        user_id?: number;
-        channel_id?: number;
-        mute?: boolean;
-        deaf?: boolean;
-        suppress?: boolean;
-        self_mute?: boolean;
-        self_deaf?: boolean;
-        priority_speaker?: boolean;
-        recording?: boolean;
-        listening_channel_add?: number[];
-        listening_channel_remove?: number[];
-        temporary_access_tokens?: string[];
-      }
-      const userStateInit: UserStateInit = {
-        session: userStateObj.session,
-        actor: userStateObj.actor,
+      // params is the userState object directly, use the type from HubNotificationParams
+      // Build UserState protobuf message with only the fields that are set
+      const userStateInit: Record<string, unknown> = {
+        session: params.session,
+        actor: params.actor,
       };
       
-      // 只设置实际存在的字段
-      if (userStateObj.name !== undefined) {
-        userStateInit.name = userStateObj.name;
-      }
-      if (userStateObj.user_id !== undefined) {
-        userStateInit.user_id = userStateObj.user_id;
-      }
-      if (userStateObj.channel_id !== undefined) {
-        userStateInit.channel_id = userStateObj.channel_id;
-      }
-      if (userStateObj.mute !== undefined) {
-        userStateInit.mute = userStateObj.mute;
-      }
-      if (userStateObj.deaf !== undefined) {
-        userStateInit.deaf = userStateObj.deaf;
-      }
-      if (userStateObj.suppress !== undefined) {
-        userStateInit.suppress = userStateObj.suppress;
-      }
-      if (userStateObj.self_mute !== undefined) {
-        userStateInit.self_mute = userStateObj.self_mute;
-      }
-      if (userStateObj.self_deaf !== undefined) {
-        userStateInit.self_deaf = userStateObj.self_deaf;
-      }
-      if (userStateObj.priority_speaker !== undefined) {
-        userStateInit.priority_speaker = userStateObj.priority_speaker;
-      }
-      if (userStateObj.recording !== undefined) {
-        userStateInit.recording = userStateObj.recording;
-      }
+      // Only set fields that are defined
+      if (params.name !== undefined) userStateInit.name = params.name;
+      if (params.user_id !== undefined) userStateInit.user_id = params.user_id;
+      if (params.channel_id !== undefined) userStateInit.channel_id = params.channel_id;
+      if (params.mute !== undefined) userStateInit.mute = params.mute;
+      if (params.deaf !== undefined) userStateInit.deaf = params.deaf;
+      if (params.suppress !== undefined) userStateInit.suppress = params.suppress;
+      if (params.self_mute !== undefined) userStateInit.self_mute = params.self_mute;
+      if (params.self_deaf !== undefined) userStateInit.self_deaf = params.self_deaf;
+      if (params.priority_speaker !== undefined) userStateInit.priority_speaker = params.priority_speaker;
+      if (params.recording !== undefined) userStateInit.recording = params.recording;
+      if (params.texture !== undefined) userStateInit.texture = params.texture;
+      if (params.plugin_context !== undefined) userStateInit.plugin_context = params.plugin_context;
+      if (params.plugin_identity !== undefined) userStateInit.plugin_identity = params.plugin_identity;
       
-      // 只在有值时才设置 repeated 字段
-      if (userStateObj.listening_channel_add && userStateObj.listening_channel_add.length > 0) {
-        userStateInit.listening_channel_add = userStateObj.listening_channel_add;
+      // Only set repeated fields when they have values
+      if (params.listening_channel_add && params.listening_channel_add.length > 0) {
+        userStateInit.listening_channel_add = params.listening_channel_add;
       }
-      if (userStateObj.listening_channel_remove && userStateObj.listening_channel_remove.length > 0) {
-        userStateInit.listening_channel_remove = userStateObj.listening_channel_remove;
+      if (params.listening_channel_remove && params.listening_channel_remove.length > 0) {
+        userStateInit.listening_channel_remove = params.listening_channel_remove;
       }
-      if (userStateObj.temporary_access_tokens && userStateObj.temporary_access_tokens.length > 0) {
-        userStateInit.temporary_access_tokens = userStateObj.temporary_access_tokens;
+      if (params.temporary_access_tokens && params.temporary_access_tokens.length > 0) {
+        userStateInit.temporary_access_tokens = params.temporary_access_tokens;
       }
       
       const userState = new mumbleproto.UserState(userStateInit);
@@ -192,7 +156,7 @@ export class HubMessageHandlers {
    */
   handleUserStateResponseFromHub(params: HubNotificationParams<'hub.userStateResponse'>): void {
     try {
-      const { success, actor_session, error, permission_denied } = params;
+      const { success, actor_session, error, permission_denied, userState } = params;
 
       if (!success) {
         logger.warn(`UserState request from session ${actor_session} failed: ${error}`);
@@ -206,7 +170,19 @@ export class HubMessageHandlers {
         return;
       }
 
-      logger.debug(`UserState request from session ${actor_session} succeeded`);
+      // 如果成功并且有userState数据，发送给客户端
+      if (userState) {
+        logger.debug(`Sending UserState response to session ${actor_session}`);
+        
+        // 构建UserState消息
+        const userStateMsg = new mumbleproto.UserState(userState);
+        const userStateBuffer = Buffer.from(userStateMsg.serialize());
+        
+        // 发送给客户端
+        this.messageHandler.sendMessage(actor_session, MessageType.UserState, userStateBuffer);
+      } else {
+        logger.debug(`UserState request from session ${actor_session} succeeded (no state data to send)`);
+      }
     } catch (error) {
       logger.error('Error handling UserState response from Hub:', error);
     }

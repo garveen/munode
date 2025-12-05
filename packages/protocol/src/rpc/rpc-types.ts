@@ -777,6 +777,7 @@ export interface HubUserStateBroadcastNotification {
     texture?: Buffer;
     plugin_context?: Buffer;
     plugin_identity?: string;
+    target_sessions?: number[]; // Optional: for Channel Ninja filtered broadcast
   };
 }
 
@@ -788,7 +789,31 @@ export interface HubUserStateResponseNotification {
   params: {
     success: boolean;
     actor_session: number;
+    target_session?: number;
     error?: string;
+    permission_denied?: boolean;
+    permission_type?: string;
+    // The actual UserState data to send back to the client
+    userState?: {
+      session: number;
+      actor: number;
+      name?: string;
+      user_id?: number;
+      channel_id?: number;
+      mute?: boolean;
+      deaf?: boolean;
+      suppress?: boolean;
+      self_mute?: boolean;
+      self_deaf?: boolean;
+      priority_speaker?: boolean;
+      recording?: boolean;
+      listening_channel_add?: number[];
+      listening_channel_remove?: number[];
+      temporary_access_tokens?: string[];
+      texture?: Buffer;
+      plugin_context?: Buffer;
+      plugin_identity?: string;
+    };
   };
 }
 

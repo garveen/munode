@@ -379,11 +379,12 @@ export class UserStateHandler implements IUserStateHandler {
         return;
       }
 
-      // 向发起Edge回复成功
+      // 向发起Edge回复成功，并包含实际的userState数据用于发送给客户端
       controlService.notify(edge_id, 'hub.userStateResponse', {
         success: true,
         actor_session,
         target_session: targetSession,
+        userState: broadcastUserState,
       });
 
       logger.info(`Hub: Broadcasting UserState for session ${targetSession} to all edges, fields: ${Object.keys(broadcastUserState).join(', ')}`);
