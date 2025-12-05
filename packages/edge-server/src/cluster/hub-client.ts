@@ -317,7 +317,7 @@ export class EdgeControlClient extends EventEmitter {
   }  /**
    * 处理来自 Hub 的通知
    */
-  private handleIncomingNotification(message: any): void {
+  private handleIncomingNotification(message: { method: string; params: unknown }): void {
     try {
       // 首先触发通用的notification事件，供上层直接处理
       this.emit('notification', message);
@@ -595,7 +595,7 @@ export class EdgeControlClient extends EventEmitter {
   /**
    * 发送通知到Hub（不等待响应）
    */
-  notify(method: string, params?: any): void {
+  notify(method: string, params?: unknown): void {
     if (!this.isConnected()) {
       logger.warn(`Cannot send notification ${method}: not connected to Hub`);
       return;
@@ -708,17 +708,17 @@ export class EdgeControlClient extends EventEmitter {
   /**
    * 发送客户端消息中转到 Hub
    */
-  async sendRelay(relay: any): Promise<void> {
+  async sendRelay(relay: unknown): Promise<void> {
     // TODO: 实现通过 WebSocket 发送 ClientMessageRelay
     // 当前暂时通过 RPC 模拟
-    logger.debug(`Sending relay to Hub: session=${relay.session_id}`);
+    logger.debug(`Sending relay to Hub: session=${typeof relay === 'object' && relay !== null && 'session_id' in relay ? (relay as { session_id: unknown }).session_id : 'unknown'}`);
     this.emit('relay', relay);
   }
 
   /**
    * 批量发送客户端消息中转到 Hub
    */
-  async sendRelayBatch(relays: any[]): Promise<void> {
+  async sendRelayBatch(relays: unknown[]): Promise<void> {
     // TODO: 实现批量发送优化
     for (const relay of relays) {
       await this.sendRelay(relay);

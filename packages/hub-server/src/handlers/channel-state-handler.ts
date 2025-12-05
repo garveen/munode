@@ -1,6 +1,7 @@
 import { createLogger } from '@munode/common';
 import { HubPermissionChecker, Permission } from '../permission-checker.js';
 import { HubHandlerFactory } from '../factory.js';
+import type { EdgeNotificationParams } from '@munode/protocol';
 
 const logger = createLogger({ service: 'hub-channel-state-handler' });
 
@@ -11,12 +12,12 @@ export interface IChannelStateHandler {
   /**
    * 处理频道状态通知
    */
-  handleChannelStateNotification(params: any): Promise<void>;
+  handleChannelStateNotification(params: EdgeNotificationParams<'edge.channelStateNotification'>): Promise<void>;
 
   /**
    * 处理频道删除通知
    */
-  handleChannelRemoveNotification(params: any): Promise<void>;
+  handleChannelRemoveNotification(params: EdgeNotificationParams<'edge.channelRemoveNotification'>): Promise<void>;
 }
 
 /**
@@ -31,9 +32,9 @@ export class ChannelStateHandler implements IChannelStateHandler {
     this.permissionChecker = factory.getPermissionChecker();
   }
 
-  async handleChannelStateNotification(params: any): Promise<void> {
+  async handleChannelStateNotification(params: EdgeNotificationParams<'edge.channelStateNotification'>): Promise<void> {
     try {
-      const { edge_id, actor_session, actor_username, channelState: channelStateObj, has_channel_id } = params;
+      const { edge_id, actor_session, actor_username, channelState: channelStateObj } = params;
 
       logger.info(`Hub received ChannelState from Edge ${edge_id}, actor: ${actor_username}(${actor_session})`);
 
@@ -56,7 +57,7 @@ export class ChannelStateHandler implements IChannelStateHandler {
       let channelId: number;
       let isNewChannel: boolean;
       
-      if (has_channel_id && channelStateObj.channel_id !== undefined) {
+      if (channelStateObj.channel_id !== undefined) {
         // 指定了channel_id - 这是更新现有频道或链接操作
         channelId = channelStateObj.channel_id;
         const existingChannel = channelManager?.getChannel(channelId);
@@ -265,7 +266,7 @@ export class ChannelStateHandler implements IChannelStateHandler {
     }
   }
 
-  async handleChannelRemoveNotification(params: any): Promise<void> {
+  async handleChannelRemoveNotification(params: EdgeNotificationParams<'edge.channelRemoveNotification'>): Promise<void> {
     try {
       const { edge_id, actor_session, actor_username, channel_id } = params;
 

@@ -1,6 +1,7 @@
 import { createLogger } from '@munode/common';
 import { HubPermissionChecker } from '../permission-checker.js';
 import { HubHandlerFactory } from '../factory.js';
+import type { RPCParams, RPCResult } from '@munode/protocol';
 
 const logger = createLogger({ service: 'hub-authentication-handler' });
 
@@ -11,17 +12,17 @@ export interface IAuthenticationHandler {
   /**
    * 处理会话ID分配
    */
-  handleAllocateSessionId(params: any): Promise<any>;
+  handleAllocateSessionId(params: RPCParams<'edge.allocateSessionId'>): Promise<RPCResult<'edge.allocateSessionId'>>;
 
   /**
    * 处理用户认证
    */
-  handleAuthenticateUser(params: any): Promise<any>;
+  handleAuthenticateUser(params: RPCParams<'edge.authenticateUser'>): Promise<RPCResult<'edge.authenticateUser'>>;
 
   /**
    * 处理会话报告
    */
-  handleReportSession(params: any): Promise<any>;
+  handleReportSession(params: RPCParams<'edge.reportSession'>): Promise<RPCResult<'edge.reportSession'>>;
 }
 
 /**
@@ -36,14 +37,14 @@ export class AuthenticationHandler implements IAuthenticationHandler {
     this.permissionChecker = factory.getPermissionChecker();
   }
 
-  async handleAllocateSessionId(params: any): Promise<any> {
+  async handleAllocateSessionId(params: RPCParams<'edge.allocateSessionId'>): Promise<RPCResult<'edge.allocateSessionId'>> {
     const sessionManager = this.factory.getSessionManager();
     const session_id = sessionManager.allocateSessionId();
     logger.debug(`Allocated session ID ${session_id} for Edge ${params.edge_id}`);
     return { session_id };
   }
 
-  async handleAuthenticateUser(params: any): Promise<any> {
+  async handleAuthenticateUser(params: RPCParams<'edge.authenticateUser'>): Promise<RPCResult<'edge.authenticateUser'>> {
     const authManager = this.factory.getAuthManager();
     if (!authManager) {
       logger.error('Auth manager not initialized');
@@ -75,7 +76,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
     }
   }
 
-  async handleReportSession(params: any): Promise<any> {
+  async handleReportSession(params: RPCParams<'edge.reportSession'>): Promise<RPCResult<'edge.reportSession'>> {
     const sessionManager = this.factory.getSessionManager();
     const permissionChecker = this.factory.getPermissionChecker();
     const config = this.factory.getConfig();
@@ -127,7 +128,25 @@ export class AuthenticationHandler implements IAuthenticationHandler {
     // 将RPC参数转换为GlobalSession对象
     // Note: params.startTime may be a Date object or ISO string (from JSON serialization)
     const startTime = params.startTime instanceof Date ? params.startTime : new Date(params.startTime);
-    const session: any = {
+    // Use proper typing instead of any
+    interface SessionData {
+      session_id: number;
+      edge_id: number;
+      user_id: number;
+      username: string;
+      ip_address: string;
+      cert_hash: string;
+      is_authenticated: boolean;
+      channel_id: number;
+      connected_at: number;
+      last_active: number;
+      groups: string[];
+      version?: string;
+      release?: string;
+      os?: string;
+      os_version?: string;
+    }
+    const session: SessionData = {
       session_id: params.session_id,
       edge_id: params.edge_server_id,
       user_id: params.user_id,

@@ -164,12 +164,17 @@ export type { RPCHandler } from './rpc/typed-rpc-server.js';
 // Note: RPCError is now exported from rpc-methods.js (new Protobuf version)
 export type {
   EdgeToHubMethods,
+  EdgeToHubNotifications,
   HubToEdgeNotifications,
   RPCMethodMap,
   NotificationMethodMap,
+  HubToEdgeNotificationMethodMap,
+  EdgeToHubNotificationMethodMap,
   RPCParams,
   RPCResult,
   NotificationParams,
+  HubNotificationParams,
+  EdgeNotificationParams,
   // Individual method types
   EdgeRegisterMethod,
   EdgeHeartbeatMethod,
@@ -191,6 +196,15 @@ export type {
   HubVoiceDataNotification,
   HubForceDisconnectNotification,
   HubPeerJoinedNotification,
+  // Edge to Hub notification types
+  EdgeUserStateNotification,
+  EdgeUserLeftNotification,
+  EdgeChannelStateNotification,
+  EdgeChannelRemoveNotification,
+  EdgeUserRemoveNotification,
+  EdgeTextMessageNotification,
+  EdgePluginDataTransmissionNotification,
+  EdgeUserStatsNotification,
 } from './rpc/rpc-types.js';
 
 // Voice Channel

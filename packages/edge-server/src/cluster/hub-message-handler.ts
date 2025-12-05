@@ -14,6 +14,7 @@
 import { logger } from '@munode/common';
 import {  mumbleproto } from '@munode/protocol';
 import { MessageType } from '@munode/protocol';
+import type { HubNotificationParams } from '@munode/protocol';
 import type { ChannelInfo, ClientInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
@@ -29,7 +30,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的UserState广播
    */
-  handleUserStateBroadcastFromHub(params: any): void {
+  handleUserStateBroadcastFromHub(params: HubNotificationParams<'hub.userStateBroadcast'>): void {
     try {
       logger.info(`Edge: Received UserState broadcast from Hub: ${JSON.stringify(params)}`);
       
@@ -37,7 +38,24 @@ export class HubMessageHandlers {
       const userStateObj = params;
 
       // 重构UserState对象，只包含实际存在的字段
-      const userStateInit: any = {
+      interface UserStateInit {
+        session: number;
+        actor: number;
+        name?: string;
+        user_id?: number;
+        channel_id?: number;
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
+        self_mute?: boolean;
+        self_deaf?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
+        listening_channel_add?: number[];
+        listening_channel_remove?: number[];
+        temporary_access_tokens?: string[];
+      }
+      const userStateInit: UserStateInit = {
         session: userStateObj.session,
         actor: userStateObj.actor,
       };
@@ -172,7 +190,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的UserState响应
    */
-  handleUserStateResponseFromHub(params: any): void {
+  handleUserStateResponseFromHub(params: HubNotificationParams<'hub.userStateResponse'>): void {
     try {
       const { success, actor_session, error, permission_denied } = params;
 
@@ -197,7 +215,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的ChannelState响应
    */
-  handleChannelStateResponseFromHub(params: any): void {
+  handleChannelStateResponseFromHub(params: HubNotificationParams<'hub.channelStateResponse'>): void {
     try {
       const { success, actor_session, error, permission_denied } = params;
 
@@ -219,7 +237,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的ChannelState广播
    */
-  handleChannelStateBroadcastFromHub(params: any): void {
+  handleChannelStateBroadcastFromHub(params: HubNotificationParams<'hub.channelStateBroadcast'>): void {
     try {
       const channelState = params;
 
@@ -325,7 +343,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的UserRemove响应
    */
-  handleUserRemoveResponseFromHub(params: any): void {
+  handleUserRemoveResponseFromHub(params: HubNotificationParams<'hub.userRemoveResponse'>): void {
     try {
       const { success, actor_session, error } = params;
 
@@ -344,7 +362,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的UserRemove广播
    */
-  handleUserRemoveBroadcastFromHub(params: any): void {
+  handleUserRemoveBroadcastFromHub(params: HubNotificationParams<'hub.userRemoveBroadcast'>): void {
     try {
       const { session_id, actor_session, target_session, target_edge_id, reason, ban, target_sessions } = params;
 
@@ -400,7 +418,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的ChannelRemove响应
    */
-  handleChannelRemoveResponseFromHub(data: any): void {
+  handleChannelRemoveResponseFromHub(data: HubNotificationParams<'hub.channelRemoveResponse'>): void {
     try {
       const { success, error, actor_session } = data;
       
@@ -432,7 +450,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的ChannelRemove广播
    */
-  handleChannelRemoveBroadcastFromHub(data: any): void {
+  handleChannelRemoveBroadcastFromHub(data: HubNotificationParams<'hub.channelRemoveBroadcast'>): void {
     try {
       const { channel_id, channels_removed, affected_sessions, parent_id } = data;
       
@@ -506,7 +524,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的TextMessage广播
    */
-  handleTextMessageBroadcastFromHub(params: any): void {
+  handleTextMessageBroadcastFromHub(params: HubNotificationParams<'hub.textMessageBroadcast'>): void {
     try {
       const { textMessage, target_sessions } = params;
 
@@ -569,7 +587,7 @@ export class HubMessageHandlers {
    * 客户端不需要知道其他接收者列表
    * 参考：mumble-voip/mumble/src/murmur/Messages.cpp msgPluginDataTransmission
    */
-  handlePluginDataBroadcastFromHub(params: any): void {
+  handlePluginDataBroadcastFromHub(params: HubNotificationParams<'hub.pluginDataBroadcast'>): void {
     try {
       const { pluginData, target_sessions } = params;
 
@@ -607,7 +625,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的语音数据
    */
-  handleVoiceDataFromHub(data: any, respond: (result?: any, error?: any) => void): void {
+  handleVoiceDataFromHub(data: HubNotificationParams<'voice.data'>, respond: (result?: unknown, error?: unknown) => void): void {
     try {
       // TODO: 实现VoiceRouter.handleVoiceDataFromHub方法
       logger.debug('Received voice data from Hub:', data);
@@ -637,7 +655,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的UserStats响应
    */
-  handleUserStatsResponseFromHub(params: any): void {
+  handleUserStatsResponseFromHub(params: HubNotificationParams<'hub.userStatsResponse'>): void {
     try {
       const { actor_session, userStats, error } = params;
 

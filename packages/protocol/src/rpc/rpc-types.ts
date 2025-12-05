@@ -442,6 +442,152 @@ export interface ClusterGetStatusMethod {
 }
 
 // ============================================================================
+// Edge -> Hub Notification Methods (不需要响应的通知)
+// ============================================================================
+
+/**
+ * Edge 通知 Hub 用户状态变更
+ */
+export interface EdgeUserStateNotification {
+  method: 'edge.userStateNotification';
+  params: {
+    edge_id: number;
+    actor_session: number;
+    actor_username: string;
+    userState: {
+      session?: number;
+      actor?: number;
+      name?: string;
+      user_id?: number;
+      channel_id?: number;
+      mute?: boolean;
+      deaf?: boolean;
+      suppress?: boolean;
+      self_mute?: boolean;
+      self_deaf?: boolean;
+      priority_speaker?: boolean;
+      recording?: boolean;
+      listening_channel_add?: number[];
+      listening_channel_remove?: number[];
+      temporary_access_tokens?: string[];
+    };
+  };
+}
+
+/**
+ * Edge 通知 Hub 用户离开
+ */
+export interface EdgeUserLeftNotification {
+  method: 'edge.userLeftNotification';
+  params: {
+    edge_id: number;
+    session: number;
+    actor: number;
+    reason?: string;
+    ban?: boolean;
+  };
+}
+
+/**
+ * Edge 通知 Hub 频道状态变更
+ */
+export interface EdgeChannelStateNotification {
+  method: 'edge.channelStateNotification';
+  params: {
+    edge_id: number;
+    actor_session: number;
+    actor_user_id: number;
+    actor_username: string;
+    channelState: {
+      channel_id?: number;
+      parent?: number;
+      name?: string;
+      description?: string;
+      description_hash?: Buffer;
+      temporary?: boolean;
+      position?: number;
+      max_users?: number;
+    };
+  };
+}
+
+/**
+ * Edge 通知 Hub 频道移除
+ */
+export interface EdgeChannelRemoveNotification {
+  method: 'edge.channelRemoveNotification';
+  params: {
+    edge_id: number;
+    actor_session: number;
+    actor_user_id: number;
+    actor_username: string;
+    channel_id: number;
+  };
+}
+
+/**
+ * Edge 通知 Hub 用户移除
+ */
+export interface EdgeUserRemoveNotification {
+  method: 'edge.userRemoveNotification';
+  params: {
+    edge_id: number;
+    actor_session: number;
+    actor_user_id: number;
+    actor_username: string;
+    target_session: number;
+    reason?: string;
+    ban?: boolean;
+  };
+}
+
+/**
+ * Edge 通知 Hub 文本消息
+ */
+export interface EdgeTextMessageNotification {
+  method: 'edge.textMessageNotification';
+  params: {
+    edge_id: number;
+    actor_session: number;
+    actor_user_id: number;
+    actor_username: string;
+    session?: number[];
+    channel_id?: number[];
+    tree_id?: number[];
+    message: string;
+  };
+}
+
+/**
+ * Edge 通知 Hub 插件数据传输
+ */
+export interface EdgePluginDataTransmissionNotification {
+  method: 'edge.pluginDataTransmissionNotification';
+  params: {
+    edge_id: number;
+    sender_session: number;
+    dataID: string;
+    data: Buffer;
+    receiver_sessions?: number[];
+  };
+}
+
+/**
+ * Edge 通知 Hub 用户统计
+ */
+export interface EdgeUserStatsNotification {
+  method: 'edge.userStatsNotification';
+  params: {
+    edge_id: number;
+    actor_session: number;
+    actor_user_id: number;
+    actor_username: string;
+    target_session: number;
+    stats_only: boolean;
+  };
+}
+
+// ============================================================================
 // Blob Storage RPC Methods
 // ============================================================================
 
@@ -596,6 +742,231 @@ export interface HubACLResponseNotification {
   };
 }
 
+/**
+ * Hub 通知 Edge 用户状态广播
+ */
+export interface HubUserStateBroadcastNotification {
+  method: 'hub.userStateBroadcast';
+  params: {
+    session: number;
+    actor: number;
+    name?: string;
+    user_id?: number;
+    channel_id?: number;
+    mute?: boolean;
+    deaf?: boolean;
+    suppress?: boolean;
+    self_mute?: boolean;
+    self_deaf?: boolean;
+    priority_speaker?: boolean;
+    recording?: boolean;
+    listening_channel_add?: number[];
+    listening_channel_remove?: number[];
+    temporary_access_tokens?: string[];
+  };
+}
+
+/**
+ * Hub 通知 Edge 用户状态响应
+ */
+export interface HubUserStateResponseNotification {
+  method: 'hub.userStateResponse';
+  params: {
+    success: boolean;
+    actor_session: number;
+    error?: string;
+  };
+}
+
+/**
+ * Hub 通知 Edge 频道状态广播
+ */
+export interface HubChannelStateBroadcastNotification {
+  method: 'hub.channelStateBroadcast';
+  params: {
+    channel_id: number;
+    parent?: number;
+    name?: string;
+    description?: string;
+    description_hash?: Buffer;
+    temporary?: boolean;
+    position?: number;
+    max_users?: number;
+    is_enter_restricted?: boolean;
+    can_enter?: boolean;
+  };
+}
+
+/**
+ * Hub 通知 Edge 频道状态响应
+ */
+export interface HubChannelStateResponseNotification {
+  method: 'hub.channelStateResponse';
+  params: {
+    success: boolean;
+    actor_session: number;
+    error?: string;
+  };
+}
+
+/**
+ * Hub 通知 Edge 用户移除广播
+ */
+export interface HubUserRemoveBroadcastNotification {
+  method: 'hub.userRemoveBroadcast';
+  params: {
+    session: number;
+    actor: number;
+    reason?: string;
+    ban?: boolean;
+  };
+}
+
+/**
+ * Hub 通知 Edge 用户移除响应
+ */
+export interface HubUserRemoveResponseNotification {
+  method: 'hub.userRemoveResponse';
+  params: {
+    success: boolean;
+    actor_session: number;
+    error?: string;
+  };
+}
+
+/**
+ * Hub 通知 Edge 频道移除广播
+ */
+export interface HubChannelRemoveBroadcastNotification {
+  method: 'hub.channelRemoveBroadcast';
+  params: {
+    channel_id: number;
+  };
+}
+
+/**
+ * Hub 通知 Edge 频道移除响应
+ */
+export interface HubChannelRemoveResponseNotification {
+  method: 'hub.channelRemoveResponse';
+  params: {
+    success: boolean;
+    actor_session: number;
+    error?: string;
+  };
+}
+
+/**
+ * Hub 通知 Edge 文本消息广播
+ */
+export interface HubTextMessageBroadcastNotification {
+  method: 'hub.textMessageBroadcast';
+  params: {
+    actor: number;
+    session?: number[];
+    channel_id?: number[];
+    tree_id?: number[];
+    message: string;
+  };
+}
+
+/**
+ * Hub 通知 Edge 文本消息被拒绝
+ */
+export interface HubTextMessageDeniedNotification {
+  method: 'hub.textMessageDenied';
+  params: {
+    actor_session: number;
+    reason: string;
+  };
+}
+
+/**
+ * Hub 通知 Edge 权限被拒绝
+ */
+export interface HubPermissionDeniedNotification {
+  method: 'hub.permissionDenied';
+  params: {
+    actor_session: number;
+    permission: number;
+    channel_id: number;
+    reason: string;
+  };
+}
+
+/**
+ * Hub 通知 Edge 插件数据广播
+ */
+export interface HubPluginDataBroadcastNotification {
+  method: 'hub.pluginDataBroadcast';
+  params: {
+    sender_session: number;
+    dataID: string;
+    data: Buffer;
+  };
+}
+
+/**
+ * Hub 通知 Edge 用户统计响应
+ */
+export interface HubUserStatsResponseNotification {
+  method: 'hub.userStatsResponse';
+  params: {
+    success: boolean;
+    actor_session: number;
+    error?: string;
+  };
+}
+
+/**
+ * Hub 通知 Edge 用户加入
+ */
+export interface HubUserJoinedNotification {
+  method: 'hub.userJoined';
+  params: {
+    session_id: number;
+    edge_id: number;
+    user_id: number;
+    username: string;
+    channel_id: number;
+    cert_hash?: string;
+    target_sessions?: number[]; // Optional: for ninja channel filtering
+  };
+}
+
+/**
+ * Hub 通知 Edge 可见用户列表（用于 Channel Ninja）
+ */
+export interface HubVisibleUsersNotification {
+  method: 'hub.visibleUsers';
+  params: {
+    new_session_id: number;
+    visible_sessions: number[];
+  };
+}
+
+/**
+ * Hub 通知 Edge 用户状态变更（通用）
+ */
+export interface HubUserStateChangedNotification {
+  method: 'hub.userStateChanged';
+  params: {
+    session_id: number;
+    changes: Record<string, unknown>;
+  };
+}
+
+/**
+ * Hub 通知 Edge 用户离开
+ */
+export interface HubUserLeftNotification {
+  method: 'hub.userLeft';
+  params: {
+    session_id: number;
+    reason?: string;
+  };
+}
+
 // ============================================================================
 // Type Union & Mapping
 // ============================================================================
@@ -634,13 +1005,43 @@ export type EdgeToHubMethods =
   | BlobSetUserCommentMethod;
 
 /**
+ * 所有 Edge -> Hub 的通知方法（不需要响应）
+ */
+export type EdgeToHubNotifications =
+  | EdgeUserStateNotification
+  | EdgeUserLeftNotification
+  | EdgeChannelStateNotification
+  | EdgeChannelRemoveNotification
+  | EdgeUserRemoveNotification
+  | EdgeTextMessageNotification
+  | EdgePluginDataTransmissionNotification
+  | EdgeUserStatsNotification;
+
+/**
  * 所有 Hub -> Edge 的通知方法
  */
 export type HubToEdgeNotifications =
   | HubVoiceDataNotification
   | HubForceDisconnectNotification
   | HubPeerJoinedNotification
-  | HubACLResponseNotification;
+  | HubACLResponseNotification
+  | HubUserStateBroadcastNotification
+  | HubUserStateResponseNotification
+  | HubChannelStateBroadcastNotification
+  | HubChannelStateResponseNotification
+  | HubUserRemoveBroadcastNotification
+  | HubUserRemoveResponseNotification
+  | HubChannelRemoveBroadcastNotification
+  | HubChannelRemoveResponseNotification
+  | HubTextMessageBroadcastNotification
+  | HubTextMessageDeniedNotification
+  | HubPermissionDeniedNotification
+  | HubPluginDataBroadcastNotification
+  | HubUserStatsResponseNotification
+  | HubUserJoinedNotification
+  | HubVisibleUsersNotification
+  | HubUserStateChangedNotification
+  | HubUserLeftNotification;
 
 /**
  * 方法名到类型的映射
@@ -660,14 +1061,32 @@ export type RPCParams<M extends EdgeToHubMethods['method']> = RPCMethodMap[M]['p
 export type RPCResult<M extends EdgeToHubMethods['method']> = RPCMethodMap[M]['result'];
 
 /**
- * 通知方法名到类型的映射
+ * 通知方法名到类型的映射 (Hub -> Edge)
  */
-export type NotificationMethodMap = {
+export type HubToEdgeNotificationMethodMap = {
   [K in HubToEdgeNotifications as K['method']]: K;
 };
 
 /**
- * 根据通知方法名获取参数类型
+ * 通知方法名到类型的映射 (Edge -> Hub)
  */
+export type EdgeToHubNotificationMethodMap = {
+  [K in EdgeToHubNotifications as K['method']]: K;
+};
+
+/**
+ * 根据通知方法名获取参数类型 (Hub -> Edge)
+ */
+export type HubNotificationParams<M extends HubToEdgeNotifications['method']> =
+  HubToEdgeNotificationMethodMap[M]['params'];
+
+/**
+ * 根据通知方法名获取参数类型 (Edge -> Hub)
+ */
+export type EdgeNotificationParams<M extends EdgeToHubNotifications['method']> =
+  EdgeToHubNotificationMethodMap[M]['params'];
+
+// Deprecated: 保持向后兼容
+export type NotificationMethodMap = HubToEdgeNotificationMethodMap;
 export type NotificationParams<M extends HubToEdgeNotifications['method']> =
-  NotificationMethodMap[M]['params'];
+  HubNotificationParams<M>;

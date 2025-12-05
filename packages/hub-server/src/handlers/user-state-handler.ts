@@ -1,6 +1,7 @@
 import { createLogger } from '@munode/common';
 import { HubPermissionChecker, Permission } from '../permission-checker.js';
 import { HubHandlerFactory } from '../factory.js';
+import type { EdgeNotificationParams } from '@munode/protocol';
 
 const logger = createLogger({ service: 'hub-user-state-handler' });
 
@@ -11,12 +12,12 @@ export interface IUserStateHandler {
   /**
    * 处理用户状态通知
    */
-  handleUserStateNotification(params: any): Promise<void>;
+  handleUserStateNotification(params: EdgeNotificationParams<'edge.userStateNotification'>): Promise<void>;
 
   /**
    * 处理用户离开通知
    */
-  handleUserLeftNotification(params: any): Promise<void>;
+  handleUserLeftNotification(params: EdgeNotificationParams<'edge.userLeftNotification'>): Promise<void>;
 }
 
 /**
@@ -31,7 +32,7 @@ export class UserStateHandler implements IUserStateHandler {
     this.permissionChecker = factory.getPermissionChecker();
   }
 
-  async handleUserStateNotification(params: any): Promise<void> {
+  async handleUserStateNotification(params: EdgeNotificationParams<'edge.userStateNotification'>): Promise<void> {
     try {
       const { edge_id, actor_session, actor_username, userState: userStateObj } = params;
 
@@ -442,20 +443,20 @@ export class UserStateHandler implements IUserStateHandler {
     }
   }
 
-  async handleUserLeftNotification(params: any): Promise<void> {
-    const { edge_id, session_id, username } = params;
+  async handleUserLeftNotification(params: EdgeNotificationParams<'edge.userLeftNotification'>): Promise<void> {
+    const { edge_id, session } = params;
     const sessionManager = this.factory.getSessionManager();
     const controlService = this.factory.getControlService();
 
-    logger.info(`User ${username}(${session_id}) left from Edge ${edge_id}`);
+    logger.info(`User (session ${session}) left from Edge ${edge_id}`);
 
     // 从会话管理器中移除会话
-    sessionManager.removeSession(session_id);
+    sessionManager.removeSession(session);
 
     // 广播用户离开消息给所有Edge
     controlService.broadcast('hub.userLeft', {
-      session_id,
-      username,
+      session_id: session,
+      reason: params.reason,
     });
   }
 

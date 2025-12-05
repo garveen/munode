@@ -1,6 +1,7 @@
 import { createLogger } from '@munode/common';
 import { HubPermissionChecker, Permission } from '../permission-checker.js';
 import { HubHandlerFactory } from '../factory.js';
+import type { EdgeNotificationParams } from '@munode/protocol';
 
 const logger = createLogger({ service: 'hub-text-message-handler' });
 
@@ -11,7 +12,7 @@ export interface ITextMessageHandler {
   /**
    * 处理文本消息通知
    */
-  handleTextMessageNotification(params: any): Promise<void>;
+  handleTextMessageNotification(params: EdgeNotificationParams<'edge.textMessageNotification'>): Promise<void>;
 }
 
 /**
@@ -26,7 +27,7 @@ export class TextMessageHandler implements ITextMessageHandler {
     this.permissionChecker = factory.getPermissionChecker();
   }
 
-  async handleTextMessageNotification(params: any): Promise<void> {
+  async handleTextMessageNotification(params: EdgeNotificationParams<'edge.textMessageNotification'>): Promise<void> {
     try {
       const { edge_id, actor_session, actor_username, actor_channel_id, textMessage } = params;
 
