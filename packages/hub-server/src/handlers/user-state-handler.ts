@@ -445,18 +445,18 @@ export class UserStateHandler implements IUserStateHandler {
   }
 
   async handleUserLeftNotification(params: EdgeNotificationParams<'edge.userLeftNotification'>): Promise<void> {
-    const { edge_id, session } = params;
+    const { edge_id, session_id } = params as { edge_id: number; session_id: number; reason?: string };
     const sessionManager = this.factory.getSessionManager();
     const controlService = this.factory.getControlService();
 
-    logger.info(`User (session ${session}) left from Edge ${edge_id}`);
+    logger.info(`User (session ${session_id}) left from Edge ${edge_id}`);
 
     // 从会话管理器中移除会话
-    sessionManager.removeSession(session);
+    sessionManager.removeSession(session_id);
 
     // 广播用户离开消息给所有Edge
     controlService.broadcast('hub.userLeft', {
-      session_id: session,
+      session_id: session_id,
       reason: params.reason,
     });
   }

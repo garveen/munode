@@ -34,9 +34,9 @@ export class ChannelStateHandler implements IChannelStateHandler {
 
   async handleChannelStateNotification(params: EdgeNotificationParams<'edge.channelStateNotification'>): Promise<void> {
     try {
-      const { edge_id, actor_session, actor_username, channelState: channelStateObj } = params;
+      const { edge_id, actor_session, actor_username, channelState: channelStateObj, has_channel_id } = params;
 
-      logger.info(`Hub received ChannelState from Edge ${edge_id}, actor: ${actor_username}(${actor_session})`);
+      logger.info(`Hub received ChannelState from Edge ${edge_id}, actor: ${actor_username}(${actor_session}), has_channel_id: ${has_channel_id}`);
 
       const sessionManager = this.factory.getSessionManager();
       const permissionChecker = this.factory.getPermissionChecker();
@@ -54,12 +54,13 @@ export class ChannelStateHandler implements IChannelStateHandler {
       }
 
       // 确定频道ID和操作类型
+      // 使用 has_channel_id 检查 protobuf optional 字段是否真的设置了值（遵循 Copilot 指导）
       let channelId: number;
       let isNewChannel: boolean;
       
-      if (channelStateObj.channel_id !== undefined) {
+      if (has_channel_id) {
         // 指定了channel_id - 这是更新现有频道或链接操作
-        channelId = channelStateObj.channel_id;
+        channelId = channelStateObj.channel_id!;
         const existingChannel = channelManager?.getChannel(channelId);
         isNewChannel = !existingChannel;
       } else {

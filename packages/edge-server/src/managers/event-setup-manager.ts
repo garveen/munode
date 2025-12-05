@@ -288,8 +288,7 @@ export class EventSetupManager {
       this.hubClient!.notify('hub.userLeft', {
         session_id: client.session,
         edge_id: this.config.server_id,
-        user_id: client.user_id,
-        username: client.username,
+        reason: undefined,
       });
 
       logger.info(`User ${client.username} (session ${client.session}) left, notified Hub for broadcast`);
