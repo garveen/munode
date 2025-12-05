@@ -216,6 +216,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           user_id: params.user_id,
           username: params.username,
           channel_id: actualChannelId,
+          groups: session.groups || [],
           cert_hash: session.cert_hash,
           target_sessions: sessionIds,
         });
@@ -265,6 +266,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           user_id: params.user_id,
           username: params.username,
           channel_id: actualChannelId,
+          groups: session.groups || [],
           cert_hash: session.cert_hash,
         });
         process.stderr.write(`[DIRECT] broadcast returned\n`);

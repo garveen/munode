@@ -118,17 +118,23 @@ export class ChannelStateHandler implements IChannelStateHandler {
         }
 
         // 准备新频道数据（用于创建）
-        const channelData: any = {
-          channel_id: channelId,
+        // 注意：ChannelManager.createChannel 期望的是 CreateChannelRequest 接口
+        const channelData = {
           name: channelStateObj.name || '',
-          parent: channelStateObj.parent || 0,
-          description: channelStateObj.description || '',
-          temporary: channelStateObj.temporary || false,
+          parent_id: channelStateObj.parent || 0,
+          description_blob: channelStateObj.description || '',
           position: channelStateObj.position || 0,
+          max_users: channelStateObj.max_users || 0,
+          inherit_acl: true, // 默认继承 ACL
         };
 
         try {
-          await channelManager.createChannel(channelData);
+          const createdId = await channelManager.createChannel(channelData);
+          // 验证创建的频道 ID 与预期一致
+          if (createdId !== channelId) {
+            logger.warn(`Expected channel ID ${channelId}, but database returned ${createdId}`);
+            channelId = createdId; // 使用数据库返回的实际 ID
+          }
           logger.info(`Created new channel: ${channelData.name} (ID: ${channelId})`);
         } catch (error) {
           logger.error(`Failed to create channel ${channelId}:`, error);

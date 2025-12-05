@@ -79,6 +79,8 @@ export class ACLManager {
     // 等待服务器回复
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
+        this.client.removeListener('acl', onACL);
+        this.client.removeListener('permissionDenied', onPermissionDenied);
         reject(new Error('ACL query timeout'));
       }, 5000); // 5秒超时
 
@@ -86,6 +88,7 @@ export class ACLManager {
         if (message.channel_id === channelId) {
           clearTimeout(timeout);
           this.client.removeListener('acl', onACL);
+          this.client.removeListener('permissionDenied', onPermissionDenied);
 
           const aclData: ACLQueryResult = {
             channelId,
@@ -120,7 +123,19 @@ export class ACLManager {
         }
       };
 
+      const onPermissionDenied = (info: any) => {
+        // 检查是否是针对 ACL 查询的权限拒绝（通过 channel_id 或 channelId 匹配）
+        const eventChannelId = info.channel_id ?? info.channelId;
+        if (eventChannelId === channelId) {
+          clearTimeout(timeout);
+          this.client.removeListener('acl', onACL);
+          this.client.removeListener('permissionDenied', onPermissionDenied);
+          reject(new Error(`Permission denied: ${info.reason || 'No permission to query ACL'}`));
+        }
+      };
+
       this.client.on('acl', onACL);
+      this.client.on('permissionDenied', onPermissionDenied);
     });
   }
 
