@@ -11,7 +11,7 @@ export interface CachedMessage {
   id: string;
   type: string;
   method: string;
-  params: any;
+  params: unknown;
   timestamp: number;
   sequence: number; // 消息序列号，用于排序
 }

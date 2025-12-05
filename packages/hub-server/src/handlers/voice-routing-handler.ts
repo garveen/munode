@@ -1,5 +1,6 @@
 import { createLogger } from '@munode/common';
 import { HubHandlerFactory } from '../factory.js';
+import type { RPCParams, RPCResult } from '@munode/protocol';
 
 const logger = createLogger({ service: 'hub-voice-routing-handler' });
 
@@ -10,17 +11,17 @@ export interface IVoiceRoutingHandler {
   /**
    * 处理语音目标同步
    */
-  handleSyncVoiceTarget(params: any): Promise<any>;
+  handleSyncVoiceTarget(params: RPCParams<'edge.syncVoiceTarget'>): Promise<RPCResult<'edge.syncVoiceTarget'>>;
 
   /**
    * 处理获取语音目标
    */
-  handleGetVoiceTargets(params: any): Promise<any>;
+  handleGetVoiceTargets(params: RPCParams<'edge.getVoiceTargets'>): Promise<RPCResult<'edge.getVoiceTargets'>>;
 
   /**
    * 处理语音路由
    */
-  handleRouteVoice(params: any): Promise<any>;
+  handleRouteVoice(params: RPCParams<'edge.routeVoice'>): Promise<RPCResult<'edge.routeVoice'>>;
 }
 
 /**
@@ -33,7 +34,7 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
     this.factory = factory;
   }
 
-  async handleSyncVoiceTarget(params: any): Promise<any> {
+  async handleSyncVoiceTarget(params: RPCParams<'edge.syncVoiceTarget'>): Promise<RPCResult<'edge.syncVoiceTarget'>> {
     const voiceTargetSync = this.factory.getVoiceTargetSync();
     const controlService = this.factory.getControlService();
 
@@ -49,7 +50,7 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
     controlService.broadcastExcept(params.edge_id, 'hub.syncVoiceTarget', params);    return { success: true };
   }
 
-  async handleGetVoiceTargets(params: any): Promise<any> {
+  async handleGetVoiceTargets(params: RPCParams<'edge.getVoiceTargets'>): Promise<RPCResult<'edge.getVoiceTargets'>> {
     const voiceTargetSync = this.factory.getVoiceTargetSync();
 
     let configs;
@@ -64,7 +65,7 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
     return { voiceTargets: configs };
   }
 
-  async handleRouteVoice(params: any): Promise<any> {
+  async handleRouteVoice(params: RPCParams<'edge.routeVoice'>): Promise<RPCResult<'edge.routeVoice'>> {
     const voiceTargetSync = this.factory.getVoiceTargetSync();
     const sessionManager = this.factory.getSessionManager();
     const controlService = this.factory.getControlService();

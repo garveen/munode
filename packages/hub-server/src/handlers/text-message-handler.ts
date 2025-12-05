@@ -1,6 +1,7 @@
 import { createLogger } from '@munode/common';
 import { HubPermissionChecker, Permission } from '../permission-checker.js';
 import { HubHandlerFactory } from '../factory.js';
+import type { EdgeNotificationParams } from '@munode/protocol';
 
 const logger = createLogger({ service: 'hub-text-message-handler' });
 
@@ -11,7 +12,7 @@ export interface ITextMessageHandler {
   /**
    * 处理文本消息通知
    */
-  handleTextMessageNotification(params: any): Promise<void>;
+  handleTextMessageNotification(params: EdgeNotificationParams<'edge.textMessageNotification'>): Promise<void>;
 }
 
 /**
@@ -26,9 +27,9 @@ export class TextMessageHandler implements ITextMessageHandler {
     this.permissionChecker = factory.getPermissionChecker();
   }
 
-  async handleTextMessageNotification(params: any): Promise<void> {
+  async handleTextMessageNotification(params: EdgeNotificationParams<'edge.textMessageNotification'>): Promise<void> {
     try {
-      const { edge_id, actor_session, actor_username, actor_channel_id, textMessage } = params;
+      const { edge_id, actor_session, actor_username, session, channel_id, tree_id, message } = params;
 
       logger.info(`Hub received TextMessage from Edge ${edge_id}, actor: ${actor_username}(${actor_session})`);
 
@@ -44,43 +45,45 @@ export class TextMessageHandler implements ITextMessageHandler {
         return;
       }
 
+      // Get actor's channel
+      const actor_channel_id = actorSession.channel_id ?? 0;
+
       // 目标会话列表
       const targetSessions: number[] = [];
       const targetSessionsByEdge = new Map<number, number[]>(); // edge_id -> session_ids
 
       // 1. 处理直接指定的用户（私聊）
-      if (textMessage.session && textMessage.session.length > 0) {
-        for (const targetSession of textMessage.session) {
-          const session = sessionManager.getSession(targetSession);
-          if (session) {
+      if (session && session.length > 0) {
+        for (const targetSession of session) {
+          const sess = sessionManager.getSession(targetSession);
+          if (sess) {
             targetSessions.push(targetSession);
             // 按Edge分组
-            if (!targetSessionsByEdge.has(session.edge_id)) {
-              targetSessionsByEdge.set(session.edge_id, []);
+            if (!targetSessionsByEdge.has(sess.edge_id)) {
+              targetSessionsByEdge.set(sess.edge_id, []);
             }
-            targetSessionsByEdge.get(session.edge_id)!.push(targetSession);
+            targetSessionsByEdge.get(sess.edge_id)!.push(targetSession);
           }
         }
       }
 
       // 2. 处理频道消息
-      if (textMessage.channel_id && textMessage.channel_id.length > 0) {
-        for (const channel_id of textMessage.channel_id) {
+      if (channel_id && channel_id.length > 0) {
+        for (const channelId of channel_id) {
           // 权限检查：需要TextMessage权限
           if (permissionChecker) {
             const actorUserInfo = this.permissionChecker.sessionToUserInfo(actorSession, actor_channel_id);
             const hasPermission = await permissionChecker.hasPermission(
-              channel_id,
+              channelId,
               actorUserInfo,
               Permission.TextMessage
             );
 
             if (!hasPermission) {
-              logger.warn(`Actor ${actor_username} denied TextMessage permission for channel ${channel_id}`);
+              logger.warn(`Actor ${actor_username} denied TextMessage permission for channel ${channelId}`);
               // 发送权限拒绝通知给发起Edge
               this.factory.getControlService().notify(edge_id, 'hub.textMessageDenied', {
                 actor_session,
-                channel_id,
                 reason: 'TextMessage permission denied',
               });
               continue;
@@ -88,23 +91,23 @@ export class TextMessageHandler implements ITextMessageHandler {
           }
 
           // 获取频道中的所有用户
-          const channelSessions = sessionManager.getChannelSessions(channel_id);
-          for (const session of channelSessions) {
-            if (!targetSessions.includes(session.session_id)) {
-              targetSessions.push(session.session_id);
+          const channelSessions = sessionManager.getChannelSessions(channelId);
+          for (const sess of channelSessions) {
+            if (!targetSessions.includes(sess.session_id)) {
+              targetSessions.push(sess.session_id);
               // 按Edge分组
-              if (!targetSessionsByEdge.has(session.edge_id)) {
-                targetSessionsByEdge.set(session.edge_id, []);
+              if (!targetSessionsByEdge.has(sess.edge_id)) {
+                targetSessionsByEdge.set(sess.edge_id, []);
               }
-              targetSessionsByEdge.get(session.edge_id)!.push(session.session_id);
+              targetSessionsByEdge.get(sess.edge_id)!.push(sess.session_id);
             }
           }
         }
       }
 
       // 3. 处理频道树消息（包含子频道）
-      if (textMessage.tree_id && textMessage.tree_id.length > 0) {
-        for (const rootChannelId of textMessage.tree_id) {
+      if (tree_id && tree_id.length > 0) {
+        for (const rootChannelId of tree_id) {
           // 权限检查：需要TextMessage权限
           if (permissionChecker) {
             const actorUserInfo = this.permissionChecker.sessionToUserInfo(actorSession, actor_channel_id);
@@ -118,7 +121,6 @@ export class TextMessageHandler implements ITextMessageHandler {
               logger.warn(`Actor ${actor_username} denied TextMessage permission for channel tree ${rootChannelId}`);
               this.factory.getControlService().notify(edge_id, 'hub.textMessageDenied', {
                 actor_session,
-                channel_id: rootChannelId,
                 reason: 'TextMessage permission denied',
               });
               continue;
@@ -127,15 +129,15 @@ export class TextMessageHandler implements ITextMessageHandler {
 
           // 收集频道树中的所有频道
           const channelsInTree: number[] = [];
-          const collectChannels = async (channel_id: number) => {
-            channelsInTree.push(channel_id);
+          const collectChannels = async (channelId: number) => {
+            channelsInTree.push(channelId);
             const channel = channelManager
-              ? channelManager.getChannel(channel_id)
-              : await databaseOperations.getChannel(channel_id);
+              ? channelManager.getChannel(channelId)
+              : await databaseOperations.getChannel(channelId);
             if (channel) {
               const children = channelManager
-                ? await channelManager.getChildChannels(channel_id)
-                : await databaseOperations.getChildChannels(channel_id);
+                ? await channelManager.getChildChannels(channelId)
+                : await databaseOperations.getChildChannels(channelId);
               for (const child of children) {
                 await collectChannels(child.id);
               }
@@ -146,14 +148,14 @@ export class TextMessageHandler implements ITextMessageHandler {
           // 获取这些频道中的所有用户
           for (const channelId of channelsInTree) {
             const channelSessions = sessionManager.getChannelSessions(channelId);
-            for (const session of channelSessions) {
-              if (!targetSessions.includes(session.session_id)) {
-                targetSessions.push(session.session_id);
+            for (const sess of channelSessions) {
+              if (!targetSessions.includes(sess.session_id)) {
+                targetSessions.push(sess.session_id);
                 // 按Edge分组
-                if (!targetSessionsByEdge.has(session.edge_id)) {
-                  targetSessionsByEdge.set(session.edge_id, []);
+                if (!targetSessionsByEdge.has(sess.edge_id)) {
+                  targetSessionsByEdge.set(sess.edge_id, []);
                 }
-                targetSessionsByEdge.get(session.edge_id)!.push(session.session_id);
+                targetSessionsByEdge.get(sess.edge_id)!.push(sess.session_id);
               }
             }
           }
@@ -166,16 +168,13 @@ export class TextMessageHandler implements ITextMessageHandler {
       }
 
       // 按Edge广播（每个Edge只发送其本地用户的session列表）
-      for (const [target_edge_id, sessions] of targetSessionsByEdge.entries()) {
+      for (const [target_edge_id] of targetSessionsByEdge.entries()) {
         this.factory.getControlService().notify(target_edge_id, 'hub.textMessageBroadcast', {
-          textMessage: {
-            actor: textMessage.actor,
-            session: textMessage.session || [],
-            channel_id: textMessage.channel_id || [],
-            tree_id: textMessage.tree_id || [],
-            message: textMessage.message || '',
-          },
-          target_sessions: sessions,
+          actor: actor_session,
+          session: session || [],
+          channel_id: channel_id || [],
+          tree_id: tree_id || [],
+          message: message || '',
         });
       }
 

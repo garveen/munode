@@ -8,6 +8,7 @@ import {
   createTypedRPCServer,
   RPCParams,
   RPCResult,
+  EdgeNotificationParams,
   DEFAULT_ROUTING_POLICY,
   DEFAULT_HUB_RELAY_CONFIG,
   hubedgeRpc,
@@ -213,38 +214,40 @@ export class HubControlService {
    */
   private handleNotification(_channel: RPCChannel, message: Message): void {
     const { method, params } = message;
+    // Cast params to unknown first to avoid TypeScript error, then to the proper type
+    const typedParams = params as unknown;
 
     switch (method) {
       case 'hub.handleUserState':
-        void this.userStateHandler.handleUserStateNotification(params);
+        void this.userStateHandler.handleUserStateNotification(typedParams as EdgeNotificationParams<'edge.userStateNotification'>);
         break;
       
       case 'hub.handleChannelState':
-        void this.channelStateHandler.handleChannelStateNotification(params);
+        void this.channelStateHandler.handleChannelStateNotification(typedParams as EdgeNotificationParams<'edge.channelStateNotification'>);
         break;
       
       case 'hub.handleUserRemove':
-        void this.notificationHandler.handleUserRemoveNotification(params);
+        void this.notificationHandler.handleUserRemoveNotification(typedParams as EdgeNotificationParams<'edge.userRemoveNotification'>);
         break;
       
       case 'hub.handleChannelRemove':
-        void this.channelStateHandler.handleChannelRemoveNotification(params);
+        void this.channelStateHandler.handleChannelRemoveNotification(typedParams as EdgeNotificationParams<'edge.channelRemoveNotification'>);
         break;
       
       case 'hub.userLeft':
-        void this.userStateHandler.handleUserLeftNotification(params);
+        void this.userStateHandler.handleUserLeftNotification(typedParams as EdgeNotificationParams<'edge.userLeftNotification'>);
         break;
 
       case 'hub.handleTextMessage':
-        void this.textMessageHandler.handleTextMessageNotification(params);
+        void this.textMessageHandler.handleTextMessageNotification(typedParams as EdgeNotificationParams<'edge.textMessageNotification'>);
         break;
 
       case 'hub.handlePluginDataTransmission':
-        void this.notificationHandler.handlePluginDataTransmissionNotification(params);
+        void this.notificationHandler.handlePluginDataTransmissionNotification(typedParams as EdgeNotificationParams<'edge.pluginDataTransmissionNotification'>);
         break;
 
       case 'hub.handleUserStats':
-        void this.notificationHandler.handleUserStatsNotification(params);
+        void this.notificationHandler.handleUserStatsNotification(typedParams as EdgeNotificationParams<'edge.userStatsNotification'>);
         break;
 
       default:

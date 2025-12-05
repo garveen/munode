@@ -1,6 +1,7 @@
 import { logger } from '@munode/common';
 import { MessageType } from '@munode/protocol';
 import { mumbleproto } from '@munode/protocol';
+import type { HubNotificationParams } from '@munode/protocol';
 import { HandlerFactory } from '../core/handler-factory.js';
 import { EdgeControlClient } from './hub-client.js';
 import { ChannelInfo } from '../types.js';
@@ -105,7 +106,7 @@ export class HubDataManager {
   /**
    * 处理来自其他Edge的用户加入通知
    */
-  handleRemoteUserJoined(params: any): void {
+  handleRemoteUserJoined(params: HubNotificationParams<'hub.userJoined'>): void {
     try {
       const thisEdgeId = this.handlerFactory.config.server_id;
       fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] EDGE ${thisEdgeId} received userJoined: ${params.username} (session=${params.session_id}, from_edge=${params.edge_id})\n`);
@@ -134,7 +135,17 @@ export class HubDataManager {
           const receiverIsRegistered = client.user_id > 0;
           
           // 构建UserState消息（每个客户端都单独构建，因为cert_hash字段可能不同）
-          const userStateData: any = {
+          interface UserStateData {
+            session: number;
+            user_id: number;
+            name: string;
+            channel_id: number;
+            temporary_access_tokens: string[];
+            listening_channel_add: number[];
+            listening_channel_remove: number[];
+            hash?: string;
+          }
+          const userStateData: UserStateData = {
             session: params.session_id,
             user_id: params.user_id,
             name: params.username,
@@ -167,7 +178,7 @@ export class HubDataManager {
    * 处理来自Hub的用户离开广播
    * Hub收到userLeft通知后会广播给所有Edge（包括发起的Edge）
    */
-  handleRemoteUserLeft(params: any): void {
+  handleRemoteUserLeft(params: HubNotificationParams<'hub.userLeft'>): void {
     try {
       const { session_id, edge_id, username } = params;
 
@@ -207,7 +218,7 @@ export class HubDataManager {
   /**
    * 处理来自其他Edge的用户状态变更通知
    */
-  handleRemoteUserStateChanged(params: any): void {
+  handleRemoteUserStateChanged(params: HubNotificationParams<'hub.userStateChanged'>): void {
     try {
       // 不要处理来自本Edge的用户
       if (params.edge_id === this.handlerFactory.config.server_id) {

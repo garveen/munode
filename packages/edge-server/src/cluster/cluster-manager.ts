@@ -10,6 +10,7 @@
 
 import { createHmac } from 'crypto';
 import { ControlChannelClient } from '@munode/protocol';
+import type { HubNotificationParams } from '@munode/protocol';
 import { ReconnectManager } from './reconnect-manager.js';
 import type { EdgeConfig } from '../types.js';
 import type { Logger } from 'winston';
@@ -259,7 +260,7 @@ export class EdgeClusterManager {
   /**
    * 处理 Hub 通知
    */
-  private handleHubNotification(message: any): void {
+  private handleHubNotification(message: { method: string; params: unknown }): void {
     switch (message.method) {
       case 'edge.peerJoined':
         void this.handlePeerJoined(message.params);
@@ -284,7 +285,7 @@ export class EdgeClusterManager {
   /**
    * 处理新 Peer 加入
    */
-  private async handlePeerJoined(params: any): Promise<void> {
+  private async handlePeerJoined(params: HubNotificationParams<'edge.peerJoined'>): Promise<void> {
     this.logger.info(`New peer joined: ${JSON.stringify(params)}`);
     
     // 添加到 peers 列表
@@ -304,7 +305,7 @@ export class EdgeClusterManager {
   /**
    * 处理 Peer 离开
    */
-  private handlePeerLeft(params: any): void {
+  private handlePeerLeft(params: { id: number }): void {
     this.logger.info(`Peer left: ${params.id}`);
     
     // 从 peers 列表移除
@@ -317,7 +318,7 @@ export class EdgeClusterManager {
   /**
    * 处理强制断开
    */
-  private async handleForceDisconnect(params: any): Promise<void> {
+  private async handleForceDisconnect(params: HubNotificationParams<'edge.forceDisconnect'>): Promise<void> {
     this.logger.warn(`Force disconnect requested: ${params.reason}`);
     await this.reconnectManager.performFullDisconnect();
   }
@@ -328,7 +329,7 @@ export class EdgeClusterManager {
   getStatus(): {
     isJoined: boolean;
     hubConnected: boolean;
-    reconnectStats: any;
+    reconnectStats: ReturnType<ReconnectManager['getStats']>;
   } {
     return {
       isJoined: this.isJoined,

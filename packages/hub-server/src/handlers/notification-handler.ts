@@ -1,6 +1,7 @@
 import { createLogger } from '@munode/common';
 import type { HubHandlerFactory } from '../factory.js';
 import { HubPermissionChecker, Permission } from '../permission-checker.js';
+import type { EdgeNotificationParams } from '@munode/protocol';
 
 const logger = createLogger({ service: 'hub-notification-handler' });
 
@@ -8,9 +9,9 @@ const logger = createLogger({ service: 'hub-notification-handler' });
  * Hub 通知处理器接口
  */
 export interface INotificationHandler {
-  handleUserRemoveNotification(params: any): Promise<void>;
-  handlePluginDataTransmissionNotification(params: any): Promise<void>;
-  handleUserStatsNotification(params: any): Promise<void>;
+  handleUserRemoveNotification(params: EdgeNotificationParams<'edge.userRemoveNotification'>): Promise<void>;
+  handlePluginDataTransmissionNotification(params: EdgeNotificationParams<'edge.pluginDataTransmissionNotification'>): Promise<void>;
+  handleUserStatsNotification(params: EdgeNotificationParams<'edge.userStatsNotification'>): Promise<void>;
 }
 
 /**
@@ -28,7 +29,7 @@ export class NotificationHandler implements INotificationHandler {
   /**
    * 处理 UserRemove 通知 - 执行完整的业务逻辑并广播
    */
-  async handleUserRemoveNotification(params: any): Promise<void> {
+  async handleUserRemoveNotification(params: EdgeNotificationParams<'edge.userRemoveNotification'>): Promise<void> {
     try {
       const { edge_id, actor_session, actor_username, target_session, reason, ban } = params;
 
@@ -144,9 +145,9 @@ export class NotificationHandler implements INotificationHandler {
   /**
    * 处理 PluginDataTransmission 通知
    */
-  async handlePluginDataTransmissionNotification(params: any): Promise<void> {
+  async handlePluginDataTransmissionNotification(params: EdgeNotificationParams<'edge.pluginDataTransmissionNotification'>): Promise<void> {
     try {
-      const { edge_id, actor_session, actor_username, pluginData } = params;
+      const { edge_id, actor_session, actor_username, pluginData, receiver_sessions, dataID, data } = params;
 
       logger.info(`Hub received PluginDataTransmission from Edge ${edge_id}, actor: ${actor_username}(${actor_session})`);
 
@@ -163,9 +164,14 @@ export class NotificationHandler implements INotificationHandler {
       const targetSessions: number[] = [];
       const targetSessionsByEdge = new Map<number, number[]>(); // edge_id -> session_ids
 
+      // Support both pluginData structure and direct fields
+      const actualReceiverSessions = receiver_sessions;
+      const actualDataID = pluginData?.dataID || dataID;
+      const actualData = pluginData?.data || data;
+
       // 1. 处理直接指定的接收者
-      if (pluginData.receiverSessions && pluginData.receiverSessions.length > 0) {
-        for (const targetSession of pluginData.receiverSessions) {
+      if (actualReceiverSessions && actualReceiverSessions.length > 0) {
+        for (const targetSession of actualReceiverSessions) {
           const session = sessionManager.getSession(targetSession);
           if (session) {
             targetSessions.push(targetSession);
@@ -197,15 +203,11 @@ export class NotificationHandler implements INotificationHandler {
       }
 
       // 按Edge广播（每个Edge只发送其本地用户的session列表）
-      for (const [target_edge_id, sessions] of targetSessionsByEdge.entries()) {
+      for (const [target_edge_id] of targetSessionsByEdge.entries()) {
         this.factory.getControlService().notify(target_edge_id, 'hub.pluginDataBroadcast', {
-          pluginData: {
-            senderSession: pluginData.senderSession,
-            dataID: pluginData.dataID || '',
-            data: pluginData.data || Buffer.alloc(0),
-            receiverSessions: sessions, // 只发送该Edge需要接收的用户列表
-          },
-          target_sessions: sessions,
+          sender_session: params.sender_session,
+          dataID: actualDataID || '',
+          data: actualData || Buffer.alloc(0),
         });
       }
 
@@ -218,7 +220,7 @@ export class NotificationHandler implements INotificationHandler {
   /**
    * 处理 UserStats 请求通知 - 从Hub获取完整的用户统计信息
    */
-  async handleUserStatsNotification(params: any): Promise<void> {
+  async handleUserStatsNotification(params: EdgeNotificationParams<'edge.userStatsNotification'>): Promise<void> {
     try {
       const { edge_id, actor_session, target_session, stats_only } = params;
 
