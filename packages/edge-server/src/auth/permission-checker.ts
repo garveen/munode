@@ -37,7 +37,8 @@ export class PermissionHandlers {
         return;
       }
 
-      if (acl.channel_id === undefined) {
+      // 使用 has_channel_id 检查 protobuf optional 字段是否真的设置了值（遵循 Copilot 指导）
+      if (!acl.has_channel_id) {
         logger.warn(`ACL without channel_id from session: ${session_id}`);
         return;
       }
@@ -110,7 +111,8 @@ export class PermissionHandlers {
 
       logger.debug(`PermissionQuery from session ${session_id}: user_id=${actor.user_id}, username=${actor.username}, groups=${JSON.stringify(actor.groups)}`);
 
-      if (permQuery.channel_id === undefined) {
+      // 使用 has_channel_id 检查 protobuf optional 字段是否真的设置了值（遵循 Copilot 指导）
+      if (!permQuery.has_channel_id) {
         logger.warn(`PermissionQuery without channel_id from session: ${session_id}`);
         return;
       }
