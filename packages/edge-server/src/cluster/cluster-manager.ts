@@ -263,15 +263,15 @@ export class EdgeClusterManager {
   private handleHubNotification(message: { method: string; params: unknown }): void {
     switch (message.method) {
       case 'edge.peerJoined':
-        void this.handlePeerJoined(message.params);
+        void this.handlePeerJoined(message.params as HubNotificationParams<'edge.peerJoined'>);
         break;
 
       case 'edge.peerLeft':
-        this.handlePeerLeft(message.params);
+        this.handlePeerLeft(message.params as { id: number });
         break;
 
       case 'edge.forceDisconnect':
-        void this.handleForceDisconnect(message.params);
+        void this.handleForceDisconnect(message.params as HubNotificationParams<'edge.forceDisconnect'>);
         break;
 
       default:

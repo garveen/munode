@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import { createHmac } from 'crypto';
 import { createLogger } from '@munode/common';
-import { ControlChannelClient, ControlChannelClientConfig } from '@munode/protocol';
+import { ControlChannelClient, ControlChannelClientConfig, type ChannelNotificationParams } from '@munode/protocol';
 import type {
   RPCParams,
   RPCResult,
@@ -602,7 +602,7 @@ export class EdgeControlClient extends EventEmitter {
     }
 
     try {
-      this.client.notify(method, params);
+      this.client.notify(method, params as ChannelNotificationParams);
     } catch (error) {
       logger.error(`Failed to send notification ${method}:`, error);
     }

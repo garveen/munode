@@ -25,7 +25,6 @@ export class HubMessageHandlers {
   private get channelManager() { return this.factory.channelManager; }
   private get stateManager() { return this.factory.stateManager; }
   private get messageHandler() { return this.factory.messageHandler; }
-  private get config() { return this.factory.config; }
 
   /**
    * 处理来自Hub的UserState广播
@@ -275,32 +274,8 @@ export class HubMessageHandlers {
             updates.description = channelState.description;
           }
           
-          // 处理频道链接
-          if (channelState.links !== undefined && Array.isArray(channelState.links)) {
-            // 完整替换链接列表
-            updates.links = [...channelState.links];
-            logger.debug(`Updated channel ${existingChannel.id} links to: [${updates.links.join(', ')}]`);
-          } else if (channelState.links_add !== undefined || channelState.links_remove !== undefined) {
-            // 基于当前链接进行增量更新
-            let newLinks = [...(existingChannel.links || [])];
-            
-            if (channelState.links_add !== undefined && Array.isArray(channelState.links_add)) {
-              for (const linkId of channelState.links_add) {
-                if (!newLinks.includes(linkId)) {
-                  newLinks.push(linkId);
-                }
-              }
-              logger.debug(`Added links to channel ${existingChannel.id}: [${channelState.links_add.join(', ')}]`);
-            }
-            
-            if (channelState.links_remove !== undefined && Array.isArray(channelState.links_remove)) {
-              newLinks = newLinks.filter(linkId => !channelState.links_remove.includes(linkId));
-              logger.debug(`Removed links from channel ${existingChannel.id}: [${channelState.links_remove.join(', ')}]`);
-            }
-            
-            updates.links = newLinks;
-            logger.debug(`Channel ${existingChannel.id} final links: [${newLinks.join(', ')}]`);
-          }
+          // Note: Channel links are not included in hub.channelStateBroadcast notification.
+          // Links should be managed through separate RPC calls or included in edge.fullSync.
           
           // 应用更新
           if (Object.keys(updates).length > 0) {
@@ -309,10 +284,6 @@ export class HubMessageHandlers {
             // 更新stateManager
             const updatedChannel = { ...existingChannel, ...updates };
             this.stateManager.addOrUpdateChannel(updatedChannel);
-            
-            if (existingChannel.id === 0 && updates.links) {
-              logger.info(`[HUB-HANDLER] Updated stateManager channel 0 with links: [${updates.links.join(', ')}]`);
-            }
           }
         } else {
           // 创建新频道
@@ -324,19 +295,49 @@ export class HubMessageHandlers {
             position: channelState.position || 0,
             max_users: channelState.max_users || 0,
             temporary: channelState.temporary || false,
-            inherit_acl: channelState.inherit_acl !== undefined ? channelState.inherit_acl : true,
+            inherit_acl: true, // Default value, as it's not in the broadcast
             children: [],
-            links: channelState.links || [], // 使用广播中的链接，而不是硬编码为空数组
+            links: [], // Links not included in broadcast, will be synced via fullSync
           };
-
-          logger.debug(`[CHANNEL-LINKS] Created new channel ${channelState.channel_id} with links: [${newChannelData.links.join(', ')}]`);
           this.channelManager.addOrUpdateChannel(newChannelData);
           this.stateManager.addOrUpdateChannel(newChannelData);
         }
       }
 
       // 广播给所有本地已认证的客户端
-      const channelStateMsg = new mumbleproto.ChannelState(channelState);
+      // Construct ChannelState message with only the fields present in the notification
+      const channelStateInit: {
+        channel_id: number;
+        parent?: number;
+        name?: string;
+        description?: string;
+        description_hash?: Buffer;
+        temporary?: boolean;
+        position?: number;
+        max_users?: number;
+        is_enter_restricted?: boolean;
+        can_enter?: boolean;
+        links: number[];
+        links_add: number[];
+        links_remove: number[];
+      } = {
+        channel_id: channelState.channel_id,
+        links: [],
+        links_add: [],
+        links_remove: [],
+      };
+      
+      if (channelState.parent !== undefined) channelStateInit.parent = channelState.parent;
+      if (channelState.name !== undefined) channelStateInit.name = channelState.name;
+      if (channelState.description !== undefined) channelStateInit.description = channelState.description;
+      if (channelState.description_hash !== undefined) channelStateInit.description_hash = channelState.description_hash;
+      if (channelState.temporary !== undefined) channelStateInit.temporary = channelState.temporary;
+      if (channelState.position !== undefined) channelStateInit.position = channelState.position;
+      if (channelState.max_users !== undefined) channelStateInit.max_users = channelState.max_users;
+      if (channelState.is_enter_restricted !== undefined) channelStateInit.is_enter_restricted = channelState.is_enter_restricted;
+      if (channelState.can_enter !== undefined) channelStateInit.can_enter = channelState.can_enter;
+
+      const channelStateMsg = new mumbleproto.ChannelState(channelStateInit);
       const channelStateMessage = channelStateMsg.serialize();
       const allClients = this.clientManager.getAllClients();
       for (const client of allClients) {
@@ -375,52 +376,41 @@ export class HubMessageHandlers {
    */
   handleUserRemoveBroadcastFromHub(params: HubNotificationParams<'hub.userRemoveBroadcast'>): void {
     try {
-      const { session_id, actor_session, target_session, target_edge_id, reason, ban, target_sessions } = params;
+      const { session, actor, reason, ban } = params;
 
-      // Use session_id as primary target (Channel Ninja mode), otherwise use target_session (traditional kick/ban mode)
-      const actualTargetSession = session_id || target_session;
-
-      logger.debug(`Received UserRemove broadcast from Hub: target ${actualTargetSession} on Edge ${target_edge_id}${target_sessions ? ' (filtered)' : ''}`);
+      logger.debug(`Received UserRemove broadcast from Hub: target ${session}`);
 
       // 构建UserRemove消息
       const userRemove = new mumbleproto.UserRemove({
-        session: actualTargetSession,
-        actor: actor_session,
+        session: session,
+        actor: actor,
         reason: reason || '',
         ban: ban || false,
       });
 
       const userRemoveMessage = userRemove.serialize();
 
-      // Broadcast to all local authenticated clients (if target_sessions provided, only broadcast to these clients)
+      // Broadcast to all local authenticated clients
       const allClients = this.clientManager.getAllClients();
-      const targetSessionsSet = target_sessions ? new Set(target_sessions) : null; // Convert to Set for O(1) lookup
       
       for (const client of allClients) {
         if (client.user_id > 0) {
-          // If target_sessions provided, only broadcast to specified sessions (Channel Ninja mode)
-          if (!targetSessionsSet || targetSessionsSet.has(client.session)) {
-            this.messageHandler.sendMessage(client.session, MessageType.UserRemove, Buffer.from(userRemoveMessage));
-          }
+          this.messageHandler.sendMessage(client.session, MessageType.UserRemove, Buffer.from(userRemoveMessage));
         }
       }
 
-      // If target user on this Edge and is real kick/ban (not Channel Ninja hiding), force disconnect
-      if (!target_sessions && target_edge_id === this.config.server_id) {
-        const targetClient = this.clientManager.getClient(actualTargetSession);
-        if (targetClient) {
-          this.clientManager.forceDisconnect(
-            actualTargetSession,
-            ban ? `Banned: ${reason}` : `Kicked: ${reason}`
-          );
-          logger.info(`Disconnected local client ${actualTargetSession} due to ${ban ? 'ban' : 'kick'}`);
-        }
+      // If target user is on this Edge and is real kick/ban, force disconnect
+      const targetClient = this.clientManager.getClient(session);
+      if (targetClient) {
+        this.clientManager.forceDisconnect(
+          session,
+          ban ? `Banned: ${reason || ''}` : `Kicked: ${reason || ''}`
+        );
+        logger.info(`Disconnected local client ${session} due to ${ban ? 'ban' : 'kick'}`);
       }
 
-      const broadcasted = targetSessionsSet 
-        ? allClients.filter(c => c.user_id > 0 && targetSessionsSet.has(c.session)).length
-        : allClients.filter(c => c.user_id > 0).length;
-      logger.debug(`Broadcasted UserRemove to ${broadcasted} local clients${targetSessionsSet ? ' (filtered)' : ''}`);
+      const broadcasted = allClients.filter(c => c.user_id > 0).length;
+      logger.debug(`Broadcasted UserRemove to ${broadcasted} local clients`);
     } catch (error) {
       logger.error('Error handling UserRemove broadcast from Hub:', error);
     }
@@ -463,66 +453,27 @@ export class HubMessageHandlers {
    */
   handleChannelRemoveBroadcastFromHub(data: HubNotificationParams<'hub.channelRemoveBroadcast'>): void {
     try {
-      const { channel_id, channels_removed, affected_sessions, parent_id } = data;
+      const { channel_id } = data;
       
-      logger.info(
-        `ChannelRemove broadcast from Hub: channel=${channel_id}, ` +
-        `removed=${channels_removed.length}, affected=${affected_sessions.length}`
+      logger.info(`ChannelRemove broadcast from Hub: channel=${channel_id}`);
+      
+      // 更新本地频道镜像 - 删除频道
+      this.channelManager.removeChannel(channel_id);
+      this.stateManager.removeChannel(channel_id);
+      logger.debug(`Removed channel ${channel_id} from local mirrors`);
+      
+      // 构造ChannelRemove消息并广播给所有本地客户端
+      const allClients = this.clientManager.getAllClients();
+      const channelRemoveMessage = {
+        channel_id: channel_id,
+      };
+      const channelRemoveBuffer = Buffer.from(
+        new mumbleproto.ChannelRemove(channelRemoveMessage).serialize()
       );
       
-      // 1. 更新本地频道镜像 - 删除所有被移除的频道
-      for (const removed_id of channels_removed) {
-        this.channelManager.removeChannel(removed_id);
-        this.stateManager.removeChannel(removed_id);
-        logger.debug(`Removed channel ${removed_id} from local mirrors`);
-      }
-      
-      // 2. 更新受影响用户的频道位置（他们已被Hub移动到父频道）
-      for (const session of affected_sessions) {
-        const client = this.clientManager.getClient(session);
-        if (client) {
-          const oldChannel = client.channel_id;
-          client.channel_id = parent_id;
-          logger.debug(`Updated session ${session} channel: ${oldChannel} -> ${parent_id}`);
-        }
-      }
-      
-      // 3. 为每个被删除的频道构造ChannelRemove消息并广播给所有本地客户端
-      const allClients = this.clientManager.getAllClients();
-      for (const removed_id of channels_removed) {
-        const channelRemoveMessage = {
-          channel_id: removed_id,
-        };
-        const channelRemoveBuffer = Buffer.from(
-          new mumbleproto.ChannelRemove(channelRemoveMessage).serialize()
-        );
-        
-        for (const client of allClients) {
-          if (client.user_id > 0) {
-            this.messageHandler.sendMessage(client.session, MessageType.ChannelRemove, channelRemoveBuffer);
-          }
-        }
-      }
-      
-      // 4. 为每个受影响的用户发送UserState更新（新的channel_id）
-      for (const session of affected_sessions) {
-        const client = this.clientManager.getClient(session);
-        if (client) {
-          const userStateUpdate = new mumbleproto.UserState({
-            session,
-            channel_id: parent_id,
-            temporary_access_tokens: [],
-            listening_channel_add: [],
-            listening_channel_remove: [],
-          });
-          const userStateBuffer = Buffer.from(userStateUpdate.serialize());
-          
-          // 广播给所有本地客户端
-          for (const c of allClients) {
-            if (c.user_id > 0) {
-              this.messageHandler.sendMessage(c.session, MessageType.UserState, userStateBuffer);
-            }
-          }
+      for (const client of allClients) {
+        if (client.user_id > 0) {
+          this.messageHandler.sendMessage(client.session, MessageType.ChannelRemove, channelRemoveBuffer);
         }
       }
       
@@ -558,7 +509,7 @@ export class HubMessageHandlers {
       let sentCount = 0;
       for (const client of this.clientManager.getAllClients()) {
         if (client && client.user_id > 0) {
-          this.messageHandler.sendMessage(targetSession, MessageType.TextMessage, textMessageBuffer);
+          this.messageHandler.sendMessage(client.session, MessageType.TextMessage, textMessageBuffer);
           sentCount++;
         }
       }
@@ -619,9 +570,8 @@ export class HubMessageHandlers {
       // 发送给所有本地客户端
       let sentCount = 0;
       for (const client of this.clientManager.getAllClients()) {
-        const client = this.clientManager.getClient(targetSession);
         if (client && client.user_id > 0) {
-          this.messageHandler.sendMessage(targetSession, MessageType.PluginDataTransmission, pluginDataBuffer);
+          this.messageHandler.sendMessage(client.session, MessageType.PluginDataTransmission, pluginDataBuffer);
           sentCount++;
         }
       }
