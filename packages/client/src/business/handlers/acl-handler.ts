@@ -4,7 +4,6 @@
 
 import type { BusinessHandler } from '../../types/api-types.js';
 import type { ApiContext } from '../../types/api-types.js';
-import type { MumbleClient } from '../../core/mumble-client.js';
 
 /**
  * 查询 ACL 处理器

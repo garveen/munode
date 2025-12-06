@@ -119,7 +119,7 @@ export class ConnectionHandlers {
             logger.debug(`UDP address matched by decryption: ${addressKey} -> session ${client.session} (${client.username})`);
             break;
           }
-        } catch (error) {
+        } catch (_error) {
           // 解密失败，继续尝试下一个客户端
           logger.debug(`Failed to decrypt UDP packet with client ${client.session} key`);
         }

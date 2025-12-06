@@ -583,7 +583,7 @@ export class HubDatabase {
       const md = forge.md.sha256.create();
       md.update(der);
       return md.digest().toHex();
-    } catch (error) {
+    } catch (_error) {
       return '';
     }
   }

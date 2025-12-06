@@ -102,7 +102,7 @@ export class ReconnectManager extends EventEmitter {
             });
         }, this.config.hubReconnectInterval);
       });
-    } catch (error) {
+    } catch (_error) {
       // 重连超时，执行完全断开
       console.error(
         `Hub reconnect failed after ${this.config.hubReconnectTimeout}ms, performing full disconnect`

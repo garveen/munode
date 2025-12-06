@@ -253,7 +253,7 @@ export class HubPermissionChecker {
         if (isInChannelGroup) {
           return true;
         }
-      } catch (error) {
+      } catch (_error) {
         // 如果组不存在或查询失败，继续检查用户的groups属性
       }
     }

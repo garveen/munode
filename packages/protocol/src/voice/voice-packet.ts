@@ -81,7 +81,7 @@ export class VoiceChannel {
         codec: decryptedData.readUInt8(13),
         data: decryptedData.slice(14),
       };
-    } catch (error) {
+    } catch (_error) {
       // 解密失败，返回null
       return null;
     }

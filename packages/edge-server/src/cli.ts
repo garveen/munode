@@ -25,7 +25,7 @@ program
       let config;
       try {
         config = await loadEdgeConfig(options.config);
-      } catch (error) {
+      } catch (_error) {
         console.log('Using default configuration...');
         config = await loadEdgeConfig();
       }

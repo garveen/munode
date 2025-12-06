@@ -502,7 +502,7 @@ export class VoiceManager {
       if (this.voiceTransport) {
         try {
           this.voiceTransport.sendToEdge(targetEdgeId, voicePacket, packetData);
-        } catch (e) {
+        } catch (_e) {
           // 忽略 UDP 发送失败
         }
       }
