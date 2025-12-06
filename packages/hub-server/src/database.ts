@@ -7,6 +7,7 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import { ACLData } from './acl-manager.js';
 import type { ChannelGroupData, ChannelGroupMemberData } from './channel-group-manager.js';
+import * as forge from 'node-forge';
 
 const logger = createLogger({ service: 'hub-database' });
 
@@ -577,7 +578,6 @@ export class HubDatabase {
   // @ts-expect-error - 保留方法以备未来使用
   private getCertFingerprint(certPem: string): string {
     try {
-      const forge = require('node-forge');
       const cert = forge.pki.certificateFromPem(certPem);
       const der = forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
       const md = forge.md.sha256.create();

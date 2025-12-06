@@ -649,7 +649,6 @@ export class VoiceRouter extends EventEmitter {
         targetChannels.add(linkedId);
       }
       this.logger.debug(`Calculated target channels for ${channelId}: [${Array.from(targetChannels).join(', ')}], linked=${linkedChannels.size}`);
-    } else {
     }
 
     return targetChannels;
@@ -1047,7 +1046,7 @@ export class VoiceRouter extends EventEmitter {
    * 
    * 注意：当前未使用，但保留以备将来需要（如解析sequence number）
    */
-  // @ts-ignore - 保留以备将来使用
+  // @ts-expect-error - 保留以备将来使用
   private decodeVarint(data: Buffer, offset: number): { value: number; offset: number } | null {
     if (offset >= data.length) {
       return null;
