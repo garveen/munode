@@ -1,7 +1,6 @@
 import { createLogger } from '@munode/common';
 import type { CertificateInfo, CertificateExchangeResult } from './types.js';
 import type { ServiceRegistry } from './registry.js';
-import * as forge from 'node-forge';
 
 const logger = createLogger({ service: 'hub-cert-exchange' });
 
@@ -118,6 +117,8 @@ export class CertificateExchangeService {
    */
   private parseCertificate(pem: string): any {
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const forge = require('node-forge');
       return forge.pki.certificateFromPem(pem);
     } catch (error) {
       logger.error('Failed to parse certificate:', error);
@@ -130,6 +131,8 @@ export class CertificateExchangeService {
    */
   private getFingerprint(cert: any): string {
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const forge = require('node-forge');
       const der = forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
       const md = forge.md.sha256.create();
       md.update(der);

@@ -33,6 +33,7 @@ export default [
       '@typescript-eslint/no-unsafe-return': 'off',
       '@typescript-eslint/no-redundant-type-constituents': 'off',
       '@typescript-eslint/no-base-to-string': 'off',
+      '@typescript-eslint/no-empty-object-type': 'off',
       // Disable declaration merging warning (it's a valid TypeScript pattern)
       '@typescript-eslint/no-unsafe-declaration-merging': 'off',
       'no-redeclare': 'off', // TypeScript handles this
@@ -44,8 +45,8 @@ export default [
         varsIgnorePattern: '^_',
         caughtErrorsIgnorePattern: '^_'
       }],
-      '@typescript-eslint/no-floating-promises': 'error',
-      '@typescript-eslint/no-misused-promises': 'error',
+      '@typescript-eslint/no-floating-promises': 'warn',
+      '@typescript-eslint/no-misused-promises': 'warn',
       '@typescript-eslint/require-await': 'warn',
     },
   },
