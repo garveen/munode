@@ -144,7 +144,7 @@ export class VoiceManager {
    */
   private clearTcpFallbackState(edgeId: number): void {
     if (this.tcpFallbackStates.has(edgeId)) {
-      const state = this.tcpFallbackStates.get(edgeId)!;
+      const state = this.tcpFallbackStates.get(edgeId);
       const duration = Date.now() - state.activeSince;
       logger.info(`TCP fallback deactivated for Edge ${edgeId} after ${duration}ms, ${state.packetsSent} packets sent`);
       this.tcpFallbackStates.delete(edgeId);

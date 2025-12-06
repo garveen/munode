@@ -46,7 +46,7 @@ export class EventSetupManager {
     this.handlerFactory.messageHandler.on(
       'sendMessage',
       (session_id: number, messageType: number, messageData: Buffer) => {
-        this.messageManager!.sendMessageToClient(session_id, messageType, messageData);
+        this.messageManager.sendMessageToClient(session_id, messageType, messageData);
       }
     );
 
@@ -63,7 +63,7 @@ export class EventSetupManager {
     });
 
     this.handlerFactory.messageHandler.on('banListQuery', (session_id: number) => {
-      void this.banHandler!.handleBanListQuery(session_id);
+      void this.banHandler.handleBanListQuery(session_id);
     });
 
     this.handlerFactory.messageHandler.on(
@@ -80,7 +80,7 @@ export class EventSetupManager {
           duration?: number;
         }>
       ) => {
-        void this.banHandler!.handleBanListUpdate(session_id, bans);
+        void this.banHandler.handleBanListUpdate(session_id, bans);
       }
     );
 
@@ -263,7 +263,7 @@ export class EventSetupManager {
 
     this.handlerFactory.clientManager.on('clientData', (session_id: number, data: Buffer) => {
       // 解析 Mumble 协议消息
-      this.messageManager!.parseAndHandleMessage(session_id, data);
+      this.messageManager.parseAndHandleMessage(session_id, data);
     });
 
     this.handlerFactory.clientManager.on('clientDisconnected', (client) => {
@@ -281,11 +281,11 @@ export class EventSetupManager {
       }
 
       // 清理消息缓冲区
-      this.messageManager!.clearClientBuffer(client.session);
+      this.messageManager.clearClientBuffer(client.session);
 
       // 在集群模式下，通知Hub用户已离开
       // 通知Hub用户离开（Hub会广播给所有Edge，包括本Edge）
-      this.hubClient!.notify('hub.userLeft', {
+      this.hubClient.notify('hub.userLeft', {
         session_id: client.session,
         edge_id: this.config.server_id,
         reason: undefined,
@@ -355,7 +355,7 @@ export class EventSetupManager {
         // 注意：根据 Mumble 协议，UDPTunnel 消息的 payload 直接就是语音包数据
         // 不需要 protobuf 包装，这是一个性能优化
         logger.info(`[TCP-VOICE] Sending voice data (${voiceData.length} bytes) as UDPTunnel to session ${session_id}`);
-        this.messageManager!.sendMessageToClient(session_id, MessageType.UDPTunnel, voiceData);
+        this.messageManager.sendMessageToClient(session_id, MessageType.UDPTunnel, voiceData);
         logger.info(`[TCP-VOICE] UDPTunnel message sent successfully to session ${session_id}`);
       } catch (error) {
         logger.error(`Failed to send UDPTunnel message for session ${session_id}:`, error);
@@ -369,7 +369,7 @@ export class EventSetupManager {
           logger.info('Connected to Hub Server');
 
           // 加载频道和ACL数据
-          await this.hubDataManager!.loadDataFromHub();
+          await this.hubDataManager.loadDataFromHub();
 
           // 连接成功后立即请求完整同步
           try {
@@ -482,7 +482,7 @@ export class EventSetupManager {
 
       this.hubClient.on('voiceData', (data, respond) => {
         // 处理来自Hub的语音数据路由
-        this.voiceManager!.handleVoiceDataFromHub(data, respond);
+        this.voiceManager.handleVoiceDataFromHub(data, respond);
       });
 
       // 监听来自Hub的所有通知消息（合并多个监听器）
@@ -495,7 +495,7 @@ export class EventSetupManager {
           // 尝试注册新Edge的语音端口（非强制，允许失败）
           if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.voicePort && data.id !== this.config.server_id) {
             try {
-              this.voiceManager.getVoiceTransport()!.registerEndpoint(data.id, data.host, data.voicePort);
+              this.voiceManager.getVoiceTransport().registerEndpoint(data.id, data.host, data.voicePort);
               logger.info(`Registered voice endpoint for new Edge ${data.id}: ${data.host}:${data.voicePort}`);
             } catch (error) {
               // 端点注册失败不影响其他功能
@@ -508,18 +508,18 @@ export class EventSetupManager {
 
           // 移除该Edge的语音端口注册
           if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.id) {
-            this.voiceManager.getVoiceTransport()!.unregisterEndpoint(data.id);
+            this.voiceManager.getVoiceTransport().unregisterEndpoint(data.id);
             logger.info(`Unregistered voice endpoint for Edge ${data.id}`);
           }
         }
         // 处理用户事件
         else if (message.method === 'hub.userJoined') {
           console.error(`[EDGE-DEBUG] Received hub.userJoined notification: ${JSON.stringify(message.params)}`);
-          this.hubDataManager!.handleRemoteUserJoined(message.params);
+          this.hubDataManager.handleRemoteUserJoined(message.params);
         } else if (message.method === 'hub.userLeft') {
-          this.hubDataManager!.handleRemoteUserLeft(message.params);
+          this.hubDataManager.handleRemoteUserLeft(message.params);
         } else if (message.method === 'hub.userStateChanged') {
-          this.hubDataManager!.handleRemoteUserStateChanged(message.params);
+          this.hubDataManager.handleRemoteUserStateChanged(message.params);
         } else if (message.method === 'hub.userStateBroadcast') {
           // 新的UserState广播处理
           this.handlerFactory.hubMessageHandlers.handleUserStateBroadcastFromHub(message.params);

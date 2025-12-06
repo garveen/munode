@@ -238,6 +238,6 @@ export class HubHandlerFactory {
   getBlobStore(): BlobStore { return this.blobStore; }
   getAuthManager(): HubAuthManager { return this.authManager; }
   getPermissionChecker(): HubPermissionChecker { return this.permissionChecker; }
-  getNetworkTopologyManager(): NetworkTopologyManager { return this.networkTopologyManager!; }
-  getDatabaseOperations(): IDatabaseOperations { return this.databaseOperations!; }
+  getNetworkTopologyManager(): NetworkTopologyManager { return this.networkTopologyManager; }
+  getDatabaseOperations(): IDatabaseOperations { return this.databaseOperations; }
 }

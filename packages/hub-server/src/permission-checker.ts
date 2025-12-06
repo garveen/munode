@@ -250,7 +250,9 @@ export class HubPermissionChecker {
       try {
         // 检查上下文频道的组（这是ACL所在的频道）
         const isInChannelGroup = await this.channelGroupManager.isUserInChannelGroup(ctx.id, group, user.user_id);
-        return isInChannelGroup;
+        if (isInChannelGroup) {
+          return true;
+        }
       } catch (error) {
         // 如果组不存在或查询失败，继续检查用户的groups属性
       }
@@ -504,7 +506,7 @@ export class HubPermissionChecker {
     const queue: number[] = [channelId];
 
     while (queue.length > 0) {
-      const currentId = queue.shift()!;
+      const currentId = queue.shift();
       if (visited.has(currentId)) {
         continue;
       }
@@ -631,10 +633,19 @@ export class HubPermissionChecker {
   /**
    * Check if a user should see another user based on ninja channel rules
    * 
+   * For ninja functionality to be active, ALL of the following must be true:
+   * 1. ninjaChannels parameter is provided and not empty (from Hub config)
+   * 2. The target user is in a ninja channel (or a channel linked to a ninja channel)
+   * 
+   * If ninja is active for the target user, observer can see them if ANY of:
+   * 1. Observer has Enter permission on any channel in the ninja group (target + linked)
+   * 2. Observer has Listen permission on any channel in the ninja group
+   * 3. Observer is in the same ninja channel group (e.g., moved there by admin)
+   * 
    * @param observerUser - The user who is observing
    * @param observerChannelId - The channel the observer is in
    * @param targetChannelId - The channel the target user is in
-   * @param ninjaChannels - Set of channel IDs that are ninja channels
+   * @param ninjaChannels - Set of channel IDs that are ninja channels (from Hub config)
    * @returns Whether the observer can see the target user
    */
   async canUserSeeOtherUser(
@@ -643,15 +654,15 @@ export class HubPermissionChecker {
     targetChannelId: number,
     ninjaChannels?: Set<number>
   ): Promise<boolean> {
-    // If ninja mode is not enabled or no ninja channels, everyone sees everyone
+    // Condition 1: If ninja mode is not enabled (no ninja channels configured), everyone sees everyone
     if (!ninjaChannels || ninjaChannels.size === 0) {
       return true;
     }
 
-    // Get all channels transitively linked to the target channel
+    // Get all channels transitively linked to the target channel (includes the channel itself)
     const targetTransitiveLinks = await this.getTransitivelyLinkedChannels(targetChannelId);
 
-    // Check if the target channel (or its links) involves any ninja channel
+    // Condition 2: Check if the target channel (or its links) involves any ninja channel
     let isTargetInNinjaGroup = false;
     for (const chId of targetTransitiveLinks) {
       if (ninjaChannels.has(chId)) {
@@ -660,23 +671,26 @@ export class HubPermissionChecker {
       }
     }
 
-    // If target is not in a ninja channel group, they are visible to everyone
+    // If target is not in a ninja channel group, they are visible to everyone (no ninja filtering)
     if (!isTargetInNinjaGroup) {
       return true;
     }
 
-    // Observer is also in the same ninja channel group (e.g., moved by admin)
+    // Target is in a ninja channel group - now check if observer can see them
+
+    // Check condition 3: Observer is in the same ninja channel group (moved there by admin)
     if (targetTransitiveLinks.has(observerChannelId)) {
       return true;
     }
 
-    // Check if observer has permission to access any channel in the ninja group
+    // Check conditions 1 & 2: Observer has Enter or Listen permission on any channel in the ninja group
     for (const chId of targetTransitiveLinks) {
       if (await this.canUserAccessChannel(chId, observerUser)) {
         return true;
       }
     }
 
+    // Observer cannot see the target user
     return false;
   }
 }

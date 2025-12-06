@@ -406,9 +406,9 @@ export class HubMessageHandlers {
    */
   handleUserRemoveBroadcastFromHub(params: HubNotificationParams<'hub.userRemoveBroadcast'>): void {
     try {
-      const { session, actor, reason, ban } = params;
+      const { session, actor, reason, ban, target_sessions } = params;
 
-      logger.debug(`Received UserRemove broadcast from Hub: target ${session}`);
+      logger.debug(`Received UserRemove broadcast from Hub: target ${session}, ninja mode: ${!!target_sessions}`);
 
       // 构建UserRemove消息
       const userRemove = new mumbleproto.UserRemove({
@@ -420,27 +420,37 @@ export class HubMessageHandlers {
 
       const userRemoveMessage = userRemove.serialize();
 
-      // Broadcast to all local authenticated clients
+      // Broadcast to local authenticated clients
+      // If target_sessions is provided (ninja mode), only send to specified sessions
       const allClients = this.clientManager.getAllClients();
+      const targetSessionsSet = target_sessions ? new Set(target_sessions) : null;
       
       for (const client of allClients) {
         if (client.user_id > 0) {
-          this.messageHandler.sendMessage(client.session, MessageType.UserRemove, Buffer.from(userRemoveMessage));
+          // If target_sessions provided, only broadcast to specified sessions
+          if (!targetSessionsSet || targetSessionsSet.has(client.session)) {
+            this.messageHandler.sendMessage(client.session, MessageType.UserRemove, Buffer.from(userRemoveMessage));
+          }
         }
       }
 
-      // If target user is on this Edge and is real kick/ban, force disconnect
-      const targetClient = this.clientManager.getClient(session);
-      if (targetClient) {
-        this.clientManager.forceDisconnect(
-          session,
-          ban ? `Banned: ${reason || ''}` : `Kicked: ${reason || ''}`
-        );
-        logger.info(`Disconnected local client ${session} due to ${ban ? 'ban' : 'kick'}`);
+      // If target_sessions is NOT provided, this is a real kick/ban - force disconnect
+      // If target_sessions IS provided, this is ninja mode - don't disconnect
+      if (!target_sessions) {
+        const targetClient = this.clientManager.getClient(session);
+        if (targetClient) {
+          this.clientManager.forceDisconnect(
+            session,
+            ban ? `Banned: ${reason || ''}` : `Kicked: ${reason || ''}`
+          );
+          logger.info(`Disconnected local client ${session} due to ${ban ? 'ban' : 'kick'}`);
+        }
       }
 
-      const broadcasted = allClients.filter(c => c.user_id > 0).length;
-      logger.debug(`Broadcasted UserRemove to ${broadcasted} local clients`);
+      const broadcasted = targetSessionsSet 
+        ? allClients.filter(c => c.user_id > 0 && targetSessionsSet.has(c.session)).length
+        : allClients.filter(c => c.user_id > 0).length;
+      logger.debug(`Broadcasted UserRemove to ${broadcasted} local clients${targetSessionsSet ? ' (filtered)' : ''}`);
     } catch (error) {
       logger.error('Error handling UserRemove broadcast from Hub:', error);
     }

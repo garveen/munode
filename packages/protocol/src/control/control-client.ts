@@ -39,7 +39,7 @@ export class ControlChannelClient extends EventEmitter {
 
       this.ws.on('open', () => {
         this.isConnecting = false;
-        this.channel = new RPCChannel(this.ws!);
+        this.channel = new RPCChannel(this.ws);
         this.typedClient = createTypedRPCClient(this.channel);
         this.setupChannel();
         this.emit('connect');
@@ -86,7 +86,7 @@ export class ControlChannelClient extends EventEmitter {
     if (!this.typedClient) {
       throw new Error('Not connected');
     }
-    return this.typedClient.call(method, params as RPCParams<M>);
+    return this.typedClient.call(method, params);
   }
 
   /**

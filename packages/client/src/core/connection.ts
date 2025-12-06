@@ -129,11 +129,11 @@ export class ConnectionManager {
           reject(error);
         };
         
-        this.udpSocket!.once('error', errorHandler);
+        this.udpSocket.once('error', errorHandler);
         
-        this.udpSocket!.bind(0, () => {
+        this.udpSocket.bind(0, () => {
           // bind 成功，移除临时错误处理器
-          this.udpSocket!.removeListener('error', errorHandler);
+          this.udpSocket.removeListener('error', errorHandler);
           resolve();
         });
       });
@@ -212,7 +212,7 @@ export class ConnectionManager {
     }
     
     return new Promise((resolve, reject) => {
-      this.tcpSocket!.write(message, (error) => {
+      this.tcpSocket.write(message, (error) => {
         if (error) {
           reject(error);
         } else {
@@ -236,7 +236,7 @@ export class ConnectionManager {
     }
 
     return new Promise((resolve, reject) => {
-      this.udpSocket!.send(message, 0, message.length, this.udpPort, this.serverHost, (error) => {
+      this.udpSocket.send(message, 0, message.length, this.udpPort, this.serverHost, (error) => {
         if (error) {
           // UDP发送失败，标记UDP为不可用
           this.udpFailed = true;

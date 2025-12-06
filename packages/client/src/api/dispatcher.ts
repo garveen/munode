@@ -77,7 +77,7 @@ export class ApiDispatcher {
       return {
         success: false,
         error: {
-          code: (error as any).code || 'UNKNOWN_ERROR',
+          code: (error).code || 'UNKNOWN_ERROR',
           message: (error as Error).message
         }
       };

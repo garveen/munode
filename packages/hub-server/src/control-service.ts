@@ -307,7 +307,7 @@ export class HubControlService {
     logger.info(`Registered ${handlers.length} RPC handlers: ${handlers.map(h => h.method).join(', ')}`);
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+   
   private async handleEdgeRegister(
     _channel: RPCChannel,
     params: RPCParams<'edge.register'>

@@ -49,7 +49,7 @@ export class TypedRPCClient {
     const request = new hubedgeRpc.TypedRPCRequest({
       request_id: '',
       method,
-    }) as TypedRPCRequest;
+    });
 
     // Set the appropriate params field based on method
     // Each case narrows params to the specific type and converts to protobuf format
@@ -446,7 +446,7 @@ export class TypedRPCClient {
     const notification = new hubedgeRpc.TypedRPCNotification({
       method,
       timestamp: Date.now(),
-    }) as TypedRPCNotification;
+    });
 
     switch (method) {
       case 'voice.data': {

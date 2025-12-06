@@ -30,12 +30,12 @@ export class BlobHandler implements IBlobHandler {
    * 处理Blob存储
    */
   async handleBlobPut(params: RPCParams<'blob.put'>): Promise<RPCResult<'blob.put'>> {
-    if (!this.factory.getBlobStore() || !this.factory.getBlobStore()!.isEnabled()) {
+    if (!this.factory.getBlobStore() || !this.factory.getBlobStore().isEnabled()) {
       return { success: false, error: 'Blob storage is disabled' };
     }
 
     try {
-      const hash = await this.factory.getBlobStore()!.put(params.data);
+      const hash = await this.factory.getBlobStore().put(params.data);
       logger.debug(`Blob stored: ${hash}`);
       return { success: true, hash };
     } catch (error) {
@@ -48,12 +48,12 @@ export class BlobHandler implements IBlobHandler {
    * 处理Blob获取
    */
   async handleBlobGet(params: RPCParams<'blob.get'>): Promise<RPCResult<'blob.get'>> {
-    if (!this.factory.getBlobStore() || !this.factory.getBlobStore()!.isEnabled()) {
+    if (!this.factory.getBlobStore() || !this.factory.getBlobStore().isEnabled()) {
       return { success: false, error: 'Blob storage is disabled' };
     }
 
     try {
-      const data = await this.factory.getBlobStore()!.get(params.hash);
+      const data = await this.factory.getBlobStore().get(params.hash);
       if (!data) {
         return { success: false, error: 'Blob not found' };
       }
@@ -68,7 +68,7 @@ export class BlobHandler implements IBlobHandler {
    * 处理获取用户纹理
    */
   async handleGetUserTexture(params: RPCParams<'blob.getUserTexture'>): Promise<RPCResult<'blob.getUserTexture'>> {
-    if (!this.factory.getBlobStore() || !this.factory.getBlobStore()!.isEnabled()) {
+    if (!this.factory.getBlobStore() || !this.factory.getBlobStore().isEnabled()) {
       return { success: false, error: 'Blob storage is disabled' };
     }
 
@@ -98,7 +98,7 @@ export class BlobHandler implements IBlobHandler {
    * 处理获取用户评论
    */
   async handleGetUserComment(params: RPCParams<'blob.getUserComment'>): Promise<RPCResult<'blob.getUserComment'>> {
-    if (!this.factory.getBlobStore() || !this.factory.getBlobStore()!.isEnabled()) {
+    if (!this.factory.getBlobStore() || !this.factory.getBlobStore().isEnabled()) {
       return { success: false, error: 'Blob storage is disabled' };
     }
 
@@ -112,7 +112,7 @@ export class BlobHandler implements IBlobHandler {
         return { success: false, error: 'User comment not found' };
       }
 
-      const data = await this.factory.getBlobStore()!.get(hash);
+      const data = await this.factory.getBlobStore().get(hash);
       if (!data) {
         return { success: false, error: 'Comment blob not found' };
       }
@@ -128,7 +128,7 @@ export class BlobHandler implements IBlobHandler {
    * 处理设置用户纹理
    */
   async handleSetUserTexture(params: RPCParams<'blob.setUserTexture'>): Promise<RPCResult<'blob.setUserTexture'>> {
-    if (!this.factory.getBlobStore() || !this.factory.getBlobStore()!.isEnabled()) {
+    if (!this.factory.getBlobStore() || !this.factory.getBlobStore().isEnabled()) {
       return { success: false, error: 'Blob storage is disabled' };
     }
 
@@ -153,7 +153,7 @@ export class BlobHandler implements IBlobHandler {
    * 处理设置用户评论
    */
   async handleSetUserComment(params: RPCParams<'blob.setUserComment'>): Promise<RPCResult<'blob.setUserComment'>> {
-    if (!this.factory.getBlobStore() || !this.factory.getBlobStore()!.isEnabled()) {
+    if (!this.factory.getBlobStore() || !this.factory.getBlobStore().isEnabled()) {
       return { success: false, error: 'Blob storage is disabled' };
     }
 

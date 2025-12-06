@@ -12,7 +12,7 @@ import type { MumbleClient } from '../../core/mumble-client.js';
 export class QueryACLHandler implements BusinessHandler {
   async execute(params: { channelId: number }, context: ApiContext): Promise<any> {
     const { channelId } = params;
-    const client = context.client as MumbleClient;
+    const client = context.client;
 
     const result = await client.queryACL(channelId);
     return {
@@ -28,7 +28,7 @@ export class QueryACLHandler implements BusinessHandler {
 export class SaveACLHandler implements BusinessHandler {
   async execute(params: { channelId: number; acls: any[]; groups?: any }, context: ApiContext): Promise<any> {
     const { channelId, acls, groups } = params;
-    const client = context.client as MumbleClient;
+    const client = context.client;
 
     const aclIds = await client.saveACL(channelId, acls, groups);
     return {
@@ -44,7 +44,7 @@ export class SaveACLHandler implements BusinessHandler {
 export class CheckPermissionHandler implements BusinessHandler {
   async execute(params: { channelId: number; permission: number; userSession?: number }, context: ApiContext): Promise<any> {
     const { channelId, permission, userSession } = params;
-    const client = context.client as MumbleClient;
+    const client = context.client;
 
     const hasPermission = await client.checkPermission(channelId, permission, userSession);
     return {
@@ -60,7 +60,7 @@ export class CheckPermissionHandler implements BusinessHandler {
 export class GetUserPermissionsHandler implements BusinessHandler {
   async execute(params: { channelId: number; userSession?: number }, context: ApiContext): Promise<any> {
     const { channelId, userSession } = params;
-    const client = context.client as MumbleClient;
+    const client = context.client;
 
     const permissions = await client.getUserPermissions(channelId, userSession);
     return {
@@ -76,7 +76,7 @@ export class GetUserPermissionsHandler implements BusinessHandler {
 export class AddACLEntryHandler implements BusinessHandler {
   async execute(params: { channelId: number; entry: any }, context: ApiContext): Promise<any> {
     const { channelId, entry } = params;
-    const client = context.client as MumbleClient;
+    const client = context.client;
 
     const aclId = await client.addACLEntry(channelId, entry);
     return {
@@ -92,7 +92,7 @@ export class AddACLEntryHandler implements BusinessHandler {
 export class RemoveACLEntryHandler implements BusinessHandler {
   async execute(params: { channelId: number; entryIndex: number }, context: ApiContext): Promise<any> {
     const { channelId, entryIndex } = params;
-    const client = context.client as MumbleClient;
+    const client = context.client;
 
     await client.removeACLEntry(channelId, entryIndex);
     return {
@@ -108,7 +108,7 @@ export class RemoveACLEntryHandler implements BusinessHandler {
 export class UpdateACLEntryHandler implements BusinessHandler {
   async execute(params: { channelId: number; entryIndex: number; updates: any }, context: ApiContext): Promise<any> {
     const { channelId, entryIndex, updates } = params;
-    const client = context.client as MumbleClient;
+    const client = context.client;
 
     await client.updateACLEntry(channelId, entryIndex, updates);
     return {
@@ -124,7 +124,7 @@ export class UpdateACLEntryHandler implements BusinessHandler {
 export class CreateChannelGroupHandler implements BusinessHandler {
   async execute(params: { channelId: number; groupName: string; inherited?: boolean; inheritable?: boolean }, context: ApiContext): Promise<any> {
     const { channelId, groupName, inherited, inheritable } = params;
-    const client = context.client as MumbleClient;
+    const client = context.client;
 
     await client.createChannelGroup(channelId, groupName, inherited, inheritable);
     return {
@@ -140,7 +140,7 @@ export class CreateChannelGroupHandler implements BusinessHandler {
 export class DeleteChannelGroupHandler implements BusinessHandler {
   async execute(params: { channelId: number; groupName: string }, context: ApiContext): Promise<any> {
     const { channelId, groupName } = params;
-    const client = context.client as MumbleClient;
+    const client = context.client;
 
     await client.deleteChannelGroup(channelId, groupName);
     return {
@@ -156,7 +156,7 @@ export class DeleteChannelGroupHandler implements BusinessHandler {
 export class AddUserToGroupHandler implements BusinessHandler {
   async execute(params: { channelId: number; groupName: string; userId: number }, context: ApiContext): Promise<any> {
     const { channelId, groupName, userId } = params;
-    const client = context.client as MumbleClient;
+    const client = context.client;
 
     await client.addUserToGroup(channelId, groupName, userId);
     return {
@@ -172,7 +172,7 @@ export class AddUserToGroupHandler implements BusinessHandler {
 export class RemoveUserFromGroupHandler implements BusinessHandler {
   async execute(params: { channelId: number; groupName: string; userId: number }, context: ApiContext): Promise<any> {
     const { channelId, groupName, userId } = params;
-    const client = context.client as MumbleClient;
+    const client = context.client;
 
     await client.removeUserFromGroup(channelId, groupName, userId);
     return {

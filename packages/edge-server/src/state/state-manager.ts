@@ -482,7 +482,7 @@ export class EdgeStateManager {
     if (!this.channelRemoteUsers.has(channel_id)) {
       this.channelRemoteUsers.set(channel_id, new Set());
     }
-    this.channelRemoteUsers.get(channel_id)!.add(edge_id);
+    this.channelRemoteUsers.get(channel_id).add(edge_id);
     
     logger.debug(`Added remote user: session=${session_id}, edge=${edge_id}, channel=${channel_id}`);
   }
@@ -545,7 +545,7 @@ export class EdgeStateManager {
       if (!this.channelRemoteUsers.has(new_channel_id)) {
         this.channelRemoteUsers.set(new_channel_id, new Set());
       }
-      this.channelRemoteUsers.get(new_channel_id)!.add(user.edge_id);
+      this.channelRemoteUsers.get(new_channel_id).add(user.edge_id);
       
       logger.debug(`Updated remote user channel: session=${session_id}, edge=${user.edge_id}, ${old_channel_id} -> ${new_channel_id}`);
     }

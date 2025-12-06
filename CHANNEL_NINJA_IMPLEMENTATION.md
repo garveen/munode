@@ -8,46 +8,84 @@ The Channel Ninja feature allows servers to hide channels from users who don't h
 
 ### Hub Configuration
 
-Add the following option to your Hub configuration file (e.g., `config/hub.json`):
+Add the following options to your Hub configuration file (e.g., `config/hub.json`):
 
 ```json
 {
-  "channelNinja": false
+  "channelNinja": false,
+  "ninjaChannels": []
 }
 ```
 
-- **Default**: `false` (disabled)
-- **When disabled**: All users can see all channels (traditional Mumble behavior)
-- **When enabled**: Users only see channels they have permission to access
+- **channelNinja** (boolean): Enable/disable the Channel Ninja feature globally
+  - **Default**: `false` (disabled)
+  - **When disabled**: All users can see all users (traditional Mumble behavior)
+  - **When enabled**: Ninja channel rules apply to channels in `ninjaChannels`
+
+- **ninjaChannels** (array of numbers): List of channel IDs that are ninja channels
+  - **Default**: `[]` (empty array)
+  - Only channels explicitly listed here will have ninja rules applied
+  - Users without Enter/Listen permission cannot see users in these channels
+
+### How Ninja Mode is Activated
+
+For ninja functionality to take effect, **ALL** of the following conditions must be met:
+
+1. **Hub configuration has `channelNinja: true`** - Global feature toggle
+2. **Hub configuration has `ninjaChannels` with at least one channel ID** - Specific channels to protect
+3. **The channel (or a linked channel) is in the `ninjaChannels` list** - Channel must be explicitly marked as ninja
+
+If any of these conditions is not met, the system operates in traditional mode (all users can see all users).
 
 ## How It Works
 
 ### Visibility Rules
 
-A channel is visible to a user if **any** of the following conditions are met:
+A user can see another user in a ninja channel if **any** of the following conditions are met:
 
-1. The user has **Enter** permission on the channel
-2. The user has **Listen** permission on the channel
-3. The user has **Enter or Listen** permission on **any linked channel**
+1. The observer has **Enter** permission on the ninja channel
+2. The observer has **Listen** permission on the ninja channel  
+3. The observer has **Enter or Listen** permission on **any transitively linked channel** to the ninja channel
+4. The observer is currently in the ninja channel or a linked channel (moved there by an admin)
+
+**Important Notes:**
+- Ninja rules only apply to channels explicitly listed in `ninjaChannels`
+- Non-ninja channels always show all users (traditional behavior)
+- Transitive linking is supported: if Channel A links to Channel B, and Channel B links to Channel C, permissions on Channel C grant visibility to Channel A
+- Both the ninja channel itself AND any linked channels are checked for permissions
+
+### Channel Linking and Ninja Mode
+
+Ninja mode fully respects Mumble's channel linking (contagious linking):
+
+- If a ninja channel is linked to another channel, users with Enter/Listen on the linked channel can see users in the ninja channel
+- Linking works transitively: Channel A → Channel B → Ninja Channel C means users with permission on A or B can see C
+- This allows creating "visible entry points" to hidden channels
 
 ### User State Broadcasting
 
-When Channel Ninja is enabled:
+When Channel Ninja is enabled and the user is in (or moving to) a ninja channel:
 
-1. **Normal state changes** (mute, deaf, etc.):
-   - Only broadcast to users who can see the user's current channel
-   - Users who cannot see the channel don't receive the state update
+1. **Normal state changes** (mute, deaf, etc.) in a ninja channel:
+   - Only broadcast to users who can see the user in that ninja channel
+   - Users who cannot see the ninja channel don't receive the state update
 
-2. **Channel moves**:
-   - If user moves to a **visible channel**: Normal UserState broadcast to all who can see it
-   - If user moves to an **invisible channel**: 
-     - Send `UserRemove` message to users who cannot see the new channel
+2. **Channel moves to a ninja channel**:
+   - If user moves to a **ninja channel from a visible channel**: 
+     - Send `UserRemove` message to users who cannot see the ninja channel
      - User appears to have "left the server" to those who can't see them
-     - Send `UserState` only to users who can see the new channel
+     - Send `UserState` only to users who can see the ninja channel
+   
+3. **Channel moves from a ninja channel**:
+   - When user moves from a ninja channel to a visible channel:
+     - Normal UserState is sent to all users
+     - User "reappears" to those who previously couldn't see them
 
-3. **Returning to visible channel**:
-   - When user moves back to a visible channel, normal UserState is sent
-   - User "reappears" to those who previously couldn't see them
+4. **Moves between ninja channels**:
+   - Permission checks are done for both source and destination channels
+   - Users see appropriate state changes based on their visibility to both channels
+
+**Key Behavior:** Non-ninja channels always show all users. Ninja filtering only applies when a user is in a channel explicitly listed in `ninjaChannels` or linked to such a channel.
 
 ### Voice Routing
 

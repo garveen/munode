@@ -133,7 +133,7 @@ export class TypedRPCServer {
     const handler = this.handlers.get(method);
 
     if (!handler) {
-      respond(new hubedgeRpc.TypedRPCResponse({ request_id: request.request_id }) as TypedRPCResponse, {
+      respond(new hubedgeRpc.TypedRPCResponse({ request_id: request.request_id }), {
         code: -32601,
         message: `Method not found: ${method}`,
       });
@@ -143,13 +143,13 @@ export class TypedRPCServer {
     try {
       // Extract params from request based on method
       const params = this.extractRequestParams(request);
-      const result = await handler(channel, params as RPCParams<EdgeToHubMethods['method']>);
+      const result = await handler(channel, params);
       
       // Create typed response
       const response = this.createTypedResponse(method, request.request_id, result);
       respond(response, undefined);
     } catch (error) {
-      respond(new hubedgeRpc.TypedRPCResponse({ request_id: request.request_id }) as TypedRPCResponse, {
+      respond(new hubedgeRpc.TypedRPCResponse({ request_id: request.request_id }), {
         code: -32603,
         message: error instanceof Error ? error.message : 'Internal error',
       });
@@ -309,7 +309,7 @@ export class TypedRPCServer {
     const response = new hubedgeRpc.TypedRPCResponse({
       request_id: requestId,
       method,
-    }) as TypedRPCResponse;
+    });
 
     // Convert result to protobuf format based on method
     // Each case narrows the result type appropriately
@@ -693,7 +693,7 @@ export class TypedRPCServer {
     const notification = new hubedgeRpc.TypedRPCNotification({
       method,
       timestamp: Date.now(),
-    }) as TypedRPCNotification;
+    });
 
     switch (method) {
       case 'voice.data': {

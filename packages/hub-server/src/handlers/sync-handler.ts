@@ -31,9 +31,9 @@ export class SyncHandler implements ISyncHandler {
     // 获取所有频道
     let dbChannels;
     if (this.factory.getChannelManager()) {
-      dbChannels = this.factory.getChannelManager()!.getAllChannels();
+      dbChannels = this.factory.getChannelManager().getAllChannels();
     } else {
-      dbChannels = await this.factory.getDatabase()!.getAllChannels();
+      dbChannels = await this.factory.getDatabase().getAllChannels();
     }
 
     // 映射数据库字段到protocol字段，并加载每个频道的链接
@@ -54,7 +54,7 @@ export class SyncHandler implements ISyncHandler {
 
     // If ninja channels are configured and user info is provided, filter sessions
     const channelNinjaEnabled = this.factory.getConfig().channelNinja ?? false;
-    const hasNinjaChannels = this.factory.getConfig().ninjaChannels?.length ?? 0 > 0;
+    const hasNinjaChannels = (this.factory.getConfig().ninjaChannels?.length ?? 0) > 0;
 
     if (channelNinjaEnabled && hasNinjaChannels && this.factory.getPermissionChecker() &&
         params.for_user_id !== undefined && params.for_user_id > 0) {
@@ -72,7 +72,7 @@ export class SyncHandler implements ISyncHandler {
       // Filter sessions to only include users the requesting user can see
       const filteredSessions: GlobalSession[] = [];
       for (const session of sessions) {
-        const canSee = await this.factory.getPermissionChecker()!.canUserSeeOtherUser(
+        const canSee = await this.factory.getPermissionChecker().canUserSeeOtherUser(
           requestingUserInfo,
           requestingUserInfo.channel_id,
           session.channel_id ?? 0,
@@ -86,7 +86,7 @@ export class SyncHandler implements ISyncHandler {
         }
       }
 
-      logger.debug(`Channel Ninja: Filtered sessions for user ${params.for_user_id}: ${sessions.length} -> ${filteredSessions.length}`);
+      logger.info(`Channel Ninja: Filtered sessions for user ${params.for_user_id}: ${sessions.length} -> ${filteredSessions.length}`);
       sessions = filteredSessions;
     }
 
@@ -135,9 +135,9 @@ export class SyncHandler implements ISyncHandler {
     // Use ChannelManager if available, otherwise fall back to direct database access
     let dbChannels;
     if (this.factory.getChannelManager()) {
-      dbChannels = this.factory.getChannelManager()!.getAllChannels();
+      dbChannels = this.factory.getChannelManager().getAllChannels();
     } else {
-      dbChannels = await this.factory.getDatabase()!.getAllChannels();
+      dbChannels = await this.factory.getDatabase().getAllChannels();
     }
 
     // DEBUG: 打印从数据库/ChannelManager获取的原始数据
@@ -164,8 +164,8 @@ export class SyncHandler implements ISyncHandler {
    */
   async handleGetACLs(params: RPCParams<'edge.getACLs'>): Promise<RPCResult<'edge.getACLs'>> {
     const dbAcls = this.factory.getAclManager()
-      ? await this.factory.getAclManager()!.getChannelACLs(params.channel_id)
-      : await this.factory.getDatabase()!.getChannelACLs(params.channel_id);
+      ? await this.factory.getAclManager().getChannelACLs(params.channel_id)
+      : await this.factory.getDatabase().getChannelACLs(params.channel_id);
     const acls: ACLData[] = dbAcls.map((acl) => ({
       id: acl.id,
       channel_id: acl.channel_id,
@@ -186,9 +186,9 @@ export class SyncHandler implements ISyncHandler {
   private async loadChannelLinks(channelId: number): Promise<number[]> {
     try {
       if (this.factory.getChannelManager()) {
-        return await this.factory.getChannelManager()!.getChannelLinks(channelId);
+        return await this.factory.getChannelManager().getChannelLinks(channelId);
       } else {
-        return await this.factory.getDatabase()!.getChannelLinks(channelId);
+        return await this.factory.getDatabase().getChannelLinks(channelId);
       }
     } catch (error) {
       logger.warn(`Failed to get links for channel ${channelId}:`, error);

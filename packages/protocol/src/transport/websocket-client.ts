@@ -150,7 +150,7 @@ export class EdgeHubWebSocketClient extends EventEmitter {
     const data = PacketCodec.encode(packet);
     
     return new Promise((resolve, reject) => {
-      this.ws!.send(data, (error) => {
+      this.ws.send(data, (error) => {
         if (error) {
           this.logger.error('Failed to send packet', error);
           reject(error);

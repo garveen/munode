@@ -864,6 +864,7 @@ export interface HubUserRemoveBroadcastNotification {
     actor: number;
     reason?: string;
     ban?: boolean;
+    target_sessions?: number[]; // For ninja mode: only send to these sessions
   };
 }
 

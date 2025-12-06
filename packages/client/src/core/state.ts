@@ -282,7 +282,7 @@ export class StateManager {
       const children = channel.children
         .map(childId => this.channels.get(childId))
         .filter(child => child !== undefined)
-        .map(child => buildTree(child!));
+        .map(child => buildTree(child));
 
       return {
         ...channel,

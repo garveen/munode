@@ -47,8 +47,8 @@ export class ACLHandler implements IACLHandler {
 
       // 获取频道信息
       const channel = this.factory.getChannelManager()
-        ? this.factory.getChannelManager()!.getChannel(channel_id)
-        : await this.factory.getDatabase()!.getChannel(channel_id);
+        ? this.factory.getChannelManager().getChannel(channel_id)
+        : await this.factory.getDatabase().getChannel(channel_id);
       if (!channel) {
         logger.warn(`ACL for non-existent channel: ${channel_id}`);
         return { success: false, error: 'Channel not found' };
@@ -114,8 +114,8 @@ export class ACLHandler implements IACLHandler {
 
         while (currentChannelId !== null && currentChannelId >= 0) {
           const ch = this.factory.getChannelManager()
-            ? this.factory.getChannelManager()!.getChannel(currentChannelId)
-            : await this.factory.getDatabase()!.getChannel(currentChannelId);
+            ? this.factory.getChannelManager().getChannel(currentChannelId)
+            : await this.factory.getDatabase().getChannel(currentChannelId);
           if (!ch) break;
 
           channelsInChain.unshift({ id: ch.id, inherit_acl: ch.inherit_acl, parent_id: ch.parent_id });
@@ -135,8 +135,8 @@ export class ACLHandler implements IACLHandler {
 
         for (const iterChannel of channelsInChain) {
           const channelACLs = this.factory.getAclManager()
-            ? await this.factory.getAclManager()!.getChannelACLs(iterChannel.id)
-            : await this.factory.getDatabase()!.getChannelACLs(iterChannel.id);
+            ? await this.factory.getAclManager().getChannelACLs(iterChannel.id)
+            : await this.factory.getDatabase().getChannelACLs(iterChannel.id);
           logger.debug(`Channel ${iterChannel.id} has ${channelACLs.length} ACL entries`);
 
           for (const aclEntry of channelACLs) {
@@ -164,7 +164,7 @@ export class ACLHandler implements IACLHandler {
         const allGroups: mumbleproto.ACL.ChanGroup[] = [];
 
         if (this.factory.getChannelGroupManager()) {
-          const channelGroups = await this.factory.getChannelGroupManager()!.getChannelGroups(channel_id, true);
+          const channelGroups = await this.factory.getChannelGroupManager().getChannelGroups(channel_id, true);
 
           for (const channelGroup of channelGroups) {
             const chanGroup: any = {
@@ -218,16 +218,16 @@ export class ACLHandler implements IACLHandler {
 
         // 使用 ACLManager 保存 ACL
         if (this.factory.getAclManager()) {
-          await this.factory.getAclManager()!.saveACLs(channel_id, aclData);
+          await this.factory.getAclManager().saveACLs(channel_id, aclData);
           logger.info(`ACL updated for channel ${channel_id}: ${aclData.length} entries`);
         }
 
         // 更新频道的 inherit_acl 设置
         if (acl.inherit_acls !== undefined && acl.inherit_acls !== channel.inherit_acl) {
           if (this.factory.getChannelManager()) {
-            await this.factory.getChannelManager()!.updateChannel(channel_id, { inherit_acl: acl.inherit_acls });
+            await this.factory.getChannelManager().updateChannel(channel_id, { inherit_acl: acl.inherit_acls });
           } else {
-            await this.factory.getDatabase()!.updateChannel(channel_id, { inherit_acl: acl.inherit_acls });
+            await this.factory.getDatabase().updateChannel(channel_id, { inherit_acl: acl.inherit_acls });
           }
           logger.info(`Channel ${channel_id} inherit_acl updated to ${acl.inherit_acls}`);
         }
@@ -248,7 +248,7 @@ export class ACLHandler implements IACLHandler {
               remove_members: g.remove || [],
             }));
 
-          await this.factory.getChannelGroupManager()!.saveChannelGroups(channel_id, channelGroupsToSave);
+          await this.factory.getChannelGroupManager().saveChannelGroups(channel_id, channelGroupsToSave);
           logger.info(`Saved ${channelGroupsToSave.length} channel groups for channel ${channel_id}`);
         }
 
@@ -307,7 +307,7 @@ export class ACLHandler implements IACLHandler {
         return { success: false, error: 'PermissionChecker not available' };
       }
 
-      const permissions = await this.factory.getPermissionChecker()!.calculatePermission(channel_id, actorUserInfo);
+      const permissions = await this.factory.getPermissionChecker().calculatePermission(channel_id, actorUserInfo);
 
       logger.debug(`PermissionQuery result for session ${actor_session} on channel ${channel_id}: ${permissions} (0x${permissions.toString(16)})`);
 
@@ -347,7 +347,7 @@ export class ACLHandler implements IACLHandler {
     }));
 
     // Use ACLManager to save ACLs
-    const aclIds = await this.factory.getAclManager()!.saveACLs(channel_id, aclData);
+    const aclIds = await this.factory.getAclManager().saveACLs(channel_id, aclData);
 
     return { success: true, aclIds };
   }

@@ -47,7 +47,7 @@ export class MessageCache {
       this.cache.set(edgeId, []);
     }
 
-    const messages = this.cache.get(edgeId)!;
+    const messages = this.cache.get(edgeId);
     const cachedMessage: CachedMessage = {
       ...message,
       sequence: ++this.messageSequence,

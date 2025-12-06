@@ -182,7 +182,7 @@ export class ClientManager extends EventEmitter {
     }
     return Array.from(sessionIds)
       .map(id => this.clients.get(id))
-      .filter(Boolean) as ClientInfo[];
+      .filter(Boolean);
   }
 
   /**

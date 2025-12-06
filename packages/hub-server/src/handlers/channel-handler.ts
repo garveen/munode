@@ -48,8 +48,8 @@ export class ChannelHandler implements IChannelHandler {
       }
 
       await (this.factory.getChannelManager()
-        ? this.factory.getChannelManager()!.updateChannel(params.channel.id, updates)
-        : this.factory.getDatabase()!.updateChannel(params.channel.id, updates));
+        ? this.factory.getChannelManager().updateChannel(params.channel.id, updates)
+        : this.factory.getDatabase().updateChannel(params.channel.id, updates));
       channel_id = params.channel.id;
     } else {
       // 创建新频道 - 必须提供所有必需字段的默认值
@@ -66,8 +66,8 @@ export class ChannelHandler implements IChannelHandler {
       };
 
       channel_id = this.factory.getChannelManager()
-        ? await this.factory.getChannelManager()!.createChannel(channelData)
-        : await this.factory.getDatabase()!.createChannel(channelData);
+        ? await this.factory.getChannelManager().createChannel(channelData)
+        : await this.factory.getDatabase().createChannel(channelData);
     }
 
     return { success: true, channel_id };

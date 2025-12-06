@@ -74,7 +74,7 @@ export class VoiceUDPTransport extends EventEmitter {
       });
 
       this.socket.on('listening', () => {
-        const address = this.socket!.address();
+        const address = this.socket.address();
         console.info(`Voice UDP listening on ${address.address}:${address.port}`);
         this.emit('listening', address);
         resolve();

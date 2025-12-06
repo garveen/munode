@@ -393,42 +393,88 @@ export class UserStateHandler implements IUserStateHandler {
       const channelNinjaEnabled = config.channelNinja ?? false;
       const hasNinjaChannels = config.ninjaChannels?.length > 0;
 
-      if (channelNinjaEnabled && hasNinjaChannels && broadcastUserState.channel_id !== undefined) {
-        // 频道忍者逻辑 - 过滤广播目标
+      if (channelNinjaEnabled && hasNinjaChannels) {
+        // Ninja logic: Filter broadcast based on individual user visibility
         const ninjaChannels = new Set(config.ninjaChannels);
-        const isLeavingNinjaChannel = ninjaChannels.has(originalChannelId);
-        const isEnteringNinjaChannel = ninjaChannels.has(broadcastUserState.channel_id);
-
-        if (isLeavingNinjaChannel || isEnteringNinjaChannel) {
-          // 获取所有连接的Edge ID
-          const allEdgeIds = Array.from(this.factory.getRegistry().getAllEdges()).map(edge => edge.server_id);
-
-          // 确定哪些Edge应该接收广播
-          const targetEdgeIds: number[] = allEdgeIds.filter(edgeId => {
-            if (isLeavingNinjaChannel && !isEnteringNinjaChannel) {
-              // 从忍者频道离开 - 只广播给非忍者频道用户所在的Edge
-              return !this.isEdgeInNinjaChannel(edgeId, ninjaChannels);
-            } else if (!isLeavingNinjaChannel && isEnteringNinjaChannel) {
-              // 进入忍者频道 - 只广播给忍者频道用户所在的Edge
-              return this.isEdgeInNinjaChannel(edgeId, ninjaChannels);
-            } else {
-              // 在忍者频道之间移动 - 只广播给忍者频道用户所在的Edge
-              return this.isEdgeInNinjaChannel(edgeId, ninjaChannels);
+        const allSessions = sessionManager.getAllSessions();
+        
+        // Track which sessions can see this user state change
+        const visibleToSessions = new Map<number, number[]>(); // edge_id -> session_ids[]
+        const invisibleToSessions = new Map<number, number[]>(); // edge_id -> session_ids[]
+        
+        // Determine the target user's channel (after the state change)
+        const targetChannelId = broadcastUserState.channel_id ?? targetGlobalSession.channel_id ?? 0;
+        
+        // Check if this is a channel move (and user was in a different channel before)
+        const isChannelMove = broadcastUserState.channel_id !== undefined && originalChannelId !== targetChannelId;
+        
+        for (const observerSession of allSessions) {
+          // Skip the target user themselves
+          if (observerSession.session_id === targetSession) continue;
+          
+          const observerUserInfo = this.permissionChecker.sessionToUserInfo(
+            observerSession,
+            observerSession.channel_id ?? 0
+          );
+          
+          // Check if observer can see the target user in the new state
+          const canSeeTarget = await this.permissionChecker.canUserSeeOtherUser(
+            observerUserInfo,
+            observerSession.channel_id ?? 0,
+            targetChannelId,
+            ninjaChannels
+          );
+          
+          if (canSeeTarget) {
+            // Observer can see the target - send UserState
+            if (!visibleToSessions.has(observerSession.edge_id)) {
+              visibleToSessions.set(observerSession.edge_id, []);
             }
-          });
-
-          // 向选定的Edge广播
-          for (const targetEdgeId of targetEdgeIds) {
-            controlService.notify(targetEdgeId, 'hub.userStateBroadcast', broadcastUserState);
+            visibleToSessions.get(observerSession.edge_id).push(observerSession.session_id);
+          } else if (isChannelMove) {
+            // Observer cannot see target AND this is a channel move
+            // Check if they could see the target in the old channel
+            const couldSeeOldChannel = await this.permissionChecker.canUserSeeOtherUser(
+              observerUserInfo,
+              observerSession.channel_id ?? 0,
+              originalChannelId,
+              ninjaChannels
+            );
+            
+            if (couldSeeOldChannel) {
+              // Observer could see target before but not now - send UserRemove
+              if (!invisibleToSessions.has(observerSession.edge_id)) {
+                invisibleToSessions.set(observerSession.edge_id, []);
+              }
+              invisibleToSessions.get(observerSession.edge_id).push(observerSession.session_id);
+            }
+            // else: observer couldn't see before and can't see now - do nothing
           }
-
-          logger.info(`Channel Ninja: Broadcasted UserState to ${targetEdgeIds.length} edges (filtered from ${allEdgeIds.length})`);
-        } else {
-          // 普通频道移动 - 广播给所有Edge
-          controlService.broadcast('hub.userStateBroadcast', broadcastUserState);
+          // else: not a channel move and observer can't see - do nothing
         }
+        
+        // Send UserState to sessions that can see the target
+        for (const [edgeId, sessionIds] of visibleToSessions.entries()) {
+          controlService.notify(edgeId, 'hub.userStateBroadcast', {
+            ...broadcastUserState,
+            target_sessions: sessionIds,
+          });
+        }
+        
+        // Send UserRemove to sessions that could see before but not now
+        if (invisibleToSessions.size > 0) {
+          for (const [edgeId, sessionIds] of invisibleToSessions.entries()) {
+            controlService.notify(edgeId, 'hub.userRemoveBroadcast', {
+              session: targetSession,
+              target_sessions: sessionIds,
+            });
+          }
+          logger.info(`Channel Ninja: Sent UserRemove for session ${targetSession} to ${Array.from(invisibleToSessions.values()).flat().length} users who cannot see the new channel`);
+        }
+        
+        logger.info(`Channel Ninja: Broadcasted UserState for session ${targetSession} to ${Array.from(visibleToSessions.values()).flat().length} users (ninja filtering applied)`);
       } else {
-        // 没有频道忍者功能或不是频道移动 - 广播给所有Edge
+        // No ninja functionality or not configured - broadcast to all edges normally
         controlService.broadcast('hub.userStateBroadcast', broadcastUserState);
       }
 
@@ -459,20 +505,5 @@ export class UserStateHandler implements IUserStateHandler {
       session_id: session_id,
       reason: params.reason,
     });
-  }
-
-  /**
-   * 检查Edge是否在忍者频道中
-   */
-  private isEdgeInNinjaChannel(edgeId: number, ninjaChannels: Set<number>): boolean {
-    const sessionManager = this.factory.getSessionManager();
-    const sessions = sessionManager.getEdgeSessions(edgeId);
-
-    for (const session of sessions) {
-      if (session.channel_id && ninjaChannels.has(session.channel_id)) {
-        return true;
-      }
-    }
-    return false;
   }
 }

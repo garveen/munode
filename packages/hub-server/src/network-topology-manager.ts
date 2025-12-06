@@ -317,9 +317,9 @@ export class NetworkTopologyManager extends EventEmitter {
         if (!link) continue;
         
         const edgeCost = this.calculateDirectCost(link.quality);
-        const newDistance = distances.get(currentNode)! + edgeCost;
+        const newDistance = distances.get(currentNode) + edgeCost;
         
-        if (newDistance < distances.get(edgeId)!) {
+        if (newDistance < distances.get(edgeId)) {
           distances.set(edgeId, newDistance);
           previous.set(edgeId, currentNode);
         }
@@ -368,7 +368,7 @@ export class NetworkTopologyManager extends EventEmitter {
         routeTable.set(targetEdgeId, {
           targetEdgeId,
           type: RouteType.DIRECT,
-          cost: this.calculateDirectCost(directQuality!),
+          cost: this.calculateDirectCost(directQuality),
           timestamp: Date.now(),
           source: 'hub',
         });

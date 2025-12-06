@@ -179,11 +179,11 @@ class WebSocketConnection {
 
     try {
       const result = await this.dispatcher.dispatch(
-        { action: action!, params: data },
+        { action: action, params: data },
         { client: this.client, source: 'websocket' }
       );
 
-      this.sendResponse(id!, result);
+      this.sendResponse(id, result);
     } catch (error) {
       this.sendError('COMMAND_FAILED', (error as Error).message, id);
     }

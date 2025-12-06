@@ -84,7 +84,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 1) != null;
         }
         get rpc_request() {
-            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCRequest, 10) as dependency_3.hubedge.TypedRPCRequest;
+            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCRequest, 10);
         }
         set rpc_request(value: dependency_3.hubedge.TypedRPCRequest) {
             pb_1.Message.setWrapperField(this, 10, value);
@@ -93,7 +93,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 10) != null;
         }
         get rpc_response() {
-            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCResponse, 11) as dependency_3.hubedge.TypedRPCResponse;
+            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCResponse, 11);
         }
         set rpc_response(value: dependency_3.hubedge.TypedRPCResponse) {
             pb_1.Message.setWrapperField(this, 11, value);
@@ -102,7 +102,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 11) != null;
         }
         get rpc_error() {
-            return pb_1.Message.getWrapperField(this, RPCError, 12) as RPCError;
+            return pb_1.Message.getWrapperField(this, RPCError, 12);
         }
         set rpc_error(value: RPCError) {
             pb_1.Message.setWrapperField(this, 12, value);
@@ -111,7 +111,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 12) != null;
         }
         get rpc_notification() {
-            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCNotification, 13) as dependency_3.hubedge.TypedRPCNotification;
+            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCNotification, 13);
         }
         set rpc_notification(value: dependency_3.hubedge.TypedRPCNotification) {
             pb_1.Message.setWrapperField(this, 13, value);
@@ -120,7 +120,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 13) != null;
         }
         get relay() {
-            return pb_1.Message.getWrapperField(this, ClientMessageRelay, 20) as ClientMessageRelay;
+            return pb_1.Message.getWrapperField(this, ClientMessageRelay, 20);
         }
         set relay(value: ClientMessageRelay) {
             pb_1.Message.setWrapperField(this, 20, value);
@@ -129,7 +129,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 20) != null;
         }
         get sync_data() {
-            return pb_1.Message.getWrapperField(this, dependency_2.hubedge.SyncData, 30) as dependency_2.hubedge.SyncData;
+            return pb_1.Message.getWrapperField(this, dependency_2.hubedge.SyncData, 30);
         }
         set sync_data(value: dependency_2.hubedge.SyncData) {
             pb_1.Message.setWrapperField(this, 30, value);
@@ -138,7 +138,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 30) != null;
         }
         get heartbeat() {
-            return pb_1.Message.getWrapperField(this, Heartbeat, 40) as Heartbeat;
+            return pb_1.Message.getWrapperField(this, Heartbeat, 40);
         }
         set heartbeat(value: Heartbeat) {
             pb_1.Message.setWrapperField(this, 40, value);
@@ -147,7 +147,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 40) != null;
         }
         get heartbeat_ack() {
-            return pb_1.Message.getWrapperField(this, HeartbeatAck, 41) as HeartbeatAck;
+            return pb_1.Message.getWrapperField(this, HeartbeatAck, 41);
         }
         set heartbeat_ack(value: HeartbeatAck) {
             pb_1.Message.setWrapperField(this, 41, value);
@@ -596,7 +596,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 3) != null;
         }
         get routing() {
-            return pb_1.Message.getWrapperField(this, RelayRouting, 4) as RelayRouting;
+            return pb_1.Message.getWrapperField(this, RelayRouting, 4);
         }
         set routing(value: RelayRouting) {
             pb_1.Message.setWrapperField(this, 4, value);
@@ -614,7 +614,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 5) != null;
         }
         get version() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Version, 10) as dependency_1.mumbleproto.Version;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Version, 10);
         }
         set version(value: dependency_1.mumbleproto.Version) {
             pb_1.Message.setWrapperField(this, 10, value);
@@ -623,7 +623,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 10) != null;
         }
         get udp_tunnel() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UDPTunnel, 11) as dependency_1.mumbleproto.UDPTunnel;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UDPTunnel, 11);
         }
         set udp_tunnel(value: dependency_1.mumbleproto.UDPTunnel) {
             pb_1.Message.setWrapperField(this, 11, value);
@@ -632,7 +632,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 11) != null;
         }
         get authenticate() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Authenticate, 12) as dependency_1.mumbleproto.Authenticate;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Authenticate, 12);
         }
         set authenticate(value: dependency_1.mumbleproto.Authenticate) {
             pb_1.Message.setWrapperField(this, 12, value);
@@ -641,7 +641,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 12) != null;
         }
         get ping() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Ping, 13) as dependency_1.mumbleproto.Ping;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Ping, 13);
         }
         set ping(value: dependency_1.mumbleproto.Ping) {
             pb_1.Message.setWrapperField(this, 13, value);
@@ -650,7 +650,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 13) != null;
         }
         get reject() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Reject, 14) as dependency_1.mumbleproto.Reject;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Reject, 14);
         }
         set reject(value: dependency_1.mumbleproto.Reject) {
             pb_1.Message.setWrapperField(this, 14, value);
@@ -659,7 +659,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 14) != null;
         }
         get server_sync() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ServerSync, 15) as dependency_1.mumbleproto.ServerSync;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ServerSync, 15);
         }
         set server_sync(value: dependency_1.mumbleproto.ServerSync) {
             pb_1.Message.setWrapperField(this, 15, value);
@@ -668,7 +668,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 15) != null;
         }
         get channel_remove() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ChannelRemove, 16) as dependency_1.mumbleproto.ChannelRemove;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ChannelRemove, 16);
         }
         set channel_remove(value: dependency_1.mumbleproto.ChannelRemove) {
             pb_1.Message.setWrapperField(this, 16, value);
@@ -677,7 +677,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 16) != null;
         }
         get channel_state() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ChannelState, 17) as dependency_1.mumbleproto.ChannelState;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ChannelState, 17);
         }
         set channel_state(value: dependency_1.mumbleproto.ChannelState) {
             pb_1.Message.setWrapperField(this, 17, value);
@@ -686,7 +686,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 17) != null;
         }
         get user_remove() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserRemove, 18) as dependency_1.mumbleproto.UserRemove;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserRemove, 18);
         }
         set user_remove(value: dependency_1.mumbleproto.UserRemove) {
             pb_1.Message.setWrapperField(this, 18, value);
@@ -695,7 +695,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 18) != null;
         }
         get user_state() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserState, 19) as dependency_1.mumbleproto.UserState;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserState, 19);
         }
         set user_state(value: dependency_1.mumbleproto.UserState) {
             pb_1.Message.setWrapperField(this, 19, value);
@@ -704,7 +704,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 19) != null;
         }
         get ban_list() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.BanList, 20) as dependency_1.mumbleproto.BanList;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.BanList, 20);
         }
         set ban_list(value: dependency_1.mumbleproto.BanList) {
             pb_1.Message.setWrapperField(this, 20, value);
@@ -713,7 +713,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 20) != null;
         }
         get text_message() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.TextMessage, 21) as dependency_1.mumbleproto.TextMessage;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.TextMessage, 21);
         }
         set text_message(value: dependency_1.mumbleproto.TextMessage) {
             pb_1.Message.setWrapperField(this, 21, value);
@@ -722,7 +722,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 21) != null;
         }
         get permission_denied() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.PermissionDenied, 22) as dependency_1.mumbleproto.PermissionDenied;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.PermissionDenied, 22);
         }
         set permission_denied(value: dependency_1.mumbleproto.PermissionDenied) {
             pb_1.Message.setWrapperField(this, 22, value);
@@ -731,7 +731,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 22) != null;
         }
         get acl() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ACL, 23) as dependency_1.mumbleproto.ACL;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ACL, 23);
         }
         set acl(value: dependency_1.mumbleproto.ACL) {
             pb_1.Message.setWrapperField(this, 23, value);
@@ -740,7 +740,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 23) != null;
         }
         get query_users() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.QueryUsers, 24) as dependency_1.mumbleproto.QueryUsers;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.QueryUsers, 24);
         }
         set query_users(value: dependency_1.mumbleproto.QueryUsers) {
             pb_1.Message.setWrapperField(this, 24, value);
@@ -749,7 +749,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 24) != null;
         }
         get crypt_setup() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.CryptSetup, 25) as dependency_1.mumbleproto.CryptSetup;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.CryptSetup, 25);
         }
         set crypt_setup(value: dependency_1.mumbleproto.CryptSetup) {
             pb_1.Message.setWrapperField(this, 25, value);
@@ -758,7 +758,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 25) != null;
         }
         get context_action_modify() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ContextActionModify, 26) as dependency_1.mumbleproto.ContextActionModify;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ContextActionModify, 26);
         }
         set context_action_modify(value: dependency_1.mumbleproto.ContextActionModify) {
             pb_1.Message.setWrapperField(this, 26, value);
@@ -767,7 +767,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 26) != null;
         }
         get context_action() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ContextAction, 27) as dependency_1.mumbleproto.ContextAction;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ContextAction, 27);
         }
         set context_action(value: dependency_1.mumbleproto.ContextAction) {
             pb_1.Message.setWrapperField(this, 27, value);
@@ -776,7 +776,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 27) != null;
         }
         get user_list() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserList, 28) as dependency_1.mumbleproto.UserList;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserList, 28);
         }
         set user_list(value: dependency_1.mumbleproto.UserList) {
             pb_1.Message.setWrapperField(this, 28, value);
@@ -785,7 +785,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 28) != null;
         }
         get voice_target() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.VoiceTarget, 29) as dependency_1.mumbleproto.VoiceTarget;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.VoiceTarget, 29);
         }
         set voice_target(value: dependency_1.mumbleproto.VoiceTarget) {
             pb_1.Message.setWrapperField(this, 29, value);
@@ -794,7 +794,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 29) != null;
         }
         get permission_query() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.PermissionQuery, 30) as dependency_1.mumbleproto.PermissionQuery;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.PermissionQuery, 30);
         }
         set permission_query(value: dependency_1.mumbleproto.PermissionQuery) {
             pb_1.Message.setWrapperField(this, 30, value);
@@ -803,7 +803,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 30) != null;
         }
         get codec_version() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.CodecVersion, 31) as dependency_1.mumbleproto.CodecVersion;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.CodecVersion, 31);
         }
         set codec_version(value: dependency_1.mumbleproto.CodecVersion) {
             pb_1.Message.setWrapperField(this, 31, value);
@@ -812,7 +812,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 31) != null;
         }
         get user_stats() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserStats, 32) as dependency_1.mumbleproto.UserStats;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserStats, 32);
         }
         set user_stats(value: dependency_1.mumbleproto.UserStats) {
             pb_1.Message.setWrapperField(this, 32, value);
@@ -821,7 +821,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 32) != null;
         }
         get request_blob() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.RequestBlob, 33) as dependency_1.mumbleproto.RequestBlob;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.RequestBlob, 33);
         }
         set request_blob(value: dependency_1.mumbleproto.RequestBlob) {
             pb_1.Message.setWrapperField(this, 33, value);
@@ -830,7 +830,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 33) != null;
         }
         get server_config() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ServerConfig, 34) as dependency_1.mumbleproto.ServerConfig;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ServerConfig, 34);
         }
         set server_config(value: dependency_1.mumbleproto.ServerConfig) {
             pb_1.Message.setWrapperField(this, 34, value);
@@ -839,7 +839,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 34) != null;
         }
         get suggest_config() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.SuggestConfig, 35) as dependency_1.mumbleproto.SuggestConfig;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.SuggestConfig, 35);
         }
         set suggest_config(value: dependency_1.mumbleproto.SuggestConfig) {
             pb_1.Message.setWrapperField(this, 35, value);
@@ -1442,7 +1442,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 2) != null;
         }
         get stats() {
-            return pb_1.Message.getWrapperField(this, ServerStats, 3) as ServerStats;
+            return pb_1.Message.getWrapperField(this, ServerStats, 3);
         }
         set stats(value: ServerStats) {
             pb_1.Message.setWrapperField(this, 3, value);
@@ -1568,7 +1568,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 3) != null;
         }
         get config_update() {
-            return pb_1.Message.getWrapperField(this, ConfigUpdate, 4) as ConfigUpdate;
+            return pb_1.Message.getWrapperField(this, ConfigUpdate, 4);
         }
         set config_update(value: ConfigUpdate) {
             pb_1.Message.setWrapperField(this, 4, value);
@@ -1891,7 +1891,7 @@ export namespace hubedge {
             }
         }
         get items() {
-            return pb_1.Message.getRepeatedWrapperField(this, ConfigItem, 1) as ConfigItem[];
+            return pb_1.Message.getRepeatedWrapperField(this, ConfigItem, 1);
         }
         set items(value: ConfigItem[]) {
             pb_1.Message.setRepeatedWrapperField(this, 1, value);

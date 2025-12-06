@@ -221,7 +221,7 @@ export class MessageHandlers {
         if (!childrenMap.has(parentId)) {
           childrenMap.set(parentId, []);
         }
-        childrenMap.get(parentId)!.push(channel);
+        childrenMap.get(parentId).push(channel);
       }
     }
 
@@ -243,7 +243,7 @@ export class MessageHandlers {
     visited.add(0);
     
     while (queue.length > 0) {
-      const channel = queue.shift()!;
+      const channel = queue.shift();
       
       // 准备ChannelState消息
       const parentId = this.getChannelParentForProtocol(channel);

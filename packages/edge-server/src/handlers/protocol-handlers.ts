@@ -322,7 +322,7 @@ export class ProtocolHandlers {
           // 如果有channel_id，添加到channels
           if (target.has_channel_id) {
             channels.push({
-              channel_id: target.channel_id!,
+              channel_id: target.channel_id,
               include_subchannels: !!target.children,
               include_links: !!target.links,
               group: target.group,

@@ -62,7 +62,7 @@ export class TextMessageHandler implements ITextMessageHandler {
             if (!targetSessionsByEdge.has(sess.edge_id)) {
               targetSessionsByEdge.set(sess.edge_id, []);
             }
-            targetSessionsByEdge.get(sess.edge_id)!.push(targetSession);
+            targetSessionsByEdge.get(sess.edge_id).push(targetSession);
           }
         }
       }
@@ -99,7 +99,7 @@ export class TextMessageHandler implements ITextMessageHandler {
               if (!targetSessionsByEdge.has(sess.edge_id)) {
                 targetSessionsByEdge.set(sess.edge_id, []);
               }
-              targetSessionsByEdge.get(sess.edge_id)!.push(sess.session_id);
+              targetSessionsByEdge.get(sess.edge_id).push(sess.session_id);
             }
           }
         }
@@ -155,7 +155,7 @@ export class TextMessageHandler implements ITextMessageHandler {
                 if (!targetSessionsByEdge.has(sess.edge_id)) {
                   targetSessionsByEdge.set(sess.edge_id, []);
                 }
-                targetSessionsByEdge.get(sess.edge_id)!.push(sess.session_id);
+                targetSessionsByEdge.get(sess.edge_id).push(sess.session_id);
               }
             }
           }

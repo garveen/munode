@@ -1317,7 +1317,7 @@ export class VoiceRouter extends EventEmitter {
 
     // 发送UDP包
     try {
-      this.udpServer.send(encrypted, client.udp_port!, client.udp_ip!, (err) => {
+      this.udpServer.send(encrypted, client.udp_port, client.udp_ip, (err) => {
         if (err) {
           this.logger.error(`Failed to send voice packet via UDP to ${client.username} (${client.session}):`, err);
           // UDP发送失败，标记客户端UDP为不可用

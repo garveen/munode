@@ -209,7 +209,7 @@ export class PermissionHandlers {
           if (aclData.length > 0) {
             aclMap.set(channel_id, []);
             for (const acl of aclData) {
-              aclMap.get(channel_id)!.push({
+              aclMap.get(channel_id).push({
                 user_id: acl.user_id,
                 group: acl.group || '',
                 apply_here: acl.apply_here,
@@ -378,7 +378,7 @@ export class PermissionHandlers {
           
           return this.permissionManager.hasPermission(
             channel,
-            client as ClientInfo,
+            client,
             permission,
             channelTree,
             this.aclMap

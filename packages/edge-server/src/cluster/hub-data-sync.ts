@@ -86,7 +86,7 @@ export class HubDataManager {
             deny: aclData.deny,
           };
 
-          aclMap.get(channelId)!.push(aclEntry);
+          aclMap.get(channelId).push(aclEntry);
           logger.debug(`Loaded ACL for channel ${channelId}: user_id=${aclData.user_id}, group=${aclData.group}`);
         }
 

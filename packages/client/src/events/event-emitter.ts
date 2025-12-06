@@ -28,7 +28,7 @@ export class ClientEventEmitter extends EventEmitter {
     if (!this.eventFilters.has(eventName)) {
       this.eventFilters.set(eventName, []);
     }
-    this.eventFilters.get(eventName)!.push(filter);
+    this.eventFilters.get(eventName).push(filter);
   }
 
   /**

@@ -169,19 +169,12 @@ export class AuthenticationHandler implements IAuthenticationHandler {
     // 上报会话
     sessionManager.reportSession(session);
 
-    // Debug logging
-    console.error(`[CROSS-EDGE-DEBUG] HUB reportSession: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id}, user_id=${params.user_id})`);
-    try {
-      const fs = await import('fs');
-      fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] HUB reportSession: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id}, user_id=${params.user_id})\n`);
-    } catch (e) {}
-
-    logger.info(`[CROSS-EDGE-DEBUG] Session reported: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id}, user_id=${params.user_id})`);
+    logger.info(`Session reported: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id}, user_id=${params.user_id}, channel=${actualChannelId})`);
 
     // Handle ninja channel visibility for the userJoined broadcast
-    console.error(`[CROSS-EDGE-DEBUG] channelNinja=${config.channelNinja}, ninjaChannels=${config.ninjaChannels?.length || 0}, hasPermissionChecker=${!!permissionChecker}`);
     if (config.channelNinja && config.ninjaChannels?.length > 0 && permissionChecker) {
-      console.error(`[CROSS-EDGE-DEBUG] Using ninja channel filtering for ${params.username}`);
+      logger.debug(`Channel Ninja: Filtering userJoined broadcast for ${params.username}`);
+      
       // Filter which existing users should see this new user
       const allSessions = sessionManager.getAllSessions();
       const visibleToSessions = new Map<number, number[]>(); // edge_id -> session_ids
@@ -204,7 +197,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           if (!visibleToSessions.has(otherSession.edge_id)) {
             visibleToSessions.set(otherSession.edge_id, []);
           }
-          visibleToSessions.get(otherSession.edge_id)!.push(otherSession.session_id);
+          visibleToSessions.get(otherSession.edge_id).push(otherSession.session_id);
         }
       }
 
@@ -239,45 +232,22 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         }
       }
 
-      // Notify the new user's edge about which existing users they should know about
-      if (usersNewUserCanSee.length > 0) {
-        this.factory.getControlService().notify(params.edge_server_id, 'hub.visibleUsers', {
-          new_session_id: session.session_id,
-          visible_sessions: usersNewUserCanSee,
-        });
-      }
+      // Note: visibleUsers notification is no longer needed - Edge relies on fullSync
 
       logger.info(`Session ${params.session_id} reported with ninja filtering: visible to ${Array.from(visibleToSessions.values()).flat().length} users, can see ${usersNewUserCanSee.length} users`);
     } else {
-      // 广播新用户加入通知到所有Edge（包括发起者）
-      // Edge通过edge_id判断是否需要过滤（不要处理来自自己Edge的用户）
-      console.error(`[CROSS-EDGE-DEBUG] Broadcasting userJoined (no ninja) to edges: ${params.username}`);
-      process.stderr.write(`[STDERR-DIRECT] About to broadcast userJoined for ${params.username}\n`);
+      // Broadcast new user joined notification to all edges (no ninja filtering)
+      logger.debug(`Broadcasting userJoined (no ninja) to all edges: ${params.username}`);
 
-      logger.info(`[CROSS-EDGE-DEBUG] Broadcasting userJoined to edges: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id})`);
-
-      process.stderr.write(`[DIRECT] Before console.error\n`);
-      console.error(`[PRE-BROADCAST] About to call broadcast for hub.userJoined`);
-      process.stderr.write(`[DIRECT] Calling broadcast now\n`);
-      try {
-        this.factory.getControlService().broadcast('hub.userJoined', {
-          session_id: params.session_id,
-          edge_id: params.edge_server_id,
-          user_id: params.user_id,
-          username: params.username,
-          channel_id: actualChannelId,
-          groups: session.groups || [],
-          cert_hash: session.cert_hash,
-        });
-        process.stderr.write(`[DIRECT] broadcast returned\n`);
-        console.error(`[POST-BROADCAST] broadcast called successfully`);
-        process.stderr.write(`[STDERR-DIRECT] broadcast completed\n`);
-      } catch (e) {
-        process.stderr.write(`[DIRECT] broadcast threw error: ${e}\n`);
-        console.error(`[BROADCAST-ERROR]`, e);
-        process.stderr.write(`[STDERR-DIRECT] broadcast error: ${e}\n`);
-      }
-      process.stderr.write(`[DIRECT] After broadcast try-catch\n`);
+      this.factory.getControlService().broadcast('hub.userJoined', {
+        session_id: params.session_id,
+        edge_id: params.edge_server_id,
+        user_id: params.user_id,
+        username: params.username,
+        channel_id: actualChannelId,
+        groups: session.groups || [],
+        cert_hash: session.cert_hash,
+      });
 
       logger.info(`Session ${params.session_id} reported from Edge ${params.edge_server_id}, broadcasted to all edges`);
     }

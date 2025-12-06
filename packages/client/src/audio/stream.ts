@@ -342,7 +342,7 @@ export class AudioMixer {
       this.inputs.set(session, []);
     }
     
-    const buffers = this.inputs.get(session)!;
+    const buffers = this.inputs.get(session);
     buffers.push(audioData);
     
     // 限制缓冲区大小，避免内存泄漏
@@ -363,7 +363,7 @@ export class AudioMixer {
     const allBuffers: Buffer[] = [];
     for (const buffers of this.inputs.values()) {
       if (buffers.length > 0) {
-        allBuffers.push(buffers.shift()!); // 使用并移除第一个缓冲区
+        allBuffers.push(buffers.shift()); // 使用并移除第一个缓冲区
       }
     }
     

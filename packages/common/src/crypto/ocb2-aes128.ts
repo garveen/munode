@@ -134,7 +134,7 @@ export class OCB2AES128 {
     }
 
     // 复用缓存的 cipher 实例
-    const aesEncrypt = (data: Buffer) => this.encryptCipher!.update(data);
+    const aesEncrypt = (data: Buffer) => this.encryptCipher.update(data);
 
     const cipherText = Buffer.alloc(plainText.length + 4);
     const tag = this.ocbEncrypt(plainText, cipherText.subarray(4), encryptIV, aesEncrypt);
@@ -162,7 +162,7 @@ export class OCB2AES128 {
     const decryptIV = this.decryptIV;
     // 使用预分配的 saveiv buffer
     const saveiv = this.workBuffer.saveiv;
-    decryptIV!.copy(saveiv);
+    decryptIV.copy(saveiv);
     const ivbyte = cipherText[0];
     let restore = false;
     let late = 0;
@@ -233,14 +233,14 @@ export class OCB2AES128 {
       }
 
       if (this.decryptHistory[decryptIV[0]] === decryptIV[1]) {
-        saveiv.copy(this.decryptIV!);
+        saveiv.copy(this.decryptIV);
         return { data: Buffer.alloc(0), valid: false };
       }
     }
 
     // 复用缓存的 cipher 实例
-    const aesEncrypt = (data: Buffer) => this.decryptCipherEnc!.update(data);
-    const aesDecrypt = (data: Buffer) => this.decryptCipherDec!.update(data);
+    const aesEncrypt = (data: Buffer) => this.decryptCipherEnc.update(data);
+    const aesDecrypt = (data: Buffer) => this.decryptCipherDec.update(data);
 
     const plainText = Buffer.alloc(cipherText.length - 4);
     const tag = this.ocbDecrypt(
@@ -252,14 +252,14 @@ export class OCB2AES128 {
     );
 
     if (tag.compare(cipherText, 1, 4, 0, 3) !== 0) {
-      saveiv.copy(this.decryptIV!);
+      saveiv.copy(this.decryptIV);
       return { data: Buffer.alloc(0), valid: false };
     }
 
     this.decryptHistory[decryptIV[0]] = decryptIV[1];
 
     if (restore) {
-      saveiv.copy(this.decryptIV!);
+      saveiv.copy(this.decryptIV);
     }
 
     // 更新统计信息（参照 Go 实现 cryptstate.go 第241-248行）

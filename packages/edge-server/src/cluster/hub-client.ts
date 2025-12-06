@@ -122,7 +122,7 @@ export class EdgeControlClient extends EventEmitter {
     try {
       // 第一阶段：请求挑战码
       logger.info('Requesting challenge from Hub...');
-      const challengeResponse = await this.client.call('edge.register', registerParams) as RPCResult<'edge.register'>;
+      const challengeResponse = await this.client.call('edge.register', registerParams);
       
       // 如果 Hub 返回了 challenge，进行第二阶段认证
       if (!challengeResponse.success && challengeResponse.challenge) {
@@ -145,7 +145,7 @@ export class EdgeControlClient extends EventEmitter {
         };
         
         logger.info('Submitting challenge response...');
-        const finalResponse = await this.client.call('edge.register', authParams) as RPCResult<'edge.register'>;
+        const finalResponse = await this.client.call('edge.register', authParams);
         
         if (!finalResponse.success) {
           throw new Error(finalResponse.error || 'Registration failed after authentication');
@@ -194,7 +194,7 @@ export class EdgeControlClient extends EventEmitter {
         stats,
       };
 
-      const response = await this.client.call('edge.heartbeat', params) as RPCResult<'edge.heartbeat'>;
+      const response = await this.client.call('edge.heartbeat', params);
 
       this.emit('heartbeat', response);
     } catch (error) {
@@ -378,7 +378,7 @@ export class EdgeControlClient extends EventEmitter {
       const params: RPCParams<'edge.allocateSessionId'> = {
         edge_id: this.config.server_id,
       };
-      const response = await this.client.call('edge.allocateSessionId', params) as RPCResult<'edge.allocateSessionId'>;
+      const response = await this.client.call('edge.allocateSessionId', params);
       return response.session_id;
     } catch (error) {
       logger.error('Failed to allocate session ID:', error);
@@ -475,7 +475,7 @@ export class EdgeControlClient extends EventEmitter {
     }
 
     try {
-      return await this.client.call('edge.fullSync', {}) as RPCResult<'edge.fullSync'>;
+      return await this.client.call('edge.fullSync', {});
     } catch (error) {
       logger.error('Failed to request full sync:', error);
       throw error;
@@ -491,7 +491,7 @@ export class EdgeControlClient extends EventEmitter {
     }
 
     try {
-      const response = await this.client.call('edge.getChannels', {}) as RPCResult<'edge.getChannels'>;
+      const response = await this.client.call('edge.getChannels', {});
       return response.channels || [];
     } catch (error) {
       logger.error('Failed to get channels:', error);
@@ -509,7 +509,7 @@ export class EdgeControlClient extends EventEmitter {
 
     try {
       const params: RPCParams<'edge.getACLs'> = { channel_id };
-      const response = await this.client.call('edge.getACLs', params) as RPCResult<'edge.getACLs'>;
+      const response = await this.client.call('edge.getACLs', params);
       return response.acls || [];
     } catch (error) {
       logger.error('Failed to get ACLs:', error);
@@ -527,7 +527,7 @@ export class EdgeControlClient extends EventEmitter {
 
     try {
       const params: RPCParams<'edge.saveChannel'> = { channel };
-      const response = await this.client.call('edge.saveChannel', params) as RPCResult<'edge.saveChannel'>;
+      const response = await this.client.call('edge.saveChannel', params);
       return response.channel_id;
     } catch (error) {
       logger.error('Failed to save channel:', error);
@@ -556,7 +556,7 @@ export class EdgeControlClient extends EventEmitter {
           deny: acl.deny,
         })),
       };
-      const response = await this.client.call('edge.saveACL', params) as RPCResult<'edge.saveACL'>;
+      const response = await this.client.call('edge.saveACL', params);
       return response.aclIds;
     } catch (error) {
       logger.error('Failed to save ACL:', error);
@@ -574,7 +574,7 @@ export class EdgeControlClient extends EventEmitter {
 
     try {
       const params: RPCParams<'edge.adminOperation'> = { operation, data };
-      return await this.client.call('edge.adminOperation', params) as RPCResult<'edge.adminOperation'>;
+      return await this.client.call('edge.adminOperation', params);
     } catch (error) {
       logger.error('Failed to execute admin operation:', error);
       throw error;
@@ -677,28 +677,28 @@ export class EdgeControlClient extends EventEmitter {
    * 获取用户纹理
    */
   async getUserTexture(user_id: number): Promise<RPCResult<'blob.getUserTexture'>> {
-    return await this.client.call('blob.getUserTexture', { user_id }) as RPCResult<'blob.getUserTexture'>;
+    return await this.client.call('blob.getUserTexture', { user_id });
   }
 
   /**
    * 获取用户评论
    */
   async getUserComment(user_id: number): Promise<RPCResult<'blob.getUserComment'>> {
-    return await this.client.call('blob.getUserComment', { user_id }) as RPCResult<'blob.getUserComment'>;
+    return await this.client.call('blob.getUserComment', { user_id });
   }
 
   /**
    * 设置用户纹理
    */
   async setUserTexture(user_id: number, data: Buffer): Promise<RPCResult<'blob.setUserTexture'>> {
-    return await this.client.call('blob.setUserTexture', { user_id, data }) as RPCResult<'blob.setUserTexture'>;
+    return await this.client.call('blob.setUserTexture', { user_id, data });
   }
 
   /**
    * 设置用户评论
    */
   async setUserComment(user_id: number, data: Buffer): Promise<RPCResult<'blob.setUserComment'>> {
-    return await this.client.call('blob.setUserComment', { user_id, data }) as RPCResult<'blob.setUserComment'>;
+    return await this.client.call('blob.setUserComment', { user_id, data });
   }
 
   // ============================================================================

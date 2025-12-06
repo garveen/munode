@@ -179,7 +179,7 @@ export class NotificationHandler implements INotificationHandler {
             if (!targetSessionsByEdge.has(session.edge_id)) {
               targetSessionsByEdge.set(session.edge_id, []);
             }
-            targetSessionsByEdge.get(session.edge_id)!.push(targetSession);
+            targetSessionsByEdge.get(session.edge_id).push(targetSession);
           }
         }
       } else {
@@ -192,7 +192,7 @@ export class NotificationHandler implements INotificationHandler {
             if (!targetSessionsByEdge.has(session.edge_id)) {
               targetSessionsByEdge.set(session.edge_id, []);
             }
-            targetSessionsByEdge.get(session.edge_id)!.push(session.session_id);
+            targetSessionsByEdge.get(session.edge_id).push(session.session_id);
           }
         }
       }
@@ -267,7 +267,7 @@ export class NotificationHandler implements INotificationHandler {
 
       // 如果没有extended权限，检查是否有进入目标用户频道的权限
       if (!extended) {
-        const hasEnter = await permissionChecker!.hasPermission(
+        const hasEnter = await permissionChecker.hasPermission(
           targetSession.channel_id,
           actorUserInfo,
           Permission.Enter
