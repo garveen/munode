@@ -269,6 +269,193 @@ export class VoiceRoutingManager extends EventEmitter {
   }
 
   /**
+   * 验证路由表条目
+   * 
+   * 检查路由条目是否有效：
+   * - 目标 Edge ID 必须存在且不等于本机
+   * - 路由类型必须有效
+   * - 中转模式必须有 nextHop
+   * - nextHop 不能等于 targetEdgeId 或本机
+   * - cost 必须为非负数
+   * - timestamp 必须有效
+   */
+  validateRouteEntry(route: RouteEntry): { valid: boolean; error?: string } {
+    // 检查 targetEdgeId
+    if (!route.targetEdgeId || route.targetEdgeId === this.serverId) {
+      return {
+        valid: false,
+        error: `Invalid targetEdgeId: ${route.targetEdgeId} (must exist and not equal to self ${this.serverId})`
+      };
+    }
+
+    // 检查路由类型
+    if (!route.type || !Object.values(RouteType).includes(route.type)) {
+      return {
+        valid: false,
+        error: `Invalid route type: ${route.type}`
+      };
+    }
+
+    // 中转模式必须有 nextHop
+    if (route.type === RouteType.RELAY) {
+      if (!route.nextHop) {
+        return {
+          valid: false,
+          error: 'Relay route must have nextHop'
+        };
+      }
+
+      // nextHop 不能等于目标或本机
+      if (route.nextHop === route.targetEdgeId) {
+        return {
+          valid: false,
+          error: `nextHop (${route.nextHop}) cannot equal targetEdgeId (${route.targetEdgeId})`
+        };
+      }
+
+      if (route.nextHop === this.serverId) {
+        return {
+          valid: false,
+          error: `nextHop (${route.nextHop}) cannot equal self (${this.serverId})`
+        };
+      }
+    }
+
+    // 检查 cost
+    if (typeof route.cost !== 'number' || route.cost < 0) {
+      return {
+        valid: false,
+        error: `Invalid cost: ${route.cost} (must be non-negative number)`
+      };
+    }
+
+    // 检查 timestamp
+    if (!route.timestamp || typeof route.timestamp !== 'number' || route.timestamp <= 0) {
+      return {
+        valid: false,
+        error: `Invalid timestamp: ${route.timestamp}`
+      };
+    }
+
+    // 检查 source
+    if (route.source !== 'hub' && route.source !== 'local') {
+      return {
+        valid: false,
+        error: `Invalid source: ${route.source} (must be 'hub' or 'local')`
+      };
+    }
+
+    return { valid: true };
+  }
+
+  /**
+   * 验证整个路由表
+   * 
+   * 检查路由表的整体一致性：
+   * - 所有路由条目都有效
+   * - 没有循环路由（A -> B -> A）
+   * - 中转节点在路由表中存在
+   */
+  validateRoutingTable(): { valid: boolean; errors: string[] } {
+    const errors: string[] = [];
+
+    // 验证每个路由条目
+    for (const [targetEdgeId, route] of this.routingTable) {
+      const validation = this.validateRouteEntry(route);
+      if (!validation.valid) {
+        errors.push(`Route to Edge ${targetEdgeId}: ${validation.error}`);
+      }
+
+      // 检查路由表键和条目的 targetEdgeId 是否一致
+      if (targetEdgeId !== route.targetEdgeId) {
+        errors.push(
+          `Route table key (${targetEdgeId}) does not match targetEdgeId (${route.targetEdgeId})`
+        );
+      }
+    }
+
+    // 检查中转节点是否存在于路由表中（可选的完整性检查）
+    for (const [targetEdgeId, route] of this.routingTable) {
+      if (route.type === RouteType.RELAY && route.nextHop) {
+        // 检查 nextHop 是否有路由（如果不是直连）
+        const nextHopRoute = this.routingTable.get(route.nextHop);
+        if (!nextHopRoute) {
+          // 这不一定是错误，nextHop 可能是直连的
+          logger.debug(
+            `Route to Edge ${targetEdgeId} uses nextHop ${route.nextHop} which has no route entry (might be direct)`
+          );
+        }
+      }
+    }
+
+    // 检测简单的循环路由（A -> B, B -> A）
+    for (const [targetEdgeId, route] of this.routingTable) {
+      if (route.type === RouteType.RELAY && route.nextHop) {
+        const nextHopRoute = this.routingTable.get(route.nextHop);
+        if (nextHopRoute && nextHopRoute.type === RouteType.RELAY) {
+          if (nextHopRoute.nextHop === targetEdgeId) {
+            errors.push(
+              `Circular route detected: Edge ${targetEdgeId} -> ${route.nextHop} -> ${targetEdgeId}`
+            );
+          }
+        }
+      }
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors
+    };
+  }
+
+  /**
+   * 获取路由表统计信息
+   */
+  getRoutingTableStats(): {
+    totalRoutes: number;
+    directRoutes: number;
+    relayRoutes: number;
+    fallbackRoutes: number;
+    hubRoutes: number;
+    localRoutes: number;
+  } {
+    let directRoutes = 0;
+    let relayRoutes = 0;
+    let fallbackRoutes = 0;
+    let hubRoutes = 0;
+    let localRoutes = 0;
+
+    for (const route of this.routingTable.values()) {
+      switch (route.type) {
+        case RouteType.DIRECT:
+          directRoutes++;
+          break;
+        case RouteType.RELAY:
+          relayRoutes++;
+          break;
+        case RouteType.FALLBACK:
+          fallbackRoutes++;
+          break;
+      }
+
+      if (route.source === 'hub') {
+        hubRoutes++;
+      } else {
+        localRoutes++;
+      }
+    }
+
+    return {
+      totalRoutes: this.routingTable.size,
+      directRoutes,
+      relayRoutes,
+      fallbackRoutes,
+      hubRoutes,
+      localRoutes,
+    };
+  }
+
+  /**
    * 记录收到的语音包（用于被动探测）
    */
   recordReceivedPacket(

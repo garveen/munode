@@ -509,6 +509,259 @@ export class NetworkTopologyManager extends EventEmitter {
   }
 
   /**
+   * 验证路由表条目
+   * 
+   * 检查路由条目是否有效：
+   * - 目标 Edge ID 必须在拓扑中存在
+   * - 路由类型必须有效
+   * - 中转模式必须有 nextHop 且 nextHop 存在于拓扑中
+   * - nextHop 不能等于 targetEdgeId
+   * - cost 必须为非负数
+   * - timestamp 必须有效
+   */
+  validateRouteEntry(sourceEdgeId: number, route: RouteEntry): { valid: boolean; error?: string } {
+    // 检查源 Edge
+    if (!this.edges.has(sourceEdgeId)) {
+      return {
+        valid: false,
+        error: `Source Edge ${sourceEdgeId} does not exist in topology`
+      };
+    }
+
+    // 检查目标 Edge
+    if (!this.edges.has(route.targetEdgeId)) {
+      return {
+        valid: false,
+        error: `Target Edge ${route.targetEdgeId} does not exist in topology`
+      };
+    }
+
+    // 源和目标不能相同
+    if (sourceEdgeId === route.targetEdgeId) {
+      return {
+        valid: false,
+        error: `Source (${sourceEdgeId}) and target (${route.targetEdgeId}) cannot be the same`
+      };
+    }
+
+    // 检查路由类型
+    if (!route.type || !Object.values(RouteType).includes(route.type)) {
+      return {
+        valid: false,
+        error: `Invalid route type: ${route.type}`
+      };
+    }
+
+    // 中转模式必须有 nextHop
+    if (route.type === RouteType.RELAY) {
+      if (!route.nextHop) {
+        return {
+          valid: false,
+          error: 'Relay route must have nextHop'
+        };
+      }
+
+      // nextHop 必须存在于拓扑中
+      if (!this.edges.has(route.nextHop)) {
+        return {
+          valid: false,
+          error: `nextHop ${route.nextHop} does not exist in topology`
+        };
+      }
+
+      // nextHop 不能等于源或目标
+      if (route.nextHop === route.targetEdgeId) {
+        return {
+          valid: false,
+          error: `nextHop (${route.nextHop}) cannot equal targetEdgeId (${route.targetEdgeId})`
+        };
+      }
+
+      if (route.nextHop === sourceEdgeId) {
+        return {
+          valid: false,
+          error: `nextHop (${route.nextHop}) cannot equal source (${sourceEdgeId})`
+        };
+      }
+    }
+
+    // 检查 cost
+    if (typeof route.cost !== 'number' || route.cost < 0) {
+      return {
+        valid: false,
+        error: `Invalid cost: ${route.cost} (must be non-negative number)`
+      };
+    }
+
+    // 检查 timestamp
+    if (!route.timestamp || typeof route.timestamp !== 'number' || route.timestamp <= 0) {
+      return {
+        valid: false,
+        error: `Invalid timestamp: ${route.timestamp}`
+      };
+    }
+
+    // 检查 source
+    if (route.source !== 'hub' && route.source !== 'local') {
+      return {
+        valid: false,
+        error: `Invalid source: ${route.source} (must be 'hub' or 'local')`
+      };
+    }
+
+    return { valid: true };
+  }
+
+  /**
+   * 验证单个 Edge 的路由表
+   * 
+   * 检查路由表的整体一致性：
+   * - 所有路由条目都有效
+   * - 没有循环路由
+   * - 中转节点可达
+   */
+  validateRouteTableForEdge(edgeId: number): { valid: boolean; errors: string[] } {
+    const errors: string[] = [];
+
+    if (!this.edges.has(edgeId)) {
+      return {
+        valid: false,
+        errors: [`Edge ${edgeId} does not exist in topology`]
+      };
+    }
+
+    const routeTable = this.routingTables.get(edgeId);
+    if (!routeTable) {
+      return {
+        valid: false,
+        errors: [`No route table found for Edge ${edgeId}`]
+      };
+    }
+
+    // 验证每个路由条目
+    for (const [targetEdgeId, route] of routeTable) {
+      const validation = this.validateRouteEntry(edgeId, route);
+      if (!validation.valid) {
+        errors.push(`Route from Edge ${edgeId} to ${targetEdgeId}: ${validation.error}`);
+      }
+
+      // 检查路由表键和条目的 targetEdgeId 是否一致
+      if (targetEdgeId !== route.targetEdgeId) {
+        errors.push(
+          `Route table key (${targetEdgeId}) does not match targetEdgeId (${route.targetEdgeId})`
+        );
+      }
+
+      // 检查中转路由的可达性
+      if (route.type === RouteType.RELAY && route.nextHop) {
+        // 检查从源到 nextHop 的链接是否存在
+        const linkToNextHop = this.getLink(edgeId, route.nextHop);
+        if (!linkToNextHop) {
+          errors.push(
+            `Relay route from Edge ${edgeId} to ${targetEdgeId} via ${route.nextHop}, ` +
+            `but no link exists from ${edgeId} to ${route.nextHop}`
+          );
+        }
+
+        // 检查从 nextHop 到目标的链接是否存在
+        const linkFromNextHop = this.getLink(route.nextHop, targetEdgeId);
+        if (!linkFromNextHop) {
+          errors.push(
+            `Relay route from Edge ${edgeId} to ${targetEdgeId} via ${route.nextHop}, ` +
+            `but no link exists from ${route.nextHop} to ${targetEdgeId}`
+          );
+        }
+      }
+    }
+
+    // 检测简单的循环路由（A -> B via C, B -> A via C）
+    for (const [targetEdgeId, route] of routeTable) {
+      if (route.type === RouteType.RELAY && route.nextHop) {
+        const reverseRouteTable = this.routingTables.get(targetEdgeId);
+        if (reverseRouteTable) {
+          const reverseRoute = reverseRouteTable.get(edgeId);
+          if (reverseRoute && reverseRoute.type === RouteType.RELAY) {
+            if (reverseRoute.nextHop === route.nextHop) {
+              errors.push(
+                `Possible circular route: Edge ${edgeId} -> ${targetEdgeId} via ${route.nextHop}, ` +
+                `Edge ${targetEdgeId} -> ${edgeId} via ${reverseRoute.nextHop}`
+              );
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors
+    };
+  }
+
+  /**
+   * 验证所有 Edge 的路由表
+   */
+  validateAllRouteTables(): { valid: boolean; errors: Map<number, string[]> } {
+    const allErrors = new Map<number, string[]>();
+
+    for (const edgeId of this.edges) {
+      const validation = this.validateRouteTableForEdge(edgeId);
+      if (!validation.valid) {
+        allErrors.set(edgeId, validation.errors);
+      }
+    }
+
+    return {
+      valid: allErrors.size === 0,
+      errors: allErrors
+    };
+  }
+
+  /**
+   * 获取路由表统计信息（针对特定 Edge）
+   */
+  getRouteTableStats(edgeId: number): {
+    totalRoutes: number;
+    directRoutes: number;
+    relayRoutes: number;
+    fallbackRoutes: number;
+    avgCost: number;
+  } | null {
+    const routeTable = this.routingTables.get(edgeId);
+    if (!routeTable) {
+      return null;
+    }
+
+    let directRoutes = 0;
+    let relayRoutes = 0;
+    let fallbackRoutes = 0;
+    let totalCost = 0;
+
+    for (const route of routeTable.values()) {
+      switch (route.type) {
+        case RouteType.DIRECT:
+          directRoutes++;
+          break;
+        case RouteType.RELAY:
+          relayRoutes++;
+          break;
+        case RouteType.FALLBACK:
+          fallbackRoutes++;
+          break;
+      }
+      totalCost += route.cost;
+    }
+
+    return {
+      totalRoutes: routeTable.size,
+      directRoutes,
+      relayRoutes,
+      fallbackRoutes,
+      avgCost: routeTable.size > 0 ? totalCost / routeTable.size : 0,
+    };
+  }
+
+  /**
    * 处理 Edge 上报的网络质量
    */
   handleQualityReport(
