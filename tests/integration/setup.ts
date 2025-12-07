@@ -324,6 +324,17 @@ class TestAuthServer {
       'max_hop_sender': { password: 'pass1', user_id: 421 },
       'max_hop_intermediate': { password: 'pass2', user_id: 422 },
       'max_hop_receiver': { password: 'pass3', user_id: 423 },
+      'poor_direct_sender': { password: 'pass1', user_id: 424 },
+      'poor_direct_relay': { password: 'pass2', user_id: 425 },
+      'poor_direct_receiver': { password: 'pass3', user_id: 426 },
+      'balance_sender': { password: 'pass1', user_id: 427 },
+      'balance_relay1': { password: 'pass2', user_id: 428 },
+      'balance_relay2': { password: 'pass3', user_id: 429 },
+      'balance_receiver': { password: 'pass4', user_id: 430 },
+      'failover_sender': { password: 'pass1', user_id: 431 },
+      'failover_relay1': { password: 'pass2', user_id: 432 },
+      'failover_relay2': { password: 'pass3', user_id: 433 },
+      'failover_receiver': { password: 'pass4', user_id: 434 },
     };
 
     const user = users[req.username];
