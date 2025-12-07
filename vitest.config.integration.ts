@@ -13,6 +13,7 @@ export default defineConfig({
     include: ['tests/integration/suites/**/*.test.ts'],
     testTimeout: 30000, // 集成测试需要更长的超时时间
     hookTimeout: 60000, // setup/teardown 需要更长的时间
+    teardownTimeout: 10000, // 强制 teardown 超时
     pool: 'forks', // 使用 forks 以确保测试隔离
     poolOptions: {
       forks: {
