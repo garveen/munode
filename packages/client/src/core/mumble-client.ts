@@ -141,6 +141,7 @@ export class MumbleClient extends EventEmitter {
    * 发送原始 UserState 消息
    * 用于移动到频道、静音/禁音等的低级API
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async sendUserState(userState: any): Promise<void> {
     const userStateMessage = mumbleproto.UserState.fromObject(userState);
     const serialized = userStateMessage.serialize();
@@ -158,7 +159,7 @@ export class MumbleClient extends EventEmitter {
       }, 5000); // 5秒超时
 
       // 监听频道状态变化
-      const onChannelState = (message: any) => {
+      const onChannelState = (message: mumbleproto.ChannelState) => {
         // 检查是否是我们刚创建的频道 (通过名称匹配)
         // 使用 has_xxx 检查 protobuf optional 字段是否真的设置了值
         // 新创建的频道channel_id必须大于0（Root频道ID为0，不是新创建的）
@@ -196,6 +197,7 @@ export class MumbleClient extends EventEmitter {
    * 发送原始 ChannelState 消息
    * 用于创建或修改频道的低级API
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async sendChannelState(channelState: any): Promise<void> {
     const channelStateMessage = mumbleproto.ChannelState.fromObject(channelState);
     const serialized = channelStateMessage.serialize();
@@ -357,7 +359,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 设置语音目标
    */
-  async setVoiceTarget(id: number, targets: any[]): Promise<void> {
+  async setVoiceTarget(id: number, targets: mumbleproto.VoiceTarget.Target[]): Promise<void> {
     const voiceTargetMessage = mumbleproto.VoiceTarget.fromObject({
       id: id,
       targets: targets
@@ -431,7 +433,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 添加 Webhook 订阅
    */
-  addWebhook(id: string, config: any): void {
+  addWebhook(id: string, config: import('../types/api-types.js').WebhookConfig): void {
     this.webhookManager.addWebhook(id, config);
   }
 
@@ -487,6 +489,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 保存 ACL
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async saveACL(channelId: number, acls: any[], groups?: Map<string, any>) {
     return this.aclManager.saveACL(channelId, acls, groups);
   }
@@ -494,6 +497,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 添加 ACL 条目
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async addACLEntry(channelId: number, entry: any) {
     return this.aclManager.addACLEntry(channelId, entry);
   }
@@ -508,6 +512,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 更新 ACL 条目
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async updateACLEntry(channelId: number, entryIndex: number, updates: any) {
     return this.aclManager.updateACLEntry(channelId, entryIndex, updates);
   }
@@ -604,7 +609,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 更新封禁列表
    */
-  async updateBanList(bans: any[]): Promise<void> {
+  async updateBanList(bans: mumbleproto.BanList.BanEntry[]): Promise<void> {
     const banListMessage = mumbleproto.BanList.fromObject({
       query: false,
       bans: bans
@@ -828,6 +833,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 检查是否为对象
    */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private isObject(item: any): item is Record<string, any> {
     return item && typeof item === 'object' && !Array.isArray(item);
   }
