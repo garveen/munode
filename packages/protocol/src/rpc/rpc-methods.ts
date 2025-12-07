@@ -275,7 +275,7 @@ export interface HubToEdgeMethods {
  * 从方法名获取参数类型
  */
 export type RPCParams<
-  Methods extends Record<string, { method: string; params: any }>,
+  Methods extends Record<string, { method: string; params: unknown }>,
   M extends keyof Methods
 > = Methods[M] extends { params: infer P } ? P : never;
 
@@ -283,7 +283,7 @@ export type RPCParams<
  * 从方法名获取返回值类型
  */
 export type RPCResult<
-  Methods extends Record<string, { method: string; result: any }>,
+  Methods extends Record<string, { method: string; result: unknown }>,
   M extends keyof Methods
 > = Methods[M] extends { result: infer R } ? R : never;
 
