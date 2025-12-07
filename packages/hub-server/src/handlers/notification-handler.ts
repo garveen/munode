@@ -205,7 +205,7 @@ export class NotificationHandler implements INotificationHandler {
       // 按Edge广播（每个Edge只发送其本地用户的session列表）
       for (const [target_edge_id] of targetSessionsByEdge.entries()) {
         this.factory.getControlService().notify(target_edge_id, 'hub.pluginDataBroadcast', {
-          sender_session: params.sender_session,
+          sender_session: actor_session,
           dataID: actualDataID || '',
           data: actualData || Buffer.alloc(0),
         });

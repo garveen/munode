@@ -109,12 +109,10 @@ export class MessageHandlers {
         actor_user_id: actor.user_id,
         actor_username: actor.username,
         actor_channel_id: actor.channel_id,
-        pluginData: {
-          senderSession: session_id,
-          dataID: pluginData.dataID || '',
-          data: pluginData.data || Buffer.alloc(0),
-          receiverSessions: pluginData.receiverSessions || [],
-        },
+        sender_session: session_id,
+        dataID: pluginData.dataID || '',
+        data: pluginData.data || Buffer.alloc(0),
+        receiver_sessions: pluginData.receiverSessions || [],
       });
 
       logger.debug(`Forwarded PluginDataTransmission from session ${session_id} to Hub`);

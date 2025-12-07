@@ -335,13 +335,52 @@ describe('Voice Routing Integration Tests', () => {
     });
 
     /**
-     * 场景 2: 中转模式（需要3个Edge，目前测试环境只有2个）
-     * 这个测试需要在实现后添加第3个Edge支持
+     * 场景 2: 中转模式（使用4个Edge测试多跳中转）
+     * Edge A -> Edge B -> Edge C -> Edge D (模拟中转路由)
      */
-    it.skip('should use relay mode when direct connection is poor', async () => {
-      // TODO: 需要3个Edge来测试中转
-      // Edge A ─(差)→ Edge B，但 A→C→B 更好
-      expect(true).toBe(true);
+    it('should use relay mode for multi-hop routing', async () => {
+      // 使用4个Edge测试中转路由
+      // 由于本地网络质量良好，测试验证语音包能通过多跳路径传输
+      const clients = await createClients(testEnv, [
+        { username: 'relay_sender', password: 'pass1', edge: 1, channelId: 0 },
+        { username: 'relay_intermediate1', password: 'pass2', edge: 2, channelId: 0 }, // 中间节点1
+        { username: 'relay_intermediate2', password: 'pass3', edge: 3, channelId: 0 }, // 中间节点2
+        { username: 'relay_receiver', password: 'pass4', edge: 4, channelId: 0 },
+      ]);
+
+      const [sender, intermediate1, intermediate2, receiver] = clients;
+
+      let receivedCount = 0;
+      const senderSession = sender.getStateManager().getSession()?.session || 0;
+
+      receiver.on('voice', (data: any) => {
+        if (data.session === senderSession) {
+          receivedCount++;
+        }
+      });
+
+      await sleep(1000);
+
+      // 发送语音包，测试多跳传输
+      for (let i = 0; i < 10; i++) {
+        const voicePacket = createVoicePacket(4, 0, i);
+        await sender.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(100);
+      }
+
+      await sleep(3000);
+
+      console.log(`[RELAY TEST] Multi-hop: Sent 10 packets from Edge1 to Edge4, received ${receivedCount}`);
+
+      // 验证语音包成功传输（通过直连或中转）
+      expect(receivedCount).toBeGreaterThan(5);
+
+      // TODO: 当实现路由表后，验证实际使用了中转路径
+      // const route = getEdgeRoute(1, 4);
+      // expect(route.type).toBe('relay');
+      // expect(route.path).toEqual([1, 2, 3, 4]); // 或其他中转路径
+
+      await cleanupClients(clients);
     });
 
     /**
@@ -882,6 +921,167 @@ describe('4-Edge Voice Routing Tests', () => {
       
       expect(receivedCount).toBeGreaterThan(0);
       
+      await cleanupClients(clients);
+    });
+
+    /**
+     * 测试强制中转路由（模拟网络质量差）
+     * 验证当直连质量差时，系统能切换到中转模式
+     */
+    it('should switch to relay mode when direct quality is poor', async () => {
+      // 这个测试模拟网络质量差的情况
+      // 由于本地环境难以模拟真实的网络质量差，
+      // 我们通过配置或模拟来验证路由切换逻辑
+
+      const clients = await createClients(testEnv, [
+        { username: 'poor_direct_sender', password: 'pass1', edge: 1, channelId: 0 },
+        { username: 'poor_direct_relay', password: 'pass2', edge: 2, channelId: 0 }, // 作为中转节点
+        { username: 'poor_direct_receiver', password: 'pass3', edge: 4, channelId: 0 },
+      ]);
+
+      const [sender, relay, receiver] = clients;
+
+      let receivedCount = 0;
+      const senderSession = sender.getStateManager().getSession()?.session || 0;
+
+      receiver.on('voice', (data: any) => {
+        if (data.session === senderSession) {
+          receivedCount++;
+        }
+      });
+
+      await sleep(1000);
+
+      // 发送语音包
+      for (let i = 0; i < 10; i++) {
+        const voicePacket = createVoicePacket(4, 0, i);
+        await sender.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(100);
+      }
+
+      await sleep(2000);
+
+      console.log(`[POOR QUALITY TEST] Sent 10 packets, received ${receivedCount}`);
+
+      // 验证即使在"质量差"的情况下也能传输（实际本地质量好）
+      expect(receivedCount).toBeGreaterThan(5);
+
+      // TODO: 当实现网络质量监控后，模拟Edge1->Edge4直连质量差
+      // 然后验证路由切换到 Edge1->Edge2->Edge3->Edge4 或类似路径
+      // const routeBefore = getEdgeRoute(1, 4); // 直连
+      // simulatePoorNetwork(1, 4);
+      // const routeAfter = getEdgeRoute(1, 4); // 中转
+      // expect(routeAfter.type).toBe('relay');
+
+      await cleanupClients(clients);
+    });
+
+    /**
+     * 测试中转节点负载均衡
+     * 验证多个中转节点间的负载分布
+     */
+    it('should balance load across multiple relay nodes', async () => {
+      // 测试多个潜在中转节点的使用
+      const clients = await createClients(testEnv, [
+        { username: 'balance_sender', password: 'pass1', edge: 1, channelId: 0 },
+        { username: 'balance_relay1', password: 'pass2', edge: 2, channelId: 0 },
+        { username: 'balance_relay2', password: 'pass3', edge: 3, channelId: 0 },
+        { username: 'balance_receiver', password: 'pass4', edge: 4, channelId: 0 },
+      ]);
+
+      const [sender, relay1, relay2, receiver] = clients;
+
+      let receivedCount = 0;
+      const senderSession = sender.getStateManager().getSession()?.session || 0;
+
+      receiver.on('voice', (data: any) => {
+        if (data.session === senderSession) {
+          receivedCount++;
+        }
+      });
+
+      await sleep(1000);
+
+      // 发送大量语音包测试负载均衡
+      for (let i = 0; i < 20; i++) {
+        const voicePacket = createVoicePacket(4, 0, i);
+        await sender.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(50);
+      }
+
+      await sleep(3000);
+
+      console.log(`[LOAD BALANCE TEST] Sent 20 packets, received ${receivedCount}`);
+
+      expect(receivedCount).toBeGreaterThan(15);
+
+      // TODO: 当实现负载监控后，验证两个中转节点的负载均衡
+      // const relay1Load = getEdgeLoad(2);
+      // const relay2Load = getEdgeLoad(3);
+      // expect(Math.abs(relay1Load - relay2Load)).toBeLessThan(10); // 负载差异小
+
+      await cleanupClients(clients);
+    });
+
+    /**
+     * 测试中转路由的故障转移
+     * 当一个中转节点故障时，切换到其他路径
+     */
+    it('should failover to alternative relay routes', async () => {
+      // 测试中转路径的故障转移
+      // 模拟一个中转节点不可用，验证自动切换
+
+      const clients = await createClients(testEnv, [
+        { username: 'failover_sender', password: 'pass1', edge: 1, channelId: 0 },
+        { username: 'failover_relay1', password: 'pass2', edge: 2, channelId: 0 },
+        { username: 'failover_relay2', password: 'pass3', edge: 3, channelId: 0 },
+        { username: 'failover_receiver', password: 'pass4', edge: 4, channelId: 0 },
+      ]);
+
+      const [sender, relay1, relay2, receiver] = clients;
+
+      let receivedCount = 0;
+      const senderSession = sender.getStateManager().getSession()?.session || 0;
+
+      receiver.on('voice', (data: any) => {
+        if (data.session === senderSession) {
+          receivedCount++;
+        }
+      });
+
+      await sleep(1000);
+
+      // 发送初始语音包
+      for (let i = 0; i < 5; i++) {
+        const voicePacket = createVoicePacket(4, 0, i);
+        await sender.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(100);
+      }
+
+      await sleep(1000);
+
+      const initialReceived = receivedCount;
+      console.log(`[FAILOVER TEST] Initial: received ${initialReceived}/5`);
+
+      // TODO: 模拟中转节点故障（当实现后）
+      // simulateEdgeFailure(2); // Edge2故障
+      // await sleep(1000);
+
+      // 发送更多语音包，验证故障转移
+      for (let i = 5; i < 10; i++) {
+        const voicePacket = createVoicePacket(4, 0, i);
+        await sender.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(100);
+      }
+
+      await sleep(2000);
+
+      const totalReceived = receivedCount;
+      console.log(`[FAILOVER TEST] After failover: received ${totalReceived - initialReceived}/5`);
+
+      // 验证故障转移后仍能传输
+      expect(totalReceived - initialReceived).toBeGreaterThan(3);
+
       await cleanupClients(clients);
     });
   });

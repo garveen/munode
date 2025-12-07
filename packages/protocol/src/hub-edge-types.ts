@@ -67,6 +67,10 @@ export interface RegisterRequest {
   capacity: number;
   certificate: string;
   metadata?: Record<string, unknown>;
+  
+  // HMAC 挑战-响应认证字段
+  challenge?: string; // Edge 在第二阶段返回的挑战码
+  challenge_response?: string; // Edge 计算的 HMAC 响应
 }
 
 export interface RegisterResponse extends RPCResponse {
