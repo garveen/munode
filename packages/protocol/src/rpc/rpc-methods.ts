@@ -253,7 +253,7 @@ export interface EdgeToHubMethods {
   'edge.queryChannelTree': EdgeQueryChannelTreeMethod;
   'edge.queryOnlineUsers': EdgeQueryOnlineUsersMethod;
   // 添加索引签名以满足泛型约束
-  [key: string]: { method: string; params: any; result: any };
+  [key: string]: { method: string; params: unknown; result: unknown };
 }
 
 /**
@@ -264,7 +264,7 @@ export interface HubToEdgeMethods {
   'hub.reloadConfig': HubReloadConfigMethod;
   'hub.requestStats': HubRequestStatsMethod;
   // 添加索引签名以满足泛型约束
-  [key: string]: { method: string; params: any; result: any };
+  [key: string]: { method: string; params: unknown; result: unknown };
 }
 
 // ============================================================================

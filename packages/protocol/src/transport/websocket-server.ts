@@ -13,10 +13,10 @@ import { hubedge } from '../generated/proto/HubEdge';
 import { PacketCodec } from './packet-codec';
 
 export type Logger = {
-  info(message: string, ...args: any[]): void;
-  warn(message: string, ...args: any[]): void;
-  error(message: string, ...args: any[]): void;
-  debug?(message: string, ...args: any[]): void;
+  info(message: string, ...args: unknown[]): void;
+  warn(message: string, ...args: unknown[]): void;
+  error(message: string, ...args: unknown[]): void;
+  debug?(message: string, ...args: unknown[]): void;
 };
 
 export interface WebSocketServerConfig {
@@ -102,7 +102,7 @@ export class EdgeClient extends EventEmitter {
    * 获取远程地址
    */
   getRemoteAddress(): string {
-    const socket: any = (this.ws as any)._socket;
+    const socket = (this.ws as { _socket?: { remoteAddress?: string } })._socket;
     return socket?.remoteAddress || 'unknown';
   }
 }
@@ -119,7 +119,7 @@ export class EdgeHubWebSocketServer extends EventEmitter {
     this.config = {
       port: 9000,
       path: '/hub',
-      logger: console as any,
+      logger: console as Logger,
       ...config,
     } as Required<WebSocketServerConfig>;
     this.logger = this.config.logger;

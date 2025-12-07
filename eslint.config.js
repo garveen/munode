@@ -39,7 +39,7 @@ export default [
       'no-redeclare': 'off', // TypeScript handles this
       // Keep important rules enabled
       '@typescript-eslint/explicit-module-boundary-types': 'off',
-      '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unused-vars': ['error', { 
         argsIgnorePattern: '^_', 
         varsIgnorePattern: '^_',

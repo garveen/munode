@@ -63,7 +63,7 @@ export class PermissionManager {
     Permission.Whisper |
     Permission.TextMessage;
 
-  constructor(_logger?: any) {
+  constructor(_logger?: unknown) {
     // logger parameter kept for interface compatibility
   }
 
