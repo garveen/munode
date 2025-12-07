@@ -10,6 +10,7 @@
 
 import { EventEmitter } from 'events';
 import type { ClientEvent, EventFilter } from '../types/client-types.js';
+import { mumbleproto } from '@munode/protocol';
 
 /**
  * 扩展的事件发射器，支持类型化事件
@@ -138,25 +139,25 @@ export interface ClientEventMap {
   // 认证事件
   authenticated: (session: number) => void;
   authenticationFailed: (reason: string) => void;
-  serverSync: (data: any) => void;
+  serverSync: (data: mumbleproto.ServerSync) => void;
 
   // 用户事件
-  userJoined: (user: any) => void;
-  userLeft: (user: any) => void;
-  userMoved: (user: any, fromChannel: number, toChannel: number) => void;
-  userStateChanged: (user: any, changes: any) => void;
+  userJoined: (user: mumbleproto.UserState) => void;
+  userLeft: (user: mumbleproto.UserRemove) => void;
+  userMoved: (user: mumbleproto.UserState, fromChannel: number, toChannel: number) => void;
+  userStateChanged: (user: mumbleproto.UserState, changes: Partial<mumbleproto.UserState>) => void;
   userTalking: (session: number) => void;
   userStoppedTalking: (session: number) => void;
 
   // 频道事件
-  channelCreated: (channel: any) => void;
-  channelRemoved: (channel: any) => void;
-  channelUpdated: (channel: any, changes: any) => void;
-  channelMoved: (channel: any, newParent: number) => void;
+  channelCreated: (channel: mumbleproto.ChannelState) => void;
+  channelRemoved: (channel: mumbleproto.ChannelRemove) => void;
+  channelUpdated: (channel: mumbleproto.ChannelState, changes: Partial<mumbleproto.ChannelState>) => void;
+  channelMoved: (channel: mumbleproto.ChannelState, newParent: number) => void;
 
   // 消息事件
-  message: (message: any) => void;
-  textMessage: (message: any) => void;
+  message: (message: mumbleproto.TextMessage) => void;
+  textMessage: (message: mumbleproto.TextMessage) => void;
 
   // 音频事件
   audioReceived: (session: number, audioData: Buffer) => void;
@@ -168,11 +169,11 @@ export interface ClientEventMap {
   permissionQuery: (channelId: number, permissions: number) => void;
 
   // 服务器事件
-  serverConfig: (config: any) => void;
+  serverConfig: (config: mumbleproto.ServerConfig) => void;
   ping: (timestamp: number) => void;
   pong: (timestamp: number) => void;
 
   // 其他事件
-  contextAction: (action: string, data: any) => void;
-  pluginData: (data: any) => void;
+  contextAction: (action: string, data: mumbleproto.ContextAction) => void;
+  pluginData: (data: mumbleproto.PluginDataTransmission) => void;
 }
