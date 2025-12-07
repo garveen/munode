@@ -319,6 +319,11 @@ class TestAuthServer {
       'route_push_user': { password: 'pass1', user_id: 416 },
       'relay_sender': { password: 'pass1', user_id: 417 },
       'relay_receiver': { password: 'pass2', user_id: 418 },
+      'relay_intermediate1': { password: 'pass2', user_id: 419 },
+      'relay_intermediate2': { password: 'pass3', user_id: 420 },
+      'max_hop_sender': { password: 'pass1', user_id: 421 },
+      'max_hop_intermediate': { password: 'pass2', user_id: 422 },
+      'max_hop_receiver': { password: 'pass3', user_id: 423 },
     };
 
     const user = users[req.username];
