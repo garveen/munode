@@ -4,12 +4,13 @@
 
 import type { BusinessHandler } from '../../types/api-types.js';
 import type { ApiContext } from '../../types/api-types.js';
-import type { MumbleClient } from '../../core/mumble-client.js';
+import type { ACLEntry } from '@munode/protocol';
 
 /**
  * 查询 ACL 处理器
  */
 export class QueryACLHandler implements BusinessHandler {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async execute(params: { channelId: number }, context: ApiContext): Promise<any> {
     const { channelId } = params;
     const client = context.client;
@@ -26,7 +27,8 @@ export class QueryACLHandler implements BusinessHandler {
  * 保存 ACL 处理器
  */
 export class SaveACLHandler implements BusinessHandler {
-  async execute(params: { channelId: number; acls: any[]; groups?: any }, context: ApiContext): Promise<any> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async execute(params: { channelId: number; acls: ACLEntry[]; groups?: Map<string, any> }, context: ApiContext): Promise<any> {
     const { channelId, acls, groups } = params;
     const client = context.client;
 
@@ -74,7 +76,8 @@ export class GetUserPermissionsHandler implements BusinessHandler {
  * 添加 ACL 条目处理器
  */
 export class AddACLEntryHandler implements BusinessHandler {
-  async execute(params: { channelId: number; entry: any }, context: ApiContext): Promise<any> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async execute(params: { channelId: number; entry: ACLEntry }, context: ApiContext): Promise<any> {
     const { channelId, entry } = params;
     const client = context.client;
 
@@ -106,7 +109,8 @@ export class RemoveACLEntryHandler implements BusinessHandler {
  * 更新 ACL 条目处理器
  */
 export class UpdateACLEntryHandler implements BusinessHandler {
-  async execute(params: { channelId: number; entryIndex: number; updates: any }, context: ApiContext): Promise<any> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async execute(params: { channelId: number; entryIndex: number; updates: Partial<ACLEntry> }, context: ApiContext): Promise<any> {
     const { channelId, entryIndex, updates } = params;
     const client = context.client;
 

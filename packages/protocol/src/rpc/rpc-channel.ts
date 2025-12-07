@@ -537,8 +537,8 @@ export class RPCChannel extends EventEmitter {
   /**
    * Convert TypedRPCNotification to simple format with method and params
    */
-  private convertNotificationToSimple(typedNotification: hubedgeRpc.TypedRPCNotification): { method: string; params?: any } {
-    const result: { method: string; params?: any } = {
+  private convertNotificationToSimple(typedNotification: hubedgeRpc.TypedRPCNotification): { method: string; params?: unknown } {
+    const result: { method: string; params?: unknown } = {
       method: typedNotification.method,
     };
 

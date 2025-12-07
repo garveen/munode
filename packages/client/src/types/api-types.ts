@@ -12,6 +12,7 @@ export interface ApiRequest {
   action: string;
   
   /** 请求参数 */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   params: any;
   
   /** 请求 ID (可选) */
@@ -26,7 +27,7 @@ export interface ApiResponse {
   success: boolean;
   
   /** 响应数据 */
-  data?: any;
+  data?: unknown;
   
   /** 错误信息 */
   error?: {
@@ -112,7 +113,7 @@ export interface WebSocketMessage {
   event?: string;
   
   /** 消息数据 */
-  data?: any;
+  data?: unknown;
   
   /** 是否成功 (response 类型) */
   success?: boolean;
@@ -161,13 +162,13 @@ export interface WebhookPayload {
   timestamp: number;
   
   /** 事件数据 */
-  data: any;
+  data: unknown;
 }
 
 /**
  * 业务处理器接口
  */
-export interface BusinessHandler {
+export interface BusinessHandler<TParams = Record<string, unknown>, TResult = unknown> {
   /** 执行业务逻辑 */
-  execute(params: any, context: ApiContext): Promise<any>;
+  execute(params: TParams, context: ApiContext): Promise<TResult>;
 }

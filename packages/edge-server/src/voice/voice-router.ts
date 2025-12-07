@@ -477,7 +477,7 @@ export class VoiceRouter extends EventEmitter {
     }
 
     // 发送给目标频道中的所有客户端
-    let sentCount = 0;
+    let _sentCount = 0;
     for (const sessionId of targetSessions) {
       // 跳过发送者自己（远程session可能与本地session冲突，这里也检查一下）
       if (sessionId === packet.sender_session) {
@@ -501,7 +501,7 @@ export class VoiceRouter extends EventEmitter {
 
       this.logger.debug(`[VOICE-DEBUG] Sending remote voice to ${targetClient.username} (session ${targetClient.session}, channel ${targetClient.channel_id})`);
       this.sendVoicePacketToClient(targetClient, broadcastPacket);
-      sentCount++;
+      _sentCount++;
     }
     
   }
@@ -589,7 +589,7 @@ export class VoiceRouter extends EventEmitter {
     }
 
     // 发送语音包给所有目标用户
-    let sentCount = 0;
+    let _sentCount = 0;
     for (const sessionId of targetSessions) {
       // 跳过发送者自己
       if (sessionId === packet.sender_session) {
@@ -613,7 +613,7 @@ export class VoiceRouter extends EventEmitter {
 
       this.logger.debug(`[VOICE-DEBUG] Sending voice to ${targetClient.username} (session ${sessionId}, channel ${targetClient.channel_id})`);
       this.sendVoicePacketToClient(targetClient, broadcastPacket);
-      sentCount++;
+      _sentCount++;
     }
     
     // 触发事件供VoiceManager进行跨Edge广播
@@ -649,7 +649,6 @@ export class VoiceRouter extends EventEmitter {
         targetChannels.add(linkedId);
       }
       this.logger.debug(`Calculated target channels for ${channelId}: [${Array.from(targetChannels).join(', ')}], linked=${linkedChannels.size}`);
-    } else {
     }
 
     return targetChannels;
@@ -1047,7 +1046,7 @@ export class VoiceRouter extends EventEmitter {
    * 
    * 注意：当前未使用，但保留以备将来需要（如解析sequence number）
    */
-  // @ts-ignore - 保留以备将来使用
+  // @ts-expect-error - 保留以备将来使用
   private decodeVarint(data: Buffer, offset: number): { value: number; offset: number } | null {
     if (offset >= data.length) {
       return null;

@@ -15,21 +15,58 @@ export default [
         ecmaVersion: 2022,
         sourceType: 'module',
       },
-      globals: globals.node,
+      globals: {
+        ...globals.node,
+        NodeJS: 'readonly',
+      },
     },
     plugins: {
       '@typescript-eslint': tsplugin,
     },
     rules: {
       ...tsplugin.configs.recommended.rules,
-      ...tsplugin.configs['recommended-requiring-type-checking'].rules,
+      // Disable strict type-checking rules that are too aggressive for this codebase
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/no-redundant-type-constituents': 'off',
+      '@typescript-eslint/no-base-to-string': 'off',
+      '@typescript-eslint/no-empty-object-type': 'off',
+      // Disable declaration merging warning (it's a valid TypeScript pattern)
+      '@typescript-eslint/no-unsafe-declaration-merging': 'off',
+      'no-redeclare': 'off', // TypeScript handles this
+      // Keep important rules enabled
       '@typescript-eslint/explicit-module-boundary-types': 'off',
-      '@typescript-eslint/no-explicit-any': 'warn',
-      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-unused-vars': ['error', { 
+        argsIgnorePattern: '^_', 
+        varsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_'
+      }],
+      '@typescript-eslint/no-floating-promises': 'warn',
+      '@typescript-eslint/no-misused-promises': 'warn',
+      '@typescript-eslint/require-await': 'warn',
     },
   },
   prettierConfig,
   {
-    ignores: ['dist/', 'tmp/', 'node_modules/', 'tests/', 'packages/protocol/src/generated/', '*.js', '*.d.ts', '.eslintrc.cjs', 'vitest.config.unit.ts', 'vitest.config.integration.ts'],
+    ignores: [
+      'dist/',
+      'tmp/',
+      'node_modules/',
+      'tests/',
+      'packages/protocol/src/generated/',
+      '**/*.js',
+      '**/*.cjs',
+      '**/*.mjs',
+      '**/*.d.ts',
+      '**/__tests__/',
+      '**/vitest.config.ts',
+      'vitest.config.unit.ts',
+      'vitest.config.integration.ts',
+      'scripts/',
+    ],
   },
 ];

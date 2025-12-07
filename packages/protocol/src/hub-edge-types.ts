@@ -213,7 +213,7 @@ export interface MissingUpdatesRequest {
 }
 
 export interface MissingUpdatesResponse extends RPCResponse {
-  updates: any[]; // TODO: Define specific update types
+  updates: unknown[]; // TODO: Define specific update types
 }
 
 // Checksum response

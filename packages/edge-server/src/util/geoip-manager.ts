@@ -117,7 +117,7 @@ export class GeoIPManager extends EventEmitter {
     try {
       const response = (this.reader as any).city(ip);
       return response.city?.names?.en || 'Unknown';
-    } catch (error) {
+    } catch (_error) {
       return 'Unknown';
     }
   }

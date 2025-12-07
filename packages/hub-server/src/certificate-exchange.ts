@@ -117,6 +117,7 @@ export class CertificateExchangeService {
    */
   private parseCertificate(pem: string): any {
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const forge = require('node-forge');
       return forge.pki.certificateFromPem(pem);
     } catch (error) {
@@ -130,6 +131,7 @@ export class CertificateExchangeService {
    */
   private getFingerprint(cert: any): string {
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const forge = require('node-forge');
       const der = forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
       const md = forge.md.sha256.create();

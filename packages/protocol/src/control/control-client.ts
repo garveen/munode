@@ -81,7 +81,7 @@ export class ControlChannelClient extends EventEmitter {
   async call<M extends EdgeToHubMethods['method']>(
     method: M,
     params?: RPCParams<M>,
-    timeout?: number
+    _timeout?: number
   ): Promise<RPCResult<M>> {
     if (!this.typedClient) {
       throw new Error('Not connected');

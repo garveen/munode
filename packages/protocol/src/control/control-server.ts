@@ -1,6 +1,7 @@
 import WebSocket, { WebSocketServer } from 'ws';
-import { RPCChannel, Message } from '../rpc/rpc-channel.js';
+import { RPCChannel, Message, NotificationParams } from '../rpc/rpc-channel.js';
 import { EventEmitter } from 'events';
+import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
 
 export interface ControlChannelConfig {
   port: number;
@@ -8,8 +9,8 @@ export interface ControlChannelConfig {
 }
 
 export class ControlChannelServer extends EventEmitter {
-  private wss: any;
-  private channels = new Map<any, RPCChannel>();
+  private wss: WebSocketServer;
+  private channels = new Map<WebSocket, RPCChannel>();
 
   constructor(config: ControlChannelConfig) {
     super();
@@ -29,7 +30,7 @@ export class ControlChannelServer extends EventEmitter {
     this.channels.set(ws, channel);
 
     // 监听请求
-    channel.on('request', (message: Message, respond: (result?: any, error?: any) => void) => {
+    channel.on('request', (message: Message, respond: (result?: unknown, error?: unknown) => void) => {
       this.handleRequest(channel, message, respond);
     });
 
@@ -47,7 +48,7 @@ export class ControlChannelServer extends EventEmitter {
     this.emit('connect', channel);
   }
 
-  private handleRequest(channel: RPCChannel, message: Message, respond: (result?: any, error?: any) => void): void {
+  private handleRequest(channel: RPCChannel, message: Message, respond: (result?: unknown, error?: unknown) => void): void {
     // 转发请求到上层处理
     this.emit('request', channel, message, respond);
   }
@@ -61,7 +62,7 @@ export class ControlChannelServer extends EventEmitter {
    * 广播通知给所有连接的客户端
    * 使用 Promise.allSettled 确保单个 Edge 失败不影响其他 Edge
    */
-  async broadcast(method: string, params?: any): Promise<void> {
+  async broadcast(method: string, params?: hubedgeRpc.TypedRPCNotification | NotificationParams): Promise<void> {
     console.error(`[BROADCAST-DEBUG] Broadcasting method=${method} to ${this.channels.size} channels`);
     const promises = Array.from(this.channels.values()).map(channel => 
       Promise.resolve().then(() => {

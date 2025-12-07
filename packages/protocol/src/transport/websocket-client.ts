@@ -10,10 +10,10 @@ import { hubedge } from '../generated/proto/HubEdge';
 import { PacketCodec } from './packet-codec';
 
 export type Logger = {
-  info(message: string, ...args: any[]): void;
-  warn(message: string, ...args: any[]): void;
-  error(message: string, ...args: any[]): void;
-  debug?(message: string, ...args: any[]): void;
+  info(message: string, ...args: unknown[]): void;
+  warn(message: string, ...args: unknown[]): void;
+  error(message: string, ...args: unknown[]): void;
+  debug?(message: string, ...args: unknown[]): void;
 };
 
 export interface WebSocketClientConfig {
@@ -62,7 +62,7 @@ export class EdgeHubWebSocketClient extends EventEmitter {
       reconnectInterval: 5000,
       reconnectMaxAttempts: 10,
       heartbeatInterval: 30000,
-      logger: console as any,
+      logger: console as Logger,
       ...config,
     };
     this.logger = this.config.logger;
