@@ -26,7 +26,15 @@ export class ChannelHandler implements IChannelHandler {
 
     if (params.channel.id !== undefined) {
       // 更新现有频道 - 只更新提供的字段
-      const updates: any = {};
+      const updates: Partial<{
+        name?: string;
+        description?: string;
+        description_blob?: string;
+        position?: number;
+        max_users?: number;
+        parent_id?: number;
+        inherit_acl?: boolean;
+      }> = {};
 
       if (params.channel.name !== undefined) {
         updates.name = params.channel.name;

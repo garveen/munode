@@ -13,6 +13,7 @@ import {
   DEFAULT_HUB_RELAY_CONFIG,
   hubedgeRpc,
   EdgeToHubMethods,
+  ChannelNotificationParams,
 } from '@munode/protocol';
 import type { HubConfig } from './types.js';
 import type { ServiceRegistry } from './registry.js';
@@ -398,7 +399,7 @@ export class HubControlService {
   }
 
   
-  broadcast(method: string, params?: any): void {
+  broadcast(method: string, params?: ChannelNotificationParams): void {
     logger.debug(`Broadcasting ${method} to all edges`);
     // Fire and forget - 不等待广播完成
     void this.server.broadcast(method, params);
@@ -408,7 +409,7 @@ export class HubControlService {
   /**
    * 广播通知给除指定Edge外的所有连接的Edge
    */
-  broadcastExcept(excludeEdgeId: number, method: string, params?: any): void {
+  broadcastExcept(excludeEdgeId: number, method: string, params?: ChannelNotificationParams): void {
     logger.debug(`Broadcasting ${method} to all edges except ${excludeEdgeId}`);
     for (const [edgeId, channel] of this.edgeChannels.entries()) {
       if (edgeId === excludeEdgeId) {
@@ -422,7 +423,7 @@ export class HubControlService {
     }
   }
 
-  notify(edgeId: number, method: string, params?: any): void {
+  notify(edgeId: number, method: string, params?: ChannelNotificationParams): void {
     const channel = this.edgeChannels.get(edgeId);
     if (channel) {
       try {

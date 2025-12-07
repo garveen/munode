@@ -6,6 +6,7 @@ import { HubDataManager } from '../cluster/hub-data-sync.js';
 import { BanHandler } from './ban-handler.js';
 import { MessageManager } from './message-manager.js';
 import { mumbleproto, MessageType, ClientState } from '@munode/protocol';
+import type { EdgeConfig, ClientInfo, ChannelInfo } from '../types.js';
 
 /**
  * 事件设置管理器
@@ -18,11 +19,11 @@ export class EventSetupManager {
   private hubDataManager?: HubDataManager;
   private banHandler?: BanHandler;
   private messageManager?: MessageManager;
-  private config: any;
+  private config: EdgeConfig;
 
   constructor(
     handlerFactory: HandlerFactory,
-    config: any,
+    config: EdgeConfig,
     hubClient?: EdgeControlClient,
     voiceManager?: VoiceManager,
     hubDataManager?: HubDataManager,
@@ -153,7 +154,7 @@ export class EventSetupManager {
     // UserStats 事件
     this.handlerFactory.messageHandler.on('userStats', (session_id: number, data: Buffer) => {
       // 创建一个权限检查函数包装器
-      const hasPermission = (client: any, channel: any, perm: number): boolean => {
+      const hasPermission = (client: ClientInfo, channel: ChannelInfo, perm: number): boolean => {
         if (!this.handlerFactory.permissionHandlers) return false;
         // PermissionHandlers.checkPermission 是异步的，但 handleUserStats 需要同步
         // 这里我们使用同步方式，直接调用 PermissionManager
@@ -171,10 +172,13 @@ export class EventSetupManager {
     });
 
     // userStatsForward 转发事件 - 转发到 Hub 处理
-    this.handlerFactory.messageHandler.on('userStatsForward', (params: any) => {
+    this.handlerFactory.messageHandler.on('userStatsForward', (params: {
+      session_id: number;
+      stats_data: Buffer;
+    }) => {
       if (this.hubClient) {
         this.hubClient.notify('hub.handleUserStats', params);
-        logger.debug(`Forwarded UserStats request to Hub: actor=${params.actor_session}, target=${params.target_session}`);
+        logger.debug(`Forwarded UserStats request to Hub: session=${params.session_id}`);
       } else {
         logger.error('Cannot forward UserStats: Hub client not available');
       }
@@ -221,7 +225,7 @@ export class EventSetupManager {
     // ContextActions 组件事件
     this.handlerFactory.contextActions.on(
       'sendContextActionModify',
-      (session_id: number, message: any) => {
+      (session_id: number, message: mumbleproto.ContextActionModify) => {
         if (this.handlerFactory.adminHandlers) {
           this.handlerFactory.adminHandlers.sendContextActionModify(session_id, message);
         }
@@ -328,7 +332,7 @@ export class EventSetupManager {
       this.handlerFactory.voiceRouter.rebuildChannelCache(channel_id2);
     });
     
-    this.handlerFactory.channelManager.on('channelUpdated', (channel: any) => {
+    this.handlerFactory.channelManager.on('channelUpdated', (channel: ChannelInfo) => {
       // 频道更新可能包括链接变化，重建该频道的PTT缓存
       if (channel && channel.id !== undefined) {
         logger.debug(`Channel ${channel.id} updated, rebuilding cache`);
@@ -426,7 +430,20 @@ export class EventSetupManager {
       });
 
       // 监听来自 Hub 的 VoiceTarget 同步
-      this.hubClient.on('syncVoiceTarget', (params: any) => {
+      this.hubClient.on('syncVoiceTarget', (params: {
+        edge_id: number;
+        client_session: number;
+        target_id: number;
+        config: {
+          sessions?: Array<{ session: number }>;
+          channels?: Array<{
+            channel_id: number;
+            include_subchannels?: boolean;
+            include_links?: boolean;
+            group?: string;
+          }>;
+        } | null;
+      }) => {
         logger.info(
           `Received VoiceTarget sync from Hub: Edge ${params.edge_id}, Session ${params.client_session}, Target ${params.target_id}`
         );
@@ -437,17 +454,23 @@ export class EventSetupManager {
           logger.info(`Removing VoiceTarget: session=${params.client_session}, target=${params.target_id}`);
           this.handlerFactory.voiceRouter.removeVoiceTarget(params.client_session, params.target_id);
         } else if (params.config) {
-          // 将Hub-Edge格式转换回Mumble protocol格式
+          // 将Hub-Edge格式转换回 Mumble protocol格式
           // Hub-Edge格式: { sessions: VoiceTargetSession[], channels: ChannelTarget[] }
           // Mumble格式: targets数组，每个target有session/channel_id/links/children/group
-          const targets: any[] = [];
+          interface VoiceTargetItem {
+            session?: number[];
+            channel_id?: number;
+            links?: boolean;
+            children?: boolean;
+            group?: string;
+          }
+          const targets: VoiceTargetItem[] = [];
           
-          // 转换sessions - 从VoiceTargetSession对象数组提取session ID
+          // 转换sessions - 从 VoiceTargetSession对象数组提取session ID
           if (params.config.sessions && params.config.sessions.length > 0) {
-            const sessionIds = params.config.sessions.map((s: any) => s.session);
+            const sessionIds = params.config.sessions.map((s: { session: number }) => s.session);
             targets.push({
               session: sessionIds,
-              has_channel_id: false,
             });
           }
           
@@ -455,8 +478,6 @@ export class EventSetupManager {
           if (params.config.channels && params.config.channels.length > 0) {
             for (const channel of params.config.channels) {
               targets.push({
-                session: [],
-                has_channel_id: true,
                 channel_id: channel.channel_id,
                 children: channel.include_subchannels || false,
                 links: channel.include_links || false,

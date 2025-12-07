@@ -75,7 +75,7 @@ export interface SyncUpdate {
   type: string | number;
   sequence: number;
   timestamp: number;
-  data: any; // 已经通过 msgpack 解析的数据
+  data: Record<string, unknown>; // 已经通过 msgpack 解析的数据
 }
 
 // 完整快照类型

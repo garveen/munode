@@ -2,7 +2,7 @@
  * JoinChannelHandler - 加入频道处理器
  */
 
-import type { BusinessHandler } from '../../api/dispatcher.js';
+import type { BusinessHandler } from '../../types/api-types.js';
 import type { ApiContext } from '../context.js';
 
 export interface JoinChannelParams {

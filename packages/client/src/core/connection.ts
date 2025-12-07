@@ -63,7 +63,7 @@ export class ConnectionManager {
     this.setState(ConnectionState.Connecting);
 
     return new Promise((resolve, reject) => {
-      const tlsOptions: any = {
+      const tlsOptions: tls.ConnectionOptions = {
         host: options.host,
         port: options.port || 64738,
         rejectUnauthorized: options.rejectUnauthorized !== false,
@@ -824,7 +824,7 @@ export class ConnectionManager {
   /**
    * 处理加密设置消息
    */
-  private async handleCryptSetup(message: any): Promise<void> {
+  private async handleCryptSetup(message: mumbleproto.CryptSetup): Promise<void> {
     // 从CryptSetup消息中提取加密参数
     // 注意：protobuf optional字段需要使用 has_xxx 方法检查是否设置
     if (message.has_key && message.has_client_nonce && message.has_server_nonce) {

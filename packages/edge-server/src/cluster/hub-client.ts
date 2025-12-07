@@ -6,6 +6,7 @@ import type {
   RPCParams,
   RPCResult,
   EdgeToHubMethods,
+  VoiceTarget,
 } from '@munode/protocol';
 import type {
   ServerStats,
@@ -424,7 +425,7 @@ export class EdgeControlClient extends EventEmitter {
   async syncVoiceTarget(config: {
     client_session: number;
     target_id: number;
-    config: any; // VoiceTarget | null
+    config: VoiceTarget | null;
     timestamp: number;
   }): Promise<void> {
     if (!this.isConnected() || (!this.useExternalClient && !this.registered)) {

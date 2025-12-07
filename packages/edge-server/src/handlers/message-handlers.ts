@@ -249,7 +249,19 @@ export class MessageHandlers {
       const parentId = this.getChannelParentForProtocol(channel);
       
       // 构造ChannelState对象 - 注意：根频道不应该设置parent字段
-      const channelStateData: any = {
+      const channelStateData: {
+        channel_id: number;
+        parent?: number;
+        name: string;
+        description: string;
+        position: number;
+        temporary: boolean;
+        max_users: number;
+        links: number[];
+        links_add: number[];
+        links_remove: number[];
+        description_hash?: Uint8Array;
+      } = {
         channel_id: channel.id,
         name: channel.name,
         description: channel.description || '',
@@ -351,7 +363,23 @@ export class MessageHandlers {
         for (const session of allSessions) {
           // 发送所有其他已认证用户的状态（不包括自己）
           if (session.user_id > 0 && session.session_id !== session_id) {
-            const userStateData: any = {
+            const userStateData: {
+              session: number;
+              user_id: number;
+              name: string;
+              channel_id: number;
+              temporary_access_tokens: string[];
+              listening_channel_add: number[];
+              listening_channel_remove: number[];
+              hash?: string;
+              mute?: boolean;
+              deaf?: boolean;
+              suppress?: boolean;
+              self_mute?: boolean;
+              self_deaf?: boolean;
+              priority_speaker?: boolean;
+              recording?: boolean;
+            } = {
               session: session.session_id,
               user_id: session.user_id,
               name: session.username,
@@ -417,16 +445,17 @@ export class MessageHandlers {
         
         // 🔒 证书哈希只发送给已注册用户
         if (client.cert_hash && receiverIsRegistered) {
-          (userState as any).hash = client.cert_hash;
+          userState.hash = client.cert_hash;
         }
         
         // 添加其他字段
-        for (const field of ['mute', 'deaf', 'suppress', 'self_mute', 'self_deaf', 'priority_speaker', 'recording'] as const) {
-          const value = client[field];
-          if (value) {
-            (userState as any)[field] = value;
-          }
-        }
+        if (client.mute) userState.mute = client.mute;
+        if (client.deaf) userState.deaf = client.deaf;
+        if (client.suppress) userState.suppress = client.suppress;
+        if (client.self_mute) userState.self_mute = client.self_mute;
+        if (client.self_deaf) userState.self_deaf = client.self_deaf;
+        if (client.priority_speaker) userState.priority_speaker = client.priority_speaker;
+        if (client.recording) userState.recording = client.recording;
 
         this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(userState.serialize())); 
       }
@@ -447,7 +476,14 @@ export class MessageHandlers {
   ): void {
     try {
       // 构建 mumbleproto.PermissionDenied 消息
-      const permissionDenied: any = {
+      const permissionDenied: Partial<{
+        reason: string;
+        session: number;
+        type: number;
+        permission?: number;
+        channel_id?: number;
+        name?: string;
+      }> = {
         reason: reason,
         session: session_id,
         type: type,
@@ -479,7 +515,7 @@ export class MessageHandlers {
         permissionDenied.type = mumbleproto.PermissionDenied.DenyType.Permission;
 
         // 尝试将权限字符串转换为权限位
-        const permissionMap: { [key: string]: any } = {
+        const permissionMap: { [key: string]: number } = {
           write: 0x00001,
           traverse: 0x00002,
           enter: 0x00004,

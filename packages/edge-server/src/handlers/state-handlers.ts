@@ -97,7 +97,29 @@ export class StateHandlers {
 
       // 只转发实际设置的字段，避免发送默认值
       // 参考Edge废弃实现：只检查has_xxx来确定字段是否真正存在
-      const userStateToSend: any = {
+      const userStateToSend: {
+        session: number;
+        actor: number;
+        channel_id?: number;
+        self_mute?: boolean;
+        self_deaf?: boolean;
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
+        name?: string;
+        user_id?: number;
+        comment?: string;
+        hash?: string;
+        texture?: Uint8Array;
+        plugin_context?: Uint8Array;
+        plugin_identity?: string;
+        comment_hash?: Uint8Array;
+        texture_hash?: Uint8Array;
+        listening_channel_add?: number[];
+        listening_channel_remove?: number[];
+      } = {
         session: userState.session,
         actor: userState.actor,
       };

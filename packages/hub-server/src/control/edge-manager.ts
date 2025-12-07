@@ -237,7 +237,13 @@ export class EdgeManager {
     totalMessagesReceived: number;
     totalBytesSent: number;
     totalBytesReceived: number;
-    cacheStats: any;
+    cacheStats: {
+      totalEdges: number;
+      totalMessages: number;
+      messagesPerEdge: Record<number, number>;
+      oldestMessage?: number;
+      newestMessage?: number;
+    };
   } {
     let totalMessagesSent = 0;
     let totalMessagesReceived = 0;

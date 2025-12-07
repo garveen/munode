@@ -12,7 +12,7 @@
 
 import { logger } from '@munode/common';
 import { mumbleproto, MessageType, Permission, ClientState } from '@munode/protocol';
-import type { ClientInfo } from '../types.js';
+import type { ClientInfo, ChannelInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
 export class ProtocolHandlers {
@@ -233,7 +233,7 @@ export class ProtocolHandlers {
   /**
    * 处理 UserStats 消息
    */
-  handleUserStats(session_id: number, data: Buffer, _hasPermission: (client: ClientInfo, channel: any, perm: Permission) => boolean): void {
+  handleUserStats(session_id: number, data: Buffer, _hasPermission: (client: ClientInfo, channel: ChannelInfo, perm: Permission) => boolean): void {
     try {
       const statsRequest = mumbleproto.UserStats.deserialize(data);
 

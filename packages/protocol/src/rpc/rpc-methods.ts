@@ -317,7 +317,7 @@ export class RPCError extends Error {
   constructor(
     public code: RPCErrorCode,
     message: string,
-    public details?: any
+    public details?: Record<string, unknown>
   ) {
     super(message);
     this.name = 'RPCError';
@@ -331,7 +331,7 @@ export class RPCError extends Error {
     };
   }
 
-  static fromJSON(json: { code: number; message: string; details?: any }): RPCError {
+  static fromJSON(json: { code: number; message: string; details?: Record<string, unknown> }): RPCError {
     return new RPCError(json.code, json.message, json.details);
   }
 }

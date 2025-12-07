@@ -5,18 +5,101 @@
 import type { MumbleClient } from '../core/mumble-client.js';
 
 /**
+ * API 请求参数类型
+ */
+export interface ConnectParams {
+  host: string;
+  username: string;
+  port?: number;
+  password?: string;
+  tokens?: string[];
+}
+
+export interface JoinChannelParams {
+  channelId: number;
+}
+
+export interface SendMessageParams {
+  message: string;
+  target: string | number;
+}
+
+export interface AddListeningChannelParams {
+  id: number;
+}
+
+export interface QueryACLParams {
+  channelId: number;
+}
+
+export interface SaveACLParams {
+  channelId: number;
+  acl: object; // 更精确的类型待定义
+}
+
+export interface CheckPermissionParams {
+  channelId: number;
+  permission: number;
+  userSession?: number;
+}
+
+export interface GetUserPermissionsParams {
+  channelId: number;
+  userSession?: number;
+}
+
+export interface AddACLEntryParams {
+  channelId: number;
+  entry: object; // 更精确的类型待定义
+}
+
+export interface RemoveACLEntryParams {
+  channelId: number;
+  index: number;
+}
+
+export interface UpdateACLEntryParams {
+  channelId: number;
+  index: number;
+  updates: object; // 更精确的类型待定义
+}
+
+export interface CreateChannelGroupParams {
+  channelId: number;
+  groupName: string;
+}
+
+export interface DeleteChannelGroupParams {
+  channelId: number;
+  groupName: string;
+}
+
+/**
  * API 请求
  */
-export interface ApiRequest {
+export interface ApiRequest<TParams = object> {
   /** 操作名称 */
   action: string;
   
   /** 请求参数 */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  params: any;
+  params: TParams;
   
   /** 请求 ID (可选) */
   id?: string;
+}
+
+/**
+ * 空参数类型（保留用于向后兼容）
+ */
+export interface EmptyParams {
+  [key: string]: never;
+}
+
+/**
+ * API 响应数据类型
+ */
+export interface ResponseData {
+  [key: string]: string | number | boolean | object | null | undefined;
 }
 
 /**
@@ -27,7 +110,7 @@ export interface ApiResponse {
   success: boolean;
   
   /** 响应数据 */
-  data?: unknown;
+  data?: ResponseData;
   
   /** 错误信息 */
   error?: {
@@ -37,6 +120,13 @@ export interface ApiResponse {
   
   /** 请求 ID */
   id?: string;
+}
+
+/**
+ * API 元数据类型
+ */
+export interface ApiMetadata {
+  [key: string]: string | number | boolean;
 }
 
 /**
@@ -59,7 +149,7 @@ export interface ApiContext {
   requestId?: string;
   
   /** 元数据 */
-  metadata?: Record<string, any>;
+  metadata?: ApiMetadata;
 }
 
 /**
@@ -97,6 +187,13 @@ export interface WebSocketOptions {
 }
 
 /**
+ * WebSocket 消息数据
+ */
+export interface WebSocketMessageData {
+  [key: string]: string | number | boolean | object | null | undefined;
+}
+
+/**
  * WebSocket 消息
  */
 export interface WebSocketMessage {
@@ -113,7 +210,7 @@ export interface WebSocketMessage {
   event?: string;
   
   /** 消息数据 */
-  data?: unknown;
+  data?: WebSocketMessageData;
   
   /** 是否成功 (response 类型) */
   success?: boolean;
@@ -126,29 +223,17 @@ export interface WebSocketMessage {
 }
 
 /**
- * Webhook 配置
+ * Webhook HTTP 请求头
  */
-export interface WebhookConfig {
-  /** Webhook URL */
-  url: string;
-  
-  /** 订阅的事件列表 */
-  events: string[];
-  
-  /** HTTP 方法 */
-  method?: 'POST' | 'PUT';
-  
-  /** 自定义请求头 */
-  headers?: Record<string, string>;
-  
-  /** 重试次数 */
-  retry?: number;
-  
-  /** 是否批量发送 */
-  batch?: boolean;
-  
-  /** 批量发送间隔 (ms) */
-  batchInterval?: number;
+export interface WebhookHeaders {
+  [key: string]: string;
+}
+
+/**
+ * Webhook 事件数据
+ */
+export interface WebhookEventData {
+  [key: string]: string | number | boolean | object | null;
 }
 
 /**
@@ -162,13 +247,13 @@ export interface WebhookPayload {
   timestamp: number;
   
   /** 事件数据 */
-  data: unknown;
+  data: WebhookEventData;
 }
 
 /**
  * 业务处理器接口
  */
-export interface BusinessHandler<TParams = Record<string, unknown>, TResult = unknown> {
+export interface BusinessHandler<TParams = object, TResult = object | void> {
   /** 执行业务逻辑 */
   execute(params: TParams, context: ApiContext): Promise<TResult>;
 }

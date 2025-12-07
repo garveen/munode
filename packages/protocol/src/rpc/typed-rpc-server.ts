@@ -6,15 +6,18 @@
  * The RPC channel now uses TypedRPCRequest/TypedRPCResponse protobuf messages.
  */
 
-import type { RPCChannel } from './rpc-channel.js';
+import type { RPCChannel, NotificationParams as UnionNotificationParams } from './rpc-channel.js';
 import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
 import type {
   EdgeToHubMethods,
   RPCParams,
   RPCResult,
   HubToEdgeNotifications,
-  NotificationParams,
+  HubNotificationParams,
 } from './rpc-types.js';
+
+// Use generic version for type-safe notifications
+type NotificationParams<M extends HubToEdgeNotifications['method']> = HubNotificationParams<M>;
 
 // Import protobuf types for typed conversions
 type TypedRPCRequest = hubedgeRpc.TypedRPCRequest;

@@ -118,7 +118,7 @@ export class ACLHandler implements IACLHandler {
             : await this.factory.getDatabase().getChannel(currentChannelId);
           if (!ch) break;
 
-          channelsInChain.unshift({ id: ch.id, inherit_acl: ch.inherit_acl, parent_id: ch.parent_id });
+          channelsInChain.unshift({ id: ch.id, inherit_acl: Boolean(ch.inherit_acl), parent_id: ch.parent_id });
 
           // 如果是当前频道或者继承ACL，且有父频道，继续向上
           if ((ch.id === channel_id || ch.inherit_acl) && ch.parent_id > 0) {
@@ -142,9 +142,17 @@ export class ACLHandler implements IACLHandler {
           for (const aclEntry of channelACLs) {
             // 如果是当前频道，或者 ACL 应用于子频道，则包含此 ACL
             if (iterChannel.id === channel_id || aclEntry.apply_subs) {
-              const chanACL: any = {
-                apply_here: aclEntry.apply_here,
-                apply_subs: aclEntry.apply_subs,
+              const chanACL: {
+                apply_here?: boolean;
+                apply_subs?: boolean;
+                inherited?: boolean;
+                user_id?: number;
+                group?: string;
+                grant?: number;
+                deny?: number;
+              } = {
+                apply_here: Boolean(aclEntry.apply_here),
+                apply_subs: Boolean(aclEntry.apply_subs),
                 inherited: iterChannel.id !== channel_id,
                 group: aclEntry.group || undefined,
                 grant: aclEntry.allow,
@@ -167,11 +175,19 @@ export class ACLHandler implements IACLHandler {
           const channelGroups = await this.factory.getChannelGroupManager().getChannelGroups(channel_id, true);
 
           for (const channelGroup of channelGroups) {
-            const chanGroup: any = {
+            const chanGroup: {
+              name: string;
+              inherited?: boolean;
+              inherit?: boolean;
+              inheritable?: boolean;
+              add: number[];
+              remove: number[];
+              inherited_members: number[];
+            } = {
               name: channelGroup.name,
               inherited: channelGroup.channel_id !== channel_id,
-              inherit: channelGroup.inherit,
-              inheritable: channelGroup.inheritable,
+              inherit: Boolean(channelGroup.inherit),
+              inheritable: Boolean(channelGroup.inheritable),
               add: channelGroup.add_members,
               remove: channelGroup.remove_members,
               inherited_members: channelGroup.inherited_members,
@@ -185,7 +201,7 @@ export class ACLHandler implements IACLHandler {
         // 构建 ACL 响应 - 确保groups字段总是存在
         const aclResponse = new mumbleproto.ACL({
           channel_id,
-          inherit_acls: channel.inherit_acl,
+          inherit_acls: Boolean(channel.inherit_acl),
           acls: allACLs.length > 0 ? allACLs : [],
           groups: allGroups.length > 0 ? allGroups : [],
           query: false,

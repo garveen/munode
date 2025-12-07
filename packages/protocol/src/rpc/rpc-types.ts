@@ -1165,7 +1165,7 @@ export type HubNotificationParams<M extends HubToEdgeNotifications['method']> =
 export type EdgeNotificationParams<M extends EdgeToHubNotifications['method']> =
   EdgeToHubNotificationMethodMap[M]['params'];
 
-// Deprecated: 保持向后兼容
+// Note: The non-generic NotificationParams union type is defined in rpc-channel.ts
+// for backward compatibility and convenience when method name is not statically known
+// These generic versions should be used when the method name is known at compile time
 export type NotificationMethodMap = HubToEdgeNotificationMethodMap;
-export type NotificationParams<M extends HubToEdgeNotifications['method']> =
-  HubNotificationParams<M>;

@@ -98,6 +98,9 @@ export interface SyncVoiceTargetParams {
   timestamp: number;
 }
 
+// Union type for all notification parameters (for backward compatibility)
+// This is a convenience type that combines all specific notification parameter types
+// Includes a catch-all for custom notification params
 export type NotificationParams =
   | VoiceDataParams
   | ForceDisconnectParams
@@ -109,7 +112,8 @@ export type NotificationParams =
   | ChannelCreatedParams
   | ChannelRemovedParams
   | ChannelUpdatedParams
-  | SyncVoiceTargetParams;
+  | SyncVoiceTargetParams
+  | Record<string, unknown>; // Catch-all for custom notifications
 
 // Internal type for notification data construction
 interface NotificationDataType {

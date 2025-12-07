@@ -206,7 +206,14 @@ export class UDPMonitor extends EventEmitter {
   /**
    * 获取全局统计
    */
-  getGlobalStats(): any {
+  getGlobalStats(): {
+    totalSessions: number;
+    unstableSessions: number;
+    averagePing: number;
+    totalPackets: number;
+    totalVolume: number;
+    stabilityRate: number;
+  } {
     const allStats = this.getAllStats();
     const unstableCount = this.unstableSessions.size;
 

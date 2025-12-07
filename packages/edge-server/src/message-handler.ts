@@ -10,7 +10,9 @@ import { MessageType } from '@munode/protocol';
  */
 export class MessageHandler extends EventEmitter {
   private logger: Logger;
-  private clientManager: any; // ClientManager 引用，用于获取客户端状态
+  private clientManager: {
+    getClient: (session: number) => { state: ClientState } | undefined;
+  } | null = null;
 
   constructor(_config: EdgeConfig, logger: Logger) {
     super();
@@ -20,7 +22,9 @@ export class MessageHandler extends EventEmitter {
   /**
    * 设置 ClientManager 引用（在 HandlerFactory 中调用）
    */
-  setClientManager(clientManager: any): void {
+  setClientManager(clientManager: {
+    getClient: (session: number) => { state: ClientState } | undefined;
+  }): void {
     this.clientManager = clientManager;
   }
 

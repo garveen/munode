@@ -5,7 +5,7 @@ import { GlobalSessionManager } from './session-manager.js';
 import { VoiceTargetSyncService } from './voice-target-sync.js';
 import { HubControlService } from './control-service.js';
 import { HubDatabase } from './database.js';
-import { VoiceUDPTransport } from '@munode/protocol';
+import { VoiceUDPTransport, VoicePacketHeader } from '@munode/protocol';
 import { validateHubConfig } from './config-validator.js';
 import { applyConfigDefaults } from './config-defaults.js';
 import { WebApiService } from './web-api-service.js';
@@ -281,22 +281,36 @@ export class HubServer {
    * 处理接收到的语音包
    * 根据 target_id 转发到对应的 Edge
    */
-  private handleVoicePacket(packet: any): void {
+  private handleVoicePacket(packet: {
+    source_session: number;
+    target_type: number;
+    target_id: number;
+    data: Uint8Array;
+  }): void {
     if (!this.voiceTransport) {
       return;
     }
 
     try {
+      // 转换为 VoicePacketHeader 格式
+      const header: VoicePacketHeader = {
+        version: 1,
+        senderId: packet.source_session,
+        targetId: packet.target_id,
+        sequence: 0, // TODO: 从 packet 中获取序列号
+        codec: 0, // TODO: 从 packet 中获取编解码器
+      };
+      
       // packet 包含 senderId, target_id 等信息
       // 在 Hub 中转模式下，根据 target_id 转发到目标 Edge
       const targetEdgeId = packet.target_id;
       
       if (targetEdgeId) {
         // 单播到特定 Edge
-        this.voiceTransport.sendToEdge(targetEdgeId, packet, packet.data);
+        this.voiceTransport.sendToEdge(targetEdgeId, header, Buffer.from(packet.data));
       } else {
         // 广播到所有 Edge（除了发送者）
-        this.voiceTransport.broadcast(packet, packet.data, packet.sender_id);
+        this.voiceTransport.broadcast(header, Buffer.from(packet.data), packet.source_session);
       }
     } catch (error) {
       logger.error('Error handling voice packet:', error);

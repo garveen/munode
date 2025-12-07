@@ -335,7 +335,7 @@ export class ContextActions extends EventEmitter {
   /**
    * 获取动作统计
    */
-  getActionStats(): any {
+  getActionStats(): { totalClients: number } {
     return {
       totalClients: this.clients.size,
       // 可以添加更多统计信息

@@ -3,6 +3,10 @@ import { promises as fs, constants } from 'fs';
 import * as path from 'path';
 import { createLogger } from './logger/logger.js';
 
+interface NodeJSError extends Error {
+  code?: string;
+}
+
 const logger = createLogger({ service: 'blob-store' });
 
 /**
@@ -85,8 +89,9 @@ export class BlobStore {
     
     try {
       await fs.mkdir(blobdir, { recursive: true, mode: 0o750 });
-    } catch (error: any) {
-      if (error.code !== 'EEXIST') {
+    } catch (error) {
+      const err = error as NodeJSError;
+      if (err.code !== 'EEXIST') {
         throw error;
       }
     }
@@ -147,8 +152,9 @@ export class BlobStore {
 
       logger.debug(`Blob retrieved: ${key} (${data.length} bytes)`);
       return data;
-    } catch (error: any) {
-      if (error.code === 'ENOENT') {
+    } catch (error) {
+      const err = error as NodeJSError;
+      if (err.code === 'ENOENT') {
         logger.debug(`Blob not found: ${key}`);
         return null;
       }
@@ -203,8 +209,9 @@ export class BlobStore {
       await fs.unlink(blobpath);
       logger.debug(`Blob deleted: ${key}`);
       return true;
-    } catch (error: any) {
-      if (error.code === 'ENOENT') {
+    } catch (error) {
+      const err = error as NodeJSError;
+      if (err.code === 'ENOENT') {
         return false;
       }
       logger.error(`Error deleting blob ${key}:`, error);

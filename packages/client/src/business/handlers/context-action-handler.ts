@@ -4,7 +4,7 @@
  * 处理上下文操作的注册和执行
  */
 
-import type { BusinessHandler } from '../../api/dispatcher.js';
+import type { BusinessHandler } from '../../types/api-types.js';
 import type { ApiContext } from '../context.js';
 
 export class RegisterContextActionHandler implements BusinessHandler {

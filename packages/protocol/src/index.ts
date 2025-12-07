@@ -142,7 +142,9 @@ export { RPCChannel } from './rpc/rpc-channel.js';
 export type { 
   Message, 
   PendingRequest,
+  // Union type for all notification parameters - use when method name is dynamic
   NotificationParams as ChannelNotificationParams,
+  // Individual notification parameter types
   VoiceDataParams,
   ForceDisconnectParams,
   PeerJoinedParams,
@@ -172,7 +174,8 @@ export type {
   EdgeToHubNotificationMethodMap,
   RPCParams,
   RPCResult,
-  NotificationParams,
+  // Generic notification params - use when method name is known at compile time
+  // For dynamic method names, use ChannelNotificationParams (union type)
   HubNotificationParams,
   EdgeNotificationParams,
   // Individual method types

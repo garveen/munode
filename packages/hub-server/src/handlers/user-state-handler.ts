@@ -79,7 +79,22 @@ export class UserStateHandler implements IUserStateHandler {
 
       // 创建一个新的UserState对象，只包含实际变更的字段
       // 参考Edge废弃实现：只广播变更的字段，避免客户端显示不必要的消息
-      const broadcastUserState: any = {
+      const broadcastUserState: Partial<{
+        session?: number;
+        actor?: number;
+        name?: string;
+        user_id?: number;
+        channel_id?: number;
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
+        self_mute?: boolean;
+        self_deaf?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
+        listening_channel_add?: number[];
+        listening_channel_remove?: number[];
+      }> = {
         session: targetSession,
         actor: actor_session,
         name: targetGlobalSession.username,
@@ -211,7 +226,7 @@ export class UserStateHandler implements IUserStateHandler {
 
       // 处理SelfDeaf/SelfMute（用户自己控制）
       if (userStateObj.self_deaf !== undefined) {
-        const stateUpdates: any = { self_deaf: userStateObj.self_deaf };
+        const stateUpdates: { self_deaf: boolean; self_mute?: boolean } = { self_deaf: userStateObj.self_deaf };
         broadcastUserState.self_deaf = userStateObj.self_deaf;
 
         if (userStateObj.self_deaf) {
@@ -226,7 +241,7 @@ export class UserStateHandler implements IUserStateHandler {
       }
 
       if (userStateObj.self_mute !== undefined) {
-        const stateUpdates: any = { self_mute: userStateObj.self_mute };
+        const stateUpdates: { self_mute: boolean; self_deaf?: boolean } = { self_mute: userStateObj.self_mute };
         broadcastUserState.self_mute = userStateObj.self_mute;
 
         if (!userStateObj.self_mute) {
@@ -277,7 +292,14 @@ export class UserStateHandler implements IUserStateHandler {
           return;
         }
 
-        const stateUpdates: any = {};
+        const stateUpdates: Partial<{
+          deaf?: boolean;
+          mute?: boolean;
+          suppress?: boolean;
+          self_deaf?: boolean;
+          self_mute?: boolean;
+          priority_speaker?: boolean;
+        }> = {};
 
         if (userStateObj.deaf !== undefined) {
           stateUpdates.deaf = userStateObj.deaf;

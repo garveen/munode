@@ -200,7 +200,15 @@ export class SyncHandler implements ISyncHandler {
    * Helper method to convert database channel to protocol ChannelData with links
    * @private
    */
-  private async mapChannelToProtocol(ch: any, includeRegisterName: boolean = false): Promise<ChannelData> {
+  private async mapChannelToProtocol(ch: {
+    id: number;
+    name: string;
+    position: number;
+    max_users: number;
+    parent_id: number;
+    inherit_acl: number;
+    description_blob?: string;
+  }, includeRegisterName: boolean = false): Promise<ChannelData> {
     const links = await this.loadChannelLinks(ch.id);
 
     return {
@@ -209,7 +217,7 @@ export class SyncHandler implements ISyncHandler {
       parent_id: ch.parent_id >= 0 ? ch.parent_id : undefined, // Skip negative parent_ids (root channel)
       position: ch.position,
       max_users: ch.max_users,
-      inherit_acl: ch.inherit_acl,
+      inherit_acl: ch.inherit_acl === 1, // 转换数字到布尔值
       description: ch.description_blob,
       temporary: false, // 从数据库加载的频道都不是临时频道
       links,

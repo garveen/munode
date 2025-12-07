@@ -45,11 +45,20 @@ export class ChannelManager {
    * 从数据库加载所有频道到缓存
    */
   private async loadChannels(): Promise<void> {
-    const channels = await this.database.getAllChannels();
-    for (const ch of channels) {
-      this.channelCache.set(ch.id, ch);
+    const dbChannels = await this.database.getAllChannels();
+    for (const ch of dbChannels) {
+      const channelData: ChannelData = {
+        id: ch.id,
+        name: ch.name,
+        parent_id: ch.parent_id,
+        position: ch.position,
+        max_users: ch.max_users,
+        inherit_acl: Boolean(ch.inherit_acl), // 确保是布尔类型
+        description_blob: ch.description_blob,
+      };
+      this.channelCache.set(ch.id, channelData);
     }
-    logger.info(`Loaded ${channels.length} channels from database`);
+    logger.info(`Loaded ${dbChannels.length} channels from database`);
   }
 
   /**
@@ -57,9 +66,18 @@ export class ChannelManager {
    */
   async createChannel(request: CreateChannelRequest): Promise<number> {
     const id = await this.database.createChannel(request);
-    const created = await this.database.getChannel(id);
+    const dbCreated = await this.database.getChannel(id);
 
-    if (created) {
+    if (dbCreated) {
+      const created: ChannelData = {
+        id: dbCreated.id,
+        name: dbCreated.name,
+        parent_id: dbCreated.parent_id,
+        position: dbCreated.position,
+        max_users: dbCreated.max_users,
+        inherit_acl: dbCreated.inherit_acl === 1,
+        description_blob: dbCreated.description_blob,
+      };
       this.channelCache.set(id, created);
       logger.info(`Channel created: ${id} (${created.name})`);
     }
@@ -72,9 +90,18 @@ export class ChannelManager {
    */
   async updateChannel(id: number, updates: Partial<ChannelData>): Promise<void> {
     await this.database.updateChannel(id, updates);
-    const updated = await this.database.getChannel(id);
+    const dbUpdated = await this.database.getChannel(id);
 
-    if (updated) {
+    if (dbUpdated) {
+      const updated: ChannelData = {
+        id: dbUpdated.id,
+        name: dbUpdated.name,
+        parent_id: dbUpdated.parent_id,
+        position: dbUpdated.position,
+        max_users: dbUpdated.max_users,
+        inherit_acl: dbUpdated.inherit_acl === 1,
+        description_blob: dbUpdated.description_blob,
+      };
       this.channelCache.set(id, updated);
       logger.info(`Channel updated: ${id}`, updates);
     }
@@ -107,7 +134,16 @@ export class ChannelManager {
    * 获取子频道
    */
   async getChildChannels( parent_id: number): Promise<ChannelData[]> {
-    return await this.database.getChildChannels(parent_id);
+    const dbChannels = await this.database.getChildChannels(parent_id);
+    return dbChannels.map(ch => ({
+      id: ch.id,
+      name: ch.name,
+      parent_id: ch.parent_id,
+      position: ch.position,
+      max_users: ch.max_users,
+      inherit_acl: ch.inherit_acl === 1,
+      description_blob: ch.description_blob,
+    }));
   }
 
   /**

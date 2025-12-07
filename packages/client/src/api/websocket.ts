@@ -12,7 +12,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { IncomingMessage } from 'http';
 import type { MumbleClient } from '../core/mumble-client.js';
 import { ApiDispatcher } from './dispatcher.js';
-import type { WebSocketOptions, WebSocketMessage } from '../types/api-types.js';
+import type { WebSocketOptions, WebSocketMessage, WebSocketMessageData } from '../types/api-types.js';
 
 export class MumbleWebSocketServer {
   private wss: WebSocketServer;
@@ -72,31 +72,31 @@ export class MumbleWebSocketServer {
     // 监听客户端事件并推送到所有 WebSocket 连接
     
     this.client.on('connected', () => {
-      this.broadcast({ type: 'event', event: 'connected', data: {} });
+      this.broadcast({ type: 'event', event: 'connected', data: {} as WebSocketMessageData });
     });
     
     this.client.on('disconnected', () => {
-      this.broadcast({ type: 'event', event: 'disconnected', data: {} });
+      this.broadcast({ type: 'event', event: 'disconnected', data: {} as WebSocketMessageData });
     });
     
-    this.client.on('userJoined', (user: any) => {
-      this.broadcast({ type: 'event', event: 'userJoined', data: user });
+    this.client.on('userJoined', (user: object) => {
+      this.broadcast({ type: 'event', event: 'userJoined', data: user as WebSocketMessageData });
     });
     
-    this.client.on('userLeft', (user: any) => {
-      this.broadcast({ type: 'event', event: 'userLeft', data: user });
+    this.client.on('userLeft', (user: object) => {
+      this.broadcast({ type: 'event', event: 'userLeft', data: user as WebSocketMessageData });
     });
     
-    this.client.on('textMessage', (message: any) => {
-      this.broadcast({ type: 'event', event: 'textMessage', data: message });
+    this.client.on('textMessage', (message: object) => {
+      this.broadcast({ type: 'event', event: 'textMessage', data: message as WebSocketMessageData });
     });
     
-    this.client.on('channelCreated', (channel: any) => {
-      this.broadcast({ type: 'event', event: 'channelCreated', data: channel });
+    this.client.on('channelCreated', (channel: object) => {
+      this.broadcast({ type: 'event', event: 'channelCreated', data: channel as WebSocketMessageData });
     });
     
     this.client.on('channelRemoved', (channelId: number) => {
-      this.broadcast({ type: 'event', event: 'channelRemoved', data: { channelId } });
+      this.broadcast({ type: 'event', event: 'channelRemoved', data: { channelId } as WebSocketMessageData });
     });
   }
 
@@ -178,8 +178,9 @@ class WebSocketConnection {
     const { id, action, data } = message;
 
     try {
+      const params: object = data ? (data as object) : {};
       const result = await this.dispatcher.dispatch(
-        { action: action, params: data },
+        { action: action || '', params },
         { client: this.client, source: 'websocket' }
       );
 
@@ -192,7 +193,7 @@ class WebSocketConnection {
   /**
    * 发送响应
    */
-  private sendResponse(id: string, result: any): void {
+  private sendResponse(id: string, result: unknown): void {
     this.send(JSON.stringify({
       type: 'response',
       id,
@@ -216,7 +217,7 @@ class WebSocketConnection {
   /**
    * 发送事件
    */
-  sendEvent(event: string, data: any): void {
+  sendEvent(event: string, data: unknown): void {
     this.send(JSON.stringify({
       type: 'event',
       event,

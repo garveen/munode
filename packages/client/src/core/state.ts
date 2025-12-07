@@ -8,6 +8,7 @@
  * - 提供状态查询接口
  */
 
+import { mumbleproto } from '@munode/protocol';
 import type { MumbleClient } from './mumble-client.js';
 import type { Channel, User, ServerInfo, SessionState } from '../types/client-types.js';
 
@@ -29,17 +30,17 @@ export class StateManager {
   /**
    * 处理 ServerSync 消息
    */
-  handleServerSync(message: any): void {
+  handleServerSync(message: mumbleproto.ServerSync): void {
     // 保存会话信息
     this.session = {
-      session: message.session,
-      channel_id: message.channel_id || 0,
-      self_mute: message.self_mute || false,
-      self_deaf: message.self_deaf || false,
-      suppress: message.suppress || false,
-      recording: message.recording || false,
-      priority_speaker: message.priority_speaker || false,
-      listeningChannels: message.listening_channel_add || []
+      session: message.session || 0,
+      channel_id: 0, // 将在 UserState 消息中更新
+      self_mute: false,
+      self_deaf: false,
+      suppress: false,
+      recording: false,
+      priority_speaker: false,
+      listeningChannels: []
     };
 
     // 初始化根频道 (如果不存在)
@@ -72,12 +73,12 @@ export class StateManager {
   /**
    * 处理 ServerConfig 消息
    */
-  handleServerConfig(message: any): void {
+  handleServerConfig(message: mumbleproto.ServerConfig): void {
     // 更新服务器配置信息
     this.serverInfo = {
-      version: message.version || 0,
-      release: message.release || '',
-      os: message.os || '',
+      version: this.serverInfo?.version || 0,
+      release: this.serverInfo?.release || '',
+      os: this.serverInfo?.os || '',
       maxBandwidth: message.max_bandwidth || 0,
       maxUsers: message.max_users || 0,
       welcomeText: message.welcome_text || '',
@@ -92,7 +93,7 @@ export class StateManager {
   /**
    * 处理 ChannelState 消息
    */
-  handleChannelState(message: any): void {
+  handleChannelState(message: mumbleproto.ChannelState): void {
     const channelId = message.channel_id;
     const existingChannel = this.channels.get(channelId);
 
@@ -161,7 +162,7 @@ export class StateManager {
   /**
    * 处理 ChannelRemove 消息
    */
-  handleChannelRemove(message: any): void {
+  handleChannelRemove(message: mumbleproto.ChannelRemove): void {
     const channelId = message.channel_id;
     const channel = this.channels.get(channelId);
 
@@ -183,7 +184,7 @@ export class StateManager {
   /**
    * 处理 UserState 消息
    */
-  handleUserState(message: any): void {
+  handleUserState(message: mumbleproto.UserState): void {
     const session = message.session;
     const existingUser = this.users.get(session);
 
@@ -201,7 +202,7 @@ export class StateManager {
       priority_speaker: message.priority_speaker || false,
       hash: message.hash,
       comment: message.comment,
-      texture: message.texture
+      texture: message.texture ? Buffer.from(message.texture) : undefined
     };
 
     // 如果是当前用户，更新会话状态
@@ -223,7 +224,7 @@ export class StateManager {
   /**
    * 处理 UserRemove 消息
    */
-  handleUserRemove(message: any): void {
+  handleUserRemove(message: mumbleproto.UserRemove): void {
     const session = message.session;
     const user = this.users.get(session);
 
@@ -238,7 +239,7 @@ export class StateManager {
   /**
    * 处理 PermissionDenied 消息
    */
-  handlePermissionDenied(message: any): void {
+  handlePermissionDenied(message: mumbleproto.PermissionDenied): void {
     // 解析权限拒绝消息
     const permission = message.permission || 0;
     const type = message.type || 0;

@@ -8,16 +8,32 @@
  * - 认证中间件
  */
 
-import Fastify, { FastifyInstance } from 'fastify';
+import Fastify, { FastifyInstance, FastifyRequest } from 'fastify';
 import type { MumbleClient } from '../core/mumble-client.js';
 import { ApiDispatcher } from './dispatcher.js';
 import type { HttpServerOptions } from '../types/api-types.js';
+
+interface FastifyParams {
+  id?: string;
+  channelId?: string;
+  permission?: string;
+  index?: string;
+  groupName?: string;
+}
+
+interface FastifyQuery {
+  userSession?: string;
+}
+
+interface FastifyRequestBody {
+  [key: string]: string | number | boolean | object | null | undefined;
+}
 
 interface RouteConfig {
   path: string;
   method: string;
   action: string;
-  paramMapper?: (request: any) => any;
+  paramMapper?: (request: FastifyRequest<{ Params: FastifyParams; Querystring: FastifyQuery; Body: FastifyRequestBody }>) => FastifyRequestBody;
 }
 
 export class HttpServer {
@@ -32,8 +48,8 @@ export class HttpServer {
     { path: '/client/status', method: 'GET', action: 'getStatus' },
     { path: '/channel/join', method: 'POST', action: 'joinChannel' },
     { path: '/channel/create', method: 'POST', action: 'createChannel' },
-    { path: '/channel/:id', method: 'DELETE', action: 'deleteChannel', paramMapper: (req) => ({ channelId: req.params.id }) },
-    { path: '/channel/:id', method: 'PUT', action: 'updateChannel', paramMapper: (req) => ({ channelId: req.params.id, ...req.body }) },
+    { path: '/channel/:id', method: 'DELETE', action: 'deleteChannel', paramMapper: (req) => ({ channelId: req.params.id ? parseInt(req.params.id) : 0 }) },
+    { path: '/channel/:id', method: 'PUT', action: 'updateChannel', paramMapper: (req) => ({ channelId: req.params.id ? parseInt(req.params.id) : 0, ...req.body }) },
     { path: '/channel/list', method: 'GET', action: 'getChannels' },
     { path: '/channel/listen/add', method: 'POST', action: 'addListeningChannel' },
     { path: '/channel/listen/remove', method: 'POST', action: 'removeListeningChannel' },
@@ -47,15 +63,15 @@ export class HttpServer {
     { path: '/webhook/add', method: 'POST', action: 'addWebhook' },
     { path: '/webhook/remove', method: 'POST', action: 'removeWebhook' },
     { path: '/webhook/list', method: 'GET', action: 'getWebhooks' },
-    { path: '/acl/query/:channelId', method: 'GET', action: 'queryACL', paramMapper: (req) => ({ channelId: parseInt(req.params.channelId) }) },
+    { path: '/acl/query/:channelId', method: 'GET', action: 'queryACL', paramMapper: (req) => ({ channelId: req.params.channelId ? parseInt(req.params.channelId) : 0 }) },
     { path: '/acl/save', method: 'POST', action: 'saveACL' },
-    { path: '/acl/check/:channelId/:permission', method: 'GET', action: 'checkPermission', paramMapper: (req) => ({ channelId: parseInt(req.params.channelId), permission: parseInt(req.params.permission), userSession: req.query.userSession ? parseInt(req.query.userSession) : undefined }) },
-    { path: '/acl/user-permissions/:channelId', method: 'GET', action: 'getUserPermissions', paramMapper: (req) => ({ channelId: parseInt(req.params.channelId), userSession: req.query.userSession ? parseInt(req.query.userSession) : undefined }) },
+    { path: '/acl/check/:channelId/:permission', method: 'GET', action: 'checkPermission', paramMapper: (req) => ({ channelId: req.params.channelId ? parseInt(req.params.channelId) : 0, permission: req.params.permission ? parseInt(req.params.permission) : 0, userSession: req.query.userSession ? parseInt(req.query.userSession) : undefined }) },
+    { path: '/acl/user-permissions/:channelId', method: 'GET', action: 'getUserPermissions', paramMapper: (req) => ({ channelId: req.params.channelId ? parseInt(req.params.channelId) : 0, userSession: req.query.userSession ? parseInt(req.query.userSession) : undefined }) },
     { path: '/acl/entry/add', method: 'POST', action: 'addACLEntry' },
-    { path: '/acl/entry/:channelId/:index', method: 'DELETE', action: 'removeACLEntry', paramMapper: (req) => ({ channelId: parseInt(req.params.channelId), entryIndex: parseInt(req.params.index) }) },
-    { path: '/acl/entry/:channelId/:index', method: 'PUT', action: 'updateACLEntry', paramMapper: (req) => ({ channelId: parseInt(req.params.channelId), entryIndex: parseInt(req.params.index), updates: req.body }) },
+    { path: '/acl/entry/:channelId/:index', method: 'DELETE', action: 'removeACLEntry', paramMapper: (req) => ({ channelId: req.params.channelId ? parseInt(req.params.channelId) : 0, entryIndex: req.params.index ? parseInt(req.params.index) : 0 }) },
+    { path: '/acl/entry/:channelId/:index', method: 'PUT', action: 'updateACLEntry', paramMapper: (req) => ({ channelId: req.params.channelId ? parseInt(req.params.channelId) : 0, entryIndex: req.params.index ? parseInt(req.params.index) : 0, updates: req.body }) },
     { path: '/acl/group/create', method: 'POST', action: 'createChannelGroup' },
-    { path: '/acl/group/:channelId/:groupName', method: 'DELETE', action: 'deleteChannelGroup', paramMapper: (req) => ({ channelId: parseInt(req.params.channelId), groupName: req.params.groupName }) },
+    { path: '/acl/group/:channelId/:groupName', method: 'DELETE', action: 'deleteChannelGroup', paramMapper: (req) => ({ channelId: req.params.channelId ? parseInt(req.params.channelId) : 0, groupName: req.params.groupName || '' }) },
     { path: '/acl/group/add-user', method: 'POST', action: 'addUserToGroup' },
     { path: '/acl/group/remove-user', method: 'POST', action: 'removeUserFromGroup' },
     { path: '/user/list', method: 'GET', action: 'getUsers' },

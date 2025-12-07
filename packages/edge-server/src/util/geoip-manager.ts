@@ -2,7 +2,36 @@ import { EventEmitter } from 'events';
 // import { logger } from '@munode/common';
 import type { Logger } from 'winston';
 import { EdgeConfig, GeoIPResult } from '../types.js';
-import { Reader } from '@maxmind/geoip2-node';
+import { Reader, ReaderModel } from '@maxmind/geoip2-node';
+
+interface MaxMindCityResponse {
+  country?: {
+    isoCode?: string;
+    names?: {
+      en?: string;
+    };
+  };
+  continent?: {
+    code?: string;
+  };
+  location?: {
+    latitude?: number;
+    longitude?: number;
+    timeZone?: string;
+  };
+  traits?: {
+    isp?: string;
+  };
+  city?: {
+    names?: {
+      en?: string;
+    };
+  };
+}
+
+interface CacheStats {
+  cacheSize: number;
+}
 
 /**
  * GeoIP 管理器 - 处理IP地理位置查询
@@ -10,7 +39,7 @@ import { Reader } from '@maxmind/geoip2-node';
 export class GeoIPManager extends EventEmitter {
   // private config: EdgeConfig;
   private logger: Logger;
-  private reader?: Reader;
+  private reader?: ReaderModel;
   private cache: Map<string, GeoIPResult> = new Map();
 
   constructor(_config: EdgeConfig, logger: Logger) {
@@ -52,7 +81,7 @@ export class GeoIPManager extends EventEmitter {
     }
 
     try {
-      const response = (this.reader as any).city(ip);
+      const response = this.reader.city(ip) as MaxMindCityResponse;
 
       const result: GeoIPResult = {
         ip,
@@ -115,7 +144,7 @@ export class GeoIPManager extends EventEmitter {
     }
 
     try {
-      const response = (this.reader as any).city(ip);
+      const response = this.reader.city(ip) as MaxMindCityResponse;
       return response.city?.names?.en || 'Unknown';
     } catch (_error) {
       return 'Unknown';
@@ -133,10 +162,9 @@ export class GeoIPManager extends EventEmitter {
   /**
    * 获取缓存统计
    */
-  getCacheStats(): any {
+  getCacheStats(): CacheStats {
     return {
       cacheSize: this.cache.size,
-      // 其他统计信息
     };
   }
 

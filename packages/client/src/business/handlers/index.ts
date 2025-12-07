@@ -14,10 +14,10 @@ export {
   ClearListeningChannelsHandler,
   GetListeningChannelsHandler
 } from './listen-channel-handler.js';
-export { SetVoiceTargetHandler, RemoveVoiceTargetHandler } from './voice-target-handler.js';
+export { VoiceTargetHandler as SetVoiceTargetHandler, RemoveVoiceTargetHandler } from './voice-target-handler.js';
 export { SendPluginDataHandler } from './plugin-data-handler.js';
 export { RegisterContextActionHandler, ExecuteContextActionHandler } from './context-action-handler.js';
-export { AddWebhookHandler, RemoveWebhookHandler, GetWebhooksHandler } from './webhook-handler.js';
+export { WebhookHandler as AddWebhookHandler, RemoveWebhookHandler, GetWebhooksHandler } from './webhook-handler.js';
 export {
   QueryACLHandler,
   SaveACLHandler,

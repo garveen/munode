@@ -62,8 +62,8 @@ export class ServiceRegistry {
     const hasSecret = !!this.config.hmacSecret;
     
     if (enableAuth && hasSecret) {
-      const challengeResponse = (request as any).challenge_response;
-      const challenge = (request as any).challenge;
+      const challengeResponse = (request as { challenge_response?: Uint8Array }).challenge_response;
+      const challenge = (request as { challenge?: Uint8Array }).challenge;
       
       // 第一阶段：生成挑战码
       if (!challengeResponse) {
@@ -92,7 +92,10 @@ export class ServiceRegistry {
         };
       }
       
-      const isValid = this.verifyChallenge(server_id, challenge, challengeResponse);
+      // 转换 challenge 和 challengeResponse 为字符串
+      const challengeStr = Buffer.from(challenge).toString('hex');
+      const challengeResponseStr = challengeResponse ? Buffer.from(challengeResponse).toString('hex') : '';
+      const isValid = this.verifyChallenge(server_id, challengeStr, challengeResponseStr);
       if (!isValid) {
         logger.warn(`Edge ${server_id} authentication failed`);
         return {
@@ -104,7 +107,8 @@ export class ServiceRegistry {
       }
       
       // 验证通过，清理挑战码
-      this.challenges.delete(challenge);
+      const challengeKey = Buffer.from(challenge).toString('hex');
+      this.challenges.delete(challengeKey);
       logger.info(`Edge ${server_id} authenticated successfully`);
     }
 

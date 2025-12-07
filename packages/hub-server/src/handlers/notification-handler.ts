@@ -284,7 +284,43 @@ export class NotificationHandler implements INotificationHandler {
 
       // 构建UserStats响应
       const now = Math.floor(Date.now() / 1000);
-      const userStats: any = {
+      const userStats: {
+        session: number;
+        stats_only?: boolean;
+        certificates?: Uint8Array[];
+        cert_hash?: Uint8Array;
+        strong_certificate?: boolean;
+        from_client?: {
+          good?: number;
+          late?: number;
+          lost?: number;
+          resync?: number;
+        };
+        from_server?: {
+          good?: number;
+          late?: number;
+          lost?: number;
+          resync?: number;
+        };
+        udp_packets?: number;
+        tcp_packets?: number;
+        udp_ping_avg?: number;
+        udp_ping_var?: number;
+        tcp_ping_avg?: number;
+        tcp_ping_var?: number;
+        version?: {
+          version?: number;
+          version_v1?: number;
+          release?: string;
+          os?: string;
+          os_version?: string;
+        };
+        celt_versions?: number[];
+        address?: Uint8Array;
+        bandwidth?: number;
+        onlinesecs?: number;
+        idlesecs?: number;
+      } = {
         session: target_session,
         onlinesecs: now - targetSession.connected_at,
         idlesecs: now - targetSession.last_active,
@@ -303,11 +339,14 @@ export class NotificationHandler implements INotificationHandler {
           if (this.factory.getConfig().hideCertHashes) {
             // 返回用户ID的哈希（如果有用户ID）
             if (targetSession.user_id !== undefined && targetSession.user_id !== null) {
-              userStats.cert_hash = await this.hashUserId(targetSession.user_id);
+              const hashStr = await this.hashUserId(targetSession.user_id);
+              userStats.cert_hash = Buffer.from(hashStr, 'utf-8');
             }
           } else {
-            // 返回真实的证书哈希
-            userStats.cert_hash = targetSession.cert_hash;
+            // 返回真实的证书哈希 - 转换为 Uint8Array
+            userStats.cert_hash = typeof targetSession.cert_hash === 'string'
+              ? Buffer.from(targetSession.cert_hash, 'utf-8')
+              : targetSession.cert_hash;
           }
 
           // stats_only 模式下不添加证书链
@@ -331,8 +370,6 @@ export class NotificationHandler implements INotificationHandler {
         if (targetSession.version || targetSession.release || targetSession.os) {
           userStats.version = {
             version_v1: targetSession.version ? parseInt(targetSession.version.split('.')[0]) || 0 : 0,
-            version_v2: targetSession.version ? parseInt(targetSession.version.split('.')[1]) || 0 : 0,
-            version_v3: targetSession.version ? parseInt(targetSession.version.split('.')[2]) || 0 : 0,
             release: targetSession.release || '',
             os: targetSession.os || '',
             os_version: targetSession.os_version || '',

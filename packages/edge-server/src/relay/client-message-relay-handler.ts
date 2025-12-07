@@ -116,7 +116,8 @@ export class ClientMessageRelayHandler extends EventEmitter {
       }
 
       // 序列化 Mumble 消息并发送给客户端
-      const messageData = message.serialize();
+      // Type assertion: we know message has serialize() based on messageType
+      const messageData = (message as { serialize(): Uint8Array }).serialize();
       this.messageHandler.sendMessage(sessionId, messageType, Buffer.from(messageData));
 
       logger.debug(
@@ -138,7 +139,7 @@ export class ClientMessageRelayHandler extends EventEmitter {
   private parseMumbleMessage(
     messageType: MessageType,
     messageData: Buffer
-  ): any {
+  ): unknown | null {
     try {
       switch (messageType) {
         case MessageType.Version:
@@ -215,7 +216,7 @@ export class ClientMessageRelayHandler extends EventEmitter {
   private createRelayMessage(
     sessionId: number,
     messageType: MessageType,
-    message: any,
+    message: unknown,
     direction: hubedge.RelayDirection
   ): hubedge.ClientMessageRelay {
     const relay = new hubedge.ClientMessageRelay({
@@ -320,7 +321,7 @@ export class ClientMessageRelayHandler extends EventEmitter {
    */
   private extractMumbleMessage(
     relay: hubedge.ClientMessageRelay
-  ): { messageType: MessageType | null; message: any } {
+  ): { messageType: MessageType | null; message: unknown | null } {
     // 检查每个可能的 Mumble 消息字段
     if (relay.has_version) {
       return { messageType: MessageType.Version, message: relay.version };

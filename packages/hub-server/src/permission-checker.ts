@@ -315,7 +315,7 @@ export class HubPermissionChecker {
     const channelInfo: ChannelInfo = {
       id: channel.id,
       parent_id: channel.parent_id,
-      inherit_acl: channel.inherit_acl,
+      inherit_acl: channel.inherit_acl === 1, // 转换数字到布尔值
     };
 
     // 更新缓存

@@ -10,7 +10,7 @@
 
 import { createHmac } from 'crypto';
 import { ControlChannelClient } from '@munode/protocol';
-import type { HubNotificationParams } from '@munode/protocol';
+import type { HubNotificationParams, RegisterResponse } from '@munode/protocol';
 import { ReconnectManager } from './reconnect-manager.js';
 import type { EdgeConfig } from '../types.js';
 import type { Logger } from 'winston';
@@ -127,7 +127,7 @@ export class EdgeClusterManager {
   /**
    * 注册到 Hub，支持 HMAC 挑战-响应认证
    */
-  private async registerToHub(): Promise<any> {
+  private async registerToHub(): Promise<RegisterResponse> {
     const registerParams = {
       server_id: this.config.server_id,
       name: this.config.name,

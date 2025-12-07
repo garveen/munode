@@ -18,6 +18,14 @@ import type { HubNotificationParams } from '@munode/protocol';
 import type { ChannelInfo, ClientInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
+interface ChannelUpdateFields {
+  name?: string;
+  position?: number;
+  max_users?: number;
+  description?: string;
+  links?: number[];
+}
+
 export class HubMessageHandlers {
   constructor(private factory: HandlerFactory) {}
 
@@ -36,9 +44,31 @@ export class HubMessageHandlers {
       // params is the userState object directly, use the type from HubNotificationParams
       // Build UserState protobuf message with only the fields that are set
       // Use any here since we're building a protobuf message dynamically
-      const userStateInit: any = {
+      const userStateInit: {
+        session: number;
+        actor: number;
+        temporary_access_tokens: string[];
+        listening_channel_add: number[];
+        listening_channel_remove: number[];
+        name?: string;
+        user_id?: number;
+        channel_id?: number;
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
+        self_mute?: boolean;
+        self_deaf?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
+        texture?: Uint8Array;
+        plugin_context?: Uint8Array;
+        plugin_identity?: string;
+      } = {
         session: params.session,
         actor: params.actor,
+        temporary_access_tokens: [],
+        listening_channel_add: [],
+        listening_channel_remove: [],
       };
       
       // Only set fields that are defined
@@ -177,9 +207,31 @@ export class HubMessageHandlers {
         // Build UserState protobuf message with only the fields that are set
         // Use the same pattern as handleUserStateBroadcastFromHub
         // Use any here since we're building a protobuf message dynamically
-        const userStateInit: any = {
+        const userStateInit: {
+          session: number;
+          actor: number;
+          temporary_access_tokens: string[];
+          listening_channel_add: number[];
+          listening_channel_remove: number[];
+          name?: string;
+          user_id?: number;
+          channel_id?: number;
+          mute?: boolean;
+          deaf?: boolean;
+          suppress?: boolean;
+          self_mute?: boolean;
+          self_deaf?: boolean;
+          priority_speaker?: boolean;
+          recording?: boolean;
+          texture?: Uint8Array;
+          plugin_context?: Uint8Array;
+          plugin_identity?: string;
+        } = {
           session: userState.session,
           actor: userState.actor,
+          temporary_access_tokens: [],
+          listening_channel_add: [],
+          listening_channel_remove: [],
         };
         
         // Only set fields that are defined
@@ -258,7 +310,7 @@ export class HubMessageHandlers {
         const existingChannel = this.channelManager.getChannel(channelState.channel_id);
         
         if (existingChannel) {
-          const updates: any = {};
+          const updates: ChannelUpdateFields = {};
           
           // 更新现有频道
           if (channelState.name !== undefined) {
@@ -671,8 +723,30 @@ export class HubMessageHandlers {
         
         // 构建 UserStats protobuf 对象
         // Use any here since we're building a protobuf message dynamically
-        const response: any = {
+        const response: {
+          session: number;
+          certificates: Uint8Array[];
+          from_client?: mumbleproto.UserStats.Stats;
+          from_server?: mumbleproto.UserStats.Stats;
+          udp_packets?: number;
+          tcp_packets?: number;
+          udp_ping_avg?: number;
+          udp_ping_var?: number;
+          tcp_ping_avg?: number;
+          tcp_ping_var?: number;
+          version?: mumbleproto.Version;
+          strong_certificate?: boolean;
+          address?: Uint8Array;
+          bandwidth?: number;
+          onlinesecs?: number;
+          idlesecs?: number;
+          stats_only?: boolean;
+          celt_versions: number[];
+          opus?: boolean;
+        } = {
           session: userStats.session,
+          certificates: [],
+          celt_versions: [],
         };
 
         // 添加基本统计字段
@@ -695,10 +769,18 @@ export class HubMessageHandlers {
             response.strong_certificate = userStats.strong_certificate;
           }
           if (userStats.address) {
-            response.address = userStats.address;
+            // Convert address string to Uint8Array if needed
+            response.address = typeof userStats.address === 'string' 
+              ? new TextEncoder().encode(userStats.address)
+              : userStats.address;
           }
           if (userStats.version) {
-            response.version = new mumbleproto.Version(userStats.version as any);
+            response.version = new mumbleproto.Version({
+              version: (userStats.version.major || 0) << 16 | (userStats.version.minor || 0) << 8 | (userStats.version.patch || 0),
+              release: `${userStats.version.major}.${userStats.version.minor}.${userStats.version.patch || 0}`,
+              os: '',
+              os_version: '',
+            });
           }
           // 注意：证书链 (certificates) 由 protobuf 自动初始化为空数组
           // 如果有证书数据需要添加，在这里处理

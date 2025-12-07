@@ -157,7 +157,13 @@ export class ChannelStateHandler implements IChannelStateHandler {
         }
 
         // 准备更新数据（使用数据库列名）
-        const updateData: any = {};
+        const updateData: Partial<{
+          name?: string;
+          description_blob?: string;
+          position?: number;
+          max_users?: number;
+          parent_id?: number;
+        }> = {};
         if (channelStateObj.name !== undefined) {
           updateData.name = channelStateObj.name;
         }
@@ -237,7 +243,18 @@ export class ChannelStateHandler implements IChannelStateHandler {
       }
 
       // 广播频道状态变化给所有Edge
-      const broadcastData: any = {
+      const broadcastData: Partial<{
+        channel_id?: number;
+        parent?: number;
+        name?: string;
+        description?: string;
+        position?: number;
+        temporary?: boolean;
+        max_users?: number;
+        links?: number[];
+        links_add?: number[];
+        links_remove?: number[];
+      }> = {
         channel_id: channelId,
         name: channelStateObj.name,
         parent: channelStateObj.parent,

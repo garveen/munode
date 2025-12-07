@@ -34,6 +34,15 @@ export interface ChannelGroup {
   inherited_members: number[]; // 继承的成员
 }
 
+interface GroupObject {
+  name: string;
+  inherited: boolean;
+  inheritable: boolean;
+  add: number[];
+  remove: number[];
+  inherited_members: number[];
+}
+
 /**
  * ACL 管理器
  */
@@ -84,7 +93,7 @@ export class ACLManager {
         reject(new Error('ACL query timeout'));
       }, 5000); // 5秒超时
 
-      const onACL = (message: any) => {
+      const onACL = (message: mumbleproto.ACL) => {
         if (message.channel_id === channelId) {
           clearTimeout(timeout);
           this.client.removeListener('acl', onACL);
@@ -92,7 +101,16 @@ export class ACLManager {
 
           const aclData: ACLQueryResult = {
             channelId,
-            acls: message.acls || [],
+            acls: (message.acls || []).map(acl => ({
+              channel_id: channelId,
+              user_id: acl.user_id,
+              group: acl.group,
+              apply_here: acl.apply_here !== undefined ? acl.apply_here : true,
+              apply_subs: acl.apply_subs !== undefined ? acl.apply_subs : true,
+              inherited: acl.inherited,
+              allow: acl.grant || 0,
+              deny: acl.deny || 0
+            })),
             groups: new Map(),
             inheritAcl: message.inherit_acls || false
           };
@@ -123,9 +141,9 @@ export class ACLManager {
         }
       };
 
-      const onPermissionDenied = (info: any) => {
-        // 检查是否是针对 ACL 查询的权限拒绝（通过 channel_id 或 channelId 匹配）
-        const eventChannelId = info.channel_id ?? info.channelId;
+      const onPermissionDenied = (info: mumbleproto.PermissionDenied) => {
+        // 检查是否是针对 ACL 查询的权限拒绝（通过 channel_id 匹配）
+        const eventChannelId = info.channel_id;
         if (eventChannelId === channelId) {
           clearTimeout(timeout);
           this.client.removeListener('acl', onACL);
@@ -144,7 +162,7 @@ export class ACLManager {
    */
   async saveACL(channelId: number, acls: ACLEntry[], groups?: Map<string, ChannelGroup>): Promise<number[]> {
     // 构建组对象数组
-    const groupObjects: any[] = [];
+    const groupObjects: GroupObject[] = [];
     if (groups) {
       for (const [name, group] of groups) {
         groupObjects.push({

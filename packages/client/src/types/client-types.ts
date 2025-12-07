@@ -94,13 +94,30 @@ export interface ClientConfig {
   };
   
   /** Webhook 配置 */
-  webhooks: any[];
+  webhooks: WebhookConfig[];
   
   /** 日志配置 */
   logging: {
     level: 'debug' | 'info' | 'warn' | 'error';
     file?: string;
   };
+}
+
+/**
+ * Webhook 配置
+ */
+export interface WebhookConfig {
+  id: string;
+  url: string;
+  events: string[];
+  enabled: boolean;
+  method?: 'POST' | 'PUT';
+  headers?: {
+    [key: string]: string;
+  };
+  retry?: number;
+  batch?: boolean;
+  batchInterval?: number;
 }
 
 /**
@@ -116,6 +133,107 @@ export interface Channel {
   links: number[];
   max_users: number;
   children: number[];
+}
+
+/**
+ * 用户状态更新参数
+ */
+export interface UserStateUpdate {
+  session?: number;
+  channel_id?: number;
+  mute?: boolean;
+  deaf?: boolean;
+  suppress?: boolean;
+  self_mute?: boolean;
+  self_deaf?: boolean;
+  priority_speaker?: boolean;
+  recording?: boolean;
+}
+
+/**
+ * 频道状态更新参数
+ */
+export interface ChannelStateUpdate {
+  channel_id?: number;
+  parent?: number;
+  name?: string;
+  description?: string;
+  position?: number;
+  temporary?: boolean;
+  max_users?: number;
+  links?: number[];
+  links_add?: number[];
+  links_remove?: number[];
+}
+
+/**
+ * ACL 条目更新参数
+ */
+export interface ACLEntryUpdate {
+  apply_here?: boolean;
+  apply_subs?: boolean;
+  inherited?: boolean;
+  user_id?: number;
+  group?: string;
+  grant?: number;
+  deny?: number;
+}
+
+/**
+ * 客户端配置更新参数
+ */
+export interface ClientConfigUpdate {
+  connection?: {
+    host?: string;
+    port?: number;
+    autoReconnect?: boolean;
+    reconnectDelay?: number;
+    reconnectMaxDelay?: number;
+    connectTimeout?: number;
+  };
+  
+  auth?: {
+    username?: string;
+    password?: string;
+    tokens?: string[];
+    certificate?: string;
+    key?: string;
+  };
+  
+  audio?: {
+    encoder?: {
+      codec?: 'opus';
+      bitrate?: number;
+      frameSize?: number;
+      vbr?: boolean;
+    };
+    decoder?: {
+      codecs?: string[];
+      autoDetect?: boolean;
+    };
+    inputSampleRate?: number;
+    outputSampleRate?: number;
+  };
+  
+  api?: {
+    http?: {
+      enabled?: boolean;
+      host?: string;
+      port?: number;
+      cors?: boolean;
+    };
+    websocket?: {
+      enabled?: boolean;
+      path?: string;
+    };
+  };
+  
+  webhooks?: WebhookConfig[];
+  
+  logging?: {
+    level?: 'debug' | 'info' | 'warn' | 'error';
+    file?: string;
+  };
 }
 
 /**
@@ -181,12 +299,19 @@ export interface MessageTarget {
 }
 
 /**
+ * 客户端事件数据
+ */
+export interface ClientEventData {
+  [key: string]: string | number | boolean | object | null | undefined;
+}
+
+/**
  * 客户端事件
  */
 export interface ClientEvent {
   type: string;
   timestamp: number;
-  data: any;
+  data: ClientEventData;
 }
 
 /**

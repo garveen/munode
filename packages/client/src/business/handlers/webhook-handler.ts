@@ -4,12 +4,25 @@
  * 处理 Webhook 订阅的管理
  */
 
-import type { BusinessHandler } from '../../api/dispatcher.js';
+import type { BusinessHandler } from '../../types/api-types.js';
 import type { ApiContext } from '../context.js';
 
-export class AddWebhookHandler implements BusinessHandler {
-  async execute(params: { id: string; config: any }, context: ApiContext): Promise<void> {
-    context.client.addWebhook(params.id, params.config);
+interface WebhookParams {
+  id: string;
+  config: {
+    url: string;
+    events: string[];
+    enabled: boolean;
+  };
+}
+
+export class WebhookHandler implements BusinessHandler<WebhookParams, void> {
+  async execute(params: WebhookParams, context: ApiContext): Promise<void> {
+    const config = {
+      id: params.id,
+      ...params.config
+    };
+    context.client.addWebhook(params.id, config);
   }
 }
 

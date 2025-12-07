@@ -279,7 +279,23 @@ export class AuthHandlers {
 
       // 11. 广播新用户加入给其他已认证客户端
       // broadcastUserStateToAuthenticatedClients 会根据接收方是否为注册用户决定是否发送证书哈希
-      const broadcastStateData: any = {
+      const broadcastStateData: {
+        session: number;
+        user_id: number;
+        name: string;
+        channel_id: number;
+        temporary_access_tokens: string[];
+        listening_channel_add: number[];
+        listening_channel_remove: number[];
+        hash?: string;
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
+        self_mute?: boolean;
+        self_deaf?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
+      } = {
         session: session_id,
         name: updatedClient.username,
         user_id: updatedClient.user_id,

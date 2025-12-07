@@ -10,17 +10,41 @@ export interface IDatabaseOperations {
   /**
    * 添加封禁记录
    */
-  addBan(banData: any): Promise<void>;
+  addBan(banData: {
+    address: Buffer;
+    mask: number;
+    name?: string;
+    hash?: string;
+    reason?: string;
+    start?: number;
+    duration?: number;
+  }): Promise<void>;
 
   /**
    * 获取频道信息
    */
-  getChannel(channelId: number): Promise<any | null>;
+  getChannel(channelId: number): Promise<{
+    id: number;
+    name: string;
+    position: number;
+    max_users: number;
+    parent_id: number;
+    inherit_acl: number;
+    description_blob?: string;
+  } | null>;
 
   /**
    * 获取子频道列表
    */
-  getChildChannels(channelId: number): Promise<any[]>;
+  getChildChannels(channelId: number): Promise<Array<{
+    id: number;
+    name: string;
+    position: number;
+    max_users: number;
+    parent_id: number;
+    inherit_acl: number;
+    description_blob?: string;
+  }>>;
 
   /**
    * 清理数据库
@@ -30,12 +54,29 @@ export interface IDatabaseOperations {
   /**
    * 获取活跃的Edge列表
    */
-  getActiveEdges(): Promise<any[]>;
+  getActiveEdges(): Promise<Array<{
+    server_id: number;
+    name: string;
+    host: string;
+    port: number;
+    region: string;
+    current_load: number;
+    capacity: number;
+  }>>;
 
   /**
    * 获取所有频道ACL
    */
-  getAllChannelACLs(): Promise<any[]>;
+  getAllChannelACLs(): Promise<Array<{
+    id: number;
+    channel_id: number;
+    user_id?: number;
+    group: string;
+    apply_here: boolean;
+    apply_subs: boolean;
+    allow: number;
+    deny: number;
+  }>>;
 
   /**
    * 获取用户纹理blob
@@ -80,7 +121,15 @@ export class DatabaseOperations implements IDatabaseOperations {
     this.blobStore = blobStore;
   }
 
-  async addBan(banData: any): Promise<void> {
+  async addBan(banData: {
+    address: Buffer;
+    mask: number;
+    name?: string;
+    hash?: string;
+    reason?: string;
+    start?: number;
+    duration?: number;
+  }): Promise<void> {
     if (!this.database) {
       throw new Error('Database not available');
     }
@@ -89,7 +138,15 @@ export class DatabaseOperations implements IDatabaseOperations {
     logger.debug('Added ban record', { banData });
   }
 
-  async getChannel(channelId: number): Promise<any | null> {
+  async getChannel(channelId: number): Promise<{
+    id: number;
+    name: string;
+    position: number;
+    max_users: number;
+    parent_id: number;
+    inherit_acl: number;
+    description_blob?: string;
+  } | null> {
     if (!this.database) {
       return null;
     }
@@ -97,7 +154,15 @@ export class DatabaseOperations implements IDatabaseOperations {
     return await this.database.getChannel(channelId);
   }
 
-  async getChildChannels(channelId: number): Promise<any[]> {
+  async getChildChannels(channelId: number): Promise<Array<{
+    id: number;
+    name: string;
+    position: number;
+    max_users: number;
+    parent_id: number;
+    inherit_acl: number;
+    description_blob?: string;
+  }>> {
     if (!this.database) {
       return [];
     }
@@ -114,20 +179,58 @@ export class DatabaseOperations implements IDatabaseOperations {
     logger.debug('Database cleanup completed');
   }
 
-  async getActiveEdges(): Promise<any[]> {
+  async getActiveEdges(): Promise<Array<{
+    server_id: number;
+    name: string;
+    host: string;
+    port: number;
+    region: string;
+    current_load: number;
+    capacity: number;
+  }>> {
     if (!this.database) {
       return [];
     }
 
-    return await this.database.getActiveEdges();
+    const edges = await this.database.getActiveEdges();
+    // 转换 RegisteredEdge 类型为返回类型
+    return edges.map(edge => ({
+      server_id: edge.server_id,
+      name: edge.name,
+      host: edge.host,
+      port: edge.port,
+      region: edge.region || '',
+      current_load: edge.current_load,
+      capacity: edge.capacity,
+    }));
   }
 
-  async getAllChannelACLs(): Promise<any[]> {
+  async getAllChannelACLs(): Promise<Array<{
+    id: number;
+    channel_id: number;
+    user_id?: number;
+    group: string;
+    apply_here: boolean;
+    apply_subs: boolean;
+    allow: number;
+    deny: number;
+  }>> {
     if (!this.database) {
       return [];
     }
 
-    return await this.database.getAllChannelACLs();
+    const acls = await this.database.getAllChannelACLs();
+    // 转换 ACLData 类型为返回类型
+    return acls.map(acl => ({
+      id: acl.id,
+      channel_id: acl.channel_id,
+      user_id: acl.user_id,
+      group: acl.group || '',
+      apply_here: acl.apply_here,
+      apply_subs: acl.apply_subs,
+      allow: acl.allow,
+      deny: acl.deny,
+    }));
   }
 
   async getUserTextureBlob(userId: number): Promise<string | null> {

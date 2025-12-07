@@ -254,7 +254,7 @@ export class EdgeHubWebSocketServer extends EventEmitter {
   /**
    * 处理新连接
    */
-  private handleConnection(ws: WebSocket, _request: any): void {
+  private handleConnection(ws: WebSocket, _request: { url?: string; headers: Record<string, string | string[] | undefined> }): void {
     const client = new EdgeClient(ws, this.logger);
     this.clients.set(client.id, client);
 
