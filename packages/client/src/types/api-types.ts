@@ -168,8 +168,7 @@ export interface WebhookPayload {
 /**
  * 业务处理器接口
  */
-export interface BusinessHandler {
+export interface BusinessHandler<TParams = Record<string, unknown>, TResult = unknown> {
   /** 执行业务逻辑 */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  execute(params: any, context: ApiContext): Promise<any>;
+  execute(params: TParams, context: ApiContext): Promise<TResult>;
 }

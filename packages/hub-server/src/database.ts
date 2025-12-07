@@ -283,7 +283,9 @@ export class HubDatabase {
       const pragma = await this.db.prepare('PRAGMA table_info(channels)');
       const columns = await pragma.all();
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const hasDescription = columns.some((col: any) => col.name === 'description');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const hasDescriptionBlob = columns.some((col: any) => col.name === 'description_blob');
 
       if (hasDescription && !hasDescriptionBlob) {
@@ -442,7 +444,7 @@ export class HubDatabase {
   /**
    * 设置配置值
    */
-  async setConfig(key: string, value: any, description?: string): Promise<void> {
+  async setConfig(key: string, value: string | number | boolean | null | Record<string, unknown>, description?: string): Promise<void> {
     const stmt = await this.db.prepare(`
       INSERT OR REPLACE INTO configs (key, value, description, updated_at)
       VALUES (?, ?, ?, ?)
@@ -460,7 +462,7 @@ export class HubDatabase {
     edge_id?: number;
     session_id?: number;
     message: string;
-    metadata?: any;
+    metadata?: Record<string, unknown>;
   }): Promise<void> {
     const stmt = await this.db.prepare(`
       INSERT INTO audit_logs (event_type, edge_id, session_id, message, metadata, created_at)
@@ -1210,6 +1212,7 @@ export class HubDatabase {
    */
   async updateChannelGroup(id: number, updates: Partial<Omit<ChannelGroupData, 'id' | 'channel_id'>>): Promise<void> {
     const fields: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const values: any[] = [];
 
     if (updates.name !== undefined) {
