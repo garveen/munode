@@ -583,6 +583,35 @@ export class EdgeControlClient extends EventEmitter {
   }
 
   /**
+   * 报告到其他Edge的连接质量
+   */
+  async reportQuality(targetEdgeId: number, quality: {
+    rtt: number;
+    packetLoss: number;
+    jitter: number;
+    samples: number;
+  }): Promise<RPCResult<'edge.reportQuality'>> {
+    if (!this.isConnected() || (!this.useExternalClient && !this.registered)) {
+      throw new Error('Not connected to Hub');
+    }
+
+    try {
+      const params: RPCParams<'edge.reportQuality'> = {
+        edge_id: this.config.server_id,
+        target_edge_id: targetEdgeId,
+        quality,
+      };
+
+      const result = await this.client.call('edge.reportQuality', params);
+      logger.debug(`Reported quality to Edge ${targetEdgeId}:`, quality);
+      return result;
+    } catch (error) {
+      logger.error(`Failed to report quality to Edge ${targetEdgeId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * 获取服务器统计信息
    */
   private async getServerStats(): Promise<ServerStats> {

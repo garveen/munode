@@ -67,6 +67,8 @@ export interface TestEnvironment {
   authServer?: http.Server;
   authPort: number;
   hubPort: number;
+  controlPort: number; // Hub 控制端口
+  webApiPort: number; // Hub Web API 端口
   edgePort: number;
   edgeUdpPort: number; // Edge1 的 UDP 端口
   edgePort2: number; // 第二个 Edge 服务器端口
@@ -335,6 +337,9 @@ class TestAuthServer {
       'failover_relay1': { password: 'pass2', user_id: 432 },
       'failover_relay2': { password: 'pass3', user_id: 433 },
       'failover_receiver': { password: 'pass4', user_id: 434 },
+      // Quality simulation test users
+      'quality_sender': { password: 'pass1', user_id: 501 },
+      'quality_receiver': { password: 'pass2', user_id: 502 },
     };
 
     const user = users[req.username];
@@ -1068,6 +1073,8 @@ export async function setupTestEnvironment(
     authServer: authServer?.getServer(),
     authPort,
     hubPort,
+    controlPort,
+    webApiPort,
     edgePort,
     edgeUdpPort,
     edgePort2,

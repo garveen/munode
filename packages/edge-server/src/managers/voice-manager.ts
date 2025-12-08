@@ -70,6 +70,21 @@ export class VoiceManager {
     this.voiceRoutingManager.on('quality-degraded', (edgeId: number, quality: EdgeConnectionQuality) => {
       logger.warn(`Voice quality degraded for Edge ${edgeId}: RTT=${quality.rtt}ms, loss=${(quality.packetLoss * 100).toFixed(1)}%`);
     });
+
+    // 监听质量更新事件，报告给Hub
+    this.voiceRoutingManager.on('quality-updated', async (edgeId: number, quality: EdgeConnectionQuality) => {
+      try {
+        await this.handlerFactory.hubClient.reportQuality(edgeId, {
+          rtt: quality.rtt,
+          packetLoss: quality.packetLoss,
+          jitter: quality.jitter,
+          samples: quality.samples,
+        });
+        logger.debug(`Reported connection quality to Edge ${edgeId} to Hub`);
+      } catch (error) {
+        logger.error(`Failed to report quality to Edge ${edgeId}:`, error);
+      }
+    });
   }
 
   /**
