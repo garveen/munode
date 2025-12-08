@@ -17,6 +17,8 @@ import {
   DEFAULT_EDGE_RELAY_CONFIG,
   DEFAULT_PROBE_CONFIG,
   DEFAULT_FALLBACK_CONFIG,
+  RouteValidator,
+  type ValidationResult,
 } from '@munode/protocol';
 import type {
   EdgeConfig,
@@ -92,6 +94,18 @@ export class VoiceRoutingManager extends EventEmitter {
   
   // 功能启用状态
   private _isEnabled: boolean = false;
+
+  // 性能优化：路由查找缓存
+  private routeCache: Map<number, { route: RouteEntry; timestamp: number }> = new Map();
+  private readonly ROUTE_CACHE_TTL = 5000; // 5秒缓存
+
+  // 性能优化：验证结果缓存
+  private validationCache: Map<string, { result: ValidationResult; timestamp: number }> = new Map();
+  private readonly VALIDATION_CACHE_TTL = 10000; // 10秒缓存
+  
+  // 性能优化：统计信息缓存
+  private statsCache: { stats: any; timestamp: number } | null = null;
+  private readonly STATS_CACHE_TTL = 3000; // 3秒缓存
 
   constructor(config: EdgeConfig) {
     super();
@@ -197,6 +211,11 @@ export class VoiceRoutingManager extends EventEmitter {
       this.metricsCleanupTimer = undefined;
     }
     
+    // 清除所有缓存
+    this.clearRouteCache();
+    this.validationCache.clear();
+    this.statsCache = null;
+    
     logger.info('VoiceRoutingManager stopped');
   }
 
@@ -248,10 +267,26 @@ export class VoiceRoutingManager extends EventEmitter {
   }
 
   /**
-   * 获取到目标 Edge 的路由
+   * 获取到目标 Edge 的路由（带缓存优化）
    */
   getRoute(targetEdgeId: number): RouteEntry | undefined {
-    return this.routingTable.get(targetEdgeId);
+    // 检查缓存
+    const cached = this.routeCache.get(targetEdgeId);
+    const now = Date.now();
+    
+    if (cached && (now - cached.timestamp) < this.ROUTE_CACHE_TTL) {
+      return cached.route;
+    }
+
+    // 从路由表获取
+    const route = this.routingTable.get(targetEdgeId);
+    
+    // 更新缓存
+    if (route) {
+      this.routeCache.set(targetEdgeId, { route, timestamp: now });
+    }
+    
+    return route;
   }
 
   /**
@@ -262,6 +297,38 @@ export class VoiceRoutingManager extends EventEmitter {
   }
 
   /**
+   * 清除路由缓存
+   */
+  private clearRouteCache(): void {
+    this.routeCache.clear();
+  }
+
+  /**
+   * 更新路由时清除相关缓存
+   */
+  private updateRoute(route: RouteEntry): void {
+    const oldRoute = this.routingTable.get(route.targetEdgeId);
+    this.routingTable.set(route.targetEdgeId, route);
+    
+    // 清除该路由的缓存
+    this.routeCache.delete(route.targetEdgeId);
+    // 清除统计缓存
+    this.statsCache = null;
+    
+    // 记录路由变化
+    if (oldRoute) {
+      logger.info(`Route updated: Edge ${route.targetEdgeId}, ` +
+                  `${oldRoute.type} -> ${route.type}, cost: ${route.cost.toFixed(2)}`);
+    } else {
+      logger.info(`Route added: Edge ${route.targetEdgeId}, ` +
+                  `type: ${route.type}, cost: ${route.cost.toFixed(2)}`);
+    }
+    
+    // 触发事件
+    this.emit('route-changed', route.targetEdgeId, route, oldRoute);
+  }
+
+  /**
    * 检查功能是否启用
    */
   isEnabled(): boolean {
@@ -269,7 +336,7 @@ export class VoiceRoutingManager extends EventEmitter {
   }
 
   /**
-   * 验证路由表条目
+   * 验证路由表条目（使用共享验证器和缓存）
    * 
    * 检查路由条目是否有效：
    * - 目标 Edge ID 必须存在且不等于本机
@@ -279,73 +346,27 @@ export class VoiceRoutingManager extends EventEmitter {
    * - cost 必须为非负数
    * - timestamp 必须有效
    */
-  validateRouteEntry(route: RouteEntry): { valid: boolean; error?: string } {
-    // 检查 targetEdgeId
-    if (!route.targetEdgeId || route.targetEdgeId === this.serverId) {
-      return {
-        valid: false,
-        error: `Invalid targetEdgeId: ${route.targetEdgeId} (must exist and not equal to self ${this.serverId})`
-      };
+  validateRouteEntry(route: RouteEntry): ValidationResult {
+    // 生成缓存键
+    const cacheKey = `${route.targetEdgeId}-${route.type}-${route.nextHop}-${route.timestamp}`;
+    const now = Date.now();
+    
+    // 检查缓存
+    const cached = this.validationCache.get(cacheKey);
+    if (cached && (now - cached.timestamp) < this.VALIDATION_CACHE_TTL) {
+      return cached.result;
     }
 
-    // 检查路由类型
-    if (!route.type || !Object.values(RouteType).includes(route.type)) {
-      return {
-        valid: false,
-        error: `Invalid route type: ${route.type}`
-      };
-    }
+    // 使用共享验证器
+    const result = RouteValidator.validateRouteEntry(route, {
+      sourceEdgeId: this.serverId,
+      // Edge 不知道所有允许的 Edge ID，所以不传递
+    });
 
-    // 中转模式必须有 nextHop
-    if (route.type === RouteType.RELAY) {
-      if (!route.nextHop) {
-        return {
-          valid: false,
-          error: 'Relay route must have nextHop'
-        };
-      }
+    // 更新缓存
+    this.validationCache.set(cacheKey, { result, timestamp: now });
 
-      // nextHop 不能等于目标或本机
-      if (route.nextHop === route.targetEdgeId) {
-        return {
-          valid: false,
-          error: `nextHop (${route.nextHop}) cannot equal targetEdgeId (${route.targetEdgeId})`
-        };
-      }
-
-      if (route.nextHop === this.serverId) {
-        return {
-          valid: false,
-          error: `nextHop (${route.nextHop}) cannot equal self (${this.serverId})`
-        };
-      }
-    }
-
-    // 检查 cost
-    if (typeof route.cost !== 'number' || route.cost < 0) {
-      return {
-        valid: false,
-        error: `Invalid cost: ${route.cost} (must be non-negative number)`
-      };
-    }
-
-    // 检查 timestamp
-    if (!route.timestamp || typeof route.timestamp !== 'number' || route.timestamp <= 0) {
-      return {
-        valid: false,
-        error: `Invalid timestamp: ${route.timestamp}`
-      };
-    }
-
-    // 检查 source
-    if (route.source !== 'hub' && route.source !== 'local') {
-      return {
-        valid: false,
-        error: `Invalid source: ${route.source} (must be 'hub' or 'local')`
-      };
-    }
-
-    return { valid: true };
+    return result;
   }
 
   /**
@@ -409,7 +430,7 @@ export class VoiceRoutingManager extends EventEmitter {
   }
 
   /**
-   * 获取路由表统计信息
+   * 获取路由表统计信息（使用共享验证器和缓存）
    */
   getRoutingTableStats(): {
     totalRoutes: number;
@@ -419,40 +440,19 @@ export class VoiceRoutingManager extends EventEmitter {
     hubRoutes: number;
     localRoutes: number;
   } {
-    let directRoutes = 0;
-    let relayRoutes = 0;
-    let fallbackRoutes = 0;
-    let hubRoutes = 0;
-    let localRoutes = 0;
-
-    for (const route of this.routingTable.values()) {
-      switch (route.type) {
-        case RouteType.DIRECT:
-          directRoutes++;
-          break;
-        case RouteType.RELAY:
-          relayRoutes++;
-          break;
-        case RouteType.FALLBACK:
-          fallbackRoutes++;
-          break;
-      }
-
-      if (route.source === 'hub') {
-        hubRoutes++;
-      } else {
-        localRoutes++;
-      }
+    // 检查缓存
+    const now = Date.now();
+    if (this.statsCache && (now - this.statsCache.timestamp) < this.STATS_CACHE_TTL) {
+      return this.statsCache.stats;
     }
 
-    return {
-      totalRoutes: this.routingTable.size,
-      directRoutes,
-      relayRoutes,
-      fallbackRoutes,
-      hubRoutes,
-      localRoutes,
-    };
+    // 使用共享验证器获取统计
+    const stats = RouteValidator.getRouteStats(this.routingTable);
+
+    // 更新缓存
+    this.statsCache = { stats, timestamp: now };
+
+    return stats;
   }
 
   /**
@@ -775,24 +775,6 @@ export class VoiceRoutingManager extends EventEmitter {
     }
     
     return true;
-  }
-
-  /**
-   * 更新路由
-   */
-  private updateRoute(route: RouteEntry): void {
-    const oldRoute = this.routingTable.get(route.targetEdgeId);
-    this.routingTable.set(route.targetEdgeId, route);
-    
-    if (oldRoute) {
-      logger.info(`Route updated: Edge ${route.targetEdgeId}, ` +
-                  `${oldRoute.type} -> ${route.type}, cost: ${route.cost.toFixed(2)}`);
-    } else {
-      logger.info(`Route added: Edge ${route.targetEdgeId}, ` +
-                  `type: ${route.type}, cost: ${route.cost.toFixed(2)}`);
-    }
-    
-    this.emit('route-changed', route.targetEdgeId, route, oldRoute);
   }
 
   /**

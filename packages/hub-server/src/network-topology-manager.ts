@@ -10,7 +10,7 @@
 
 import { EventEmitter } from 'events';
 import { createLogger } from '@munode/common';
-import { DEFAULT_ROUTING_POLICY } from '@munode/protocol';
+import { DEFAULT_ROUTING_POLICY, RouteValidator, type ValidationResult } from '@munode/protocol';
 import type { RoutingPolicy, VoiceRoutingConfig } from './types.js';
 
 const logger = createLogger({ service: 'network-topology-manager' });
@@ -88,6 +88,14 @@ export class NetworkTopologyManager extends EventEmitter {
   
   // 功能启用状态
   private _isEnabled: boolean = false;
+
+  // 性能优化：验证结果缓存
+  private validationCache: Map<string, { result: ValidationResult; timestamp: number }> = new Map();
+  private readonly VALIDATION_CACHE_TTL = 10000; // 10秒缓存
+  
+  // 性能优化：统计信息缓存
+  private statsCache: Map<number, { stats: any; timestamp: number }> = new Map();
+  private readonly STATS_CACHE_TTL = 3000; // 3秒缓存
 
   constructor(config?: VoiceRoutingConfig) {
     super();
@@ -509,7 +517,7 @@ export class NetworkTopologyManager extends EventEmitter {
   }
 
   /**
-   * 验证路由表条目
+   * 验证路由表条目（使用共享验证器和缓存）
    * 
    * 检查路由条目是否有效：
    * - 目标 Edge ID 必须在拓扑中存在
@@ -519,7 +527,7 @@ export class NetworkTopologyManager extends EventEmitter {
    * - cost 必须为非负数
    * - timestamp 必须有效
    */
-  validateRouteEntry(sourceEdgeId: number, route: RouteEntry): { valid: boolean; error?: string } {
+  validateRouteEntry(sourceEdgeId: number, route: RouteEntry): ValidationResult {
     // 检查源 Edge
     if (!this.edges.has(sourceEdgeId)) {
       return {
@@ -528,88 +536,26 @@ export class NetworkTopologyManager extends EventEmitter {
       };
     }
 
-    // 检查目标 Edge
-    if (!this.edges.has(route.targetEdgeId)) {
-      return {
-        valid: false,
-        error: `Target Edge ${route.targetEdgeId} does not exist in topology`
-      };
+    // 生成缓存键
+    const cacheKey = `${sourceEdgeId}-${route.targetEdgeId}-${route.type}-${route.nextHop}-${route.timestamp}`;
+    const now = Date.now();
+    
+    // 检查缓存
+    const cached = this.validationCache.get(cacheKey);
+    if (cached && (now - cached.timestamp) < this.VALIDATION_CACHE_TTL) {
+      return cached.result;
     }
 
-    // 源和目标不能相同
-    if (sourceEdgeId === route.targetEdgeId) {
-      return {
-        valid: false,
-        error: `Source (${sourceEdgeId}) and target (${route.targetEdgeId}) cannot be the same`
-      };
-    }
+    // 使用共享验证器，传递允许的 Edge ID
+    const result = RouteValidator.validateRouteEntry(route, {
+      sourceEdgeId,
+      allowedEdgeIds: this.edges,
+    });
 
-    // 检查路由类型
-    if (!route.type || !Object.values(RouteType).includes(route.type)) {
-      return {
-        valid: false,
-        error: `Invalid route type: ${route.type}`
-      };
-    }
+    // 更新缓存
+    this.validationCache.set(cacheKey, { result, timestamp: now });
 
-    // 中转模式必须有 nextHop
-    if (route.type === RouteType.RELAY) {
-      if (!route.nextHop) {
-        return {
-          valid: false,
-          error: 'Relay route must have nextHop'
-        };
-      }
-
-      // nextHop 必须存在于拓扑中
-      if (!this.edges.has(route.nextHop)) {
-        return {
-          valid: false,
-          error: `nextHop ${route.nextHop} does not exist in topology`
-        };
-      }
-
-      // nextHop 不能等于源或目标
-      if (route.nextHop === route.targetEdgeId) {
-        return {
-          valid: false,
-          error: `nextHop (${route.nextHop}) cannot equal targetEdgeId (${route.targetEdgeId})`
-        };
-      }
-
-      if (route.nextHop === sourceEdgeId) {
-        return {
-          valid: false,
-          error: `nextHop (${route.nextHop}) cannot equal source (${sourceEdgeId})`
-        };
-      }
-    }
-
-    // 检查 cost
-    if (typeof route.cost !== 'number' || route.cost < 0) {
-      return {
-        valid: false,
-        error: `Invalid cost: ${route.cost} (must be non-negative number)`
-      };
-    }
-
-    // 检查 timestamp
-    if (!route.timestamp || typeof route.timestamp !== 'number' || route.timestamp <= 0) {
-      return {
-        valid: false,
-        error: `Invalid timestamp: ${route.timestamp}`
-      };
-    }
-
-    // 检查 source
-    if (route.source !== 'hub' && route.source !== 'local') {
-      return {
-        valid: false,
-        error: `Invalid source: ${route.source} (must be 'hub' or 'local')`
-      };
-    }
-
-    return { valid: true };
+    return result;
   }
 
   /**
@@ -718,7 +664,7 @@ export class NetworkTopologyManager extends EventEmitter {
   }
 
   /**
-   * 获取路由表统计信息（针对特定 Edge）
+   * 获取路由表统计信息（针对特定 Edge，使用共享验证器和缓存）
    */
   getRouteTableStats(edgeId: number): {
     totalRoutes: number;
@@ -726,39 +672,39 @@ export class NetworkTopologyManager extends EventEmitter {
     relayRoutes: number;
     fallbackRoutes: number;
     avgCost: number;
+    hubRoutes?: number;
+    localRoutes?: number;
   } | null {
     const routeTable = this.routingTables.get(edgeId);
     if (!routeTable) {
       return null;
     }
 
-    let directRoutes = 0;
-    let relayRoutes = 0;
-    let fallbackRoutes = 0;
-    let totalCost = 0;
+    // 检查缓存
+    const now = Date.now();
+    const cached = this.statsCache.get(edgeId);
+    if (cached && (now - cached.timestamp) < this.STATS_CACHE_TTL) {
+      return cached.stats;
+    }
 
+    // 使用共享验证器获取统计
+    const basicStats = RouteValidator.getRouteStats(routeTable);
+    
+    // 计算平均成本
+    let totalCost = 0;
     for (const route of routeTable.values()) {
-      switch (route.type) {
-        case RouteType.DIRECT:
-          directRoutes++;
-          break;
-        case RouteType.RELAY:
-          relayRoutes++;
-          break;
-        case RouteType.FALLBACK:
-          fallbackRoutes++;
-          break;
-      }
       totalCost += route.cost;
     }
 
-    return {
-      totalRoutes: routeTable.size,
-      directRoutes,
-      relayRoutes,
-      fallbackRoutes,
+    const stats = {
+      ...basicStats,
       avgCost: routeTable.size > 0 ? totalCost / routeTable.size : 0,
     };
+
+    // 更新缓存
+    this.statsCache.set(edgeId, { stats, timestamp: now });
+
+    return stats;
   }
 
   /**
