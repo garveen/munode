@@ -4,7 +4,6 @@
  * 提供用于测试的 UDP 质量模拟功能
  */
 
-import { vi } from 'vitest';
 import type { Socket } from 'dgram';
 
 /**
@@ -56,10 +55,11 @@ export class UDPQualitySimulator {
     this.socket = socket;
     this.originalSend = socket.send.bind(socket);
 
-    // Mock socket.send 方法
-    socket.send = vi.fn((msg: any, offset: any, length: any, port: any, address: any, callback?: any) => {
+    // 替换 socket.send 方法来模拟网络质量问题
+    const self = this;
+    socket.send = function(msg: any, offset: any, length: any, port: any, address: any, callback?: any) {
       // 如果完全阻断，直接返回错误
-      if (this.config.blocked) {
+      if (self.config.blocked) {
         if (callback) {
           setImmediate(() => callback(new Error('Network blocked')));
         }
@@ -67,7 +67,7 @@ export class UDPQualitySimulator {
       }
 
       // 模拟丢包
-      if (Math.random() < this.config.packetLoss) {
+      if (Math.random() < self.config.packetLoss) {
         if (callback) {
           // 丢包模拟为超时
           setImmediate(() => callback(new Error('ETIMEDOUT')));
@@ -76,18 +76,18 @@ export class UDPQualitySimulator {
       }
 
       // 计算延迟（包含抖动）
-      const actualLatency = this.config.latency + 
-        (Math.random() * this.config.jitter * 2 - this.config.jitter);
+      const actualLatency = self.config.latency + 
+        (Math.random() * self.config.jitter * 2 - self.config.jitter);
 
       // 延迟发送
       if (actualLatency > 0) {
         setTimeout(() => {
-          this.originalSend!(msg, offset, length, port, address, callback);
+          self.originalSend!(msg, offset, length, port, address, callback);
         }, actualLatency);
       } else {
-        this.originalSend!(msg, offset, length, port, address, callback);
+        self.originalSend!(msg, offset, length, port, address, callback);
       }
-    });
+    } as any;
   }
 
   /**
