@@ -182,6 +182,14 @@ export class ConnectionManager {
   }
 
   /**
+   * 获取 UDP socket（用于测试目的）
+   * @internal
+   */
+  getUdpSocket(): UDPSocket | null {
+    return this.udpSocket;
+  }
+
+  /**
    * 断开连接
    */
   async disconnect(): Promise<void> {

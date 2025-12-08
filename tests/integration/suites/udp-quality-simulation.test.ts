@@ -75,17 +75,19 @@ describe('UDP Quality Simulation Tests', () => {
 
       const [sender, receiver] = clients;
       
-      // 获取发送方的 UDP transport
+      // 获取发送方的 UDP socket
       const connectionManager = sender.getConnectionManager();
-      const voiceTransport = (connectionManager as any).voiceTransport;
+      const udpSocket = connectionManager.getUdpSocket();
+      
+      // UDP socket 必须存在才能进行模拟测试
+      if (!udpSocket) {
+        throw new Error('UDP socket not available - cannot test quality simulation');
+      }
       
       // 模拟轻微丢包（2%）
-      let simulator: UDPQualitySimulator | undefined;
-      if (voiceTransport && voiceTransport.socket) {
-        simulator = new UDPQualitySimulator(NetworkScenarios.LIGHT_LOSS);
-        simulator.start(voiceTransport.socket);
-        console.log('[TEST] Started UDP quality simulation with LIGHT_LOSS');
-      }
+      const simulator = new UDPQualitySimulator(NetworkScenarios.LIGHT_LOSS);
+      simulator.start(udpSocket);
+      console.log('[TEST] Started UDP quality simulation with LIGHT_LOSS');
 
       let receivedCount = 0;
       const senderSession = sender.getStateManager().getSession()?.session || 0;
@@ -108,10 +110,8 @@ describe('UDP Quality Simulation Tests', () => {
       await sleep(3000);
 
       // 停止模拟
-      if (simulator) {
-        simulator.stop();
-        console.log('[TEST] Stopped UDP quality simulation');
-      }
+      simulator.stop();
+      console.log('[TEST] Stopped UDP quality simulation');
 
       console.log(`[LIGHT_LOSS] Sent 50, received ${receivedCount}`);
 
@@ -130,17 +130,19 @@ describe('UDP Quality Simulation Tests', () => {
 
       const [sender, receiver] = clients;
       
-      // 获取发送方的 UDP transport
+      // 获取发送方的 UDP socket
       const connectionManager = sender.getConnectionManager();
-      const voiceTransport = (connectionManager as any).voiceTransport;
+      const udpSocket = connectionManager.getUdpSocket();
+      
+      // UDP socket 必须存在才能进行模拟测试
+      if (!udpSocket) {
+        throw new Error('UDP socket not available - cannot test quality simulation');
+      }
       
       // 模拟高延迟（200ms + 50ms jitter）
-      let simulator: UDPQualitySimulator | undefined;
-      if (voiceTransport && voiceTransport.socket) {
-        simulator = new UDPQualitySimulator(NetworkScenarios.HIGH_LATENCY);
-        simulator.start(voiceTransport.socket);
-        console.log('[TEST] Started UDP quality simulation with HIGH_LATENCY');
-      }
+      const simulator = new UDPQualitySimulator(NetworkScenarios.HIGH_LATENCY);
+      simulator.start(udpSocket);
+      console.log('[TEST] Started UDP quality simulation with HIGH_LATENCY');
 
       let receivedCount = 0;
       const senderSession = sender.getStateManager().getSession()?.session || 0;
@@ -165,9 +167,7 @@ describe('UDP Quality Simulation Tests', () => {
       await sleep(5000);
 
       // 停止模拟
-      if (simulator) {
-        simulator.stop();
-      }
+      simulator.stop();
 
       const totalTime = Date.now() - startTime;
       console.log(`[HIGH_LATENCY] Sent 20, received ${receivedCount}, took ${totalTime}ms`);
@@ -186,19 +186,19 @@ describe('UDP Quality Simulation Tests', () => {
 
       const [sender, receiver] = clients;
       
-      // 获取发送方的 UDP transport
+      // 获取发送方的 UDP socket
       const connectionManager = sender.getConnectionManager();
-      const voiceTransport = (connectionManager as any).voiceTransport;
+      const udpSocket = connectionManager.getUdpSocket();
+      
+      // UDP socket 必须存在才能进行模拟测试
+      if (!udpSocket) {
+        throw new Error('UDP socket not available - cannot test quality simulation');
+      }
       
       // 模拟严重质量问题（15%丢包，300ms延迟）
-      let simulator: UDPQualitySimulator | undefined;
-      if (voiceTransport && voiceTransport.socket) {
-        simulator = new UDPQualitySimulator(NetworkScenarios.POOR);
-        simulator.start(voiceTransport.socket);
-        console.log('[TEST] Started UDP quality simulation with POOR quality');
-      } else {
-        console.warn('[TEST] Could not access UDP socket, simulator not started');
-      }
+      const simulator = new UDPQualitySimulator(NetworkScenarios.POOR);
+      simulator.start(udpSocket);
+      console.log('[TEST] Started UDP quality simulation with POOR quality');
 
       let receivedCount = 0;
       const senderSession = sender.getStateManager().getSession()?.session || 0;
@@ -221,24 +221,15 @@ describe('UDP Quality Simulation Tests', () => {
       await sleep(6000);
 
       // 停止模拟
-      if (simulator) {
-        simulator.stop();
-      }
+      simulator.stop();
 
       const lossRate = 1 - (receivedCount / 100);
       console.log(`[POOR_QUALITY] Sent 100, received ${receivedCount}, loss rate: ${(lossRate * 100).toFixed(1)}%`);
 
-      // 注意：如果 UDP socket 无法访问，模拟器不会生效，所有包都会到达
-      // 在这种情况下，我们只验证通信正常
-      if (simulator && voiceTransport && voiceTransport.socket) {
-        // 如果模拟器启动了，期望看到丢包
-        // 15%丢包率下应该收到约85个包（允许较大误差因为是随机的）
-        expect(receivedCount).toBeGreaterThan(70);
-        expect(receivedCount).toBeLessThan(100);
-      } else {
-        // 如果模拟器未启动，只验证基本通信
-        expect(receivedCount).toBeGreaterThan(90);
-      }
+      // 模拟器已启动，期望看到丢包
+      // 15%丢包率下应该收到约85个包（允许较大误差因为是随机的）
+      expect(receivedCount).toBeGreaterThan(70);
+      expect(receivedCount).toBeLessThan(100);
 
       await cleanupClients(clients);
     });
@@ -251,17 +242,19 @@ describe('UDP Quality Simulation Tests', () => {
 
       const [sender, receiver] = clients;
       
-      // 获取发送方的 UDP transport
+      // 获取发送方的 UDP socket
       const connectionManager = sender.getConnectionManager();
-      const voiceTransport = (connectionManager as any).voiceTransport;
+      const udpSocket = connectionManager.getUdpSocket();
       
-      let simulator: UDPQualitySimulator | undefined;
-      if (voiceTransport && voiceTransport.socket) {
-        // 开始时使用良好质量
-        simulator = new UDPQualitySimulator(NetworkScenarios.GOOD);
-        simulator.start(voiceTransport.socket);
-        console.log('[TEST] Started with GOOD quality');
+      // UDP socket 必须存在才能进行模拟测试
+      if (!udpSocket) {
+        throw new Error('UDP socket not available - cannot test quality simulation');
       }
+      
+      // 开始时使用良好质量
+      const simulator = new UDPQualitySimulator(NetworkScenarios.GOOD);
+      simulator.start(udpSocket);
+      console.log('[TEST] Started with GOOD quality');
 
       let receivedCount = 0;
       const senderSession = sender.getStateManager().getSession()?.session || 0;
@@ -287,10 +280,8 @@ describe('UDP Quality Simulation Tests', () => {
       console.log(`[TEST] Phase 1 received: ${phase1Count}/20`);
 
       // 第二阶段：切换到差质量
-      if (simulator) {
-        simulator.updateConfig(NetworkScenarios.POOR);
-        console.log('[TEST] Phase 2: POOR quality');
-      }
+      simulator.updateConfig(NetworkScenarios.POOR);
+      console.log('[TEST] Phase 2: POOR quality');
 
       for (let i = 20; i < 40; i++) {
         const voicePacket = createVoicePacket(4, 0, i);
@@ -303,25 +294,17 @@ describe('UDP Quality Simulation Tests', () => {
       console.log(`[TEST] Phase 2 received: ${phase2Count}/20`);
 
       // 停止模拟
-      if (simulator) {
-        simulator.stop();
-      }
+      simulator.stop();
 
       console.log(`[DYNAMIC] Phase 1: ${phase1Count}/20, Phase 2: ${phase2Count}/20`);
 
-      // 注意：如果 UDP socket 无法访问，模拟器不会生效
       // 第一阶段应该收到几乎所有包
       expect(phase1Count).toBeGreaterThan(18);
       
-      // 如果模拟器成功启动，第二阶段会有丢包
-      if (simulator && voiceTransport && voiceTransport.socket) {
-        // 第二阶段由于质量差，应该会丢失一些包
-        // 但由于本地网络可能仍然很好，允许收到大部分包
-        expect(phase2Count).toBeGreaterThan(10);
-      } else {
-        // 如果模拟器未启动，两个阶段应该差不多
-        expect(phase2Count).toBeGreaterThan(15);
-      }
+      // 第二阶段由于质量差，应该会丢失一些包
+      // 15%丢包率下预期收到约17个包（允许较大误差）
+      expect(phase2Count).toBeGreaterThan(10);
+      expect(phase2Count).toBeLessThan(20);
 
       await cleanupClients(clients);
     });
