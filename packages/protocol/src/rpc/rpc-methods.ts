@@ -253,7 +253,7 @@ export interface EdgeToHubMethods {
   'edge.queryChannelTree': EdgeQueryChannelTreeMethod;
   'edge.queryOnlineUsers': EdgeQueryOnlineUsersMethod;
   // 添加索引签名以满足泛型约束
-  [key: string]: { method: string; params: any; result: any };
+  [key: string]: { method: string; params: unknown; result: unknown };
 }
 
 /**
@@ -264,7 +264,7 @@ export interface HubToEdgeMethods {
   'hub.reloadConfig': HubReloadConfigMethod;
   'hub.requestStats': HubRequestStatsMethod;
   // 添加索引签名以满足泛型约束
-  [key: string]: { method: string; params: any; result: any };
+  [key: string]: { method: string; params: unknown; result: unknown };
 }
 
 // ============================================================================
@@ -275,7 +275,7 @@ export interface HubToEdgeMethods {
  * 从方法名获取参数类型
  */
 export type RPCParams<
-  Methods extends Record<string, { method: string; params: any }>,
+  Methods extends Record<string, { method: string; params: unknown }>,
   M extends keyof Methods
 > = Methods[M] extends { params: infer P } ? P : never;
 
@@ -283,7 +283,7 @@ export type RPCParams<
  * 从方法名获取返回值类型
  */
 export type RPCResult<
-  Methods extends Record<string, { method: string; result: any }>,
+  Methods extends Record<string, { method: string; result: unknown }>,
   M extends keyof Methods
 > = Methods[M] extends { result: infer R } ? R : never;
 
@@ -317,7 +317,7 @@ export class RPCError extends Error {
   constructor(
     public code: RPCErrorCode,
     message: string,
-    public details?: any
+    public details?: Record<string, unknown>
   ) {
     super(message);
     this.name = 'RPCError';
@@ -331,7 +331,7 @@ export class RPCError extends Error {
     };
   }
 
-  static fromJSON(json: { code: number; message: string; details?: any }): RPCError {
+  static fromJSON(json: { code: number; message: string; details?: Record<string, unknown> }): RPCError {
     return new RPCError(json.code, json.message, json.details);
   }
 }

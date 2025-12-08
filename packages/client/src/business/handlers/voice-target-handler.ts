@@ -4,12 +4,37 @@
  * 处理语音目标的设置和移除
  */
 
-import type { BusinessHandler } from '../../api/dispatcher.js';
+import { mumbleproto } from '@munode/protocol';
+import type { BusinessHandler } from '../../types/api-types.js';
 import type { ApiContext } from '../context.js';
 
-export class SetVoiceTargetHandler implements BusinessHandler {
-  async execute(params: { id: number; targets: any[] }, context: ApiContext): Promise<void> {
-    await context.client.setVoiceTarget(params.id, params.targets);
+interface VoiceTarget {
+  session?: number[];
+  channelId?: number;
+  links?: boolean;
+  children?: boolean;
+  group?: string;
+}
+
+interface VoiceTargetParams {
+  id: number;
+  targets: VoiceTarget[];
+}
+
+export class VoiceTargetHandler implements BusinessHandler<VoiceTargetParams, void> {
+  async execute(params: VoiceTargetParams, context: ApiContext): Promise<void> {
+    // 转换为 protobuf 格式
+    const protoTargets: mumbleproto.VoiceTarget.Target[] = params.targets.map(target => 
+      mumbleproto.VoiceTarget.Target.fromObject({
+        session: target.session || [],
+        channel_id: target.channelId,
+        links: target.links,
+        children: target.children,
+        group: target.group
+      })
+    );
+    
+    await context.client.setVoiceTarget(params.id, protoTargets);
   }
 }
 

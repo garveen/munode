@@ -11,7 +11,7 @@ export interface CachedMessage {
   id: string;
   type: string;
   method: string;
-  params: any;
+  params: unknown;
   timestamp: number;
   sequence: number; // 消息序列号，用于排序
 }
@@ -47,7 +47,7 @@ export class MessageCache {
       this.cache.set(edgeId, []);
     }
 
-    const messages = this.cache.get(edgeId)!;
+    const messages = this.cache.get(edgeId);
     const cachedMessage: CachedMessage = {
       ...message,
       sequence: ++this.messageSequence,

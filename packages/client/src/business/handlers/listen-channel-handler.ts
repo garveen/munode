@@ -4,7 +4,7 @@
  * 处理监听频道的添加、移除和查询
  */
 
-import type { BusinessHandler } from '../../api/dispatcher.js';
+import type { BusinessHandler } from '../../types/api-types.js';
 import type { ApiContext } from '../context.js';
 
 export class AddListeningChannelHandler implements BusinessHandler {

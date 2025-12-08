@@ -1,0 +1,824 @@
+syntax = "proto2";
+
+package hubedge;
+
+// ============================================================================
+// Common Types
+// ============================================================================
+
+message EdgeInfo {
+  required uint32 server_id = 1;
+  required string name = 2;
+  required string host = 3;
+  required uint32 port = 4;
+  optional string region = 5;
+  required uint32 current_load = 6;
+  required uint32 capacity = 7;
+  required string certificate = 8;
+  required int64 last_seen = 9;
+}
+
+// ============================================================================
+// RPC 方法参数和结果的类型安全定义
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// edge.register - Edge 注册到 Hub
+// ---------------------------------------------------------------------------
+message EdgeRegisterParams {
+  required uint32 server_id = 1;
+  required string name = 2;
+  required string host = 3;
+  required uint32 port = 4;
+  optional string region = 5;
+  required uint32 capacity = 6;
+  required string certificate = 7;
+  optional string challenge = 8;
+  optional string challenge_response = 9;
+}
+
+message EdgeRegisterResult {
+  required bool success = 1;
+  optional uint32 hub_server_id = 2;
+  repeated EdgeInfo edge_list = 3;
+  optional string challenge = 4;
+  optional uint32 challenge_timeout = 5;
+  optional string error = 6;
+}
+
+// ---------------------------------------------------------------------------
+// edge.heartbeat - Edge 发送心跳
+// ---------------------------------------------------------------------------
+message EdgeHeartbeatParams {
+  required uint32 server_id = 1;
+  optional EdgeServerStats stats = 2;
+}
+
+message EdgeServerStats {
+  optional uint32 user_count = 1;
+  optional uint32 channel_count = 2;
+  optional float cpu_usage = 3;
+  optional uint64 memory_usage_mb = 4;
+  optional float bandwidth_in = 5;
+  optional float bandwidth_out = 6;
+}
+
+message EdgeHeartbeatResult {
+  required bool success = 1;
+  repeated EdgeInfo updated_edges = 2;
+  optional string error = 3;
+}
+
+// ---------------------------------------------------------------------------
+// edge.allocateSessionId - Edge 分配 Session ID
+// ---------------------------------------------------------------------------
+message EdgeAllocateSessionIdParams {
+  required uint32 edge_id = 1;
+}
+
+message EdgeAllocateSessionIdResult {
+  required uint32 session_id = 1;
+}
+
+// ---------------------------------------------------------------------------
+// edge.authenticateUser - Edge 请求用户认证
+// ---------------------------------------------------------------------------
+message EdgeAuthenticateUserParams {
+  required uint32 session_id = 1;
+  required uint32 server_id = 2;
+  required string username = 3;
+  required string password = 4;
+  repeated string tokens = 5;
+  optional ClientInfo client_info = 6;
+}
+
+message ClientInfo {
+  required string ip_address = 1;
+  required string ip_version = 2;
+  required string release = 3;
+  optional uint32 version = 4;
+  required string os = 5;
+  required string os_version = 6;
+  optional string certificate_hash = 7;
+}
+
+message EdgeAuthenticateUserResult {
+  required bool success = 1;
+  optional uint32 user_id = 2;
+  optional string username = 3;
+  optional string display_name = 4;
+  repeated string groups = 5;
+  optional string reason = 6;
+  optional uint32 reject_type = 7;
+}
+
+// ---------------------------------------------------------------------------
+// edge.reportSession - Edge 上报用户会话
+// ---------------------------------------------------------------------------
+message EdgeReportSessionParams {
+  required uint32 session_id = 1;
+  required uint32 user_id = 2;
+  required string username = 3;
+  required uint32 edge_server_id = 4;
+  optional uint32 channel_id = 5;
+  required int64 start_time = 6;
+  required string ip_address = 7;
+  repeated string groups = 8;
+  optional string cert_hash = 9;
+  optional string version = 10;
+  optional string release = 11;
+  optional string os = 12;
+  optional string os_version = 13;
+}
+
+message EdgeReportSessionResult {
+  required bool success = 1;
+  optional string error = 2;
+}
+
+// ---------------------------------------------------------------------------
+// edge.syncVoiceTarget - Edge 同步语音目标配置
+// ---------------------------------------------------------------------------
+message EdgeSyncVoiceTargetParams {
+  required uint32 edge_id = 1;
+  required uint32 client_session = 2;
+  required uint32 target_id = 3;
+  optional VoiceTargetConfigProto config = 4;
+  required int64 timestamp = 5;
+}
+
+message VoiceTargetConfigProto {
+  repeated VoiceTargetSession sessions = 1;
+  repeated VoiceTargetChannel channels = 2;
+}
+
+message VoiceTargetSession {
+  required uint32 session = 1;
+}
+
+message VoiceTargetChannel {
+  required uint32 channel_id = 1;
+  optional bool children = 2;
+  optional bool links = 3;
+  optional string group = 4;
+}
+
+message EdgeSyncVoiceTargetResult {
+  required bool success = 1;
+  optional string error = 2;
+}
+
+// ---------------------------------------------------------------------------
+// edge.getVoiceTargets - Edge 获取语音目标配置
+// ---------------------------------------------------------------------------
+message EdgeGetVoiceTargetsParams {
+  optional uint32 edge_id = 1;
+}
+
+message EdgeGetVoiceTargetsResult {
+  repeated VoiceTargetConfigEntry voice_targets = 1;
+}
+
+message VoiceTargetConfigEntry {
+  required uint32 edge_id = 1;
+  required uint32 client_session = 2;
+  required uint32 target_id = 3;
+  optional VoiceTargetConfigProto config = 4;
+  required int64 timestamp = 5;
+}
+
+// ---------------------------------------------------------------------------
+// edge.routeVoice - Edge 请求路由语音数据
+// ---------------------------------------------------------------------------
+message EdgeRouteVoiceParams {
+  required uint32 from_edge_id = 1;
+  required uint32 from_session_id = 2;
+  required uint32 target_id = 3;
+  required bytes voice_data = 4;
+  required int64 timestamp = 5;
+}
+
+message EdgeRouteVoiceResult {
+  required bool success = 1;
+  repeated RouteTarget routed_to = 2;
+}
+
+message RouteTarget {
+  required uint32 session_id = 1;
+  required uint32 edge_id = 2;
+}
+
+// ---------------------------------------------------------------------------
+// edge.adminOperation - Edge 执行管理操作
+// ---------------------------------------------------------------------------
+message EdgeAdminOperationParams {
+  required string operation = 1;
+  optional bytes data = 2;
+}
+
+message EdgeAdminOperationResult {
+  required bool success = 1;
+  optional string message = 2;
+  optional AdminStats stats = 3;
+}
+
+message AdminStats {
+  optional uint32 edges = 1;
+  optional uint32 sessions = 2;
+  optional uint32 voice_targets = 3;
+  optional uint32 channels = 4;
+}
+
+// ---------------------------------------------------------------------------
+// edge.exchangeCertificates - Edge 交换证书
+// ---------------------------------------------------------------------------
+message EdgeExchangeCertificatesParams {
+  required uint32 server_id = 1;
+  required string certificate = 2;
+}
+
+message EdgeExchangeCertificatesResult {
+  required bool success = 1;
+  optional string error = 2;
+}
+
+// ---------------------------------------------------------------------------
+// edge.fullSync - Edge 请求完整同步
+// ---------------------------------------------------------------------------
+message EdgeFullSyncParams {
+  optional uint32 for_user_id = 1;
+  repeated string for_user_groups = 2;
+  optional uint32 for_user_channel_id = 3;
+  optional string for_user_cert_hash = 4;
+}
+
+message EdgeFullSyncResult {
+  repeated ChannelDataProto channels = 1;
+  repeated ChannelLinkProto channel_links = 2;
+  repeated ACLDataProto acls = 3;
+  repeated BanDataProto bans = 4;
+  repeated GlobalSessionProto sessions = 5;
+  required int64 timestamp = 6;
+  required uint64 sequence = 7;
+  repeated EdgeInfoProto edges = 8;
+}
+
+message ChannelDataProto {
+  required uint32 channel_id = 1;
+  required string name = 2;
+  optional uint32 parent_id = 3;
+  optional string description = 4;
+  optional int32 position = 5;
+  optional uint32 max_users = 6;
+  optional bool temporary = 7;
+  optional bool inherit_acl = 8;
+  repeated uint32 links = 9;
+}
+
+message ChannelLinkProto {
+  required uint32 channel_id = 1;
+  required uint32 target_id = 2;
+}
+
+message ACLDataProto {
+  optional uint32 id = 1;
+  required uint32 channel_id = 2;
+  optional uint32 user_id = 3;
+  optional string group = 4;
+  required bool apply_here = 5;
+  required bool apply_subs = 6;
+  required uint32 allow = 7;
+  required uint32 deny = 8;
+}
+
+message BanDataProto {
+  required string address = 1;
+  required uint32 mask = 2;
+  optional string username = 3;
+  optional string cert_hash = 4;
+  optional string reason = 5;
+  optional int64 start = 6;
+  optional uint32 duration = 7;
+}
+
+message GlobalSessionProto {
+  required uint32 session_id = 1;
+  required uint32 edge_id = 2;
+  required uint32 user_id = 3;
+  required string username = 4;
+  required uint32 channel_id = 5;
+  optional string ip_address = 6;
+  optional string cert_hash = 7;
+  optional int64 connected_at = 8;
+  repeated string groups = 9;
+}
+
+message EdgeInfoProto {
+  required uint32 server_id = 1;
+  required string name = 2;
+  required string host = 3;
+  required uint32 port = 4;
+  optional string region = 5;
+  required uint32 current_load = 6;
+  required uint32 capacity = 7;
+}
+
+// ---------------------------------------------------------------------------
+// edge.getChannels - Edge 获取频道列表
+// ---------------------------------------------------------------------------
+message EdgeGetChannelsParams {
+  // Empty params
+}
+
+message EdgeGetChannelsResult {
+  repeated ChannelDataProto channels = 1;
+}
+
+// ---------------------------------------------------------------------------
+// edge.getACLs - Edge 获取 ACL 列表
+// ---------------------------------------------------------------------------
+message EdgeGetACLsParams {
+  required uint32 channel_id = 1;
+}
+
+message EdgeGetACLsResult {
+  repeated ACLDataProto acls = 1;
+}
+
+// ---------------------------------------------------------------------------
+// edge.saveChannel - Edge 保存频道
+// ---------------------------------------------------------------------------
+message EdgeSaveChannelParams {
+  optional uint32 id = 1;
+  optional string name = 2;
+  optional int32 position = 3;
+  optional uint32 max_users = 4;
+  optional uint32 parent_id = 5;
+  optional bool inherit_acl = 6;
+  optional string description = 7;
+  optional string description_blob = 8;
+}
+
+message EdgeSaveChannelResult {
+  required bool success = 1;
+  optional uint32 channel_id = 2;
+  optional string error = 3;
+}
+
+// ---------------------------------------------------------------------------
+// edge.saveACL - Edge 保存 ACL
+// ---------------------------------------------------------------------------
+message EdgeSaveACLParams {
+  required uint32 channel_id = 1;
+  repeated ACLEntryProto acls = 2;
+}
+
+message ACLEntryProto {
+  optional uint32 id = 1;
+  optional uint32 channel_id = 2;
+  optional uint32 user_id = 3;
+  optional string group = 4;
+  required bool apply_here = 5;
+  required bool apply_subs = 6;
+  required uint32 allow = 7;
+  required uint32 deny = 8;
+}
+
+message EdgeSaveACLResult {
+  required bool success = 1;
+  repeated uint32 acl_ids = 2;
+  optional string error = 3;
+}
+
+// ---------------------------------------------------------------------------
+// edge.join - Edge 请求加入集群
+// ---------------------------------------------------------------------------
+message EdgeJoinParams {
+  required uint32 server_id = 1;
+  required string name = 2;
+  required string host = 3;
+  required uint32 port = 4;
+  required uint32 voice_port = 5;
+  required uint32 capacity = 6;
+}
+
+message EdgeJoinResult {
+  required bool success = 1;
+  optional string token = 2;
+  repeated PeerInfoProto peers = 3;
+  optional uint32 timeout = 4;
+  optional string error = 5;
+}
+
+message PeerInfoProto {
+  required uint32 id = 1;
+  required string name = 2;
+  required string host = 3;
+  required uint32 port = 4;
+  required uint32 voice_port = 5;
+}
+
+// ---------------------------------------------------------------------------
+// edge.joinComplete - Edge 完成集群加入
+// ---------------------------------------------------------------------------
+message EdgeJoinCompleteParams {
+  required uint32 server_id = 1;
+  required string token = 2;
+  repeated uint32 connected_peers = 3;
+}
+
+message EdgeJoinCompleteResult {
+  required bool success = 1;
+  optional string error = 2;
+}
+
+// ---------------------------------------------------------------------------
+// edge.handleACL - Edge 处理 ACL 消息
+// ---------------------------------------------------------------------------
+message EdgeHandleACLParams {
+  required uint32 edge_id = 1;
+  required uint32 actor_session = 2;
+  required uint32 actor_user_id = 3;
+  required string actor_username = 4;
+  required uint32 channel_id = 5;
+  required bool query = 6;
+  required bytes raw_data = 7;
+}
+
+message EdgeHandleACLResult {
+  required bool success = 1;
+  optional string error = 2;
+  optional bool permission_denied = 3;
+  optional uint32 channel_id = 4;
+  optional bytes raw_data = 5;
+}
+
+// ---------------------------------------------------------------------------
+// edge.handlePermissionQuery - Edge 处理 PermissionQuery 消息
+// ---------------------------------------------------------------------------
+message EdgeHandlePermissionQueryParams {
+  required uint32 edge_id = 1;
+  required uint32 actor_session = 2;
+  required uint32 actor_user_id = 3;
+  required string actor_username = 4;
+  required uint32 channel_id = 5;
+}
+
+message EdgeHandlePermissionQueryResult {
+  required bool success = 1;
+  optional uint32 permissions = 2;
+  optional string error = 3;
+}
+
+// ---------------------------------------------------------------------------
+// edge.reportPeerDisconnect - Edge 报告 Peer 断开连接
+// ---------------------------------------------------------------------------
+message EdgeReportPeerDisconnectParams {
+  required uint32 local_edge_id = 1;
+  required uint32 remote_edge_id = 2;
+  required uint32 local_client_count = 3;
+}
+
+message EdgeReportPeerDisconnectResult {
+  required string action = 1;
+}
+
+// ---------------------------------------------------------------------------
+// edge.reportQuality - Edge 上报网络质量
+// ---------------------------------------------------------------------------
+message EdgeReportQualityParams {
+  required uint32 edge_id = 1;
+  required uint32 target_edge_id = 2;
+  required NetworkQualityProto quality = 3;
+}
+
+message NetworkQualityProto {
+  required float rtt = 1;
+  required float packet_loss = 2;
+  required float jitter = 3;
+  required uint32 samples = 4;
+}
+
+message EdgeReportQualityResult {
+  required bool success = 1;
+}
+
+// ---------------------------------------------------------------------------
+// cluster.getStatus - 获取集群状态
+// ---------------------------------------------------------------------------
+message ClusterGetStatusParams {
+  // Empty params
+}
+
+message ClusterGetStatusResult {
+  repeated ClusterEdgeStatusProto edges = 1;
+}
+
+message ClusterEdgeStatusProto {
+  required uint32 id = 1;
+  required string name = 2;
+  required string host = 3;
+  required uint32 port = 4;
+  required uint32 client_count = 5;
+  required string status = 6;
+  optional int64 last_seen = 7;
+}
+
+// ---------------------------------------------------------------------------
+// blob.put - 存储 Blob 数据
+// ---------------------------------------------------------------------------
+message BlobPutParams {
+  required bytes data = 1;
+}
+
+message BlobPutResult {
+  required bool success = 1;
+  optional string hash = 2;
+  optional string error = 3;
+}
+
+// ---------------------------------------------------------------------------
+// blob.get - 获取 Blob 数据
+// ---------------------------------------------------------------------------
+message BlobGetParams {
+  required string hash = 1;
+}
+
+message BlobGetResult {
+  required bool success = 1;
+  optional bytes data = 2;
+  optional string error = 3;
+}
+
+// ---------------------------------------------------------------------------
+// blob.getUserTexture - 获取用户纹理
+// ---------------------------------------------------------------------------
+message BlobGetUserTextureParams {
+  required uint32 user_id = 1;
+}
+
+message BlobGetUserTextureResult {
+  required bool success = 1;
+  optional bytes data = 2;
+  optional string hash = 3;
+  optional string error = 4;
+}
+
+// ---------------------------------------------------------------------------
+// blob.getUserComment - 获取用户评论
+// ---------------------------------------------------------------------------
+message BlobGetUserCommentParams {
+  required uint32 user_id = 1;
+}
+
+message BlobGetUserCommentResult {
+  required bool success = 1;
+  optional bytes data = 2;
+  optional string hash = 3;
+  optional string error = 4;
+}
+
+// ---------------------------------------------------------------------------
+// blob.setUserTexture - 设置用户纹理
+// ---------------------------------------------------------------------------
+message BlobSetUserTextureParams {
+  required uint32 user_id = 1;
+  required bytes data = 2;
+}
+
+message BlobSetUserTextureResult {
+  required bool success = 1;
+  optional string hash = 2;
+  optional string error = 3;
+}
+
+// ---------------------------------------------------------------------------
+// blob.setUserComment - 设置用户评论
+// ---------------------------------------------------------------------------
+message BlobSetUserCommentParams {
+  required uint32 user_id = 1;
+  required bytes data = 2;
+}
+
+message BlobSetUserCommentResult {
+  required bool success = 1;
+  optional string hash = 2;
+  optional string error = 3;
+}
+
+// ============================================================================
+// Hub -> Edge 通知消息
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// voice.data - Hub 通知 Edge 有语音数据
+// ---------------------------------------------------------------------------
+message HubVoiceDataParams {
+  required uint32 from_session_id = 1;
+  required uint32 target_session_id = 2;
+  required bytes voice_data = 3;
+  required int64 timestamp = 4;
+}
+
+// ---------------------------------------------------------------------------
+// edge.forceDisconnect - Hub 通知 Edge 强制断开连接
+// ---------------------------------------------------------------------------
+message HubForceDisconnectParams {
+  required string reason = 1;
+}
+
+// ---------------------------------------------------------------------------
+// edge.peerJoined - Hub 通知 Edge 有新成员加入
+// ---------------------------------------------------------------------------
+message HubPeerJoinedParams {
+  required uint32 id = 1;
+  required string name = 2;
+  required string host = 3;
+  required uint32 port = 4;
+  required uint32 voice_port = 5;
+}
+
+// ---------------------------------------------------------------------------
+// hub.aclResponse - Hub 向 Edge 返回 ACL 查询结果
+// ---------------------------------------------------------------------------
+message HubACLResponseParams {
+  required uint32 edge_id = 1;
+  required uint32 actor_session = 2;
+  required bool success = 3;
+  optional uint32 channel_id = 4;
+  optional bytes raw_data = 5;
+  optional string error = 6;
+  optional bool permission_denied = 7;
+}
+
+// ---------------------------------------------------------------------------
+// hub.userJoined - Hub 通知 Edge 有用户加入
+// ---------------------------------------------------------------------------
+message HubUserJoinedParams {
+  required uint32 session_id = 1;
+  required uint32 edge_id = 2;
+  required uint32 user_id = 3;
+  required string username = 4;
+  required uint32 channel_id = 5;
+  repeated string groups = 6;
+  optional string cert_hash = 7;
+}
+
+// ---------------------------------------------------------------------------
+// hub.userLeft - Hub 通知 Edge 有用户离开
+// ---------------------------------------------------------------------------
+message HubUserLeftParams {
+  required uint32 session_id = 1;
+  required uint32 edge_id = 2;
+  optional string reason = 3;
+}
+
+// ---------------------------------------------------------------------------
+// hub.userMoved - Hub 通知 Edge 用户移动频道
+// ---------------------------------------------------------------------------
+message HubUserMovedParams {
+  required uint32 session_id = 1;
+  required uint32 edge_id = 2;
+  required uint32 channel_id = 3;
+  optional uint32 actor_session = 4;
+}
+
+// ---------------------------------------------------------------------------
+// hub.channelCreated - Hub 通知 Edge 频道创建
+// ---------------------------------------------------------------------------
+message HubChannelCreatedParams {
+  required ChannelDataProto channel = 1;
+}
+
+// ---------------------------------------------------------------------------
+// hub.channelRemoved - Hub 通知 Edge 频道删除
+// ---------------------------------------------------------------------------
+message HubChannelRemovedParams {
+  required uint32 channel_id = 1;
+}
+
+// ---------------------------------------------------------------------------
+// hub.channelUpdated - Hub 通知 Edge 频道更新
+// ---------------------------------------------------------------------------
+message HubChannelUpdatedParams {
+  required ChannelDataProto channel = 1;
+}
+
+// ---------------------------------------------------------------------------
+// hub.syncVoiceTarget - Hub 同步 Voice Target 配置到其他 Edge
+// ---------------------------------------------------------------------------
+message HubSyncVoiceTargetParams {
+  required uint32 edge_id = 1;
+  required uint32 client_session = 2;
+  required uint32 target_id = 3;
+  required string config_json = 4;  // VoiceTarget config as JSON (complex nested structure)
+  required int64 timestamp = 5;
+}
+
+// ============================================================================
+// 类型安全的 RPC 请求/响应包装
+// ============================================================================
+
+/**
+ * TypedRPCRequest - 类型安全的 RPC 请求
+ * 使用 method 字段标识方法，params 字段根据方法类型选择
+ */
+message TypedRPCRequest {
+  required string request_id = 1;
+  required string method = 2;
+  optional uint32 timeout_ms = 3;
+  
+  // 根据 method 选择对应的 params
+  optional EdgeRegisterParams edge_register = 10;
+  optional EdgeHeartbeatParams edge_heartbeat = 11;
+  optional EdgeAllocateSessionIdParams edge_allocate_session_id = 12;
+  optional EdgeAuthenticateUserParams edge_authenticate_user = 13;
+  optional EdgeReportSessionParams edge_report_session = 14;
+  optional EdgeSyncVoiceTargetParams edge_sync_voice_target = 15;
+  optional EdgeGetVoiceTargetsParams edge_get_voice_targets = 16;
+  optional EdgeRouteVoiceParams edge_route_voice = 17;
+  optional EdgeAdminOperationParams edge_admin_operation = 18;
+  optional EdgeExchangeCertificatesParams edge_exchange_certificates = 19;
+  optional EdgeFullSyncParams edge_full_sync = 20;
+  optional EdgeGetChannelsParams edge_get_channels = 21;
+  optional EdgeGetACLsParams edge_get_acls = 22;
+  optional EdgeSaveChannelParams edge_save_channel = 23;
+  optional EdgeSaveACLParams edge_save_acl = 24;
+  optional EdgeJoinParams edge_join = 25;
+  optional EdgeJoinCompleteParams edge_join_complete = 26;
+  optional EdgeHandleACLParams edge_handle_acl = 27;
+  optional EdgeHandlePermissionQueryParams edge_handle_permission_query = 28;
+  optional EdgeReportPeerDisconnectParams edge_report_peer_disconnect = 29;
+  optional EdgeReportQualityParams edge_report_quality = 30;
+  optional ClusterGetStatusParams cluster_get_status = 31;
+  optional BlobPutParams blob_put = 32;
+  optional BlobGetParams blob_get = 33;
+  optional BlobGetUserTextureParams blob_get_user_texture = 34;
+  optional BlobGetUserCommentParams blob_get_user_comment = 35;
+  optional BlobSetUserTextureParams blob_set_user_texture = 36;
+  optional BlobSetUserCommentParams blob_set_user_comment = 37;
+}
+
+/**
+ * TypedRPCResponse - 类型安全的 RPC 响应
+ * 使用 method 字段标识方法，result 字段根据方法类型选择
+ */
+message TypedRPCResponse {
+  required string request_id = 1;
+  optional string method = 2;
+  optional uint32 processing_time_ms = 3;
+  
+  // 根据 method 选择对应的 result
+  optional EdgeRegisterResult edge_register = 10;
+  optional EdgeHeartbeatResult edge_heartbeat = 11;
+  optional EdgeAllocateSessionIdResult edge_allocate_session_id = 12;
+  optional EdgeAuthenticateUserResult edge_authenticate_user = 13;
+  optional EdgeReportSessionResult edge_report_session = 14;
+  optional EdgeSyncVoiceTargetResult edge_sync_voice_target = 15;
+  optional EdgeGetVoiceTargetsResult edge_get_voice_targets = 16;
+  optional EdgeRouteVoiceResult edge_route_voice = 17;
+  optional EdgeAdminOperationResult edge_admin_operation = 18;
+  optional EdgeExchangeCertificatesResult edge_exchange_certificates = 19;
+  optional EdgeFullSyncResult edge_full_sync = 20;
+  optional EdgeGetChannelsResult edge_get_channels = 21;
+  optional EdgeGetACLsResult edge_get_acls = 22;
+  optional EdgeSaveChannelResult edge_save_channel = 23;
+  optional EdgeSaveACLResult edge_save_acl = 24;
+  optional EdgeJoinResult edge_join = 25;
+  optional EdgeJoinCompleteResult edge_join_complete = 26;
+  optional EdgeHandleACLResult edge_handle_acl = 27;
+  optional EdgeHandlePermissionQueryResult edge_handle_permission_query = 28;
+  optional EdgeReportPeerDisconnectResult edge_report_peer_disconnect = 29;
+  optional EdgeReportQualityResult edge_report_quality = 30;
+  optional ClusterGetStatusResult cluster_get_status = 31;
+  optional BlobPutResult blob_put = 32;
+  optional BlobGetResult blob_get = 33;
+  optional BlobGetUserTextureResult blob_get_user_texture = 34;
+  optional BlobGetUserCommentResult blob_get_user_comment = 35;
+  optional BlobSetUserTextureResult blob_set_user_texture = 36;
+  optional BlobSetUserCommentResult blob_set_user_comment = 37;
+}
+
+/**
+ * TypedRPCNotification - 类型安全的 RPC 通知
+ */
+message TypedRPCNotification {
+  required string method = 1;
+  optional int64 timestamp = 2;
+  
+  // 根据 method 选择对应的 params
+  optional HubVoiceDataParams voice_data = 10;
+  optional HubForceDisconnectParams force_disconnect = 11;
+  optional HubPeerJoinedParams peer_joined = 12;
+  optional HubACLResponseParams acl_response = 13;
+  optional HubUserJoinedParams user_joined = 14;
+  optional HubUserLeftParams user_left = 15;
+  optional HubUserMovedParams user_moved = 16;
+  optional HubChannelCreatedParams channel_created = 17;
+  optional HubChannelRemovedParams channel_removed = 18;
+  optional HubChannelUpdatedParams channel_updated = 19;
+  optional HubSyncVoiceTargetParams sync_voice_target = 20;
+  
+  // For unknown notification types, store params as JSON string
+  optional string unknown_params_json = 99;
+}

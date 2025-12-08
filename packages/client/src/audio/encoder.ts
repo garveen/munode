@@ -15,7 +15,7 @@ export class OpusEncoder {
   private frameSize: number; // in ms
   private sampleRate: number = 48000;
   private channels: number = 1; // Mumble 使用单声道
-  private encoder: any = null; // opus.Encoder instance
+  private encoder: DiscordOpusEncoder | null = null;
 
   constructor(options: EncoderOptions = {}) {
     this.frameSize = options.frameSize || 20;
@@ -48,14 +48,11 @@ export class OpusEncoder {
       throw new Error(`PCM frame size mismatch: expected ${expectedBytes} bytes, got ${pcm.length}`);
     }
 
-    // @discordjs/opus 期望的输入是 Int16Array
-    const pcmArray = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.length / 2);
-
-    // 编码为 Opus
-    const opusData = this.encoder.encode(pcmArray, this.frameSize);
+    // @discordjs/opus 的 encode 方法接受 Buffer
+    const opusData = this.encoder.encode(pcm);
 
     // 返回 Buffer
-    return Buffer.from(opusData);
+    return opusData;
   }
 
   /**
@@ -72,7 +69,6 @@ export class OpusEncoder {
     // @discordjs/opus 编码器初始化后不支持动态改变比特率
     // 需要重新创建编码器
     if (this.encoder) {
-      this.encoder.destroy();
       this.encoder = null;
     }
     this.initialize();
@@ -85,7 +81,7 @@ export class OpusEncoder {
     this.frameSize = frameSize;
     // 帧大小改变需要重新初始化编码器
     if (this.encoder) {
-      this.encoder.destroy();
+      this.encoder = null;
       this.initialize();
     }
   }
@@ -111,7 +107,7 @@ export class OpusEncoder {
     // @discordjs/opus 编码器可能没有显式的reset方法
     // 可以通过重新初始化来重置状态
     if (this.encoder) {
-      this.encoder.destroy();
+      this.encoder = null;
       this.initialize();
     }
   }
@@ -121,7 +117,6 @@ export class OpusEncoder {
    */
   destroy(): void {
     if (this.encoder) {
-      this.encoder.destroy();
       this.encoder = null;
     }
   }

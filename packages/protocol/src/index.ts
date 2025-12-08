@@ -4,15 +4,8 @@ export { mumbleproto } from './generated/proto/Mumble.js';
 // Hub-Edge protocol types
 export { hubedge } from './generated/proto/HubEdge.js';
 
-// RPC layer - New Protobuf-based implementation
-export {
-  ProtobufRPCClient,
-} from './rpc/rpc-client.js';
-
-export {
-  ProtobufRPCServer,
-  type RPCHandler as ProtobufRPCHandler,
-} from './rpc/rpc-server.js';
+// Hub-Edge RPC types (typed protobuf messages)
+export { hubedge as hubedgeRpc } from './generated/proto/HubEdgeRPC.js';
 
 export {
   type EdgeToHubMethods as ProtobufEdgeToHubMethods,
@@ -141,12 +134,30 @@ export type {
   GeoIPResult,
   UDPStats,
 } from './shared-types.js';
-// 导出 ClientState 枚举（既作为类型也作为值）
-export { ClientState } from './shared-types.js';
+// 导出 ClientState 和 RouteType 枚举（既作为类型也作为值）
+export { ClientState, RouteType } from './shared-types.js';
 
 // RPC Channel
 export { RPCChannel } from './rpc/rpc-channel.js';
-export type { Message, PendingRequest } from './rpc/rpc-channel.js';
+export type { 
+  Message, 
+  PendingRequest,
+  // Union type for all notification parameters - use when method name is dynamic
+  NotificationParams as ChannelNotificationParams,
+  // Individual notification parameter types
+  VoiceDataParams,
+  ForceDisconnectParams,
+  PeerJoinedParams,
+  ACLResponseParams,
+  UserJoinedParams,
+  UserLeftParams,
+  UserMovedParams,
+  ChannelCreatedParams,
+  ChannelRemovedParams,
+  ChannelUpdatedParams,
+  SyncVoiceTargetParams,
+  ChannelDataInput,
+} from './rpc/rpc-channel.js';
 
 // Typed RPC (Legacy - will be deprecated)
 export { TypedRPCClient, createTypedRPCClient } from './rpc/typed-rpc-client.js';
@@ -155,12 +166,18 @@ export type { RPCHandler } from './rpc/typed-rpc-server.js';
 // Note: RPCError is now exported from rpc-methods.js (new Protobuf version)
 export type {
   EdgeToHubMethods,
+  EdgeToHubNotifications,
   HubToEdgeNotifications,
   RPCMethodMap,
   NotificationMethodMap,
+  HubToEdgeNotificationMethodMap,
+  EdgeToHubNotificationMethodMap,
   RPCParams,
   RPCResult,
-  NotificationParams,
+  // Generic notification params - use when method name is known at compile time
+  // For dynamic method names, use ChannelNotificationParams (union type)
+  HubNotificationParams,
+  EdgeNotificationParams,
   // Individual method types
   EdgeRegisterMethod,
   EdgeHeartbeatMethod,
@@ -182,6 +199,15 @@ export type {
   HubVoiceDataNotification,
   HubForceDisconnectNotification,
   HubPeerJoinedNotification,
+  // Edge to Hub notification types
+  EdgeUserStateNotification,
+  EdgeUserLeftNotification,
+  EdgeChannelStateNotification,
+  EdgeChannelRemoveNotification,
+  EdgeUserRemoveNotification,
+  EdgeTextMessageNotification,
+  EdgePluginDataTransmissionNotification,
+  EdgeUserStatsNotification,
 } from './rpc/rpc-types.js';
 
 // Voice Channel
@@ -256,3 +282,11 @@ export {
   DEFAULT_PROBE_CONFIG,
   DEFAULT_FALLBACK_CONFIG,
 } from './voice/voice-routing-constants.js';
+
+// Route validation utilities
+export {
+  RouteValidator,
+  type RouteEntry as ValidatorRouteEntry,
+  type ValidationResult,
+  type RouteValidatorOptions,
+} from './routing/route-validator.js';

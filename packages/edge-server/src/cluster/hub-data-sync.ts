@@ -1,9 +1,11 @@
 import { logger } from '@munode/common';
 import { MessageType } from '@munode/protocol';
 import { mumbleproto } from '@munode/protocol';
+import type { HubNotificationParams } from '@munode/protocol';
 import { HandlerFactory } from '../core/handler-factory.js';
 import { EdgeControlClient } from './hub-client.js';
 import { ChannelInfo } from '../types.js';
+import * as fs from 'fs';
 
 /**
  * Hub数据管理器
@@ -33,11 +35,16 @@ export class HubDataManager {
       // 从Hub获取所有频道
       const channels = await this.hubClient.getChannels();
       logger.info(`Loaded ${channels.length} channels from Hub`);
+      
+      // DEBUG: 打印每个从Hub收到的频道数据
+      for (const ch of channels) {
+        logger.info(`[hub-data-sync] Hub returned channel: id=${ch.channel_id}, name=${ch.name}, parent_id=${ch.parent_id}`);
+      }
 
       // 重建频道树结构
       for (const channelData of channels) {
         const channel: ChannelInfo = {
-          id: channelData.id,
+          id: channelData.channel_id,
           name: channelData.name,
           // Hub返回的是parent_id，需要转换为parent_id
           parent_id: channelData.parent_id === null || channelData.parent_id === undefined ? 0 : channelData.parent_id,
@@ -79,7 +86,7 @@ export class HubDataManager {
             deny: aclData.deny,
           };
 
-          aclMap.get(channelId)!.push(aclEntry);
+          aclMap.get(channelId).push(aclEntry);
           logger.debug(`Loaded ACL for channel ${channelId}: user_id=${aclData.user_id}, group=${aclData.group}`);
         }
 
@@ -99,8 +106,12 @@ export class HubDataManager {
   /**
    * 处理来自其他Edge的用户加入通知
    */
-  handleRemoteUserJoined(params: any): void {
+  handleRemoteUserJoined(params: HubNotificationParams<'hub.userJoined'>): void {
     try {
+      const thisEdgeId = this.handlerFactory.config.server_id;
+      fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] EDGE ${thisEdgeId} received userJoined: ${params.username} (session=${params.session_id}, from_edge=${params.edge_id})\n`);
+      
+      logger.info(`[CROSS-EDGE-DEBUG] Edge ${thisEdgeId} received userJoined: ${params.username} (session=${params.session_id}, from_edge=${params.edge_id})`);
       logger.info(`Remote user joined: ${params.username} (session ${params.session_id}) from Edge ${params.edge_id}`);
 
       // 不要处理来自本Edge的用户
@@ -112,6 +123,10 @@ export class HubDataManager {
 
       // 广播给所有本地已认证的客户端
       const allClients = this.handlerFactory.clientManager.getAllClients();
+      const clientsWithFullList = allClients.filter(c => c.user_id > 0 && c.has_full_user_list);
+      fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] EDGE ${thisEdgeId} has ${allClients.length} local clients, ${clientsWithFullList.length} with full user list: ${JSON.stringify(clientsWithFullList.map(c => ({u: c.username, s: c.session})))}\n`);
+      
+      logger.info(`[CROSS-EDGE-DEBUG] Edge ${thisEdgeId} has ${allClients.length} local clients, ${allClients.filter(c => c.user_id > 0 && c.has_full_user_list).length} with full user list`);
       let broadcastCount = 0;
       
       for (const client of allClients) {
@@ -120,7 +135,17 @@ export class HubDataManager {
           const receiverIsRegistered = client.user_id > 0;
           
           // 构建UserState消息（每个客户端都单独构建，因为cert_hash字段可能不同）
-          const userStateData: any = {
+          interface UserStateData {
+            session: number;
+            user_id: number;
+            name: string;
+            channel_id: number;
+            temporary_access_tokens: string[];
+            listening_channel_add: number[];
+            listening_channel_remove: number[];
+            hash?: string;
+          }
+          const userStateData: UserStateData = {
             session: params.session_id,
             user_id: params.user_id,
             name: params.username,
@@ -153,11 +178,11 @@ export class HubDataManager {
    * 处理来自Hub的用户离开广播
    * Hub收到userLeft通知后会广播给所有Edge（包括发起的Edge）
    */
-  handleRemoteUserLeft(params: any): void {
+  handleRemoteUserLeft(params: HubNotificationParams<'hub.userLeft'>): void {
     try {
-      const { session_id, edge_id, username } = params;
+      const { session_id, reason } = params;
 
-      logger.info(`User left notification from Hub: ${username || 'unknown'} (session ${session_id}) from Edge ${edge_id}`);
+      logger.info(`User left notification from Hub: session ${session_id}${reason ? `, reason: ${reason}` : ''}`);
 
       // 从状态管理器中移除远程用户（即使是本Edge的用户，也需要从远程用户列表中移除）
       if (this.handlerFactory.stateManager) {
@@ -167,6 +192,7 @@ export class HubDataManager {
       // 构建UserRemove消息
       const userRemove = new mumbleproto.UserRemove({
         session: session_id,
+        reason: reason || '',
       });
 
       const userRemoveMessage = userRemove.serialize();
@@ -193,18 +219,22 @@ export class HubDataManager {
   /**
    * 处理来自其他Edge的用户状态变更通知
    */
-  handleRemoteUserStateChanged(params: any): void {
+  handleRemoteUserStateChanged(params: HubNotificationParams<'hub.userStateChanged'>): void {
     try {
+      // Extract edge_id from changes if present
+      const changes = params.changes;
+      const edgeId = typeof changes.edge_id === 'number' ? changes.edge_id : undefined;
+
       // 不要处理来自本Edge的用户
-      if (params.edge_id === this.handlerFactory.config.server_id) {
+      if (edgeId !== undefined && edgeId === this.handlerFactory.config.server_id) {
         return;
       }
 
-      logger.debug(`Remote user state changed: session ${params.session_id} from Edge ${params.edge_id}`);
+      logger.debug(`Remote user state changed: session ${params.session_id}${edgeId !== undefined ? ` from Edge ${edgeId}` : ''}`);
 
       // 更新状态管理器中的远程用户频道信息
-      if (params.channel_id !== undefined && this.handlerFactory.stateManager) {
-        this.handlerFactory.stateManager.updateRemoteUserChannel(params.session_id, params.channel_id);
+      if (typeof changes.channel_id === 'number' && this.handlerFactory.stateManager) {
+        this.handlerFactory.stateManager.updateRemoteUserChannel(params.session_id, changes.channel_id);
       }
 
       // 构建UserState消息
@@ -216,29 +246,29 @@ export class HubDataManager {
       });
 
       // 只包含变更的字段
-      if (params.channel_id !== undefined) {
-        userState.channel_id = params.channel_id;
+      if (typeof changes.channel_id === 'number') {
+        userState.channel_id = changes.channel_id;
       }
-      if (params.mute !== undefined) {
-        userState.mute = params.mute;
+      if (typeof changes.mute === 'boolean') {
+        userState.mute = changes.mute;
       }
-      if (params.deaf !== undefined) {
-        userState.deaf = params.deaf;
+      if (typeof changes.deaf === 'boolean') {
+        userState.deaf = changes.deaf;
       }
-      if (params.suppress !== undefined) {
-        userState.suppress = params.suppress;
+      if (typeof changes.suppress === 'boolean') {
+        userState.suppress = changes.suppress;
       }
-      if (params.self_mute !== undefined) {
-        userState.self_mute = params.self_mute;
+      if (typeof changes.self_mute === 'boolean') {
+        userState.self_mute = changes.self_mute;
       }
-      if (params.self_deaf !== undefined) {
-        userState.self_deaf = params.self_deaf;
+      if (typeof changes.self_deaf === 'boolean') {
+        userState.self_deaf = changes.self_deaf;
       }
-      if (params.recording !== undefined) {
-        userState.recording = params.recording;
+      if (typeof changes.recording === 'boolean') {
+        userState.recording = changes.recording;
       }
-      if (params.priority_speaker !== undefined) {
-        userState.priority_speaker = params.priority_speaker;
+      if (typeof changes.priority_speaker === 'boolean') {
+        userState.priority_speaker = changes.priority_speaker;
       }
 
       const userStateMessage = userState.serialize();

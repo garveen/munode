@@ -67,6 +67,8 @@ export interface TestEnvironment {
   authServer?: http.Server;
   authPort: number;
   hubPort: number;
+  controlPort: number; // Hub 控制端口
+  webApiPort: number; // Hub Web API 端口
   edgePort: number;
   edgeUdpPort: number; // Edge1 的 UDP 端口
   edgePort2: number; // 第二个 Edge 服务器端口
@@ -319,6 +321,25 @@ class TestAuthServer {
       'route_push_user': { password: 'pass1', user_id: 416 },
       'relay_sender': { password: 'pass1', user_id: 417 },
       'relay_receiver': { password: 'pass2', user_id: 418 },
+      'relay_intermediate1': { password: 'pass2', user_id: 419 },
+      'relay_intermediate2': { password: 'pass3', user_id: 420 },
+      'max_hop_sender': { password: 'pass1', user_id: 421 },
+      'max_hop_intermediate': { password: 'pass2', user_id: 422 },
+      'max_hop_receiver': { password: 'pass3', user_id: 423 },
+      'poor_direct_sender': { password: 'pass1', user_id: 424 },
+      'poor_direct_relay': { password: 'pass2', user_id: 425 },
+      'poor_direct_receiver': { password: 'pass3', user_id: 426 },
+      'balance_sender': { password: 'pass1', user_id: 427 },
+      'balance_relay1': { password: 'pass2', user_id: 428 },
+      'balance_relay2': { password: 'pass3', user_id: 429 },
+      'balance_receiver': { password: 'pass4', user_id: 430 },
+      'failover_sender': { password: 'pass1', user_id: 431 },
+      'failover_relay1': { password: 'pass2', user_id: 432 },
+      'failover_relay2': { password: 'pass3', user_id: 433 },
+      'failover_receiver': { password: 'pass4', user_id: 434 },
+      // Quality simulation test users
+      'quality_sender': { password: 'pass1', user_id: 501 },
+      'quality_receiver': { password: 'pass2', user_id: 502 },
     };
 
     const user = users[req.username];
@@ -438,6 +459,18 @@ export async function startHubServer(configPath?: string, maxRetries: number = 3
         });
       });
 
+      // Add continuous logging after startup completes
+      hubProcess.stdout?.on('data', (data: Buffer) => {
+        const message = data.toString();
+        if (message.includes('CROSS-EDGE-DEBUG') || message.includes('BROADCAST') || message.includes('RPC-DEBUG') || message.includes('CONTROL-SERVICE-DEBUG')) {
+          console.error('[HUB-STDOUT]', message.trim());
+        }
+      });
+      hubProcess.stderr?.on('data', (data: Buffer) => {
+        const message = data.toString();
+        console.error('[HUB-STDERR]', message.trim());
+      });
+
       return hubProcess;
     } catch (error) {
       lastError = error as Error;
@@ -519,6 +552,12 @@ export async function startEdgeServer(configPath?: string, port?: number, maxRet
             reject(new Error(`Edge process exited with code ${code}`));
           }
         });
+      });
+
+      // Add continuous logging after startup completes
+      edgeProcess.stderr?.on('data', (data: Buffer) => {
+        const message = data.toString();
+        console.error(`[EDGE-${port || 'unknown'}-STDERR]`, message.trim());
       });
 
       return edgeProcess;
@@ -644,7 +683,6 @@ export async function setupTestEnvironment(
         console.log('Initializing test database...');
         const initScript = join(PROJECT_ROOT, 'scripts/init-test-db.ts');
         if (fs.existsSync(initScript)) {
-          const { spawn } = require('child_process');
           const initProcess = spawn('tsx', [initScript], {
             stdio: 'inherit',
             cwd: PROJECT_ROOT,
@@ -933,33 +971,62 @@ export async function setupTestEnvironment(
       }
     }
 
-    // 关闭 Edge 服务器
+    // 改进的进程终止函数 - 更激进地终止进程
     const killProcess = async (process: ChildProcess | undefined, name: string) => {
       if (!process) return;
       
       try {
+        console.log(`Killing ${name} process (PID: ${process.pid})...`);
+        
+        // 首先尝试 SIGTERM
         process.kill('SIGTERM');
-        await new Promise<void>((resolve) => {
+        
+        // 等待进程退出，带超时
+        const killed = await new Promise<boolean>((resolve) => {
           const exitHandler = () => {
-            resolve();
+            console.log(`${name} exited gracefully`);
+            resolve(true);
           };
           process.once('exit', exitHandler);
           
-          setTimeout(() => {
+          // 2秒后强制 SIGKILL
+          const killTimeout = setTimeout(() => {
             process.removeListener('exit', exitHandler);
+            console.warn(`${name} did not exit gracefully, sending SIGKILL...`);
             try {
-              process.kill('SIGKILL');
+              // 先尝试杀死进程组（如果有子进程）
+              if (process.pid) {
+                try {
+                  process.kill('SIGKILL');
+                  // 也尝试杀死整个进程组
+                  process.kill(0); // 测试进程是否存在
+                } catch (e) {
+                  // 进程可能已经不存在
+                }
+              }
             } catch (e) {
               // 进程可能已退出
             }
-            resolve();
+            resolve(false);
           }, 2000);
+          
+          // 也监听错误
+          process.once('error', () => {
+            clearTimeout(killTimeout);
+            resolve(false);
+          });
         });
+        
+        if (!killed) {
+          // 如果还没有退出，等待一小段时间让 SIGKILL 生效
+          await sleep(500);
+        }
       } catch (error) {
         console.warn(`Error killing ${name}:`, error);
       }
     };
 
+    // 按照依赖顺序关闭进程（先关 Edge，最后关 Hub）
     await killProcess(edgeProcess4, 'Edge4');
     await killProcess(edgeProcess3, 'Edge3');
     await killProcess(edgeProcess2, 'Edge2');
@@ -967,20 +1034,32 @@ export async function setupTestEnvironment(
     await killProcess(hubProcess, 'Hub');
     
     // 等待端口释放 - 增加等待时间确保端口完全释放
-    await sleep(500);
+    console.log('Waiting for ports to be released...');
+    await sleep(1000);
     
     // 验证端口是否已释放（可选，用于调试）
     const portsToCheck = [authPort, hubPort, edgePort, edgePort2, edgePort3, edgePort4, controlPort, webApiPort].filter(p => p > 0);
     for (const port of portsToCheck) {
       let attempts = 0;
       while (attempts < 10 && !(await isPortAvailable(port))) {
+        console.log(`Waiting for port ${port} to be released... (attempt ${attempts + 1}/10)`);
         await sleep(100);
         attempts++;
       }
       if (!(await isPortAvailable(port))) {
-        console.warn(`Warning: Port ${port} may still be in use after cleanup`);
+        console.error(`ERROR: Port ${port} is still in use after cleanup. This may cause test failures.`);
+        // 尝试找出占用端口的进程
+        try {
+          const { execSync } = await import('child_process');
+          const output = execSync(`lsof -i :${port} || netstat -tulpn | grep :${port}`).toString();
+          console.error(`Port ${port} is held by:`, output);
+        } catch (e) {
+          // 忽略错误
+        }
       }
     }
+    
+    console.log('Cleanup completed');
   };
 
   // Set up the global environment
@@ -994,6 +1073,8 @@ export async function setupTestEnvironment(
     authServer: authServer?.getServer(),
     authPort,
     hubPort,
+    controlPort,
+    webApiPort,
     edgePort,
     edgeUdpPort,
     edgePort2,
@@ -1043,6 +1124,7 @@ process.on('beforeExit', async () => {
       const killProcess = async (process: ChildProcess | undefined, name: string) => {
         if (!process) return;
         try {
+          console.log(`Cleaning up ${name} on exit...`);
           process.kill('SIGTERM');
           await new Promise<void>((resolve) => {
             process.once('exit', () => resolve());
@@ -1053,13 +1135,15 @@ process.on('beforeExit', async () => {
                 // Process may have already exited
               }
               resolve();
-            }, 2000);
+            }, 1000); // Shorter timeout for exit cleanup
           });
         } catch (error) {
           console.warn(`Error killing ${name} on exit:`, error);
         }
       };
 
+      await killProcess(env.edgeProcess4, 'Edge4');
+      await killProcess(env.edgeProcess3, 'Edge3');
       await killProcess(env.edgeProcess2, 'Edge2');
       await killProcess(env.edgeProcess, 'Edge');
       await killProcess(env.hubProcess, 'Hub');
@@ -1070,3 +1154,37 @@ process.on('beforeExit', async () => {
     }
   }
 });
+
+// Handle SIGINT (Ctrl+C) and SIGTERM
+const handleSignal = async (signal: string) => {
+  console.log(`\nReceived ${signal}, cleaning up...`);
+  if (globalTestEnvironment && refCount > 0) {
+    refCount = 0;
+    const env = globalTestEnvironment;
+    globalTestEnvironment = null;
+
+    // Synchronous cleanup for signal handlers
+    const killSync = (process: ChildProcess | undefined, name: string) => {
+      if (!process || !process.pid) return;
+      try {
+        console.log(`Force killing ${name} (PID: ${process.pid})...`);
+        process.kill('SIGKILL');
+      } catch (e) {
+        // Process may not exist
+      }
+    };
+
+    killSync(env.edgeProcess4, 'Edge4');
+    killSync(env.edgeProcess3, 'Edge3');
+    killSync(env.edgeProcess2, 'Edge2');
+    killSync(env.edgeProcess, 'Edge');
+    killSync(env.hubProcess, 'Hub');
+  }
+  
+  // Exit immediately
+  process.exit(0);
+};
+
+process.on('SIGINT', () => handleSignal('SIGINT'));
+process.on('SIGTERM', () => handleSignal('SIGTERM'));
+

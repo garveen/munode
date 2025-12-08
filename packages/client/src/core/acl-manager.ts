@@ -34,6 +34,15 @@ export interface ChannelGroup {
   inherited_members: number[]; // 继承的成员
 }
 
+interface GroupObject {
+  name: string;
+  inherited: boolean;
+  inheritable: boolean;
+  add: number[];
+  remove: number[];
+  inherited_members: number[];
+}
+
 /**
  * ACL 管理器
  */
@@ -79,17 +88,29 @@ export class ACLManager {
     // 等待服务器回复
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
+        this.client.removeListener('acl', onACL);
+        this.client.removeListener('permissionDenied', onPermissionDenied);
         reject(new Error('ACL query timeout'));
       }, 5000); // 5秒超时
 
-      const onACL = (message: any) => {
+      const onACL = (message: mumbleproto.ACL) => {
         if (message.channel_id === channelId) {
           clearTimeout(timeout);
           this.client.removeListener('acl', onACL);
+          this.client.removeListener('permissionDenied', onPermissionDenied);
 
           const aclData: ACLQueryResult = {
             channelId,
-            acls: message.acls || [],
+            acls: (message.acls || []).map(acl => ({
+              channel_id: channelId,
+              user_id: acl.user_id,
+              group: acl.group,
+              apply_here: acl.apply_here !== undefined ? acl.apply_here : true,
+              apply_subs: acl.apply_subs !== undefined ? acl.apply_subs : true,
+              inherited: acl.inherited,
+              allow: acl.grant || 0,
+              deny: acl.deny || 0
+            })),
             groups: new Map(),
             inheritAcl: message.inherit_acls || false
           };
@@ -120,7 +141,19 @@ export class ACLManager {
         }
       };
 
+      const onPermissionDenied = (info: mumbleproto.PermissionDenied) => {
+        // 检查是否是针对 ACL 查询的权限拒绝（通过 channel_id 匹配）
+        const eventChannelId = info.channel_id;
+        if (eventChannelId === channelId) {
+          clearTimeout(timeout);
+          this.client.removeListener('acl', onACL);
+          this.client.removeListener('permissionDenied', onPermissionDenied);
+          reject(new Error(`Permission denied: ${info.reason || 'No permission to query ACL'}`));
+        }
+      };
+
       this.client.on('acl', onACL);
+      this.client.on('permissionDenied', onPermissionDenied);
     });
   }
 
@@ -129,7 +162,7 @@ export class ACLManager {
    */
   async saveACL(channelId: number, acls: ACLEntry[], groups?: Map<string, ChannelGroup>): Promise<number[]> {
     // 构建组对象数组
-    const groupObjects: any[] = [];
+    const groupObjects: GroupObject[] = [];
     if (groups) {
       for (const [name, group] of groups) {
         groupObjects.push({

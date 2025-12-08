@@ -72,9 +72,9 @@ program
       try {
         const { loadConfig } = await import('@munode/common');
         const configPath = resolve(options.config);
-        config = await loadConfig<CliConfig>(configPath);
+        config = await loadConfig(configPath);
         console.log(`Loaded configuration from ${configPath}`);
-      } catch (error) {
+      } catch (_error) {
         console.log('Using default configuration...');
         config = {
           server: {

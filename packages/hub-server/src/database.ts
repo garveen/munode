@@ -283,8 +283,8 @@ export class HubDatabase {
       const pragma = await this.db.prepare('PRAGMA table_info(channels)');
       const columns = await pragma.all();
 
-      const hasDescription = columns.some((col: any) => col.name === 'description');
-      const hasDescriptionBlob = columns.some((col: any) => col.name === 'description_blob');
+      const hasDescription = columns.some((col: { name: string }) => col.name === 'description');
+      const hasDescriptionBlob = columns.some((col: { name: string }) => col.name === 'description_blob');
 
       if (hasDescription && !hasDescriptionBlob) {
         logger.info('Migrating channels table: renaming description to description_blob');
@@ -377,7 +377,18 @@ export class HubDatabase {
     const stmt = await this.db.prepare('SELECT * FROM sessions');
     const rows = await stmt.all();
 
-    return rows.map((row: any): GlobalSession => ({
+    return rows.map((row: {
+      session_id: number;
+      edge_id: number;
+      user_id: number;
+      username: string;
+      ip_address: string;
+      cert_hash: string;
+      is_authenticated: number;
+      channel_id: number;
+      connected_at: number;
+      last_active: number;
+    }): GlobalSession => ({
       session_id: row.session_id as number,
       edge_id: row.edge_id as number,
       user_id: row.user_id as number,
@@ -442,7 +453,7 @@ export class HubDatabase {
   /**
    * 设置配置值
    */
-  async setConfig(key: string, value: any, description?: string): Promise<void> {
+  async setConfig(key: string, value: string | number | boolean | null | Record<string, unknown>, description?: string): Promise<void> {
     const stmt = await this.db.prepare(`
       INSERT OR REPLACE INTO configs (key, value, description, updated_at)
       VALUES (?, ?, ?, ?)
@@ -460,7 +471,7 @@ export class HubDatabase {
     edge_id?: number;
     session_id?: number;
     message: string;
-    metadata?: any;
+    metadata?: Record<string, unknown>;
   }): Promise<void> {
     const stmt = await this.db.prepare(`
       INSERT INTO audit_logs (event_type, edge_id, session_id, message, metadata, created_at)
@@ -577,13 +588,14 @@ export class HubDatabase {
   // @ts-expect-error - 保留方法以备未来使用
   private getCertFingerprint(certPem: string): string {
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const forge = require('node-forge');
       const cert = forge.pki.certificateFromPem(certPem);
       const der = forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
       const md = forge.md.sha256.create();
       md.update(der);
       return md.digest().toHex();
-    } catch (error) {
+    } catch (_error) {
       return '';
     }
   }
@@ -715,7 +727,15 @@ export class HubDatabase {
   > {
     const stmt = await this.db.prepare('SELECT * FROM channels ORDER BY id ASC');
     const rows = await stmt.all();
-    return rows.map((row: any) => ({
+    return rows.map((row: {
+      id: number;
+      name: string;
+      position: number;
+      max_users: number;
+      parent_id: number;
+      inherit_acl: number;
+      description_blob?: string;
+    }) => ({
       ...row,
       inherit_acl: row.inherit_acl === 1,
     }));
@@ -724,7 +744,15 @@ export class HubDatabase {
   /**
    * 获取频道
    */
-  async getChannel(id: number): Promise<any> {
+  async getChannel(id: number): Promise<{
+    id: number;
+    name: string;
+    position: number;
+    max_users: number;
+    parent_id: number;
+    inherit_acl: number;
+    description_blob?: string;
+  } | undefined> {
     const stmt = await this.db.prepare('SELECT * FROM channels WHERE id = ?');
     return await stmt.get(id);
   }
@@ -796,7 +824,15 @@ export class HubDatabase {
   /**
    * 获取子频道
    */
-  async getChildChannels(parent_id: number): Promise<Array<any>> {
+  async getChildChannels(parent_id: number): Promise<Array<{
+    id: number;
+    name: string;
+    position: number;
+    max_users: number;
+    parent_id: number;
+    inherit_acl: number;
+    description_blob?: string;
+  }>> {
     const stmt = await this.db.prepare(
       'SELECT * FROM channels WHERE parent_id = ? ORDER BY position ASC'
     );
@@ -1138,7 +1174,7 @@ export class HubDatabase {
     }>
   > {
     let query = 'SELECT * FROM audit_logs WHERE 1=1';
-    const params: any[] = [];
+    const params: (string | number | boolean | null)[] = [];
 
     if (options.eventType) {
       query += ' AND event_type = ?';
@@ -1209,7 +1245,7 @@ export class HubDatabase {
    */
   async updateChannelGroup(id: number, updates: Partial<Omit<ChannelGroupData, 'id' | 'channel_id'>>): Promise<void> {
     const fields: string[] = [];
-    const values: any[] = [];
+    const values: (string | number | boolean | null)[] = [];
 
     if (updates.name !== undefined) {
       fields.push('name = ?');
@@ -1256,7 +1292,13 @@ export class HubDatabase {
     `);
 
     const rows = await stmt.all(channel_id);
-    return rows.map((row: any) => ({
+    return rows.map((row: {
+      id: number;
+      channel_id: number;
+      name: string;
+      inherit: number;
+      inheritable: number;
+    }) => ({
       id: row.id,
       channel_id: row.channel_id,
       name: row.name,
@@ -1326,7 +1368,12 @@ export class HubDatabase {
     `);
 
     const rows = await stmt.all(channel_group_id);
-    return rows.map((row: any) => ({
+    return rows.map((row: {
+      id: number;
+      channel_group_id: number;
+      user_id: number;
+      is_add: number;
+    }) => ({
       id: row.id,
       channel_group_id: row.channel_group_id,
       user_id: row.user_id,

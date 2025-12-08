@@ -23,7 +23,7 @@ export interface AuthConfig {
   };
   responseFields?: {
     successField?: string; // 成功标志字段名，默认 'success'
-    successValue?: any; // 成功标志的期望值，默认 true（可以是 true, 1, 'ok', 'success' 等）
+    successValue?: boolean | number | string; // 成功标志的期望值，默认 true（可以是 true, 1, 'ok', 'success' 等）
     userIdField?: string; // 用户ID字段名，默认 'user_id'
     usernameField?: string; // 用户名字段名，默认 'username'
     displayNameField?: string; // 显示名字段名，默认 'displayName'
@@ -84,7 +84,7 @@ export class HubAuthManager {
 
   constructor(hubConfig: HubConfig) {
     // 从 Hub 配置中提取认证配置
-    this.config = (hubConfig as any).auth || {};
+    this.config = (hubConfig as { auth?: AuthConfig }).auth || {};
     
     // 设置默认值
     this.config.timeout = this.config.timeout || 5000;
@@ -233,7 +233,7 @@ export class HubAuthManager {
       }
 
       // 构建请求数据（使用标准字段名）
-      const requestData: Record<string, any> = {
+      const requestData: Record<string, string | number | string[] | undefined> = {
         username: request.username,
         password: request.password,
         tokens: request.tokens,
@@ -287,9 +287,12 @@ export class HubAuthManager {
 
         // 根据 HTTP 状态码确定 reject 类型
         if (response.status === 401 || response.status === 403) {
-          let errorData: any = null;
+          let errorData: { message?: string; reason?: string } | null = null;
           try {
-            errorData = JSON.parse(errorText);
+            const parsed: unknown = JSON.parse(errorText);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              errorData = parsed as { message?: string; reason?: string };
+            }
           } catch {
             // 忽略解析错误
           }
@@ -328,10 +331,10 @@ export class HubAuthManager {
         username: result[usernameField] || request.username,
         displayName: result[displayNameField] || result[usernameField] || request.username,
         groups: result[groupsField] || ['user'],
-        reason: (result as any).message || result[reasonField],
+        reason: (result as { message?: string })[reasonField] || (result as { message?: string }).message,
         rejectType: isSuccess
           ? undefined
-          : ((result as any).message?.includes('Invalid password'))
+          : (typeof (result as { message?: string }).message === 'string' && (result as { message?: string }).message?.includes('Invalid password'))
             ? 2 // mumbleproto.Reject.RejectType.WrongUserPW
             : 0, // mumbleproto.Reject.RejectType.None
       };

@@ -18,6 +18,8 @@
     "test": "pnpm -r test",
     "test:watch": "pnpm -r test:watch",
     "test:coverage": "pnpm -r test:coverage",
+    "test:unit": "vitest run --config vitest.config.unit.ts",
+    "test:unit:watch": "vitest watch --config vitest.config.unit.ts",
     "test:integration": "vitest run --config vitest.config.integration.ts",
     "test:integration:watch": "vitest watch --config vitest.config.integration.ts",
     "test:integration:ui": "vitest --ui --config vitest.config.integration.ts",
@@ -40,7 +42,6 @@
   "author": "MuNode Team",
   "license": "MIT",
   "devDependencies": {
-    "@grpc/proto-loader": "^0.8.0",
     "@types/node": "^22.0.0",
     "@typescript-eslint/eslint-plugin": "^8.47.0",
     "@typescript-eslint/parser": "^8.47.0",
@@ -48,17 +49,14 @@
     "eslint": "^9.39.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",
+    "globals": "^16.5.0",
     "prettier": "^3.2.5",
-    "protobufjs": "^7.2.0",
-    "protobufjs-cli": "^1.1.3",
-    "protoc-gen-grpc-web": "^1.5.0",
     "tsx": "^4.20.6",
     "typescript": "^5.4.5",
     "vitest": "^1.4.0"
   },
   "packageManager": "pnpm@8.15.4",
   "dependencies": {
-    "@grpc/grpc-js": "^1.14.1",
     "@munode/common": "workspace:*"
   }
 }

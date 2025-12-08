@@ -4,7 +4,7 @@
  * 处理客户端连接到 Mumble 服务器
  */
 
-import type { BusinessHandler } from '../../api/dispatcher.js';
+import type { BusinessHandler } from '../../types/api-types.js';
 import type { ApiContext } from '../context.js';
 import type { ConnectOptions } from '../../types/client-types.js';
 

@@ -97,7 +97,29 @@ export class StateHandlers {
 
       // 只转发实际设置的字段，避免发送默认值
       // 参考Edge废弃实现：只检查has_xxx来确定字段是否真正存在
-      const userStateToSend: any = {
+      const userStateToSend: {
+        session: number;
+        actor: number;
+        channel_id?: number;
+        self_mute?: boolean;
+        self_deaf?: boolean;
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
+        name?: string;
+        user_id?: number;
+        comment?: string;
+        hash?: string;
+        texture?: Uint8Array;
+        plugin_context?: Uint8Array;
+        plugin_identity?: string;
+        comment_hash?: Uint8Array;
+        texture_hash?: Uint8Array;
+        listening_channel_add?: number[];
+        listening_channel_remove?: number[];
+      } = {
         session: userState.session,
         actor: userState.actor,
       };
@@ -144,7 +166,7 @@ export class StateHandlers {
       // 如果客户端发送了texture或comment数据，需要上传到Hub blob存储
       if (userState.has_texture && userState.texture && userState.texture.length > 0) {
         // 异步上传texture到Hub，不阻塞当前处理
-        this.uploadUserTexture(actor.user_id!, userState.texture).catch(error => {
+        this.uploadUserTexture(actor.user_id, userState.texture).catch(error => {
           logger.error(`Failed to upload texture for user ${actor.user_id}:`, error);
         });
       }
@@ -152,7 +174,7 @@ export class StateHandlers {
       if (userState.has_comment && userState.comment && userState.comment.length > 128) {
         // 如果comment超过128字节，上传到blob存储
         // 参考 Go 实现：小于128字节的comment直接存储在消息中
-        this.uploadUserComment(actor.user_id!, Buffer.from(userState.comment, 'utf-8')).catch(error => {
+        this.uploadUserComment(actor.user_id, Buffer.from(userState.comment, 'utf-8')).catch(error => {
           logger.error(`Failed to upload comment for user ${actor.user_id}:`, error);
         });
       }

@@ -20,6 +20,30 @@ import { MumbleClient } from '../../../packages/client/src/index.js';
 import * as crypto from 'crypto';
 
 /**
+ * Voice event data structure
+ */
+interface VoiceData {
+  session: number;
+  codec: number;
+  target: number;
+  sequence: number;
+  data: Buffer;
+}
+
+/**
+ * Channel structure for tests
+ */
+interface ChannelInfo {
+  channel_id: number;
+  name: string;
+  parent?: number;
+  links?: number[];
+  description?: string;
+  position?: number;
+  temporary?: boolean;
+}
+
+/**
  * 生成随机语音数据用于测试
  */
 function generateRandomVoiceData(size: number = 20): Buffer {
@@ -68,7 +92,7 @@ async function unlinkChannels(adminClient: MumbleClient, channelId1: number, cha
 /**
  * 清除所有频道链接
  */
-async function clearAllChannelLinks(adminClient: MumbleClient, channels: any[]): Promise<void> {
+async function clearAllChannelLinks(adminClient: MumbleClient, channels: ChannelInfo[]): Promise<void> {
   for (const channel of channels) {
     if (channel.links && channel.links.length > 0) {
       await adminClient.sendChannelState({
@@ -86,9 +110,12 @@ async function clearAllChannelLinks(adminClient: MumbleClient, channels: any[]):
 async function createAdminClient(testEnv: TestEnvironment, edge: 1 | 2 = 1): Promise<MumbleClient> {
   const admin = new MumbleClient();
   const port = edge === 1 ? testEnv.edgePort : testEnv.edgePort2;
+  // UDP port is the same as TCP port for client-to-Edge communication
+  const udpPort = port;
   await admin.connect({
     host: 'localhost',
     port: port,
+    udpPort: udpPort,
     username: 'admin',
     password: 'admin123',
     rejectUnauthorized: false,
@@ -105,7 +132,7 @@ function waitForVoice(client: MumbleClient, senderSession: number, timeoutMs: nu
     let voiceReceived = false;
     const timer = setTimeout(() => resolve(voiceReceived), timeoutMs);
     
-    const voiceHandler = (data: any) => {
+    const voiceHandler = (data: VoiceData) => {
       if (data.session === senderSession) {
         voiceReceived = true;
         clearTimeout(timer);
@@ -134,10 +161,13 @@ async function createClients(testEnv: TestEnvironment, configs: ClientConfig[]):
   await Promise.all(configs.map(async (config, index) => {
     const client = new MumbleClient();
     const targetPort = config.edge === 1 ? testEnv.edgePort : testEnv.edgePort2;
-    console.log(`[TEST] Connecting ${config.username} to Edge ${config.edge} on port ${targetPort}`);
+    // UDP port is the same as TCP port for client-to-Edge communication
+    const targetUdpPort = targetPort;
+    console.log(`[TEST] Connecting ${config.username} to Edge ${config.edge} on port ${targetPort} (UDP: ${targetUdpPort})`);
     await client.connect({
       host: 'localhost',
       port: targetPort,
+      udpPort: targetUdpPort,
       username: config.username,
       password: config.password,
       rejectUnauthorized: false,
@@ -240,19 +270,19 @@ describe('Voice Integration Tests', () => {
       
       const senderSession = sender.getStateManager().getSession()?.session || 0;
       
-      recvE1Same.on('voice', (data: any) => {
+      recvE1Same.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE1Same = true;
       });
       
-      recvE2Same.on('voice', (data: any) => {
+      recvE2Same.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE2Same = true;
       });
       
-      recvE1Other.on('voice', (data: any) => {
+      recvE1Other.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE1Other = true;
       });
       
-      recvE2Other.on('voice', (data: any) => {
+      recvE2Other.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE2Other = true;
       });
       
@@ -297,15 +327,15 @@ describe('Voice Integration Tests', () => {
       
       const senderSession = sender.getStateManager().getSession()?.session || 0;
       
-      deafE1.on('voice', (data: any) => {
+      deafE1.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.deafE1 = true;
       });
       
-      deafE2.on('voice', (data: any) => {
+      deafE2.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.deafE2 = true;
       });
       
-      normalE1.on('voice', (data: any) => {
+      normalE1.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.normalE1 = true;
       });
       
@@ -356,8 +386,8 @@ describe('Voice Integration Tests', () => {
       // 验证频道链接是否正确同步
       const channelsE1 = sender.getChannels();
       const channelsE2 = recvE2Ch0.getChannels();
-      const ch0E1 = channelsE1.find((ch: any) => ch.channel_id === 0);
-      const ch0E2 = channelsE2.find((ch: any) => ch.channel_id === 0);
+      const ch0E1 = channelsE1.find((ch: ChannelInfo) => ch.channel_id === 0);
+      const ch0E2 = channelsE2.find((ch: ChannelInfo) => ch.channel_id === 0);
       
       console.log(`[TEST-DEBUG] Edge 1 Channel 0 links: [${(ch0E1?.links || []).join(', ')}]`);
       console.log(`[TEST-DEBUG] Edge 2 Channel 0 links: [${(ch0E2?.links || []).join(', ')}]`);
@@ -376,19 +406,19 @@ describe('Voice Integration Tests', () => {
       
       const senderSession = sender.getStateManager().getSession()?.session || 0;
       
-      recvE1Ch0.on('voice', (data: any) => {
+      recvE1Ch0.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE1Ch0 = true;
       });
-      recvE2Ch0.on('voice', (data: any) => {
+      recvE2Ch0.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE2Ch0 = true;
       });
-      recvE1Ch1.on('voice', (data: any) => {
+      recvE1Ch1.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE1Ch1 = true;
       });
-      recvE2Ch1.on('voice', (data: any) => {
+      recvE2Ch1.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE2Ch1 = true;
       });
-      recvE1Ch2.on('voice', (data: any) => {
+      recvE1Ch2.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE1Ch2 = true;
       });
       
@@ -447,16 +477,16 @@ describe('Voice Integration Tests', () => {
       
       const senderSession = sender.getStateManager().getSession()?.session || 0;
       
-      target1E1.on('voice', (data: any) => {
+      target1E1.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.target1E1 = true;
       });
-      target1E2.on('voice', (data: any) => {
+      target1E2.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.target1E2 = true;
       });
-      nonTargetE1.on('voice', (data: any) => {
+      nonTargetE1.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.nonTargetE1 = true;
       });
-      nonTargetE2.on('voice', (data: any) => {
+      nonTargetE2.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.nonTargetE2 = true;
       });
       
@@ -514,16 +544,16 @@ describe('Voice Integration Tests', () => {
       
       const senderSession = sender.getStateManager().getSession()?.session || 0;
       
-      recvE1Ch1.on('voice', (data: any) => {
+      recvE1Ch1.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE1Ch1 = true;
       });
-      recvE2Ch1.on('voice', (data: any) => {
+      recvE2Ch1.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE2Ch1 = true;
       });
-      recvE1Ch0.on('voice', (data: any) => {
+      recvE1Ch0.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE1Ch0 = true;
       });
-      recvE1Ch2.on('voice', (data: any) => {
+      recvE1Ch2.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE1Ch2 = true;
       });
       
@@ -564,11 +594,11 @@ describe('Voice Integration Tests', () => {
       
       const senderSession = sender.getStateManager().getSession()?.session || 0;
       
-      sender.on('voice', (data: any) => {
+      sender.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.sender = true;
       });
       
-      other.on('voice', (data: any) => {
+      other.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.other = true;
       });
       
@@ -606,11 +636,11 @@ describe('Voice Integration Tests', () => {
       
       const senderSession = sender.getStateManager().getSession()?.session || 0;
       
-      recvE1.on('voice', (data: any) => {
+      recvE1.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedCount.recvE1++;
       });
       
-      recvE2.on('voice', (data: any) => {
+      recvE2.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedCount.recvE2++;
       });
       
@@ -680,19 +710,19 @@ describe('Voice Integration Tests', () => {
       
       const senderSession = sender.getStateManager().getSession()?.session || 0;
       
-      recvE1Ch0.on('voice', (data: any) => {
+      recvE1Ch0.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE1Ch0 = true;
       });
-      recvE2Ch1.on('voice', (data: any) => {
+      recvE2Ch1.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE2Ch1 = true;
       });
-      whisperTargetE2.on('voice', (data: any) => {
+      whisperTargetE2.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.whisperTargetE2 = true;
       });
-      deafE1Ch0.on('voice', (data: any) => {
+      deafE1Ch0.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.deafE1Ch0 = true;
       });
-      normalE1Ch2.on('voice', (data: any) => {
+      normalE1Ch2.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.normalE1Ch2 = true;
       });
       

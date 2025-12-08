@@ -120,12 +120,12 @@ export class WebApiService {
     const port = this.config.port;
 
     return new Promise((resolve, reject) => {
-      this.server!.listen(port, host, () => {
+      this.server.listen(port, host, () => {
         logger.info(`Web API service started on ${host}:${port}`);
         resolve();
       });
 
-      this.server!.on('error', (error) => {
+      this.server.on('error', (error) => {
         logger.error('Web API server error:', error);
         reject(error);
       });
@@ -138,7 +138,7 @@ export class WebApiService {
   async stop(): Promise<void> {
     if (this.server) {
       return new Promise((resolve) => {
-        this.server!.close(() => {
+        this.server.close(() => {
           logger.info('Web API service stopped');
           this.server = null;
           resolve();

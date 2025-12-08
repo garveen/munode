@@ -182,7 +182,7 @@ export class ClientManager extends EventEmitter {
     }
     return Array.from(sessionIds)
       .map(id => this.clients.get(id))
-      .filter(Boolean) as ClientInfo[];
+      .filter(Boolean);
   }
 
   /**
@@ -256,7 +256,7 @@ export class ClientManager extends EventEmitter {
    * 广播消息给所有客户端
    * 使用 Promise.allSettled 确保单个客户端失败不影响其他客户端
    */
-  async broadcast(message: any, excludeSession?: number): Promise<void> {
+  async broadcast(message: Buffer, excludeSession?: number): Promise<void> {
     const promises = Array.from(this.clients.entries())
       .filter(([sessionId]) => sessionId !== excludeSession)
       .map(([sessionId]) =>
@@ -276,7 +276,7 @@ export class ClientManager extends EventEmitter {
   /**
    * 发送消息给指定客户端
    */
-  sendToClient(sessionId: number, message: any): void {
+  sendToClient(sessionId: number, message: Buffer): void {
     // 消息发送逻辑将在 MessageHandler 中实现
     this.emit('sendMessage', sessionId, message);
   }
@@ -285,7 +285,7 @@ export class ClientManager extends EventEmitter {
    * 发送消息给频道中的所有客户端
    * 使用 Promise.allSettled 确保单个客户端失败不影响其他客户端
    */
-  async sendToChannel(channelId: number, message: any, excludeSession?: number): Promise<void> {
+  async sendToChannel(channelId: number, message: Buffer, excludeSession?: number): Promise<void> {
     const promises = Array.from(this.clients.entries())
       .filter(([sessionId, client]) => client.channel_id === channelId && sessionId !== excludeSession)
       .map(([sessionId]) =>
@@ -307,7 +307,7 @@ export class ClientManager extends EventEmitter {
    */
   private setupSocketHandlers(socket: Socket | TLSSocket, sessionId: number): void {
     socket.on('data', (data: Buffer) => {
-      this.logger.info(`[CLIENT-MANAGER] Received data from client: sessionId=${sessionId}, length=${data.length}`);
+      this.logger.debug(`[CLIENT-MANAGER] Received data from client: sessionId=${sessionId}, length=${data.length}`);
       this.handleClientData(sessionId, data);
     });
 

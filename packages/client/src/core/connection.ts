@@ -63,7 +63,7 @@ export class ConnectionManager {
     this.setState(ConnectionState.Connecting);
 
     return new Promise((resolve, reject) => {
-      const tlsOptions: any = {
+      const tlsOptions: tls.ConnectionOptions = {
         host: options.host,
         port: options.port || 64738,
         rejectUnauthorized: options.rejectUnauthorized !== false,
@@ -129,11 +129,11 @@ export class ConnectionManager {
           reject(error);
         };
         
-        this.udpSocket!.once('error', errorHandler);
+        this.udpSocket.once('error', errorHandler);
         
-        this.udpSocket!.bind(0, () => {
+        this.udpSocket.bind(0, () => {
           // bind 成功，移除临时错误处理器
-          this.udpSocket!.removeListener('error', errorHandler);
+          this.udpSocket.removeListener('error', errorHandler);
           resolve();
         });
       });
@@ -182,6 +182,14 @@ export class ConnectionManager {
   }
 
   /**
+   * 获取 UDP socket（用于测试目的）
+   * @internal
+   */
+  getUdpSocket(): UDPSocket | null {
+    return this.udpSocket;
+  }
+
+  /**
    * 断开连接
    */
   async disconnect(): Promise<void> {
@@ -212,7 +220,7 @@ export class ConnectionManager {
     }
     
     return new Promise((resolve, reject) => {
-      this.tcpSocket!.write(message, (error) => {
+      this.tcpSocket.write(message, (error) => {
         if (error) {
           reject(error);
         } else {
@@ -236,7 +244,7 @@ export class ConnectionManager {
     }
 
     return new Promise((resolve, reject) => {
-      this.udpSocket!.send(message, 0, message.length, this.udpPort, this.serverHost, (error) => {
+      this.udpSocket.send(message, 0, message.length, this.udpPort, this.serverHost, (error) => {
         if (error) {
           // UDP发送失败，标记UDP为不可用
           this.udpFailed = true;
@@ -330,11 +338,12 @@ export class ConnectionManager {
   private routeMessage(type: number, payload: Buffer): void {
     try {
       switch (type) {
-        case MessageType.Version:
+        case MessageType.Version: {
           // 版本消息，通常是服务器发送的第一个消息
           const versionMessage = mumbleproto.Version.deserialize(payload);
           this.client.emit('version', versionMessage);
           break;
+        }
 
         case MessageType.UDPTunnel:
           // UDP隧道消息，包含音频数据
@@ -346,79 +355,91 @@ export class ConnectionManager {
           console.warn('Received unexpected Authenticate message from server');
           break;
 
-        case MessageType.Ping:
+        case MessageType.Ping: {
           // Ping消息
           const pingMessage = mumbleproto.Ping.deserialize(payload);
           this.client.emit('ping', pingMessage);
           break;
+        }
 
-        case MessageType.Reject:
+        case MessageType.Reject: {
           // 拒绝消息 (认证失败)
           const rejectMessage = mumbleproto.Reject.deserialize(payload);
           this.client.getAuthManager().handleReject(rejectMessage);
           break;
+        }
 
-        case MessageType.ServerSync:
+        case MessageType.ServerSync: {
           // 服务器同步消息 (认证成功)
           const serverSyncMessage = mumbleproto.ServerSync.deserialize(payload);
           this.client.getAuthManager().handleServerSync(serverSyncMessage);
           break;
+        }
 
-        case MessageType.ChannelRemove:
+        case MessageType.ChannelRemove: {
           // 频道删除消息
           const channelRemoveMessage = mumbleproto.ChannelRemove.deserialize(payload);
           this.client.getStateManager().handleChannelRemove(channelRemoveMessage);
           break;
+        }
 
-        case MessageType.ChannelState:
+        case MessageType.ChannelState: {
           // 频道状态消息
           const channelStateMessage = mumbleproto.ChannelState.deserialize(payload);
           this.client.getStateManager().handleChannelState(channelStateMessage);
           break;
+        }
 
-        case MessageType.UserRemove:
+        case MessageType.UserRemove: {
           // 用户删除消息
           const userRemoveMessage = mumbleproto.UserRemove.deserialize(payload);
           this.client.getStateManager().handleUserRemove(userRemoveMessage);
           break;
+        }
 
-        case MessageType.UserState:
+        case MessageType.UserState: {
           // 用户状态消息
           const userStateMessage = mumbleproto.UserState.deserialize(payload);
           this.client.getStateManager().handleUserState(userStateMessage);
           break;
+        }
 
-        case MessageType.BanList:
+        case MessageType.BanList: {
           // 封禁列表消息
           const banListMessage = mumbleproto.BanList.deserialize(payload);
           this.client.emit('banList', banListMessage);
           break;
+        }
 
-        case MessageType.TextMessage:
+        case MessageType.TextMessage: {
           // 文本消息
           const textMessage = mumbleproto.TextMessage.deserialize(payload);
           this.client.emit('textMessage', textMessage);
           break;
+        }
 
-        case MessageType.PermissionDenied:
+        case MessageType.PermissionDenied: {
           // 权限拒绝消息
           const permissionDeniedMessage = mumbleproto.PermissionDenied.deserialize(payload);
           this.client.getStateManager().handlePermissionDenied(permissionDeniedMessage);
           break;
+        }
 
-        case MessageType.ACL:
+        case MessageType.ACL: {
           // ACL消息
           const aclMessage = mumbleproto.ACL.deserialize(payload);
           this.client.emit('acl', aclMessage);
           break;
+        }
 
-        case MessageType.QueryUsers:
+        case MessageType.QueryUsers: {
           // 查询用户消息
           const queryUsersMessage = mumbleproto.QueryUsers.deserialize(payload);
           this.client.emit('queryUsers', queryUsersMessage);
           break;
+        }
 
-        case MessageType.CryptSetup:
+        case MessageType.CryptSetup: {
           // 加密设置消息
           const cryptSetupMessage = mumbleproto.CryptSetup.deserialize(payload);
           // 异步处理，但不阻塞消息处理循环
@@ -427,72 +448,84 @@ export class ConnectionManager {
             console.error('Failed to handle CryptSetup:', error);
           });
           break;
+        }
 
-        case MessageType.ContextActionModify:
+        case MessageType.ContextActionModify: {
           // 上下文操作修改消息
           const contextActionModifyMessage = mumbleproto.ContextActionModify.deserialize(payload);
           this.client.emit('contextActionModify', contextActionModifyMessage);
           break;
+        }
 
-        case MessageType.ContextAction:
+        case MessageType.ContextAction: {
           // 上下文操作消息
           const contextActionMessage = mumbleproto.ContextAction.deserialize(payload);
           this.client.emit('contextAction', contextActionMessage);
           break;
+        }
 
-        case MessageType.UserList:
+        case MessageType.UserList: {
           // 用户列表消息
           const userListMessage = mumbleproto.UserList.deserialize(payload);
           this.client.emit('userList', userListMessage);
           break;
+        }
 
-        case MessageType.VoiceTarget:
+        case MessageType.VoiceTarget: {
           // 语音目标消息
           const voiceTargetMessage = mumbleproto.VoiceTarget.deserialize(payload);
           this.client.emit('voiceTarget', voiceTargetMessage);
           break;
+        }
 
-        case MessageType.PermissionQuery:
+        case MessageType.PermissionQuery: {
           // 权限查询消息
           const permissionQueryMessage = mumbleproto.PermissionQuery.deserialize(payload);
           this.client.emit('permissionQuery', permissionQueryMessage);
           break;
+        }
 
-        case MessageType.CodecVersion:
+        case MessageType.CodecVersion: {
           // 编解码器版本消息
           const codecVersionMessage = mumbleproto.CodecVersion.deserialize(payload);
           this.client.emit('codecVersion', codecVersionMessage);
           break;
+        }
 
-        case MessageType.UserStats:
+        case MessageType.UserStats: {
           // 用户统计消息
           const userStatsMessage = mumbleproto.UserStats.deserialize(payload);
           this.client.emit('userStats', userStatsMessage);
           break;
+        }
 
-        case MessageType.RequestBlob:
+        case MessageType.RequestBlob: {
           // 请求Blob消息
           const requestBlobMessage = mumbleproto.RequestBlob.deserialize(payload);
           this.client.emit('requestBlob', requestBlobMessage);
           break;
+        }
 
-        case MessageType.ServerConfig:
+        case MessageType.ServerConfig: {
           // 服务器配置消息
           const serverConfigMessage = mumbleproto.ServerConfig.deserialize(payload);
           this.client.getStateManager().handleServerConfig(serverConfigMessage);
           break;
+        }
 
-        case MessageType.SuggestConfig:
+        case MessageType.SuggestConfig: {
           // 建议配置消息
           const suggestConfigMessage = mumbleproto.SuggestConfig.deserialize(payload);
           this.client.emit('suggestConfig', suggestConfigMessage);
           break;
+        }
 
-        case MessageType.PluginDataTransmission:
+        case MessageType.PluginDataTransmission: {
           // 插件数据传输消息
           const pluginDataMessage = mumbleproto.PluginDataTransmission.deserialize(payload);
           this.client.emit('pluginData', pluginDataMessage);
           break;
+        }
 
         default:
           console.warn(`Unknown message type: ${type}`);
@@ -799,7 +832,7 @@ export class ConnectionManager {
   /**
    * 处理加密设置消息
    */
-  private async handleCryptSetup(message: any): Promise<void> {
+  private async handleCryptSetup(message: mumbleproto.CryptSetup): Promise<void> {
     // 从CryptSetup消息中提取加密参数
     // 注意：protobuf optional字段需要使用 has_xxx 方法检查是否设置
     if (message.has_key && message.has_client_nonce && message.has_server_nonce) {

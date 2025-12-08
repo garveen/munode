@@ -9,7 +9,7 @@ export interface RPCResponse {
 
 // Channel data structure
 export interface ChannelData {
-  id: number;
+  channel_id: number; // 修改：与protobuf字段名一致
   name?: string;
   parent_id?: number;
   position?: number;
@@ -67,6 +67,10 @@ export interface RegisterRequest {
   capacity: number;
   certificate: string;
   metadata?: Record<string, unknown>;
+  
+  // HMAC 挑战-响应认证字段
+  challenge?: string; // Edge 在第二阶段返回的挑战码
+  challenge_response?: string; // Edge 计算的 HMAC 响应
 }
 
 export interface RegisterResponse extends RPCResponse {
@@ -213,7 +217,7 @@ export interface MissingUpdatesRequest {
 }
 
 export interface MissingUpdatesResponse extends RPCResponse {
-  updates: any[]; // TODO: Define specific update types
+  updates: unknown[]; // TODO: Define specific update types
 }
 
 // Checksum response

@@ -59,7 +59,8 @@ describe('Channel Ninja Integration Tests', () => {
       
       await sleep(1000);
       
-      // Set ACL: deny all users, then allow "ninja" group
+      // Set ACL: first deny all users, then allow ninja group
+      // Order matters: later rules override earlier ones
       await setupAdmin.saveACL(NINJA_CHANNEL_ID, [
         {
           apply_here: true,
@@ -378,7 +379,8 @@ describe('Channel Ninja Disabled Tests', () => {
       
       await sleep(1000);
       
-      // Set ACL: deny all, allow ninja group (but since ninja is disabled, users should still be visible)
+      // Set ACL: first deny all users, then allow ninja group
+      // Even though ninja mode is disabled, we still set up ACL for testing
       await setupAdmin.saveACL(restrictedChannelId, [
         {
           apply_here: true,
@@ -393,7 +395,7 @@ describe('Channel Ninja Disabled Tests', () => {
           apply_subs: true,
           inherited: false,
           group: 'ninja',
-          allow: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak,
+          allow: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak | PermissionFlag.Listen,
           deny: 0,
         },
       ]);

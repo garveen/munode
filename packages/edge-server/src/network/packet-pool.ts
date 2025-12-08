@@ -149,7 +149,12 @@ export class PacketConnPool extends EventEmitter {
   /**
    * 获取连接统计
    */
-  getStats(): any {
+  getStats(): {
+    activeConnections: number;
+    maxConnections: number;
+    totalPackets: number;
+    averagePacketsPerConnection: number;
+  } {
     const totalPackets = Array.from(this.connections.values()).reduce(
       (sum, conn) => sum + conn.packetCount,
       0

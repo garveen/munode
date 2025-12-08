@@ -156,7 +156,7 @@ export class ServerLifecycleManager {
       this.udpServer = createSocket('udp4');
 
       this.udpServer.on('message', (msg, rinfo) => {
-        this.handlerFactory.connectionHandlers!.handleUDPMessage(msg, rinfo);
+        this.handlerFactory.connectionHandlers.handleUDPMessage(msg, rinfo);
       });
 
       this.udpServer.on('error', (error) => {
@@ -170,7 +170,7 @@ export class ServerLifecycleManager {
         );
 
         // 设置 VoiceRouter 的 UDP 服务器引用
-        this.handlerFactory.voiceRouter.setUDPServer(this.udpServer!);
+        this.handlerFactory.voiceRouter.setUDPServer(this.udpServer);
 
         resolve();
       });
@@ -213,7 +213,7 @@ export class ServerLifecycleManager {
       this.tlsServer = createTLSServer(tlsOptions);
 
       this.tlsServer.on('secureConnection', (socket: TLSSocket) => {
-        void this.handlerFactory.connectionHandlers!.handleTLSConnection(socket);
+        void this.handlerFactory.connectionHandlers.handleTLSConnection(socket);
       });
 
       this.tlsServer.on('error', (error: Error) => {

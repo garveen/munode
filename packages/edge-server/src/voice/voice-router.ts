@@ -1,11 +1,13 @@
 import { EventEmitter } from 'events';
 // import { logger } from '@munode/common';
 import type { Logger } from 'winston';
+import type { RemoteInfo } from 'dgram';
 import { EdgeConfig, VoicePacket, VoiceBroadcast, ClientInfo } from '../types.js';
 import { OCB2AES128 } from '@munode/common';
 import type { Socket as UDPSocket } from 'dgram';
-import { mumbleproto } from '@munode/protocol';
 import { LRUCache } from 'lru-cache';
+import type { ClientManager } from '../client/client-manager.js';
+import type { ChannelManager } from '../models/channel.js';
 
 /**
  * 路由缓存条目
@@ -16,6 +18,35 @@ interface RouteCacheEntry {
 }
 
 /**
+ * 语音目标数据
+ * 兼容 mumbleproto.VoiceTarget.Target 和内部使用的格式
+ */
+interface VoiceTargetData {
+  id?: number;
+  session?: number[];  // Mumble protocol uses 'session'
+  sessions?: number[]; // Internal format uses 'sessions'
+  channel_id?: number;
+  links?: boolean;
+  children?: boolean;
+  group?: string;
+  channels?: Array<{
+    channel_id: number;
+    links?: boolean;
+    children?: boolean;
+    group?: string;
+  }>;
+}
+
+/**
+ * 语音统计信息
+ */
+interface VoiceStats {
+  packetsProcessed: number;
+  bytesProcessed: number;
+  activeTargets: number;
+}
+
+/**
  * 语音路由器 - 处理语音包的路由和转发
  * 性能优化：使用索引和缓存实现 O(1) 查找
  */
@@ -23,10 +54,10 @@ export class VoiceRouter extends EventEmitter {
   private config: EdgeConfig;
   private logger: Logger;
   private clientCryptos: Map<number, OCB2AES128> = new Map(); // session_id -> OCB2AES128
-  private voiceTargets: Map<number, Map<number, any>> = new Map(); // session_id -> (target_id -> config)
+  private voiceTargets: Map<number, Map<number, VoiceTargetData[]>> = new Map(); // session_id -> (target_id -> config array)
   private udpServer?: UDPSocket; // UDP 服务器引用，用于发送语音包
-  private clientManager?: any; // ClientManager 引用，用于获取客户端信息
-  private channelManager?: any; // ChannelManager 引用，用于获取频道链接信息
+  private clientManager?: ClientManager; // ClientManager 引用，用于获取客户端信息
+  private channelManager?: ChannelManager; // ChannelManager 引用，用于获取频道链接信息
   
   // 性能优化：路由缓存（事件驱动，主动重建）
   private routingCache: Map<string, RouteCacheEntry> = new Map(); // cacheKey -> RouteCacheEntry
@@ -55,14 +86,14 @@ export class VoiceRouter extends EventEmitter {
   /**
    * 设置 ClientManager 引用（用于获取客户端信息）
    */
-  setClientManager(clientManager: any): void {
+  setClientManager(clientManager: ClientManager): void {
     this.clientManager = clientManager;
   }
 
   /**
    * 设置 ChannelManager 引用（用于获取频道链接信息）
    */
-  setChannelManager(channelManager: any): void {
+  setChannelManager(channelManager: ChannelManager): void {
     this.channelManager = channelManager;
   }
 
@@ -112,7 +143,7 @@ export class VoiceRouter extends EventEmitter {
    * @param rinfo UDP 源地址信息
    * @param alreadyDecrypted 是否已经解密过（用于地址匹配）
    */
-  handleUDPPacket(session_id: number, data: Buffer, rinfo: any, alreadyDecrypted: boolean = false): void {
+  handleUDPPacket(session_id: number, data: Buffer, rinfo: RemoteInfo, alreadyDecrypted: boolean = false): void {
     this.logger.debug(`[UDP] handleUDPPacket: session=${session_id}, size=${data.length}, alreadyDecrypted=${alreadyDecrypted}`);
     this.logger.debug(`[UDP] handleUDPPacket: session=${session_id}, size=${data.length}, alreadyDecrypted=${alreadyDecrypted}`);
     try {
@@ -192,8 +223,8 @@ export class VoiceRouter extends EventEmitter {
    * 3. 只在接收 UDP Ping 时才更新客户端的 UDP 地址信息
    * 这样可以在第一次 UDP Ping 时就建立 UDP 连接
    */
-  private handleUDPPing(session_id: number, plaintextData: Buffer, rinfo: any): void {
-    this.logger.info(`[UDP] Handling ping from session ${session_id}, data size: ${plaintextData.length}`);
+  private handleUDPPing(session_id: number, plaintextData: Buffer, rinfo: RemoteInfo): void {
+    this.logger.debug(`[UDP] Handling ping from session ${session_id}, data size: ${plaintextData.length}`);
     if (!this.udpServer) {
       this.logger.warn('[UDP] No UDP server available for ping response');
       return;
@@ -227,7 +258,7 @@ export class VoiceRouter extends EventEmitter {
         if (err) {
           this.logger.error(`Failed to send UDP ping response to session ${session_id}:`, err);
         } else {
-          this.logger.info(`Sent UDP ping response to session ${session_id} at ${address}:${port}`);
+          this.logger.debug(`Sent UDP ping response to session ${session_id} at ${address}:${port}`);
         }
       });
     } catch (error) {
@@ -477,7 +508,7 @@ export class VoiceRouter extends EventEmitter {
     }
 
     // 发送给目标频道中的所有客户端
-    let sentCount = 0;
+    let _sentCount = 0;
     for (const sessionId of targetSessions) {
       // 跳过发送者自己（远程session可能与本地session冲突，这里也检查一下）
       if (sessionId === packet.sender_session) {
@@ -501,10 +532,9 @@ export class VoiceRouter extends EventEmitter {
 
       this.logger.debug(`[VOICE-DEBUG] Sending remote voice to ${targetClient.username} (session ${targetClient.session}, channel ${targetClient.channel_id})`);
       this.sendVoicePacketToClient(targetClient, broadcastPacket);
-      sentCount++;
+      _sentCount++;
     }
     
-    this.logger.info(`[VOICE] Remote PTT from session ${packet.sender_session} sent to ${sentCount} local clients across ${targetChannels.size} channels (indexed lookup)`);
   }
 
   /**
@@ -590,7 +620,7 @@ export class VoiceRouter extends EventEmitter {
     }
 
     // 发送语音包给所有目标用户
-    let sentCount = 0;
+    let _sentCount = 0;
     for (const sessionId of targetSessions) {
       // 跳过发送者自己
       if (sessionId === packet.sender_session) {
@@ -614,11 +644,9 @@ export class VoiceRouter extends EventEmitter {
 
       this.logger.debug(`[VOICE-DEBUG] Sending voice to ${targetClient.username} (session ${sessionId}, channel ${targetClient.channel_id})`);
       this.sendVoicePacketToClient(targetClient, broadcastPacket);
-      sentCount++;
+      _sentCount++;
     }
     
-    this.logger.info(`[VOICE] Push-to-talk from ${sender.username} sent to ${sentCount} clients across ${targetChannels.size} channels (indexed lookup)`);
-
     // 触发事件供VoiceManager进行跨Edge广播
     // VoiceManager会将语音包广播到所有其他Edge
     // 每个Edge（包括本地）都会独立计算应该接收的用户
@@ -652,7 +680,6 @@ export class VoiceRouter extends EventEmitter {
         targetChannels.add(linkedId);
       }
       this.logger.debug(`Calculated target channels for ${channelId}: [${Array.from(targetChannels).join(', ')}], linked=${linkedChannels.size}`);
-    } else {
     }
 
     return targetChannels;
@@ -812,14 +839,14 @@ export class VoiceRouter extends EventEmitter {
    * 使用索引实现高效查找
    */
   private calculateWhisperTargets(
-    voiceTarget: ReturnType<typeof mumbleproto.VoiceTarget.Target.deserialize>[]
+    voiceTarget: VoiceTargetData[]
   ): Set<number> {
     const targetSessions = new Set<number>();
 
     // 处理每个目标
     for (const target of voiceTarget) {
-      // 情况1: 基于session的目标 - 使用protobuf标准属性
-      const sessions: number[] = target.session || [];
+      // 情况1: 基于session的目标
+      const sessions: number[] = target.session || target.sessions || [];
       
       if (sessions.length > 0) {
         for (const sessionId of sessions) {
@@ -828,8 +855,7 @@ export class VoiceRouter extends EventEmitter {
       }
 
       // 情况2: 基于频道的目标
-      // protobuf对象：使用 has_channel_id 判断是否显式设置了 channel_id
-      const hasChannelId = target.has_channel_id;
+      const hasChannelId = target.channel_id !== undefined;
 
       if (hasChannelId) {
         const targetChannels = new Set<number>();
@@ -1050,7 +1076,7 @@ export class VoiceRouter extends EventEmitter {
    * 
    * 注意：当前未使用，但保留以备将来需要（如解析sequence number）
    */
-  // @ts-ignore - 保留以备将来使用
+  // @ts-expect-error - 保留以备将来使用
   private decodeVarint(data: Buffer, offset: number): { value: number; offset: number } | null {
     if (offset >= data.length) {
       return null;
@@ -1193,7 +1219,7 @@ export class VoiceRouter extends EventEmitter {
   /**
    * 获取语音统计信息
    */
-  getVoiceStats(): any {
+  getVoiceStats(): VoiceStats {
     return {
       packetsProcessed: 0,
       bytesProcessed: 0,
@@ -1229,7 +1255,7 @@ export class VoiceRouter extends EventEmitter {
   /**
    * 设置语音目标
    */
-  setVoiceTarget(session_id: number,  target_id: number, targets: any[]): void {
+  setVoiceTarget(session_id: number,  target_id: number, targets: VoiceTargetData[]): void {
     let clientTargets = this.voiceTargets.get(session_id);
     if (!clientTargets) {
       clientTargets = new Map();
@@ -1267,7 +1293,7 @@ export class VoiceRouter extends EventEmitter {
   /**
    * 获取语音目标配置
    */
-  getVoiceTarget(session_id: number,  target_id: number): any[] | undefined {
+  getVoiceTarget(session_id: number,  target_id: number): VoiceTargetData[] | undefined {
     const clientTargets = this.voiceTargets.get(session_id);
     if (clientTargets) {
       return clientTargets.get(target_id);
@@ -1320,7 +1346,7 @@ export class VoiceRouter extends EventEmitter {
 
     // 发送UDP包
     try {
-      this.udpServer.send(encrypted, client.udp_port!, client.udp_ip!, (err) => {
+      this.udpServer.send(encrypted, client.udp_port, client.udp_ip, (err) => {
         if (err) {
           this.logger.error(`Failed to send voice packet via UDP to ${client.username} (${client.session}):`, err);
           // UDP发送失败，标记客户端UDP为不可用

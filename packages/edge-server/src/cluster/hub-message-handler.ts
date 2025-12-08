@@ -12,10 +12,19 @@
  */
 
 import { logger } from '@munode/common';
-import { mumbleproto } from '@munode/protocol';
+import {  mumbleproto } from '@munode/protocol';
 import { MessageType } from '@munode/protocol';
-import type { ClientInfo } from '../types.js';
+import type { HubNotificationParams } from '@munode/protocol';
+import type { ChannelInfo, ClientInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
+
+interface ChannelUpdateFields {
+  name?: string;
+  position?: number;
+  max_users?: number;
+  description?: string;
+  links?: number[];
+}
 
 export class HubMessageHandlers {
   constructor(private factory: HandlerFactory) {}
@@ -24,74 +33,77 @@ export class HubMessageHandlers {
   private get channelManager() { return this.factory.channelManager; }
   private get stateManager() { return this.factory.stateManager; }
   private get messageHandler() { return this.factory.messageHandler; }
-  private get config() { return this.factory.config; }
 
   /**
    * 处理来自Hub的UserState广播
    */
-  handleUserStateBroadcastFromHub(params: any): void {
+  handleUserStateBroadcastFromHub(params: HubNotificationParams<'hub.userStateBroadcast'>): void {
     try {
       logger.info(`Edge: Received UserState broadcast from Hub: ${JSON.stringify(params)}`);
       
-      const { session_id, edge_id, userState: userStateObj } = params;
-
-      // 重构UserState对象，只包含实际存在的字段
-      const userStateInit: any = {
-        session: userStateObj.session || session_id,
-        actor: userStateObj.actor,
+      // params is the userState object directly, use the type from HubNotificationParams
+      // Build UserState protobuf message with only the fields that are set
+      // Use any here since we're building a protobuf message dynamically
+      const userStateInit: {
+        session: number;
+        actor: number;
+        temporary_access_tokens: string[];
+        listening_channel_add: number[];
+        listening_channel_remove: number[];
+        name?: string;
+        user_id?: number;
+        channel_id?: number;
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
+        self_mute?: boolean;
+        self_deaf?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
+        texture?: Uint8Array;
+        plugin_context?: Uint8Array;
+        plugin_identity?: string;
+      } = {
+        session: params.session,
+        actor: params.actor,
+        temporary_access_tokens: [],
+        listening_channel_add: [],
+        listening_channel_remove: [],
       };
       
-      // 只设置实际存在的字段
-      if (userStateObj.name !== undefined) {
-        userStateInit.name = userStateObj.name;
-      }
-      if (userStateObj.user_id !== undefined) {
-        userStateInit.user_id = userStateObj.user_id;
-      }
-      if (userStateObj.channel_id !== undefined) {
-        userStateInit.channel_id = userStateObj.channel_id;
-      }
-      if (userStateObj.mute !== undefined) {
-        userStateInit.mute = userStateObj.mute;
-      }
-      if (userStateObj.deaf !== undefined) {
-        userStateInit.deaf = userStateObj.deaf;
-      }
-      if (userStateObj.suppress !== undefined) {
-        userStateInit.suppress = userStateObj.suppress;
-      }
-      if (userStateObj.self_mute !== undefined) {
-        userStateInit.self_mute = userStateObj.self_mute;
-      }
-      if (userStateObj.self_deaf !== undefined) {
-        userStateInit.self_deaf = userStateObj.self_deaf;
-      }
-      if (userStateObj.priority_speaker !== undefined) {
-        userStateInit.priority_speaker = userStateObj.priority_speaker;
-      }
-      if (userStateObj.recording !== undefined) {
-        userStateInit.recording = userStateObj.recording;
-      }
+      // Only set fields that are defined
+      if (params.name !== undefined) userStateInit.name = params.name;
+      if (params.user_id !== undefined) userStateInit.user_id = params.user_id;
+      if (params.channel_id !== undefined) userStateInit.channel_id = params.channel_id;
+      if (params.mute !== undefined) userStateInit.mute = params.mute;
+      if (params.deaf !== undefined) userStateInit.deaf = params.deaf;
+      if (params.suppress !== undefined) userStateInit.suppress = params.suppress;
+      if (params.self_mute !== undefined) userStateInit.self_mute = params.self_mute;
+      if (params.self_deaf !== undefined) userStateInit.self_deaf = params.self_deaf;
+      if (params.priority_speaker !== undefined) userStateInit.priority_speaker = params.priority_speaker;
+      if (params.recording !== undefined) userStateInit.recording = params.recording;
+      if (params.texture !== undefined) userStateInit.texture = params.texture;
+      if (params.plugin_context !== undefined) userStateInit.plugin_context = params.plugin_context;
+      if (params.plugin_identity !== undefined) userStateInit.plugin_identity = params.plugin_identity;
       
-      // 只在有值时才设置 repeated 字段
-      if (userStateObj.listening_channel_add && userStateObj.listening_channel_add.length > 0) {
-        userStateInit.listening_channel_add = userStateObj.listening_channel_add;
+      // Only set repeated fields when they have values
+      if (params.listening_channel_add && params.listening_channel_add.length > 0) {
+        userStateInit.listening_channel_add = params.listening_channel_add;
       }
-      if (userStateObj.listening_channel_remove && userStateObj.listening_channel_remove.length > 0) {
-        userStateInit.listening_channel_remove = userStateObj.listening_channel_remove;
+      if (params.listening_channel_remove && params.listening_channel_remove.length > 0) {
+        userStateInit.listening_channel_remove = params.listening_channel_remove;
       }
-      if (userStateObj.temporary_access_tokens && userStateObj.temporary_access_tokens.length > 0) {
-        userStateInit.temporary_access_tokens = userStateObj.temporary_access_tokens;
+      if (params.temporary_access_tokens && params.temporary_access_tokens.length > 0) {
+        userStateInit.temporary_access_tokens = params.temporary_access_tokens;
       }
       
       const userState = new mumbleproto.UserState(userStateInit);
 
-      const targetSession = userState.session || session_id;
+      const targetSession = userState.session;
 
       // 更新本地用户状态镜像（如果是本Edge的用户）
-      if (edge_id === this.config.server_id) {
-        const client = this.clientManager.getClient(targetSession);
-        if (client) {
+      const client = this.clientManager.getClient(targetSession);
+      if (client) {
           const updates: Partial<ClientInfo> = {};
           
           if (userState.has_channel_id && userState.channel_id !== undefined) {
@@ -144,7 +156,6 @@ export class HubMessageHandlers {
             this.clientManager.updateClient(targetSession, updates);
           }
         }
-      }
 
       // Broadcast to all local authenticated clients (if target_sessions provided, only broadcast to these clients)
       const userStateMessage = userState.serialize();
@@ -173,9 +184,9 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的UserState响应
    */
-  handleUserStateResponseFromHub(params: any): void {
+  handleUserStateResponseFromHub(params: HubNotificationParams<'hub.userStateResponse'>): void {
     try {
-      const { success, actor_session, error, permission_denied } = params;
+      const { success, actor_session, error, permission_denied, userState } = params;
 
       if (!success) {
         logger.warn(`UserState request from session ${actor_session} failed: ${error}`);
@@ -189,7 +200,75 @@ export class HubMessageHandlers {
         return;
       }
 
-      logger.debug(`UserState request from session ${actor_session} succeeded`);
+      // 如果成功并且有userState数据，发送给客户端
+      if (userState) {
+        logger.debug(`Sending UserState response to session ${actor_session}`);
+        
+        // Build UserState protobuf message with only the fields that are set
+        // Use the same pattern as handleUserStateBroadcastFromHub
+        // Use any here since we're building a protobuf message dynamically
+        const userStateInit: {
+          session: number;
+          actor: number;
+          temporary_access_tokens: string[];
+          listening_channel_add: number[];
+          listening_channel_remove: number[];
+          name?: string;
+          user_id?: number;
+          channel_id?: number;
+          mute?: boolean;
+          deaf?: boolean;
+          suppress?: boolean;
+          self_mute?: boolean;
+          self_deaf?: boolean;
+          priority_speaker?: boolean;
+          recording?: boolean;
+          texture?: Uint8Array;
+          plugin_context?: Uint8Array;
+          plugin_identity?: string;
+        } = {
+          session: userState.session,
+          actor: userState.actor,
+          temporary_access_tokens: [],
+          listening_channel_add: [],
+          listening_channel_remove: [],
+        };
+        
+        // Only set fields that are defined
+        if (userState.name !== undefined) userStateInit.name = userState.name;
+        if (userState.user_id !== undefined) userStateInit.user_id = userState.user_id;
+        if (userState.channel_id !== undefined) userStateInit.channel_id = userState.channel_id;
+        if (userState.mute !== undefined) userStateInit.mute = userState.mute;
+        if (userState.deaf !== undefined) userStateInit.deaf = userState.deaf;
+        if (userState.suppress !== undefined) userStateInit.suppress = userState.suppress;
+        if (userState.self_mute !== undefined) userStateInit.self_mute = userState.self_mute;
+        if (userState.self_deaf !== undefined) userStateInit.self_deaf = userState.self_deaf;
+        if (userState.priority_speaker !== undefined) userStateInit.priority_speaker = userState.priority_speaker;
+        if (userState.recording !== undefined) userStateInit.recording = userState.recording;
+        if (userState.texture !== undefined) userStateInit.texture = userState.texture;
+        if (userState.plugin_context !== undefined) userStateInit.plugin_context = userState.plugin_context;
+        if (userState.plugin_identity !== undefined) userStateInit.plugin_identity = userState.plugin_identity;
+        
+        // Only set repeated fields when they have values
+        if (userState.listening_channel_add && userState.listening_channel_add.length > 0) {
+          userStateInit.listening_channel_add = userState.listening_channel_add;
+        }
+        if (userState.listening_channel_remove && userState.listening_channel_remove.length > 0) {
+          userStateInit.listening_channel_remove = userState.listening_channel_remove;
+        }
+        if (userState.temporary_access_tokens && userState.temporary_access_tokens.length > 0) {
+          userStateInit.temporary_access_tokens = userState.temporary_access_tokens;
+        }
+        
+        // 构建UserState消息
+        const userStateMsg = new mumbleproto.UserState(userStateInit);
+        const userStateBuffer = Buffer.from(userStateMsg.serialize());
+        
+        // 发送给客户端
+        this.messageHandler.sendMessage(actor_session, MessageType.UserState, userStateBuffer);
+      } else {
+        logger.debug(`UserState request from session ${actor_session} succeeded (no state data to send)`);
+      }
     } catch (error) {
       logger.error('Error handling UserState response from Hub:', error);
     }
@@ -198,7 +277,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的ChannelState响应
    */
-  handleChannelStateResponseFromHub(params: any): void {
+  handleChannelStateResponseFromHub(params: HubNotificationParams<'hub.channelStateResponse'>): void {
     try {
       const { success, actor_session, error, permission_denied } = params;
 
@@ -220,9 +299,9 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的ChannelState广播
    */
-  handleChannelStateBroadcastFromHub(params: any): void {
+  handleChannelStateBroadcastFromHub(params: HubNotificationParams<'hub.channelStateBroadcast'>): void {
     try {
-      const { channelState } = params;
+      const channelState = params;
 
       logger.debug(`Received ChannelState broadcast from Hub: channel ${channelState.channel_id}`);
 
@@ -231,7 +310,7 @@ export class HubMessageHandlers {
         const existingChannel = this.channelManager.getChannel(channelState.channel_id);
         
         if (existingChannel) {
-          const updates: any = {};
+          const updates: ChannelUpdateFields = {};
           
           // 更新现有频道
           if (channelState.name !== undefined) {
@@ -281,10 +360,14 @@ export class HubMessageHandlers {
             // 更新stateManager
             const updatedChannel = { ...existingChannel, ...updates };
             this.stateManager.addOrUpdateChannel(updatedChannel);
+            
+            if (existingChannel.id === 0 && updates.links) {
+              logger.info(`[HUB-HANDLER] Updated stateManager channel 0 with links: [${updates.links.join(', ')}]`);
+            }
           }
         } else {
           // 创建新频道
-          const newChannelData = {
+          const newChannelData: ChannelInfo = {
             id: channelState.channel_id,
             name: channelState.name || 'Unnamed Channel',
             parent_id: channelState.parent || 0,
@@ -294,16 +377,49 @@ export class HubMessageHandlers {
             temporary: channelState.temporary || false,
             inherit_acl: channelState.inherit_acl !== undefined ? channelState.inherit_acl : true,
             children: [],
-            links: [],
+            links: channelState.links || [], // 使用广播中的链接，而不是硬编码为空数组
           };
 
+          logger.debug(`[CHANNEL-LINKS] Created new channel ${channelState.channel_id} with links: [${newChannelData.links.join(', ')}]`);
           this.channelManager.addOrUpdateChannel(newChannelData);
           this.stateManager.addOrUpdateChannel(newChannelData);
         }
       }
 
       // 广播给所有本地已认证的客户端
-      const channelStateMsg = new mumbleproto.ChannelState(channelState);
+      // Construct ChannelState message with the fields present in the notification
+      const channelStateInit: {
+        channel_id: number;
+        parent?: number;
+        name?: string;
+        description?: string;
+        description_hash?: Buffer;
+        temporary?: boolean;
+        position?: number;
+        max_users?: number;
+        is_enter_restricted?: boolean;
+        can_enter?: boolean;
+        links: number[];
+        links_add: number[];
+        links_remove: number[];
+      } = {
+        channel_id: channelState.channel_id,
+        links: channelState.links || [],
+        links_add: channelState.links_add || [],
+        links_remove: channelState.links_remove || [],
+      };
+      
+      if (channelState.parent !== undefined) channelStateInit.parent = channelState.parent;
+      if (channelState.name !== undefined) channelStateInit.name = channelState.name;
+      if (channelState.description !== undefined) channelStateInit.description = channelState.description;
+      if (channelState.description_hash !== undefined) channelStateInit.description_hash = channelState.description_hash;
+      if (channelState.temporary !== undefined) channelStateInit.temporary = channelState.temporary;
+      if (channelState.position !== undefined) channelStateInit.position = channelState.position;
+      if (channelState.max_users !== undefined) channelStateInit.max_users = channelState.max_users;
+      if (channelState.is_enter_restricted !== undefined) channelStateInit.is_enter_restricted = channelState.is_enter_restricted;
+      if (channelState.can_enter !== undefined) channelStateInit.can_enter = channelState.can_enter;
+
+      const channelStateMsg = new mumbleproto.ChannelState(channelStateInit);
       const channelStateMessage = channelStateMsg.serialize();
       const allClients = this.clientManager.getAllClients();
       for (const client of allClients) {
@@ -321,7 +437,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的UserRemove响应
    */
-  handleUserRemoveResponseFromHub(params: any): void {
+  handleUserRemoveResponseFromHub(params: HubNotificationParams<'hub.userRemoveResponse'>): void {
     try {
       const { success, actor_session, error } = params;
 
@@ -340,47 +456,46 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的UserRemove广播
    */
-  handleUserRemoveBroadcastFromHub(params: any): void {
+  handleUserRemoveBroadcastFromHub(params: HubNotificationParams<'hub.userRemoveBroadcast'>): void {
     try {
-      const { session_id, actor_session, target_session, target_edge_id, reason, ban, target_sessions } = params;
+      const { session, actor, reason, ban, target_sessions } = params;
 
-      // Use session_id as primary target (Channel Ninja mode), otherwise use target_session (traditional kick/ban mode)
-      const actualTargetSession = session_id || target_session;
-
-      logger.debug(`Received UserRemove broadcast from Hub: target ${actualTargetSession} on Edge ${target_edge_id}${target_sessions ? ' (filtered)' : ''}`);
+      logger.debug(`Received UserRemove broadcast from Hub: target ${session}, ninja mode: ${!!target_sessions}`);
 
       // 构建UserRemove消息
       const userRemove = new mumbleproto.UserRemove({
-        session: actualTargetSession,
-        actor: actor_session,
+        session: session,
+        actor: actor,
         reason: reason || '',
         ban: ban || false,
       });
 
       const userRemoveMessage = userRemove.serialize();
 
-      // Broadcast to all local authenticated clients (if target_sessions provided, only broadcast to these clients)
+      // Broadcast to local authenticated clients
+      // If target_sessions is provided (ninja mode), only send to specified sessions
       const allClients = this.clientManager.getAllClients();
-      const targetSessionsSet = target_sessions ? new Set(target_sessions) : null; // Convert to Set for O(1) lookup
+      const targetSessionsSet = target_sessions ? new Set(target_sessions) : null;
       
       for (const client of allClients) {
         if (client.user_id > 0) {
-          // If target_sessions provided, only broadcast to specified sessions (Channel Ninja mode)
+          // If target_sessions provided, only broadcast to specified sessions
           if (!targetSessionsSet || targetSessionsSet.has(client.session)) {
             this.messageHandler.sendMessage(client.session, MessageType.UserRemove, Buffer.from(userRemoveMessage));
           }
         }
       }
 
-      // If target user on this Edge and is real kick/ban (not Channel Ninja hiding), force disconnect
-      if (!target_sessions && target_edge_id === this.config.server_id) {
-        const targetClient = this.clientManager.getClient(actualTargetSession);
+      // If target_sessions is NOT provided, this is a real kick/ban - force disconnect
+      // If target_sessions IS provided, this is ninja mode - don't disconnect
+      if (!target_sessions) {
+        const targetClient = this.clientManager.getClient(session);
         if (targetClient) {
           this.clientManager.forceDisconnect(
-            actualTargetSession,
-            ban ? `Banned: ${reason}` : `Kicked: ${reason}`
+            session,
+            ban ? `Banned: ${reason || ''}` : `Kicked: ${reason || ''}`
           );
-          logger.info(`Disconnected local client ${actualTargetSession} due to ${ban ? 'ban' : 'kick'}`);
+          logger.info(`Disconnected local client ${session} due to ${ban ? 'ban' : 'kick'}`);
         }
       }
 
@@ -396,7 +511,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的ChannelRemove响应
    */
-  handleChannelRemoveResponseFromHub(data: any): void {
+  handleChannelRemoveResponseFromHub(data: HubNotificationParams<'hub.channelRemoveResponse'>): void {
     try {
       const { success, error, actor_session } = data;
       
@@ -428,68 +543,29 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的ChannelRemove广播
    */
-  handleChannelRemoveBroadcastFromHub(data: any): void {
+  handleChannelRemoveBroadcastFromHub(data: HubNotificationParams<'hub.channelRemoveBroadcast'>): void {
     try {
-      const { channel_id, channels_removed, affected_sessions, parent_id } = data;
+      const { channel_id } = data;
       
-      logger.info(
-        `ChannelRemove broadcast from Hub: channel=${channel_id}, ` +
-        `removed=${channels_removed.length}, affected=${affected_sessions.length}`
+      logger.info(`ChannelRemove broadcast from Hub: channel=${channel_id}`);
+      
+      // 更新本地频道镜像 - 删除频道
+      this.channelManager.removeChannel(channel_id);
+      this.stateManager.removeChannel(channel_id);
+      logger.debug(`Removed channel ${channel_id} from local mirrors`);
+      
+      // 构造ChannelRemove消息并广播给所有本地客户端
+      const allClients = this.clientManager.getAllClients();
+      const channelRemoveMessage = {
+        channel_id: channel_id,
+      };
+      const channelRemoveBuffer = Buffer.from(
+        new mumbleproto.ChannelRemove(channelRemoveMessage).serialize()
       );
       
-      // 1. 更新本地频道镜像 - 删除所有被移除的频道
-      for (const removed_id of channels_removed) {
-        this.channelManager.removeChannel(removed_id);
-        this.stateManager.removeChannel(removed_id);
-        logger.debug(`Removed channel ${removed_id} from local mirrors`);
-      }
-      
-      // 2. 更新受影响用户的频道位置（他们已被Hub移动到父频道）
-      for (const session of affected_sessions) {
-        const client = this.clientManager.getClient(session);
-        if (client) {
-          const oldChannel = client.channel_id;
-          client.channel_id = parent_id;
-          logger.debug(`Updated session ${session} channel: ${oldChannel} -> ${parent_id}`);
-        }
-      }
-      
-      // 3. 为每个被删除的频道构造ChannelRemove消息并广播给所有本地客户端
-      const allClients = this.clientManager.getAllClients();
-      for (const removed_id of channels_removed) {
-        const channelRemoveMessage = {
-          channel_id: removed_id,
-        };
-        const channelRemoveBuffer = Buffer.from(
-          new mumbleproto.ChannelRemove(channelRemoveMessage).serialize()
-        );
-        
-        for (const client of allClients) {
-          if (client.user_id > 0) {
-            this.messageHandler.sendMessage(client.session, MessageType.ChannelRemove, channelRemoveBuffer);
-          }
-        }
-      }
-      
-      // 4. 为每个受影响的用户发送UserState更新（新的channel_id）
-      for (const session of affected_sessions) {
-        const client = this.clientManager.getClient(session);
-        if (client) {
-          const userStateUpdate = new mumbleproto.UserState({
-            session,
-            channel_id: parent_id,
-            temporary_access_tokens: [],
-            listening_channel_add: [],
-            listening_channel_remove: [],
-          });
-          const userStateBuffer = Buffer.from(userStateUpdate.serialize());
-          
-          // 广播给所有本地客户端
-          for (const c of allClients) {
-            if (c.user_id > 0) {
-              this.messageHandler.sendMessage(c.session, MessageType.UserState, userStateBuffer);
-            }
-          }
+      for (const client of allClients) {
+        if (client.user_id > 0) {
+          this.messageHandler.sendMessage(client.session, MessageType.ChannelRemove, channelRemoveBuffer);
         }
       }
       
@@ -502,31 +578,30 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的TextMessage广播
    */
-  handleTextMessageBroadcastFromHub(params: any): void {
+  handleTextMessageBroadcastFromHub(params: HubNotificationParams<'hub.textMessageBroadcast'>): void {
     try {
-      const { textMessage, target_sessions } = params;
+      const { actor, session, channel_id, tree_id, message } = params;
 
       logger.debug(
-        `Received TextMessage broadcast from Hub: from ${textMessage.actor}, targets: ${target_sessions.length}`
+        `Received TextMessage broadcast from Hub: from ${actor}`
       );
 
       // 构建TextMessage消息
       const textMsg = new mumbleproto.TextMessage({
-        actor: textMessage.actor,
-        session: textMessage.session || [],
-        channel_id: textMessage.channel_id || [],
-        tree_id: textMessage.tree_id || [],
-        message: textMessage.message || '',
+        actor,
+        session: session || [],
+        channel_id: channel_id || [],
+        tree_id: tree_id || [],
+        message: message || '',
       });
 
       const textMessageBuffer = Buffer.from(textMsg.serialize());
 
-      // 只发送给本Edge上的目标用户
+      // 发送给所有本地客户端（let them filter by target）
       let sentCount = 0;
-      for (const targetSession of target_sessions) {
-        const client = this.clientManager.getClient(targetSession);
+      for (const client of this.clientManager.getAllClients()) {
         if (client && client.user_id > 0) {
-          this.messageHandler.sendMessage(targetSession, MessageType.TextMessage, textMessageBuffer);
+          this.messageHandler.sendMessage(client.session, MessageType.TextMessage, textMessageBuffer);
           sentCount++;
         }
       }
@@ -565,31 +640,30 @@ export class HubMessageHandlers {
    * 客户端不需要知道其他接收者列表
    * 参考：mumble-voip/mumble/src/murmur/Messages.cpp msgPluginDataTransmission
    */
-  handlePluginDataBroadcastFromHub(params: any): void {
+  handlePluginDataBroadcastFromHub(params: HubNotificationParams<'hub.pluginDataBroadcast'>): void {
     try {
-      const { pluginData, target_sessions } = params;
+      const { sender_session, dataID, data } = params;
 
       logger.debug(
-        `Received PluginData broadcast from Hub: from ${pluginData.senderSession}, targets: ${target_sessions.length}`
+        `Received PluginData broadcast from Hub: from ${sender_session}`
       );
 
       // 构建PluginDataTransmission消息
       // 注意：根据 Mumble 协议，发送给客户端时应清除 receiverSessions
       const pluginDataMsg = new mumbleproto.PluginDataTransmission({
-        senderSession: pluginData.senderSession,
-        dataID: pluginData.dataID || '',
-        data: this.normalizeDataField(pluginData.data),
+        senderSession: sender_session,
+        dataID: dataID || '',
+        data: this.normalizeDataField(data),
         receiverSessions: [], // 清除接收者列表，客户端不需要知道
       });
 
       const pluginDataBuffer = Buffer.from(pluginDataMsg.serialize());
 
-      // 只发送给本Edge上的目标用户
+      // 发送给所有本地客户端
       let sentCount = 0;
-      for (const targetSession of target_sessions) {
-        const client = this.clientManager.getClient(targetSession);
+      for (const client of this.clientManager.getAllClients()) {
         if (client && client.user_id > 0) {
-          this.messageHandler.sendMessage(targetSession, MessageType.PluginDataTransmission, pluginDataBuffer);
+          this.messageHandler.sendMessage(client.session, MessageType.PluginDataTransmission, pluginDataBuffer);
           sentCount++;
         }
       }
@@ -603,7 +677,7 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的语音数据
    */
-  handleVoiceDataFromHub(data: any, respond: (result?: any, error?: any) => void): void {
+  handleVoiceDataFromHub(data: HubNotificationParams<'voice.data'>, respond: (result?: unknown, error?: unknown) => void): void {
     try {
       // TODO: 实现VoiceRouter.handleVoiceDataFromHub方法
       logger.debug('Received voice data from Hub:', data);
@@ -633,9 +707,9 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的UserStats响应
    */
-  handleUserStatsResponseFromHub(params: any): void {
+  handleUserStatsResponseFromHub(params: HubNotificationParams<'hub.userStatsResponse'>): void {
     try {
-      const { actor_session, userStats, error } = params;
+      const { actor_session, error, userStats } = params;
 
       if (error) {
         logger.warn(`UserStats request from session ${actor_session} failed: ${error}`);
@@ -643,72 +717,113 @@ export class HubMessageHandlers {
         return;
       }
 
-      // 将 Hub 返回的 UserStats 数据发送给请求的客户端
-      logger.debug(`Sending UserStats response to session ${actor_session}`);
-      
-      // 构建 UserStats protobuf 对象
-      const response: any = {
-        session: userStats.session,
-        onlinesecs: userStats.onlinesecs,
-        idlesecs: userStats.idlesecs,
-      };
+      // 如果有userStats数据，发送给请求的客户端
+      if (userStats) {
+        logger.debug(`Sending UserStats response to session ${actor_session}`);
+        
+        // 构建 UserStats protobuf 对象
+        // Use any here since we're building a protobuf message dynamically
+        const response: {
+          session: number;
+          certificates: Uint8Array[];
+          from_client?: mumbleproto.UserStats.Stats;
+          from_server?: mumbleproto.UserStats.Stats;
+          udp_packets?: number;
+          tcp_packets?: number;
+          udp_ping_avg?: number;
+          udp_ping_var?: number;
+          tcp_ping_avg?: number;
+          tcp_ping_var?: number;
+          version?: mumbleproto.Version;
+          strong_certificate?: boolean;
+          address?: Uint8Array;
+          bandwidth?: number;
+          onlinesecs?: number;
+          idlesecs?: number;
+          stats_only?: boolean;
+          celt_versions: number[];
+          opus?: boolean;
+        } = {
+          session: userStats.session,
+          certificates: [],
+          celt_versions: [],
+        };
 
-      // 添加 stats_only 标志（如果在请求中设置）
-      if (userStats.stats_only !== undefined) {
-        response.stats_only = userStats.stats_only;
-      }
+        // 添加基本统计字段
+        if (userStats.onlinesecs !== undefined) {
+          response.onlinesecs = userStats.onlinesecs;
+        }
+        if (userStats.idlesecs !== undefined) {
+          response.idlesecs = userStats.idlesecs;
+        }
 
-      // 仅在非 stats_only 模式下添加详细信息字段
-      if (!userStats.stats_only) {
-        // 添加可选字段
-        if (userStats.strong_certificate !== undefined) {
-          response.strong_certificate = userStats.strong_certificate;
+        // 添加 stats_only 标志（如果在请求中设置）
+        if (userStats.stats_only !== undefined) {
+          response.stats_only = userStats.stats_only;
         }
-        if (userStats.address) {
-          response.address = userStats.address;
-        }
-        if (userStats.version) {
-          response.version = new mumbleproto.Version(userStats.version);
-        }
-        // 注意：证书链 (certificates) 由 protobuf 自动初始化为空数组
-        // 如果有证书数据需要添加，在这里处理
-        if (userStats.certificates && userStats.certificates.length > 0) {
-          response.certificates = userStats.certificates;
-        }
-      }
 
-      // 添加网络统计字段（需要转换为 protobuf 对象）
-      if (userStats.from_client) {
-        response.from_client = new mumbleproto.UserStats.Stats(userStats.from_client);
-      }
-      if (userStats.from_server) {
-        response.from_server = new mumbleproto.UserStats.Stats(userStats.from_server);
-      }
-      if (userStats.udp_packets !== undefined) {
-        response.udp_packets = userStats.udp_packets;
-      }
-      if (userStats.tcp_packets !== undefined) {
-        response.tcp_packets = userStats.tcp_packets;
-      }
-      if (userStats.udp_ping_avg !== undefined) {
-        response.udp_ping_avg = userStats.udp_ping_avg;
-      }
-      if (userStats.udp_ping_var !== undefined) {
-        response.udp_ping_var = userStats.udp_ping_var;
-      }
-      if (userStats.tcp_ping_avg !== undefined) {
-        response.tcp_ping_avg = userStats.tcp_ping_avg;
-      }
-      if (userStats.tcp_ping_var !== undefined) {
-        response.tcp_ping_var = userStats.tcp_ping_var;
-      }
+        // 仅在非 stats_only 模式下添加详细信息字段
+        if (!userStats.stats_only) {
+          // 添加可选字段
+          if (userStats.strong_certificate !== undefined) {
+            response.strong_certificate = userStats.strong_certificate;
+          }
+          if (userStats.address) {
+            // Convert address string to Uint8Array if needed
+            response.address = typeof userStats.address === 'string' 
+              ? new TextEncoder().encode(userStats.address)
+              : userStats.address;
+          }
+          if (userStats.version) {
+            response.version = new mumbleproto.Version({
+              version: (userStats.version.major || 0) << 16 | (userStats.version.minor || 0) << 8 | (userStats.version.patch || 0),
+              release: `${userStats.version.major}.${userStats.version.minor}.${userStats.version.patch || 0}`,
+              os: '',
+              os_version: '',
+            });
+          }
+          // 注意：证书链 (certificates) 由 protobuf 自动初始化为空数组
+          // 如果有证书数据需要添加，在这里处理
+          if (userStats.certificates && userStats.certificates.length > 0) {
+            response.certificates = userStats.certificates;
+          }
+        }
 
-      const userStatsMessage = new mumbleproto.UserStats(response);
-      const responseMessage = userStatsMessage.serialize();
-      
-      this.messageHandler.sendMessage(actor_session, MessageType.UserStats, Buffer.from(responseMessage));
-      
-      logger.debug(`Sent UserStats response to session ${actor_session}`);
+        // 添加网络统计字段（需要转换为 protobuf 对象）
+        if (userStats.from_client) {
+          response.from_client = new mumbleproto.UserStats.Stats(userStats.from_client);
+        }
+        if (userStats.from_server) {
+          response.from_server = new mumbleproto.UserStats.Stats(userStats.from_server);
+        }
+        if (userStats.udp_packets !== undefined) {
+          response.udp_packets = userStats.udp_packets;
+        }
+        if (userStats.tcp_packets !== undefined) {
+          response.tcp_packets = userStats.tcp_packets;
+        }
+        if (userStats.udp_ping_avg !== undefined) {
+          response.udp_ping_avg = userStats.udp_ping_avg;
+        }
+        if (userStats.udp_ping_var !== undefined) {
+          response.udp_ping_var = userStats.udp_ping_var;
+        }
+        if (userStats.tcp_ping_avg !== undefined) {
+          response.tcp_ping_avg = userStats.tcp_ping_avg;
+        }
+        if (userStats.tcp_ping_var !== undefined) {
+          response.tcp_ping_var = userStats.tcp_ping_var;
+        }
+
+        const userStatsMessage = new mumbleproto.UserStats(response);
+        const responseMessage = userStatsMessage.serialize();
+        
+        this.messageHandler.sendMessage(actor_session, MessageType.UserStats, Buffer.from(responseMessage));
+        
+        logger.debug(`Sent UserStats response to session ${actor_session}`);
+      } else {
+        logger.debug(`UserStats response for session ${actor_session}: success (no stats data)`);
+      }
     } catch (error) {
       logger.error('Error handling UserStats response from Hub:', error);
     }

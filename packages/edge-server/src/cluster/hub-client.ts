@@ -1,11 +1,12 @@
 import { EventEmitter } from 'events';
 import { createHmac } from 'crypto';
 import { createLogger } from '@munode/common';
-import { ControlChannelClient, ControlChannelClientConfig } from '@munode/protocol';
+import { ControlChannelClient, ControlChannelClientConfig, type ChannelNotificationParams } from '@munode/protocol';
 import type {
   RPCParams,
   RPCResult,
   EdgeToHubMethods,
+  VoiceTarget,
 } from '@munode/protocol';
 import type {
   ServerStats,
@@ -122,7 +123,7 @@ export class EdgeControlClient extends EventEmitter {
     try {
       // 第一阶段：请求挑战码
       logger.info('Requesting challenge from Hub...');
-      const challengeResponse = await this.client.call('edge.register', registerParams) as RPCResult<'edge.register'>;
+      const challengeResponse = await this.client.call('edge.register', registerParams);
       
       // 如果 Hub 返回了 challenge，进行第二阶段认证
       if (!challengeResponse.success && challengeResponse.challenge) {
@@ -145,7 +146,7 @@ export class EdgeControlClient extends EventEmitter {
         };
         
         logger.info('Submitting challenge response...');
-        const finalResponse = await this.client.call('edge.register', authParams) as RPCResult<'edge.register'>;
+        const finalResponse = await this.client.call('edge.register', authParams);
         
         if (!finalResponse.success) {
           throw new Error(finalResponse.error || 'Registration failed after authentication');
@@ -194,7 +195,7 @@ export class EdgeControlClient extends EventEmitter {
         stats,
       };
 
-      const response = await this.client.call('edge.heartbeat', params) as RPCResult<'edge.heartbeat'>;
+      const response = await this.client.call('edge.heartbeat', params);
 
       this.emit('heartbeat', response);
     } catch (error) {
@@ -317,7 +318,7 @@ export class EdgeControlClient extends EventEmitter {
   }  /**
    * 处理来自 Hub 的通知
    */
-  private handleIncomingNotification(message: any): void {
+  private handleIncomingNotification(message: { method: string; params: unknown }): void {
     try {
       // 首先触发通用的notification事件，供上层直接处理
       this.emit('notification', message);
@@ -378,7 +379,7 @@ export class EdgeControlClient extends EventEmitter {
       const params: RPCParams<'edge.allocateSessionId'> = {
         edge_id: this.config.server_id,
       };
-      const response = await this.client.call('edge.allocateSessionId', params) as RPCResult<'edge.allocateSessionId'>;
+      const response = await this.client.call('edge.allocateSessionId', params);
       return response.session_id;
     } catch (error) {
       logger.error('Failed to allocate session ID:', error);
@@ -424,7 +425,7 @@ export class EdgeControlClient extends EventEmitter {
   async syncVoiceTarget(config: {
     client_session: number;
     target_id: number;
-    config: any; // VoiceTarget | null
+    config: VoiceTarget | null;
     timestamp: number;
   }): Promise<void> {
     if (!this.isConnected() || (!this.useExternalClient && !this.registered)) {
@@ -475,7 +476,7 @@ export class EdgeControlClient extends EventEmitter {
     }
 
     try {
-      return await this.client.call('edge.fullSync', {}) as RPCResult<'edge.fullSync'>;
+      return await this.client.call('edge.fullSync', {});
     } catch (error) {
       logger.error('Failed to request full sync:', error);
       throw error;
@@ -491,7 +492,7 @@ export class EdgeControlClient extends EventEmitter {
     }
 
     try {
-      const response = await this.client.call('edge.getChannels', {}) as RPCResult<'edge.getChannels'>;
+      const response = await this.client.call('edge.getChannels', {});
       return response.channels || [];
     } catch (error) {
       logger.error('Failed to get channels:', error);
@@ -509,7 +510,7 @@ export class EdgeControlClient extends EventEmitter {
 
     try {
       const params: RPCParams<'edge.getACLs'> = { channel_id };
-      const response = await this.client.call('edge.getACLs', params) as RPCResult<'edge.getACLs'>;
+      const response = await this.client.call('edge.getACLs', params);
       return response.acls || [];
     } catch (error) {
       logger.error('Failed to get ACLs:', error);
@@ -527,7 +528,7 @@ export class EdgeControlClient extends EventEmitter {
 
     try {
       const params: RPCParams<'edge.saveChannel'> = { channel };
-      const response = await this.client.call('edge.saveChannel', params) as RPCResult<'edge.saveChannel'>;
+      const response = await this.client.call('edge.saveChannel', params);
       return response.channel_id;
     } catch (error) {
       logger.error('Failed to save channel:', error);
@@ -556,7 +557,7 @@ export class EdgeControlClient extends EventEmitter {
           deny: acl.deny,
         })),
       };
-      const response = await this.client.call('edge.saveACL', params) as RPCResult<'edge.saveACL'>;
+      const response = await this.client.call('edge.saveACL', params);
       return response.aclIds;
     } catch (error) {
       logger.error('Failed to save ACL:', error);
@@ -574,9 +575,38 @@ export class EdgeControlClient extends EventEmitter {
 
     try {
       const params: RPCParams<'edge.adminOperation'> = { operation, data };
-      return await this.client.call('edge.adminOperation', params) as RPCResult<'edge.adminOperation'>;
+      return await this.client.call('edge.adminOperation', params);
     } catch (error) {
       logger.error('Failed to execute admin operation:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 报告到其他Edge的连接质量
+   */
+  async reportQuality(targetEdgeId: number, quality: {
+    rtt: number;
+    packetLoss: number;
+    jitter: number;
+    samples: number;
+  }): Promise<RPCResult<'edge.reportQuality'>> {
+    if (!this.isConnected() || (!this.useExternalClient && !this.registered)) {
+      throw new Error('Not connected to Hub');
+    }
+
+    try {
+      const params: RPCParams<'edge.reportQuality'> = {
+        edge_id: this.config.server_id,
+        target_edge_id: targetEdgeId,
+        quality,
+      };
+
+      const result = await this.client.call('edge.reportQuality', params);
+      logger.debug(`Reported quality to Edge ${targetEdgeId}:`, quality);
+      return result;
+    } catch (error) {
+      logger.error(`Failed to report quality to Edge ${targetEdgeId}:`, error);
       throw error;
     }
   }
@@ -595,14 +625,14 @@ export class EdgeControlClient extends EventEmitter {
   /**
    * 发送通知到Hub（不等待响应）
    */
-  notify(method: string, params?: any): void {
+  notify(method: string, params?: unknown): void {
     if (!this.isConnected()) {
       logger.warn(`Cannot send notification ${method}: not connected to Hub`);
       return;
     }
 
     try {
-      this.client.notify(method, params);
+      this.client.notify(method, params as ChannelNotificationParams);
     } catch (error) {
       logger.error(`Failed to send notification ${method}:`, error);
     }
@@ -677,28 +707,28 @@ export class EdgeControlClient extends EventEmitter {
    * 获取用户纹理
    */
   async getUserTexture(user_id: number): Promise<RPCResult<'blob.getUserTexture'>> {
-    return await this.client.call('blob.getUserTexture', { user_id }) as RPCResult<'blob.getUserTexture'>;
+    return await this.client.call('blob.getUserTexture', { user_id });
   }
 
   /**
    * 获取用户评论
    */
   async getUserComment(user_id: number): Promise<RPCResult<'blob.getUserComment'>> {
-    return await this.client.call('blob.getUserComment', { user_id }) as RPCResult<'blob.getUserComment'>;
+    return await this.client.call('blob.getUserComment', { user_id });
   }
 
   /**
    * 设置用户纹理
    */
   async setUserTexture(user_id: number, data: Buffer): Promise<RPCResult<'blob.setUserTexture'>> {
-    return await this.client.call('blob.setUserTexture', { user_id, data }) as RPCResult<'blob.setUserTexture'>;
+    return await this.client.call('blob.setUserTexture', { user_id, data });
   }
 
   /**
    * 设置用户评论
    */
   async setUserComment(user_id: number, data: Buffer): Promise<RPCResult<'blob.setUserComment'>> {
-    return await this.client.call('blob.setUserComment', { user_id, data }) as RPCResult<'blob.setUserComment'>;
+    return await this.client.call('blob.setUserComment', { user_id, data });
   }
 
   // ============================================================================
@@ -708,17 +738,17 @@ export class EdgeControlClient extends EventEmitter {
   /**
    * 发送客户端消息中转到 Hub
    */
-  async sendRelay(relay: any): Promise<void> {
+  async sendRelay(relay: unknown): Promise<void> {
     // TODO: 实现通过 WebSocket 发送 ClientMessageRelay
     // 当前暂时通过 RPC 模拟
-    logger.debug(`Sending relay to Hub: session=${relay.session_id}`);
+    logger.debug(`Sending relay to Hub: session=${typeof relay === 'object' && relay !== null && 'session_id' in relay ? (relay as { session_id: unknown }).session_id : 'unknown'}`);
     this.emit('relay', relay);
   }
 
   /**
    * 批量发送客户端消息中转到 Hub
    */
-  async sendRelayBatch(relays: any[]): Promise<void> {
+  async sendRelayBatch(relays: unknown[]): Promise<void> {
     // TODO: 实现批量发送优化
     for (const relay of relays) {
       await this.sendRelay(relay);

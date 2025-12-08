@@ -4,7 +4,7 @@
  * 处理插件数据的发送
  */
 
-import type { BusinessHandler } from '../../api/dispatcher.js';
+import type { BusinessHandler } from '../../types/api-types.js';
 import type { ApiContext } from '../context.js';
 
 export class SendPluginDataHandler implements BusinessHandler {

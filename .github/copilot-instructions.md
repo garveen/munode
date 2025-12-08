@@ -26,13 +26,37 @@ MuNode 是一个基于 Node.js/TypeScript 的 Mumble 服务器实现，采用 Hu
 ## 编码规范
 
 ### TypeScript 风格
+
+**严格类型要求（必须遵守）：**
+
+1. **禁止使用 any**：系统内严禁使用 `any` 类型
+2. **禁止使用 unknown**：避免使用 `unknown`，必须定义精确类型
+3. **限制使用 Partial**：一般不使用 `Partial<T>`，显式定义可选属性
+4. **限制使用 Record**：一般不使用 `Record<string, any>` 等模糊类型，定义精确的接口；除非该record的确用于定义动态键值对集合
+5. **必须定义接口**：所有对象类型必须有明确的 interface 或 type 定义
+6. **精确类型定义**：项目内不应该有任何模糊的类型定义
+
 ```typescript
-// 使用严格类型定义
+// ❌ 错误示例
+function handle(data: any) { }
+function process(config: Partial<Config>) { }
+function update(fields: Record<string, unknown>) { }
+
+// ✅ 正确示例
 interface UserState {
   session: number;
   name: string;
   channelId: number;
 }
+
+interface UpdateFields {
+  name?: string;
+  position?: number;
+  maxUsers?: number;
+}
+
+function handle(data: UserState) { }
+function process(config: UpdateFields) { }
 
 // 优先使用 interface 而非 type
 interface ILogger {
@@ -51,8 +75,6 @@ enum PermissionFlag {
 
 protobuf使用其标准属性，不要使用单字母内部属性(n f等)
 protobuf optional字段需要检查是否真的设置了值，不能仅凭默认值判断，使用has_xxx
-
-系统内一般不应使用any
 
 ### 命名约定
 - **类名**: PascalCase (如 `EdgeServer`, `HubClient`)

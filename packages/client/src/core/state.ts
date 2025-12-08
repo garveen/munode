@@ -8,6 +8,7 @@
  * - 提供状态查询接口
  */
 
+import { mumbleproto } from '@munode/protocol';
 import type { MumbleClient } from './mumble-client.js';
 import type { Channel, User, ServerInfo, SessionState } from '../types/client-types.js';
 
@@ -29,17 +30,17 @@ export class StateManager {
   /**
    * 处理 ServerSync 消息
    */
-  handleServerSync(message: any): void {
+  handleServerSync(message: mumbleproto.ServerSync): void {
     // 保存会话信息
     this.session = {
-      session: message.session,
-      channel_id: message.channel_id || 0,
-      self_mute: message.self_mute || false,
-      self_deaf: message.self_deaf || false,
-      suppress: message.suppress || false,
-      recording: message.recording || false,
-      priority_speaker: message.priority_speaker || false,
-      listeningChannels: message.listening_channel_add || []
+      session: message.session || 0,
+      channel_id: 0, // 将在 UserState 消息中更新
+      self_mute: false,
+      self_deaf: false,
+      suppress: false,
+      recording: false,
+      priority_speaker: false,
+      listeningChannels: []
     };
 
     // 初始化根频道 (如果不存在)
@@ -72,12 +73,12 @@ export class StateManager {
   /**
    * 处理 ServerConfig 消息
    */
-  handleServerConfig(message: any): void {
+  handleServerConfig(message: mumbleproto.ServerConfig): void {
     // 更新服务器配置信息
     this.serverInfo = {
-      version: message.version || 0,
-      release: message.release || '',
-      os: message.os || '',
+      version: this.serverInfo?.version || 0,
+      release: this.serverInfo?.release || '',
+      os: this.serverInfo?.os || '',
       maxBandwidth: message.max_bandwidth || 0,
       maxUsers: message.max_users || 0,
       welcomeText: message.welcome_text || '',
@@ -92,19 +93,45 @@ export class StateManager {
   /**
    * 处理 ChannelState 消息
    */
-  handleChannelState(message: any): void {
+  handleChannelState(message: mumbleproto.ChannelState): void {
     const channelId = message.channel_id;
     const existingChannel = this.channels.get(channelId);
 
+    // 处理频道链接
+    // 如果提供了 links_add 或 links_remove，进行增量更新
+    // 否则使用 links 字段（可能为空数组）
+    let channelLinks: number[];
+    if (message.links_add !== undefined && message.links_add.length > 0 ||
+        message.links_remove !== undefined && message.links_remove.length > 0) {
+      // 增量更新模式
+      channelLinks = [...(existingChannel?.links || [])];
+      if (message.links_add) {
+        for (const linkId of message.links_add) {
+          if (!channelLinks.includes(linkId)) {
+            channelLinks.push(linkId);
+          }
+        }
+      }
+      if (message.links_remove) {
+        channelLinks = channelLinks.filter(id => !message.links_remove.includes(id));
+      }
+    } else if (message.links !== undefined) {
+      // 完整替换模式
+      channelLinks = message.links;
+    } else {
+      // links 字段未提供，保留现有值
+      channelLinks = existingChannel?.links || [];
+    }
+
     const channel: Channel = {
       channel_id: channelId,
-      parent: message.parent || 0,
-      name: message.name || '',
-      description: message.description || '',
-      temporary: message.temporary || false,
-      position: message.position || 0,
-      links: message.links || [],
-      max_users: message.max_users || 0,
+      parent: message.parent !== undefined ? message.parent : (existingChannel?.parent || 0),
+      name: message.name !== undefined ? message.name : (existingChannel?.name || ''),
+      description: message.description !== undefined ? message.description : (existingChannel?.description || ''),
+      temporary: message.temporary !== undefined ? message.temporary : (existingChannel?.temporary || false),
+      position: message.position !== undefined ? message.position : (existingChannel?.position || 0),
+      links: channelLinks,
+      max_users: message.max_users !== undefined ? message.max_users : (existingChannel?.max_users || 0),
       children: existingChannel?.children || []
     };
 
@@ -135,7 +162,7 @@ export class StateManager {
   /**
    * 处理 ChannelRemove 消息
    */
-  handleChannelRemove(message: any): void {
+  handleChannelRemove(message: mumbleproto.ChannelRemove): void {
     const channelId = message.channel_id;
     const channel = this.channels.get(channelId);
 
@@ -157,7 +184,7 @@ export class StateManager {
   /**
    * 处理 UserState 消息
    */
-  handleUserState(message: any): void {
+  handleUserState(message: mumbleproto.UserState): void {
     const session = message.session;
     const existingUser = this.users.get(session);
 
@@ -175,7 +202,7 @@ export class StateManager {
       priority_speaker: message.priority_speaker || false,
       hash: message.hash,
       comment: message.comment,
-      texture: message.texture
+      texture: message.texture ? Buffer.from(message.texture) : undefined
     };
 
     // 如果是当前用户，更新会话状态
@@ -197,7 +224,7 @@ export class StateManager {
   /**
    * 处理 UserRemove 消息
    */
-  handleUserRemove(message: any): void {
+  handleUserRemove(message: mumbleproto.UserRemove): void {
     const session = message.session;
     const user = this.users.get(session);
 
@@ -212,7 +239,7 @@ export class StateManager {
   /**
    * 处理 PermissionDenied 消息
    */
-  handlePermissionDenied(message: any): void {
+  handlePermissionDenied(message: mumbleproto.PermissionDenied): void {
     // 解析权限拒绝消息
     const permission = message.permission || 0;
     const type = message.type || 0;
@@ -256,7 +283,7 @@ export class StateManager {
       const children = channel.children
         .map(childId => this.channels.get(childId))
         .filter(child => child !== undefined)
-        .map(child => buildTree(child!));
+        .map(child => buildTree(child));
 
       return {
         ...channel,

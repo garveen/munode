@@ -10,6 +10,7 @@
 
 import { createHmac } from 'crypto';
 import { ControlChannelClient } from '@munode/protocol';
+import type { HubNotificationParams, RegisterResponse } from '@munode/protocol';
 import { ReconnectManager } from './reconnect-manager.js';
 import type { EdgeConfig } from '../types.js';
 import type { Logger } from 'winston';
@@ -126,7 +127,7 @@ export class EdgeClusterManager {
   /**
    * 注册到 Hub，支持 HMAC 挑战-响应认证
    */
-  private async registerToHub(): Promise<any> {
+  private async registerToHub(): Promise<RegisterResponse> {
     const registerParams = {
       server_id: this.config.server_id,
       name: this.config.name,
@@ -204,13 +205,17 @@ export class EdgeClusterManager {
       // 3. 发起 join 请求
       const joinRequest = {
          server_id: this.config.server_id,
-        serverName: this.config.name,
+        name: this.config.name,
+        host: this.config.network.host,
+        port: this.config.network.port,
+        voicePort: this.config.network.port + 1, // Voice port is main port + 1 by convention
+        capacity: this.config.capacity,
       };
 
       const joinResponse = await this.hubClient.call('edge.join', joinRequest);
 
       if (!joinResponse.success) {
-        throw new Error(`Join failed: ${joinResponse.error || 'Unknown error'}`);
+        throw new Error(`Join failed: ${(joinResponse as { error?: string }).error || 'Unknown error'}`);
       }
 
       this.logger.info(`Join request accepted, token: ${joinResponse.token}`);
@@ -255,18 +260,18 @@ export class EdgeClusterManager {
   /**
    * 处理 Hub 通知
    */
-  private handleHubNotification(message: any): void {
+  private handleHubNotification(message: { method: string; params: unknown }): void {
     switch (message.method) {
       case 'edge.peerJoined':
-        void this.handlePeerJoined(message.params);
+        void this.handlePeerJoined(message.params as HubNotificationParams<'edge.peerJoined'>);
         break;
 
       case 'edge.peerLeft':
-        this.handlePeerLeft(message.params);
+        this.handlePeerLeft(message.params as { id: number });
         break;
 
       case 'edge.forceDisconnect':
-        void this.handleForceDisconnect(message.params);
+        void this.handleForceDisconnect(message.params as HubNotificationParams<'edge.forceDisconnect'>);
         break;
 
       default:
@@ -280,7 +285,7 @@ export class EdgeClusterManager {
   /**
    * 处理新 Peer 加入
    */
-  private async handlePeerJoined(params: any): Promise<void> {
+  private async handlePeerJoined(params: HubNotificationParams<'edge.peerJoined'>): Promise<void> {
     this.logger.info(`New peer joined: ${JSON.stringify(params)}`);
     
     // 添加到 peers 列表
@@ -300,7 +305,7 @@ export class EdgeClusterManager {
   /**
    * 处理 Peer 离开
    */
-  private handlePeerLeft(params: any): void {
+  private handlePeerLeft(params: { id: number }): void {
     this.logger.info(`Peer left: ${params.id}`);
     
     // 从 peers 列表移除
@@ -313,7 +318,7 @@ export class EdgeClusterManager {
   /**
    * 处理强制断开
    */
-  private async handleForceDisconnect(params: any): Promise<void> {
+  private async handleForceDisconnect(params: HubNotificationParams<'edge.forceDisconnect'>): Promise<void> {
     this.logger.warn(`Force disconnect requested: ${params.reason}`);
     await this.reconnectManager.performFullDisconnect();
   }
@@ -324,7 +329,7 @@ export class EdgeClusterManager {
   getStatus(): {
     isJoined: boolean;
     hubConnected: boolean;
-    reconnectStats: any;
+    reconnectStats: ReturnType<ReconnectManager['getStats']>;
   } {
     return {
       isJoined: this.isJoined,

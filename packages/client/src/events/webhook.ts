@@ -9,7 +9,8 @@
  */
 
 import type { MumbleClient } from '../core/mumble-client.js';
-import type { WebhookConfig, WebhookPayload } from '../types/api-types.js';
+import type { WebhookPayload, WebhookEventData } from '../types/api-types.js';
+import type { WebhookConfig } from '../types/client-types.js';
 
 export class WebhookManager {
   private client: MumbleClient;
@@ -28,7 +29,7 @@ export class WebhookManager {
 
     // 订阅指定的事件
     config.events.forEach(eventName => {
-      this.client.on(eventName, (data: any) => {
+      this.client.on(eventName, (data: object) => {
         this.handleEvent(eventName, data);
       });
     });
@@ -48,11 +49,11 @@ export class WebhookManager {
   /**
    * 处理事件并推送到 Webhook
    */
-  private async handleEvent(eventName: string, data: any): Promise<void> {
+  private async handleEvent(eventName: string, data: object): Promise<void> {
     const payload: WebhookPayload = {
       event: eventName,
       timestamp: Date.now(),
-      data
+      data: data as WebhookEventData
     };
 
     // 推送到所有订阅了该事件的 Webhook

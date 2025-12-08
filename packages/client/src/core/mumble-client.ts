@@ -18,7 +18,7 @@ import { PerformanceOptimizer } from './performance-optimizer.js';
 import { AudioStreamManager, AudioInputStream } from '../audio/stream.js';
 import { WebhookManager } from '../events/webhook.js';
 import { mumbleproto, MessageType } from '@munode/protocol';
-import type { ConnectOptions, ClientConfig, MessageTarget, User, Channel } from '../types/client-types.js';
+import type { ConnectOptions, ClientConfig, MessageTarget, User, Channel, UserStateUpdate, ChannelStateUpdate, ACLEntryUpdate, ClientConfigUpdate, WebhookConfig } from '../types/client-types.js';
 import type { AudioInput } from '../types/audio-types.js';
 import { Readable } from 'stream';
 
@@ -33,7 +33,7 @@ export class MumbleClient extends EventEmitter {
   private audioManager: AudioStreamManager;
   private config: ClientConfig;
 
-  constructor(config?: Partial<ClientConfig>) {
+  constructor(config?: ClientConfigUpdate) {
     super();
     
     // 初始化各个管理器
@@ -141,8 +141,15 @@ export class MumbleClient extends EventEmitter {
    * 发送原始 UserState 消息
    * 用于移动到频道、静音/禁音等的低级API
    */
-  async sendUserState(userState: any): Promise<void> {
-    const userStateMessage = mumbleproto.UserState.fromObject(userState);
+  async sendUserState(userState: UserStateUpdate): Promise<void> {
+    // Provide default values for required fields
+    const fullUserState = {
+      ...userState,
+      temporary_access_tokens: [],
+      listening_channel_add: [],
+      listening_channel_remove: [],
+    };
+    const userStateMessage = mumbleproto.UserState.fromObject(fullUserState);
     const serialized = userStateMessage.serialize();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
     await this.connection.sendTCP(wrappedMessage);
@@ -158,10 +165,13 @@ export class MumbleClient extends EventEmitter {
       }, 5000); // 5秒超时
 
       // 监听频道状态变化
-      const onChannelState = (message: any) => {
+      const onChannelState = (message: mumbleproto.ChannelState) => {
         // 检查是否是我们刚创建的频道 (通过名称匹配)
+        // 使用 has_xxx 检查 protobuf optional 字段是否真的设置了值
         // 新创建的频道channel_id必须大于0（Root频道ID为0，不是新创建的）
-        if (message.name === name && message.parent === (parent || 0) && message.channel_id > 0) {
+        if (message.has_channel_id && message.channel_id > 0 && 
+            message.has_name && message.name === name && 
+            message.has_parent && message.parent === (parent || 0)) {
           clearTimeout(timeout);
           this.removeListener('channelState', onChannelState);
           resolve(message.channel_id);
@@ -193,8 +203,15 @@ export class MumbleClient extends EventEmitter {
    * 发送原始 ChannelState 消息
    * 用于创建或修改频道的低级API
    */
-  async sendChannelState(channelState: any): Promise<void> {
-    const channelStateMessage = mumbleproto.ChannelState.fromObject(channelState);
+  async sendChannelState(channelState: ChannelStateUpdate): Promise<void> {
+    // Provide default values for required fields
+    const fullChannelState = {
+      ...channelState,
+      links: channelState.links || [],
+      links_add: channelState.links_add || [],
+      links_remove: channelState.links_remove || [],
+    };
+    const channelStateMessage = mumbleproto.ChannelState.fromObject(fullChannelState);
     const serialized = channelStateMessage.serialize();
     const wrappedMessage = this.connection.wrapMessage(MessageType.ChannelState, serialized);
     await this.connection.sendTCP(wrappedMessage);
@@ -354,7 +371,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 设置语音目标
    */
-  async setVoiceTarget(id: number, targets: any[]): Promise<void> {
+  async setVoiceTarget(id: number, targets: mumbleproto.VoiceTarget.Target[]): Promise<void> {
     const voiceTargetMessage = mumbleproto.VoiceTarget.fromObject({
       id: id,
       targets: targets
@@ -428,7 +445,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 添加 Webhook 订阅
    */
-  addWebhook(id: string, config: any): void {
+  addWebhook(id: string, config: WebhookConfig): void {
     this.webhookManager.addWebhook(id, config);
   }
 
@@ -442,7 +459,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 获取所有 Webhook 配置
    */
-  getWebhooks(): Map<string, any> {
+  getWebhooks(): Map<string, { url: string; events: string[] }> {
     return this.webhookManager.getWebhooks();
   }
 
@@ -484,14 +501,37 @@ export class MumbleClient extends EventEmitter {
   /**
    * 保存 ACL
    */
-  async saveACL(channelId: number, acls: any[], groups?: Map<string, any>) {
+  async saveACL(channelId: number, acls: Array<{
+    apply_here: boolean;
+    apply_subs: boolean;
+    inherited?: boolean;
+    user_id?: number;
+    group?: string;
+    allow: number;
+    deny: number;
+  }>, groups?: Map<string, {
+    name: string;
+    inherited: boolean;
+    inherit: boolean;
+    inheritable: boolean;
+    add: number[];
+    remove: number[];
+    inherited_members: number[];
+  }>) {
     return this.aclManager.saveACL(channelId, acls, groups);
   }
 
   /**
    * 添加 ACL 条目
    */
-  async addACLEntry(channelId: number, entry: any) {
+  async addACLEntry(channelId: number, entry: {
+    apply_here: boolean;
+    apply_subs: boolean;
+    user_id?: number;
+    group?: string;
+    allow: number;
+    deny: number;
+  }) {
     return this.aclManager.addACLEntry(channelId, entry);
   }
 
@@ -505,7 +545,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 更新 ACL 条目
    */
-  async updateACLEntry(channelId: number, entryIndex: number, updates: any) {
+  async updateACLEntry(channelId: number, entryIndex: number, updates: ACLEntryUpdate) {
     return this.aclManager.updateACLEntry(channelId, entryIndex, updates);
   }
 
@@ -601,7 +641,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 更新封禁列表
    */
-  async updateBanList(bans: any[]): Promise<void> {
+  async updateBanList(bans: mumbleproto.BanList.BanEntry[]): Promise<void> {
     const banListMessage = mumbleproto.BanList.fromObject({
       query: false,
       bans: bans
@@ -722,8 +762,8 @@ export class MumbleClient extends EventEmitter {
   /**
    * 更新配置
    */
-  async updateConfig(newConfig: Partial<ClientConfig>): Promise<void> {
-    this.config = { ...this.config, ...newConfig };
+  updateConfig(newConfig: ClientConfigUpdate): void {
+    this.config = this.deepMerge(this.config, newConfig);
   }
 
   /**
@@ -745,7 +785,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 加载配置
    */
-  private loadConfig(userConfig?: Partial<ClientConfig>): ClientConfig {
+  private loadConfig(userConfig?: ClientConfigUpdate): ClientConfig {
     // 默认配置
     const defaultConfig: ClientConfig = {
       connection: {
@@ -803,18 +843,18 @@ export class MumbleClient extends EventEmitter {
   /**
    * 深度合并对象
    */
-  private deepMerge<T>(target: T, source: Partial<T>): T {
-    const result = { ...target };
+  private deepMerge<T extends object>(target: T, source: object): T {
+    const result = { ...target } as T;
 
     for (const key in source) {
-      if (source.hasOwnProperty(key)) {
-        const sourceValue = source[key];
-        const targetValue = result[key];
+      if (Object.prototype.hasOwnProperty.call(source, key)) {
+        const sourceValue = (source as {[key: string]: unknown})[key];
+        const targetValue = (result as {[key: string]: unknown})[key];
 
         if (this.isObject(sourceValue) && this.isObject(targetValue)) {
-          result[key] = this.deepMerge(targetValue, sourceValue);
+          (result as {[key: string]: unknown})[key] = this.deepMerge(targetValue, sourceValue);
         } else if (sourceValue !== undefined) {
-          result[key] = sourceValue;
+          (result as {[key: string]: unknown})[key] = sourceValue;
         }
       }
     }
@@ -825,8 +865,8 @@ export class MumbleClient extends EventEmitter {
   /**
    * 检查是否为对象
    */
-  private isObject(item: any): item is Record<string, any> {
-    return item && typeof item === 'object' && !Array.isArray(item);
+  private isObject(item: unknown): item is object {
+    return Boolean(item && typeof item === 'object' && !Array.isArray(item));
   }
 
   /**

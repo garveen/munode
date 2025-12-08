@@ -38,10 +38,19 @@ import {
   AddUserToGroupHandler,
   RemoveUserFromGroupHandler
 } from '../business/handlers/index.js';
-import type { ApiContext, ApiRequest, ApiResponse } from '../types/api-types.js';
+import type { 
+  ApiContext, 
+  ApiRequest, 
+  ApiResponse,
+  ResponseData,
+  ConnectParams,
+  JoinChannelParams,
+  SendMessageParams,
+  BusinessHandler
+} from '../types/api-types.js';
 
 export class ApiDispatcher {
-  private handlers: Map<string, BusinessHandler> = new Map();
+  private handlers: Map<string, BusinessHandler<object, object | void>> = new Map();
 
   constructor() {
     this.registerHandlers();
@@ -70,14 +79,14 @@ export class ApiDispatcher {
       // 5. 返回成功响应
       return {
         success: true,
-        data: result
+        data: result ? (result as ResponseData) : undefined
       };
     } catch (error) {
       // 6. 错误处理
       return {
         success: false,
         error: {
-          code: (error as any).code || 'UNKNOWN_ERROR',
+          code: (error as {code?: string}).code || 'UNKNOWN_ERROR',
           message: (error as Error).message
         }
       };
@@ -133,24 +142,27 @@ export class ApiDispatcher {
       throw new Error('Action is required');
     }
     
-    // 检查必需参数
+    // 类型守卫：检查必需参数
     if (request.action === 'connect') {
-      if (!request.params.host || !request.params.username) {
+      const params = request.params as unknown as ConnectParams;
+      if (!params.host || !params.username) {
         throw new Error('Host and username are required for connect action');
       }
     }
     
     if (request.action === 'joinChannel') {
-      if (typeof request.params.channelId !== 'number') {
+      const params = request.params as unknown as JoinChannelParams;
+      if (typeof params.channelId !== 'number') {
         throw new Error('channelId must be a number');
       }
     }
     
     if (request.action === 'sendMessage') {
-      if (!request.params.message) {
+      const params = request.params as unknown as SendMessageParams;
+      if (!params.message) {
         throw new Error('message is required');
       }
-      if (!request.params.target) {
+      if (!params.target) {
         throw new Error('target is required');
       }
     }
@@ -170,14 +182,4 @@ export class ApiDispatcher {
       throw new Error('Client must be connected to perform this action');
     }
   }
-}
-
-/**
- * 业务处理器接口
- */
-export interface BusinessHandler {
-  /**
-   * 执行业务逻辑
-   */
-  execute(params: any, context: ApiContext): Promise<any>;
 }

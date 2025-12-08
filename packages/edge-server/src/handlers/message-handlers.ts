@@ -3,6 +3,7 @@ import { mumbleproto } from '@munode/protocol';
 import { MessageType } from '@munode/protocol';
 import type { ChannelInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
+import * as fs from 'fs';
 
 /**
  * 消息处理器 - 处理文本消息和频道/用户列表发送
@@ -108,12 +109,10 @@ export class MessageHandlers {
         actor_user_id: actor.user_id,
         actor_username: actor.username,
         actor_channel_id: actor.channel_id,
-        pluginData: {
-          senderSession: session_id,
-          dataID: pluginData.dataID || '',
-          data: pluginData.data || Buffer.alloc(0),
-          receiverSessions: pluginData.receiverSessions || [],
-        },
+        sender_session: session_id,
+        dataID: pluginData.dataID || '',
+        data: pluginData.data || Buffer.alloc(0),
+        receiver_sessions: pluginData.receiverSessions || [],
       });
 
       logger.debug(`Forwarded PluginDataTransmission from session ${session_id} to Hub`);
@@ -155,15 +154,14 @@ export class MessageHandlers {
   /**
    * 发送频道树给客户端
    * 
-   * 重要：模仿Go服务器的两次发送策略，避免客户端报错
-   * "Server asked to move a channel into itself or one of its children"
+   * 实现方式：模仿官方C实现（Murmur）的BFS遍历方式
    * 
-   * 原因：Mumble客户端在收到包含parent字段的ChannelState时会立即执行移动操作，
-   * 如果一次性发送所有频道信息（包含parent），可能导致循环引用检查失败。
+   * 官方实现策略：
+   * 1. 使用BFS（广度优先搜索）遍历频道树
+   * 2. 在第一次遍历中，发送所有频道的完整信息（包括正确的parent、name、description等）
+   * 3. 在第二次遍历中，单独发送频道链接（links）
    * 
-   * 解决方案：
-   * 1. 第一次：发送所有频道的基本信息（name、description等），但parent设为0（根频道除外）
-   * 2. 第二次：仅发送频道的parent关系，此时所有频道都已在客户端创建完毕
+   * 注意：Go实现使用了两次发送parent的策略，但C实现不需要
    */
   sendChannelTree(session_id: number): void {
     let channels: ChannelInfo[];
@@ -171,20 +169,27 @@ export class MessageHandlers {
     // 在集群模式下，从stateManager获取频道（Hub同步的数据）
     if (this.stateManager) {
       const stateChannels = this.stateManager.getAllChannels();
+      
+      logger.debug(`[sendChannelTree] DEBUG: stateManager.getAllChannels() returned ${stateChannels.length} channels`);
+      stateChannels.forEach(ch => {
+        logger.debug(`[sendChannelTree] DEBUG: Channel from state: id=${ch.channel_id}, name=${ch.name}, parent_id=${ch.parent_id}`);
+      });
+      
       // 转换ChannelData为ChannelInfo
       channels = stateChannels.map((ch) => ({
-        id: ch.id,
+        id: ch.channel_id,
         name: ch.name,
-        parent_id: ch.id === 0 ? -1 : ch.parent_id,
+        parent_id: ch.channel_id === 0 ? -1 : (ch.parent_id ?? 0),
         description: ch.description || '',
         position: ch.position || 0,
-        max_users: ch.maxUsers || 0,
+        max_users: ch.max_users || 0,
         temporary: ch.temporary || false,
-        inherit_acl: ch.inheritAcl !== false, // 默认 true
+        inherit_acl: ch.inherit_acl !== false, // 默认 true
         children: [],
-        links: [],
+        links: ch.links || [],
       }));
-      logger.info(
+      
+      logger.debug(
         `[sendChannelTree] Cluster mode: sending ${channels.length} channels from stateManager to session ${session_id}`
       );
     } else {
@@ -196,69 +201,130 @@ export class MessageHandlers {
       return;
     }
 
-    logger.debug(`[sendChannelTree] Starting two-pass channel tree sync for session ${session_id}`);
-
-    // === 第一次循环：发送所有频道的基本信息，parent字段设为0（根频道除外不设parent） ===
+    // 构建频道映射和父子关系
+    const channelMap = new Map<number, ChannelInfo>();
+    const childrenMap = new Map<number, ChannelInfo[]>();
+    
     for (const channel of channels) {
-      // 从ChannelManager获取links（ChannelManager是实时更新的）
-      const channelObj = this.factory.channelManager.getChannel(channel.id);
-      const links = channelObj?.links || [];
+      channelMap.set(channel.id, channel);
+      
+      // 初始化children数组
+      if (!childrenMap.has(channel.id)) {
+        childrenMap.set(channel.id, []);
+      }
+      
+      // 添加到父频道的children列表
+      const parentId = channel.id === 0 ? -1 : (channel.parent_id ?? 0);
+      if (parentId >= 0 && parentId !== channel.id) {
+        if (!childrenMap.has(parentId)) {
+          childrenMap.set(parentId, []);
+        }
+        childrenMap.get(parentId).push(channel);
+      }
+    }
 
-      const channelState = new mumbleproto.ChannelState({
+    logger.debug(`[sendChannelTree] Starting BFS channel tree traversal for session ${session_id}`);
+
+    // === Pass 1: BFS遍历发送所有频道的完整信息 ===
+    const queue: ChannelInfo[] = [];
+    const visited = new Set<number>();
+    const channelsToSendLinks: ChannelInfo[] = [];
+    
+    // 从根频道开始
+    const rootChannel = channelMap.get(0);
+    if (!rootChannel) {
+      logger.error('[sendChannelTree] Root channel (ID=0) not found!');
+      return;
+    }
+    
+    queue.push(rootChannel);
+    visited.add(0);
+    
+    while (queue.length > 0) {
+      const channel = queue.shift();
+      
+      // 准备ChannelState消息
+      const parentId = this.getChannelParentForProtocol(channel);
+      
+      // 构造ChannelState对象 - 注意：根频道不应该设置parent字段
+      const channelStateData: {
+        channel_id: number;
+        parent?: number;
+        name: string;
+        description: string;
+        position: number;
+        temporary: boolean;
+        max_users: number;
+        links: number[];
+        links_add: number[];
+        links_remove: number[];
+        description_hash?: Uint8Array;
+      } = {
         channel_id: channel.id,
         name: channel.name,
         description: channel.description || '',
         position: channel.position,
         temporary: channel.temporary,
         max_users: channel.max_users || 0,
-        links: links || [],
+        // 不在第一遍发送links
+        links: [],
         links_add: [],
         links_remove: [],
-        // 第一次：根频道(id=0)不设parent，其他频道parent都设为0
-        parent: channel.id === 0 ? undefined : 0,
-      });
+      };
+      
+      // 只有非根频道才设置parent
+      if (parentId !== undefined) {
+        channelStateData.parent = parentId;
+      }
+      
+      const channelState = new mumbleproto.ChannelState(channelStateData);
 
       logger.debug(
-        `[sendChannelTree] Pass 1: channel ${channel.id} (${channel.name}), parent=${channel.id === 0 ? 'undefined' : 0}`
+        `[sendChannelTree] BFS: channel ${channel.id} (${channel.name}), ` +
+        `parent=${parentId === undefined ? 'NONE' : parentId}, ` +
+        `has_parent=${channelState.has_parent}, ` +
+        `pos=${channel.position}`
       );
 
-      const channelStateMessage = new mumbleproto.ChannelState(channelState).serialize();
+      const channelStateMessage = channelState.serialize();
       this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(channelStateMessage));
+      
+      // 如果有links，记录下来稍后发送
+      if (channel.links && channel.links.length > 0) {
+        channelsToSendLinks.push(channel);
+      }
+      
+      // 将子频道加入队列（按position排序）
+      const children = childrenMap.get(channel.id) || [];
+      children.sort((a, b) => (a.position || 0) - (b.position || 0));
+      
+      for (const child of children) {
+        if (!visited.has(child.id)) {
+          visited.add(child.id);
+          queue.push(child);
+        }
+      }
     }
 
-    // === 第二次循环：仅发送parent关系 ===
-    for (const channel of channels) {
-      // 根频道跳过（根频道没有parent）
-      if (channel.id === 0) {
-        continue;
-      }
-
-      const parentId = this.getChannelParentForProtocol(channel);
-      
-      // 从ChannelManager获取当前的links，避免覆盖
-      const channelObj = this.factory.channelManager.getChannel(channel.id);
-      const currentLinks = channelObj?.links || [];
-
+    // === Pass 2: 发送频道链接 ===
+    for (const channel of channelsToSendLinks) {
       const channelState = new mumbleproto.ChannelState({
         channel_id: channel.id,
-        parent: parentId,
-        position: channel.position,
-        temporary: channel.temporary,
-        links: currentLinks || [], // 保留现有links
+        links: channel.links, // 发送完整链接列表
         links_add: [],
         links_remove: [],
       });
 
       logger.debug(
-        `[sendChannelTree] Pass 2: channel ${channel.id} parent relationship, parent=${parentId}`
+        `[sendChannelTree] Links: channel ${channel.id} links: [${channel.links.join(', ')}]`
       );
 
-      const channelStateMessage = new mumbleproto.ChannelState(channelState).serialize();
+      const channelStateMessage = channelState.serialize();
       this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(channelStateMessage));
     }
 
     logger.info(
-      `[sendChannelTree] Completed two-pass channel tree sync. Sent ${channels.length} channels to session ${session_id}`
+      `[sendChannelTree] Completed BFS channel tree traversal. Sent ${visited.size} channels (${channelsToSendLinks.length} with links) to session ${session_id}`
     );
   }
 
@@ -287,11 +353,31 @@ export class MessageHandlers {
         });
         const allSessions = syncData.sessions || [];
         
+        fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] EDGE ${this.config.server_id} Client ${receiverClient.username} (session=${session_id}) received ${allSessions.length} sessions from fullSync\n`);
+        
+        logger.info(`[CROSS-EDGE-DEBUG] Client ${receiverClient.username} (session=${session_id}) received ${allSessions.length} sessions from fullSync: ${JSON.stringify(allSessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}`);
+        
         let sentCount = 0;
         for (const session of allSessions) {
           // 发送所有其他已认证用户的状态（不包括自己）
           if (session.user_id > 0 && session.session_id !== session_id) {
-            const userStateData: any = {
+            const userStateData: {
+              session: number;
+              user_id: number;
+              name: string;
+              channel_id: number;
+              temporary_access_tokens: string[];
+              listening_channel_add: number[];
+              listening_channel_remove: number[];
+              hash?: string;
+              mute?: boolean;
+              deaf?: boolean;
+              suppress?: boolean;
+              self_mute?: boolean;
+              self_deaf?: boolean;
+              priority_speaker?: boolean;
+              recording?: boolean;
+            } = {
               session: session.session_id,
               user_id: session.user_id,
               name: session.username,
@@ -357,16 +443,17 @@ export class MessageHandlers {
         
         // 🔒 证书哈希只发送给已注册用户
         if (client.cert_hash && receiverIsRegistered) {
-          (userState as any).hash = client.cert_hash;
+          userState.hash = client.cert_hash;
         }
         
         // 添加其他字段
-        for (const field of ['mute', 'deaf', 'suppress', 'self_mute', 'self_deaf', 'priority_speaker', 'recording'] as const) {
-          const value = client[field];
-          if (value) {
-            (userState as any)[field] = value;
-          }
-        }
+        if (client.mute) userState.mute = client.mute;
+        if (client.deaf) userState.deaf = client.deaf;
+        if (client.suppress) userState.suppress = client.suppress;
+        if (client.self_mute) userState.self_mute = client.self_mute;
+        if (client.self_deaf) userState.self_deaf = client.self_deaf;
+        if (client.priority_speaker) userState.priority_speaker = client.priority_speaker;
+        if (client.recording) userState.recording = client.recording;
 
         this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(userState.serialize())); 
       }
@@ -387,7 +474,14 @@ export class MessageHandlers {
   ): void {
     try {
       // 构建 mumbleproto.PermissionDenied 消息
-      const permissionDenied: any = {
+      const permissionDenied: Partial<{
+        reason: string;
+        session: number;
+        type: number;
+        permission?: number;
+        channel_id?: number;
+        name?: string;
+      }> = {
         reason: reason,
         session: session_id,
         type: type,
@@ -419,7 +513,7 @@ export class MessageHandlers {
         permissionDenied.type = mumbleproto.PermissionDenied.DenyType.Permission;
 
         // 尝试将权限字符串转换为权限位
-        const permissionMap: { [key: string]: any } = {
+        const permissionMap: { [key: string]: number } = {
           write: 0x00001,
           traverse: 0x00002,
           enter: 0x00004,

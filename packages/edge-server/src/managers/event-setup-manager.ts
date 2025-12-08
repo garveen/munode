@@ -6,6 +6,7 @@ import { HubDataManager } from '../cluster/hub-data-sync.js';
 import { BanHandler } from './ban-handler.js';
 import { MessageManager } from './message-manager.js';
 import { mumbleproto, MessageType, ClientState } from '@munode/protocol';
+import type { EdgeConfig, ClientInfo, ChannelInfo } from '../types.js';
 
 /**
  * 事件设置管理器
@@ -18,11 +19,11 @@ export class EventSetupManager {
   private hubDataManager?: HubDataManager;
   private banHandler?: BanHandler;
   private messageManager?: MessageManager;
-  private config: any;
+  private config: EdgeConfig;
 
   constructor(
     handlerFactory: HandlerFactory,
-    config: any,
+    config: EdgeConfig,
     hubClient?: EdgeControlClient,
     voiceManager?: VoiceManager,
     hubDataManager?: HubDataManager,
@@ -46,7 +47,7 @@ export class EventSetupManager {
     this.handlerFactory.messageHandler.on(
       'sendMessage',
       (session_id: number, messageType: number, messageData: Buffer) => {
-        this.messageManager!.sendMessageToClient(session_id, messageType, messageData);
+        this.messageManager.sendMessageToClient(session_id, messageType, messageData);
       }
     );
 
@@ -63,7 +64,7 @@ export class EventSetupManager {
     });
 
     this.handlerFactory.messageHandler.on('banListQuery', (session_id: number) => {
-      void this.banHandler!.handleBanListQuery(session_id);
+      void this.banHandler.handleBanListQuery(session_id);
     });
 
     this.handlerFactory.messageHandler.on(
@@ -80,7 +81,7 @@ export class EventSetupManager {
           duration?: number;
         }>
       ) => {
-        void this.banHandler!.handleBanListUpdate(session_id, bans);
+        void this.banHandler.handleBanListUpdate(session_id, bans);
       }
     );
 
@@ -153,7 +154,7 @@ export class EventSetupManager {
     // UserStats 事件
     this.handlerFactory.messageHandler.on('userStats', (session_id: number, data: Buffer) => {
       // 创建一个权限检查函数包装器
-      const hasPermission = (client: any, channel: any, perm: number): boolean => {
+      const hasPermission = (client: ClientInfo, channel: ChannelInfo, perm: number): boolean => {
         if (!this.handlerFactory.permissionHandlers) return false;
         // PermissionHandlers.checkPermission 是异步的，但 handleUserStats 需要同步
         // 这里我们使用同步方式，直接调用 PermissionManager
@@ -171,10 +172,13 @@ export class EventSetupManager {
     });
 
     // userStatsForward 转发事件 - 转发到 Hub 处理
-    this.handlerFactory.messageHandler.on('userStatsForward', (params: any) => {
+    this.handlerFactory.messageHandler.on('userStatsForward', (params: {
+      session_id: number;
+      stats_data: Buffer;
+    }) => {
       if (this.hubClient) {
         this.hubClient.notify('hub.handleUserStats', params);
-        logger.debug(`Forwarded UserStats request to Hub: actor=${params.actor_session}, target=${params.target_session}`);
+        logger.debug(`Forwarded UserStats request to Hub: session=${params.session_id}`);
       } else {
         logger.error('Cannot forward UserStats: Hub client not available');
       }
@@ -221,7 +225,7 @@ export class EventSetupManager {
     // ContextActions 组件事件
     this.handlerFactory.contextActions.on(
       'sendContextActionModify',
-      (session_id: number, message: any) => {
+      (session_id: number, message: mumbleproto.ContextActionModify) => {
         if (this.handlerFactory.adminHandlers) {
           this.handlerFactory.adminHandlers.sendContextActionModify(session_id, message);
         }
@@ -263,7 +267,7 @@ export class EventSetupManager {
 
     this.handlerFactory.clientManager.on('clientData', (session_id: number, data: Buffer) => {
       // 解析 Mumble 协议消息
-      this.messageManager!.parseAndHandleMessage(session_id, data);
+      this.messageManager.parseAndHandleMessage(session_id, data);
     });
 
     this.handlerFactory.clientManager.on('clientDisconnected', (client) => {
@@ -280,13 +284,15 @@ export class EventSetupManager {
         this.handlerFactory.connectionHandlers.clearUDPMapping(client.session);
       }
 
+      // 清理消息缓冲区
+      this.messageManager.clearClientBuffer(client.session);
+
       // 在集群模式下，通知Hub用户已离开
       // 通知Hub用户离开（Hub会广播给所有Edge，包括本Edge）
-      this.hubClient!.notify('hub.userLeft', {
+      this.hubClient.notify('hub.userLeft', {
         session_id: client.session,
         edge_id: this.config.server_id,
-        user_id: client.user_id,
-        username: client.username,
+        reason: undefined,
       });
 
       logger.info(`User ${client.username} (session ${client.session}) left, notified Hub for broadcast`);
@@ -326,7 +332,7 @@ export class EventSetupManager {
       this.handlerFactory.voiceRouter.rebuildChannelCache(channel_id2);
     });
     
-    this.handlerFactory.channelManager.on('channelUpdated', (channel: any) => {
+    this.handlerFactory.channelManager.on('channelUpdated', (channel: ChannelInfo) => {
       // 频道更新可能包括链接变化，重建该频道的PTT缓存
       if (channel && channel.id !== undefined) {
         logger.debug(`Channel ${channel.id} updated, rebuilding cache`);
@@ -353,7 +359,7 @@ export class EventSetupManager {
         // 注意：根据 Mumble 协议，UDPTunnel 消息的 payload 直接就是语音包数据
         // 不需要 protobuf 包装，这是一个性能优化
         logger.info(`[TCP-VOICE] Sending voice data (${voiceData.length} bytes) as UDPTunnel to session ${session_id}`);
-        this.messageManager!.sendMessageToClient(session_id, MessageType.UDPTunnel, voiceData);
+        this.messageManager.sendMessageToClient(session_id, MessageType.UDPTunnel, voiceData);
         logger.info(`[TCP-VOICE] UDPTunnel message sent successfully to session ${session_id}`);
       } catch (error) {
         logger.error(`Failed to send UDPTunnel message for session ${session_id}:`, error);
@@ -367,7 +373,7 @@ export class EventSetupManager {
           logger.info('Connected to Hub Server');
 
           // 加载频道和ACL数据
-          await this.hubDataManager!.loadDataFromHub();
+          await this.hubDataManager.loadDataFromHub();
 
           // 连接成功后立即请求完整同步
           try {
@@ -424,7 +430,20 @@ export class EventSetupManager {
       });
 
       // 监听来自 Hub 的 VoiceTarget 同步
-      this.hubClient.on('syncVoiceTarget', (params: any) => {
+      this.hubClient.on('syncVoiceTarget', (params: {
+        edge_id: number;
+        client_session: number;
+        target_id: number;
+        config: {
+          sessions?: Array<{ session: number }>;
+          channels?: Array<{
+            channel_id: number;
+            include_subchannels?: boolean;
+            include_links?: boolean;
+            group?: string;
+          }>;
+        } | null;
+      }) => {
         logger.info(
           `Received VoiceTarget sync from Hub: Edge ${params.edge_id}, Session ${params.client_session}, Target ${params.target_id}`
         );
@@ -434,10 +453,38 @@ export class EventSetupManager {
           // 删除 VoiceTarget
           logger.info(`Removing VoiceTarget: session=${params.client_session}, target=${params.target_id}`);
           this.handlerFactory.voiceRouter.removeVoiceTarget(params.client_session, params.target_id);
-        } else if (params.config && params.config.targets) {
-          // params.config 已经是规范化的纯JSON对象（由发送端Edge规范化）
-          // 直接使用 config.targets，不需要访问protobuf内部字段
-          const targets = params.config.targets;
+        } else if (params.config) {
+          // 将Hub-Edge格式转换回 Mumble protocol格式
+          // Hub-Edge格式: { sessions: VoiceTargetSession[], channels: ChannelTarget[] }
+          // Mumble格式: targets数组，每个target有session/channel_id/links/children/group
+          interface VoiceTargetItem {
+            session?: number[];
+            channel_id?: number;
+            links?: boolean;
+            children?: boolean;
+            group?: string;
+          }
+          const targets: VoiceTargetItem[] = [];
+          
+          // 转换sessions - 从 VoiceTargetSession对象数组提取session ID
+          if (params.config.sessions && params.config.sessions.length > 0) {
+            const sessionIds = params.config.sessions.map((s: { session: number }) => s.session);
+            targets.push({
+              session: sessionIds,
+            });
+          }
+          
+          // 转换channels
+          if (params.config.channels && params.config.channels.length > 0) {
+            for (const channel of params.config.channels) {
+              targets.push({
+                channel_id: channel.channel_id,
+                children: channel.include_subchannels || false,
+                links: channel.include_links || false,
+                group: channel.group,
+              });
+            }
+          }
           
           if (targets.length > 0) {
             logger.info(`Setting VoiceTarget: session=${params.client_session}, target=${params.target_id}, targets count=${targets.length}`);
@@ -456,7 +503,7 @@ export class EventSetupManager {
 
       this.hubClient.on('voiceData', (data, respond) => {
         // 处理来自Hub的语音数据路由
-        this.voiceManager!.handleVoiceDataFromHub(data, respond);
+        this.voiceManager.handleVoiceDataFromHub(data, respond);
       });
 
       // 监听来自Hub的所有通知消息（合并多个监听器）
@@ -469,7 +516,7 @@ export class EventSetupManager {
           // 尝试注册新Edge的语音端口（非强制，允许失败）
           if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.voicePort && data.id !== this.config.server_id) {
             try {
-              this.voiceManager.getVoiceTransport()!.registerEndpoint(data.id, data.host, data.voicePort);
+              this.voiceManager.getVoiceTransport().registerEndpoint(data.id, data.host, data.voicePort);
               logger.info(`Registered voice endpoint for new Edge ${data.id}: ${data.host}:${data.voicePort}`);
             } catch (error) {
               // 端点注册失败不影响其他功能
@@ -482,17 +529,18 @@ export class EventSetupManager {
 
           // 移除该Edge的语音端口注册
           if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.id) {
-            this.voiceManager.getVoiceTransport()!.unregisterEndpoint(data.id);
+            this.voiceManager.getVoiceTransport().unregisterEndpoint(data.id);
             logger.info(`Unregistered voice endpoint for Edge ${data.id}`);
           }
         }
         // 处理用户事件
         else if (message.method === 'hub.userJoined') {
-          this.hubDataManager!.handleRemoteUserJoined(message.params);
+          console.error(`[EDGE-DEBUG] Received hub.userJoined notification: ${JSON.stringify(message.params)}`);
+          this.hubDataManager.handleRemoteUserJoined(message.params);
         } else if (message.method === 'hub.userLeft') {
-          this.hubDataManager!.handleRemoteUserLeft(message.params);
+          this.hubDataManager.handleRemoteUserLeft(message.params);
         } else if (message.method === 'hub.userStateChanged') {
-          this.hubDataManager!.handleRemoteUserStateChanged(message.params);
+          this.hubDataManager.handleRemoteUserStateChanged(message.params);
         } else if (message.method === 'hub.userStateBroadcast') {
           // 新的UserState广播处理
           this.handlerFactory.hubMessageHandlers.handleUserStateBroadcastFromHub(message.params);

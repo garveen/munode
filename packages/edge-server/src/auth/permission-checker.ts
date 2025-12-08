@@ -1,7 +1,7 @@
 import { logger } from '@munode/common';
 import { mumbleproto } from '@munode/protocol';
 import { MessageType, Permission } from '@munode/protocol';
-import type { ClientInfo, ChannelInfo } from '../types.js';
+import type { ChannelInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
 /**
@@ -37,7 +37,8 @@ export class PermissionHandlers {
         return;
       }
 
-      if (acl.channel_id === undefined) {
+      // 使用 has_channel_id 检查 protobuf optional 字段是否真的设置了值（遵循 Copilot 指导）
+      if (!acl.has_channel_id) {
         logger.warn(`ACL without channel_id from session: ${session_id}`);
         return;
       }
@@ -110,7 +111,8 @@ export class PermissionHandlers {
 
       logger.debug(`PermissionQuery from session ${session_id}: user_id=${actor.user_id}, username=${actor.username}, groups=${JSON.stringify(actor.groups)}`);
 
-      if (permQuery.channel_id === undefined) {
+      // 使用 has_channel_id 检查 protobuf optional 字段是否真的设置了值（遵循 Copilot 指导）
+      if (!permQuery.has_channel_id) {
         logger.warn(`PermissionQuery without channel_id from session: ${session_id}`);
         return;
       }
@@ -133,7 +135,7 @@ export class PermissionHandlers {
         return;
       }
 
-      logger.info(`Forwarding PermissionQuery from session ${session_id} to Hub, channel: ${permQuery.channel_id}`);
+      logger.debug(`Forwarding PermissionQuery from session ${session_id} to Hub, channel: ${permQuery.channel_id}`);
 
       // 转发到 Hub（使用 RPC call）
       const result = await this.hubClient.call('edge.handlePermissionQuery', {
@@ -174,7 +176,7 @@ export class PermissionHandlers {
         Buffer.from(permissionQueryResponse.serialize())
       );
 
-      logger.info(`Sent permission query response for channel ${permQuery.channel_id} to session ${session_id}: ${result.permissions}`);
+      logger.debug(`Sent permission query response for channel ${permQuery.channel_id} to session ${session_id}: ${result.permissions}`);
     } catch (error) {
       logger.error(`Error handling PermissionQuery for session ${session_id}:`, error);
     }
@@ -207,7 +209,7 @@ export class PermissionHandlers {
           if (aclData.length > 0) {
             aclMap.set(channel_id, []);
             for (const acl of aclData) {
-              aclMap.get(channel_id)!.push({
+              aclMap.get(channel_id).push({
                 user_id: acl.user_id,
                 group: acl.group || '',
                 apply_here: acl.apply_here,
@@ -376,7 +378,7 @@ export class PermissionHandlers {
           
           return this.permissionManager.hasPermission(
             channel,
-            client as ClientInfo,
+            client,
             permission,
             channelTree,
             this.aclMap

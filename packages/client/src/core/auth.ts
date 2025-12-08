@@ -59,7 +59,7 @@ export class AuthManager {
         reject(new Error('Authentication timeout'));
       }, 30000); // 30秒超时
 
-      const onServerSync = (message: any) => {
+      const onServerSync = (message: mumbleproto.ServerSync) => {
         clearTimeout(timeout);
         this.client.removeListener('serverSync', onServerSync);
         this.client.removeListener('reject', onReject);
@@ -67,7 +67,7 @@ export class AuthManager {
         resolve();
       };
 
-      const onReject = (message: any) => {
+      const onReject = (message: mumbleproto.Reject) => {
         clearTimeout(timeout);
         this.client.removeListener('serverSync', onServerSync);
         this.client.removeListener('reject', onReject);
@@ -100,7 +100,7 @@ export class AuthManager {
   /**
    * 处理认证成功 (ServerSync)
    */
-  handleServerSync(message: any): void {
+  handleServerSync(message: mumbleproto.ServerSync): void {
     // 保存会话信息到状态管理器
     this.client.getStateManager().handleServerSync(message);
 
@@ -114,7 +114,7 @@ export class AuthManager {
   /**
    * 处理认证失败 (Reject)
    */
-  handleReject(message: any): void {
+  handleReject(message: mumbleproto.Reject): void {
     // 解析拒绝原因
     const reason = message.reason || 'Unknown reason';
     const type = message.type || 0;

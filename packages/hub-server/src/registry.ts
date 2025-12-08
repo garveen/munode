@@ -62,8 +62,8 @@ export class ServiceRegistry {
     const hasSecret = !!this.config.hmacSecret;
     
     if (enableAuth && hasSecret) {
-      const challengeResponse = (request as any).challenge_response;
-      const challenge = (request as any).challenge;
+      const challengeResponse = (request as { challenge_response?: string }).challenge_response;
+      const challenge = (request as { challenge?: string }).challenge;
       
       // 第一阶段：生成挑战码
       if (!challengeResponse) {
@@ -92,6 +92,7 @@ export class ServiceRegistry {
         };
       }
       
+      // challenge 和 challengeResponse 已经是字符串格式
       const isValid = this.verifyChallenge(server_id, challenge, challengeResponse);
       if (!isValid) {
         logger.warn(`Edge ${server_id} authentication failed`);

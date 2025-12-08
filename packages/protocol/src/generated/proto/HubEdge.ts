@@ -5,6 +5,7 @@
  * git: https://github.com/thesayyn/protoc-gen-ts */
 import * as dependency_1 from "./Mumble";
 import * as dependency_2 from "./HubEdgeSync";
+import * as dependency_3 from "./HubEdgeRPC";
 import * as pb_1 from "google-protobuf";
 export namespace hubedge {
     export enum PacketType {
@@ -12,6 +13,7 @@ export namespace hubedge {
         PACKET_TYPE_RPC_REQUEST = 1,
         PACKET_TYPE_RPC_RESPONSE = 2,
         PACKET_TYPE_RPC_ERROR = 3,
+        PACKET_TYPE_RPC_NOTIFICATION = 4,
         PACKET_TYPE_CLIENT_RELAY = 10,
         PACKET_TYPE_SYNC = 20,
         PACKET_TYPE_HEARTBEAT = 30,
@@ -33,9 +35,10 @@ export namespace hubedge {
         #one_of_decls: number[][] = [];
         constructor(data?: any[] | {
             type: PacketType;
-            rpc_request?: RPCRequest;
-            rpc_response?: RPCResponse;
+            rpc_request?: dependency_3.hubedge.TypedRPCRequest;
+            rpc_response?: dependency_3.hubedge.TypedRPCResponse;
             rpc_error?: RPCError;
+            rpc_notification?: dependency_3.hubedge.TypedRPCNotification;
             relay?: ClientMessageRelay;
             sync_data?: dependency_2.hubedge.SyncData;
             heartbeat?: Heartbeat;
@@ -53,6 +56,9 @@ export namespace hubedge {
                 }
                 if ("rpc_error" in data && data.rpc_error != undefined) {
                     this.rpc_error = data.rpc_error;
+                }
+                if ("rpc_notification" in data && data.rpc_notification != undefined) {
+                    this.rpc_notification = data.rpc_notification;
                 }
                 if ("relay" in data && data.relay != undefined) {
                     this.relay = data.relay;
@@ -78,25 +84,25 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 1) != null;
         }
         get rpc_request() {
-            return pb_1.Message.getWrapperField(this, RPCRequest, 10) as RPCRequest;
+            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCRequest, 10);
         }
-        set rpc_request(value: RPCRequest) {
+        set rpc_request(value: dependency_3.hubedge.TypedRPCRequest) {
             pb_1.Message.setWrapperField(this, 10, value);
         }
         get has_rpc_request() {
             return pb_1.Message.getField(this, 10) != null;
         }
         get rpc_response() {
-            return pb_1.Message.getWrapperField(this, RPCResponse, 11) as RPCResponse;
+            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCResponse, 11);
         }
-        set rpc_response(value: RPCResponse) {
+        set rpc_response(value: dependency_3.hubedge.TypedRPCResponse) {
             pb_1.Message.setWrapperField(this, 11, value);
         }
         get has_rpc_response() {
             return pb_1.Message.getField(this, 11) != null;
         }
         get rpc_error() {
-            return pb_1.Message.getWrapperField(this, RPCError, 12) as RPCError;
+            return pb_1.Message.getWrapperField(this, RPCError, 12);
         }
         set rpc_error(value: RPCError) {
             pb_1.Message.setWrapperField(this, 12, value);
@@ -104,8 +110,17 @@ export namespace hubedge {
         get has_rpc_error() {
             return pb_1.Message.getField(this, 12) != null;
         }
+        get rpc_notification() {
+            return pb_1.Message.getWrapperField(this, dependency_3.hubedge.TypedRPCNotification, 13);
+        }
+        set rpc_notification(value: dependency_3.hubedge.TypedRPCNotification) {
+            pb_1.Message.setWrapperField(this, 13, value);
+        }
+        get has_rpc_notification() {
+            return pb_1.Message.getField(this, 13) != null;
+        }
         get relay() {
-            return pb_1.Message.getWrapperField(this, ClientMessageRelay, 20) as ClientMessageRelay;
+            return pb_1.Message.getWrapperField(this, ClientMessageRelay, 20);
         }
         set relay(value: ClientMessageRelay) {
             pb_1.Message.setWrapperField(this, 20, value);
@@ -114,7 +129,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 20) != null;
         }
         get sync_data() {
-            return pb_1.Message.getWrapperField(this, dependency_2.hubedge.SyncData, 30) as dependency_2.hubedge.SyncData;
+            return pb_1.Message.getWrapperField(this, dependency_2.hubedge.SyncData, 30);
         }
         set sync_data(value: dependency_2.hubedge.SyncData) {
             pb_1.Message.setWrapperField(this, 30, value);
@@ -123,7 +138,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 30) != null;
         }
         get heartbeat() {
-            return pb_1.Message.getWrapperField(this, Heartbeat, 40) as Heartbeat;
+            return pb_1.Message.getWrapperField(this, Heartbeat, 40);
         }
         set heartbeat(value: Heartbeat) {
             pb_1.Message.setWrapperField(this, 40, value);
@@ -132,7 +147,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 40) != null;
         }
         get heartbeat_ack() {
-            return pb_1.Message.getWrapperField(this, HeartbeatAck, 41) as HeartbeatAck;
+            return pb_1.Message.getWrapperField(this, HeartbeatAck, 41);
         }
         set heartbeat_ack(value: HeartbeatAck) {
             pb_1.Message.setWrapperField(this, 41, value);
@@ -142,9 +157,10 @@ export namespace hubedge {
         }
         static fromObject(data: {
             type?: PacketType;
-            rpc_request?: ReturnType<typeof RPCRequest.prototype.toObject>;
-            rpc_response?: ReturnType<typeof RPCResponse.prototype.toObject>;
+            rpc_request?: ReturnType<typeof dependency_3.hubedge.TypedRPCRequest.prototype.toObject>;
+            rpc_response?: ReturnType<typeof dependency_3.hubedge.TypedRPCResponse.prototype.toObject>;
             rpc_error?: ReturnType<typeof RPCError.prototype.toObject>;
+            rpc_notification?: ReturnType<typeof dependency_3.hubedge.TypedRPCNotification.prototype.toObject>;
             relay?: ReturnType<typeof ClientMessageRelay.prototype.toObject>;
             sync_data?: ReturnType<typeof dependency_2.hubedge.SyncData.prototype.toObject>;
             heartbeat?: ReturnType<typeof Heartbeat.prototype.toObject>;
@@ -154,13 +170,16 @@ export namespace hubedge {
                 type: data.type
             });
             if (data.rpc_request != null) {
-                message.rpc_request = RPCRequest.fromObject(data.rpc_request);
+                message.rpc_request = dependency_3.hubedge.TypedRPCRequest.fromObject(data.rpc_request);
             }
             if (data.rpc_response != null) {
-                message.rpc_response = RPCResponse.fromObject(data.rpc_response);
+                message.rpc_response = dependency_3.hubedge.TypedRPCResponse.fromObject(data.rpc_response);
             }
             if (data.rpc_error != null) {
                 message.rpc_error = RPCError.fromObject(data.rpc_error);
+            }
+            if (data.rpc_notification != null) {
+                message.rpc_notification = dependency_3.hubedge.TypedRPCNotification.fromObject(data.rpc_notification);
             }
             if (data.relay != null) {
                 message.relay = ClientMessageRelay.fromObject(data.relay);
@@ -179,9 +198,10 @@ export namespace hubedge {
         toObject() {
             const data: {
                 type?: PacketType;
-                rpc_request?: ReturnType<typeof RPCRequest.prototype.toObject>;
-                rpc_response?: ReturnType<typeof RPCResponse.prototype.toObject>;
+                rpc_request?: ReturnType<typeof dependency_3.hubedge.TypedRPCRequest.prototype.toObject>;
+                rpc_response?: ReturnType<typeof dependency_3.hubedge.TypedRPCResponse.prototype.toObject>;
                 rpc_error?: ReturnType<typeof RPCError.prototype.toObject>;
+                rpc_notification?: ReturnType<typeof dependency_3.hubedge.TypedRPCNotification.prototype.toObject>;
                 relay?: ReturnType<typeof ClientMessageRelay.prototype.toObject>;
                 sync_data?: ReturnType<typeof dependency_2.hubedge.SyncData.prototype.toObject>;
                 heartbeat?: ReturnType<typeof Heartbeat.prototype.toObject>;
@@ -198,6 +218,9 @@ export namespace hubedge {
             }
             if (this.rpc_error != null) {
                 data.rpc_error = this.rpc_error.toObject();
+            }
+            if (this.rpc_notification != null) {
+                data.rpc_notification = this.rpc_notification.toObject();
             }
             if (this.relay != null) {
                 data.relay = this.relay.toObject();
@@ -225,6 +248,8 @@ export namespace hubedge {
                 writer.writeMessage(11, this.rpc_response, () => this.rpc_response.serialize(writer));
             if (this.has_rpc_error)
                 writer.writeMessage(12, this.rpc_error, () => this.rpc_error.serialize(writer));
+            if (this.has_rpc_notification)
+                writer.writeMessage(13, this.rpc_notification, () => this.rpc_notification.serialize(writer));
             if (this.has_relay)
                 writer.writeMessage(20, this.relay, () => this.relay.serialize(writer));
             if (this.has_sync_data)
@@ -246,13 +271,16 @@ export namespace hubedge {
                         message.type = reader.readEnum();
                         break;
                     case 10:
-                        reader.readMessage(message.rpc_request, () => message.rpc_request = RPCRequest.deserialize(reader));
+                        reader.readMessage(message.rpc_request, () => message.rpc_request = dependency_3.hubedge.TypedRPCRequest.deserialize(reader));
                         break;
                     case 11:
-                        reader.readMessage(message.rpc_response, () => message.rpc_response = RPCResponse.deserialize(reader));
+                        reader.readMessage(message.rpc_response, () => message.rpc_response = dependency_3.hubedge.TypedRPCResponse.deserialize(reader));
                         break;
                     case 12:
                         reader.readMessage(message.rpc_error, () => message.rpc_error = RPCError.deserialize(reader));
+                        break;
+                    case 13:
+                        reader.readMessage(message.rpc_notification, () => message.rpc_notification = dependency_3.hubedge.TypedRPCNotification.deserialize(reader));
                         break;
                     case 20:
                         reader.readMessage(message.relay, () => message.relay = ClientMessageRelay.deserialize(reader));
@@ -278,265 +306,13 @@ export namespace hubedge {
             return EdgeHubPacket.deserialize(bytes);
         }
     }
-    export class RPCRequest extends pb_1.Message {
-        #one_of_decls: number[][] = [];
-        constructor(data?: any[] | {
-            request_id: string;
-            method: string;
-            params: Uint8Array;
-            timeout_ms?: number;
-        }) {
-            super();
-            pb_1.Message.initialize(this, Array.isArray(data) ? data : [], 0, -1, [], this.#one_of_decls);
-            if (!Array.isArray(data) && typeof data == "object") {
-                this.request_id = data.request_id;
-                this.method = data.method;
-                this.params = data.params;
-                if ("timeout_ms" in data && data.timeout_ms != undefined) {
-                    this.timeout_ms = data.timeout_ms;
-                }
-            }
-        }
-        get request_id() {
-            return pb_1.Message.getField(this, 1) as string;
-        }
-        set request_id(value: string) {
-            pb_1.Message.setField(this, 1, value);
-        }
-        get has_request_id() {
-            return pb_1.Message.getField(this, 1) != null;
-        }
-        get method() {
-            return pb_1.Message.getField(this, 2) as string;
-        }
-        set method(value: string) {
-            pb_1.Message.setField(this, 2, value);
-        }
-        get has_method() {
-            return pb_1.Message.getField(this, 2) != null;
-        }
-        get params() {
-            return pb_1.Message.getField(this, 3) as Uint8Array;
-        }
-        set params(value: Uint8Array) {
-            pb_1.Message.setField(this, 3, value);
-        }
-        get has_params() {
-            return pb_1.Message.getField(this, 3) != null;
-        }
-        get timeout_ms() {
-            return pb_1.Message.getFieldWithDefault(this, 4, 0) as number;
-        }
-        set timeout_ms(value: number) {
-            pb_1.Message.setField(this, 4, value);
-        }
-        get has_timeout_ms() {
-            return pb_1.Message.getField(this, 4) != null;
-        }
-        static fromObject(data: {
-            request_id?: string;
-            method?: string;
-            params?: Uint8Array;
-            timeout_ms?: number;
-        }): RPCRequest {
-            const message = new RPCRequest({
-                request_id: data.request_id,
-                method: data.method,
-                params: data.params
-            });
-            if (data.timeout_ms != null) {
-                message.timeout_ms = data.timeout_ms;
-            }
-            return message;
-        }
-        toObject() {
-            const data: {
-                request_id?: string;
-                method?: string;
-                params?: Uint8Array;
-                timeout_ms?: number;
-            } = {};
-            if (this.request_id != null) {
-                data.request_id = this.request_id;
-            }
-            if (this.method != null) {
-                data.method = this.method;
-            }
-            if (this.params != null) {
-                data.params = this.params;
-            }
-            if (this.timeout_ms != null) {
-                data.timeout_ms = this.timeout_ms;
-            }
-            return data;
-        }
-        serialize(): Uint8Array;
-        serialize(w: pb_1.BinaryWriter): void;
-        serialize(w?: pb_1.BinaryWriter): Uint8Array | void {
-            const writer = w || new pb_1.BinaryWriter();
-            if (this.has_request_id && this.request_id.length)
-                writer.writeString(1, this.request_id);
-            if (this.has_method && this.method.length)
-                writer.writeString(2, this.method);
-            if (this.has_params && this.params.length)
-                writer.writeBytes(3, this.params);
-            if (this.has_timeout_ms)
-                writer.writeUint32(4, this.timeout_ms);
-            if (!w)
-                return writer.getResultBuffer();
-        }
-        static deserialize(bytes: Uint8Array | pb_1.BinaryReader): RPCRequest {
-            const reader = bytes instanceof pb_1.BinaryReader ? bytes : new pb_1.BinaryReader(bytes), message = new RPCRequest();
-            while (reader.nextField()) {
-                if (reader.isEndGroup())
-                    break;
-                switch (reader.getFieldNumber()) {
-                    case 1:
-                        message.request_id = reader.readString();
-                        break;
-                    case 2:
-                        message.method = reader.readString();
-                        break;
-                    case 3:
-                        message.params = reader.readBytes();
-                        break;
-                    case 4:
-                        message.timeout_ms = reader.readUint32();
-                        break;
-                    default: reader.skipField();
-                }
-            }
-            return message;
-        }
-        serializeBinary(): Uint8Array {
-            return this.serialize();
-        }
-        static deserializeBinary(bytes: Uint8Array): RPCRequest {
-            return RPCRequest.deserialize(bytes);
-        }
-    }
-    export class RPCResponse extends pb_1.Message {
-        #one_of_decls: number[][] = [];
-        constructor(data?: any[] | {
-            request_id: string;
-            result: Uint8Array;
-            processing_time_ms?: number;
-        }) {
-            super();
-            pb_1.Message.initialize(this, Array.isArray(data) ? data : [], 0, -1, [], this.#one_of_decls);
-            if (!Array.isArray(data) && typeof data == "object") {
-                this.request_id = data.request_id;
-                this.result = data.result;
-                if ("processing_time_ms" in data && data.processing_time_ms != undefined) {
-                    this.processing_time_ms = data.processing_time_ms;
-                }
-            }
-        }
-        get request_id() {
-            return pb_1.Message.getField(this, 1) as string;
-        }
-        set request_id(value: string) {
-            pb_1.Message.setField(this, 1, value);
-        }
-        get has_request_id() {
-            return pb_1.Message.getField(this, 1) != null;
-        }
-        get result() {
-            return pb_1.Message.getField(this, 2) as Uint8Array;
-        }
-        set result(value: Uint8Array) {
-            pb_1.Message.setField(this, 2, value);
-        }
-        get has_result() {
-            return pb_1.Message.getField(this, 2) != null;
-        }
-        get processing_time_ms() {
-            return pb_1.Message.getFieldWithDefault(this, 3, 0) as number;
-        }
-        set processing_time_ms(value: number) {
-            pb_1.Message.setField(this, 3, value);
-        }
-        get has_processing_time_ms() {
-            return pb_1.Message.getField(this, 3) != null;
-        }
-        static fromObject(data: {
-            request_id?: string;
-            result?: Uint8Array;
-            processing_time_ms?: number;
-        }): RPCResponse {
-            const message = new RPCResponse({
-                request_id: data.request_id,
-                result: data.result
-            });
-            if (data.processing_time_ms != null) {
-                message.processing_time_ms = data.processing_time_ms;
-            }
-            return message;
-        }
-        toObject() {
-            const data: {
-                request_id?: string;
-                result?: Uint8Array;
-                processing_time_ms?: number;
-            } = {};
-            if (this.request_id != null) {
-                data.request_id = this.request_id;
-            }
-            if (this.result != null) {
-                data.result = this.result;
-            }
-            if (this.processing_time_ms != null) {
-                data.processing_time_ms = this.processing_time_ms;
-            }
-            return data;
-        }
-        serialize(): Uint8Array;
-        serialize(w: pb_1.BinaryWriter): void;
-        serialize(w?: pb_1.BinaryWriter): Uint8Array | void {
-            const writer = w || new pb_1.BinaryWriter();
-            if (this.has_request_id && this.request_id.length)
-                writer.writeString(1, this.request_id);
-            if (this.has_result && this.result.length)
-                writer.writeBytes(2, this.result);
-            if (this.has_processing_time_ms)
-                writer.writeUint32(3, this.processing_time_ms);
-            if (!w)
-                return writer.getResultBuffer();
-        }
-        static deserialize(bytes: Uint8Array | pb_1.BinaryReader): RPCResponse {
-            const reader = bytes instanceof pb_1.BinaryReader ? bytes : new pb_1.BinaryReader(bytes), message = new RPCResponse();
-            while (reader.nextField()) {
-                if (reader.isEndGroup())
-                    break;
-                switch (reader.getFieldNumber()) {
-                    case 1:
-                        message.request_id = reader.readString();
-                        break;
-                    case 2:
-                        message.result = reader.readBytes();
-                        break;
-                    case 3:
-                        message.processing_time_ms = reader.readUint32();
-                        break;
-                    default: reader.skipField();
-                }
-            }
-            return message;
-        }
-        serializeBinary(): Uint8Array {
-            return this.serialize();
-        }
-        static deserializeBinary(bytes: Uint8Array): RPCResponse {
-            return RPCResponse.deserialize(bytes);
-        }
-    }
     export class RPCError extends pb_1.Message {
         #one_of_decls: number[][] = [];
         constructor(data?: any[] | {
             request_id: string;
             code: number;
             message: string;
-            details?: Uint8Array;
+            details?: string;
         }) {
             super();
             pb_1.Message.initialize(this, Array.isArray(data) ? data : [], 0, -1, [], this.#one_of_decls);
@@ -577,9 +353,9 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 3) != null;
         }
         get details() {
-            return pb_1.Message.getFieldWithDefault(this, 4, new Uint8Array(0)) as Uint8Array;
+            return pb_1.Message.getFieldWithDefault(this, 4, "") as string;
         }
-        set details(value: Uint8Array) {
+        set details(value: string) {
             pb_1.Message.setField(this, 4, value);
         }
         get has_details() {
@@ -589,7 +365,7 @@ export namespace hubedge {
             request_id?: string;
             code?: number;
             message?: string;
-            details?: Uint8Array;
+            details?: string;
         }): RPCError {
             const message = new RPCError({
                 request_id: data.request_id,
@@ -606,7 +382,7 @@ export namespace hubedge {
                 request_id?: string;
                 code?: number;
                 message?: string;
-                details?: Uint8Array;
+                details?: string;
             } = {};
             if (this.request_id != null) {
                 data.request_id = this.request_id;
@@ -633,7 +409,7 @@ export namespace hubedge {
             if (this.has_message && this.message.length)
                 writer.writeString(3, this.message);
             if (this.has_details && this.details.length)
-                writer.writeBytes(4, this.details);
+                writer.writeString(4, this.details);
             if (!w)
                 return writer.getResultBuffer();
         }
@@ -653,7 +429,7 @@ export namespace hubedge {
                         message.message = reader.readString();
                         break;
                     case 4:
-                        message.details = reader.readBytes();
+                        message.details = reader.readString();
                         break;
                     default: reader.skipField();
                 }
@@ -820,7 +596,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 3) != null;
         }
         get routing() {
-            return pb_1.Message.getWrapperField(this, RelayRouting, 4) as RelayRouting;
+            return pb_1.Message.getWrapperField(this, RelayRouting, 4);
         }
         set routing(value: RelayRouting) {
             pb_1.Message.setWrapperField(this, 4, value);
@@ -838,7 +614,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 5) != null;
         }
         get version() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Version, 10) as dependency_1.mumbleproto.Version;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Version, 10);
         }
         set version(value: dependency_1.mumbleproto.Version) {
             pb_1.Message.setWrapperField(this, 10, value);
@@ -847,7 +623,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 10) != null;
         }
         get udp_tunnel() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UDPTunnel, 11) as dependency_1.mumbleproto.UDPTunnel;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UDPTunnel, 11);
         }
         set udp_tunnel(value: dependency_1.mumbleproto.UDPTunnel) {
             pb_1.Message.setWrapperField(this, 11, value);
@@ -856,7 +632,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 11) != null;
         }
         get authenticate() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Authenticate, 12) as dependency_1.mumbleproto.Authenticate;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Authenticate, 12);
         }
         set authenticate(value: dependency_1.mumbleproto.Authenticate) {
             pb_1.Message.setWrapperField(this, 12, value);
@@ -865,7 +641,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 12) != null;
         }
         get ping() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Ping, 13) as dependency_1.mumbleproto.Ping;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Ping, 13);
         }
         set ping(value: dependency_1.mumbleproto.Ping) {
             pb_1.Message.setWrapperField(this, 13, value);
@@ -874,7 +650,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 13) != null;
         }
         get reject() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Reject, 14) as dependency_1.mumbleproto.Reject;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.Reject, 14);
         }
         set reject(value: dependency_1.mumbleproto.Reject) {
             pb_1.Message.setWrapperField(this, 14, value);
@@ -883,7 +659,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 14) != null;
         }
         get server_sync() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ServerSync, 15) as dependency_1.mumbleproto.ServerSync;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ServerSync, 15);
         }
         set server_sync(value: dependency_1.mumbleproto.ServerSync) {
             pb_1.Message.setWrapperField(this, 15, value);
@@ -892,7 +668,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 15) != null;
         }
         get channel_remove() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ChannelRemove, 16) as dependency_1.mumbleproto.ChannelRemove;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ChannelRemove, 16);
         }
         set channel_remove(value: dependency_1.mumbleproto.ChannelRemove) {
             pb_1.Message.setWrapperField(this, 16, value);
@@ -901,7 +677,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 16) != null;
         }
         get channel_state() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ChannelState, 17) as dependency_1.mumbleproto.ChannelState;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ChannelState, 17);
         }
         set channel_state(value: dependency_1.mumbleproto.ChannelState) {
             pb_1.Message.setWrapperField(this, 17, value);
@@ -910,7 +686,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 17) != null;
         }
         get user_remove() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserRemove, 18) as dependency_1.mumbleproto.UserRemove;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserRemove, 18);
         }
         set user_remove(value: dependency_1.mumbleproto.UserRemove) {
             pb_1.Message.setWrapperField(this, 18, value);
@@ -919,7 +695,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 18) != null;
         }
         get user_state() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserState, 19) as dependency_1.mumbleproto.UserState;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserState, 19);
         }
         set user_state(value: dependency_1.mumbleproto.UserState) {
             pb_1.Message.setWrapperField(this, 19, value);
@@ -928,7 +704,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 19) != null;
         }
         get ban_list() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.BanList, 20) as dependency_1.mumbleproto.BanList;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.BanList, 20);
         }
         set ban_list(value: dependency_1.mumbleproto.BanList) {
             pb_1.Message.setWrapperField(this, 20, value);
@@ -937,7 +713,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 20) != null;
         }
         get text_message() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.TextMessage, 21) as dependency_1.mumbleproto.TextMessage;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.TextMessage, 21);
         }
         set text_message(value: dependency_1.mumbleproto.TextMessage) {
             pb_1.Message.setWrapperField(this, 21, value);
@@ -946,7 +722,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 21) != null;
         }
         get permission_denied() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.PermissionDenied, 22) as dependency_1.mumbleproto.PermissionDenied;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.PermissionDenied, 22);
         }
         set permission_denied(value: dependency_1.mumbleproto.PermissionDenied) {
             pb_1.Message.setWrapperField(this, 22, value);
@@ -955,7 +731,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 22) != null;
         }
         get acl() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ACL, 23) as dependency_1.mumbleproto.ACL;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ACL, 23);
         }
         set acl(value: dependency_1.mumbleproto.ACL) {
             pb_1.Message.setWrapperField(this, 23, value);
@@ -964,7 +740,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 23) != null;
         }
         get query_users() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.QueryUsers, 24) as dependency_1.mumbleproto.QueryUsers;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.QueryUsers, 24);
         }
         set query_users(value: dependency_1.mumbleproto.QueryUsers) {
             pb_1.Message.setWrapperField(this, 24, value);
@@ -973,7 +749,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 24) != null;
         }
         get crypt_setup() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.CryptSetup, 25) as dependency_1.mumbleproto.CryptSetup;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.CryptSetup, 25);
         }
         set crypt_setup(value: dependency_1.mumbleproto.CryptSetup) {
             pb_1.Message.setWrapperField(this, 25, value);
@@ -982,7 +758,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 25) != null;
         }
         get context_action_modify() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ContextActionModify, 26) as dependency_1.mumbleproto.ContextActionModify;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ContextActionModify, 26);
         }
         set context_action_modify(value: dependency_1.mumbleproto.ContextActionModify) {
             pb_1.Message.setWrapperField(this, 26, value);
@@ -991,7 +767,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 26) != null;
         }
         get context_action() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ContextAction, 27) as dependency_1.mumbleproto.ContextAction;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ContextAction, 27);
         }
         set context_action(value: dependency_1.mumbleproto.ContextAction) {
             pb_1.Message.setWrapperField(this, 27, value);
@@ -1000,7 +776,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 27) != null;
         }
         get user_list() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserList, 28) as dependency_1.mumbleproto.UserList;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserList, 28);
         }
         set user_list(value: dependency_1.mumbleproto.UserList) {
             pb_1.Message.setWrapperField(this, 28, value);
@@ -1009,7 +785,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 28) != null;
         }
         get voice_target() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.VoiceTarget, 29) as dependency_1.mumbleproto.VoiceTarget;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.VoiceTarget, 29);
         }
         set voice_target(value: dependency_1.mumbleproto.VoiceTarget) {
             pb_1.Message.setWrapperField(this, 29, value);
@@ -1018,7 +794,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 29) != null;
         }
         get permission_query() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.PermissionQuery, 30) as dependency_1.mumbleproto.PermissionQuery;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.PermissionQuery, 30);
         }
         set permission_query(value: dependency_1.mumbleproto.PermissionQuery) {
             pb_1.Message.setWrapperField(this, 30, value);
@@ -1027,7 +803,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 30) != null;
         }
         get codec_version() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.CodecVersion, 31) as dependency_1.mumbleproto.CodecVersion;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.CodecVersion, 31);
         }
         set codec_version(value: dependency_1.mumbleproto.CodecVersion) {
             pb_1.Message.setWrapperField(this, 31, value);
@@ -1036,7 +812,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 31) != null;
         }
         get user_stats() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserStats, 32) as dependency_1.mumbleproto.UserStats;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.UserStats, 32);
         }
         set user_stats(value: dependency_1.mumbleproto.UserStats) {
             pb_1.Message.setWrapperField(this, 32, value);
@@ -1045,7 +821,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 32) != null;
         }
         get request_blob() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.RequestBlob, 33) as dependency_1.mumbleproto.RequestBlob;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.RequestBlob, 33);
         }
         set request_blob(value: dependency_1.mumbleproto.RequestBlob) {
             pb_1.Message.setWrapperField(this, 33, value);
@@ -1054,7 +830,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 33) != null;
         }
         get server_config() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ServerConfig, 34) as dependency_1.mumbleproto.ServerConfig;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.ServerConfig, 34);
         }
         set server_config(value: dependency_1.mumbleproto.ServerConfig) {
             pb_1.Message.setWrapperField(this, 34, value);
@@ -1063,7 +839,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 34) != null;
         }
         get suggest_config() {
-            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.SuggestConfig, 35) as dependency_1.mumbleproto.SuggestConfig;
+            return pb_1.Message.getWrapperField(this, dependency_1.mumbleproto.SuggestConfig, 35);
         }
         set suggest_config(value: dependency_1.mumbleproto.SuggestConfig) {
             pb_1.Message.setWrapperField(this, 35, value);
@@ -1666,7 +1442,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 2) != null;
         }
         get stats() {
-            return pb_1.Message.getWrapperField(this, ServerStats, 3) as ServerStats;
+            return pb_1.Message.getWrapperField(this, ServerStats, 3);
         }
         set stats(value: ServerStats) {
             pb_1.Message.setWrapperField(this, 3, value);
@@ -1792,7 +1568,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 3) != null;
         }
         get config_update() {
-            return pb_1.Message.getWrapperField(this, ConfigUpdate, 4) as ConfigUpdate;
+            return pb_1.Message.getWrapperField(this, ConfigUpdate, 4);
         }
         set config_update(value: ConfigUpdate) {
             pb_1.Message.setWrapperField(this, 4, value);
@@ -2115,7 +1891,7 @@ export namespace hubedge {
             }
         }
         get items() {
-            return pb_1.Message.getRepeatedWrapperField(this, ConfigItem, 1) as ConfigItem[];
+            return pb_1.Message.getRepeatedWrapperField(this, ConfigItem, 1);
         }
         set items(value: ConfigItem[]) {
             pb_1.Message.setRepeatedWrapperField(this, 1, value);

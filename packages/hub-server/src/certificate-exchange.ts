@@ -115,8 +115,9 @@ export class CertificateExchangeService {
   /**
    * 解析证书 (使用 node-forge)
    */
-  private parseCertificate(pem: string): any {
+  private parseCertificate(pem: string): { validity: { notBefore: Date; notAfter: Date }; subject: unknown; issuer: unknown } | null {
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const forge = require('node-forge');
       return forge.pki.certificateFromPem(pem);
     } catch (error) {
@@ -128,8 +129,9 @@ export class CertificateExchangeService {
   /**
    * 获取证书指纹
    */
-  private getFingerprint(cert: any): string {
+  private getFingerprint(cert: { validity: { notBefore: Date; notAfter: Date }; subject: unknown; issuer: unknown }): string {
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const forge = require('node-forge');
       const der = forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
       const md = forge.md.sha256.create();

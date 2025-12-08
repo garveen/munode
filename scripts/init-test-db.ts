@@ -72,24 +72,32 @@ async function initTestData(db: HubDatabase) {
     
     // 删除测试频道（保留根频道）
     for (const channel of allChannels) {
-      if (channel.id > 0 && (channel.name.startsWith('Test') || channel.name.startsWith('SubChannel') || ['General', 'Voice Chat', 'Gaming', 'Music'].includes(channel.name))) {
+      if (channel.id > 0 && (channel.name.startsWith('Test') || channel.name.startsWith('SubChannel') || ['Lobby', 'General', 'Private', 'Voice Chat', 'Gaming', 'Music'].includes(channel.name))) {
         await db.deleteChannel(channel.id);
       }
     }
 
-    // 创建测试频道结构
+    // 创建测试频道结构（与 tests/integration/fixtures.ts 中的 TEST_CHANNELS 保持一致）
     logger.info('Creating test channel structure...');
 
-    // 创建一些测试频道
+    // 确保按照固定的ID创建频道，以匹配测试fixtures
     const testChannels = [
-      { name: 'General', parent_id: 0 },
-      { name: 'Voice Chat', parent_id: 0 },
-      { name: 'Gaming', parent_id: 0 },
-      { name: 'Music', parent_id: 0 },
+      { name: 'Lobby', parent_id: 0, position: 0 },      // ID 应该是 1
+      { name: 'General', parent_id: 0, position: 1 },    // ID 应该是 2
+      { name: 'Private', parent_id: 0, position: 2 },    // ID 应该是 3
     ];
 
+    const createdChannelIds: number[] = [];
     for (const channel of testChannels) {
-      await db.createChannel(channel);
+      const channelId = await db.createChannel(channel);
+      createdChannelIds.push(channelId);
+      logger.info(`Created channel: ${channel.name} (ID: ${channelId})`);
+    }
+
+    // 验证创建的频道ID是否符合预期
+    if (createdChannelIds[0] !== 1 || createdChannelIds[1] !== 2 || createdChannelIds[2] !== 3) {
+      logger.warn('Warning: Created channel IDs do not match expected fixture IDs');
+      logger.warn(`Expected: [1, 2, 3], Got: [${createdChannelIds.join(', ')}]`);
     }
 
     // 暂时跳过ACL和频道组创建，以避免外键约束问题

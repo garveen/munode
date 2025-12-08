@@ -74,7 +74,7 @@ export class VoiceUDPTransport extends EventEmitter {
       });
 
       this.socket.on('listening', () => {
-        const address = this.socket!.address();
+        const address = this.socket.address();
         console.info(`Voice UDP listening on ${address.address}:${address.port}`);
         this.emit('listening', address);
         resolve();
@@ -112,6 +112,13 @@ export class VoiceUDPTransport extends EventEmitter {
   unregisterEndpoint(edgeId: number): void {
     this.remoteEndpoints.delete(edgeId);
     console.debug(`Unregistered voice endpoint for edge ${edgeId}`);
+  }
+
+  /**
+   * Get list of all registered remote Edge IDs
+   */
+  getRegisteredEdgeIds(): number[] {
+    return Array.from(this.remoteEndpoints.keys());
   }
 
   /**
@@ -225,12 +232,6 @@ export class VoiceUDPTransport extends EventEmitter {
         this.stats.errors++;
         return;
       }
-
-      console.debug(
-        `Received voice packet from ${rinfo.address}:${rinfo.port}: ` +
-        `sender=${packet.header.senderId}, target=${packet.header.targetId}, ` +
-        `codec=${packet.header.codec}, voice_data_size=${packet.voiceData.length}`
-      );
 
       // 发出事件
       // voiceData 是去除了自定义header后的完整 Mumble 语音包

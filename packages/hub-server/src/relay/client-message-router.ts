@@ -4,6 +4,7 @@ import {
   hubedge,
   mumbleproto,
   MessageType,
+  ChannelNotificationParams,
 } from '@munode/protocol';
 import type { GlobalSessionManager } from '../session-manager.js';
 
@@ -19,7 +20,10 @@ const logger = createLogger({ service: 'hub-message-router' });
  */
 export class ClientMessageRouter extends EventEmitter {
   private sessionManager: GlobalSessionManager;
-  private controlService: any; // HubControlService 引用
+  private controlService: {
+    notify: (edgeId: number, method: string, params?: ChannelNotificationParams) => void;
+    sendRelayToEdge?: (edgeId: number, message: hubedge.ClientMessageRelay) => void;
+  } | null = null;
 
   constructor(
     sessionManager: GlobalSessionManager
@@ -31,7 +35,10 @@ export class ClientMessageRouter extends EventEmitter {
   /**
    * 设置 ControlService 引用（循环依赖，延迟设置）
    */
-  setControlService(controlService: any): void {
+  setControlService(controlService: {
+    notify: (edgeId: number, method: string, params?: ChannelNotificationParams) => void;
+    sendRelayToEdge?: (edgeId: number, message: hubedge.ClientMessageRelay) => void;
+  }): void {
     this.controlService = controlService;
   }
 
@@ -401,86 +408,87 @@ export class ClientMessageRouter extends EventEmitter {
   private setMessageField(
     relay: hubedge.ClientMessageRelay,
     messageType: MessageType,
-    message: any
+    message: unknown
   ): void {
+    // Type assertion is safe here because message type matches messageType at runtime
     switch (messageType) {
       case MessageType.Version:
-        relay.version = message;
+        relay.version = message as mumbleproto.Version;
         break;
       case MessageType.UDPTunnel:
-        relay.udp_tunnel = message;
+        relay.udp_tunnel = message as mumbleproto.UDPTunnel;
         break;
       case MessageType.Authenticate:
-        relay.authenticate = message;
+        relay.authenticate = message as mumbleproto.Authenticate;
         break;
       case MessageType.Ping:
-        relay.ping = message;
+        relay.ping = message as mumbleproto.Ping;
         break;
       case MessageType.Reject:
-        relay.reject = message;
+        relay.reject = message as mumbleproto.Reject;
         break;
       case MessageType.ServerSync:
-        relay.server_sync = message;
+        relay.server_sync = message as mumbleproto.ServerSync;
         break;
       case MessageType.ChannelRemove:
-        relay.channel_remove = message;
+        relay.channel_remove = message as mumbleproto.ChannelRemove;
         break;
       case MessageType.ChannelState:
-        relay.channel_state = message;
+        relay.channel_state = message as mumbleproto.ChannelState;
         break;
       case MessageType.UserRemove:
-        relay.user_remove = message;
+        relay.user_remove = message as mumbleproto.UserRemove;
         break;
       case MessageType.UserState:
-        relay.user_state = message;
+        relay.user_state = message as mumbleproto.UserState;
         break;
       case MessageType.BanList:
-        relay.ban_list = message;
+        relay.ban_list = message as mumbleproto.BanList;
         break;
       case MessageType.TextMessage:
-        relay.text_message = message;
+        relay.text_message = message as mumbleproto.TextMessage;
         break;
       case MessageType.PermissionDenied:
-        relay.permission_denied = message;
+        relay.permission_denied = message as mumbleproto.PermissionDenied;
         break;
       case MessageType.ACL:
-        relay.acl = message;
+        relay.acl = message as mumbleproto.ACL;
         break;
       case MessageType.QueryUsers:
-        relay.query_users = message;
+        relay.query_users = message as mumbleproto.QueryUsers;
         break;
       case MessageType.CryptSetup:
-        relay.crypt_setup = message;
+        relay.crypt_setup = message as mumbleproto.CryptSetup;
         break;
       case MessageType.ContextActionModify:
-        relay.context_action_modify = message;
+        relay.context_action_modify = message as mumbleproto.ContextActionModify;
         break;
       case MessageType.ContextAction:
-        relay.context_action = message;
+        relay.context_action = message as mumbleproto.ContextAction;
         break;
       case MessageType.UserList:
-        relay.user_list = message;
+        relay.user_list = message as mumbleproto.UserList;
         break;
       case MessageType.VoiceTarget:
-        relay.voice_target = message;
+        relay.voice_target = message as mumbleproto.VoiceTarget;
         break;
       case MessageType.PermissionQuery:
-        relay.permission_query = message;
+        relay.permission_query = message as mumbleproto.PermissionQuery;
         break;
       case MessageType.CodecVersion:
-        relay.codec_version = message;
+        relay.codec_version = message as mumbleproto.CodecVersion;
         break;
       case MessageType.UserStats:
-        relay.user_stats = message;
+        relay.user_stats = message as mumbleproto.UserStats;
         break;
       case MessageType.RequestBlob:
-        relay.request_blob = message;
+        relay.request_blob = message as mumbleproto.RequestBlob;
         break;
       case MessageType.ServerConfig:
-        relay.server_config = message;
+        relay.server_config = message as mumbleproto.ServerConfig;
         break;
       case MessageType.SuggestConfig:
-        relay.suggest_config = message;
+        relay.suggest_config = message as mumbleproto.SuggestConfig;
         break;
     }
   }
