@@ -17,6 +17,8 @@ import {
   DEFAULT_EDGE_RELAY_CONFIG,
   DEFAULT_PROBE_CONFIG,
   DEFAULT_FALLBACK_CONFIG,
+  RouteValidator,
+  type ValidationResult,
 } from '@munode/protocol';
 import type {
   EdgeConfig,
@@ -92,6 +94,18 @@ export class VoiceRoutingManager extends EventEmitter {
   
   // 功能启用状态
   private _isEnabled: boolean = false;
+
+  // 性能优化：路由查找缓存
+  private routeCache: Map<number, { route: RouteEntry; timestamp: number }> = new Map();
+  private readonly ROUTE_CACHE_TTL = 5000; // 5秒缓存
+
+  // 性能优化：验证结果缓存
+  private validationCache: Map<string, { result: ValidationResult; timestamp: number }> = new Map();
+  private readonly VALIDATION_CACHE_TTL = 10000; // 10秒缓存
+  
+  // 性能优化：统计信息缓存
+  private statsCache: { stats: any; timestamp: number } | null = null;
+  private readonly STATS_CACHE_TTL = 3000; // 3秒缓存
 
   constructor(config: EdgeConfig) {
     super();
@@ -197,6 +211,11 @@ export class VoiceRoutingManager extends EventEmitter {
       this.metricsCleanupTimer = undefined;
     }
     
+    // 清除所有缓存
+    this.clearRouteCache();
+    this.validationCache.clear();
+    this.statsCache = null;
+    
     logger.info('VoiceRoutingManager stopped');
   }
 
@@ -248,10 +267,26 @@ export class VoiceRoutingManager extends EventEmitter {
   }
 
   /**
-   * 获取到目标 Edge 的路由
+   * 获取到目标 Edge 的路由（带缓存优化）
    */
   getRoute(targetEdgeId: number): RouteEntry | undefined {
-    return this.routingTable.get(targetEdgeId);
+    // 检查缓存
+    const cached = this.routeCache.get(targetEdgeId);
+    const now = Date.now();
+    
+    if (cached && (now - cached.timestamp) < this.ROUTE_CACHE_TTL) {
+      return cached.route;
+    }
+
+    // 从路由表获取
+    const route = this.routingTable.get(targetEdgeId);
+    
+    // 更新缓存
+    if (route) {
+      this.routeCache.set(targetEdgeId, { route, timestamp: now });
+    }
+    
+    return route;
   }
 
   /**
@@ -262,10 +297,162 @@ export class VoiceRoutingManager extends EventEmitter {
   }
 
   /**
+   * 清除路由缓存
+   */
+  private clearRouteCache(): void {
+    this.routeCache.clear();
+  }
+
+  /**
+   * 更新路由时清除相关缓存
+   */
+  private updateRoute(route: RouteEntry): void {
+    const oldRoute = this.routingTable.get(route.targetEdgeId);
+    this.routingTable.set(route.targetEdgeId, route);
+    
+    // 清除该路由的缓存
+    this.routeCache.delete(route.targetEdgeId);
+    // 清除统计缓存
+    this.statsCache = null;
+    
+    // 记录路由变化
+    if (oldRoute) {
+      logger.info(`Route updated: Edge ${route.targetEdgeId}, ` +
+                  `${oldRoute.type} -> ${route.type}, cost: ${route.cost.toFixed(2)}`);
+    } else {
+      logger.info(`Route added: Edge ${route.targetEdgeId}, ` +
+                  `type: ${route.type}, cost: ${route.cost.toFixed(2)}`);
+    }
+    
+    // 触发事件
+    this.emit('route-changed', route.targetEdgeId, route, oldRoute);
+  }
+
+  /**
    * 检查功能是否启用
    */
   isEnabled(): boolean {
     return this._isEnabled;
+  }
+
+  /**
+   * 验证路由表条目（使用共享验证器和缓存）
+   * 
+   * 检查路由条目是否有效：
+   * - 目标 Edge ID 必须存在且不等于本机
+   * - 路由类型必须有效
+   * - 中转模式必须有 nextHop
+   * - nextHop 不能等于 targetEdgeId 或本机
+   * - cost 必须为非负数
+   * - timestamp 必须有效
+   */
+  validateRouteEntry(route: RouteEntry): ValidationResult {
+    // 生成缓存键
+    const cacheKey = `${route.targetEdgeId}-${route.type}-${route.nextHop}-${route.timestamp}`;
+    const now = Date.now();
+    
+    // 检查缓存
+    const cached = this.validationCache.get(cacheKey);
+    if (cached && (now - cached.timestamp) < this.VALIDATION_CACHE_TTL) {
+      return cached.result;
+    }
+
+    // 使用共享验证器
+    const result = RouteValidator.validateRouteEntry(route, {
+      sourceEdgeId: this.serverId,
+      // Edge 不知道所有允许的 Edge ID，所以不传递
+    });
+
+    // 更新缓存
+    this.validationCache.set(cacheKey, { result, timestamp: now });
+
+    return result;
+  }
+
+  /**
+   * 验证整个路由表
+   * 
+   * 检查路由表的整体一致性：
+   * - 所有路由条目都有效
+   * - 没有循环路由（A -> B -> A）
+   * - 中转节点在路由表中存在
+   */
+  validateRoutingTable(): { valid: boolean; errors: string[] } {
+    const errors: string[] = [];
+
+    // 验证每个路由条目
+    for (const [targetEdgeId, route] of this.routingTable) {
+      const validation = this.validateRouteEntry(route);
+      if (!validation.valid) {
+        errors.push(`Route to Edge ${targetEdgeId}: ${validation.error}`);
+      }
+
+      // 检查路由表键和条目的 targetEdgeId 是否一致
+      if (targetEdgeId !== route.targetEdgeId) {
+        errors.push(
+          `Route table key (${targetEdgeId}) does not match targetEdgeId (${route.targetEdgeId})`
+        );
+      }
+    }
+
+    // 检查中转节点是否存在于路由表中（可选的完整性检查）
+    for (const [targetEdgeId, route] of this.routingTable) {
+      if (route.type === RouteType.RELAY && route.nextHop) {
+        // 检查 nextHop 是否有路由（如果不是直连）
+        const nextHopRoute = this.routingTable.get(route.nextHop);
+        if (!nextHopRoute) {
+          // 这不一定是错误，nextHop 可能是直连的
+          logger.debug(
+            `Route to Edge ${targetEdgeId} uses nextHop ${route.nextHop} which has no route entry (might be direct)`
+          );
+        }
+      }
+    }
+
+    // 检测简单的循环路由（A -> B, B -> A）
+    for (const [targetEdgeId, route] of this.routingTable) {
+      if (route.type === RouteType.RELAY && route.nextHop) {
+        const nextHopRoute = this.routingTable.get(route.nextHop);
+        if (nextHopRoute && nextHopRoute.type === RouteType.RELAY) {
+          if (nextHopRoute.nextHop === targetEdgeId) {
+            errors.push(
+              `Circular route detected: Edge ${targetEdgeId} -> ${route.nextHop} -> ${targetEdgeId}`
+            );
+          }
+        }
+      }
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors
+    };
+  }
+
+  /**
+   * 获取路由表统计信息（使用共享验证器和缓存）
+   */
+  getRoutingTableStats(): {
+    totalRoutes: number;
+    directRoutes: number;
+    relayRoutes: number;
+    fallbackRoutes: number;
+    hubRoutes: number;
+    localRoutes: number;
+  } {
+    // 检查缓存
+    const now = Date.now();
+    if (this.statsCache && (now - this.statsCache.timestamp) < this.STATS_CACHE_TTL) {
+      return this.statsCache.stats;
+    }
+
+    // 使用共享验证器获取统计
+    const stats = RouteValidator.getRouteStats(this.routingTable);
+
+    // 更新缓存
+    this.statsCache = { stats, timestamp: now };
+
+    return stats;
   }
 
   /**
@@ -588,24 +775,6 @@ export class VoiceRoutingManager extends EventEmitter {
     }
     
     return true;
-  }
-
-  /**
-   * 更新路由
-   */
-  private updateRoute(route: RouteEntry): void {
-    const oldRoute = this.routingTable.get(route.targetEdgeId);
-    this.routingTable.set(route.targetEdgeId, route);
-    
-    if (oldRoute) {
-      logger.info(`Route updated: Edge ${route.targetEdgeId}, ` +
-                  `${oldRoute.type} -> ${route.type}, cost: ${route.cost.toFixed(2)}`);
-    } else {
-      logger.info(`Route added: Edge ${route.targetEdgeId}, ` +
-                  `type: ${route.type}, cost: ${route.cost.toFixed(2)}`);
-    }
-    
-    this.emit('route-changed', route.targetEdgeId, route, oldRoute);
   }
 
   /**

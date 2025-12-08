@@ -615,100 +615,6 @@ describe('Voice Routing Integration Tests', () => {
     });
   });
 
-  /**
-   * 3-Edge 中转模式测试
-   * 
-   * 由于当前测试环境只有 2 个 Edge，这些测试使用模拟方式验证：
-   * - NetworkTopologyManager 的路由计算逻辑
-   * - VoiceRoutingManager 的中转路由处理
-   * - 路由表推送机制
-   * 
-   * TODO: 扩展测试环境支持 3 个 Edge 后，实现真实的中转测试
-   */
-  describe('Phase 3: 3-Edge Relay Mode (Simulated)', () => {
-    /**
-     * 测试 NetworkTopologyManager 的 Dijkstra 路由计算
-     * 场景：Edge A <-> Edge C <-> Edge B (A-B 直连不通)
-     */
-    it('should compute relay route when direct path is poor', async () => {
-      // 这个测试验证 Hub 的 NetworkTopologyManager 能正确计算中转路由
-      // 由于是模拟测试，我们直接验证连接成功即可
-      const clients = await createClients(testEnv, [
-        { username: 'relay_compute_user', password: 'pass1', edge: 1, channelId: 0 },
-      ]);
-      
-      expect(clients[0].getStateManager().getSession()).toBeDefined();
-      
-      await cleanupClients(clients);
-    });
-
-    /**
-     * 测试路由表推送机制
-     * 验证 Hub 计算的路由表能正确推送给各 Edge
-     */
-    it('should push route table updates to edges', async () => {
-      const clients = await createClients(testEnv, [
-        { username: 'route_push_user', password: 'pass1', edge: 1, channelId: 0 },
-      ]);
-      
-      // 验证客户端已连接（说明 Hub-Edge 通信正常）
-      expect(clients[0].getStateManager().getSession()).toBeDefined();
-      
-      // TODO: 当实现完整的路由表推送后，验证 Edge 收到的路由表内容
-      // const routes = getEdgeRouteTable();
-      // expect(routes.length).toBeGreaterThan(0);
-      
-      await cleanupClients(clients);
-    });
-
-    /**
-     * 测试中转包转发
-     * 验证 Edge 作为中转节点时能正确转发语音包
-     */
-    it('should forward relay packets correctly', async () => {
-      // 使用 2-Edge 设置模拟中转场景
-      const clients = await createClients(testEnv, [
-        { username: 'relay_sender', password: 'pass1', edge: 1, channelId: 0 },
-        { username: 'relay_receiver', password: 'pass2', edge: 2, channelId: 0 },
-      ]);
-      
-      const [sender, receiver] = clients;
-      let receivedCount = 0;
-      const senderSession = sender.getStateManager().getSession()?.session || 0;
-      
-      receiver.on('voice', (data: any) => {
-        if (data.session === senderSession) {
-          receivedCount++;
-        }
-      });
-      
-      await sleep(1000);
-      
-      // 发送语音包
-      for (let i = 0; i < 5; i++) {
-        const voicePacket = createVoicePacket(4, 0, i);
-        await sender.getConnectionManager().sendVoicePacket(voicePacket);
-        await sleep(50);
-      }
-      
-      await sleep(2000);
-      
-      // 验证接收者收到语音包（即使是通过直连而非中转）
-      expect(receivedCount).toBeGreaterThan(0);
-      
-      await cleanupClients(clients);
-    });
-
-    /**
-     * 测试多跳中转限制
-     * 验证 maxRelayHops 配置正确限制中转跳数
-     */
-    it('should respect maxRelayHops configuration', async () => {
-      // maxRelayHops 默认为 1，表示只允许一跳中转
-      // TODO: 在 3-Edge 环境中验证多跳限制
-      expect(true).toBe(true);
-    });
-  });
 });
 
 describe('Voice Routing Stress Tests', () => {
@@ -887,6 +793,32 @@ describe('4-Edge Voice Routing Tests', () => {
     });
 
     /**
+     * 测试路由表推送机制（从 3-Edge 测试合并）
+     * 验证 Hub 计算的路由表能正确推送给各 Edge
+     */
+    it('should push route table updates to edges', async () => {
+      const clients = await createClients(testEnv, [
+        { username: 'route_push_user', password: 'pass1', edge: 1, channelId: 0 },
+      ]);
+      
+      // 验证客户端已连接（说明 Hub-Edge 通信正常）
+      expect(clients[0].getStateManager().getSession()).toBeDefined();
+      
+      // TODO: 当实现完整的路由表推送后，验证 Edge 收到的路由表内容
+      // 可以通过以下方式验证：
+      // 1. 从 Edge 获取路由表
+      // 2. 检查是否包含到其他 Edge 的路由
+      // 3. 验证路由类型和成本是否合理
+      // const routes = getEdgeRouteTable();
+      // expect(routes.size).toBeGreaterThan(0);
+      // expect(routes.has(2)).toBe(true);  // 应该有到 Edge2 的路由
+      // expect(routes.has(3)).toBe(true);  // 应该有到 Edge3 的路由
+      // expect(routes.has(4)).toBe(true);  // 应该有到 Edge4 的路由
+      
+      await cleanupClients(clients);
+    });
+
+    /**
      * 测试中间节点作为中转
      */
     it('should use intermediate edge as relay node', async () => {
@@ -929,10 +861,6 @@ describe('4-Edge Voice Routing Tests', () => {
      * 验证当直连质量差时，系统能切换到中转模式
      */
     it('should switch to relay mode when direct quality is poor', async () => {
-      // 这个测试模拟网络质量差的情况
-      // 由于本地环境难以模拟真实的网络质量差，
-      // 我们通过配置或模拟来验证路由切换逻辑
-
       const clients = await createClients(testEnv, [
         { username: 'poor_direct_sender', password: 'pass1', edge: 1, channelId: 0 },
         { username: 'poor_direct_relay', password: 'pass2', edge: 2, channelId: 0 }, // 作为中转节点
@@ -952,7 +880,9 @@ describe('4-Edge Voice Routing Tests', () => {
 
       await sleep(1000);
 
-      // 发送语音包
+      console.log('[ROUTE TEST] Phase 1: Testing direct mode with good quality');
+      
+      // 阶段1：良好质量下发送语音包（应该使用直连）
       for (let i = 0; i < 10; i++) {
         const voicePacket = createVoicePacket(4, 0, i);
         await sender.getConnectionManager().sendVoicePacket(voicePacket);
@@ -961,17 +891,69 @@ describe('4-Edge Voice Routing Tests', () => {
 
       await sleep(2000);
 
-      console.log(`[POOR QUALITY TEST] Sent 10 packets, received ${receivedCount}`);
+      const phase1Count = receivedCount;
+      console.log(`[ROUTE TEST] Phase 1 result: Sent 10, received ${phase1Count} (direct mode)`);
 
-      // 验证即使在"质量差"的情况下也能传输（实际本地质量好）
-      expect(receivedCount).toBeGreaterThan(5);
+      // 验证直连模式下的传输
+      expect(phase1Count).toBeGreaterThan(8);
 
-      // TODO: 当实现网络质量监控后，模拟Edge1->Edge4直连质量差
-      // 然后验证路由切换到 Edge1->Edge2->Edge3->Edge4 或类似路径
-      // const routeBefore = getEdgeRoute(1, 4); // 直连
-      // simulatePoorNetwork(1, 4);
-      // const routeAfter = getEdgeRoute(1, 4); // 中转
-      // expect(routeAfter.type).toBe('relay');
+      console.log('[ROUTE TEST] Phase 2: Degrading Edge1->Edge4 direct connection quality via Hub API');
+      
+      // 阶段2：通过 Hub 的 HTTP API 报告质量差
+      // Hub 监听在 testEnv.hubPort 上
+      const hubApiUrl = `http://localhost:${testEnv.hubPort}`;
+      
+      try {
+        // 使用 fetch 向 Hub 报告质量（模拟 Edge1 报告到 Edge4 质量差）
+        const response = await fetch(`${hubApiUrl}/api/test/reportQuality`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            edgeId: 1,
+            targetEdgeId: 4,
+            quality: {
+              rtt: 500,           // 高延迟 500ms  
+              packetLoss: 0.30,   // 30% 丢包
+              jitter: 200,        // 高抖动
+              samples: 100,
+            },
+          }),
+        });
+
+        if (!response.ok) {
+          console.warn(`[ROUTE TEST] Quality report via API failed: ${response.status}`);
+        } else {
+          console.log('[ROUTE TEST] Quality report sent successfully via API');
+        }
+      } catch (error) {
+        console.warn('[ROUTE TEST] Hub API not available, skipping quality report:', error);
+      }
+
+      // 等待 Hub 重新计算路由并推送到 Edge
+      console.log('[ROUTE TEST] Waiting for route table update...');
+      await sleep(3000);
+
+      console.log('[ROUTE TEST] Phase 3: Testing with degraded quality (should use relay if routing is enabled)');
+      
+      // 阶段3：在质量差的情况下发送语音包（应该使用中转，如果路由已启用）
+      const phase3Start = receivedCount;
+      for (let i = 10; i < 20; i++) {
+        const voicePacket = createVoicePacket(4, 0, i);
+        await sender.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(100);
+      }
+
+      await sleep(2000);
+
+      const phase3Count = receivedCount - phase3Start;
+      console.log(`[ROUTE TEST] Phase 3 result: Sent 10, received ${phase3Count}`);
+
+      // 验证在质量差的情况下仍然能传输
+      // 如果路由启用，应该通过中转；如果未启用，仍会使用直连（但可能通过TCP降级）
+      expect(phase3Count).toBeGreaterThan(5);
+
+      console.log('[ROUTE TEST] Test completed');
+      console.log(`[ROUTE TEST] Summary: Phase1=${phase1Count}/10 (baseline), Phase3=${phase3Count}/10 (after quality degradation)`);
 
       await cleanupClients(clients);
     });
@@ -1081,6 +1063,96 @@ describe('4-Edge Voice Routing Tests', () => {
 
       // 验证故障转移后仍能传输
       expect(totalReceived - initialReceived).toBeGreaterThan(3);
+
+      await cleanupClients(clients);
+    });
+
+    /**
+     * 测试中转包转发（从 3-Edge 测试合并）
+     * 验证 Edge 作为中转节点时能正确转发语音包
+     */
+    it('should forward relay packets correctly through intermediate edges', async () => {
+      const clients = await createClients(testEnv, [
+        { username: 'relay_sender', password: 'pass1', edge: 1, channelId: 0 },
+        { username: 'relay_intermediate1', password: 'pass2', edge: 2, channelId: 0 },
+        { username: 'relay_intermediate2', password: 'pass3', edge: 3, channelId: 0 },
+        { username: 'relay_receiver', password: 'pass4', edge: 4, channelId: 0 },
+      ]);
+      
+      const [sender, intermediate1, intermediate2, receiver] = clients;
+      let receivedCount = 0;
+      const senderSession = sender.getStateManager().getSession()?.session || 0;
+      
+      receiver.on('voice', (data: any) => {
+        if (data.session === senderSession) {
+          receivedCount++;
+        }
+      });
+      
+      await sleep(1000);
+      
+      // 发送语音包，应该能通过中转到达
+      for (let i = 0; i < 10; i++) {
+        const voicePacket = createVoicePacket(4, 0, i);
+        await sender.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(50);
+      }
+      
+      await sleep(2000);
+      
+      console.log(`[RELAY FORWARD TEST] Sent 10 packets, received ${receivedCount}`);
+      
+      // 验证接收者收到语音包（通过直连或中转）
+      expect(receivedCount).toBeGreaterThan(0);
+      
+      await cleanupClients(clients);
+    });
+
+    /**
+     * 测试多跳中转限制（从 3-Edge 测试合并）
+     * 验证 maxRelayHops 配置正确限制中转跳数
+     */
+    it('should respect maxRelayHops configuration limit', async () => {
+      // maxRelayHops 默认为 1，表示只允许一跳中转
+      // 在 4-Edge 环境中，可以测试跳数限制
+      const clients = await createClients(testEnv, [
+        { username: 'max_hop_sender', password: 'pass1', edge: 1, channelId: 0 },
+        { username: 'max_hop_intermediate', password: 'pass2', edge: 2, channelId: 0 },
+        { username: 'max_hop_receiver', password: 'pass3', edge: 4, channelId: 0 },
+      ]);
+
+      const [sender, intermediate, receiver] = clients;
+
+      let receivedCount = 0;
+      const senderSession = sender.getStateManager().getSession()?.session || 0;
+
+      receiver.on('voice', (data: any) => {
+        if (data.session === senderSession) {
+          receivedCount++;
+        }
+      });
+
+      await sleep(1000);
+
+      // 发送语音包
+      for (let i = 0; i < 5; i++) {
+        const voicePacket = createVoicePacket(4, 0, i);
+        await sender.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(50);
+      }
+
+      await sleep(2000);
+
+      console.log(`[MAX HOPS TEST] Sent 5 packets, received ${receivedCount}`);
+
+      // 验证语音包传输成功（配置允许的跳数内）
+      expect(receivedCount).toBeGreaterThan(0);
+
+      // TODO: 当实现路由表验证后，检查路由跳数是否符合 maxRelayHops 限制
+      // const route = getEdgeRoute(1, 4);
+      // if (route.type === 'relay') {
+      //   expect(route.hops).toBeLessThanOrEqual(1); // maxRelayHops = 1
+      // }
 
       await cleanupClients(clients);
     });

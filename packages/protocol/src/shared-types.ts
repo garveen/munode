@@ -9,6 +9,15 @@ import type { OCB2AES128 } from '@munode/common';
  * 客户端状态枚举
  * 与 Go 实现的状态机保持一致
  */
+/**
+ * 路由类型
+ */
+export enum RouteType {
+  DIRECT = 'direct',       // 直连
+  RELAY = 'relay',         // Edge 中转
+  FALLBACK = 'fallback',   // TCP 降级
+}
+
 export enum ClientState {
   Connected = 0,           // StateClientConnected - 客户端已连接
   ServerSentVersion = 1,   // StateServerSentVersion - 服务器已发送Version
