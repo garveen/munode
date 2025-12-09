@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { createLogger } from '@munode/common';
+import type { Logger } from 'winston';
 import {
   hubedge,
   mumbleproto,
@@ -8,8 +8,6 @@ import {
 import type { EdgeControlClient } from '../cluster/hub-client.js';
 import type { ClientManager } from '../client/client-manager.js';
 import type { MessageHandler } from '../message-handler.js';
-
-const logger = createLogger({ service: 'edge-relay-handler' });
 
 /**
  * 客户端消息中转处理器 (Edge 端)
@@ -24,18 +22,21 @@ export class ClientMessageRelayHandler extends EventEmitter {
   private clientManager: ClientManager;
   private messageHandler: MessageHandler;
   private edgeId: number;
+  private logger: Logger;
 
   constructor(
     hubClient: EdgeControlClient,
     clientManager: ClientManager,
     messageHandler: MessageHandler,
-    edgeId: number
+    edgeId: number,
+    logger: Logger
   ) {
     super();
     this.hubClient = hubClient;
     this.clientManager = clientManager;
     this.messageHandler = messageHandler;
     this.edgeId = edgeId;
+    this.logger = logger;
     
     this.setupEventHandlers();
   }
@@ -47,7 +48,7 @@ export class ClientMessageRelayHandler extends EventEmitter {
     // 监听来自 Hub 的中转消息
     this.hubClient.on('relay', (relay: hubedge.ClientMessageRelay) => {
       this.handleRelayFromHub(relay).catch((error) => {
-        logger.error('Error handling relay from Hub:', error);
+        this.logger.error('Error handling relay from Hub:', error);
       });
     });
   }
@@ -68,7 +69,7 @@ export class ClientMessageRelayHandler extends EventEmitter {
       // 解析 Mumble 消息
       const mumbleMessage = this.parseMumbleMessage(messageType, messageData);
       if (!mumbleMessage) {
-        logger.warn(`Failed to parse Mumble message type ${messageType}`);
+        this.logger.warn(`Failed to parse Mumble message type ${messageType}`);
         return;
       }
 
@@ -83,11 +84,11 @@ export class ClientMessageRelayHandler extends EventEmitter {
       // 发送到 Hub
       await this.hubClient.sendRelay(relay);
 
-      logger.debug(
+      this.logger.debug(
         `Relayed message from client to Hub: session=${sessionId}, type=${MessageType[messageType]}`
       );
     } catch (error) {
-      logger.error(`Error relaying message to Hub: session=${sessionId}`, error);
+      this.logger.error(`Error relaying message to Hub: session=${sessionId}`, error);
       throw error;
     }
   }
@@ -104,14 +105,14 @@ export class ClientMessageRelayHandler extends EventEmitter {
       // 检查客户端是否存在
       const client = this.clientManager.getClient(sessionId);
       if (!client) {
-        logger.warn(`Client not found for relay: session=${sessionId}`);
+        this.logger.warn(`Client not found for relay: session=${sessionId}`);
         return;
       }
 
       // 提取 Mumble 消息
       const { messageType, message } = this.extractMumbleMessage(relay);
       if (!messageType || !message) {
-        logger.warn('No valid Mumble message in relay');
+        this.logger.warn('No valid Mumble message in relay');
         return;
       }
 
@@ -120,11 +121,11 @@ export class ClientMessageRelayHandler extends EventEmitter {
       const messageData = (message as { serialize(): Uint8Array }).serialize();
       this.messageHandler.sendMessage(sessionId, messageType, Buffer.from(messageData));
 
-      logger.debug(
+      this.logger.debug(
         `Relayed message from Hub to client: session=${sessionId}, type=${MessageType[messageType]}`
       );
     } catch (error) {
-      logger.error('Error relaying message to client:', error);
+      this.logger.error('Error relaying message to client:', error);
       throw error;
     }
   }
@@ -195,11 +196,11 @@ export class ClientMessageRelayHandler extends EventEmitter {
         case MessageType.SuggestConfig:
           return mumbleproto.SuggestConfig.deserialize(messageData);
         default:
-          logger.warn(`Unsupported message type: ${messageType}`);
+          this.logger.warn(`Unsupported message type: ${messageType}`);
           return null;
       }
     } catch (error) {
-      logger.error(`Error parsing Mumble message type ${messageType}:`, error);
+      this.logger.error(`Error parsing Mumble message type ${messageType}:`, error);
       return null;
     }
   }
@@ -307,7 +308,7 @@ export class ClientMessageRelayHandler extends EventEmitter {
         relay.suggest_config = message as mumbleproto.SuggestConfig;
         break;
       default:
-        logger.warn(`Unsupported message type for relay: ${messageType}`);
+        this.logger.warn(`Unsupported message type for relay: ${messageType}`);
     }
 
     return relay;
@@ -436,10 +437,10 @@ export class ClientMessageRelayHandler extends EventEmitter {
 
       if (relays.length > 0) {
         await this.hubClient.sendRelayBatch(relays);
-        logger.debug(`Relayed ${relays.length} messages in batch to Hub`);
+        this.logger.debug(`Relayed ${relays.length} messages in batch to Hub`);
       }
     } catch (error) {
-      logger.error('Error relaying batch to Hub:', error);
+      this.logger.error('Error relaying batch to Hub:', error);
       throw error;
     }
   }

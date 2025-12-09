@@ -84,6 +84,7 @@ export class EdgeClusterManager {
           await this.joinCluster();
         },
       },
+      this.logger,
       {
         hubReconnectTimeout: 10000,
         hubReconnectInterval: 2000,

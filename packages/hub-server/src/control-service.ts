@@ -50,6 +50,7 @@ export class HubControlService {
   private edgeChannels = new Map<number, RPCChannel>(); // edge_id -> channel
   private _ninjaChannels: Set<number>; // Set of channel IDs that are ninja channels
   private _networkTopologyManager: NetworkTopologyManager; // 网络拓扑管理器
+  private isStopping = false; // 标记服务是否正在停止
 
   // 处理器实例 - 通过工厂获取
   private userStateHandler: IUserStateHandler;
@@ -197,6 +198,12 @@ export class HubControlService {
 
     // Handle requests
     this.server.on('request', (channel: RPCChannel, message: Message, respond: (result?: TypedRPCResponse, error?: { code: number; message: string }) => void) => {
+      // 如果服务正在停止，拒绝所有新请求
+      if (this.isStopping) {
+        respond(undefined, { code: -32000, message: 'Hub server is shutting down' });
+        return;
+      }
+      
       if (message.params) {
         this.typedServer.handleRequest(channel, message.params, respond);
       } else {
@@ -393,9 +400,26 @@ export class HubControlService {
    */
   async stop(): Promise<void> {
     logger.info('Stopping Hub control channel server');
+    this.isStopping = true; // 设置停止标志，拒绝新请求
+    
     // 停止网络拓扑管理器
     this._networkTopologyManager.stop();
+    
+    // 主动关闭所有 Edge 连接
+    logger.info(`Closing ${this.edgeChannels.size} edge connections`);
+    for (const [edgeId, channel] of this.edgeChannels.entries()) {
+      try {
+        channel.close();
+      } catch (error) {
+        logger.warn(`Error closing edge ${edgeId} channel:`, error);
+      }
+    }
+    this.edgeChannels.clear();
+    
+    // 关闭服务器
     this.server.close();
+    
+    logger.info('Hub control channel server stopped');
   }
 
   

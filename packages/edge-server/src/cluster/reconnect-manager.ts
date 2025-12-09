@@ -8,6 +8,7 @@
  */
 
 import { EventEmitter } from 'events';
+import type { Logger } from 'winston';
 
 export interface ReconnectConfig {
   hubReconnectTimeout: number; // Hub重连超时（毫秒）
@@ -27,13 +28,15 @@ export interface ReconnectCallbacks {
 export class ReconnectManager extends EventEmitter {
   private config: ReconnectConfig;
   private callbacks: ReconnectCallbacks;
+  private logger: Logger;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
   private isReconnecting = false;
 
-  constructor(callbacks: ReconnectCallbacks, config: Partial<ReconnectConfig> = {}) {
+  constructor(callbacks: ReconnectCallbacks, logger: Logger, config: Partial<ReconnectConfig> = {}) {
     super();
     this.callbacks = callbacks;
+    this.logger = logger;
     this.config = {
       hubReconnectTimeout: 10000, // 10秒
       hubReconnectInterval: 2000, // 2秒
@@ -47,11 +50,11 @@ export class ReconnectManager extends EventEmitter {
    */
   async handleHubDisconnect(): Promise<boolean> {
     if (this.isReconnecting) {
-      console.warn('Hub reconnect already in progress');
+      this.logger.warn('Hub reconnect already in progress');
       return false;
     }
 
-    console.warn('Hub connection lost, attempting reconnect');
+    this.logger.warn('Hub connection lost, attempting reconnect');
     this.isReconnecting = true;
     this.reconnectAttempts = 0;
     this.emit('reconnect-started');
@@ -71,7 +74,7 @@ export class ReconnectManager extends EventEmitter {
           this.reconnectAttempts++;
           const elapsed = Date.now() - startTime;
 
-          console.info(`Hub reconnect attempt ${this.reconnectAttempts} (elapsed: ${elapsed}ms)`);
+          this.logger.info(`Hub reconnect attempt ${this.reconnectAttempts} (elapsed: ${elapsed}ms)`);
 
           this.callbacks
             .connectToHub()
@@ -82,7 +85,7 @@ export class ReconnectManager extends EventEmitter {
               this.isReconnecting = false;
 
               const totalTime = Date.now() - startTime;
-              console.info(
+              this.logger.info(
                 `Hub reconnected successfully after ${this.reconnectAttempts} attempts (${totalTime}ms)`
               );
 
@@ -94,7 +97,7 @@ export class ReconnectManager extends EventEmitter {
               resolve(true);
             })
             .catch((error: unknown) => {
-              console.debug('Hub reconnect attempt failed:', error);
+              this.logger.debug('Hub reconnect attempt failed:', error);
               this.emit('reconnect-attempt-failed', {
                 attempt: this.reconnectAttempts,
                 error: error instanceof Error ? error.message : String(error),
@@ -104,7 +107,7 @@ export class ReconnectManager extends EventEmitter {
       });
     } catch (_error) {
       // 重连超时，执行完全断开
-      console.error(
+      this.logger.error(
         `Hub reconnect failed after ${this.config.hubReconnectTimeout}ms, performing full disconnect`
       );
 
@@ -122,46 +125,46 @@ export class ReconnectManager extends EventEmitter {
    * 执行完全断开流程
    */
   async performFullDisconnect(): Promise<void> {
-    console.warn('=== Starting full disconnect procedure ===');
+    this.logger.warn('=== Starting full disconnect procedure ===');
     this.emit('full-disconnect-started');
 
     try {
       // 1. 通知所有客户端（可选，取决于ClientManager的实现）
-      console.info('Step 1/5: Notifying clients');
+      this.logger.info('Step 1/5: Notifying clients');
       // this.notifyAllClients('Server is reconnecting, please wait...');
 
       // 2. 断开所有Peer连接
-      console.info('Step 2/5: Disconnecting from peers');
+      this.logger.info('Step 2/5: Disconnecting from peers');
       this.callbacks.disconnectAllPeers();
 
       // 3. 断开所有客户端
-      console.info('Step 3/5: Disconnecting clients');
+      this.logger.info('Step 3/5: Disconnecting clients');
       this.callbacks.disconnectAllClients();
 
       // 4. 断开Hub
-      console.info('Step 4/5: Disconnecting from Hub');
+      this.logger.info('Step 4/5: Disconnecting from Hub');
       this.callbacks.disconnectFromHub();
 
       // 5. 清理状态
-      console.info('Step 5/5: Clearing state');
+      this.logger.info('Step 5/5: Clearing state');
       this.callbacks.clearState();
 
-      console.warn('=== Full disconnect complete ===');
+      this.logger.warn('=== Full disconnect complete ===');
       this.emit('full-disconnect-complete');
 
       // 6. 延迟后重新加入
-      console.info(`Waiting ${this.config.rejoinDelay}ms before rejoin...`);
+      this.logger.info(`Waiting ${this.config.rejoinDelay}ms before rejoin...`);
       await this.sleep(this.config.rejoinDelay);
 
-      console.info('=== Starting rejoin procedure ===');
+      this.logger.info('=== Starting rejoin procedure ===');
       this.emit('rejoin-started');
 
       await this.callbacks.joinCluster();
 
-      console.info('=== Rejoin complete ===');
+      this.logger.info('=== Rejoin complete ===');
       this.emit('rejoin-complete');
     } catch (error) {
-      console.error('Failed to rejoin cluster:', error);
+      this.logger.error('Failed to rejoin cluster:', error);
       this.emit('rejoin-failed', error instanceof Error ? error.message : String(error));
       throw error;
     }

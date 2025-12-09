@@ -45,7 +45,7 @@ export class VoiceManager {
     this.voiceTransport = voiceTransport;
     
     // 初始化语音路由管理器
-    this.voiceRoutingManager = new VoiceRoutingManager(config);
+    this.voiceRoutingManager = new VoiceRoutingManager(config, logger);
     this.setupRoutingManagerEvents();
     
     // 启动 TCP 恢复检查

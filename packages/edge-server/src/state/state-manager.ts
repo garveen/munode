@@ -1,12 +1,10 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from 'winston';
 import type { BanData } from '@munode/protocol';
 import * as crypto from 'crypto';
 import * as ipaddr from 'ipaddr.js';
 import type { ChannelManager } from '../models/channel.js';
 import type {ChannelData} from '@munode/protocol';
 import type { ChannelInfo } from '@munode/protocol';
-
-const logger = createLogger({ service: 'edge-state-manager' });
 
 // ==================
 // 类型定义
@@ -104,8 +102,10 @@ class BanCache {
   private bans: Map<number, BanData> = new Map();
   private certBans: Map<string, number> = new Map(); // hash -> ban.id
   private ipBans: BanData[] = []; // IP 封禁需要遍历检查
+  private logger: Logger;
 
-  constructor(initialBans: BanData[] = []) {
+  constructor(logger: Logger, initialBans: BanData[] = []) {
+    this.logger = logger;
     for (const ban of initialBans) {
       this.add(ban);
     }
@@ -173,7 +173,7 @@ class BanCache {
         }
       }
     } catch (error) {
-      logger.warn('Invalid IP address', {
+      this.logger.warn('Invalid IP address', {
         ip,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -214,7 +214,7 @@ class BanCache {
       // 使用 CIDR 匹配
       return ip.match(bannedIP, cidr);
     } catch (error) {
-      logger.warn('IP ban match error', {
+      this.logger.warn('IP ban match error', {
         error: error instanceof Error ? error.message : String(error),
         banId: ban.id,
       });
@@ -255,17 +255,19 @@ export class EdgeStateManager {
 
   // ChannelManager reference (required, all channel data managed by ChannelManager)
   private channelManager: ChannelManager;
+  private logger: Logger;
 
-  constructor(channelManager: ChannelManager) {
-    this.bans = new BanCache();
+  constructor(channelManager: ChannelManager, logger: Logger) {
+    this.bans = new BanCache(logger);
     this.channelManager = channelManager;
+    this.logger = logger;
   }
 
   /**
    * 加载完整快照
    */
   loadSnapshot(snapshot: FullSnapshot): void {
-    logger.info('Loading snapshot...', {
+    this.logger.info('Loading snapshot...', {
       channels: snapshot.channels?.length || 0,
       channelLinks: snapshot.channelLinks?.length || 0,
       acls: snapshot.acls?.length || 0,
@@ -278,7 +280,7 @@ export class EdgeStateManager {
     // Load channels - through ChannelManager
     if (snapshot.channels && Array.isArray(snapshot.channels)) {
       for (const channel of snapshot.channels) {
-        logger.debug(`Loading channel from snapshot: ${JSON.stringify(channel)}`);
+        this.logger.debug(`Loading channel from snapshot: ${JSON.stringify(channel)}`);
         const channelInfo = channelDataToInfo(channel);
         this.channelManager.addOrUpdateChannel(channelInfo);
       }
@@ -303,9 +305,9 @@ export class EdgeStateManager {
 
     // 加载封禁
     if (snapshot.bans && Array.isArray(snapshot.bans)) {
-      this.bans = new BanCache(snapshot.bans);
+      this.bans = new BanCache(this.logger, snapshot.bans);
     } else {
-      this.bans = new BanCache();
+      this.bans = new BanCache(this.logger);
     }
 
     // 加载配置
@@ -318,7 +320,7 @@ export class EdgeStateManager {
     this.lastSyncTimestamp = snapshot.timestamp || 0;
     this.lastSyncSequence = snapshot.sequence || 0;
 
-    logger.info('Snapshot loaded successfully', {
+    this.logger.info('Snapshot loaded successfully', {
       channels: this.channelManager.getChannelCount(),
       acls: this.acls.size,
       bans: this.bans.size(),
@@ -330,7 +332,7 @@ export class EdgeStateManager {
    * 处理增量更新
    */
   handleUpdate(update: SyncUpdate): void {
-    logger.debug('Handling update', { type: update.type, sequence: update.sequence });
+    this.logger.debug('Handling update', { type: update.type, sequence: update.sequence });
 
     // 将 UpdateType 转换为字符串进行匹配
     const typeStr = typeof update.type === 'string' ? update.type : String(update.type);
@@ -375,7 +377,7 @@ export class EdgeStateManager {
           const data = update.data as { aclId: number };
           if (data.aclId > 0) {
             // TODO: 实现单个ACL删除
-            logger.warn(`Single ACL delete not implemented: ${data.aclId}`);
+            this.logger.warn(`Single ACL delete not implemented: ${data.aclId}`);
           }
           break;
         }
@@ -401,10 +403,10 @@ export class EdgeStateManager {
         }
 
         default:
-          logger.warn('Unknown update type', { type: update.type, typeStr });
+          this.logger.warn('Unknown update type', { type: update.type, typeStr });
       }
     } catch (error) {
-      logger.error('Failed to process sync update:', {
+      this.logger.error('Failed to process sync update:', {
         type: typeStr,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -484,7 +486,7 @@ export class EdgeStateManager {
     }
     this.channelRemoteUsers.get(channel_id).add(edge_id);
     
-    logger.debug(`Added remote user: session=${session_id}, edge=${edge_id}, channel=${channel_id}`);
+    this.logger.debug(`Added remote user: session=${session_id}, edge=${edge_id}, channel=${channel_id}`);
   }
 
   /**
@@ -510,7 +512,7 @@ export class EdgeStateManager {
       }
       
       this.remoteUsers.delete(session_id);
-      logger.debug(`Removed remote user: session=${session_id}, edge=${user.edge_id}, channel=${user.channel_id}`);
+      this.logger.debug(`Removed remote user: session=${session_id}, edge=${user.edge_id}, channel=${user.channel_id}`);
     }
   }
 
@@ -547,7 +549,7 @@ export class EdgeStateManager {
       }
       this.channelRemoteUsers.get(new_channel_id).add(user.edge_id);
       
-      logger.debug(`Updated remote user channel: session=${session_id}, edge=${user.edge_id}, ${old_channel_id} -> ${new_channel_id}`);
+      this.logger.debug(`Updated remote user channel: session=${session_id}, edge=${user.edge_id}, ${old_channel_id} -> ${new_channel_id}`);
     }
   }
 

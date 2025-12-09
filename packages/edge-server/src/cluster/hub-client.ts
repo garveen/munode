@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { createHmac } from 'crypto';
-import { createLogger } from '@munode/common';
+import type { Logger } from 'winston';
 import { ControlChannelClient, ControlChannelClientConfig, type ChannelNotificationParams } from '@munode/protocol';
 import type {
   RPCParams,
@@ -15,8 +15,6 @@ import type {
 } from '@munode/protocol';
 import type { EdgeConfig } from '../types.js';
 
-const logger = createLogger({ service: 'edge-control-client' });
-
 /**
  * Edge 控制通道客户端
  * 连接到 Hub 的控制服务，处理集群协调
@@ -24,16 +22,19 @@ const logger = createLogger({ service: 'edge-control-client' });
 export class EdgeControlClient extends EventEmitter {
   private client: ControlChannelClient;
   private config: EdgeConfig;
+  private logger: Logger;
   private connected = false;
   private reconnectTimer?: NodeJS.Timeout;
   private heartbeatTimer?: NodeJS.Timeout;
   private registered = false;
+  private isStopping = false; // 标记是否正在停止，避免重连
 
   private useExternalClient = false;
 
-  constructor(config: EdgeConfig, client?: ControlChannelClient) {
+  constructor(config: EdgeConfig, logger: Logger, client?: ControlChannelClient) {
     super();
     this.config = config;
+    this.logger = logger;
 
     if (client) {
       this.client = client;
@@ -59,7 +60,7 @@ export class EdgeControlClient extends EventEmitter {
     }
 
     try {
-      logger.info(`Connecting to Hub control service at ${this.clientConfig.host}:${this.clientConfig.port}`);
+      this.logger.info(`Connecting to Hub control service at ${this.clientConfig.host}:${this.clientConfig.port}`);
 
       await this.client.connect();
       this.connected = true;
@@ -72,8 +73,11 @@ export class EdgeControlClient extends EventEmitter {
 
       this.emit('connected');
     } catch (error) {
-      logger.error('Failed to connect to Hub control service:', error);
-      this.scheduleReconnect();
+      this.logger.error('Failed to connect to Hub control service:', error);
+      // 只在非停止状态下重连
+      if (!this.isStopping) {
+        this.scheduleReconnect();
+      }
       throw error;
     }
   }
@@ -82,6 +86,7 @@ export class EdgeControlClient extends EventEmitter {
    * 断开连接
    */
   disconnect(): void {
+    this.isStopping = true; // 设置停止标志，阻止重连
     this.connected = false;
     this.registered = false;
 
@@ -122,13 +127,13 @@ export class EdgeControlClient extends EventEmitter {
 
     try {
       // 第一阶段：请求挑战码
-      logger.info('Requesting challenge from Hub...');
+      this.logger.info('Requesting challenge from Hub...');
       const challengeResponse = await this.client.call('edge.register', registerParams);
       
       // 如果 Hub 返回了 challenge，进行第二阶段认证
       if (!challengeResponse.success && challengeResponse.challenge) {
         const challenge = challengeResponse.challenge;
-        logger.info('Received challenge, computing response...');
+        this.logger.info('Received challenge, computing response...');
         
         // 计算 HMAC 签名
         const hmacSecret = this.config.hubServer?.hmacSecret;
@@ -145,7 +150,7 @@ export class EdgeControlClient extends EventEmitter {
           challenge_response: challengeResponseValue,
         };
         
-        logger.info('Submitting challenge response...');
+        this.logger.info('Submitting challenge response...');
         const finalResponse = await this.client.call('edge.register', authParams);
         
         if (!finalResponse.success) {
@@ -153,18 +158,18 @@ export class EdgeControlClient extends EventEmitter {
         }
         
         this.registered = true;
-        logger.info(`Registered with Hub: ${JSON.stringify(finalResponse)}`);
+        this.logger.info(`Registered with Hub: ${JSON.stringify(finalResponse)}`);
         this.emit('registered', finalResponse);
       } else if (challengeResponse.success) {
         // Hub 未启用认证，直接注册成功
         this.registered = true;
-        logger.info(`Registered with Hub (no auth): ${JSON.stringify(challengeResponse)}`);
+        this.logger.info(`Registered with Hub (no auth): ${JSON.stringify(challengeResponse)}`);
         this.emit('registered', challengeResponse);
       } else {
         throw new Error(challengeResponse.error || 'Registration failed');
       }
     } catch (error) {
-      logger.error('Registration failed:', error);
+      this.logger.error('Registration failed:', error);
       throw error;
     }
   }
@@ -199,7 +204,7 @@ export class EdgeControlClient extends EventEmitter {
 
       this.emit('heartbeat', response);
     } catch (error) {
-      logger.error('Heartbeat failed:', error);
+      this.logger.error('Heartbeat failed:', error);
       this.emit('heartbeatFailed', error);
     }
   }
@@ -225,7 +230,8 @@ export class EdgeControlClient extends EventEmitter {
    * 调度重连
    */
   private scheduleReconnect(): void {
-    if (this.reconnectTimer || !this.config.hubServer) {
+    // 如果正在停止，不要重连
+    if (this.isStopping || this.reconnectTimer || !this.config.hubServer) {
       return;
     }
 
@@ -242,20 +248,23 @@ export class EdgeControlClient extends EventEmitter {
    */
   private setupEventHandlers(): void {
     this.client.on('connect', () => {
-      logger.info('Connected to Hub control service');
+      this.logger.info('Connected to Hub control service');
       this.connected = true;
       this.emit('connected');
     });
 
     this.client.on('disconnect', () => {
-      logger.info('Disconnected from Hub control service');
+      this.logger.info('Disconnected from Hub control service');
       this.connected = false;
       this.registered = false;
-      this.scheduleReconnect();
+      // 只在非停止状态下重连
+      if (!this.isStopping) {
+        this.scheduleReconnect();
+      }
     });
 
     this.client.on('error', (error) => {
-      logger.error('Control client error:', error);
+      this.logger.error('Control client error:', error);
       this.emit('error', error);
     });
 
@@ -312,7 +321,7 @@ export class EdgeControlClient extends EventEmitter {
         break;
       }
       default:
-        logger.warn('Unknown request method:', method);
+        this.logger.warn('Unknown request method:', method);
         respond({ success: false, error: 'Unknown method' });
     }
   }  /**
@@ -357,10 +366,10 @@ export class EdgeControlClient extends EventEmitter {
           break;
 
         default:
-          logger.debug('Notification forwarded to upper layer:', message.method);
+          this.logger.debug('Notification forwarded to upper layer:', message.method);
       }
     } catch (error) {
-      logger.error('Error handling incoming notification:', error);
+      this.logger.error('Error handling incoming notification:', error);
     }
   }
 
@@ -382,7 +391,7 @@ export class EdgeControlClient extends EventEmitter {
       const response = await this.client.call('edge.allocateSessionId', params);
       return response.session_id;
     } catch (error) {
-      logger.error('Failed to allocate session ID:', error);
+      this.logger.error('Failed to allocate session ID:', error);
       throw error;
     }
   }
@@ -415,7 +424,7 @@ export class EdgeControlClient extends EventEmitter {
       };
       await this.client.call('edge.reportSession', params);
     } catch (error) {
-      logger.error('Failed to report session:', error);
+      this.logger.error('Failed to report session:', error);
     }
   }
 
@@ -439,7 +448,7 @@ export class EdgeControlClient extends EventEmitter {
       };
       await this.client.call('edge.syncVoiceTarget', params);
     } catch (error) {
-      logger.error('Failed to sync voice target:', error);
+      this.logger.error('Failed to sync voice target:', error);
     }
   }
 
@@ -463,7 +472,7 @@ export class EdgeControlClient extends EventEmitter {
       };
       await this.client.call('edge.routeVoice', params);
     } catch (error) {
-      logger.error('Failed to route voice:', error);
+      this.logger.error('Failed to route voice:', error);
     }
   }
 
@@ -478,7 +487,7 @@ export class EdgeControlClient extends EventEmitter {
     try {
       return await this.client.call('edge.fullSync', {});
     } catch (error) {
-      logger.error('Failed to request full sync:', error);
+      this.logger.error('Failed to request full sync:', error);
       throw error;
     }
   }
@@ -495,7 +504,7 @@ export class EdgeControlClient extends EventEmitter {
       const response = await this.client.call('edge.getChannels', {});
       return response.channels || [];
     } catch (error) {
-      logger.error('Failed to get channels:', error);
+      this.logger.error('Failed to get channels:', error);
       throw error;
     }
   }
@@ -513,7 +522,7 @@ export class EdgeControlClient extends EventEmitter {
       const response = await this.client.call('edge.getACLs', params);
       return response.acls || [];
     } catch (error) {
-      logger.error('Failed to get ACLs:', error);
+      this.logger.error('Failed to get ACLs:', error);
       throw error;
     }
   }
@@ -531,7 +540,7 @@ export class EdgeControlClient extends EventEmitter {
       const response = await this.client.call('edge.saveChannel', params);
       return response.channel_id;
     } catch (error) {
-      logger.error('Failed to save channel:', error);
+      this.logger.error('Failed to save channel:', error);
       throw error;
     }
   }
@@ -560,7 +569,7 @@ export class EdgeControlClient extends EventEmitter {
       const response = await this.client.call('edge.saveACL', params);
       return response.aclIds;
     } catch (error) {
-      logger.error('Failed to save ACL:', error);
+      this.logger.error('Failed to save ACL:', error);
       throw error;
     }
   }
@@ -577,7 +586,7 @@ export class EdgeControlClient extends EventEmitter {
       const params: RPCParams<'edge.adminOperation'> = { operation, data };
       return await this.client.call('edge.adminOperation', params);
     } catch (error) {
-      logger.error('Failed to execute admin operation:', error);
+      this.logger.error('Failed to execute admin operation:', error);
       throw error;
     }
   }
@@ -603,10 +612,10 @@ export class EdgeControlClient extends EventEmitter {
       };
 
       const result = await this.client.call('edge.reportQuality', params);
-      logger.debug(`Reported quality to Edge ${targetEdgeId}:`, quality);
+      this.logger.debug(`Reported quality to Edge ${targetEdgeId}:`, quality);
       return result;
     } catch (error) {
-      logger.error(`Failed to report quality to Edge ${targetEdgeId}:`, error);
+      this.logger.error(`Failed to report quality to Edge ${targetEdgeId}:`, error);
       throw error;
     }
   }
@@ -627,14 +636,14 @@ export class EdgeControlClient extends EventEmitter {
    */
   notify(method: string, params?: unknown): void {
     if (!this.isConnected()) {
-      logger.warn(`Cannot send notification ${method}: not connected to Hub`);
+      this.logger.warn(`Cannot send notification ${method}: not connected to Hub`);
       return;
     }
 
     try {
       this.client.notify(method, params as ChannelNotificationParams);
     } catch (error) {
-      logger.error(`Failed to send notification ${method}:`, error);
+      this.logger.error(`Failed to send notification ${method}:`, error);
     }
   }
 
@@ -652,7 +661,7 @@ export class EdgeControlClient extends EventEmitter {
     try {
       return await this.client.call(method, params);
     } catch (error) {
-      logger.error(`Failed to call ${method}:`, error);
+      this.logger.error(`Failed to call ${method}:`, error);
       throw error;
     }
   }
@@ -741,7 +750,7 @@ export class EdgeControlClient extends EventEmitter {
   async sendRelay(relay: unknown): Promise<void> {
     // TODO: 实现通过 WebSocket 发送 ClientMessageRelay
     // 当前暂时通过 RPC 模拟
-    logger.debug(`Sending relay to Hub: session=${typeof relay === 'object' && relay !== null && 'session_id' in relay ? (relay as { session_id: unknown }).session_id : 'unknown'}`);
+    this.logger.debug(`Sending relay to Hub: session=${typeof relay === 'object' && relay !== null && 'session_id' in relay ? (relay as { session_id: unknown }).session_id : 'unknown'}`);
     this.emit('relay', relay);
   }
 

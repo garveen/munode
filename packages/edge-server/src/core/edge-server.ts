@@ -92,7 +92,7 @@ export class EdgeServer extends EventEmitter {
         // 状态管理器会自动清理
       },
     });
-    this.hubClient = new EdgeControlClient(this.config, this.clusterManager.getHubClient());
+    this.hubClient = new EdgeControlClient(this.config, this.logger, this.clusterManager.getHubClient());
 
     // 初始化语音 UDP 传输（集群模式下启用）
     const voicePort = this.config.network.port + 1; // 使用主端口+1作为语音端口

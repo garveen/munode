@@ -1,9 +1,7 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from 'winston';
 import { LRUCache } from 'lru-cache';
 import * as ipaddr from 'ipaddr.js';
 import type { BanInfo, BanCheckResult } from '../types.js';
-
-const logger = createLogger({ service: 'ban-manager' });
 
 /**
  * 封禁管理系统
@@ -16,10 +14,13 @@ export class BanManager {
   private certBans: Set<string>;
   private nextId = 1;
   private initialized = false;
+  private logger: Logger;
 
   constructor(
+    logger: Logger,
     private cacheSize = 1024
   ) {
+    this.logger = logger;
     this.bans = new Map<number, BanInfo>();
     this.certBans = new Set<string>();
 
@@ -48,7 +49,7 @@ export class BanManager {
     await this.cleanExpiredBans();
 
     this.initialized = true;
-    logger.info('BanManager initialized (memory-only)', { cacheSize: this.cacheSize });
+    this.logger.info('BanManager initialized (memory-only)', { cacheSize: this.cacheSize });
   }
 
   /**
@@ -145,7 +146,7 @@ export class BanManager {
     }
 
     // 审计日志
-    logger.info({
+    this.logger.info({
       action: 'ban_add',
       operator: ban.createdBy,
       target: ban.address || ban.hash || ban.name,
@@ -154,7 +155,7 @@ export class BanManager {
       timestamp: Date.now(),
     });
 
-    logger.info(`Added ban #${banId}:`, ban);
+    this.logger.info(`Added ban #${banId}:`, ban);
 
     return banId;
   }
@@ -176,7 +177,7 @@ export class BanManager {
       this.temporaryBans.delete(`ip:${ban.address}`);
     }
 
-    logger.info(`Removed ban #${banId}`);
+    this.logger.info(`Removed ban #${banId}`);
 
     return true;
   }
@@ -215,7 +216,7 @@ export class BanManager {
     }
 
     if (cleaned > 0) {
-      logger.info(`Cleaned ${cleaned} expired bans`);
+      this.logger.info(`Cleaned ${cleaned} expired bans`);
     }
 
     return cleaned;
@@ -229,7 +230,7 @@ export class BanManager {
     this.temporaryBans.clear();
     this.certBans.clear();
 
-    logger.warn('All bans purged');
+    this.logger.warn('All bans purged');
   }
 
   /**
@@ -270,7 +271,7 @@ export class BanManager {
    */
   async close(): Promise<void> {
     // 内存实现不需要清理资源
-    logger.info('BanManager closed (memory-only)');
+    this.logger.info('BanManager closed (memory-only)');
   }
 
   // ===== 私有方法 =====
@@ -313,7 +314,7 @@ export class BanManager {
       // 精确匹配
       return addr.toString() === banAddr.toString();
     } catch (err) {
-      logger.error('IP parse error:', err);
+      this.logger.error('IP parse error:', err);
       return false;
     }
   }

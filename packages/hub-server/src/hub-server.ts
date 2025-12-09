@@ -29,6 +29,7 @@ export class HubServer {
   private webApiService?: WebApiService;
   private factory: HubHandlerFactory;
   private started = false;
+  private stopping = false; // 跟踪是否正在停止
 
   constructor(config: HubConfig) {
     // 应用默认值
@@ -161,20 +162,21 @@ export class HubServer {
    * 停止 Hub Server
    */
   async stop(): Promise<void> {
-    if (!this.started) {
+    if (!this.started || this.stopping) {
       return;
     }
 
     try {
+      this.stopping = true;
       logger.info('Stopping Hub Server...');
+
+      // 停止清理任务
+      this.stopCleanupTasks();
 
       // 停止 Web API 服务
       if (this.webApiService) {
         await this.webApiService.stop();
       }
-
-      // 停止控制信道服务
-      await this.controlService.stop();
 
       // 停止语音 UDP 传输
       if (this.voiceTransport) {
@@ -182,18 +184,23 @@ export class HubServer {
         logger.info('Voice UDP transport stopped');
       }
 
-      // 停止清理任务
-      this.stopCleanupTasks();
+      // 停止控制信道服务（这会触发 Edge 断开连接）
+      await this.controlService.stop();
 
-      // 等待一小段时间确保所有数据库操作完成
-      await new Promise(resolve => setTimeout(resolve, 200));
+      // 等待足够长的时间确保：
+      // 1. 所有 Edge 客户端收到断开通知
+      // 2. 所有进行中的数据库操作完成
+      // 3. 所有 RPC 调用完成
+      await new Promise(resolve => setTimeout(resolve, 500));
 
       // 关闭数据库连接
       await this.database.close();
 
       this.started = false;
+      this.stopping = false;
       logger.info('Hub Server stopped');
     } catch (error) {
+      this.stopping = false;
       logger.error('Error stopping Hub Server:', error);
       throw error;
     }

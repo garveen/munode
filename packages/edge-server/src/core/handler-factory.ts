@@ -72,7 +72,7 @@ export class HandlerFactory {
     this.messageHandler.setClientManager(this.clientManager); // 设置 ClientManager 引用
     this.voiceRouter = new VoiceRouter(config, logger);
     this.authManager = new AuthManager(config, logger, hubClient);
-    this.banManager = new BanManager(1024);
+    this.banManager = new BanManager(logger, 1024);
     this.contextActions = new ContextActions();
     this.permissionManager = new PermissionManager(logger);
     this.aclMap = new Map();
@@ -82,7 +82,7 @@ export class HandlerFactory {
     this.voiceRouter.setChannelManager(this.channelManager);
     
     // 初始化状态管理器（集群模式）
-    this.stateManager = new EdgeStateManager(this.channelManager);
+    this.stateManager = new EdgeStateManager(this.channelManager, logger);
 
     // 初始化处理器
     this.protocolHandlers = new ProtocolHandlers(this);

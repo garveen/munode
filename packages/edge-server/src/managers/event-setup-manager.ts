@@ -535,7 +535,7 @@ export class EventSetupManager {
         }
         // 处理用户事件
         else if (message.method === 'hub.userJoined') {
-          console.error(`[EDGE-DEBUG] Received hub.userJoined notification: ${JSON.stringify(message.params)}`);
+          logger.debug(`[EDGE-DEBUG] Received hub.userJoined notification: ${JSON.stringify(message.params)}`);
           this.hubDataManager.handleRemoteUserJoined(message.params);
         } else if (message.method === 'hub.userLeft') {
           this.hubDataManager.handleRemoteUserLeft(message.params);

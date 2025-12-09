@@ -1,6 +1,6 @@
 import { resolve } from 'path';
 import { EdgeConfig } from './types.js';
-import { loadConfig } from '@munode/common';
+import { loadConfig, logger } from '@munode/common';
 
 /**
  * 加载 Edge Server 配置
@@ -70,7 +70,7 @@ export async function loadEdgeConfig(configPath?: string): Promise<EdgeConfig> {
       const userConfig = await loadConfig<Partial<EdgeConfig>>(resolve(configPath));
       return { ...defaultConfig, ...userConfig };
     } catch (error) {
-      console.warn(`Failed to load config from ${configPath}:`, error);
+      logger.warn(`Failed to load config from ${configPath}:`, error);
     }
   }
 

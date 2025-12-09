@@ -10,7 +10,7 @@
  */
 
 import { EventEmitter } from 'events';
-import { createLogger } from '@munode/common';
+import type { Logger } from 'winston';
 import {
   DEFAULT_ROUTING_POLICY,
   DEFAULT_LOCAL_DECISION_CONFIG,
@@ -28,8 +28,6 @@ import type {
   EdgeConnectionQuality,
 } from '../types.js';
 import { RouteType } from '../types.js';
-
-const logger = createLogger({ service: 'voice-routing-manager' });
 
 /**
  * 中转统计信息
@@ -77,6 +75,7 @@ export class VoiceRoutingManager extends EventEmitter {
   private config: EdgeConfig;
   private voiceRoutingConfig: Required<EdgeVoiceRoutingConfig>;
   private serverId: number;
+  private logger: Logger;
   
   // 路由表: targetEdgeId -> RouteEntry
   private routingTable: Map<number, RouteEntry> = new Map();
@@ -121,10 +120,11 @@ export class VoiceRoutingManager extends EventEmitter {
   private statsCache: { stats: any; timestamp: number } | null = null;
   private readonly STATS_CACHE_TTL = 3000; // 3秒缓存
 
-  constructor(config: EdgeConfig) {
+  constructor(config: EdgeConfig, logger: Logger) {
     super();
     this.config = config;
     this.serverId = config.server_id;
+    this.logger = logger;
     
     // 合并配置
     this.voiceRoutingConfig = this.mergeConfig(this.config.voiceRouting);
@@ -132,7 +132,7 @@ export class VoiceRoutingManager extends EventEmitter {
     // 初始化中转统计
     this.relayStats = this.initRelayStats();
     
-    logger.info(`VoiceRoutingManager initialized for Edge ${this.serverId}`);
+    this.logger.info(`VoiceRoutingManager initialized for Edge ${this.serverId}`);
   }
 
   /**
@@ -181,10 +181,10 @@ export class VoiceRoutingManager extends EventEmitter {
    * 启动路由管理器
    */
   async start(): Promise<void> {
-    logger.info(`Starting VoiceRoutingManager, enabled: ${this._isEnabled}`);
+    this.logger.info(`Starting VoiceRoutingManager, enabled: ${this._isEnabled}`);
     
     if (!this._isEnabled) {
-      logger.debug('Voice routing is disabled, skipping timer setup');
+      this.logger.debug('Voice routing is disabled, skipping timer setup');
       return;
     }
     
@@ -201,14 +201,14 @@ export class VoiceRoutingManager extends EventEmitter {
     // 启动指标清理定时器
     this.startMetricsCleanup();
     
-    logger.info('VoiceRoutingManager started');
+    this.logger.info('VoiceRoutingManager started');
   }
 
   /**
    * 停止路由管理器
    */
   async stop(): Promise<void> {
-    logger.info('Stopping VoiceRoutingManager');
+    this.logger.info('Stopping VoiceRoutingManager');
     
     if (this.localRouteUpdateTimer) {
       clearInterval(this.localRouteUpdateTimer);
@@ -230,7 +230,7 @@ export class VoiceRoutingManager extends EventEmitter {
     this.validationCache.clear();
     this.statsCache = null;
     
-    logger.info('VoiceRoutingManager stopped');
+    this.logger.info('VoiceRoutingManager stopped');
   }
 
   /**
@@ -242,11 +242,11 @@ export class VoiceRoutingManager extends EventEmitter {
     
     if (enabled && !wasEnabled) {
       // 启用功能
-      logger.info('Voice routing enabled by Hub configuration');
+      this.logger.info('Voice routing enabled by Hub configuration');
       this.start();
     } else if (!enabled && wasEnabled) {
       // 禁用功能
-      logger.info('Voice routing disabled by Hub configuration');
+      this.logger.info('Voice routing disabled by Hub configuration');
       this.stop();
     }
   }
@@ -256,7 +256,7 @@ export class VoiceRoutingManager extends EventEmitter {
    */
   updateHubPolicy(policy: EdgeRoutingPolicy): void {
     this.voiceRoutingConfig.hubPolicy = policy;
-    logger.info('Hub routing policy updated', { policy });
+    this.logger.info('Hub routing policy updated', { policy });
     
     // 触发路由重新计算
     this.emit('policy-updated', policy);
@@ -266,7 +266,7 @@ export class VoiceRoutingManager extends EventEmitter {
    * 处理 Hub 推送的路由表
    */
   handleHubRouteTable(routes: RouteEntry[]): void {
-    logger.info(`Received ${routes.length} routes from Hub`);
+    this.logger.info(`Received ${routes.length} routes from Hub`);
     
     this.hubRouteTable.clear();
     for (const route of routes) {
@@ -331,10 +331,10 @@ export class VoiceRoutingManager extends EventEmitter {
     
     // 记录路由变化
     if (oldRoute) {
-      logger.info(`Route updated: Edge ${route.targetEdgeId}, ` +
+      this.logger.info(`Route updated: Edge ${route.targetEdgeId}, ` +
                   `${oldRoute.type} -> ${route.type}, cost: ${route.cost.toFixed(2)}`);
     } else {
-      logger.info(`Route added: Edge ${route.targetEdgeId}, ` +
+      this.logger.info(`Route added: Edge ${route.targetEdgeId}, ` +
                   `type: ${route.type}, cost: ${route.cost.toFixed(2)}`);
     }
     
@@ -416,7 +416,7 @@ export class VoiceRoutingManager extends EventEmitter {
         const nextHopRoute = this.routingTable.get(route.nextHop);
         if (!nextHopRoute) {
           // 这不一定是错误，nextHop 可能是直连的
-          logger.debug(
+          this.logger.debug(
             `Route to Edge ${targetEdgeId} uses nextHop ${route.nextHop} which has no route entry (might be direct)`
           );
         }
@@ -585,7 +585,7 @@ export class VoiceRoutingManager extends EventEmitter {
     // 触发质量更新事件
     this.emit('quality-updated', sourceEdgeId, quality);
     
-    logger.debug(`Quality updated for Edge ${sourceEdgeId}:`, quality);
+    this.logger.debug(`Quality updated for Edge ${sourceEdgeId}:`, quality);
   }
 
   /**
@@ -605,7 +605,7 @@ export class VoiceRoutingManager extends EventEmitter {
       this.performLocalRouteDecision();
     }, interval);
     
-    logger.debug(`Local route update timer started, interval: ${interval}ms`);
+    this.logger.debug(`Local route update timer started, interval: ${interval}ms`);
   }
 
   /**
@@ -618,7 +618,7 @@ export class VoiceRoutingManager extends EventEmitter {
       this.checkQualityThresholds();
     }, interval);
     
-    logger.debug(`Quality check timer started, interval: ${interval}ms`);
+    this.logger.debug(`Quality check timer started, interval: ${interval}ms`);
   }
 
   /**
@@ -631,7 +631,7 @@ export class VoiceRoutingManager extends EventEmitter {
       this.cleanupExpiredMetrics();
     }, ttl);
     
-    logger.debug(`Metrics cleanup timer started, interval: ${ttl}ms`);
+    this.logger.debug(`Metrics cleanup timer started, interval: ${ttl}ms`);
   }
 
   /**
@@ -800,7 +800,7 @@ export class VoiceRoutingManager extends EventEmitter {
       
       if (quality.rtt > config.directRttThreshold ||
           quality.packetLoss > config.directLossThreshold) {
-        logger.warn(`Quality degradation detected for Edge ${edgeId}:`, {
+        this.logger.warn(`Quality degradation detected for Edge ${edgeId}:`, {
           rtt: quality.rtt,
           packetLoss: quality.packetLoss,
         });
@@ -823,7 +823,7 @@ export class VoiceRoutingManager extends EventEmitter {
         this.qualitySamples.delete(edgeId);
         this.sequenceTracking.delete(edgeId);
         
-        logger.debug(`Expired quality metrics for Edge ${edgeId}`);
+        this.logger.debug(`Expired quality metrics for Edge ${edgeId}`);
       }
     }
   }
