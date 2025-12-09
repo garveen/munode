@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
-import { logger } from '@munode/common';
+import { createLogger } from '@munode/common';
+import type { Logger } from 'winston';
 import { EdgeConfig, ClientInfo, ChannelInfo, ServerStats } from '../types.js';
 import { GeoIPManager } from '../util/geoip-manager.js';
 import { EdgeClusterManager } from '../cluster/cluster-manager.js';
@@ -20,6 +21,7 @@ import { EventSetupManager } from '../managers/event-setup-manager.js';
  */
 export class EdgeServer extends EventEmitter {
   private config: EdgeConfig;
+  private logger: Logger;
 
   // 核心组件工厂
   private handlerFactory: HandlerFactory;
@@ -46,11 +48,18 @@ export class EdgeServer extends EventEmitter {
   // 便捷访问器 - 从 HandlerFactory 获取组件
   private get clientManager() { return this.handlerFactory.clientManager; }
   private get channelManager() { return this.handlerFactory.channelManager; }
+  
+  // 公开属性访问器
+  get serverId() { return this.config.server_id; }
 
 
   constructor(config: EdgeConfig) {
     super();
     this.config = config;
+    this.logger = createLogger({
+      level: config.logLevel || 'info',
+      service: `edge-${config.server_id}`,
+    });
     this.startTime = new Date();
 
     this.stats = {
@@ -63,11 +72,11 @@ export class EdgeServer extends EventEmitter {
 
     // 初始化可选组件
     if (this.config.features.geoip) {
-      this.geoIPManager = new GeoIPManager(this.config, logger);
+      this.geoIPManager = new GeoIPManager(this.config, this.logger);
     }
 
     // 初始化集群组件
-    this.clusterManager = new EdgeClusterManager(this.config, logger, {
+    this.clusterManager = new EdgeClusterManager(this.config, this.logger, {
       onDisconnectAllClients: () => {
         // 断开所有客户端
         const clients = this.handlerFactory.clientManager.getAllClients();
@@ -96,7 +105,8 @@ export class EdgeServer extends EventEmitter {
     // 初始化处理器工厂（自动创建所有核心组件和处理器）
     this.handlerFactory = new HandlerFactory(
       this.config,
-      this.hubClient
+      this.hubClient,
+      this.logger
     );
 
     // 初始化管理器（注意：VoiceManager必须在ServerLifecycleManager之前创建）
@@ -108,6 +118,7 @@ export class EdgeServer extends EventEmitter {
     this.serverLifecycleManager = new ServerLifecycleManager(
       this.config,
       this.handlerFactory,
+      this.logger,
       this.clusterManager,
       this.voiceTransport,
       this.voiceManager
@@ -139,7 +150,7 @@ export class EdgeServer extends EventEmitter {
       await this.serverLifecycleManager.start();
       this.isRunning = true;
     } catch (error) {
-      logger.error('Failed to start Edge Server:', error);
+      this.logger.error('Failed to start Edge Server:', error);
       throw error;
     }
   }
@@ -153,10 +164,10 @@ export class EdgeServer extends EventEmitter {
 
       await this.serverLifecycleManager.stop();
 
-      logger.info('Edge Server stopped successfully');
+      this.logger.info('Edge Server stopped successfully');
       this.emit('stopped');
     } catch (error) {
-      logger.error('Failed to stop Edge Server:', error);
+      this.logger.error('Failed to stop Edge Server:', error);
       throw error;
     }
   }
@@ -215,6 +226,18 @@ export class EdgeServer extends EventEmitter {
     return Date.now() - this.startTime.getTime();
   }
 
+  /**
+   * 获取 UDP socket（用于测试和网络质量模拟）
+   */
+  getUDPSocket() {
+    return this.serverLifecycleManager.getUDPSocket();
+  }
 
+  /**
+   * 获取 VoiceManager（用于测试监控语音路由）
+   */
+  getVoiceManager() {
+    return this.voiceManager;
+  }
 
 }

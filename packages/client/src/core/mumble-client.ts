@@ -111,6 +111,8 @@ export class MumbleClient extends EventEmitter {
   async disconnect(): Promise<void> {
     await this.connection.disconnect();
     this.emit('disconnected');
+    // 移除所有事件监听器防止内存泄漏
+    this.removeAllListeners();
   }
 
   /**

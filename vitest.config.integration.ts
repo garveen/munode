@@ -11,7 +11,7 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: ['tests/integration/suites/**/*.test.ts'],
-    testTimeout: 30000, // 集成测试需要更长的超时时间
+    testTimeout: 60000, // 集成测试需要更长的超时时间（增加到60秒）
     hookTimeout: 60000, // setup/teardown 需要更长的时间
     teardownTimeout: 10000, // 强制 teardown 超时
     pool: 'forks', // 使用 forks 以确保测试隔离

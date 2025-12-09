@@ -13,7 +13,8 @@ import * as path from 'path';
 const logger = createLogger({ service: 'test-db-init' });
 
 async function initTestDatabase() {
-  const dbPath = path.join(process.cwd(), 'data', 'hub-test.db');
+  // 支持命令行参数或环境变量指定数据库路径
+  const dbPath = process.argv[2] || process.env.DB_PATH || path.join(process.cwd(), 'data', 'hub-test.db');
 
   // 确保数据目录存在
   const dataDir = path.dirname(dbPath);

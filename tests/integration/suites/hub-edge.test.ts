@@ -37,11 +37,11 @@ describe('Hub-Edge Communication Integration Tests', () => {
     });
 
     it('should have hub server running', () => {
-      expect(testEnv.hubProcess).toBeDefined();
+      expect(testEnv.hubServer).toBeDefined();
     });
 
     it('should have edge server running', () => {
-      expect(testEnv.edgeProcess).toBeDefined();
+      expect(testEnv.edgeServer).toBeDefined();
     });
   });
 

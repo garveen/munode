@@ -199,11 +199,13 @@ export class ConnectionManager {
     this.stopPing();
     
     if (this.tcpSocket) {
+      this.tcpSocket.removeAllListeners();
       this.tcpSocket.end();
       this.tcpSocket = null;
     }
     
     if (this.udpSocket) {
+      this.udpSocket.removeAllListeners();
       this.udpSocket.close();
       this.udpSocket = null;
     }

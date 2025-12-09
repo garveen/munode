@@ -55,8 +55,8 @@ describe('UDP Connection Tests', () => {
   it('should establish UDP connection with ping', async () => {
     console.log('[TEST] Starting test, testEnv:', testEnv ? 'initialized' : 'NOT initialized');
     console.log('[TEST] Edge port:', testEnv?.edgePort);
-    console.log('[TEST] Edge process:', testEnv?.edgeProcess ? 'running' : 'NOT running');
-    console.log('[TEST] Hub process:', testEnv?.hubProcess ? 'running' : 'NOT running');
+    console.log('[TEST] Edge server:', testEnv?.edgeServer ? 'running' : 'NOT running');
+    console.log('[TEST] Hub server:', testEnv?.hubServer ? 'running' : 'NOT running');
     
     // Wait for servers to be ready
     console.log('[TEST] Waiting 5 seconds for servers to stabilize...');

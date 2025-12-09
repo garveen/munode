@@ -1,7 +1,7 @@
 import { Server as TCPServer } from 'net';
 import { createSocket, type Socket as UDPSocket } from 'dgram';
 import { TLSSocket, createServer as createTLSServer, type Server as TLSServer } from 'tls';
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import { EdgeConfig } from '../types.js';
 import { EdgeClusterManager } from '../cluster/cluster-manager.js';
 import { VoiceUDPTransport } from '@munode/protocol';
@@ -14,6 +14,7 @@ import { VoiceManager } from '../managers/voice-manager.js';
  */
 export class ServerLifecycleManager {
   private config: EdgeConfig;
+  private logger: Logger;
   private tcpServer?: TCPServer;
   private udpServer?: UDPSocket;
   private tlsServer?: TLSServer;
@@ -25,12 +26,14 @@ export class ServerLifecycleManager {
   constructor(
     config: EdgeConfig,
     handlerFactory: HandlerFactory,
-    clusterManager?: EdgeClusterManager,
-    voiceTransport?: VoiceUDPTransport,
+    logger: Logger,
+    clusterManager: EdgeClusterManager,
+    voiceTransport: VoiceUDPTransport,
     voiceManager?: VoiceManager
   ) {
     this.config = config;
     this.handlerFactory = handlerFactory;
+    this.logger = logger;
     this.clusterManager = clusterManager;
     this.voiceTransport = voiceTransport;
     this.voiceManager = voiceManager;
@@ -41,7 +44,7 @@ export class ServerLifecycleManager {
    */
   async start(): Promise<void> {
     try {
-      logger.info('Starting Edge Server...');
+      this.logger.info('Starting Edge Server...');
 
       // 初始化可选组件
       if (this.handlerFactory.banManager) {
@@ -57,7 +60,7 @@ export class ServerLifecycleManager {
       // 不启动 TCP 服务器 - Mumble 客户端使用 TLS
       // await this.startTCPServer();
 
-      logger.info(
+      this.logger.info(
         `Edge Server started successfully on ${this.config.network.host}:${this.config.network.port}`
       );
 
@@ -65,12 +68,12 @@ export class ServerLifecycleManager {
       if (this.voiceTransport) {
         await this.voiceTransport.start();
         const voicePort = this.config.network.port + 1;
-        logger.info(`Voice UDP transport started on port ${voicePort}`);
+        this.logger.info(`Voice UDP transport started on port ${voicePort}`);
         
         // 设置语音传输处理器（必须在启动后立即设置）
         if (this.voiceManager) {
           this.voiceManager.setupVoiceTransportHandlers();
-          logger.info('Voice transport handlers setup complete');
+          this.logger.info('Voice transport handlers setup complete');
         }
       }
 
@@ -78,7 +81,7 @@ export class ServerLifecycleManager {
       if (this.clusterManager) {
         try {
           await this.clusterManager.joinCluster();
-          logger.info('Successfully joined cluster');
+          this.logger.info('Successfully joined cluster');
 
           // 尝试注册已有 peers 的语音端点（非强制，允许部分失败）
           if (this.voiceTransport) {
@@ -87,21 +90,21 @@ export class ServerLifecycleManager {
               if (peer.id !== this.config.server_id && peer.voicePort) {
                 try {
                   this.voiceTransport.registerEndpoint(peer.id, peer.host, peer.voicePort);
-                  logger.info(`Registered voice endpoint for peer ${peer.id}: ${peer.host}:${peer.voicePort}`);
+                  this.logger.info(`Registered voice endpoint for peer ${peer.id}: ${peer.host}:${peer.voicePort}`);
                 } catch (endpointError) {
                   // 单个端点注册失败不影响其他端点
-                  logger.warn(`Failed to register voice endpoint for peer ${peer.id}:`, endpointError);
+                  this.logger.warn(`Failed to register voice endpoint for peer ${peer.id}:`, endpointError);
                 }
               }
             }
           }
         } catch (error) {
-          logger.error('Failed to join cluster:', error);
+          this.logger.error('Failed to join cluster:', error);
           // 不抛出错误，允许服务器在standalone模式下运行
         }
       }
     } catch (error) {
-      logger.error('Failed to start Edge Server:', error);
+      this.logger.error('Failed to start Edge Server:', error);
       throw error;
     }
   }
@@ -111,7 +114,7 @@ export class ServerLifecycleManager {
    */
   async stop(): Promise<void> {
     try {
-      logger.info('Stopping Edge Server...');
+      this.logger.info('Stopping Edge Server...');
 
       // 停止服务器
       if (this.tcpServer) {
@@ -129,7 +132,7 @@ export class ServerLifecycleManager {
       // 停止语音 UDP 传输
       if (this.voiceTransport) {
         this.voiceTransport.stop();
-        logger.info('Voice UDP transport stopped');
+        this.logger.info('Voice UDP transport stopped');
       }
 
       // 停止集群管理器
@@ -141,9 +144,9 @@ export class ServerLifecycleManager {
         await this.handlerFactory.banManager.close();
       }
 
-      logger.info('Edge Server stopped successfully');
+      this.logger.info('Edge Server stopped successfully');
     } catch (error) {
-      logger.error('Failed to stop Edge Server:', error);
+      this.logger.error('Failed to stop Edge Server:', error);
       throw error;
     }
   }
@@ -160,12 +163,12 @@ export class ServerLifecycleManager {
       });
 
       this.udpServer.on('error', (error) => {
-        logger.error('UDP Server error:', error);
+        this.logger.error('UDP Server error:', error);
         reject(error);
       });
 
       this.udpServer.bind(this.config.network.port, this.config.network.host, () => {
-        logger.info(
+        this.logger.info(
           `UDP Server listening on ${this.config.network.host}:${this.config.network.port}`
         );
 
@@ -182,7 +185,7 @@ export class ServerLifecycleManager {
    */
   private async startTLSServer(): Promise<void> {
     if (!this.config.tls.cert || !this.config.tls.key) {
-      logger.warn('TLS certificates not configured, skipping TLS server');
+      this.logger.warn('TLS certificates not configured, skipping TLS server');
       return;
     }
 
@@ -217,12 +220,12 @@ export class ServerLifecycleManager {
       });
 
       this.tlsServer.on('error', (error: Error) => {
-        logger.error('TLS Server error:', error);
+        this.logger.error('TLS Server error:', error);
         reject(error);
       });
 
       this.tlsServer.listen(this.config.network.port, this.config.network.host, () => {
-        logger.info(
+        this.logger.info(
           `TLS Server listening on ${this.config.network.host}:${this.config.network.port}`
         );
         resolve();
@@ -235,5 +238,12 @@ export class ServerLifecycleManager {
    */
   getVoiceTransport(): VoiceUDPTransport | undefined {
     return this.voiceTransport;
+  }
+
+  /**
+   * 获取 UDP socket
+   */
+  getUDPSocket(): UDPSocket | undefined {
+    return this.udpServer;
   }
 }

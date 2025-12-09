@@ -14,6 +14,7 @@ import { logger } from '@munode/common';
 import { mumbleproto, MessageType, Permission, ClientState } from '@munode/protocol';
 import type { ClientInfo, ChannelInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
+import { VoiceTargetData } from '../voice/voice-router.js';
 
 export class ProtocolHandlers {
   constructor(private factory: HandlerFactory) {}
@@ -296,8 +297,33 @@ export class ProtocolHandlers {
         return;
       }
 
+      // 将 Protobuf 对象转换为普通 TypeScript 对象
+      // 这样可以避免 Protobuf optional 字段的默认值问题
+      const convertedTargets = voiceTarget.targets.map(target => {
+        const converted: VoiceTargetData = {};
+        
+        // 只有真正设置了的字段才添加到对象中
+        if (target.session && target.session.length > 0) {
+          converted.session = target.session;
+        }
+        if (target.has_channel_id) {
+          converted.channel_id = target.channel_id;
+        }
+        if (target.has_group) {
+          converted.group = target.group;
+        }
+        if (target.has_links) {
+          converted.links = target.links;
+        }
+        if (target.has_children) {
+          converted.children = target.children;
+        }
+        
+        return converted;
+      });
+
       // 保存voice target配置
-      this.voiceRouter.setVoiceTarget(session_id, voiceTarget.id, voiceTarget.targets);
+      this.voiceRouter.setVoiceTarget(session_id, voiceTarget.id, convertedTargets);
 
       logger.debug(`Set voice target ${voiceTarget.id} for session ${session_id}: ${voiceTarget.targets.length} targets`);
       

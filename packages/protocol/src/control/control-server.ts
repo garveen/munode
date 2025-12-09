@@ -11,18 +11,37 @@ export interface ControlChannelConfig {
 export class ControlChannelServer extends EventEmitter {
   private wss: WebSocketServer;
   private channels = new Map<WebSocket, RPCChannel>();
+  private ready: Promise<void>;
 
   constructor(config: ControlChannelConfig) {
     super();
-    this.wss = new WebSocketServer({
-      port: config.port,
-      host: config.host,
-    });
+    
+    // 创建 Promise 来跟踪服务器就绪状态
+    this.ready = new Promise((resolve, reject) => {
+      this.wss = new WebSocketServer({
+        port: config.port,
+        host: config.host,
+      });
 
-    this.wss.on('connection', this.handleConnection.bind(this));
-    this.wss.on('error', (error) => {
-      console.error('Control channel server error:', error);
+      this.wss.on('listening', () => {
+        console.log(`Control channel server listening on ${config.host || '0.0.0.0'}:${config.port}`);
+        resolve();
+      });
+
+      this.wss.on('connection', this.handleConnection.bind(this));
+      
+      this.wss.on('error', (error) => {
+        console.error('Control channel server error:', error);
+        reject(error);
+      });
     });
+  }
+
+  /**
+   * 等待服务器完全就绪
+   */
+  async waitForReady(): Promise<void> {
+    await this.ready;
   }
 
   private handleConnection(ws: WebSocket): void {

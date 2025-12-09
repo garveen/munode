@@ -1,24 +1,29 @@
 /**
- * 集成测试环境设置
+ * 集成测试环境设置 - 单进程模式
  */
 
-import { spawn, ChildProcess } from 'child_process';
 import { join, dirname } from 'path';
 import * as http from 'http';
 import * as fs from 'fs';
 import * as net from 'net';
 import { fileURLToPath } from 'url';
+import { EdgeServer } from '../../packages/edge-server/src/index.js';
+import { HubServer } from '../../packages/hub-server/src/index.js';
+import type { EdgeConfig } from '../../packages/edge-server/src/types.js';
+import type { HubConfig } from '../../packages/hub-server/src/types.js';
+import { MumbleClient } from '../../packages/client/src/index.js';
+import { testUserPasswords } from './test-users.js';
+import { spawn } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-// 获取项目根目录（从 tests/integration 向上两级）
 const PROJECT_ROOT = join(__dirname, '../..');
 
 // 测试调试日志控制
 const TEST_DEBUG = process.env.TEST_DEBUG === '1' || process.env.TEST_VERBOSE === '1';
 
 /**
- * 测试调试日志函数 - 只在 TEST_DEBUG=1 时输出
+ * 测试调试日志函数
  */
 export function debugLog(...args: any[]): void {
   if (TEST_DEBUG) {
@@ -29,7 +34,7 @@ export function debugLog(...args: any[]): void {
 // Counter for cache busting in dynamic imports
 let importCounter = 0;
 
-// Global test environment for sharing across parallel tests
+// Global test environment
 let globalTestEnvironment: TestEnvironment | null = null;
 let refCount = 0;
 
@@ -47,11 +52,11 @@ export async function isPortAvailable(port: number): Promise<boolean> {
 }
 
 /**
- * 查找可用端口，从指定端口开始递增
+ * 查找可用端口
  */
 export async function findAvailablePort(startPort: number = 8080, maxAttempts: number = 100): Promise<number> {
   for (let port = startPort; port < startPort + maxAttempts; port++) {
-    if (await isPortAvailable(port)) {
+    if (await isPortAvailable(port) && await isPortAvailable(port + 1) && await isPortAvailable(port + 2)) {
       return port;
     }
   }
@@ -59,25 +64,105 @@ export async function findAvailablePort(startPort: number = 8080, maxAttempts: n
 }
 
 export interface TestEnvironment {
-  hubProcess?: ChildProcess;
-  edgeProcess?: ChildProcess;
-  edgeProcess2?: ChildProcess; // 第二个 Edge 服务器用于跨 Edge 测试
-  edgeProcess3?: ChildProcess; // 第三个 Edge 服务器用于多 Edge 路由测试
-  edgeProcess4?: ChildProcess; // 第四个 Edge 服务器用于完整路由测试
-  authServer?: http.Server;
+  hubServer?: HubServer;
+  edgeServer?: EdgeServer;
+  edgeServer2?: EdgeServer;
+  edgeServer3?: EdgeServer;
+  edgeServer4?: EdgeServer;
+  authServer?: TestAuthServer;
   authPort: number;
   hubPort: number;
   controlPort: number; // Hub 控制端口
   webApiPort: number; // Hub Web API 端口
   edgePort: number;
-  edgeUdpPort: number; // Edge1 的 UDP 端口
-  edgePort2: number; // 第二个 Edge 服务器端口
-  edgeUdpPort2: number; // Edge2 的 UDP 端口
-  edgePort3: number; // 第三个 Edge 服务器端口
-  edgeUdpPort3: number; // Edge3 的 UDP 端口
-  edgePort4: number; // 第四个 Edge 服务器端口
-  edgeUdpPort4: number; // Edge4 的 UDP 端口
+  edgeUdpPort: number;
+  edgePort2: number;
+  edgeUdpPort2: number;
+  edgePort3: number;
+  edgeUdpPort3: number;
+  edgePort4: number;
+  edgeUdpPort4: number;
   cleanup: () => Promise<void>;
+}
+
+/**
+ * 客户端配置接口
+ */
+export interface ClientConfig {
+  username: string;
+  edge: 1 | 2 | 3 | 4;
+  channelId?: number;
+}
+
+/**
+ * 获取 Edge 端口
+ */
+function getEdgePort(testEnv: TestEnvironment, edge: 1 | 2 | 3 | 4): number {
+  switch (edge) {
+    case 1: return testEnv.edgePort;
+    case 2: return testEnv.edgePort2;
+    case 3: return testEnv.edgePort3;
+    case 4: return testEnv.edgePort4;
+  }
+}
+
+/**
+ * 批量创建测试客户端（统一方法，从auth配置获取密码）
+ */
+export async function createClients(testEnv: TestEnvironment, configs: ClientConfig[]): Promise<MumbleClient[]> {
+  const clients: (MumbleClient | null)[] = new Array(configs.length).fill(null);
+  
+  await Promise.all(configs.map(async (config, index) => {
+    const userInfo = testUserPasswords[config.username];
+    if (!userInfo) {
+      throw new Error(`User not found: ${config.username}`);
+    }
+    
+    const client = new MumbleClient();
+    const targetPort = getEdgePort(testEnv, config.edge);
+    console.log(`[TEST] Connecting ${config.username} to Edge ${config.edge} on port ${targetPort}`);
+    await client.connect({
+      host: 'localhost',
+      port: targetPort,
+      username: config.username,
+      password: userInfo.password,
+      rejectUnauthorized: false,
+      forceTcpVoice: false,
+    });
+    
+    // 等待 UDP 连接就绪
+    try {
+      await client.waitForUDP(3000);
+      console.log(`[TEST] ${config.username} UDP ready`);
+    } catch (error) {
+      console.warn(`[TEST] ${config.username} UDP timeout, will use TCP:`, error);
+    }
+    
+    if (config.channelId !== undefined) {
+      await client.sendUserState({ channel_id: config.channelId });
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    
+    // Use index to preserve order
+    clients[index] = client;
+  }));
+  
+  return clients as MumbleClient[];
+}
+
+/**
+ * 清理客户端
+ */
+export async function cleanupClients(clients: MumbleClient[]): Promise<void> {
+  for (const client of clients) {
+    try {
+      await client.disconnect();
+    } catch (e) {
+      // 忽略断开连接的错误
+    }
+  }
+  // 等待资源完全释放
+  await sleep(100);
 }
 
 /**
@@ -113,10 +198,8 @@ class TestAuthServer {
           const contentType = req.headers['content-type'] || '';
           
           if (contentType.includes('application/x-www-form-urlencoded')) {
-            // 解析 form-urlencoded 格式
             authReq = this.parseFormData(body);
           } else {
-            // 解析 JSON 格式
             authReq = JSON.parse(body);
           }
           
@@ -146,7 +229,7 @@ class TestAuthServer {
         if (!arrays[arrayKey]) {
           arrays[arrayKey] = [];
         }
-        if (value) { // 忽略空字符串
+        if (value) {
           arrays[arrayKey].push(value);
         }
       } else {
@@ -154,17 +237,14 @@ class TestAuthServer {
       }
     }
     
-    // 将数组添加到结果中
     for (const [key, values] of Object.entries(arrays)) {
       result[key] = values;
     }
     
-    // 确保 tokens 数组存在
     if (!result.tokens) {
       result.tokens = [];
     }
     
-    // 转换数字字段
     if (result.server_id) {
       result.server_id = parseInt(result.server_id, 10);
     }
@@ -173,174 +253,8 @@ class TestAuthServer {
   }
 
   private authenticate(req: any): any {
-    // Test user data
-    const users: Record<string, { password: string; user_id: number; groups?: string[] }> = {
-      'admin': { password: 'admin123', user_id: 1, groups: ['admin'] },
-      'admin_password': { password: 'admin_password', user_id: 11, groups: ['admin'] },
-      'admin_multi': { password: 'admin_password', user_id: 12, groups: ['admin'] },
-      'admin_state': { password: 'admin_password', user_id: 13, groups: ['admin'] },
-      'admin_no_ninja': { password: 'admin_password', user_id: 14, groups: ['admin'] },
-      // Ninja group users - have access to ninja channels
-      'ninja_user1': { password: 'ninja_password', user_id: 15, groups: ['ninja'] },
-      'ninja_user2': { password: 'ninja_password', user_id: 16, groups: ['ninja'] },
-      'ninja_cross': { password: 'ninja_password', user_id: 17, groups: ['ninja'] },
-      'user1': { password: 'password1', user_id: 2 },
-      'user1_password': { password: 'user1_password', user_id: 21 },
-      'user2': { password: 'password2', user_id: 3 },
-      'user2_password': { password: 'user2_password', user_id: 22 },
-      'user3': { password: 'password3', user_id: 5 },
-      'guest': { password: 'guest123', user_id: 4 },
-      'user_edge1': { password: 'user_password', user_id: 31 },
-      'user_edge2': { password: 'user_password', user_id: 32 },
-      'user_state': { password: 'user_password', user_id: 33 },
-      'user_no_ninja': { password: 'user_password', user_id: 34 },
-      // Cross-edge ninja test users
-      'user_cross1': { password: 'user_password', user_id: 35 },
-      'user_cross2': { password: 'user_password', user_id: 36 },
-      'mixed_tcp1': { password: 'password1', user_id: 41 },
-      'mixed_tcp2': { password: 'password2', user_id: 42 },
-      'mixed_udp': { password: 'password3', user_id: 43 },
-      'whisper_nontarget': { password: 'password3', user_id: 44 },
-      'cross_edge_tcp1': { password: 'password1', user_id: 51 },
-      'cross_edge_tcp2': { password: 'password2', user_id: 52 },
-      'fallback_user': { password: 'fallback_pass', user_id: 53 },
-      'large_packet_user': { password: 'large_pass', user_id: 54 },
-      'packet_format_user': { password: 'packet_pass', user_id: 55 },
-      'perf_test_user': { password: 'perf_pass', user_id: 56 },
-      'random_payload_user': { password: 'random_pass', user_id: 57 },
-      'tcp_receiver': { password: 'tcp_receiver_pass', user_id: 58 },
-      'tcp_sender': { password: 'tcp_sender_pass', user_id: 59 },
-      'tcp_to_udp_receiver': { password: 'receiver_pass', user_id: 60 },
-      'tcp_to_udp_sender': { password: 'sender_pass', user_id: 61 },
-      'tcp_user': { password: 'tcp_pass', user_id: 62 },
-      'udp_to_tcp_receiver': { password: 'receiver_pass', user_id: 63 },
-      'udp_to_tcp_sender': { password: 'sender_pass', user_id: 64 },
-      'banned_user': { password: 'password1', user_id: 71 },
-      'codec_receiver': { password: 'password1', user_id: 72 },
-      'codec_sender': { password: 'password1', user_id: 73 },
-      'random_receiver': { password: 'password1', user_id: 74 },
-      'random_sender': { password: 'password1', user_id: 75 },
-      'receiver1': { password: 'password1', user_id: 76 },
-      'receiver1_e1': { password: 'password1', user_id: 77 },
-      'receiver1_e2': { password: 'password1', user_id: 78 },
-      'receiver2': { password: 'password2', user_id: 79 },
-      'receiver_edge1': { password: 'password1', user_id: 80 },
-      'receiver_edge2': { password: 'password1', user_id: 81 },
-      'routing_sender': { password: 'password1', user_id: 82 },
-      'same_channel': { password: 'password1', user_id: 83 },
-      'sender1': { password: 'password1', user_id: 84 },
-      'sender1_e1': { password: 'password1', user_id: 85 },
-      'sender1_e2': { password: 'password1', user_id: 86 },
-      'sender2': { password: 'password2', user_id: 87 },
-      'sender_edge1': { password: 'password1', user_id: 88 },
-      'sender_edge2': { password: 'password1', user_id: 89 },
-      'whisper_sender': { password: 'password1', user_id: 90 },
-      'whisper_target': { password: 'password2', user_id: 91 },
-      'moderator': { password: 'mod123', user_id: 92, groups: ['moderator'] },
-      // Voice test users
-      'voice_sender': { password: 'pass1', user_id: 101 },
-      'voice_recv_e1_same': { password: 'pass2', user_id: 102 },
-      'voice_recv_e2_same': { password: 'pass3', user_id: 103 },
-      'voice_recv_e1_other': { password: 'pass4', user_id: 104 },
-      'voice_recv_e2_other': { password: 'pass5', user_id: 105 },
-      'voice_sender2': { password: 'pass1', user_id: 106 },
-      'voice_deaf_e1': { password: 'pass2', user_id: 107 },
-      'voice_deaf_e2': { password: 'pass3', user_id: 108 },
-      'voice_normal_e1': { password: 'pass4', user_id: 109 },
-      'voice_sender3': { password: 'pass1', user_id: 110 },
-      'voice_recv_e1_ch0': { password: 'pass2', user_id: 111 },
-      'voice_recv_e2_ch0': { password: 'pass3', user_id: 112 },
-      'voice_recv_e1_ch1': { password: 'pass4', user_id: 113 },
-      'voice_recv_e2_ch1': { password: 'pass5', user_id: 114 },
-      'voice_recv_e1_ch2': { password: 'pass6', user_id: 115 },
-      'voice_whisper_sender': { password: 'pass1', user_id: 116 },
-      'voice_target1_e1': { password: 'pass2', user_id: 117 },
-      'voice_target1_e2': { password: 'pass3', user_id: 118 },
-      'voice_non_target_e1': { password: 'pass4', user_id: 119 },
-      'voice_non_target_e2': { password: 'pass5', user_id: 120 },
-      'voice_ch_target_sender': { password: 'pass1', user_id: 121 },
-      'voice_recv_e1_tch1': { password: 'pass2', user_id: 122 },
-      'voice_recv_e2_tch1': { password: 'pass3', user_id: 123 },
-      'voice_recv_e1_tch0': { password: 'pass4', user_id: 124 },
-      'voice_recv_e1_tch2': { password: 'pass5', user_id: 125 },
-      'voice_loopback_sender': { password: 'pass1', user_id: 126 },
-      'voice_loopback_other': { password: 'pass2', user_id: 127 },
-      'voice_multi_sender': { password: 'pass1', user_id: 128 },
-      'voice_multi_recv_e1': { password: 'pass2', user_id: 129 },
-      'voice_multi_recv_e2': { password: 'pass3', user_id: 130 },
-      'voice_complex_sender': { password: 'pass1', user_id: 131 },
-      'voice_complex_e1_ch0': { password: 'pass2', user_id: 132 },
-      'voice_complex_e2_ch1': { password: 'pass3', user_id: 133 },
-      'voice_whisper_tgt_e2': { password: 'pass4', user_id: 134 },
-      'voice_deaf_e1_ch0': { password: 'pass5', user_id: 135 },
-      'voice_normal_e1_ch2': { password: 'pass6', user_id: 136 },
-      // UDP connection test users
-      'udp_test_user1': { password: 'password123', user_id: 201 },
-      'udp_sender': { password: 'password123', user_id: 202 },
-      'udp_receiver': { password: 'password123', user_id: 203 },
-      'tcp_fallback_user': { password: 'password123', user_id: 204 },
-      'udp_ping_test': { password: 'password123', user_id: 205 },
-      'udp_multi_sender': { password: 'password123', user_id: 206 },
-      'udp_multi_receiver': { password: 'password123', user_id: 207 },
-      // Voice routing test users
-      'routing_config_test': { password: 'pass1', user_id: 301 },
-      'rtt_sender': { password: 'pass1', user_id: 302 },
-      'rtt_receiver': { password: 'pass2', user_id: 303 },
-      'loss_sender': { password: 'pass1', user_id: 304 },
-      'loss_receiver': { password: 'pass2', user_id: 305 },
-      'direct_sender': { password: 'pass1', user_id: 306 },
-      'direct_receiver': { password: 'pass2', user_id: 307 },
-      'tcp_fallback_sender': { password: 'pass1', user_id: 308 },
-      'tcp_fallback_receiver': { password: 'pass2', user_id: 309 },
-      'route_table_test': { password: 'pass1', user_id: 310 },
-      'cross_edge_sender': { password: 'pass1', user_id: 311 },
-      'cross_edge_receiver': { password: 'pass2', user_id: 312 },
-      'deaf_test_sender': { password: 'pass1', user_id: 313 },
-      'deaf_test_deaf': { password: 'pass2', user_id: 314 },
-      'deaf_test_normal': { password: 'pass3', user_id: 315 },
-      'hub_bypass_sender': { password: 'pass1', user_id: 316 },
-      'hub_bypass_receiver': { password: 'pass2', user_id: 317 },
-      'stress_sender': { password: 'pass1', user_id: 318 },
-      'stress_receiver': { password: 'pass2', user_id: 319 },
-      // 4-Edge routing test users
-      'relay_sender_e1': { password: 'pass1', user_id: 401 },
-      'relay_receiver_e4': { password: 'pass2', user_id: 402 },
-      'relay_test_e2': { password: 'pass3', user_id: 403 },
-      'relay_test_e3': { password: 'pass4', user_id: 404 },
-      'multi_hop_sender': { password: 'pass1', user_id: 405 },
-      'multi_hop_receiver': { password: 'pass2', user_id: 406 },
-      'quality_test_e1': { password: 'pass1', user_id: 407 },
-      'quality_test_e2': { password: 'pass2', user_id: 408 },
-      'quality_test_e3': { password: 'pass3', user_id: 409 },
-      'quality_test_e4': { password: 'pass4', user_id: 410 },
-      'packet_loss_sender': { password: 'pass1', user_id: 411 },
-      'packet_loss_receiver': { password: 'pass2', user_id: 412 },
-      'network_sim_sender': { password: 'pass1', user_id: 413 },
-      'network_sim_receiver': { password: 'pass2', user_id: 414 },
-      'relay_compute_user': { password: 'pass1', user_id: 415 },
-      'route_push_user': { password: 'pass1', user_id: 416 },
-      'relay_sender': { password: 'pass1', user_id: 417 },
-      'relay_receiver': { password: 'pass2', user_id: 418 },
-      'relay_intermediate1': { password: 'pass2', user_id: 419 },
-      'relay_intermediate2': { password: 'pass3', user_id: 420 },
-      'max_hop_sender': { password: 'pass1', user_id: 421 },
-      'max_hop_intermediate': { password: 'pass2', user_id: 422 },
-      'max_hop_receiver': { password: 'pass3', user_id: 423 },
-      'poor_direct_sender': { password: 'pass1', user_id: 424 },
-      'poor_direct_relay': { password: 'pass2', user_id: 425 },
-      'poor_direct_receiver': { password: 'pass3', user_id: 426 },
-      'balance_sender': { password: 'pass1', user_id: 427 },
-      'balance_relay1': { password: 'pass2', user_id: 428 },
-      'balance_relay2': { password: 'pass3', user_id: 429 },
-      'balance_receiver': { password: 'pass4', user_id: 430 },
-      'failover_sender': { password: 'pass1', user_id: 431 },
-      'failover_relay1': { password: 'pass2', user_id: 432 },
-      'failover_relay2': { password: 'pass3', user_id: 433 },
-      'failover_receiver': { password: 'pass4', user_id: 434 },
-      // Quality simulation test users
-      'quality_sender': { password: 'pass1', user_id: 501 },
-      'quality_receiver': { password: 'pass2', user_id: 502 },
-    };
+    // Test users database
+    const users = testUserPasswords;
 
     const user = users[req.username];
     if (!user || user.password !== req.password) {
@@ -366,7 +280,7 @@ class TestAuthServer {
       
       this.server.listen(this.port, () => {
         this.server.removeListener('error', errorHandler);
-        console.log(`Test auth server listening on port ${this.port}`);
+        debugLog(`Test auth server listening on port ${this.port}`);
         resolve();
       });
     });
@@ -384,314 +298,354 @@ class TestAuthServer {
         }
         resolve();
       });
-      // 强制关闭所有连接
       this.server.closeAllConnections?.();
     });
   }
-
-  getServer(): http.Server {
-    return this.server;
-  }
 }
 
 /**
- * 启动 Hub 服务器用于测试
+ * 启动单个 Edge 服务器
  */
-export async function startHubServer(configPath?: string, maxRetries: number = 3, silent: boolean = true): Promise<ChildProcess> {
-  const hubPath = join(PROJECT_ROOT, 'packages/hub-server/dist/cli.js');
-  const config = configPath || join(PROJECT_ROOT, 'config/hub.json');
-
-  // 确保构建产物存在
-  if (!fs.existsSync(hubPath)) {
-    throw new Error(`Hub server binary not found at ${hubPath}. Run 'pnpm build' first.`);
+async function startEdgeServer(
+  serverId: number,
+  name: string,
+  port: number,
+  hubPort: number,
+  controlPort: number,
+  silent: boolean
+): Promise<EdgeServer> {
+  const edgeConfigPath = join(PROJECT_ROOT, 'tests/config/edge-test.js');
+  if (!fs.existsSync(edgeConfigPath)) {
+    throw new Error(`Edge config file not found: ${edgeConfigPath}`);
   }
 
-  let lastError: Error | null = null;
-  
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const hubProcess = spawn('node', [hubPath, config], {
-        env: {
-          ...process.env,
-          NODE_ENV: 'test',
-          LOG_LEVEL: 'info', // 设置为 info 级别以查看关键日志
-        },
-        stdio: silent ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'], // 始终使用 pipe 以捕获启动信息
-      });
+  const edgeConfigModule = await import(`file://${edgeConfigPath}?v=${++importCounter}`);
+  const edgeConfig: EdgeConfig = { ...(edgeConfigModule.default || edgeConfigModule) };
 
-      // 等待服务器启动
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Hub server startup timeout'));
-        }, 10000); // 减少到10秒
+  edgeConfig.server_id = serverId;
+  edgeConfig.name = name;
+  edgeConfig.network = edgeConfig.network || { host: '127.0.0.1', port, externalHost: '127.0.0.1' };
+  edgeConfig.network.port = port;
+  edgeConfig.logLevel = silent ? 'error' : 'info';
 
-        let startupDetected = false;
-        
-        const checkStartup = (data: Buffer) => {
-          const message = data.toString();
-          // 只在非 silent 模式下输出日志
-          if (!silent) {
-            process.stdout.write(data); // 转发到控制台
-          }
-          if (message.includes('Hub Server started successfully') || 
-              message.includes('Control channel server listening')) {
-            if (!startupDetected) {
-              startupDetected = true;
-              clearTimeout(timeout);
-              resolve();
-            }
-          }
-        };
+  const certsDir = join(__dirname, 'certs');
+  edgeConfig.tls = {
+    cert: join(certsDir, 'server.pem'),
+    key: join(certsDir, 'server.key'),
+    ca: join(certsDir, 'ca.pem'),
+    requireClientCert: false,
+    rejectUnauthorized: false
+  };
 
-        hubProcess.stdout?.on('data', checkStartup);
-        hubProcess.stderr?.on('data', checkStartup);
+  edgeConfig.hubServer = edgeConfig.hubServer || {
+    host: '127.0.0.1',
+    port: hubPort,
+    controlPort: controlPort,
+    tls: { rejectUnauthorized: false },
+    connectionType: 'websocket',
+    reconnectInterval: 5000,
+    heartbeatInterval: 30000
+  };
+  edgeConfig.hubServer.host = '127.0.0.1';
+  edgeConfig.hubServer.port = hubPort;
+  edgeConfig.hubServer.controlPort = controlPort;
 
-        hubProcess.on('error', (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        });
+  delete (edgeConfig.auth as any)?.apiUrl;
 
-        hubProcess.on('exit', (code) => {
-          if (code !== null && code !== 0) {
-            clearTimeout(timeout);
-            reject(new Error(`Hub process exited with code ${code}`));
-          }
-        });
-      });
+  const edgeServer = new EdgeServer(edgeConfig);
+  await edgeServer.start();
+  debugLog(`${name} started on port ${port}`);
+  await sleep(500);
 
-      // Add continuous logging after startup completes
-      hubProcess.stdout?.on('data', (data: Buffer) => {
-        const message = data.toString();
-        if (message.includes('CROSS-EDGE-DEBUG') || message.includes('BROADCAST') || message.includes('RPC-DEBUG') || message.includes('CONTROL-SERVICE-DEBUG')) {
-          console.error('[HUB-STDOUT]', message.trim());
-        }
-      });
-      hubProcess.stderr?.on('data', (data: Buffer) => {
-        const message = data.toString();
-        console.error('[HUB-STDERR]', message.trim());
-      });
-
-      return hubProcess;
-    } catch (error) {
-      lastError = error as Error;
-      console.warn(`Hub server start attempt ${attempt} failed:`, error);
-      if (attempt < maxRetries) {
-        await sleep(1000); // 等待1秒后重试
-      }
-    }
-  }
-  
-  throw new Error(`Failed to start Hub server after ${maxRetries} attempts. Last error: ${lastError?.message}`);
+  return edgeServer;
 }
 
 /**
- * 启动 Edge 服务器用于测试
- */
-export async function startEdgeServer(configPath?: string, port?: number, maxRetries: number = 3, silent: boolean = true): Promise<ChildProcess> {
-  const edgePath = join(PROJECT_ROOT, 'packages/edge-server/dist/cli.js');
-  const config = configPath || join(PROJECT_ROOT, 'config/edge.example.json');
-
-  // 确保构建产物存在
-  if (!fs.existsSync(edgePath)) {
-    throw new Error(`Edge server binary not found at ${edgePath}. Run 'pnpm build' first.`);
-  }
-
-  let lastError: Error | null = null;
-  
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      const args = [edgePath, 'start', '-c', configPath || config];
-      if (port) {
-        args.push('-p', port.toString());
-      }
-      const edgeProcess = spawn('node', args, {
-        env: {
-          ...process.env,
-          NODE_ENV: 'test',
-          LOG_LEVEL: 'info', // 设置为 info 级别以查看关键日志
-        },
-        stdio: silent ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'], // 始终使用 pipe 以捕获启动信息
-      });
-
-      // 等待服务器启动
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Edge server startup timeout'));
-        }, 10000); // 减少到10秒
-
-        let startupDetected = false;
-        
-        const checkStartup = (data: Buffer) => {
-          const message = data.toString();
-          // 只在非 silent 模式下输出日志
-          if (!silent) {
-            process.stdout.write(data); // 转发到控制台
-          }
-          if (message.includes('Edge Server started successfully') || 
-              message.includes('TLS Server listening') || 
-              message.includes('UDP Server listening')) {
-            if (!startupDetected) {
-              startupDetected = true;
-              clearTimeout(timeout);
-              resolve();
-            }
-          }
-        };
-
-        edgeProcess.stdout?.on('data', checkStartup);
-        edgeProcess.stderr?.on('data', checkStartup);
-
-        edgeProcess.on('error', (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        });
-
-        edgeProcess.on('exit', (code) => {
-          if (code !== null && code !== 0) {
-            clearTimeout(timeout);
-            reject(new Error(`Edge process exited with code ${code}`));
-          }
-        });
-      });
-
-      // Add continuous logging after startup completes
-      edgeProcess.stderr?.on('data', (data: Buffer) => {
-        const message = data.toString();
-        console.error(`[EDGE-${port || 'unknown'}-STDERR]`, message.trim());
-      });
-
-      return edgeProcess;
-    } catch (error) {
-      lastError = error as Error;
-      console.warn(`Edge server start attempt ${attempt} failed:`, error);
-      if (attempt < maxRetries) {
-        await sleep(1000); // 等待1秒后重试
-      }
-    }
-  }
-  
-  throw new Error(`Failed to start Edge server after ${maxRetries} attempts. Last error: ${lastError?.message}`);
-}/**
- * 设置完整的测试环境 (Auth Server + Hub + Edge)
+ * 设置完整的测试环境 - 单进程模式
  */
 export async function setupTestEnvironment(
   basePort: number = 8080,
   options: {
     startHub?: boolean;
     startEdge?: boolean;
-    startEdge2?: boolean; // Whether to start the second Edge server
-    startEdge3?: boolean; // Whether to start the third Edge server
-    startEdge4?: boolean; // Whether to start the fourth Edge server
+    startEdge2?: boolean;
+    startEdge3?: boolean;
+    startEdge4?: boolean;
     startAuth?: boolean;
-    hubConfig?: Record<string, any>; // Custom Hub configuration
-    reuse?: boolean; // Whether to reuse existing global test environment
-    silent?: boolean; // Whether to suppress server output logs (default: true for speed)
-  } = { startHub: true, startEdge: true, startEdge2: true, startEdge3: false, startEdge4: false, startAuth: true, reuse: true, silent: true }
+    hubConfig?: Partial<HubConfig>;
+    reuse?: boolean;
+    silent?: boolean;
+  } = {}
 ): Promise<TestEnvironment> {
-  // Check if we should reuse the global test environment
-  if (globalTestEnvironment && options.reuse !== false) {
-    refCount++;
-    console.log(`Reusing existing test environment (refCount: ${refCount})`);
-    return globalTestEnvironment;
+  // Apply default values
+  const defaultOptions = {
+    startHub: true,
+    startEdge: true,
+    startEdge2: true,
+    startEdge3: false,
+    startEdge4: false,
+    startAuth: true,
+    reuse: true,
+    silent: true
+  };
+  
+  const finalOptions = { ...defaultOptions, ...options };
+  
+  console.error('setup test env options:', finalOptions);
+  
+  // If reuse is false and global environment exists, clean it up first
+  if (globalTestEnvironment && finalOptions.reuse === false) {
+    debugLog('reuse=false: Cleaning up existing environment before creating new one');
+    const oldEnv = globalTestEnvironment;
+    globalTestEnvironment = null;
+    refCount = 0;
+    
+    // Clean up old environment - stop Edge servers first to disconnect from Hub
+    if (oldEnv.edgeServer4) {
+      try {
+        await oldEnv.edgeServer4.stop();
+        debugLog('Edge server 4 stopped');
+      } catch (error) {
+        console.warn('Error stopping edge server 4:', error);
+      }
+      await sleep(300);
+    }
+    if (oldEnv.edgeServer3) {
+      try {
+        await oldEnv.edgeServer3.stop();
+        debugLog('Edge server 3 stopped');
+      } catch (error) {
+        console.warn('Error stopping edge server 3:', error);
+      }
+      await sleep(300);
+    }
+    if (oldEnv.edgeServer2) {
+      try {
+        await oldEnv.edgeServer2.stop();
+        debugLog('Edge server 2 stopped');
+      } catch (error) {
+        console.warn('Error stopping edge server 2:', error);
+      }
+      await sleep(300);
+    }
+    if (oldEnv.edgeServer) {
+      try {
+        await oldEnv.edgeServer.stop();
+        debugLog('Edge server 1 stopped');
+      } catch (error) {
+        console.warn('Error stopping edge server:', error);
+      }
+      await sleep(300);
+    }
+    
+    // Now stop Hub after all Edge servers have disconnected
+    if (oldEnv.hubServer) {
+      try {
+        await oldEnv.hubServer.stop();
+        debugLog('Hub server stopped');
+      } catch (error) {
+        console.warn('Error stopping hub server:', error);
+      }
+      await sleep(500);
+    }
+    
+    if (oldEnv.authServer) {
+      try {
+        await oldEnv.authServer.stop();
+        debugLog('Auth server stopped');
+      } catch (error) {
+        console.warn('Error stopping auth server:', error);
+      }
+    }
+    
+    // Wait longer for all async operations and timers to complete
+    await sleep(2000);
+    debugLog('Old environment cleaned up');
+  }
+  
+  // Reuse global environment if available and reuse is not explicitly false
+  if (globalTestEnvironment && finalOptions.reuse !== false) {
+    // Check if the global environment has all required servers
+    const hasRequiredServers = 
+      (finalOptions.startHub === false || globalTestEnvironment.hubServer) &&
+      (finalOptions.startAuth === false || globalTestEnvironment.authServer) &&
+      (finalOptions.startEdge === false || globalTestEnvironment.edgeServer) &&
+      (finalOptions.startEdge2 !== true || globalTestEnvironment.edgeServer2) &&
+      (finalOptions.startEdge3 !== true || globalTestEnvironment.edgeServer3) &&
+      (finalOptions.startEdge4 !== true || globalTestEnvironment.edgeServer4);
+    
+    if (hasRequiredServers) {
+      refCount++;
+      debugLog(`Reusing existing test environment (refCount: ${refCount})`);
+      return globalTestEnvironment;
+    } else {
+      debugLog('Global environment missing required servers, creating new environment');
+      // Clean up the incomplete environment
+      const oldEnv = globalTestEnvironment;
+      globalTestEnvironment = null;
+      refCount = 0;
+      
+      // Stop any running servers in the old environment
+      if (oldEnv.edgeServer4) {
+        try {
+          await oldEnv.edgeServer4.stop();
+          debugLog('Edge server 4 stopped');
+        } catch (error) {
+          console.warn('Error stopping edge server 4:', error);
+        }
+        await sleep(300);
+      }
+      if (oldEnv.edgeServer3) {
+        try {
+          await oldEnv.edgeServer3.stop();
+          debugLog('Edge server 3 stopped');
+        } catch (error) {
+          console.warn('Error stopping edge server 3:', error);
+        }
+        await sleep(300);
+      }
+      if (oldEnv.edgeServer2) {
+        try {
+          await oldEnv.edgeServer2.stop();
+          debugLog('Edge server 2 stopped');
+        } catch (error) {
+          console.warn('Error stopping edge server 2:', error);
+        }
+        await sleep(300);
+      }
+      if (oldEnv.edgeServer) {
+        try {
+          await oldEnv.edgeServer.stop();
+          debugLog('Edge server 1 stopped');
+        } catch (error) {
+          console.warn('Error stopping edge server:', error);
+        }
+        await sleep(300);
+      }
+      
+      // Now stop Hub after all Edge servers have disconnected
+      if (oldEnv.hubServer) {
+        try {
+          await oldEnv.hubServer.stop();
+          debugLog('Hub server stopped');
+        } catch (error) {
+          console.warn('Error stopping hub server:', error);
+        }
+        await sleep(500);
+      }
+      
+      if (oldEnv.authServer) {
+        try {
+          await oldEnv.authServer.stop();
+          debugLog('Auth server stopped');
+        } catch (error) {
+          console.warn('Error stopping auth server:', error);
+        }
+      }
+      
+      // Wait for cleanup
+      await sleep(2000);
+      debugLog('Incomplete environment cleaned up');
+    }
   }
 
-  // 从环境变量读取 silent 选项，默认为 true（静默）
-  const silent = options.silent ?? (process.env.TEST_VERBOSE !== '1');
+  const silent = finalOptions.silent ?? (process.env.TEST_VERBOSE !== '1');
 
-  console.log('Setting up test environment...');
+  console.log('Setting up test environment (in-process mode)...');
   
   let authServer: TestAuthServer | undefined;
-  let hubProcess: ChildProcess | undefined;
-  let edgeProcess: ChildProcess | undefined;
-  let edgeProcess2: ChildProcess | undefined;
-  let edgeProcess3: ChildProcess | undefined;
-  let edgeProcess4: ChildProcess | undefined;
+  let hubServer: HubServer | undefined;
+  let edgeServer: EdgeServer | undefined;
+  let edgeServer2: EdgeServer | undefined;
+  let edgeServer3: EdgeServer | undefined;
+  let edgeServer4: EdgeServer | undefined;
   
-  // 动态分配端口 - 每个 Edge 需要两个连续端口 (TLS + UDP)
-  const authPort = options.startAuth !== false ? await findAvailablePort(basePort) : 0;
-  const hubPort = options.startHub !== false ? await findAvailablePort(authPort + 1) : 0;
-  const controlPort = options.startHub !== false ? await findAvailablePort(hubPort + 1) : 0;
-  const webApiPort = options.startHub !== false ? await findAvailablePort(controlPort + 1) : 0;
-  const hubVoicePort = options.startHub !== false ? await findAvailablePort(webApiPort + 1) : 0;
+  // 动态分配端口
+  const authPort = finalOptions.startAuth !== false ? await findAvailablePort(basePort) : 0;
+  const hubPort = finalOptions.startHub !== false ? await findAvailablePort(authPort + 1) : 0;
+  const controlPort = finalOptions.startHub !== false ? await findAvailablePort(hubPort + 1) : 0;
+  const webApiPort = finalOptions.startHub !== false ? await findAvailablePort(controlPort + 1) : 0;
+  const hubVoicePort = finalOptions.startHub !== false ? await findAvailablePort(webApiPort + 1) : 0;
   
-  // Edge1: TLS port and UDP port (consecutive)
   const edgeBasePort = Math.max(hubVoicePort, basePort - 1);
-  const edgePort = options.startEdge !== false ? await findAvailablePort(edgeBasePort + 1) : 0;
+  const edgePort = finalOptions.startEdge !== false ? await findAvailablePort(edgeBasePort + 2) : 0;
   const edgeUdpPort = edgePort > 0 ? edgePort + 1 : 0;
   
-  // Edge2: TLS port and UDP port (consecutive, after Edge1)
-  const edgePort2 = (options.startEdge2 === true && edgePort > 0) ? await findAvailablePort(edgeUdpPort + 1) : 0;
+  const edgePort2 = (finalOptions.startEdge2 === true && edgePort > 0) ? await findAvailablePort(edgeUdpPort + 2) : 0;
   const edgeUdpPort2 = edgePort2 > 0 ? edgePort2 + 1 : 0;
   
-  // Edge3: TLS port and UDP port (consecutive, after Edge2)
-  const edgePort3 = (options.startEdge3 === true && edgePort2 > 0) ? await findAvailablePort(edgeUdpPort2 + 1) : 0;
+  const edgePort3 = (finalOptions.startEdge3 === true && edgePort2 > 0) ? await findAvailablePort(edgeUdpPort2 + 2) : 0;
   const edgeUdpPort3 = edgePort3 > 0 ? edgePort3 + 1 : 0;
   
-  // Edge4: TLS port and UDP port (consecutive, after Edge3)
-  const edgePort4 = (options.startEdge4 === true && edgePort3 > 0) ? await findAvailablePort(edgeUdpPort3 + 1) : 0;
+  const edgePort4 = (finalOptions.startEdge4 === true && edgePort3 > 0) ? await findAvailablePort(edgeUdpPort3 + 2) : 0;
   const edgeUdpPort4 = edgePort4 > 0 ? edgePort4 + 1 : 0;
   
   console.log(`Allocated ports - Auth: ${authPort}, Hub: ${hubPort}(TCP)/${hubVoicePort}(UDP), Control: ${controlPort}, WebAPI: ${webApiPort}`);
   console.log(`Edge ports - Edge1: ${edgePort}(TLS)/${edgeUdpPort}(UDP), Edge2: ${edgePort2}(TLS)/${edgeUdpPort2}(UDP), Edge3: ${edgePort3}(TLS)/${edgeUdpPort3}(UDP), Edge4: ${edgePort4}(TLS)/${edgeUdpPort4}(UDP)`);
 
-  // 1. Start auth server (if needed)
-  if (options.startAuth !== false) {
-    authServer = new TestAuthServer(authPort);
-    await authServer.start();
-    // Give auth server a bit of startup time
-    await sleep(100);
-  }
+  try {
+    // 1. 启动认证服务器
+    if (finalOptions.startAuth !== false) {
+      authServer = new TestAuthServer(authPort);
+      await authServer.start();
+      await sleep(100);
+    }
 
-  // 2. Start Hub server (if needed)
-  if (options.startHub !== false) {
-    try {
+    // 2. 启动 Hub 服务器
+    if (finalOptions.startHub !== false) {
       const hubConfigPath = join(PROJECT_ROOT, 'tests/config/hub-test.js');
       if (fs.existsSync(hubConfigPath)) {
-        // Use dynamic ports to avoid conflicts
-        const actualHubPort = hubPort; // Hub uses dynamic port
-        const actualControlPort = controlPort; // Control port uses dynamic port
-        
-        // Load the JS config file
         const hubConfigModule = await import(`file://${hubConfigPath}?v=${++importCounter}`);
-        const hubConfig = { ...(hubConfigModule.default || hubConfigModule) };
+        const hubConfig: HubConfig = { ...(hubConfigModule.default || hubConfigModule) };
         
-        hubConfig.port = actualHubPort;
-        hubConfig.controlPort = actualControlPort; // Set dynamic control port
-        hubConfig.webApi.port = webApiPort; // Web API uses dynamic port
-        hubConfig.voicePort = hubVoicePort; // Set dynamic voice port
+        hubConfig.port = hubPort;
+        hubConfig.controlPort = controlPort;
+        hubConfig.webApi = hubConfig.webApi || { port: webApiPort, host: '127.0.0.1', cors: { enabled: true, origins: ['*'] } };
+        hubConfig.webApi.port = webApiPort;
+        hubConfig.voicePort = hubVoicePort;
         
-        // Configure auth (pointing to test auth server)
-        hubConfig.auth = hubConfig.auth || {};
-        hubConfig.auth.apiUrl = `http://127.0.0.1:${authPort}/auth`;
+        hubConfig.auth = { apiUrl: `http://127.0.0.1:${authPort}/auth`, apiKey: '', timeout: 5000 };
         
-        // Apply custom Hub config
-        if (options.hubConfig) {
-          Object.assign(hubConfig, options.hubConfig);
+        if (finalOptions.hubConfig) {
+          Object.assign(hubConfig, finalOptions.hubConfig);
         }
         
-        const tempHubConfigPath = join(PROJECT_ROOT, `tests/config/hub-test-${basePort}.js`);
-        fs.writeFileSync(tempHubConfigPath, `export default ${JSON.stringify(hubConfig, null, 2)};`);
+        // 使用基于端口的唯一数据库文件，避免多个测试套件冲突
+        const dbPath = join(PROJECT_ROOT, `data/hub-test-${basePort}.db`);
+        hubConfig.database.path = dbPath;
         
-        // Delete test database file to ensure clean state
-        const dbPath = join(PROJECT_ROOT, 'data/hub-test.db');
+        // 删除旧的数据库文件
         if (fs.existsSync(dbPath)) {
-          fs.unlinkSync(dbPath);
-          console.log('Deleted existing test database file');
+          try {
+            fs.unlinkSync(dbPath);
+            debugLog(`Deleted existing test database file: ${dbPath}`);
+          } catch (error) {
+            console.warn(`Failed to delete old database file: ${error}`);
+            // Try to wait a bit and retry
+            await sleep(500);
+            try {
+              fs.unlinkSync(dbPath);
+              debugLog(`Deleted database file on retry: ${dbPath}`);
+            } catch (retryError) {
+              console.error(`Failed to delete database file after retry: ${retryError}`);
+            }
+          }
         }
         
-        // Initialize test database
-        console.log('Initializing test database...');
+        // 初始化数据库
+        debugLog('Initializing test database...');
         const initScript = join(PROJECT_ROOT, 'scripts/init-test-db.ts');
         if (fs.existsSync(initScript)) {
-          const initProcess = spawn('tsx', [initScript], {
-            stdio: 'inherit',
-            cwd: PROJECT_ROOT,
-          });
-          
           await new Promise<void>((resolve, reject) => {
+            const initProcess = spawn('tsx', [initScript, dbPath], {
+              stdio: silent ? 'ignore' : 'inherit',
+              cwd: PROJECT_ROOT,
+              env: { ...process.env, DB_PATH: dbPath },
+            });
+            
             initProcess.on('exit', (code: number) => {
               if (code === 0) {
-                console.log('Test database initialized successfully');
+                debugLog('Test database initialized successfully');
                 resolve();
               } else {
                 reject(new Error(`Database initialization failed with code ${code}`));
@@ -701,343 +655,120 @@ export async function setupTestEnvironment(
           });
         }
         
-        // 等待数据库完全释放
-        await sleep(1000);
-        
-        hubProcess = await startHubServer(tempHubConfigPath, 3, silent);
-        await sleep(500); // 减少等待时间
-        
-        // 清理临时配置文件
-        setTimeout(() => {
-          try {
-            fs.unlinkSync(tempHubConfigPath);
-          } catch (error) {
-            // 忽略清理错误
-          }
-        }, 1000);
-      }
-    } catch (error) {
-      console.warn('Failed to start Hub server:', error);
-    }
-  }
-
-  // 3. 启动第一个 Edge 服务器（如果需要）
-  if (options.startEdge !== false) {
-    try {
-      const edgeConfigPath = join(PROJECT_ROOT, 'tests/config/edge-test.js');
-      if (fs.existsSync(edgeConfigPath)) {
-        // 使用动态端口避免冲突
-        const actualEdgePort = edgePort; // Edge使用动态端口
-        const actualHubPort = hubPort; // Hub端口
-        const actualControlPort = controlPort; // 控制端口
-        
-        // Load the JS config file
-        const edgeConfigModule = await import(`file://${edgeConfigPath}?v=${++importCounter}`);
-        const edgeConfig = { ...(edgeConfigModule.default || edgeConfigModule) };
-        
-        // 设置服务器 ID
-        edgeConfig.server_id = 1;
-        
-        // 设置网络端口
-        edgeConfig.network = edgeConfig.network || {};
-        edgeConfig.network.port = actualEdgePort;
-        edgeConfig.server = edgeConfig.server || {};
-        edgeConfig.server.name = 'MuNode Edge Server 1 (Test)';
-        edgeConfig.server.serverId = 1;
-        
-        // 配置 TLS 证书
-        const certsDir = join(__dirname, 'certs');
-        edgeConfig.tls = {
-          cert: join(certsDir, 'server.pem'),
-          key: join(certsDir, 'server.key'),
-          ca: join(certsDir, 'ca.pem'),
-          requireClientCert: false,
-          rejectUnauthorized: false
-        };
-        
-        // 配置 Hub 连接
-        edgeConfig.hubServer = edgeConfig.hubServer || {};
-        edgeConfig.hubServer.host = '127.0.0.1';
-        edgeConfig.hubServer.port = actualHubPort;
-        edgeConfig.hubServer.controlPort = controlPort;
-        
-        // 移除直接的认证 API 配置（现在通过 Hub 认证）
-        edgeConfig.auth = edgeConfig.auth || {};
-        delete edgeConfig.auth.apiUrl;
-        
-        const tempEdgeConfigPath = join(PROJECT_ROOT, `tests/config/edge-test-${basePort}.js`);
-        fs.writeFileSync(tempEdgeConfigPath, `export default ${JSON.stringify(edgeConfig, null, 2)};`);
-        console.log(`Created temp edge config at ${tempEdgeConfigPath} with port ${actualEdgePort}`);
-        
-        edgeProcess = await startEdgeServer(tempEdgeConfigPath, actualEdgePort, 3, silent);
-        await sleep(500); // 减少等待时间
-        
-        // 清理临时配置文件
-        setTimeout(() => {
-          try {
-            fs.unlinkSync(tempEdgeConfigPath);
-          } catch (error) {
-            // 忽略清理错误
-          }
-        }, 2000);
-      }
-    } catch (error) {
-      console.warn('Failed to start Edge server:', error);
-    }
-  }
-
-  // 4. 启动第二个 Edge 服务器（如果需要，用于跨 Edge 测试）
-  if (options.startEdge2 !== false) {
-    try {
-      const edgeConfigPath = join(PROJECT_ROOT, 'tests/config/edge-test.js');
-      if (fs.existsSync(edgeConfigPath)) {
-        // 使用动态端口避免冲突
-        const actualEdgePort2 = edgePort2; // Edge2使用动态端口
-        const actualHubPort = hubPort; // Hub端口
-        const actualControlPort = controlPort; // 控制端口
-        
-        // Load the JS config file (use counter for cache busting)
-        const edgeConfigModule2 = await import(`file://${edgeConfigPath}?v=${++importCounter}`);
-        const edgeConfig2 = { ...(edgeConfigModule2.default || edgeConfigModule2) };
-        
-        // 设置服务器 ID
-        edgeConfig2.server_id = 2;
-        
-        // 设置网络端口
-        edgeConfig2.network = edgeConfig2.network || {};
-        edgeConfig2.network.port = actualEdgePort2;
-        edgeConfig2.server = edgeConfig2.server || {};
-        edgeConfig2.server.name = 'MuNode Edge Server 2 (Test)';
-        edgeConfig2.server.serverId = 2;
-        
-        // 配置 TLS 证书
-        const certsDir = join(__dirname, 'certs');
-        edgeConfig2.tls = {
-          cert: join(certsDir, 'server.pem'),
-          key: join(certsDir, 'server.key'),
-          ca: join(certsDir, 'ca.pem'),
-          requireClientCert: false,
-          rejectUnauthorized: false
-        };
-        
-        // 配置 Hub 连接
-        edgeConfig2.hubServer = edgeConfig2.hubServer || {};
-        edgeConfig2.hubServer.host = '127.0.0.1';
-        edgeConfig2.hubServer.port = actualHubPort;
-        edgeConfig2.hubServer.controlPort = controlPort;
-        
-        // 移除直接的认证 API 配置（现在通过 Hub 认证）
-        edgeConfig2.auth = edgeConfig2.auth || {};
-        delete edgeConfig2.auth.apiUrl;
-        
-        const tempEdgeConfigPath2 = join(PROJECT_ROOT, `tests/config/edge-test-${basePort}-2.js`);
-        fs.writeFileSync(tempEdgeConfigPath2, `export default ${JSON.stringify(edgeConfig2, null, 2)};`);
-        console.log(`Created temp edge config 2 at ${tempEdgeConfigPath2} with port ${actualEdgePort2}`);
-        
-        edgeProcess2 = await startEdgeServer(tempEdgeConfigPath2, actualEdgePort2, 3, silent);
-        await sleep(500); // 减少等待时间
-        
-        // 清理临时配置文件
-        setTimeout(() => {
-          try {
-            fs.unlinkSync(tempEdgeConfigPath2);
-          } catch (error) {
-            // 忽略清理错误
-          }
-        }, 2000);
-      }
-    } catch (error) {
-      console.warn('Failed to start Edge server 2:', error);
-    }
-  }
-
-  // 5. 启动第三个 Edge 服务器（如果需要，用于多 Edge 路由测试）
-  if (options.startEdge3 === true) {
-    try {
-      const edgeConfigPath = join(PROJECT_ROOT, 'tests/config/edge-test.js');
-      if (fs.existsSync(edgeConfigPath)) {
-        const actualEdgePort3 = edgePort3;
-        
-        const edgeConfigModule3 = await import(`file://${edgeConfigPath}?v=${++importCounter}`);
-        const edgeConfig3 = { ...(edgeConfigModule3.default || edgeConfigModule3) };
-        
-        edgeConfig3.server_id = 3;
-        edgeConfig3.network = edgeConfig3.network || {};
-        edgeConfig3.network.port = actualEdgePort3;
-        edgeConfig3.server = edgeConfig3.server || {};
-        edgeConfig3.server.name = 'MuNode Edge Server 3 (Test)';
-        edgeConfig3.server.serverId = 3;
-        
-        const certsDir = join(__dirname, 'certs');
-        edgeConfig3.tls = {
-          cert: join(certsDir, 'server.pem'),
-          key: join(certsDir, 'server.key'),
-          ca: join(certsDir, 'ca.pem'),
-          requireClientCert: false,
-          rejectUnauthorized: false
-        };
-        
-        edgeConfig3.hubServer = edgeConfig3.hubServer || {};
-        edgeConfig3.hubServer.host = '127.0.0.1';
-        edgeConfig3.hubServer.port = hubPort;
-        edgeConfig3.hubServer.controlPort = controlPort;
-        
-        edgeConfig3.auth = edgeConfig3.auth || {};
-        delete edgeConfig3.auth.apiUrl;
-        
-        const tempEdgeConfigPath3 = join(PROJECT_ROOT, `tests/config/edge-test-${basePort}-3.js`);
-        fs.writeFileSync(tempEdgeConfigPath3, `export default ${JSON.stringify(edgeConfig3, null, 2)};`);
-        console.log(`Created temp edge config 3 at ${tempEdgeConfigPath3} with port ${actualEdgePort3}`);
-        
-        edgeProcess3 = await startEdgeServer(tempEdgeConfigPath3, actualEdgePort3, 3, silent);
         await sleep(500);
         
-        setTimeout(() => {
-          try {
-            fs.unlinkSync(tempEdgeConfigPath3);
-          } catch (error) {
-            // 忽略清理错误
-          }
-        }, 2000);
+        // 创建 Hub 服务器实例
+        hubServer = new HubServer(hubConfig);
+        await hubServer.start();
+        debugLog('Hub server started successfully');
+        
+        // 等待控制端口完全就绪 - WebSocketServer 需要时间监听端口
+        await sleep(2000);
       }
-    } catch (error) {
-      console.warn('Failed to start Edge server 3:', error);
     }
-  }
 
-  // 6. 启动第四个 Edge 服务器（如果需要，用于完整路由测试）
-  if (options.startEdge4 === true) {
-    try {
-      const edgeConfigPath = join(PROJECT_ROOT, 'tests/config/edge-test.js');
-      if (fs.existsSync(edgeConfigPath)) {
-        const actualEdgePort4 = edgePort4;
-        
-        const edgeConfigModule4 = await import(`file://${edgeConfigPath}?v=${++importCounter}`);
-        const edgeConfig4 = { ...(edgeConfigModule4.default || edgeConfigModule4) };
-        
-        edgeConfig4.server_id = 4;
-        edgeConfig4.network = edgeConfig4.network || {};
-        edgeConfig4.network.port = actualEdgePort4;
-        edgeConfig4.server = edgeConfig4.server || {};
-        edgeConfig4.server.name = 'MuNode Edge Server 4 (Test)';
-        edgeConfig4.server.serverId = 4;
-        
-        const certsDir = join(__dirname, 'certs');
-        edgeConfig4.tls = {
-          cert: join(certsDir, 'server.pem'),
-          key: join(certsDir, 'server.key'),
-          ca: join(certsDir, 'ca.pem'),
-          requireClientCert: false,
-          rejectUnauthorized: false
-        };
-        
-        edgeConfig4.hubServer = edgeConfig4.hubServer || {};
-        edgeConfig4.hubServer.host = '127.0.0.1';
-        edgeConfig4.hubServer.port = hubPort;
-        edgeConfig4.hubServer.controlPort = controlPort;
-        
-        edgeConfig4.auth = edgeConfig4.auth || {};
-        delete edgeConfig4.auth.apiUrl;
-        
-        const tempEdgeConfigPath4 = join(PROJECT_ROOT, `tests/config/edge-test-${basePort}-4.js`);
-        fs.writeFileSync(tempEdgeConfigPath4, `export default ${JSON.stringify(edgeConfig4, null, 2)};`);
-        console.log(`Created temp edge config 4 at ${tempEdgeConfigPath4} with port ${actualEdgePort4}`);
-        
-        edgeProcess4 = await startEdgeServer(tempEdgeConfigPath4, actualEdgePort4, 3, silent);
-        await sleep(500);
-        
-        setTimeout(() => {
-          try {
-            fs.unlinkSync(tempEdgeConfigPath4);
-          } catch (error) {
-            // 忽略清理错误
-          }
-        }, 2000);
-      }
-    } catch (error) {
-      console.warn('Failed to start Edge server 4:', error);
+    // 3. 启动 Edge 服务器 1
+    if (finalOptions.startEdge !== false && edgePort > 0) {
+      edgeServer = await startEdgeServer(1, 'MuNode Edge Server 1 (Test)', edgePort, hubPort, controlPort, silent);
     }
+
+    // 4. 启动 Edge 服务器 2
+    if (finalOptions.startEdge2 !== false && edgePort2 > 0) {
+      edgeServer2 = await startEdgeServer(2, 'MuNode Edge Server 2 (Test)', edgePort2, hubPort, controlPort, silent);
+    }
+
+    // 5. 启动 Edge 服务器 3
+    if (finalOptions.startEdge3 === true && edgePort3 > 0) {
+      edgeServer3 = await startEdgeServer(3, 'MuNode Edge Server 3 (Test)', edgePort3, hubPort, controlPort, silent);
+    }
+
+    // 6. 启动 Edge 服务器 4
+    if (finalOptions.startEdge4 === true && edgePort4 > 0) {
+      edgeServer4 = await startEdgeServer(4, 'MuNode Edge Server 4 (Test)', edgePort4, hubPort, controlPort, silent);
+    }
+
+    console.log('✓ All servers started successfully in single process!');
+
+  } catch (error) {
+    console.error('Failed to setup test environment:', error);
+    // Cleanup on error
+    if (edgeServer4) await edgeServer4.stop().catch(() => {});
+    if (edgeServer3) await edgeServer3.stop().catch(() => {});
+    if (edgeServer2) await edgeServer2.stop().catch(() => {});
+    if (edgeServer) await edgeServer.stop().catch(() => {});
+    if (hubServer) await hubServer.stop().catch(() => {});
+    if (authServer) await authServer.stop().catch(() => {});
+    throw error;
   }
 
   const realCleanup = async () => {
-    console.log('Cleaning up test environment...');
+    debugLog('Cleaning up test environment...');
 
-    // 先关闭认证服务器，它不依赖其他服务
+    // Stop Edge servers first (in reverse order) with delays between each
+    if (edgeServer4) {
+      try {
+        await edgeServer4.stop();
+        debugLog('Edge server 4 stopped');
+      } catch (error) {
+        console.warn('Error stopping edge server 4:', error);
+      }
+      await sleep(300);
+    }
+
+    if (edgeServer3) {
+      try {
+        await edgeServer3.stop();
+        debugLog('Edge server 3 stopped');
+      } catch (error) {
+        console.warn('Error stopping edge server 3:', error);
+      }
+      await sleep(300);
+    }
+
+    if (edgeServer2) {
+      try {
+        await edgeServer2.stop();
+        debugLog('Edge server 2 stopped');
+      } catch (error) {
+        console.warn('Error stopping edge server 2:', error);
+      }
+      await sleep(300);
+    }
+
+    if (edgeServer) {
+      try {
+        await edgeServer.stop();
+        debugLog('Edge server 1 stopped');
+      } catch (error) {
+        console.warn('Error stopping edge server 1:', error);
+      }
+      await sleep(300);
+    }
+
+    // Now stop Hub after all Edge servers have disconnected
+    if (hubServer) {
+      try {
+        await hubServer.stop();
+        debugLog('Hub server stopped');
+      } catch (error) {
+        console.warn('Error stopping hub server:', error);
+      }
+      await sleep(500);
+    }
+
     if (authServer) {
       try {
         await authServer.stop();
+        debugLog('Auth server stopped');
       } catch (error) {
         console.warn('Error stopping auth server:', error);
       }
     }
 
-    // 改进的进程终止函数 - 更激进地终止进程
-    const killProcess = async (process: ChildProcess | undefined, name: string) => {
-      if (!process) return;
-      
-      try {
-        console.log(`Killing ${name} process (PID: ${process.pid})...`);
-        
-        // 首先尝试 SIGTERM
-        process.kill('SIGTERM');
-        
-        // 等待进程退出，带超时
-        const killed = await new Promise<boolean>((resolve) => {
-          const exitHandler = () => {
-            console.log(`${name} exited gracefully`);
-            resolve(true);
-          };
-          process.once('exit', exitHandler);
-          
-          // 2秒后强制 SIGKILL
-          const killTimeout = setTimeout(() => {
-            process.removeListener('exit', exitHandler);
-            console.warn(`${name} did not exit gracefully, sending SIGKILL...`);
-            try {
-              // 先尝试杀死进程组（如果有子进程）
-              if (process.pid) {
-                try {
-                  process.kill('SIGKILL');
-                  // 也尝试杀死整个进程组
-                  process.kill(0); // 测试进程是否存在
-                } catch (e) {
-                  // 进程可能已经不存在
-                }
-              }
-            } catch (e) {
-              // 进程可能已退出
-            }
-            resolve(false);
-          }, 2000);
-          
-          // 也监听错误
-          process.once('error', () => {
-            clearTimeout(killTimeout);
-            resolve(false);
-          });
-        });
-        
-        if (!killed) {
-          // 如果还没有退出，等待一小段时间让 SIGKILL 生效
-          await sleep(500);
-        }
-      } catch (error) {
-        console.warn(`Error killing ${name}:`, error);
-      }
-    };
-
-    // 按照依赖顺序关闭进程（先关 Edge，最后关 Hub）
-    await killProcess(edgeProcess4, 'Edge4');
-    await killProcess(edgeProcess3, 'Edge3');
-    await killProcess(edgeProcess2, 'Edge2');
-    await killProcess(edgeProcess, 'Edge');
-    await killProcess(hubProcess, 'Hub');
+    // Wait longer for all async operations and timers to complete
+    await sleep(2000);
     
-    // 等待端口释放 - 增加等待时间确保端口完全释放
-    console.log('Waiting for ports to be released...');
-    await sleep(1000);
-    
-    // 验证端口是否已释放（可选，用于调试）
+    // 验证端口释放
     const portsToCheck = [authPort, hubPort, edgePort, edgePort2, edgePort3, edgePort4, controlPort, webApiPort].filter(p => p > 0);
     for (const port of portsToCheck) {
       let attempts = 0;
@@ -1047,30 +778,21 @@ export async function setupTestEnvironment(
         attempts++;
       }
       if (!(await isPortAvailable(port))) {
-        console.error(`ERROR: Port ${port} is still in use after cleanup. This may cause test failures.`);
-        // 尝试找出占用端口的进程
-        try {
-          const { execSync } = await import('child_process');
-          const output = execSync(`lsof -i :${port} || netstat -tulpn | grep :${port}`).toString();
-          console.error(`Port ${port} is held by:`, output);
-        } catch (e) {
-          // 忽略错误
-        }
+        console.warn(`Warning: Port ${port} may still be in use after cleanup`);
       }
     }
-    
-    console.log('Cleanup completed');
+
+    debugLog('Cleanup completed');
   };
 
-  // Set up the global environment
   refCount = 1;
   globalTestEnvironment = { 
-    hubProcess, 
-    edgeProcess,
-    edgeProcess2,
-    edgeProcess3,
-    edgeProcess4,
-    authServer: authServer?.getServer(),
+    hubServer, 
+    edgeServer,
+    edgeServer2,
+    edgeServer3,
+    edgeServer4,
+    authServer,
     authPort,
     hubPort,
     controlPort,
@@ -1085,10 +807,11 @@ export async function setupTestEnvironment(
     edgeUdpPort4,
     cleanup: async () => {
       refCount--;
-      console.log(`Test environment cleanup called (refCount: ${refCount})`);
+      debugLog(`Test environment cleanup called (refCount: ${refCount})`);
       if (refCount === 0) {
         await realCleanup();
         globalTestEnvironment = null;
+        debugLog('Global test environment cleared');
       }
     }
   };
@@ -1103,52 +826,23 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Global cleanup handlers to ensure servers are stopped on process exit
+// Global cleanup handler
 process.on('beforeExit', async () => {
   if (globalTestEnvironment && refCount > 0) {
-    console.log('Process beforeExit: Cleaning up test environment...');
+    debugLog('Process beforeExit: Cleaning up test environment...');
     refCount = 0;
     try {
-      // Perform real cleanup directly
       const env = globalTestEnvironment;
       globalTestEnvironment = null;
       
-      if (env.authServer) {
-        try {
-          await (env.authServer as any).stop?.();
-        } catch (error) {
-          console.warn('Error stopping auth server on exit:', error);
-        }
-      }
-
-      const killProcess = async (process: ChildProcess | undefined, name: string) => {
-        if (!process) return;
-        try {
-          console.log(`Cleaning up ${name} on exit...`);
-          process.kill('SIGTERM');
-          await new Promise<void>((resolve) => {
-            process.once('exit', () => resolve());
-            setTimeout(() => {
-              try {
-                process.kill('SIGKILL');
-              } catch (e) {
-                // Process may have already exited
-              }
-              resolve();
-            }, 1000); // Shorter timeout for exit cleanup
-          });
-        } catch (error) {
-          console.warn(`Error killing ${name} on exit:`, error);
-        }
-      };
-
-      await killProcess(env.edgeProcess4, 'Edge4');
-      await killProcess(env.edgeProcess3, 'Edge3');
-      await killProcess(env.edgeProcess2, 'Edge2');
-      await killProcess(env.edgeProcess, 'Edge');
-      await killProcess(env.hubProcess, 'Hub');
+      if (env.edgeServer4) await env.edgeServer4.stop().catch(() => {});
+      if (env.edgeServer3) await env.edgeServer3.stop().catch(() => {});
+      if (env.edgeServer2) await env.edgeServer2.stop().catch(() => {});
+      if (env.edgeServer) await env.edgeServer.stop().catch(() => {});
+      if (env.hubServer) await env.hubServer.stop().catch(() => {});
+      if (env.authServer) await env.authServer.stop().catch(() => {});
       
-      await sleep(500); // Wait for ports to be released
+      await sleep(500);
     } catch (error) {
       console.warn('Error during global cleanup:', error);
     }
@@ -1163,22 +857,17 @@ const handleSignal = async (signal: string) => {
     const env = globalTestEnvironment;
     globalTestEnvironment = null;
 
-    // Synchronous cleanup for signal handlers
-    const killSync = (process: ChildProcess | undefined, name: string) => {
-      if (!process || !process.pid) return;
-      try {
-        console.log(`Force killing ${name} (PID: ${process.pid})...`);
-        process.kill('SIGKILL');
-      } catch (e) {
-        // Process may not exist
-      }
-    };
-
-    killSync(env.edgeProcess4, 'Edge4');
-    killSync(env.edgeProcess3, 'Edge3');
-    killSync(env.edgeProcess2, 'Edge2');
-    killSync(env.edgeProcess, 'Edge');
-    killSync(env.hubProcess, 'Hub');
+    // 单进程模式，直接停止服务器实例
+    try {
+      if (env.edgeServer4) await env.edgeServer4.stop();
+      if (env.edgeServer3) await env.edgeServer3.stop();
+      if (env.edgeServer2) await env.edgeServer2.stop();
+      if (env.edgeServer) await env.edgeServer.stop();
+      if (env.hubServer) await env.hubServer.stop();
+      if (env.authServer) await env.authServer.stop();
+    } catch (e) {
+      console.error('Error during cleanup:', e);
+    }
   }
   
   // Exit immediately

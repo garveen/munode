@@ -12,6 +12,7 @@ import { startHttpServer } from './api/http-server.js';
 import { startWebSocketServer } from './api/websocket.js';
 import { resolve } from 'path';
 import type { ConnectOptions } from './types/client-types.js';
+import { loadConfig } from '@munode/common';
 
 interface CliConfig {
   server: {
@@ -70,7 +71,6 @@ program
       // 加载配置文件
       let config: CliConfig;
       try {
-        const { loadConfig } = await import('@munode/common');
         const configPath = resolve(options.config);
         config = await loadConfig(configPath);
         console.log(`Loaded configuration from ${configPath}`);

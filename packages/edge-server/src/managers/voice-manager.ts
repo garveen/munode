@@ -426,7 +426,8 @@ export class VoiceManager {
                 // TODO: 实现中转包装协议，传递 finalTarget 信息
                 // 暂时直接转发，假设中转节点会根据内容自行路由
                 this.voiceTransport.sendToEdge(route.nextHop, voicePacket, packetData);
-                this.voiceRoutingManager.recordRelayedPacket(packetData.length);
+                // 记录中转，传递目标节点 ID 用于调试
+                this.voiceRoutingManager.recordRelayedPacket(packetData.length, targetEdgeId);
               } else {
                 // 没有中转节点，降级到直连
                 logger.warn(`No relay hop for Edge ${targetEdgeId}, falling back to direct`);
@@ -480,7 +481,8 @@ export class VoiceManager {
 
       // 转发到最终目标（保持原始包头信息）
       this.voiceTransport.sendToEdge(finalTargetEdgeId, packet, voiceData);
-      this.voiceRoutingManager.recordRelayedPacket(voiceData.length);
+      // 记录中转，传递目标 Edge ID 用于调试
+      this.voiceRoutingManager.recordRelayedPacket(voiceData.length, finalTargetEdgeId);
       
       logger.debug(`Relayed voice packet to Edge ${finalTargetEdgeId}`);
     } catch (error) {

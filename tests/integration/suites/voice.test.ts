@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { TestEnvironment, setupTestEnvironment } from '../setup';
+import { TestEnvironment, setupTestEnvironment, createClients, cleanupClients } from '../setup';
 import { MumbleClient } from '../../../packages/client/src/index.js';
 import * as crypto from 'crypto';
 
@@ -145,68 +145,6 @@ function waitForVoice(client: MumbleClient, senderSession: number, timeoutMs: nu
   });
 }
 
-/**
- * 批量创建测试客户端
- */
-interface ClientConfig {
-  username: string;
-  password: string;
-  edge: 1 | 2;
-  channelId?: number;
-}
-
-async function createClients(testEnv: TestEnvironment, configs: ClientConfig[]): Promise<MumbleClient[]> {
-  const clients: (MumbleClient | null)[] = new Array(configs.length).fill(null);
-  
-  await Promise.all(configs.map(async (config, index) => {
-    const client = new MumbleClient();
-    const targetPort = config.edge === 1 ? testEnv.edgePort : testEnv.edgePort2;
-    // UDP port is the same as TCP port for client-to-Edge communication
-    const targetUdpPort = targetPort;
-    console.log(`[TEST] Connecting ${config.username} to Edge ${config.edge} on port ${targetPort} (UDP: ${targetUdpPort})`);
-    await client.connect({
-      host: 'localhost',
-      port: targetPort,
-      udpPort: targetUdpPort,
-      username: config.username,
-      password: config.password,
-      rejectUnauthorized: false,
-      forceTcpVoice: false,
-    });
-    
-    // 等待 UDP 连接就绪
-    try {
-      await client.waitForUDP(3000);
-      console.log(`[TEST] ${config.username} UDP ready`);
-    } catch (error) {
-      console.warn(`[TEST] ${config.username} UDP timeout, will use TCP:`, error);
-    }
-    
-    if (config.channelId !== undefined) {
-      await client.sendUserState({ channel_id: config.channelId });
-      await new Promise(resolve => setTimeout(resolve, 200));
-    }
-    
-    // Use index to preserve order
-    clients[index] = client;
-  }));
-  
-  return clients as MumbleClient[];
-}
-
-/**
- * 清理客户端
- */
-async function cleanupClients(clients: MumbleClient[]): Promise<void> {
-  for (const client of clients) {
-    try {
-      await client.disconnect();
-    } catch (e) {
-      // 忽略断开连接的错误
-    }
-  }
-}
-
 describe('Voice Integration Tests', () => {
   let testEnv: TestEnvironment;
   let adminForCleanup: MumbleClient | null = null;
@@ -251,11 +189,11 @@ describe('Voice Integration Tests', () => {
       // - receiver_edge2_other: Edge 2, Channel 1 - 不应接收（跨 Edge + 不同频道）
       
       const clients = await createClients(testEnv, [
-        { username: 'voice_sender', password: 'pass1', edge: 1, channelId: 0 },
-        { username: 'voice_recv_e1_same', password: 'pass2', edge: 1, channelId: 0 },
-        { username: 'voice_recv_e2_same', password: 'pass3', edge: 2, channelId: 0 },
-        { username: 'voice_recv_e1_other', password: 'pass4', edge: 1, channelId: 1 },
-        { username: 'voice_recv_e2_other', password: 'pass5', edge: 2, channelId: 1 },
+        { username: 'voice_sender', edge: 1, channelId: 0 },
+        { username: 'voice_recv_e1_same', edge: 1, channelId: 0 },
+        { username: 'voice_recv_e2_same', edge: 2, channelId: 0 },
+        { username: 'voice_recv_e1_other', edge: 1, channelId: 1 },
+        { username: 'voice_recv_e2_other', edge: 2, channelId: 1 },
       ]);
       
       const [sender, recvE1Same, recvE2Same, recvE1Other, recvE2Other] = clients;
@@ -306,10 +244,10 @@ describe('Voice Integration Tests', () => {
     it('should not send voice to deaf users on same or cross edge', async () => {
       // 测试 deaf 用户不接收语音
       const clients = await createClients(testEnv, [
-        { username: 'voice_sender2', password: 'pass1', edge: 1, channelId: 0 },
-        { username: 'voice_deaf_e1', password: 'pass2', edge: 1, channelId: 0 },
-        { username: 'voice_deaf_e2', password: 'pass3', edge: 2, channelId: 0 },
-        { username: 'voice_normal_e1', password: 'pass4', edge: 1, channelId: 0 },
+        { username: 'voice_sender2', edge: 1, channelId: 0 },
+        { username: 'voice_deaf_e1', edge: 1, channelId: 0 },
+        { username: 'voice_deaf_e2', edge: 2, channelId: 0 },
+        { username: 'voice_normal_e1', edge: 1, channelId: 0 },
       ]);
       
       const [sender, deafE1, deafE2, normalE1] = clients;
@@ -370,12 +308,12 @@ describe('Voice Integration Tests', () => {
       await linkChannels(admin, 0, 1);
       
       const clients = await createClients(testEnv, [
-        { username: 'voice_sender3', password: 'pass1', edge: 1, channelId: 0 },
-        { username: 'voice_recv_e1_ch0', password: 'pass2', edge: 1, channelId: 0 },
-        { username: 'voice_recv_e2_ch0', password: 'pass3', edge: 2, channelId: 0 },
-        { username: 'voice_recv_e1_ch1', password: 'pass4', edge: 1, channelId: 1 },
-        { username: 'voice_recv_e2_ch1', password: 'pass5', edge: 2, channelId: 1 },
-        { username: 'voice_recv_e1_ch2', password: 'pass6', edge: 1, channelId: 2 },
+        { username: 'voice_sender3', edge: 1, channelId: 0 },
+        { username: 'voice_recv_e1_ch0', edge: 1, channelId: 0 },
+        { username: 'voice_recv_e2_ch0', edge: 2, channelId: 0 },
+        { username: 'voice_recv_e1_ch1', edge: 1, channelId: 1 },
+        { username: 'voice_recv_e2_ch1', edge: 2, channelId: 1 },
+        { username: 'voice_recv_e1_ch2', edge: 1, channelId: 2 },
       ]);
       
       // 等待所有客户端完全初始化并接收频道链接信息（增加到 1.5 秒）
@@ -451,12 +389,15 @@ describe('Voice Integration Tests', () => {
       // - non_target_e1: Edge 1, 同频道 - 不应收到
       // - non_target_e2: Edge 2, 同频道 - 不应收到
       
+      // 等待前面测试的客户端完全断开（额外增加时间以确保清理完成）
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
       const clients = await createClients(testEnv, [
-        { username: 'voice_whisper_sender', password: 'pass1', edge: 1, channelId: 0 },
-        { username: 'voice_target1_e1', password: 'pass2', edge: 1, channelId: 0 },
-        { username: 'voice_target1_e2', password: 'pass3', edge: 2, channelId: 0 },
-        { username: 'voice_non_target_e1', password: 'pass4', edge: 1, channelId: 0 },
-        { username: 'voice_non_target_e2', password: 'pass5', edge: 2, channelId: 0 },
+        { username: 'voice_whisper_sender', edge: 1, channelId: 0 },
+        { username: 'voice_target1_e1', edge: 1, channelId: 0 },
+        { username: 'voice_target1_e2', edge: 2, channelId: 0 },
+        { username: 'voice_non_target_e1', edge: 1, channelId: 0 },
+        { username: 'voice_non_target_e2', edge: 2, channelId: 0 },
       ]);
       
       const [sender, target1E1, target1E2, nonTargetE1, nonTargetE2] = clients;
@@ -519,11 +460,11 @@ describe('Voice Integration Tests', () => {
       // - recv_e1_ch2: Edge 1, Channel 2 - 不应收到
       
       const clients = await createClients(testEnv, [
-        { username: 'voice_ch_target_sender', password: 'pass1', edge: 1, channelId: 0 },
-        { username: 'voice_recv_e1_tch1', password: 'pass2', edge: 1, channelId: 1 },
-        { username: 'voice_recv_e2_tch1', password: 'pass3', edge: 2, channelId: 1 },
-        { username: 'voice_recv_e1_tch0', password: 'pass4', edge: 1, channelId: 0 },
-        { username: 'voice_recv_e1_tch2', password: 'pass5', edge: 1, channelId: 2 },
+        { username: 'voice_ch_target_sender', edge: 1, channelId: 0 },
+        { username: 'voice_recv_e1_tch1', edge: 1, channelId: 1 },
+        { username: 'voice_recv_e2_tch1', edge: 2, channelId: 1 },
+        { username: 'voice_recv_e1_tch0', edge: 1, channelId: 0 },
+        { username: 'voice_recv_e1_tch2', edge: 1, channelId: 2 },
       ]);
       
       const [sender, recvE1Ch1, recvE2Ch1, recvE1Ch0, recvE1Ch2] = clients;
@@ -581,8 +522,8 @@ describe('Voice Integration Tests', () => {
     it('should send voice back to sender when using loopback target (31)', async () => {
       // 测试 loopback (target=31)
       const clients = await createClients(testEnv, [
-        { username: 'voice_loopback_sender', password: 'pass1', edge: 1, channelId: 0 },
-        { username: 'voice_loopback_other', password: 'pass2', edge: 1, channelId: 0 },
+        { username: 'voice_loopback_sender', edge: 1, channelId: 0 },
+        { username: 'voice_loopback_other', edge: 1, channelId: 0 },
       ]);
       
       const [sender, other] = clients;
@@ -622,9 +563,9 @@ describe('Voice Integration Tests', () => {
     it('should handle multiple voice packets to same and cross edge receivers', async () => {
       // 测试多个语音包的传输
       const clients = await createClients(testEnv, [
-        { username: 'voice_multi_sender', password: 'pass1', edge: 1, channelId: 0 },
-        { username: 'voice_multi_recv_e1', password: 'pass2', edge: 1, channelId: 0 },
-        { username: 'voice_multi_recv_e2', password: 'pass3', edge: 2, channelId: 0 },
+        { username: 'voice_multi_sender', edge: 1, channelId: 0 },
+        { username: 'voice_multi_recv_e1', edge: 1, channelId: 0 },
+        { username: 'voice_multi_recv_e2', edge: 2, channelId: 0 },
       ]);
       
       const [sender, recvE1, recvE2] = clients;
@@ -679,12 +620,12 @@ describe('Voice Integration Tests', () => {
       await linkChannels(admin, 0, 1);
       
       const clients = await createClients(testEnv, [
-        { username: 'voice_complex_sender', password: 'pass1', edge: 1, channelId: 0 },
-        { username: 'voice_complex_e1_ch0', password: 'pass2', edge: 1, channelId: 0 },
-        { username: 'voice_complex_e2_ch1', password: 'pass3', edge: 2, channelId: 1 },
-        { username: 'voice_whisper_tgt_e2', password: 'pass4', edge: 2, channelId: 2 },
-        { username: 'voice_deaf_e1_ch0', password: 'pass5', edge: 1, channelId: 0 },
-        { username: 'voice_normal_e1_ch2', password: 'pass6', edge: 1, channelId: 2 },
+        { username: 'voice_complex_sender', edge: 1, channelId: 0 },
+        { username: 'voice_complex_e1_ch0', edge: 1, channelId: 0 },
+        { username: 'voice_complex_e2_ch1', edge: 2, channelId: 1 },
+        { username: 'voice_whisper_tgt_e2', edge: 2, channelId: 2 },
+        { username: 'voice_deaf_e1_ch0', edge: 1, channelId: 0 },
+        { username: 'voice_normal_e1_ch2', edge: 1, channelId: 2 },
       ]);
       
       const [sender, recvE1Ch0, recvE2Ch1, whisperTargetE2, deafE1Ch0, normalE1Ch2] = clients;

@@ -21,7 +21,7 @@ interface RouteCacheEntry {
  * 语音目标数据
  * 兼容 mumbleproto.VoiceTarget.Target 和内部使用的格式
  */
-interface VoiceTargetData {
+export interface VoiceTargetData {
   id?: number;
   session?: number[];  // Mumble protocol uses 'session'
   sessions?: number[]; // Internal format uses 'sessions'

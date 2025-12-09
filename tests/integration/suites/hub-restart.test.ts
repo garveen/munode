@@ -13,9 +13,10 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { TestEnvironment, setupTestEnvironment, sleep, startHubServer } from '../setup.js';
+import { TestEnvironment, setupTestEnvironment, sleep } from '../setup.js';
 import { MumbleClient } from '../../../packages/client/src/index.js';
-import { spawn, ChildProcess } from 'child_process';
+import { HubServer } from '../../../packages/hub-server/src/index.js';
+import type { HubConfig } from '../../../packages/hub-server/src/types.js';
 import * as fs from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -76,20 +77,14 @@ describe('Hub Restart User Sync Tests', () => {
     console.log(`Before restart - Client A sees ${usersA.length} users:`, usersA.map(u => u.name));
     console.log(`Before restart - Client B sees ${usersB.length} users:`, usersB.map(u => u.name));
 
-    // Store Hub process for restart
-    const oldHubProcess = testEnv.hubProcess;
+    // Store Hub server for restart
+    const oldHubServer = testEnv.hubServer;
 
-    // Kill Hub process
-    console.log('Killing Hub process...');
-    oldHubProcess?.kill('SIGTERM');
-    await new Promise<void>((resolve) => {
-      if (oldHubProcess) {
-        oldHubProcess.once('exit', () => resolve());
-        setTimeout(() => resolve(), 3000);
-      } else {
-        resolve();
-      }
-    });
+    // Stop Hub server
+    console.log('Stopping Hub server...');
+    if (oldHubServer) {
+      await oldHubServer.stop();
+    }
 
     // Wait for Hub to fully stop
     await sleep(1000);
@@ -112,7 +107,12 @@ describe('Hub Restart User Sync Tests', () => {
       fs.writeFileSync(hubConfigPath, `export default ${JSON.stringify(hubConfig, null, 2)};`);
     }
     
-    testEnv.hubProcess = await startHubServer(hubConfigPath, 3, true);
+    // Load config and create new Hub server instance
+    const hubConfigModule = await import(`file://${hubConfigPath}?v=${Date.now()}`);
+    const hubConfig: HubConfig = { ...(hubConfigModule.default || hubConfigModule) };
+    const newHubServer = new HubServer(hubConfig);
+    await newHubServer.start();
+    testEnv.hubServer = newHubServer;
     
     // Wait for Hub to restart and Edge to reconnect
     console.log('Waiting for Hub to restart and Edge to reconnect...');

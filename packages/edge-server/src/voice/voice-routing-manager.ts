@@ -44,6 +44,15 @@ interface RelayStats {
 }
 
 /**
+ * 中转事件记录（仅用于测试/调试）
+ */
+interface RelayEvent {
+  timestamp: number;
+  bytes: number;
+  toEdge?: number;  // 目标 Edge ID（可选，用于调试）
+}
+
+/**
  * 网络质量样本
  */
 interface QualitySample {
@@ -83,6 +92,11 @@ export class VoiceRoutingManager extends EventEmitter {
   
   // 中转统计
   private relayStats: RelayStats;
+  
+  // 详细中转记录（仅测试模式）
+  private detailedRelayLog: RelayEvent[] = [];
+  private enableDetailedLogging: boolean = false;
+  private maxDetailedLogSize: number = 1000;
   
   // 定时器
   private localRouteUpdateTimer?: NodeJS.Timeout;
@@ -817,10 +831,15 @@ export class VoiceRoutingManager extends EventEmitter {
   /**
    * 记录中转的包
    */
-  recordRelayedPacket(bytes: number): void {
+  recordRelayedPacket(bytes: number, toEdge?: number): void {
     this.relayStats.packetsRelayed++;
     this.relayStats.bytesRelayed += bytes;
     this.relayStats.lastUpdate = Date.now();
+    
+    // 仅在启用详细日志时记录（条件检查非常快）
+    if (this.enableDetailedLogging) {
+      this.logRelayEvent(bytes, toEdge);
+    }
   }
 
   /**
@@ -857,5 +876,52 @@ export class VoiceRoutingManager extends EventEmitter {
    */
   getConfig(): Required<EdgeVoiceRoutingConfig> {
     return { ...this.voiceRoutingConfig };
+  }
+
+  /**
+   * 启用详细中转日志（仅用于测试）
+   * @param enabled 是否启用
+   * @param maxSize 最大日志条数
+   */
+  enableDetailedRelayLogging(enabled: boolean, maxSize: number = 1000): void {
+    this.enableDetailedLogging = enabled;
+    this.maxDetailedLogSize = maxSize;
+    if (!enabled) {
+      this.detailedRelayLog = [];
+    }
+  }
+
+  /**
+   * 获取详细中转日志（仅用于测试）
+   */
+  getDetailedRelayLog(): RelayEvent[] {
+    return [...this.detailedRelayLog];
+  }
+
+  /**
+   * 清除详细中转日志
+   */
+  clearDetailedRelayLog(): void {
+    this.detailedRelayLog = [];
+  }
+
+  /**
+   * 记录详细中转事件（内部使用，条件化执行）
+   */
+  private logRelayEvent(bytes: number, toEdge?: number): void {
+    if (!this.enableDetailedLogging) {
+      return; // 快速返回，零开销
+    }
+    
+    this.detailedRelayLog.push({
+      timestamp: Date.now(),
+      bytes,
+      toEdge,
+    });
+    
+    // 限制日志大小
+    if (this.detailedRelayLog.length > this.maxDetailedLogSize) {
+      this.detailedRelayLog.shift();
+    }
   }
 }

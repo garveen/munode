@@ -4,7 +4,7 @@
  * 处理器通过工厂获取其他处理器和组件，而不是在构造函数中传递
  */
 
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import { ClientManager } from '../client/client-manager.js';
 import { ChannelManager } from '../models/channel.js';
 import { MessageHandler } from '../message-handler.js';
@@ -59,7 +59,8 @@ export class HandlerFactory {
 
   constructor(
     config: EdgeConfig,
-    hubClient: EdgeControlClient
+    hubClient: EdgeControlClient,
+    logger: Logger
   ) {
     this.config = config;
     this.hubClient = hubClient;

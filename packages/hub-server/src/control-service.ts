@@ -469,7 +469,7 @@ export class HubControlService {
         });
       }
     } catch (error) {
-      logger.error(`Error cleaning up sessions for Edge ${edgeId}:`, error);
+      logger.error(`Error cleaning up Edge ${edgeId} sessions:`, error);
     }
   }
 }
