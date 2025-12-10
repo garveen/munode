@@ -101,6 +101,11 @@ export class EdgeControlClient extends EventEmitter {
     }
 
     this.client.disconnect();
+    
+    // 移除所有事件监听器以防止内存泄漏
+    this.client.removeAllListeners();
+    this.removeAllListeners();
+    
     this.emit('disconnected');
   }
 

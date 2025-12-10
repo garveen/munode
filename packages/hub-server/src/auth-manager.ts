@@ -111,6 +111,7 @@ export class HubAuthManager {
       logger.info('Hub Authentication Manager initialized with callback function');
     } else if (this.config.apiUrl) {
       logger.info('Hub Authentication Manager initialized with API URL', { 
+        apiUrl: this.config.apiUrl,
         contentType: this.config.contentType 
       });
     } else {

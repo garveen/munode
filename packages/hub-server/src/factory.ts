@@ -120,6 +120,13 @@ export class HubHandlerFactory {
     return HubHandlerFactory.instance;
   }
 
+  /**
+   * Clear the singleton instance (for testing)
+   */
+  static clearInstance(): void {
+    HubHandlerFactory.instance = null as any;
+  }
+
   getControlService(): HubControlService {
     return this.controlService;
   }
