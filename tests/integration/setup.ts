@@ -154,15 +154,20 @@ export async function createClients(testEnv: TestEnvironment, configs: ClientCon
  * 清理客户端
  */
 export async function cleanupClients(clients: MumbleClient[]): Promise<void> {
-  for (const client of clients) {
+  const promises = clients.map(async (client) => {
     try {
       await client.disconnect();
     } catch (e) {
       // 忽略断开连接的错误
     }
-  }
-  // 等待资源完全释放
-  await sleep(100);
+  });
+  
+  await Promise.all(promises);
+  
+  // Wait for all client connections to be fully closed
+  // Instead of a fixed sleep, we could check connection states, but clients are already disconnected
+  // A small delay is acceptable here for final cleanup
+  await sleep(50);
 }
 
 /**
@@ -355,7 +360,36 @@ async function startEdgeServer(
   const edgeServer = new EdgeServer(edgeConfig);
   await edgeServer.start();
   debugLog(`${name} started on port ${port}`);
-  await sleep(500);
+  
+  // Wait for Edge server to be ready (port listening)
+  await waitForCondition(
+    async () => {
+      try {
+        const testSocket = await new Promise<boolean>((resolve) => {
+          const socket = new net.Socket();
+          socket.setTimeout(100);
+          socket.connect(port, '127.0.0.1', () => {
+            socket.destroy();
+            resolve(true);
+          });
+          socket.on('error', () => {
+            socket.destroy();
+            resolve(false);
+          });
+          socket.on('timeout', () => {
+            socket.destroy();
+            resolve(false);
+          });
+        });
+        return testSocket;
+      } catch {
+        return false;
+      }
+    },
+    3000,
+    100,
+    `${name} to be listening on port ${port}`
+  );
 
   return edgeServer;
 }
@@ -405,37 +439,37 @@ export async function setupTestEnvironment(
       try {
         await oldEnv.edgeServer4.stop();
         debugLog('Edge server 4 stopped');
+        await waitForPortsAvailable([oldEnv.edgePort4, oldEnv.edgeUdpPort4], 3000);
       } catch (error) {
         console.warn('Error stopping edge server 4:', error);
       }
-      await sleep(300);
     }
     if (oldEnv.edgeServer3) {
       try {
         await oldEnv.edgeServer3.stop();
         debugLog('Edge server 3 stopped');
+        await waitForPortsAvailable([oldEnv.edgePort3, oldEnv.edgeUdpPort3], 3000);
       } catch (error) {
         console.warn('Error stopping edge server 3:', error);
       }
-      await sleep(300);
     }
     if (oldEnv.edgeServer2) {
       try {
         await oldEnv.edgeServer2.stop();
         debugLog('Edge server 2 stopped');
+        await waitForPortsAvailable([oldEnv.edgePort2, oldEnv.edgeUdpPort2], 3000);
       } catch (error) {
         console.warn('Error stopping edge server 2:', error);
       }
-      await sleep(300);
     }
     if (oldEnv.edgeServer) {
       try {
         await oldEnv.edgeServer.stop();
         debugLog('Edge server 1 stopped');
+        await waitForPortsAvailable([oldEnv.edgePort, oldEnv.edgeUdpPort], 3000);
       } catch (error) {
         console.warn('Error stopping edge server:', error);
       }
-      await sleep(300);
     }
     
     // Now stop Hub after all Edge servers have disconnected
@@ -443,23 +477,26 @@ export async function setupTestEnvironment(
       try {
         await oldEnv.hubServer.stop();
         debugLog('Hub server stopped');
+        await waitForPortsAvailable([oldEnv.hubPort, oldEnv.controlPort, oldEnv.webApiPort], 5000);
       } catch (error) {
         console.warn('Error stopping hub server:', error);
       }
-      await sleep(500);
     }
     
     if (oldEnv.authServer) {
       try {
         await oldEnv.authServer.stop();
         debugLog('Auth server stopped');
+        await waitForPortAvailable(oldEnv.authPort, 2000);
       } catch (error) {
         console.warn('Error stopping auth server:', error);
       }
     }
     
-    // Wait longer for all async operations and timers to complete
-    await sleep(2000);
+    // Verify all old ports are released
+    const oldPorts = [oldEnv.authPort, oldEnv.hubPort, oldEnv.edgePort, oldEnv.edgePort2, 
+                      oldEnv.edgePort3, oldEnv.edgePort4, oldEnv.controlPort, oldEnv.webApiPort].filter(p => p > 0);
+    await waitForPortsAvailable(oldPorts, 5000);
     debugLog('Old environment cleaned up');
   }
   
@@ -490,37 +527,37 @@ export async function setupTestEnvironment(
         try {
           await oldEnv.edgeServer4.stop();
           debugLog('Edge server 4 stopped');
+          await waitForPortsAvailable([oldEnv.edgePort4, oldEnv.edgeUdpPort4], 3000);
         } catch (error) {
           console.warn('Error stopping edge server 4:', error);
         }
-        await sleep(300);
       }
       if (oldEnv.edgeServer3) {
         try {
           await oldEnv.edgeServer3.stop();
           debugLog('Edge server 3 stopped');
+          await waitForPortsAvailable([oldEnv.edgePort3, oldEnv.edgeUdpPort3], 3000);
         } catch (error) {
           console.warn('Error stopping edge server 3:', error);
         }
-        await sleep(300);
       }
       if (oldEnv.edgeServer2) {
         try {
           await oldEnv.edgeServer2.stop();
           debugLog('Edge server 2 stopped');
+          await waitForPortsAvailable([oldEnv.edgePort2, oldEnv.edgeUdpPort2], 3000);
         } catch (error) {
           console.warn('Error stopping edge server 2:', error);
         }
-        await sleep(300);
       }
       if (oldEnv.edgeServer) {
         try {
           await oldEnv.edgeServer.stop();
           debugLog('Edge server 1 stopped');
+          await waitForPortsAvailable([oldEnv.edgePort, oldEnv.edgeUdpPort], 3000);
         } catch (error) {
           console.warn('Error stopping edge server:', error);
         }
-        await sleep(300);
       }
       
       // Now stop Hub after all Edge servers have disconnected
@@ -528,23 +565,26 @@ export async function setupTestEnvironment(
         try {
           await oldEnv.hubServer.stop();
           debugLog('Hub server stopped');
+          await waitForPortsAvailable([oldEnv.hubPort, oldEnv.controlPort, oldEnv.webApiPort], 5000);
         } catch (error) {
           console.warn('Error stopping hub server:', error);
         }
-        await sleep(500);
       }
       
       if (oldEnv.authServer) {
         try {
           await oldEnv.authServer.stop();
           debugLog('Auth server stopped');
+          await waitForPortAvailable(oldEnv.authPort, 2000);
         } catch (error) {
           console.warn('Error stopping auth server:', error);
         }
       }
       
-      // Wait for cleanup
-      await sleep(2000);
+      // Verify all old ports are released
+      const oldPorts = [oldEnv.authPort, oldEnv.hubPort, oldEnv.edgePort, oldEnv.edgePort2, 
+                        oldEnv.edgePort3, oldEnv.edgePort4, oldEnv.controlPort, oldEnv.webApiPort].filter(p => p > 0);
+      await waitForPortsAvailable(oldPorts, 5000);
       debugLog('Incomplete environment cleaned up');
     }
   }
@@ -588,7 +628,20 @@ export async function setupTestEnvironment(
     if (finalOptions.startAuth !== false) {
       authServer = new TestAuthServer(authPort);
       await authServer.start();
-      await sleep(100);
+      // Verify auth server is listening
+      await waitForCondition(
+        async () => {
+          try {
+            const response = await fetch(`http://127.0.0.1:${authPort}/auth`, { method: 'OPTIONS' });
+            return response.status === 200;
+          } catch {
+            return false;
+          }
+        },
+        2000,
+        50,
+        'auth server to be ready'
+      );
     }
 
     // 2. 启动 Hub 服务器
@@ -625,20 +678,22 @@ export async function setupTestEnvironment(
         
         // 删除旧的数据库文件
         if (fs.existsSync(dbPath)) {
-          try {
-            fs.unlinkSync(dbPath);
-            debugLog(`Deleted existing test database file: ${dbPath}`);
-          } catch (error) {
-            console.warn(`Failed to delete old database file: ${error}`);
-            // Try to wait a bit and retry
-            await sleep(500);
-            try {
-              fs.unlinkSync(dbPath);
-              debugLog(`Deleted database file on retry: ${dbPath}`);
-            } catch (retryError) {
-              console.error(`Failed to delete database file after retry: ${retryError}`);
-            }
-          }
+          // Wait for file to be deletable (may be locked from previous test)
+          await waitForCondition(
+            () => {
+              try {
+                fs.unlinkSync(dbPath);
+                debugLog(`Deleted existing test database file: ${dbPath}`);
+                return true;
+              } catch (error) {
+                debugLog(`Database file still locked, retrying...`);
+                return false;
+              }
+            },
+            3000,
+            100,
+            'database file to be deletable'
+          );
         }
         
         // 初始化数据库
@@ -664,7 +719,13 @@ export async function setupTestEnvironment(
           });
         }
         
-        await sleep(500);
+        // Wait for database file to be ready
+        await waitForCondition(
+          () => fs.existsSync(dbPath),
+          2000,
+          50,
+          'database file to exist'
+        );
         
         // 创建 Hub 服务器实例
         console.log(`[SETUP] Creating Hub server with auth URL: ${hubConfig.auth?.apiUrl || 'undefined'}`);
@@ -672,8 +733,36 @@ export async function setupTestEnvironment(
         await hubServer.start();
         debugLog('Hub server started successfully');
         
-        // 等待控制端口完全就绪 - WebSocketServer 需要时间监听端口
-        await sleep(2000);
+        // Wait for control port to be listening instead of fixed delay
+        await waitForCondition(
+          async () => {
+            try {
+              // Try to connect to control port
+              const testSocket = await new Promise<boolean>((resolve) => {
+                const socket = new net.Socket();
+                socket.setTimeout(100);
+                socket.connect(controlPort, '127.0.0.1', () => {
+                  socket.destroy();
+                  resolve(true);
+                });
+                socket.on('error', () => {
+                  socket.destroy();
+                  resolve(false);
+                });
+                socket.on('timeout', () => {
+                  socket.destroy();
+                  resolve(false);
+                });
+              });
+              return testSocket;
+            } catch {
+              return false;
+            }
+          },
+          5000,
+          100,
+          'Hub control port to be listening'
+        );
       }
     }
 
@@ -714,45 +803,49 @@ export async function setupTestEnvironment(
   const realCleanup = async () => {
     debugLog('Cleaning up test environment...');
 
-    // Stop Edge servers first (in reverse order) with delays between each
+    // Stop Edge servers first (in reverse order), checking port release after each
     if (edgeServer4) {
       try {
         await edgeServer4.stop();
         debugLog('Edge server 4 stopped');
+        // Wait for Edge 4 ports to be released
+        await waitForPortsAvailable([edgePort4, edgeUdpPort4], 3000);
       } catch (error) {
         console.warn('Error stopping edge server 4:', error);
       }
-      await sleep(300);
     }
 
     if (edgeServer3) {
       try {
         await edgeServer3.stop();
         debugLog('Edge server 3 stopped');
+        // Wait for Edge 3 ports to be released
+        await waitForPortsAvailable([edgePort3, edgeUdpPort3], 3000);
       } catch (error) {
         console.warn('Error stopping edge server 3:', error);
       }
-      await sleep(300);
     }
 
     if (edgeServer2) {
       try {
         await edgeServer2.stop();
         debugLog('Edge server 2 stopped');
+        // Wait for Edge 2 ports to be released
+        await waitForPortsAvailable([edgePort2, edgeUdpPort2], 3000);
       } catch (error) {
         console.warn('Error stopping edge server 2:', error);
       }
-      await sleep(300);
     }
 
     if (edgeServer) {
       try {
         await edgeServer.stop();
         debugLog('Edge server 1 stopped');
+        // Wait for Edge 1 ports to be released
+        await waitForPortsAvailable([edgePort, edgeUdpPort], 3000);
       } catch (error) {
         console.warn('Error stopping edge server 1:', error);
       }
-      await sleep(300);
     }
 
     // Now stop Hub after all Edge servers have disconnected
@@ -760,36 +853,30 @@ export async function setupTestEnvironment(
       try {
         await hubServer.stop();
         debugLog('Hub server stopped');
+        // Wait for Hub ports to be released
+        await waitForPortsAvailable([hubPort, controlPort, webApiPort, hubVoicePort], 5000);
       } catch (error) {
         console.warn('Error stopping hub server:', error);
       }
-      await sleep(500);
     }
 
     if (authServer) {
       try {
         await authServer.stop();
         debugLog('Auth server stopped');
+        // Wait for auth port to be released
+        await waitForPortAvailable(authPort, 2000);
       } catch (error) {
         console.warn('Error stopping auth server:', error);
       }
     }
 
-    // Wait longer for all async operations and timers to complete
-    await sleep(2000);
-    
-    // 验证端口释放
+    // Final verification that all ports are released
     const portsToCheck = [authPort, hubPort, edgePort, edgePort2, edgePort3, edgePort4, controlPort, webApiPort].filter(p => p > 0);
-    for (const port of portsToCheck) {
-      let attempts = 0;
-      while (attempts < 10 && !(await isPortAvailable(port))) {
-        console.log(`Waiting for port ${port} to be released... (attempt ${attempts + 1}/10)`);
-        await sleep(100);
-        attempts++;
-      }
-      if (!(await isPortAvailable(port))) {
-        console.warn(`Warning: Port ${port} may still be in use after cleanup`);
-      }
+    const allPortsAvailable = await waitForPortsAvailable(portsToCheck, 5000);
+    
+    if (!allPortsAvailable) {
+      console.warn('Some ports may still be in use after cleanup');
     }
 
     debugLog('Cleanup completed');
@@ -834,6 +921,72 @@ export async function setupTestEnvironment(
  */
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 等待某个条件为真，带超时
+ * @param checkFn 检查条件的函数
+ * @param timeout 超时时间（毫秒）
+ * @param interval 检查间隔（毫秒）
+ * @param description 条件描述，用于日志
+ */
+export async function waitForCondition(
+  checkFn: () => boolean | Promise<boolean>,
+  timeout: number = 5000,
+  interval: number = 50,
+  description: string = 'condition'
+): Promise<boolean> {
+  const startTime = Date.now();
+  
+  while (Date.now() - startTime < timeout) {
+    const result = await checkFn();
+    if (result) {
+      debugLog(`✓ ${description} satisfied after ${Date.now() - startTime}ms`);
+      return true;
+    }
+    await sleep(interval);
+  }
+  
+  debugLog(`✗ ${description} timeout after ${timeout}ms`);
+  return false;
+}
+
+/**
+ * 等待端口可用（已释放）
+ */
+export async function waitForPortAvailable(port: number, timeout: number = 5000): Promise<boolean> {
+  return waitForCondition(
+    () => isPortAvailable(port),
+    timeout,
+    100,
+    `port ${port} to be available`
+  );
+}
+
+/**
+ * 等待多个端口全部可用
+ */
+export async function waitForPortsAvailable(ports: number[], timeout: number = 10000): Promise<boolean> {
+  const startTime = Date.now();
+  
+  for (const port of ports) {
+    if (port === 0) continue; // Skip unallocated ports
+    
+    const remainingTime = Math.max(0, timeout - (Date.now() - startTime));
+    if (remainingTime === 0) {
+      console.warn(`Timeout waiting for ports to be available. Port ${port} still in use.`);
+      return false;
+    }
+    
+    const available = await waitForPortAvailable(port, remainingTime);
+    if (!available) {
+      console.warn(`Warning: Port ${port} may still be in use after cleanup`);
+      return false;
+    }
+  }
+  
+  debugLog(`✓ All ${ports.filter(p => p > 0).length} ports are now available`);
+  return true;
 }
 
 // Global cleanup handler

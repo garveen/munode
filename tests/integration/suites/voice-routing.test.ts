@@ -53,20 +53,18 @@ describe('Voice Routing Integration Tests', () => {
       reuse: false, // 不复用环境以便测试独立
     });
     
-    // 等待服务稳定
-    await sleep(2000);
+    // setupTestEnvironment now waits for services to be ready, no need for fixed delay
   }, 120000);
 
   afterAll(async () => {
     await testEnv?.cleanup();
-    // 等待清理完成，确保所有资源释放
-    await sleep(3000);
+    // cleanup() now checks port availability, no need for fixed delay
   });
 
   // Clean up between tests to avoid state pollution
   beforeEach(async () => {
-    // Wait for previous test cleanup to complete and resources to be released
-    await sleep(1000);
+    // Small delay to allow async operations from previous test to complete
+    await sleep(100);
   });
 
 
@@ -279,20 +277,18 @@ describe('Voice Routing Stress Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {
-    // 等待前一个测试环境完全清理
-    await sleep(5000);
+    // setupTestEnvironment with reuse=false will clean up any previous environment properly
     testEnv = await setupTestEnvironment(8300, { 
       silent: true,
       startEdge2: true,
       reuse: false,
     });
-    await sleep(2000);
+    // setupTestEnvironment now waits for services to be ready
   }, 120000);
 
   afterAll(async () => {
     await testEnv?.cleanup();
-    // 等待清理完成，确保所有资源释放
-    await sleep(3000);
+    // cleanup() now checks port availability
   });
 
   /**
@@ -348,8 +344,7 @@ describe('4-Edge Voice Routing Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {
-    // 等待前一个测试环境完全清理
-    await sleep(8000);
+    // setupTestEnvironment with reuse=false will clean up any previous environment properly
     // 启动 4 个 Edge 进行完整路由测试
     testEnv = await setupTestEnvironment(8400, { 
       silent: false,
@@ -359,14 +354,12 @@ describe('4-Edge Voice Routing Tests', () => {
       reuse: false,
     });
     
-    // 等待所有 Edge 连接到 Hub
-    await sleep(3000);
+    // setupTestEnvironment now waits for all Edge servers to be ready and connected to Hub
   }, 180000);
 
   afterAll(async () => {
     await testEnv?.cleanup();
-    // 等待清理完成，确保所有资源释放
-    await sleep(3000);
+    // cleanup() now checks port availability
   });
 
   describe('Multi-Edge Direct Mode', () => {
