@@ -368,7 +368,6 @@ describe('4-Edge Voice Routing Tests', () => {
     // 等待清理完成，确保所有资源释放
     await sleep(3000);
   });
-  });
 
   describe('Multi-Edge Direct Mode', () => {
     /**
