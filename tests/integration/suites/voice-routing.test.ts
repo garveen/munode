@@ -59,6 +59,8 @@ describe('Voice Routing Integration Tests', () => {
 
   afterAll(async () => {
     await testEnv?.cleanup();
+    // 等待清理完成，确保所有资源释放
+    await sleep(3000);
   });
 
   // Clean up between tests to avoid state pollution
@@ -278,17 +280,19 @@ describe('Voice Routing Stress Tests', () => {
 
   beforeAll(async () => {
     // 等待前一个测试环境完全清理
-    await sleep(2000);
+    await sleep(5000);
     testEnv = await setupTestEnvironment(8300, { 
       silent: true,
       startEdge2: true,
       reuse: false,
     });
-    await sleep(1000);
+    await sleep(2000);
   }, 120000);
 
   afterAll(async () => {
     await testEnv?.cleanup();
+    // 等待清理完成，确保所有资源释放
+    await sleep(3000);
   });
 
   /**
@@ -345,7 +349,7 @@ describe('4-Edge Voice Routing Tests', () => {
 
   beforeAll(async () => {
     // 等待前一个测试环境完全清理
-    await sleep(3000);
+    await sleep(8000);
     // 启动 4 个 Edge 进行完整路由测试
     testEnv = await setupTestEnvironment(8400, { 
       silent: false,
@@ -361,6 +365,9 @@ describe('4-Edge Voice Routing Tests', () => {
 
   afterAll(async () => {
     await testEnv?.cleanup();
+    // 等待清理完成，确保所有资源释放
+    await sleep(3000);
+  });
   });
 
   describe('Multi-Edge Direct Mode', () => {

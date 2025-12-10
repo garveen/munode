@@ -117,9 +117,14 @@ export class ControlChannelClient extends EventEmitter {
     }
 
     if (this.ws) {
+      // 移除所有WebSocket事件监听器以防止内存泄漏
+      this.ws.removeAllListeners();
       this.ws.close();
       this.ws = null;
     }
+    
+    // 移除所有EventEmitter监听器
+    this.removeAllListeners();
   }
 
   /**
