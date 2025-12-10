@@ -596,7 +596,8 @@ export async function setupTestEnvironment(
       const hubConfigPath = join(PROJECT_ROOT, 'tests/config/hub-test.js');
       if (fs.existsSync(hubConfigPath)) {
         const hubConfigModule = await import(`file://${hubConfigPath}?v=${++importCounter}`);
-        const hubConfig: HubConfig = { ...(hubConfigModule.default || hubConfigModule) };
+        // Deep clone to avoid shared references between test suites
+        const hubConfig: HubConfig = JSON.parse(JSON.stringify(hubConfigModule.default || hubConfigModule));
         
         hubConfig.port = hubPort;
         hubConfig.controlPort = controlPort;
@@ -604,7 +605,15 @@ export async function setupTestEnvironment(
         hubConfig.webApi.port = webApiPort;
         hubConfig.voicePort = hubVoicePort;
         
-        hubConfig.auth = { apiUrl: `http://127.0.0.1:${authPort}/auth`, apiKey: '', timeout: 5000 };
+        // Preserve existing auth config fields and merge with new values
+        const existingAuth = hubConfig.auth || {};
+        hubConfig.auth = { 
+          ...existingAuth,
+          apiUrl: `http://127.0.0.1:${authPort}/auth`, 
+          apiKey: '', 
+          timeout: 5000 
+        };
+        console.log(`[SETUP] Configured Hub auth URL: http://127.0.0.1:${authPort}/auth`);
         
         if (finalOptions.hubConfig) {
           Object.assign(hubConfig, finalOptions.hubConfig);
@@ -658,6 +667,7 @@ export async function setupTestEnvironment(
         await sleep(500);
         
         // 创建 Hub 服务器实例
+        console.log(`[SETUP] Creating Hub server with auth URL: ${hubConfig.auth?.apiUrl || 'undefined'}`);
         hubServer = new HubServer(hubConfig);
         await hubServer.start();
         debugLog('Hub server started successfully');

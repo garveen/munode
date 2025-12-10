@@ -196,6 +196,9 @@ export class HubServer {
       // 关闭数据库连接
       await this.database.close();
 
+      // 清除单例实例以允许在测试中创建新实例
+      HubHandlerFactory.clearInstance();
+
       this.started = false;
       this.stopping = false;
       logger.info('Hub Server stopped');
