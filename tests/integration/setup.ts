@@ -154,11 +154,12 @@ export async function createClients(testEnv: TestEnvironment, configs: ClientCon
  * 清理客户端
  */
 export async function cleanupClients(clients: MumbleClient[]): Promise<void> {
-  const promises = clients.map(async (client) => {
+  const promises = clients.map(async (client, index) => {
     try {
       await client.disconnect();
     } catch (e) {
-      // 忽略断开连接的错误
+      // Log error but continue cleanup
+      debugLog(`Error disconnecting client ${index}:`, e);
     }
   });
   
@@ -679,11 +680,20 @@ export async function setupTestEnvironment(
         // 删除旧的数据库文件
         if (fs.existsSync(dbPath)) {
           // Wait for file to be deletable (may be locked from previous test)
+          let deleted = false;
           await waitForCondition(
             () => {
+              // Check if file still exists first
+              if (!fs.existsSync(dbPath)) {
+                deleted = true;
+                return true;
+              }
+              
+              // Try to delete if it exists
               try {
                 fs.unlinkSync(dbPath);
                 debugLog(`Deleted existing test database file: ${dbPath}`);
+                deleted = true;
                 return true;
               } catch (error) {
                 debugLog(`Database file still locked, retrying...`);
@@ -694,6 +704,10 @@ export async function setupTestEnvironment(
             100,
             'database file to be deletable'
           );
+          
+          if (!deleted) {
+            console.warn(`Could not delete database file ${dbPath}, it may still be in use`);
+          }
         }
         
         // 初始化数据库
@@ -972,9 +986,12 @@ export async function waitForPortsAvailable(ports: number[], timeout: number = 1
   for (const port of ports) {
     if (port === 0) continue; // Skip unallocated ports
     
-    const remainingTime = Math.max(0, timeout - (Date.now() - startTime));
+    // Check remaining time at the start of iteration
+    const elapsedTime = Date.now() - startTime;
+    const remainingTime = Math.max(0, timeout - elapsedTime);
+    
     if (remainingTime === 0) {
-      console.warn(`Timeout waiting for ports to be available. Port ${port} still in use.`);
+      console.warn(`Timeout waiting for ports. Port ${port} not yet checked.`);
       return false;
     }
     
