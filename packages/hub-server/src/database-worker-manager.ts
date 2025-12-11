@@ -43,10 +43,18 @@ export class DatabaseWorkerManager {
   constructor() {
     // 计算 worker 文件路径
     // 在 ESM 中，我们需要使用 import.meta.url 来获取当前文件路径
-    // 但由于这是类定义，我们在启动时动态设置路径
     const currentFile = fileURLToPath(import.meta.url);
     const currentDir = dirname(currentFile);
-    this.workerPath = join(currentDir, 'database-worker.js');
+    
+    // 检查是否在 src 目录运行（开发模式）还是 dist 目录（生产模式）
+    if (currentDir.endsWith('src')) {
+      // 开发模式：指向 dist 目录
+      const distDir = join(currentDir, '..', 'dist');
+      this.workerPath = join(distDir, 'database-worker.js');
+    } else {
+      // 生产模式：当前目录就是 dist 目录
+      this.workerPath = join(currentDir, 'database-worker.js');
+    }
   }
 
   /**
