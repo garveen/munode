@@ -73,9 +73,9 @@ export class EdgeControlClient extends EventEmitter {
 
       this.emit('connected');
     } catch (error) {
-      this.logger.error('Failed to connect to Hub control service:', error);
       // 只在非停止状态下重连
       if (!this.isStopping) {
+        this.logger.error('Failed to connect to Hub control service:', error);
         this.scheduleReconnect();
       }
       throw error;

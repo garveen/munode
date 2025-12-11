@@ -164,6 +164,12 @@ export class EdgeServer extends EventEmitter {
 
       await this.serverLifecycleManager.stop();
 
+      // 断开 Hub 客户端连接
+      if (this.hubClient) {
+        this.hubClient.disconnect();
+        this.logger.info('Hub client disconnected');
+      }
+
       this.logger.info('Edge Server stopped successfully');
       this.emit('stopped');
     } catch (error) {

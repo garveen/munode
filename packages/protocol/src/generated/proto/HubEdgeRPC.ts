@@ -555,7 +555,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 2) != null;
         }
         get edge_list() {
-            return pb_1.Message.getRepeatedWrapperField(this, EdgeInfo, 3);
+            return pb_1.Message.getRepeatedWrapperField(this, EdgeInfo, 3) as EdgeInfo[];
         }
         set edge_list(value: EdgeInfo[]) {
             pb_1.Message.setRepeatedWrapperField(this, 3, value);
@@ -722,7 +722,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 1) != null;
         }
         get stats() {
-            return pb_1.Message.getWrapperField(this, EdgeServerStats, 2);
+            return pb_1.Message.getWrapperField(this, EdgeServerStats, 2) as EdgeServerStats;
         }
         set stats(value: EdgeServerStats) {
             pb_1.Message.setWrapperField(this, 2, value);
@@ -1017,7 +1017,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 1) != null;
         }
         get updated_edges() {
-            return pb_1.Message.getRepeatedWrapperField(this, EdgeInfo, 2);
+            return pb_1.Message.getRepeatedWrapperField(this, EdgeInfo, 2) as EdgeInfo[];
         }
         set updated_edges(value: EdgeInfo[]) {
             pb_1.Message.setRepeatedWrapperField(this, 2, value);
@@ -1302,7 +1302,7 @@ export namespace hubedge {
             pb_1.Message.setField(this, 5, value);
         }
         get client_info() {
-            return pb_1.Message.getWrapperField(this, ClientInfo, 6);
+            return pb_1.Message.getWrapperField(this, ClientInfo, 6) as ClientInfo;
         }
         set client_info(value: ClientInfo) {
             pb_1.Message.setWrapperField(this, 6, value);
@@ -2328,7 +2328,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 3) != null;
         }
         get config() {
-            return pb_1.Message.getWrapperField(this, VoiceTargetConfigProto, 4);
+            return pb_1.Message.getWrapperField(this, VoiceTargetConfigProto, 4) as VoiceTargetConfigProto;
         }
         set config(value: VoiceTargetConfigProto) {
             pb_1.Message.setWrapperField(this, 4, value);
@@ -2452,13 +2452,13 @@ export namespace hubedge {
             }
         }
         get sessions() {
-            return pb_1.Message.getRepeatedWrapperField(this, VoiceTargetSession, 1);
+            return pb_1.Message.getRepeatedWrapperField(this, VoiceTargetSession, 1) as VoiceTargetSession[];
         }
         set sessions(value: VoiceTargetSession[]) {
             pb_1.Message.setRepeatedWrapperField(this, 1, value);
         }
         get channels() {
-            return pb_1.Message.getRepeatedWrapperField(this, VoiceTargetChannel, 2);
+            return pb_1.Message.getRepeatedWrapperField(this, VoiceTargetChannel, 2) as VoiceTargetChannel[];
         }
         set channels(value: VoiceTargetChannel[]) {
             pb_1.Message.setRepeatedWrapperField(this, 2, value);
@@ -2908,7 +2908,7 @@ export namespace hubedge {
             }
         }
         get voice_targets() {
-            return pb_1.Message.getRepeatedWrapperField(this, VoiceTargetConfigEntry, 1);
+            return pb_1.Message.getRepeatedWrapperField(this, VoiceTargetConfigEntry, 1) as VoiceTargetConfigEntry[];
         }
         set voice_targets(value: VoiceTargetConfigEntry[]) {
             pb_1.Message.setRepeatedWrapperField(this, 1, value);
@@ -3009,7 +3009,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 3) != null;
         }
         get config() {
-            return pb_1.Message.getWrapperField(this, VoiceTargetConfigProto, 4);
+            return pb_1.Message.getWrapperField(this, VoiceTargetConfigProto, 4) as VoiceTargetConfigProto;
         }
         set config(value: VoiceTargetConfigProto) {
             pb_1.Message.setWrapperField(this, 4, value);
@@ -3297,7 +3297,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 1) != null;
         }
         get routed_to() {
-            return pb_1.Message.getRepeatedWrapperField(this, RouteTarget, 2);
+            return pb_1.Message.getRepeatedWrapperField(this, RouteTarget, 2) as RouteTarget[];
         }
         set routed_to(value: RouteTarget[]) {
             pb_1.Message.setRepeatedWrapperField(this, 2, value);
@@ -3580,7 +3580,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 2) != null;
         }
         get stats() {
-            return pb_1.Message.getWrapperField(this, AdminStats, 3);
+            return pb_1.Message.getWrapperField(this, AdminStats, 3) as AdminStats;
         }
         set stats(value: AdminStats) {
             pb_1.Message.setWrapperField(this, 3, value);
@@ -4158,31 +4158,31 @@ export namespace hubedge {
             }
         }
         get channels() {
-            return pb_1.Message.getRepeatedWrapperField(this, ChannelDataProto, 1);
+            return pb_1.Message.getRepeatedWrapperField(this, ChannelDataProto, 1) as ChannelDataProto[];
         }
         set channels(value: ChannelDataProto[]) {
             pb_1.Message.setRepeatedWrapperField(this, 1, value);
         }
         get channel_links() {
-            return pb_1.Message.getRepeatedWrapperField(this, ChannelLinkProto, 2);
+            return pb_1.Message.getRepeatedWrapperField(this, ChannelLinkProto, 2) as ChannelLinkProto[];
         }
         set channel_links(value: ChannelLinkProto[]) {
             pb_1.Message.setRepeatedWrapperField(this, 2, value);
         }
         get acls() {
-            return pb_1.Message.getRepeatedWrapperField(this, ACLDataProto, 3);
+            return pb_1.Message.getRepeatedWrapperField(this, ACLDataProto, 3) as ACLDataProto[];
         }
         set acls(value: ACLDataProto[]) {
             pb_1.Message.setRepeatedWrapperField(this, 3, value);
         }
         get bans() {
-            return pb_1.Message.getRepeatedWrapperField(this, BanDataProto, 4);
+            return pb_1.Message.getRepeatedWrapperField(this, BanDataProto, 4) as BanDataProto[];
         }
         set bans(value: BanDataProto[]) {
             pb_1.Message.setRepeatedWrapperField(this, 4, value);
         }
         get sessions() {
-            return pb_1.Message.getRepeatedWrapperField(this, GlobalSessionProto, 5);
+            return pb_1.Message.getRepeatedWrapperField(this, GlobalSessionProto, 5) as GlobalSessionProto[];
         }
         set sessions(value: GlobalSessionProto[]) {
             pb_1.Message.setRepeatedWrapperField(this, 5, value);
@@ -4206,7 +4206,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 7) != null;
         }
         get edges() {
-            return pb_1.Message.getRepeatedWrapperField(this, EdgeInfoProto, 8);
+            return pb_1.Message.getRepeatedWrapperField(this, EdgeInfoProto, 8) as EdgeInfoProto[];
         }
         set edges(value: EdgeInfoProto[]) {
             pb_1.Message.setRepeatedWrapperField(this, 8, value);
@@ -5645,7 +5645,7 @@ export namespace hubedge {
             }
         }
         get channels() {
-            return pb_1.Message.getRepeatedWrapperField(this, ChannelDataProto, 1);
+            return pb_1.Message.getRepeatedWrapperField(this, ChannelDataProto, 1) as ChannelDataProto[];
         }
         set channels(value: ChannelDataProto[]) {
             pb_1.Message.setRepeatedWrapperField(this, 1, value);
@@ -5776,7 +5776,7 @@ export namespace hubedge {
             }
         }
         get acls() {
-            return pb_1.Message.getRepeatedWrapperField(this, ACLDataProto, 1);
+            return pb_1.Message.getRepeatedWrapperField(this, ACLDataProto, 1) as ACLDataProto[];
         }
         set acls(value: ACLDataProto[]) {
             pb_1.Message.setRepeatedWrapperField(this, 1, value);
@@ -6222,7 +6222,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 1) != null;
         }
         get acls() {
-            return pb_1.Message.getRepeatedWrapperField(this, ACLEntryProto, 2);
+            return pb_1.Message.getRepeatedWrapperField(this, ACLEntryProto, 2) as ACLEntryProto[];
         }
         set acls(value: ACLEntryProto[]) {
             pb_1.Message.setRepeatedWrapperField(this, 2, value);
@@ -6854,7 +6854,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 2) != null;
         }
         get peers() {
-            return pb_1.Message.getRepeatedWrapperField(this, PeerInfoProto, 3);
+            return pb_1.Message.getRepeatedWrapperField(this, PeerInfoProto, 3) as PeerInfoProto[];
         }
         set peers(value: PeerInfoProto[]) {
             pb_1.Message.setRepeatedWrapperField(this, 3, value);
@@ -8185,7 +8185,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 2) != null;
         }
         get quality() {
-            return pb_1.Message.getWrapperField(this, NetworkQualityProto, 3);
+            return pb_1.Message.getWrapperField(this, NetworkQualityProto, 3) as NetworkQualityProto;
         }
         set quality(value: NetworkQualityProto) {
             pb_1.Message.setWrapperField(this, 3, value);
@@ -8514,7 +8514,7 @@ export namespace hubedge {
             }
         }
         get edges() {
-            return pb_1.Message.getRepeatedWrapperField(this, ClusterEdgeStatusProto, 1);
+            return pb_1.Message.getRepeatedWrapperField(this, ClusterEdgeStatusProto, 1) as ClusterEdgeStatusProto[];
         }
         set edges(value: ClusterEdgeStatusProto[]) {
             pb_1.Message.setRepeatedWrapperField(this, 1, value);
@@ -11014,7 +11014,7 @@ export namespace hubedge {
             }
         }
         get channel() {
-            return pb_1.Message.getWrapperField(this, ChannelDataProto, 1);
+            return pb_1.Message.getWrapperField(this, ChannelDataProto, 1) as ChannelDataProto;
         }
         set channel(value: ChannelDataProto) {
             pb_1.Message.setWrapperField(this, 1, value);
@@ -11148,7 +11148,7 @@ export namespace hubedge {
             }
         }
         get channel() {
-            return pb_1.Message.getWrapperField(this, ChannelDataProto, 1);
+            return pb_1.Message.getWrapperField(this, ChannelDataProto, 1) as ChannelDataProto;
         }
         set channel(value: ChannelDataProto) {
             pb_1.Message.setWrapperField(this, 1, value);
@@ -11515,7 +11515,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 3) != null;
         }
         get edge_register() {
-            return pb_1.Message.getWrapperField(this, EdgeRegisterParams, 10);
+            return pb_1.Message.getWrapperField(this, EdgeRegisterParams, 10) as EdgeRegisterParams;
         }
         set edge_register(value: EdgeRegisterParams) {
             pb_1.Message.setWrapperField(this, 10, value);
@@ -11524,7 +11524,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 10) != null;
         }
         get edge_heartbeat() {
-            return pb_1.Message.getWrapperField(this, EdgeHeartbeatParams, 11);
+            return pb_1.Message.getWrapperField(this, EdgeHeartbeatParams, 11) as EdgeHeartbeatParams;
         }
         set edge_heartbeat(value: EdgeHeartbeatParams) {
             pb_1.Message.setWrapperField(this, 11, value);
@@ -11533,7 +11533,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 11) != null;
         }
         get edge_allocate_session_id() {
-            return pb_1.Message.getWrapperField(this, EdgeAllocateSessionIdParams, 12);
+            return pb_1.Message.getWrapperField(this, EdgeAllocateSessionIdParams, 12) as EdgeAllocateSessionIdParams;
         }
         set edge_allocate_session_id(value: EdgeAllocateSessionIdParams) {
             pb_1.Message.setWrapperField(this, 12, value);
@@ -11542,7 +11542,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 12) != null;
         }
         get edge_authenticate_user() {
-            return pb_1.Message.getWrapperField(this, EdgeAuthenticateUserParams, 13);
+            return pb_1.Message.getWrapperField(this, EdgeAuthenticateUserParams, 13) as EdgeAuthenticateUserParams;
         }
         set edge_authenticate_user(value: EdgeAuthenticateUserParams) {
             pb_1.Message.setWrapperField(this, 13, value);
@@ -11551,7 +11551,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 13) != null;
         }
         get edge_report_session() {
-            return pb_1.Message.getWrapperField(this, EdgeReportSessionParams, 14);
+            return pb_1.Message.getWrapperField(this, EdgeReportSessionParams, 14) as EdgeReportSessionParams;
         }
         set edge_report_session(value: EdgeReportSessionParams) {
             pb_1.Message.setWrapperField(this, 14, value);
@@ -11560,7 +11560,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 14) != null;
         }
         get edge_sync_voice_target() {
-            return pb_1.Message.getWrapperField(this, EdgeSyncVoiceTargetParams, 15);
+            return pb_1.Message.getWrapperField(this, EdgeSyncVoiceTargetParams, 15) as EdgeSyncVoiceTargetParams;
         }
         set edge_sync_voice_target(value: EdgeSyncVoiceTargetParams) {
             pb_1.Message.setWrapperField(this, 15, value);
@@ -11569,7 +11569,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 15) != null;
         }
         get edge_get_voice_targets() {
-            return pb_1.Message.getWrapperField(this, EdgeGetVoiceTargetsParams, 16);
+            return pb_1.Message.getWrapperField(this, EdgeGetVoiceTargetsParams, 16) as EdgeGetVoiceTargetsParams;
         }
         set edge_get_voice_targets(value: EdgeGetVoiceTargetsParams) {
             pb_1.Message.setWrapperField(this, 16, value);
@@ -11578,7 +11578,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 16) != null;
         }
         get edge_route_voice() {
-            return pb_1.Message.getWrapperField(this, EdgeRouteVoiceParams, 17);
+            return pb_1.Message.getWrapperField(this, EdgeRouteVoiceParams, 17) as EdgeRouteVoiceParams;
         }
         set edge_route_voice(value: EdgeRouteVoiceParams) {
             pb_1.Message.setWrapperField(this, 17, value);
@@ -11587,7 +11587,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 17) != null;
         }
         get edge_admin_operation() {
-            return pb_1.Message.getWrapperField(this, EdgeAdminOperationParams, 18);
+            return pb_1.Message.getWrapperField(this, EdgeAdminOperationParams, 18) as EdgeAdminOperationParams;
         }
         set edge_admin_operation(value: EdgeAdminOperationParams) {
             pb_1.Message.setWrapperField(this, 18, value);
@@ -11596,7 +11596,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 18) != null;
         }
         get edge_exchange_certificates() {
-            return pb_1.Message.getWrapperField(this, EdgeExchangeCertificatesParams, 19);
+            return pb_1.Message.getWrapperField(this, EdgeExchangeCertificatesParams, 19) as EdgeExchangeCertificatesParams;
         }
         set edge_exchange_certificates(value: EdgeExchangeCertificatesParams) {
             pb_1.Message.setWrapperField(this, 19, value);
@@ -11605,7 +11605,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 19) != null;
         }
         get edge_full_sync() {
-            return pb_1.Message.getWrapperField(this, EdgeFullSyncParams, 20);
+            return pb_1.Message.getWrapperField(this, EdgeFullSyncParams, 20) as EdgeFullSyncParams;
         }
         set edge_full_sync(value: EdgeFullSyncParams) {
             pb_1.Message.setWrapperField(this, 20, value);
@@ -11614,7 +11614,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 20) != null;
         }
         get edge_get_channels() {
-            return pb_1.Message.getWrapperField(this, EdgeGetChannelsParams, 21);
+            return pb_1.Message.getWrapperField(this, EdgeGetChannelsParams, 21) as EdgeGetChannelsParams;
         }
         set edge_get_channels(value: EdgeGetChannelsParams) {
             pb_1.Message.setWrapperField(this, 21, value);
@@ -11623,7 +11623,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 21) != null;
         }
         get edge_get_acls() {
-            return pb_1.Message.getWrapperField(this, EdgeGetACLsParams, 22);
+            return pb_1.Message.getWrapperField(this, EdgeGetACLsParams, 22) as EdgeGetACLsParams;
         }
         set edge_get_acls(value: EdgeGetACLsParams) {
             pb_1.Message.setWrapperField(this, 22, value);
@@ -11632,7 +11632,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 22) != null;
         }
         get edge_save_channel() {
-            return pb_1.Message.getWrapperField(this, EdgeSaveChannelParams, 23);
+            return pb_1.Message.getWrapperField(this, EdgeSaveChannelParams, 23) as EdgeSaveChannelParams;
         }
         set edge_save_channel(value: EdgeSaveChannelParams) {
             pb_1.Message.setWrapperField(this, 23, value);
@@ -11641,7 +11641,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 23) != null;
         }
         get edge_save_acl() {
-            return pb_1.Message.getWrapperField(this, EdgeSaveACLParams, 24);
+            return pb_1.Message.getWrapperField(this, EdgeSaveACLParams, 24) as EdgeSaveACLParams;
         }
         set edge_save_acl(value: EdgeSaveACLParams) {
             pb_1.Message.setWrapperField(this, 24, value);
@@ -11650,7 +11650,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 24) != null;
         }
         get edge_join() {
-            return pb_1.Message.getWrapperField(this, EdgeJoinParams, 25);
+            return pb_1.Message.getWrapperField(this, EdgeJoinParams, 25) as EdgeJoinParams;
         }
         set edge_join(value: EdgeJoinParams) {
             pb_1.Message.setWrapperField(this, 25, value);
@@ -11659,7 +11659,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 25) != null;
         }
         get edge_join_complete() {
-            return pb_1.Message.getWrapperField(this, EdgeJoinCompleteParams, 26);
+            return pb_1.Message.getWrapperField(this, EdgeJoinCompleteParams, 26) as EdgeJoinCompleteParams;
         }
         set edge_join_complete(value: EdgeJoinCompleteParams) {
             pb_1.Message.setWrapperField(this, 26, value);
@@ -11668,7 +11668,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 26) != null;
         }
         get edge_handle_acl() {
-            return pb_1.Message.getWrapperField(this, EdgeHandleACLParams, 27);
+            return pb_1.Message.getWrapperField(this, EdgeHandleACLParams, 27) as EdgeHandleACLParams;
         }
         set edge_handle_acl(value: EdgeHandleACLParams) {
             pb_1.Message.setWrapperField(this, 27, value);
@@ -11677,7 +11677,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 27) != null;
         }
         get edge_handle_permission_query() {
-            return pb_1.Message.getWrapperField(this, EdgeHandlePermissionQueryParams, 28);
+            return pb_1.Message.getWrapperField(this, EdgeHandlePermissionQueryParams, 28) as EdgeHandlePermissionQueryParams;
         }
         set edge_handle_permission_query(value: EdgeHandlePermissionQueryParams) {
             pb_1.Message.setWrapperField(this, 28, value);
@@ -11686,7 +11686,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 28) != null;
         }
         get edge_report_peer_disconnect() {
-            return pb_1.Message.getWrapperField(this, EdgeReportPeerDisconnectParams, 29);
+            return pb_1.Message.getWrapperField(this, EdgeReportPeerDisconnectParams, 29) as EdgeReportPeerDisconnectParams;
         }
         set edge_report_peer_disconnect(value: EdgeReportPeerDisconnectParams) {
             pb_1.Message.setWrapperField(this, 29, value);
@@ -11695,7 +11695,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 29) != null;
         }
         get edge_report_quality() {
-            return pb_1.Message.getWrapperField(this, EdgeReportQualityParams, 30);
+            return pb_1.Message.getWrapperField(this, EdgeReportQualityParams, 30) as EdgeReportQualityParams;
         }
         set edge_report_quality(value: EdgeReportQualityParams) {
             pb_1.Message.setWrapperField(this, 30, value);
@@ -11704,7 +11704,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 30) != null;
         }
         get cluster_get_status() {
-            return pb_1.Message.getWrapperField(this, ClusterGetStatusParams, 31);
+            return pb_1.Message.getWrapperField(this, ClusterGetStatusParams, 31) as ClusterGetStatusParams;
         }
         set cluster_get_status(value: ClusterGetStatusParams) {
             pb_1.Message.setWrapperField(this, 31, value);
@@ -11713,7 +11713,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 31) != null;
         }
         get blob_put() {
-            return pb_1.Message.getWrapperField(this, BlobPutParams, 32);
+            return pb_1.Message.getWrapperField(this, BlobPutParams, 32) as BlobPutParams;
         }
         set blob_put(value: BlobPutParams) {
             pb_1.Message.setWrapperField(this, 32, value);
@@ -11722,7 +11722,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 32) != null;
         }
         get blob_get() {
-            return pb_1.Message.getWrapperField(this, BlobGetParams, 33);
+            return pb_1.Message.getWrapperField(this, BlobGetParams, 33) as BlobGetParams;
         }
         set blob_get(value: BlobGetParams) {
             pb_1.Message.setWrapperField(this, 33, value);
@@ -11731,7 +11731,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 33) != null;
         }
         get blob_get_user_texture() {
-            return pb_1.Message.getWrapperField(this, BlobGetUserTextureParams, 34);
+            return pb_1.Message.getWrapperField(this, BlobGetUserTextureParams, 34) as BlobGetUserTextureParams;
         }
         set blob_get_user_texture(value: BlobGetUserTextureParams) {
             pb_1.Message.setWrapperField(this, 34, value);
@@ -11740,7 +11740,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 34) != null;
         }
         get blob_get_user_comment() {
-            return pb_1.Message.getWrapperField(this, BlobGetUserCommentParams, 35);
+            return pb_1.Message.getWrapperField(this, BlobGetUserCommentParams, 35) as BlobGetUserCommentParams;
         }
         set blob_get_user_comment(value: BlobGetUserCommentParams) {
             pb_1.Message.setWrapperField(this, 35, value);
@@ -11749,7 +11749,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 35) != null;
         }
         get blob_set_user_texture() {
-            return pb_1.Message.getWrapperField(this, BlobSetUserTextureParams, 36);
+            return pb_1.Message.getWrapperField(this, BlobSetUserTextureParams, 36) as BlobSetUserTextureParams;
         }
         set blob_set_user_texture(value: BlobSetUserTextureParams) {
             pb_1.Message.setWrapperField(this, 36, value);
@@ -11758,7 +11758,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 36) != null;
         }
         get blob_set_user_comment() {
-            return pb_1.Message.getWrapperField(this, BlobSetUserCommentParams, 37);
+            return pb_1.Message.getWrapperField(this, BlobSetUserCommentParams, 37) as BlobSetUserCommentParams;
         }
         set blob_set_user_comment(value: BlobSetUserCommentParams) {
             pb_1.Message.setWrapperField(this, 37, value);
@@ -12360,7 +12360,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 3) != null;
         }
         get edge_register() {
-            return pb_1.Message.getWrapperField(this, EdgeRegisterResult, 10);
+            return pb_1.Message.getWrapperField(this, EdgeRegisterResult, 10) as EdgeRegisterResult;
         }
         set edge_register(value: EdgeRegisterResult) {
             pb_1.Message.setWrapperField(this, 10, value);
@@ -12369,7 +12369,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 10) != null;
         }
         get edge_heartbeat() {
-            return pb_1.Message.getWrapperField(this, EdgeHeartbeatResult, 11);
+            return pb_1.Message.getWrapperField(this, EdgeHeartbeatResult, 11) as EdgeHeartbeatResult;
         }
         set edge_heartbeat(value: EdgeHeartbeatResult) {
             pb_1.Message.setWrapperField(this, 11, value);
@@ -12378,7 +12378,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 11) != null;
         }
         get edge_allocate_session_id() {
-            return pb_1.Message.getWrapperField(this, EdgeAllocateSessionIdResult, 12);
+            return pb_1.Message.getWrapperField(this, EdgeAllocateSessionIdResult, 12) as EdgeAllocateSessionIdResult;
         }
         set edge_allocate_session_id(value: EdgeAllocateSessionIdResult) {
             pb_1.Message.setWrapperField(this, 12, value);
@@ -12387,7 +12387,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 12) != null;
         }
         get edge_authenticate_user() {
-            return pb_1.Message.getWrapperField(this, EdgeAuthenticateUserResult, 13);
+            return pb_1.Message.getWrapperField(this, EdgeAuthenticateUserResult, 13) as EdgeAuthenticateUserResult;
         }
         set edge_authenticate_user(value: EdgeAuthenticateUserResult) {
             pb_1.Message.setWrapperField(this, 13, value);
@@ -12396,7 +12396,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 13) != null;
         }
         get edge_report_session() {
-            return pb_1.Message.getWrapperField(this, EdgeReportSessionResult, 14);
+            return pb_1.Message.getWrapperField(this, EdgeReportSessionResult, 14) as EdgeReportSessionResult;
         }
         set edge_report_session(value: EdgeReportSessionResult) {
             pb_1.Message.setWrapperField(this, 14, value);
@@ -12405,7 +12405,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 14) != null;
         }
         get edge_sync_voice_target() {
-            return pb_1.Message.getWrapperField(this, EdgeSyncVoiceTargetResult, 15);
+            return pb_1.Message.getWrapperField(this, EdgeSyncVoiceTargetResult, 15) as EdgeSyncVoiceTargetResult;
         }
         set edge_sync_voice_target(value: EdgeSyncVoiceTargetResult) {
             pb_1.Message.setWrapperField(this, 15, value);
@@ -12414,7 +12414,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 15) != null;
         }
         get edge_get_voice_targets() {
-            return pb_1.Message.getWrapperField(this, EdgeGetVoiceTargetsResult, 16);
+            return pb_1.Message.getWrapperField(this, EdgeGetVoiceTargetsResult, 16) as EdgeGetVoiceTargetsResult;
         }
         set edge_get_voice_targets(value: EdgeGetVoiceTargetsResult) {
             pb_1.Message.setWrapperField(this, 16, value);
@@ -12423,7 +12423,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 16) != null;
         }
         get edge_route_voice() {
-            return pb_1.Message.getWrapperField(this, EdgeRouteVoiceResult, 17);
+            return pb_1.Message.getWrapperField(this, EdgeRouteVoiceResult, 17) as EdgeRouteVoiceResult;
         }
         set edge_route_voice(value: EdgeRouteVoiceResult) {
             pb_1.Message.setWrapperField(this, 17, value);
@@ -12432,7 +12432,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 17) != null;
         }
         get edge_admin_operation() {
-            return pb_1.Message.getWrapperField(this, EdgeAdminOperationResult, 18);
+            return pb_1.Message.getWrapperField(this, EdgeAdminOperationResult, 18) as EdgeAdminOperationResult;
         }
         set edge_admin_operation(value: EdgeAdminOperationResult) {
             pb_1.Message.setWrapperField(this, 18, value);
@@ -12441,7 +12441,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 18) != null;
         }
         get edge_exchange_certificates() {
-            return pb_1.Message.getWrapperField(this, EdgeExchangeCertificatesResult, 19);
+            return pb_1.Message.getWrapperField(this, EdgeExchangeCertificatesResult, 19) as EdgeExchangeCertificatesResult;
         }
         set edge_exchange_certificates(value: EdgeExchangeCertificatesResult) {
             pb_1.Message.setWrapperField(this, 19, value);
@@ -12450,7 +12450,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 19) != null;
         }
         get edge_full_sync() {
-            return pb_1.Message.getWrapperField(this, EdgeFullSyncResult, 20);
+            return pb_1.Message.getWrapperField(this, EdgeFullSyncResult, 20) as EdgeFullSyncResult;
         }
         set edge_full_sync(value: EdgeFullSyncResult) {
             pb_1.Message.setWrapperField(this, 20, value);
@@ -12459,7 +12459,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 20) != null;
         }
         get edge_get_channels() {
-            return pb_1.Message.getWrapperField(this, EdgeGetChannelsResult, 21);
+            return pb_1.Message.getWrapperField(this, EdgeGetChannelsResult, 21) as EdgeGetChannelsResult;
         }
         set edge_get_channels(value: EdgeGetChannelsResult) {
             pb_1.Message.setWrapperField(this, 21, value);
@@ -12468,7 +12468,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 21) != null;
         }
         get edge_get_acls() {
-            return pb_1.Message.getWrapperField(this, EdgeGetACLsResult, 22);
+            return pb_1.Message.getWrapperField(this, EdgeGetACLsResult, 22) as EdgeGetACLsResult;
         }
         set edge_get_acls(value: EdgeGetACLsResult) {
             pb_1.Message.setWrapperField(this, 22, value);
@@ -12477,7 +12477,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 22) != null;
         }
         get edge_save_channel() {
-            return pb_1.Message.getWrapperField(this, EdgeSaveChannelResult, 23);
+            return pb_1.Message.getWrapperField(this, EdgeSaveChannelResult, 23) as EdgeSaveChannelResult;
         }
         set edge_save_channel(value: EdgeSaveChannelResult) {
             pb_1.Message.setWrapperField(this, 23, value);
@@ -12486,7 +12486,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 23) != null;
         }
         get edge_save_acl() {
-            return pb_1.Message.getWrapperField(this, EdgeSaveACLResult, 24);
+            return pb_1.Message.getWrapperField(this, EdgeSaveACLResult, 24) as EdgeSaveACLResult;
         }
         set edge_save_acl(value: EdgeSaveACLResult) {
             pb_1.Message.setWrapperField(this, 24, value);
@@ -12495,7 +12495,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 24) != null;
         }
         get edge_join() {
-            return pb_1.Message.getWrapperField(this, EdgeJoinResult, 25);
+            return pb_1.Message.getWrapperField(this, EdgeJoinResult, 25) as EdgeJoinResult;
         }
         set edge_join(value: EdgeJoinResult) {
             pb_1.Message.setWrapperField(this, 25, value);
@@ -12504,7 +12504,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 25) != null;
         }
         get edge_join_complete() {
-            return pb_1.Message.getWrapperField(this, EdgeJoinCompleteResult, 26);
+            return pb_1.Message.getWrapperField(this, EdgeJoinCompleteResult, 26) as EdgeJoinCompleteResult;
         }
         set edge_join_complete(value: EdgeJoinCompleteResult) {
             pb_1.Message.setWrapperField(this, 26, value);
@@ -12513,7 +12513,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 26) != null;
         }
         get edge_handle_acl() {
-            return pb_1.Message.getWrapperField(this, EdgeHandleACLResult, 27);
+            return pb_1.Message.getWrapperField(this, EdgeHandleACLResult, 27) as EdgeHandleACLResult;
         }
         set edge_handle_acl(value: EdgeHandleACLResult) {
             pb_1.Message.setWrapperField(this, 27, value);
@@ -12522,7 +12522,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 27) != null;
         }
         get edge_handle_permission_query() {
-            return pb_1.Message.getWrapperField(this, EdgeHandlePermissionQueryResult, 28);
+            return pb_1.Message.getWrapperField(this, EdgeHandlePermissionQueryResult, 28) as EdgeHandlePermissionQueryResult;
         }
         set edge_handle_permission_query(value: EdgeHandlePermissionQueryResult) {
             pb_1.Message.setWrapperField(this, 28, value);
@@ -12531,7 +12531,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 28) != null;
         }
         get edge_report_peer_disconnect() {
-            return pb_1.Message.getWrapperField(this, EdgeReportPeerDisconnectResult, 29);
+            return pb_1.Message.getWrapperField(this, EdgeReportPeerDisconnectResult, 29) as EdgeReportPeerDisconnectResult;
         }
         set edge_report_peer_disconnect(value: EdgeReportPeerDisconnectResult) {
             pb_1.Message.setWrapperField(this, 29, value);
@@ -12540,7 +12540,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 29) != null;
         }
         get edge_report_quality() {
-            return pb_1.Message.getWrapperField(this, EdgeReportQualityResult, 30);
+            return pb_1.Message.getWrapperField(this, EdgeReportQualityResult, 30) as EdgeReportQualityResult;
         }
         set edge_report_quality(value: EdgeReportQualityResult) {
             pb_1.Message.setWrapperField(this, 30, value);
@@ -12549,7 +12549,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 30) != null;
         }
         get cluster_get_status() {
-            return pb_1.Message.getWrapperField(this, ClusterGetStatusResult, 31);
+            return pb_1.Message.getWrapperField(this, ClusterGetStatusResult, 31) as ClusterGetStatusResult;
         }
         set cluster_get_status(value: ClusterGetStatusResult) {
             pb_1.Message.setWrapperField(this, 31, value);
@@ -12558,7 +12558,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 31) != null;
         }
         get blob_put() {
-            return pb_1.Message.getWrapperField(this, BlobPutResult, 32);
+            return pb_1.Message.getWrapperField(this, BlobPutResult, 32) as BlobPutResult;
         }
         set blob_put(value: BlobPutResult) {
             pb_1.Message.setWrapperField(this, 32, value);
@@ -12567,7 +12567,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 32) != null;
         }
         get blob_get() {
-            return pb_1.Message.getWrapperField(this, BlobGetResult, 33);
+            return pb_1.Message.getWrapperField(this, BlobGetResult, 33) as BlobGetResult;
         }
         set blob_get(value: BlobGetResult) {
             pb_1.Message.setWrapperField(this, 33, value);
@@ -12576,7 +12576,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 33) != null;
         }
         get blob_get_user_texture() {
-            return pb_1.Message.getWrapperField(this, BlobGetUserTextureResult, 34);
+            return pb_1.Message.getWrapperField(this, BlobGetUserTextureResult, 34) as BlobGetUserTextureResult;
         }
         set blob_get_user_texture(value: BlobGetUserTextureResult) {
             pb_1.Message.setWrapperField(this, 34, value);
@@ -12585,7 +12585,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 34) != null;
         }
         get blob_get_user_comment() {
-            return pb_1.Message.getWrapperField(this, BlobGetUserCommentResult, 35);
+            return pb_1.Message.getWrapperField(this, BlobGetUserCommentResult, 35) as BlobGetUserCommentResult;
         }
         set blob_get_user_comment(value: BlobGetUserCommentResult) {
             pb_1.Message.setWrapperField(this, 35, value);
@@ -12594,7 +12594,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 35) != null;
         }
         get blob_set_user_texture() {
-            return pb_1.Message.getWrapperField(this, BlobSetUserTextureResult, 36);
+            return pb_1.Message.getWrapperField(this, BlobSetUserTextureResult, 36) as BlobSetUserTextureResult;
         }
         set blob_set_user_texture(value: BlobSetUserTextureResult) {
             pb_1.Message.setWrapperField(this, 36, value);
@@ -12603,7 +12603,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 36) != null;
         }
         get blob_set_user_comment() {
-            return pb_1.Message.getWrapperField(this, BlobSetUserCommentResult, 37);
+            return pb_1.Message.getWrapperField(this, BlobSetUserCommentResult, 37) as BlobSetUserCommentResult;
         }
         set blob_set_user_comment(value: BlobSetUserCommentResult) {
             pb_1.Message.setWrapperField(this, 37, value);
@@ -13130,7 +13130,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 2) != null;
         }
         get voice_data() {
-            return pb_1.Message.getWrapperField(this, HubVoiceDataParams, 10);
+            return pb_1.Message.getWrapperField(this, HubVoiceDataParams, 10) as HubVoiceDataParams;
         }
         set voice_data(value: HubVoiceDataParams) {
             pb_1.Message.setWrapperField(this, 10, value);
@@ -13139,7 +13139,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 10) != null;
         }
         get force_disconnect() {
-            return pb_1.Message.getWrapperField(this, HubForceDisconnectParams, 11);
+            return pb_1.Message.getWrapperField(this, HubForceDisconnectParams, 11) as HubForceDisconnectParams;
         }
         set force_disconnect(value: HubForceDisconnectParams) {
             pb_1.Message.setWrapperField(this, 11, value);
@@ -13148,7 +13148,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 11) != null;
         }
         get peer_joined() {
-            return pb_1.Message.getWrapperField(this, HubPeerJoinedParams, 12);
+            return pb_1.Message.getWrapperField(this, HubPeerJoinedParams, 12) as HubPeerJoinedParams;
         }
         set peer_joined(value: HubPeerJoinedParams) {
             pb_1.Message.setWrapperField(this, 12, value);
@@ -13157,7 +13157,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 12) != null;
         }
         get acl_response() {
-            return pb_1.Message.getWrapperField(this, HubACLResponseParams, 13);
+            return pb_1.Message.getWrapperField(this, HubACLResponseParams, 13) as HubACLResponseParams;
         }
         set acl_response(value: HubACLResponseParams) {
             pb_1.Message.setWrapperField(this, 13, value);
@@ -13166,7 +13166,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 13) != null;
         }
         get user_joined() {
-            return pb_1.Message.getWrapperField(this, HubUserJoinedParams, 14);
+            return pb_1.Message.getWrapperField(this, HubUserJoinedParams, 14) as HubUserJoinedParams;
         }
         set user_joined(value: HubUserJoinedParams) {
             pb_1.Message.setWrapperField(this, 14, value);
@@ -13175,7 +13175,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 14) != null;
         }
         get user_left() {
-            return pb_1.Message.getWrapperField(this, HubUserLeftParams, 15);
+            return pb_1.Message.getWrapperField(this, HubUserLeftParams, 15) as HubUserLeftParams;
         }
         set user_left(value: HubUserLeftParams) {
             pb_1.Message.setWrapperField(this, 15, value);
@@ -13184,7 +13184,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 15) != null;
         }
         get user_moved() {
-            return pb_1.Message.getWrapperField(this, HubUserMovedParams, 16);
+            return pb_1.Message.getWrapperField(this, HubUserMovedParams, 16) as HubUserMovedParams;
         }
         set user_moved(value: HubUserMovedParams) {
             pb_1.Message.setWrapperField(this, 16, value);
@@ -13193,7 +13193,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 16) != null;
         }
         get channel_created() {
-            return pb_1.Message.getWrapperField(this, HubChannelCreatedParams, 17);
+            return pb_1.Message.getWrapperField(this, HubChannelCreatedParams, 17) as HubChannelCreatedParams;
         }
         set channel_created(value: HubChannelCreatedParams) {
             pb_1.Message.setWrapperField(this, 17, value);
@@ -13202,7 +13202,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 17) != null;
         }
         get channel_removed() {
-            return pb_1.Message.getWrapperField(this, HubChannelRemovedParams, 18);
+            return pb_1.Message.getWrapperField(this, HubChannelRemovedParams, 18) as HubChannelRemovedParams;
         }
         set channel_removed(value: HubChannelRemovedParams) {
             pb_1.Message.setWrapperField(this, 18, value);
@@ -13211,7 +13211,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 18) != null;
         }
         get channel_updated() {
-            return pb_1.Message.getWrapperField(this, HubChannelUpdatedParams, 19);
+            return pb_1.Message.getWrapperField(this, HubChannelUpdatedParams, 19) as HubChannelUpdatedParams;
         }
         set channel_updated(value: HubChannelUpdatedParams) {
             pb_1.Message.setWrapperField(this, 19, value);
@@ -13220,7 +13220,7 @@ export namespace hubedge {
             return pb_1.Message.getField(this, 19) != null;
         }
         get sync_voice_target() {
-            return pb_1.Message.getWrapperField(this, HubSyncVoiceTargetParams, 20);
+            return pb_1.Message.getWrapperField(this, HubSyncVoiceTargetParams, 20) as HubSyncVoiceTargetParams;
         }
         set sync_voice_target(value: HubSyncVoiceTargetParams) {
             pb_1.Message.setWrapperField(this, 20, value);
