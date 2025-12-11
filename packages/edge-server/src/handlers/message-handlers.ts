@@ -654,7 +654,8 @@ export class MessageHandlers {
   /**
    * Ensure BinaryReader has readPackedUint32 support
    * This patches the google-protobuf BinaryReader prototype if the method doesn't exist
-   * This is needed because the generated code uses readPackedUint32() for packed repeated uint32
+   * This is needed because protoc-gen-ts v0.8.7 generates code that calls readPackedUint32()
+   * but google-protobuf v4.0.1 only has readPackableUint32Into() with a different signature
    */
   private ensurePackedUint32Support(): void {
     try {
@@ -690,4 +691,5 @@ export class MessageHandlers {
       logger.error('Failed to patch BinaryReader with readPackedUint32 support:', error);
     }
   }
+
 }
