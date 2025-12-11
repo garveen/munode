@@ -204,8 +204,8 @@ importers:
         specifier: workspace:*
         version: link:../common
       google-protobuf:
-        specifier: ^4.0.1
-        version: 4.0.1
+        specifier: 3.21.4
+        version: 3.21.4
       protoc:
         specifier: ^33.1.0
         version: 33.1.0
@@ -2789,8 +2789,8 @@ packages:
     engines: {node: '>=18'}
     dev: true
 
-  /google-protobuf@4.0.1:
-    resolution: {integrity: sha512-0I4mx3UtAwpcc8l9Ds5gHcwV2FyPdwvxxBcor8LusE4b6PjoFxEngZRBepjvuQ4B0eZ2iu/Vezh8oRsnpJ9UGA==}
+  /google-protobuf@3.21.4:
+    resolution: {integrity: sha512-MnG7N936zcKTco4Jd2PX2U96Kf9PxygAPKBug+74LHzmHXmceN16MmRcdgZv+DGef/S9YvQAfRsNCn4cjf9yyQ==}
     dev: false
 
   /gopd@1.2.0:
