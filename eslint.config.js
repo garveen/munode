@@ -48,6 +48,8 @@ export default [
       '@typescript-eslint/no-floating-promises': 'warn',
       '@typescript-eslint/no-misused-promises': 'warn',
       '@typescript-eslint/require-await': 'warn',
+      // 禁止使用console.*，应该使用logger
+      'no-console': 'error',
     },
   },
   prettierConfig,
