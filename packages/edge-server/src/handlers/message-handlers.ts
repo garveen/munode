@@ -78,6 +78,10 @@ export class MessageHandlers {
    */
   handlePluginDataTransmission(session_id: number, data: Buffer): void {
     try {
+      // Patch BinaryReader to support readPackedUint32 if it doesn't exist
+      // This fixes the issue with packed encoding in PluginDataTransmission
+      this.ensurePackedUint32Support();
+      
       const pluginData = mumbleproto.PluginDataTransmission.deserialize(data);
 
       logger.debug(`Received PluginDataTransmission from session ${session_id}, dataID=${pluginData.dataID}, data.length=${pluginData.data?.length}, receivers=${pluginData.receiverSessions?.length}`);
@@ -644,6 +648,41 @@ export class MessageHandlers {
       logger.debug(
         `Broadcasted UserState to ${clients.filter(c => c.has_full_user_list && c.session !== excludeSession).length} authenticated clients`
       );
+    }
+  }
+
+  /**
+   * Ensure BinaryReader has readPackedUint32 support
+   * This patches the google-protobuf BinaryReader prototype if the method doesn't exist
+   * This is needed because the generated code uses readPackedUint32() for packed repeated uint32
+   */
+  private ensurePackedUint32Support(): void {
+    // Get BinaryReader through the Message class to avoid direct google-protobuf import
+    const Message = (mumbleproto.PluginDataTransmission as any).constructor.constructor;
+    const BinaryReader = Message.BinaryReader;
+    
+    if (BinaryReader && !BinaryReader.prototype.readPackedUint32) {
+      BinaryReader.prototype.readPackedUint32 = function(): number[] {
+        // Read as bytes for packed encoding
+        const packedBytes = this.readBytes();
+        const values: number[] = [];
+        let offset = 0;
+        
+        // Manually decode packed varints
+        while (offset < packedBytes.length) {
+          let value = 0;
+          let shift = 0;
+          while (offset < packedBytes.length) {
+            const byte = packedBytes[offset++];
+            value |= (byte & 0x7F) << shift;
+            if ((byte & 0x80) === 0) break;
+            shift += 7;
+          }
+          values.push(value >>> 0);
+        }
+        
+        return values;
+      };
     }
   }
 }
