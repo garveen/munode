@@ -202,12 +202,42 @@ export class NotificationHandler implements INotificationHandler {
         return;
       }
 
+      // 确保data是Buffer类型（msgpack可能将Buffer序列化为特殊对象）
+      let dataBuffer: Buffer;
+      if (!actualData) {
+        dataBuffer = Buffer.alloc(0);
+      } else if (Buffer.isBuffer(actualData)) {
+        dataBuffer = actualData;
+      } else if (actualData && (actualData as unknown) instanceof Uint8Array) {
+        dataBuffer = Buffer.from(actualData as Uint8Array);
+      } else if (typeof actualData === 'object') {
+        // Handle different Buffer serialization formats from msgpack
+        const obj = actualData as any;
+        
+        // Check for { type: 'Buffer', data: [...] } format (Node.js Buffer.toJSON())
+        if (obj.type === 'Buffer' && Array.isArray(obj.data)) {
+          dataBuffer = Buffer.from(obj.data);
+        }
+        // Check for array-like object with numeric keys (msgpack serialization of Uint8Array/Buffer)
+        else if (Object.keys(obj).every((k: string) => !isNaN(Number(k)))) {
+          const values = Object.keys(obj).sort((a, b) => Number(a) - Number(b)).map(k => obj[k]);
+          dataBuffer = Buffer.from(values);
+        } else {
+          logger.warn('Unexpected object format for plugin data, using empty buffer');
+          dataBuffer = Buffer.alloc(0);
+        }
+      } else {
+        logger.warn(`Unexpected data type for plugin data: ${typeof actualData}, using empty buffer`);
+        dataBuffer = Buffer.alloc(0);
+      }
+
       // 按Edge广播（每个Edge只发送其本地用户的session列表）
-      for (const [target_edge_id] of targetSessionsByEdge.entries()) {
+      for (const [target_edge_id, sessions] of targetSessionsByEdge.entries()) {
         this.factory.getControlService().notify(target_edge_id, 'hub.pluginDataBroadcast', {
           sender_session: actor_session,
           dataID: actualDataID || '',
-          data: actualData || Buffer.alloc(0),
+          data: dataBuffer,
+          target_sessions: sessions, // 传递目标会话列表
         });
       }
 

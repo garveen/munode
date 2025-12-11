@@ -15,7 +15,7 @@
   "dependencies": {
     "@bufbuild/protobuf": "^2.10.1",
     "@munode/common": "workspace:*",
-    "google-protobuf": "^4.0.1",
+    "google-protobuf": "3.21.4",
     "protoc": "^33.1.0",
     "ws": "^8.18.3"
   },

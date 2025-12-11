@@ -80,6 +80,8 @@ export class MessageHandlers {
     try {
       const pluginData = mumbleproto.PluginDataTransmission.deserialize(data);
 
+      logger.debug(`Received PluginDataTransmission from session ${session_id}, dataID=${pluginData.dataID}, data.length=${pluginData.data?.length}, receivers=${pluginData.receiverSessions?.length}`);
+
       // 获取执行操作的客户端
       const actor = this.clientManager.getClient(session_id);
       if (!actor) {
@@ -644,4 +646,5 @@ export class MessageHandlers {
       );
     }
   }
+
 }

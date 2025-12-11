@@ -11,6 +11,22 @@ export const testUserPasswords: Record<string, { password: string; user_id: numb
       'guest': { password: 'guest123', user_id: 4 },
       'ninja_user1': { password: 'ninja_password', user_id: 15, groups: ['ninja'] },
       'ninja_user2': { password: 'ninja_password', user_id: 16, groups: ['ninja'] },
+      'ninja_cross': { password: 'ninja_password', user_id: 17, groups: ['ninja'] },
+      'user_state': { password: 'user_password', user_id: 18 },
+      'user_cross1': { password: 'user_password', user_id: 19 },
+      'user_cross2': { password: 'user_password', user_id: 20 },
+      // User visibility test users
+      'user_edge1': { password: 'user_password', user_id: 21 },
+      'user_edge2': { password: 'user_password', user_id: 22 },
+      'sender_edge1': { password: 'password1', user_id: 23 },
+      'sender_edge2': { password: 'password1', user_id: 24 },
+      'receiver1': { password: 'password1', user_id: 25 },
+      'receiver2': { password: 'password2', user_id: 26 },
+      // UDP quality simulation test users
+      'poor_direct_sender': { password: 'pass1', user_id: 27 },
+      'poor_direct_receiver': { password: 'pass3', user_id: 28 },
+      'balance_sender': { password: 'pass1', user_id: 29 },
+      'balance_receiver': { password: 'pass4', user_id: 30 },
       'moderator': { password: 'mod123', user_id: 92, groups: ['moderator'] },
       // Voice test users
       'voice_sender': { password: 'pass1', user_id: 101 },

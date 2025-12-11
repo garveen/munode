@@ -949,6 +949,7 @@ export interface HubPluginDataBroadcastNotification {
     sender_session: number;
     dataID: string;
     data: Buffer;
+    target_sessions?: number[]; // 可选：特定目标会话列表（仅本Edge的会话）
   };
 }
 
