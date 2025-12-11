@@ -23,12 +23,12 @@ describe('UDP Quality Simulation Tests', () => {
       reuse: false,
     });
     
-    // 等待所有 Edge 连接到 Hub
-    await sleep(3000);
+    // setupTestEnvironment now waits for all Edge servers to be ready and connected to Hub
   }, 180000);
 
   afterAll(async () => {
     await testEnv?.cleanup();
+    // cleanup() now checks port availability
   });
 
   describe('Network Quality Impact on Voice Delivery', () => {

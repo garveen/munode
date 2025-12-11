@@ -33,12 +33,12 @@ describe('Hub Restart User Sync Tests', () => {
 
   beforeAll(async () => {
     testEnv = await setupTestEnvironment(TEST_BASE_PORT);
-    // Give servers time to fully start
-    await sleep(1000);
+    // setupTestEnvironment now waits for services to be ready
   }, 60000);
 
   afterAll(async () => {
     await testEnv?.cleanup();
+    // cleanup() now checks port availability
   });
 
   it('should sync users correctly after Hub restart', async () => {
