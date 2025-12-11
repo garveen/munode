@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestEnvironment, setupTestEnvironment } from '../setup';
 import { MumbleClient } from '../../../packages/client/src/index.js';
+import { createVoicePacket } from '../utils/test-helpers.js';
 
 describe('TCP Voice Transmission Integration Tests', () => {
   let testEnv: TestEnvironment;
@@ -80,8 +81,8 @@ describe('TCP Voice Transmission Integration Tests', () => {
         }
       });
 
-      // 发送者发送模拟语音数据
-      const mockVoiceData = Buffer.from('mock_voice_data_for_testing');
+      // 发送者发送模拟语音数据（使用正确的语音包格式）
+      const mockVoiceData = createVoicePacket(4, 0, 1); // Opus codec, normal channel (target=0), sequence=1
       await sender.getConnectionManager().sendVoicePacket(mockVoiceData);
 
       // 等待接收
@@ -114,7 +115,7 @@ describe('TCP Voice Transmission Integration Tests', () => {
       expect(client.isConnected()).toBe(true);
 
       // 尝试发送语音包，如果UDP失败应该自动降级到TCP
-      const mockVoiceData = Buffer.from('fallback_test_voice_data');
+      const mockVoiceData = createVoicePacket(4, 0, 1);
       
       // 第一次尝试可能使用UDP
       await client.getConnectionManager().sendVoicePacket(mockVoiceData);
@@ -181,7 +182,7 @@ describe('TCP Voice Transmission Integration Tests', () => {
       // 不做严格断言，因为可能会降级到TCP
 
       // 测试语音包发送（不应该抛出错误）
-      const mockVoiceData = Buffer.from('mixed_env_voice_test');
+      const mockVoiceData = createVoicePacket(4, 0, 1);
       
       await tcpClient1.getConnectionManager().sendVoicePacket(mockVoiceData);
       await tcpClient2.getConnectionManager().sendVoicePacket(mockVoiceData);
@@ -222,7 +223,7 @@ describe('TCP Voice Transmission Integration Tests', () => {
       await new Promise(resolve => setTimeout(resolve, 500));
 
       // 发送语音包
-      const mockVoiceData = Buffer.from('tcp_to_udp_voice_data');
+      const mockVoiceData = createVoicePacket(4, 0, 1);
       await tcpSender.getConnectionManager().sendVoicePacket(mockVoiceData);
 
       // 等待传输
@@ -263,7 +264,7 @@ describe('TCP Voice Transmission Integration Tests', () => {
       await new Promise(resolve => setTimeout(resolve, 500));
 
       // 发送语音包
-      const mockVoiceData = Buffer.from('udp_to_tcp_voice_data');
+      const mockVoiceData = createVoicePacket(4, 0, 1);
       await udpSender.getConnectionManager().sendVoicePacket(mockVoiceData);
 
       // 等待传输
@@ -294,8 +295,8 @@ describe('TCP Voice Transmission Integration Tests', () => {
       // 等待认证完成
       await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // 构造模拟语音包
-      const mockAudioData = Buffer.from('test_audio_payload_12345');
+      // 构造模拟语音包（使用正确的格式）
+      const mockAudioData = createVoicePacket(4, 0, 1);
       
       // 发送语音包（应该通过TCP隧道）
       await client.getConnectionManager().sendVoicePacket(mockAudioData);
@@ -320,15 +321,10 @@ describe('TCP Voice Transmission Integration Tests', () => {
 
       await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // 生成随机payload（模拟真实语音数据）
-      const randomPayload = Buffer.alloc(128);
-      for (let i = 0; i < randomPayload.length; i++) {
-        randomPayload[i] = Math.floor(Math.random() * 256);
-      }
-
-      // 发送多个随机语音包
+      // 发送多个随机语音包（使用正确的格式）
       for (let i = 0; i < 5; i++) {
-        await client.getConnectionManager().sendVoicePacket(randomPayload);
+        const voicePacket = createVoicePacket(4, 0, i + 1);
+        await client.getConnectionManager().sendVoicePacket(voicePacket);
         await new Promise(resolve => setTimeout(resolve, 100));
       }
 
@@ -367,7 +363,7 @@ describe('TCP Voice Transmission Integration Tests', () => {
       await new Promise(resolve => setTimeout(resolve, 1000));
 
       // 发送语音包
-      const mockVoiceData = Buffer.from('cross_edge_tcp_voice');
+      const mockVoiceData = createVoicePacket(4, 0, 1);
       await edge1Client.getConnectionManager().sendVoicePacket(mockVoiceData);
 
       // 等待跨Edge路由
@@ -398,10 +394,10 @@ describe('TCP Voice Transmission Integration Tests', () => {
       await new Promise(resolve => setTimeout(resolve, 1000));
 
       // 快速发送多个语音包
-      const mockVoiceData = Buffer.from('performance_test_voice_packet');
       const sendPromises = [];
 
       for (let i = 0; i < 20; i++) {
+        const mockVoiceData = createVoicePacket(4, 0, i + 1);
         sendPromises.push(
           client.getConnectionManager().sendVoicePacket(mockVoiceData)
         );
@@ -430,13 +426,18 @@ describe('TCP Voice Transmission Integration Tests', () => {
 
       await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // 发送大的语音包
-      const largeVoiceData = Buffer.alloc(2048);
+      // 发送大的语音包（使用正确的格式，但增加语音数据部分的大小）
+      // 创建一个大的语音包：header(1) + sequence(1) + large_voice_data(2046)
+      const header = Buffer.alloc(1);
+      header.writeUInt8((4 << 5) | 0, 0); // Opus codec, target=0
+      const sequence = Buffer.from([1]); // Simple sequence
+      const largeVoiceData = Buffer.alloc(2046); // Large voice data
       for (let i = 0; i < largeVoiceData.length; i++) {
         largeVoiceData[i] = i % 256;
       }
+      const largePacket = Buffer.concat([header, sequence, largeVoiceData]);
 
-      await client.getConnectionManager().sendVoicePacket(largeVoiceData);
+      await client.getConnectionManager().sendVoicePacket(largePacket);
 
       // 等待传输完成
       await new Promise(resolve => setTimeout(resolve, 500));
