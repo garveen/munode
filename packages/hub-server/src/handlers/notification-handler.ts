@@ -202,12 +202,34 @@ export class NotificationHandler implements INotificationHandler {
         return;
       }
 
+      // 确保data是Buffer类型（msgpack可能将Buffer序列化为特殊对象）
+      let dataBuffer: Buffer;
+      if (!actualData) {
+        dataBuffer = Buffer.alloc(0);
+      } else if (Buffer.isBuffer(actualData)) {
+        dataBuffer = actualData;
+      } else if (actualData && (actualData as unknown) instanceof Uint8Array) {
+        dataBuffer = Buffer.from(actualData as Uint8Array);
+      } else if (typeof actualData === 'object') {
+        // Handle serialized Buffer from msgpack: { type: 'Buffer', data: [...] }
+        const obj = actualData as { type?: string; data?: number[] };
+        if (obj.type === 'Buffer' && Array.isArray(obj.data)) {
+          dataBuffer = Buffer.from(obj.data);
+        } else {
+          logger.warn('Unexpected object type for plugin data, using empty buffer');
+          dataBuffer = Buffer.alloc(0);
+        }
+      } else {
+        logger.warn('Unexpected data type for plugin data, using empty buffer');
+        dataBuffer = Buffer.alloc(0);
+      }
+
       // 按Edge广播（每个Edge只发送其本地用户的session列表）
       for (const [target_edge_id] of targetSessionsByEdge.entries()) {
         this.factory.getControlService().notify(target_edge_id, 'hub.pluginDataBroadcast', {
           sender_session: actor_session,
           dataID: actualDataID || '',
-          data: actualData || Buffer.alloc(0),
+          data: dataBuffer,
         });
       }
 
