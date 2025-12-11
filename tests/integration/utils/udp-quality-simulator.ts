@@ -69,8 +69,9 @@ export class UDPQualitySimulator {
       // 模拟丢包
       if (Math.random() < self.config.packetLoss) {
         if (callback) {
-          // 丢包模拟为超时
-          setImmediate(() => callback(new Error('ETIMEDOUT')));
+          // 丢包时调用成功回调，让发送方认为包已发送
+          // 但实际上不调用 originalSend，所以包不会真的发送出去
+          setImmediate(() => callback(null));
         }
         return;
       }
@@ -79,14 +80,15 @@ export class UDPQualitySimulator {
       const actualLatency = self.config.latency + 
         (Math.random() * self.config.jitter * 2 - self.config.jitter);
 
-      // 延迟发送
-      if (actualLatency > 0) {
-        setTimeout(() => {
-          self.originalSend!(msg, offset, length, port, address, callback);
-        }, actualLatency);
-      } else {
-        self.originalSend!(msg, offset, length, port, address, callback);
-      }
+      // 立即发送数据包（避免缓冲区溢出），但延迟回调来模拟延迟
+      // 这样可以避免在高延迟下大量数据包堆积导致丢包
+      self.originalSend!(msg, offset, length, port, address, (err: any) => {
+        if (actualLatency > 0 && callback) {
+          setTimeout(() => callback(err), actualLatency);
+        } else if (callback) {
+          callback(err);
+        }
+      });
     } as any;
   }
 
