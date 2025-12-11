@@ -46,14 +46,25 @@ export class DatabaseWorkerManager {
     const currentFile = fileURLToPath(import.meta.url);
     const currentDir = dirname(currentFile);
     
-    // 检查是否在 src 目录运行（开发模式）还是 dist 目录（生产模式）
-    if (currentDir.endsWith('src')) {
-      // 开发模式：指向 dist 目录
-      const distDir = join(currentDir, '..', 'dist');
-      this.workerPath = join(distDir, 'database-worker.js');
-    } else {
+    // 尝试多个可能的路径，找到第一个存在的文件
+    const possiblePaths = [
       // 生产模式：当前目录就是 dist 目录
-      this.workerPath = join(currentDir, 'database-worker.js');
+      join(currentDir, 'database-worker.js'),
+      // 开发模式：指向 dist 目录
+      join(currentDir, '..', 'dist', 'database-worker.js'),
+    ];
+    
+    // 使用环境变量覆盖（如果提供）
+    if (process.env.MUNODE_DB_WORKER_PATH) {
+      this.workerPath = process.env.MUNODE_DB_WORKER_PATH;
+    } else {
+      // 默认使用第一个路径（生产模式）
+      this.workerPath = possiblePaths[0];
+      
+      // 在开发模式下（src目录），使用第二个路径
+      if (currentDir.endsWith('src')) {
+        this.workerPath = possiblePaths[1];
+      }
     }
   }
 
@@ -178,11 +189,12 @@ export class DatabaseWorkerManager {
       this.pendingRequests.set(id, { resolve, reject });
       this.worker!.postMessage(fullMessage);
 
-      // 设置超时（30秒）
+      // 设置超时（可通过环境变量配置，默认30秒）
+      const timeoutMs = parseInt(process.env.MUNODE_DB_TIMEOUT || '30000', 10);
       const timeout = setTimeout(() => {
         this.pendingRequests.delete(id);
         reject(new Error(`Database operation timeout: ${message.type}`));
-      }, 30000);
+      }, timeoutMs);
 
       // 清理超时定时器
       const originalResolve = resolve;

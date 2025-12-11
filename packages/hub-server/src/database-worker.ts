@@ -22,8 +22,35 @@ interface WorkerResponse {
   error?: string;
 }
 
+/**
+ * 转换参数为 SQLite 接受的类型
+ */
+function convertParams(params: unknown[]): Array<string | number | bigint | Buffer | null> {
+  return params.map(p => {
+    if (p === null || p === undefined) return null;
+    if (typeof p === 'number' || typeof p === 'string' || typeof p === 'bigint') return p;
+    if (Buffer.isBuffer(p)) return p;
+    return String(p);
+  });
+}
+
+/**
+ * 管理 prepared statements 缓存，避免内存泄漏
+ */
+function managePreparedStatements(sql: string, stmt: ReturnType<DatabaseSync['prepare']>): void {
+  // 如果缓存已满，删除最旧的语句
+  if (preparedStatements.size >= MAX_PREPARED_STATEMENTS) {
+    const firstKey = preparedStatements.keys().next().value;
+    if (firstKey) {
+      preparedStatements.delete(firstKey);
+    }
+  }
+  preparedStatements.set(sql, stmt);
+}
+
 let db: DatabaseSync | null = null;
 const preparedStatements = new Map<string, ReturnType<DatabaseSync['prepare']>>();
+const MAX_PREPARED_STATEMENTS = 100; // 限制prepared statements缓存大小
 
 /**
  * 处理来自主线程的消息
@@ -66,7 +93,7 @@ function handleMessage(message: WorkerMessage): void {
         }
         // Cache the prepared statement by SQL
         const stmt = db.prepare(message.sql);
-        preparedStatements.set(message.sql, stmt);
+        managePreparedStatements(message.sql, stmt);
         response.success = true;
         response.result = { prepared: true };
         break;
@@ -83,16 +110,10 @@ function handleMessage(message: WorkerMessage): void {
         let stmt = preparedStatements.get(message.sql);
         if (!stmt) {
           stmt = db.prepare(message.sql);
-          preparedStatements.set(message.sql, stmt);
+          managePreparedStatements(message.sql, stmt);
         }
 
-        // Convert params to proper types for SQLite
-        const params = (message.params || []).map(p => {
-          if (p === null || p === undefined) return null;
-          if (typeof p === 'number' || typeof p === 'string' || typeof p === 'bigint') return p;
-          if (Buffer.isBuffer(p)) return p;
-          return String(p);
-        });
+        const params = convertParams(message.params || []);
         const result = stmt.run(...params);
         response.success = true;
         response.result = {
@@ -114,16 +135,10 @@ function handleMessage(message: WorkerMessage): void {
         let stmt = preparedStatements.get(message.sql);
         if (!stmt) {
           stmt = db.prepare(message.sql);
-          preparedStatements.set(message.sql, stmt);
+          managePreparedStatements(message.sql, stmt);
         }
 
-        // Convert params to proper types for SQLite
-        const params = (message.params || []).map(p => {
-          if (p === null || p === undefined) return null;
-          if (typeof p === 'number' || typeof p === 'string' || typeof p === 'bigint') return p;
-          if (Buffer.isBuffer(p)) return p;
-          return String(p);
-        });
+        const params = convertParams(message.params || []);
         const result = stmt.get(...params);
         response.success = true;
         response.result = result || null;
@@ -142,16 +157,10 @@ function handleMessage(message: WorkerMessage): void {
         let stmt = preparedStatements.get(message.sql);
         if (!stmt) {
           stmt = db.prepare(message.sql);
-          preparedStatements.set(message.sql, stmt);
+          managePreparedStatements(message.sql, stmt);
         }
 
-        // Convert params to proper types for SQLite
-        const params = (message.params || []).map(p => {
-          if (p === null || p === undefined) return null;
-          if (typeof p === 'number' || typeof p === 'string' || typeof p === 'bigint') return p;
-          if (Buffer.isBuffer(p)) return p;
-          return String(p);
-        });
+        const params = convertParams(message.params || []);
         const result = stmt.all(...params);
         response.success = true;
         response.result = result;
