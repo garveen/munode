@@ -5824,22 +5824,7 @@ export namespace mumbleproto {
                         message.senderSession = reader.readUint32();
                         break;
                     case 2:
-                        // Handle packed repeated uint32 - read as bytes then parse
-                        const packedBytes = reader.readBytes();
-                        message.receiverSessions = message.receiverSessions || [];
-                        let offset = 0;
-                        while (offset < packedBytes.length) {
-                            // Simple varint decoding for uint32
-                            let value = 0;
-                            let shift = 0;
-                            while (offset < packedBytes.length) {
-                                const byte = packedBytes[offset++];
-                                value |= (byte & 0x7F) << shift;
-                                if ((byte & 0x80) === 0) break;
-                                shift += 7;
-                            }
-                            message.receiverSessions.push(value >>> 0);
-                        }
+                        message.receiverSessions = reader.readPackedUint32();
                         break;
                     case 3:
                         message.data = reader.readBytes();

@@ -657,32 +657,37 @@ export class MessageHandlers {
    * This is needed because the generated code uses readPackedUint32() for packed repeated uint32
    */
   private ensurePackedUint32Support(): void {
-    // Get BinaryReader through the Message class to avoid direct google-protobuf import
-    const Message = (mumbleproto.PluginDataTransmission as any).constructor.constructor;
-    const BinaryReader = Message.BinaryReader;
-    
-    if (BinaryReader && !BinaryReader.prototype.readPackedUint32) {
-      BinaryReader.prototype.readPackedUint32 = function(): number[] {
-        // Read as bytes for packed encoding
-        const packedBytes = this.readBytes();
-        const values: number[] = [];
-        let offset = 0;
-        
-        // Manually decode packed varints
-        while (offset < packedBytes.length) {
-          let value = 0;
-          let shift = 0;
+    try {
+      // Dynamically require google-protobuf to get BinaryReader
+      // We can't import it at the top level since it's not a direct dependency
+      const pb = require('google-protobuf');
+      const BinaryReader = pb.BinaryReader;
+      
+      if (BinaryReader && !BinaryReader.prototype.readPackedUint32) {
+        BinaryReader.prototype.readPackedUint32 = function(): number[] {
+          // Read as bytes for packed encoding
+          const packedBytes = this.readBytes();
+          const values: number[] = [];
+          let offset = 0;
+          
+          // Manually decode packed varints
           while (offset < packedBytes.length) {
-            const byte = packedBytes[offset++];
-            value |= (byte & 0x7F) << shift;
-            if ((byte & 0x80) === 0) break;
-            shift += 7;
+            let value = 0;
+            let shift = 0;
+            while (offset < packedBytes.length) {
+              const byte = packedBytes[offset++];
+              value |= (byte & 0x7F) << shift;
+              if ((byte & 0x80) === 0) break;
+              shift += 7;
+            }
+            values.push(value >>> 0);
           }
-          values.push(value >>> 0);
-        }
-        
-        return values;
-      };
+          
+          return values;
+        };
+      }
+    } catch (error) {
+      logger.error('Failed to patch BinaryReader with readPackedUint32 support:', error);
     }
   }
 }
