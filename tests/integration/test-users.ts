@@ -153,4 +153,9 @@ export const testUserPasswords: Record<string, { password: string; user_id: numb
       // Additional missing voice test users (more final)
       'voice_recv_e1_ch2': { password: 'pass1', user_id: 548 },
       'voice_normal_e1_ch2': { password: 'pass1', user_id: 549 },
+      // UDP connection test users
+      'tcp_fallback_user': { password: 'password123', user_id: 550 },
+      'udp_ping_test': { password: 'password123', user_id: 551 },
+      'udp_multi_sender': { password: 'password123', user_id: 552 },
+      'udp_multi_receiver': { password: 'password123', user_id: 553 },
     };
