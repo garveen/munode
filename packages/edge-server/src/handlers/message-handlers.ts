@@ -80,7 +80,7 @@ export class MessageHandlers {
     try {
       const pluginData = mumbleproto.PluginDataTransmission.deserialize(data);
 
-      logger.info(`[EDGE-PLUGIN] Received PluginDataTransmission from session ${session_id}, dataID=${pluginData.dataID}, data.length=${pluginData.data?.length}, receivers=${pluginData.receiverSessions?.length}`);
+      logger.debug(`Received PluginDataTransmission from session ${session_id}, dataID=${pluginData.dataID}, data.length=${pluginData.data?.length}, receivers=${pluginData.receiverSessions?.length}`);
 
       // 获取执行操作的客户端
       const actor = this.clientManager.getClient(session_id);
@@ -104,8 +104,6 @@ export class MessageHandlers {
       // 设置发送者
       pluginData.senderSession = session_id;
 
-      logger.info(`[EDGE-PLUGIN] Forwarding to Hub: dataID=${pluginData.dataID}, data.length=${pluginData.data?.length}, receivers=${pluginData.receiverSessions?.length}`);
-
       // 转发到Hub处理（Hub会进行目标解析和广播）
       this.hubClient.notify('hub.handlePluginDataTransmission', {
         edge_id: this.config.server_id,
@@ -119,7 +117,7 @@ export class MessageHandlers {
         receiver_sessions: pluginData.receiverSessions || [],
       });
 
-      logger.info(`[EDGE-PLUGIN] Forwarded PluginDataTransmission from session ${session_id} to Hub`);
+      logger.debug(`Forwarded PluginDataTransmission from session ${session_id} to Hub`);
     } catch (error) {
       logger.error(`Error handling PluginDataTransmission for session ${session_id}:`, error);
     }

@@ -149,9 +149,6 @@ describe('Plugin Integration Tests', () => {
         throw new Error('Session3 is undefined - client3 may not be properly authenticated');
       }
       
-      console.log('[TEST] Sessions OK');
-      console.log('[TEST] States: Ready');
-      
       const pluginId = 'com.example.privateplugin';
       const pluginData = Buffer.from('private plugin data');
 
@@ -159,7 +156,6 @@ describe('Plugin Integration Tests', () => {
       let dataReceived = false;
       const dataPromise = new Promise<void>((resolve) => {
         client2.on('pluginData', (data: any) => {
-          console.log('[TEST] C2 got data');
           if (data.dataID === pluginId) {
             dataReceived = true;
             resolve();
@@ -170,16 +166,13 @@ describe('Plugin Integration Tests', () => {
       // 用户3也监听（不应该收到）
       let client3ReceivedData = false;
       client3.on('pluginData', (data: any) => {
-        console.log('[TEST] C3 got data');
         if (data.dataID === pluginId) {
           client3ReceivedData = true;
         }
       });
 
       // 用户1发送插件数据到特定用户（只发给用户2）
-      console.log('[TEST] Sending from C1 to C2');
       await client1.sendPluginData(pluginId, pluginData, [session2!]);
-      console.log('[TEST] Sent, waiting');
 
       // 等待数据传输（需要通过Edge -> Hub -> Edge）
       await Promise.race([
@@ -190,7 +183,6 @@ describe('Plugin Integration Tests', () => {
       // 额外等待确保所有事件都被处理
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      console.log(`[TEST] dataReceived=${dataReceived}, client3ReceivedData=${client3ReceivedData}`);
       expect(dataReceived).toBe(true);
       expect(client3ReceivedData).toBe(false); // 用户3不应该收到
 
