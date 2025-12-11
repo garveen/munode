@@ -626,9 +626,19 @@ export class HubMessageHandlers {
     if (data instanceof Uint8Array) {
       return data;
     }
-    // Handle serialized Buffer object from msgpack: { type: 'Buffer', data: [...] }
-    if (typeof data === 'object' && 'type' in data && data.type === 'Buffer' && 'data' in data && Array.isArray(data.data)) {
-      return Buffer.from(data.data);
+    if (typeof data === 'object') {
+      const obj = data as any;
+      
+      // Handle { type: 'Buffer', data: [...] } format (Node.js Buffer.toJSON())
+      if (obj.type === 'Buffer' && Array.isArray(obj.data)) {
+        return Buffer.from(obj.data);
+      }
+      
+      // Handle array-like object with numeric keys (msgpack serialization of Uint8Array/Buffer)
+      if (Object.keys(obj).every((k: string) => !isNaN(Number(k)))) {
+        const values = Object.keys(obj).sort((a, b) => Number(a) - Number(b)).map(k => obj[k]);
+        return Buffer.from(values);
+      }
     }
     return new Uint8Array(0);
   }
@@ -642,33 +652,44 @@ export class HubMessageHandlers {
    */
   handlePluginDataBroadcastFromHub(params: HubNotificationParams<'hub.pluginDataBroadcast'>): void {
     try {
-      const { sender_session, dataID, data } = params;
+      const { sender_session, dataID, data, target_sessions } = params;
 
       logger.debug(
-        `Received PluginData broadcast from Hub: from ${sender_session}`
+        `Received PluginData broadcast from Hub: from ${sender_session}, dataID=${dataID}, target_sessions=${target_sessions?.length ?? 'all'}`
       );
 
       // 构建PluginDataTransmission消息
       // 注意：根据 Mumble 协议，发送给客户端时应清除 receiverSessions
+      const normalizedData = this.normalizeDataField(data);
+      
       const pluginDataMsg = new mumbleproto.PluginDataTransmission({
         senderSession: sender_session,
         dataID: dataID || '',
-        data: this.normalizeDataField(data),
+        data: normalizedData,
         receiverSessions: [], // 清除接收者列表，客户端不需要知道
       });
 
       const pluginDataBuffer = Buffer.from(pluginDataMsg.serialize());
 
-      // 发送给所有本地客户端
+      // 发送给目标客户端
       let sentCount = 0;
       for (const client of this.clientManager.getAllClients()) {
         if (client && client.user_id > 0) {
-          this.messageHandler.sendMessage(client.session, MessageType.PluginDataTransmission, pluginDataBuffer);
-          sentCount++;
+          // 如果指定了target_sessions，只发送给这些会话
+          if (target_sessions && target_sessions.length > 0) {
+            if (target_sessions.includes(client.session)) {
+              this.messageHandler.sendMessage(client.session, MessageType.PluginDataTransmission, pluginDataBuffer);
+              sentCount++;
+            }
+          } else {
+            // 没有指定target_sessions，广播给所有本地客户端
+            this.messageHandler.sendMessage(client.session, MessageType.PluginDataTransmission, pluginDataBuffer);
+            sentCount++;
+          }
         }
       }
 
-      logger.debug(`Broadcasted PluginData to ${sentCount} local clients`);
+      logger.debug(`Sent PluginData to ${sentCount} local clients (target_sessions=${target_sessions?.length ?? 'all'})`);
     } catch (error) {
       logger.error('Error handling PluginData broadcast from Hub:', error);
     }
