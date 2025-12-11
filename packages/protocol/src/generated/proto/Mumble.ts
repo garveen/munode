@@ -2141,7 +2141,7 @@ export namespace mumbleproto {
             }
         }
         get bans() {
-            return pb_1.Message.getRepeatedWrapperField(this, BanList.BanEntry, 1);
+            return pb_1.Message.getRepeatedWrapperField(this, BanList.BanEntry, 1) as BanList.BanEntry[];
         }
         set bans(value: BanList.BanEntry[]) {
             pb_1.Message.setRepeatedWrapperField(this, 1, value);
@@ -2841,13 +2841,13 @@ export namespace mumbleproto {
             return pb_1.Message.getField(this, 2) != null;
         }
         get groups() {
-            return pb_1.Message.getRepeatedWrapperField(this, ACL.ChanGroup, 3);
+            return pb_1.Message.getRepeatedWrapperField(this, ACL.ChanGroup, 3) as ACL.ChanGroup[];
         }
         set groups(value: ACL.ChanGroup[]) {
             pb_1.Message.setRepeatedWrapperField(this, 3, value);
         }
         get acls() {
-            return pb_1.Message.getRepeatedWrapperField(this, ACL.ChanACL, 4);
+            return pb_1.Message.getRepeatedWrapperField(this, ACL.ChanACL, 4) as ACL.ChanACL[];
         }
         set acls(value: ACL.ChanACL[]) {
             pb_1.Message.setRepeatedWrapperField(this, 4, value);
@@ -3870,7 +3870,7 @@ export namespace mumbleproto {
             }
         }
         get users() {
-            return pb_1.Message.getRepeatedWrapperField(this, UserList.User, 1);
+            return pb_1.Message.getRepeatedWrapperField(this, UserList.User, 1) as UserList.User[];
         }
         set users(value: UserList.User[]) {
             pb_1.Message.setRepeatedWrapperField(this, 1, value);
@@ -4094,7 +4094,7 @@ export namespace mumbleproto {
             return pb_1.Message.getField(this, 1) != null;
         }
         get targets() {
-            return pb_1.Message.getRepeatedWrapperField(this, VoiceTarget.Target, 2);
+            return pb_1.Message.getRepeatedWrapperField(this, VoiceTarget.Target, 2) as VoiceTarget.Target[];
         }
         set targets(value: VoiceTarget.Target[]) {
             pb_1.Message.setRepeatedWrapperField(this, 2, value);
@@ -4692,7 +4692,7 @@ export namespace mumbleproto {
             pb_1.Message.setField(this, 3, value);
         }
         get from_client() {
-            return pb_1.Message.getWrapperField(this, UserStats.Stats, 4);
+            return pb_1.Message.getWrapperField(this, UserStats.Stats, 4) as UserStats.Stats;
         }
         set from_client(value: UserStats.Stats) {
             pb_1.Message.setWrapperField(this, 4, value);
@@ -4701,7 +4701,7 @@ export namespace mumbleproto {
             return pb_1.Message.getField(this, 4) != null;
         }
         get from_server() {
-            return pb_1.Message.getWrapperField(this, UserStats.Stats, 5);
+            return pb_1.Message.getWrapperField(this, UserStats.Stats, 5) as UserStats.Stats;
         }
         set from_server(value: UserStats.Stats) {
             pb_1.Message.setWrapperField(this, 5, value);
@@ -4764,7 +4764,7 @@ export namespace mumbleproto {
             return pb_1.Message.getField(this, 11) != null;
         }
         get version() {
-            return pb_1.Message.getWrapperField(this, Version, 12);
+            return pb_1.Message.getWrapperField(this, Version, 12) as Version;
         }
         set version(value: Version) {
             pb_1.Message.setWrapperField(this, 12, value);
@@ -5806,7 +5806,7 @@ export namespace mumbleproto {
             if (this.has_senderSession)
                 writer.writeUint32(1, this.senderSession);
             if (this.receiverSessions.length)
-                writer.writePackedUint32(2, this.receiverSessions);
+                writer.writeRepeatedUint32(2, this.receiverSessions);
             if (this.has_data && this.data.length)
                 writer.writeBytes(3, this.data);
             if (this.has_dataID && this.dataID.length)
@@ -5824,22 +5824,7 @@ export namespace mumbleproto {
                         message.senderSession = reader.readUint32();
                         break;
                     case 2:
-                        // Handle packed repeated uint32 - read as bytes then parse
-                        const packedBytes = reader.readBytes();
-                        message.receiverSessions = message.receiverSessions || [];
-                        let offset = 0;
-                        while (offset < packedBytes.length) {
-                            // Simple varint decoding for uint32
-                            let value = 0;
-                            let shift = 0;
-                            while (offset < packedBytes.length) {
-                                const byte = packedBytes[offset++];
-                                value |= (byte & 0x7F) << shift;
-                                if ((byte & 0x80) === 0) break;
-                                shift += 7;
-                            }
-                            message.receiverSessions.push(value >>> 0);
-                        }
+                        pb_1.Message.addToRepeatedField(message, 2, reader.readUint32());
                         break;
                     case 3:
                         message.data = reader.readBytes();

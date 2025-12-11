@@ -595,7 +595,7 @@ message PluginDataTransmission {
 	// The session ID of the client this message was sent from
 	optional uint32 senderSession = 1;
 	// The session IDs of the clients that should receive this message
-	repeated uint32 receiverSessions = 2 [packed = true];
+	repeated uint32 receiverSessions = 2;
 	// The data that is sent
 	optional bytes data = 3;
 	// The ID of the sent data. This will be used by plugins to check whether they will
