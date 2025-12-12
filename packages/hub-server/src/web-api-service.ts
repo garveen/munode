@@ -74,6 +74,37 @@ interface HubStatsResponse {
 }
 
 /**
+ * 路由表响应
+ */
+interface RoutingTableResponse {
+  enabled: boolean;
+  edges: Array<{
+    edgeId: number;
+    name: string;
+    routes: Array<{
+      targetEdgeId: number;
+      type: string;
+      nextHop?: number;
+      cost: number;
+      timestamp: number;
+      source: string;
+      ttl?: number;
+    }>;
+  }>;
+  connectivity: Array<{
+    sourceEdgeId: number;
+    targetEdgeId: number;
+    rtt: number;
+    packetLoss: number;
+    jitter: number;
+    lastUpdate: number;
+    samples: number;
+    bidirectional: boolean;
+  }>;
+  timestamp: number;
+}
+
+/**
  * Web API Service
  */
 export class WebApiService {
@@ -198,6 +229,8 @@ export class WebApiService {
         this.handleStats(res);
       } else if (pathname === '/api/topology') {
         this.handleTopology(res);
+      } else if (pathname === '/api/routing-table') {
+        this.handleRoutingTable(res);
       } else if (pathname === '/api/health') {
         this.handleHealth(res);
       } else {
@@ -423,6 +456,74 @@ export class WebApiService {
       enabled: this.networkTopologyManager.isEnabled(),
       nodes,
       links,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * GET /api/routing-table - 获取路由表和连通数据
+   */
+  private handleRoutingTable(res: http.ServerResponse): void {
+    if (!this.networkTopologyManager) {
+      this.sendJson(res, {
+        enabled: false,
+        message: 'Network topology manager not available',
+        edges: [],
+        connectivity: [],
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const allEdges = this.networkTopologyManager.getAllEdges();
+    const edges: RoutingTableResponse['edges'] = [];
+    const connectivity: RoutingTableResponse['connectivity'] = [];
+
+    // 获取每个 Edge 的路由表
+    for (const edgeId of allEdges) {
+      const edge = this.registry.getEdge(edgeId);
+      const routes = this.networkTopologyManager.getRouteTableForEdge(edgeId);
+
+      edges.push({
+        edgeId,
+        name: edge?.name || `Edge ${edgeId}`,
+        routes: routes.map(route => ({
+          targetEdgeId: route.targetEdgeId,
+          type: route.type,
+          nextHop: route.nextHop,
+          cost: route.cost,
+          timestamp: route.timestamp,
+          source: route.source,
+          ttl: route.ttl,
+        })),
+      });
+    }
+
+    // 获取连通数据
+    for (const sourceId of allEdges) {
+      for (const targetId of allEdges) {
+        if (sourceId !== targetId) {
+          const link = this.networkTopologyManager.getLink(sourceId, targetId);
+          if (link) {
+            connectivity.push({
+              sourceEdgeId: link.sourceEdgeId,
+              targetEdgeId: link.targetEdgeId,
+              rtt: link.quality.rtt,
+              packetLoss: link.quality.packetLoss,
+              jitter: link.quality.jitter,
+              lastUpdate: link.quality.lastUpdate,
+              samples: link.quality.samples,
+              bidirectional: link.bidirectional,
+            });
+          }
+        }
+      }
+    }
+
+    this.sendJson(res, {
+      enabled: this.networkTopologyManager.isEnabled(),
+      edges,
+      connectivity,
       timestamp: Date.now(),
     });
   }
