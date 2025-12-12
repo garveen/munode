@@ -187,6 +187,14 @@ export class AuthHandlers {
             release: clientBeforeSync.client_name,
             os: clientBeforeSync.os_name,
             os_version: clientBeforeSync.os_version,
+            // Include initial state (all false by default at authentication time)
+            mute: clientBeforeSync.mute ?? false,
+            deaf: clientBeforeSync.deaf ?? false,
+            suppress: clientBeforeSync.suppress ?? false,
+            self_mute: clientBeforeSync.self_mute ?? false,
+            self_deaf: clientBeforeSync.self_deaf ?? false,
+            priority_speaker: clientBeforeSync.priority_speaker ?? false,
+            recording: clientBeforeSync.recording ?? false,
           });
         this.logger.info(`Reported session ${session_id} (${clientBeforeSync.username}) to Hub (before user list sync)`);
         } catch (error) {

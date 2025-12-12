@@ -191,6 +191,13 @@ export class TypedRPCServer {
             release: reportSession.release,
             os: reportSession.os,
             os_version: reportSession.os_version,
+            mute: reportSession.mute,
+            deaf: reportSession.deaf,
+            suppress: reportSession.suppress,
+            self_mute: reportSession.self_mute,
+            self_deaf: reportSession.self_deaf,
+            priority_speaker: reportSession.priority_speaker,
+            recording: reportSession.recording,
           } as RPCParams<'edge.reportSession'>;
         }
         throw new Error('Missing edge.reportSession params');

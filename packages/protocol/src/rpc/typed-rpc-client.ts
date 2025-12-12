@@ -130,6 +130,13 @@ export class TypedRPCClient {
           release: p.release,
           os: p.os,
           os_version: p.os_version,
+          mute: p.mute,
+          deaf: p.deaf,
+          suppress: p.suppress,
+          self_mute: p.self_mute,
+          self_deaf: p.self_deaf,
+          priority_speaker: p.priority_speaker,
+          recording: p.recording,
         });
         break;
       }

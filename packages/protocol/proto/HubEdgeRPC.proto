@@ -129,6 +129,14 @@ message EdgeReportSessionParams {
   optional string release = 11;
   optional string os = 12;
   optional string os_version = 13;
+  // User state fields
+  optional bool mute = 14;
+  optional bool deaf = 15;
+  optional bool suppress = 16;
+  optional bool self_mute = 17;
+  optional bool self_deaf = 18;
+  optional bool priority_speaker = 19;
+  optional bool recording = 20;
 }
 
 message EdgeReportSessionResult {
