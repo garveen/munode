@@ -1,5 +1,9 @@
-import { open, Database } from 'sqlite';
-import sqlite3 from 'sqlite3';
+/**
+ * Hub Server 数据库管理器（使用 Node.js 内置 SQLite + Worker）
+ * 使用 Worker 线程提供异步 SQLite 操作
+ */
+
+import { DatabaseWorkerManager } from './database-worker-manager.js';
 import { createLogger } from '@munode/common';
 import type { DatabaseConfig, RegisteredEdge, VoiceTargetConfig } from './types.js';
 import { GlobalSession } from '@munode/protocol';
@@ -11,15 +15,43 @@ import type { ChannelGroupData, ChannelGroupMemberData } from './channel-group-m
 const logger = createLogger({ service: 'hub-database' });
 
 /**
+ * 准备好的语句包装器
+ * 模拟旧 API 的 Statement 接口
+ */
+class StatementWrapper {
+  constructor(
+    private sql: string,
+    private manager: DatabaseWorkerManager
+  ) {}
+
+  async run(...params: unknown[]): Promise<{ changes: number; lastID?: number | bigint }> {
+    const result = await this.manager.run(this.sql, ...params);
+    return {
+      changes: result.changes,
+      lastID: result.lastInsertRowid,
+    };
+  }
+
+  async get(...params: unknown[]): Promise<unknown> {
+    return await this.manager.get(this.sql, ...params);
+  }
+
+  async all(...params: unknown[]): Promise<unknown[]> {
+    return await this.manager.all(this.sql, ...params);
+  }
+}
+
+/**
  * Hub Server 数据库管理器
  * 使用异步 SQLite 提供持久化存储
  */
 export class HubDatabase {
-  private db!: Database<sqlite3.Database, sqlite3.Statement>;
+  private manager: DatabaseWorkerManager;
   private config: DatabaseConfig;
 
   constructor(config: DatabaseConfig) {
     this.config = config;
+    this.manager = new DatabaseWorkerManager();
   }
 
   /**
@@ -28,23 +60,43 @@ export class HubDatabase {
   async init(): Promise<void> {
     // 初始化数据库
     try {
-      this.db = await open({
-        filename: this.config.path,
-        driver: sqlite3.Database,
-      });
+      await this.manager.init(this.config.path);
     } catch (error) {
       console.error('cannot open database file:', this.config.path);
       throw error;
     }
 
     // 优化配置
-    await this.db.run('PRAGMA journal_mode = WAL');
-    await this.db.run('PRAGMA synchronous = NORMAL');
-    await this.db.run('PRAGMA cache_size = -64000');
-    await this.db.run('PRAGMA foreign_keys = ON');
+    await this.run('PRAGMA journal_mode = WAL');
+    await this.run('PRAGMA synchronous = NORMAL');
+    await this.run('PRAGMA cache_size = -64000');
+    await this.run('PRAGMA foreign_keys = ON');
 
     await this.initSchema();
     this.startBackupTask();
+  }
+
+  /**
+   * 执行 SQL 语句（便捷方法）
+   */
+  private async run(sql: string, ...params: unknown[]): Promise<{ changes: number }> {
+    const result = await this.manager.run(sql, ...params);
+    return { changes: result.changes };
+  }
+
+  /**
+   * 执行 SQL 语句（便捷方法，用于 exec）
+   */
+  async exec(sql: string): Promise<void> {
+    await this.manager.exec(sql);
+  }
+
+  /**
+   * 准备 SQL 语句
+   */
+  async prepare(sql: string): Promise<StatementWrapper> {
+    await this.manager.prepare(sql);
+    return new StatementWrapper(sql, this.manager);
   }
 
   /**
@@ -264,7 +316,7 @@ export class HubDatabase {
         ('server.max_users', '5000', '全局最大用户数', strftime('%s', 'now'));
     `;
 
-    await this.db.exec(schema);
+    await this.exec(schema);
     logger.info('Database schema initialized (Go-compatible)');
 
     // 迁移旧的列名
@@ -280,15 +332,15 @@ export class HubDatabase {
   private async migrateSchema(): Promise<void> {
     try {
       // 检查 channels 表是否有旧的 description 列
-      const pragma = await this.db.prepare('PRAGMA table_info(channels)');
+      const pragma = await this.prepare('PRAGMA table_info(channels)');
       const columns = await pragma.all();
 
-      const hasDescription = columns.some((col: { name: string }) => col.name === 'description');
-      const hasDescriptionBlob = columns.some((col: { name: string }) => col.name === 'description_blob');
+      const hasDescription = (columns as Array<{ name: string }>).some((col) => col.name === 'description');
+      const hasDescriptionBlob = (columns as Array<{ name: string }>).some((col) => col.name === 'description_blob');
 
       if (hasDescription && !hasDescriptionBlob) {
         logger.info('Migrating channels table: renaming description to description_blob');
-        await this.db.exec('ALTER TABLE channels RENAME COLUMN description TO description_blob');
+        await this.exec('ALTER TABLE channels RENAME COLUMN description TO description_blob');
       } else if (hasDescription && hasDescriptionBlob) {
         logger.warn(
           'Channels table has both description and description_blob columns, this should not happen'
@@ -327,7 +379,7 @@ export class HubDatabase {
     // Edge不再持久化到数据库，跳过Edge检查
     // Session信息仍然保存（但这个也应该考虑改为内存存储）
 
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       INSERT OR REPLACE INTO sessions (
         session_id, edge_id, user_id, username, ip_address,
         cert_hash, is_authenticated, channel_id, connected_at, last_active
@@ -352,7 +404,7 @@ export class HubDatabase {
    * 更新会话频道
    */
   async updateSessionChannel(session_id: number, channel_id: number): Promise<void> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       UPDATE sessions
       SET channel_id = ?, last_active = ?
       WHERE session_id = ?
@@ -366,7 +418,7 @@ export class HubDatabase {
    * 删除会话
    */
   async deleteSession(session_id: number): Promise<void> {
-    const stmt = await this.db.prepare('DELETE FROM sessions WHERE session_id = ?');
+    const stmt = await this.prepare('DELETE FROM sessions WHERE session_id = ?');
     await stmt.run(session_id);
   }
 
@@ -374,10 +426,10 @@ export class HubDatabase {
    * 获取所有会话
    */
   async getAllSessions(): Promise<GlobalSession[]> {
-    const stmt = await this.db.prepare('SELECT * FROM sessions');
+    const stmt = await this.prepare('SELECT * FROM sessions');
     const rows = await stmt.all();
 
-    return rows.map((row: {
+    return (rows as Array<{
       session_id: number;
       edge_id: number;
       user_id: number;
@@ -388,7 +440,7 @@ export class HubDatabase {
       channel_id: number;
       connected_at: number;
       last_active: number;
-    }): GlobalSession => ({
+    }>).map((row): GlobalSession => ({
       session_id: row.session_id as number,
       edge_id: row.edge_id as number,
       user_id: row.user_id as number,
@@ -406,7 +458,7 @@ export class HubDatabase {
    * 保存 VoiceTarget 配置
    */
   async saveVoiceTarget(config: VoiceTargetConfig): Promise<void> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       INSERT OR REPLACE INTO voice_targets (
         edge_id, client_session, target_id, target_type,
         target_value, created_at, updated_at
@@ -429,10 +481,17 @@ export class HubDatabase {
    * 获取所有 VoiceTarget 配置
    */
   async getAllVoiceTargets(): Promise<VoiceTargetConfig[]> {
-    const stmt = await this.db.prepare('SELECT * FROM voice_targets');
+    const stmt = await this.prepare('SELECT * FROM voice_targets');
     const rows = await stmt.all();
 
-    return rows.map((row) => ({
+    return (rows as Array<{
+      edge_id: number;
+      client_session: number;
+      target_id: number;
+      target_type: string;
+      target_value: string;
+      updated_at: number;
+    }>).map((row) => ({
       edge_id: row.edge_id,
       client_session: row.client_session,
       target_id: row.target_id,
@@ -445,8 +504,8 @@ export class HubDatabase {
    * 获取配置值
    */
   async getConfig(key: string): Promise<string | null> {
-    const stmt = await this.db.prepare('SELECT value FROM configs WHERE key = ?');
-    const row = await stmt.get(key);
+    const stmt = await this.prepare('SELECT value FROM configs WHERE key = ?');
+    const row = await stmt.get(key) as { value: string } | undefined;
     return row ? JSON.parse(row.value) : null;
   }
 
@@ -454,7 +513,7 @@ export class HubDatabase {
    * 设置配置值
    */
   async setConfig(key: string, value: string | number | boolean | null | Record<string, unknown>, description?: string): Promise<void> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       INSERT OR REPLACE INTO configs (key, value, description, updated_at)
       VALUES (?, ?, ?, ?)
     `);
@@ -473,7 +532,7 @@ export class HubDatabase {
     message: string;
     metadata?: Record<string, unknown>;
   }): Promise<void> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       INSERT INTO audit_logs (event_type, edge_id, session_id, message, metadata, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
@@ -496,13 +555,13 @@ export class HubDatabase {
     const oneDayAgo = Math.floor(Date.now() / 1000) - 24 * 3600;
 
     // 清理离线会话
-    const sessionStmt = await this.db.prepare('DELETE FROM sessions WHERE last_active < ?');
+    const sessionStmt = await this.prepare('DELETE FROM sessions WHERE last_active < ?');
     const sessionResult = await sessionStmt.run(oneDayAgo);
     const deletedSessions = sessionResult.changes || 0;
 
     // 清理旧日志 (保留7天)
     const oneWeekAgo = Math.floor(Date.now() / 1000) - 7 * 24 * 3600;
-    const logStmt = await this.db.prepare('DELETE FROM audit_logs WHERE created_at < ?');
+    const logStmt = await this.prepare('DELETE FROM audit_logs WHERE created_at < ?');
     const logResult = await logStmt.run(oneWeekAgo);
     const deletedLogs = logResult.changes || 0;
 
@@ -542,7 +601,7 @@ export class HubDatabase {
       const backupPath = path.join(this.config.backupDir, `hub-${timestamp}.db`);
 
       // 使用 VACUUM INTO 创建备份
-      await this.db.exec(`VACUUM INTO '${backupPath}'`);
+      await this.exec(`VACUUM INTO '${backupPath}'`);
 
       logger.info(`Database backup created: ${backupPath}`);
 
@@ -579,27 +638,6 @@ export class HubDatabase {
     }
   }
 
-  /**
-   * 获取证书指纹
-   */
-  /**
-   * 获取证书指纹（保留以备未来使用）
-   */
-  // @ts-expect-error - 保留方法以备未来使用
-  private getCertFingerprint(certPem: string): string {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const forge = require('node-forge');
-      const cert = forge.pki.certificateFromPem(certPem);
-      const der = forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
-      const md = forge.md.sha256.create();
-      md.update(der);
-      return md.digest().toHex();
-    } catch (_error) {
-      return '';
-    }
-  }
-
   // ====================
   // Go 兼容表操作方法
   // ====================
@@ -619,12 +657,21 @@ export class HubDatabase {
       duration?: number;
     }>
   > {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       SELECT * FROM bans 
       WHERE deleted_at IS NULL
       ORDER BY id DESC
     `);
-    return await stmt.all();
+    return await stmt.all() as Array<{
+      id: number;
+      address: Buffer;
+      mask: number;
+      name?: string;
+      hash?: string;
+      reason?: string;
+      start?: number;
+      duration?: number;
+    }>;
   }
 
   /**
@@ -639,7 +686,7 @@ export class HubDatabase {
     start?: number;
     duration?: number;
   }): Promise<number> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       INSERT INTO bans (created_at, updated_at, address, mask, name, hash, reason, start, duration)
       VALUES (datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?, ?)
     `);
@@ -654,14 +701,14 @@ export class HubDatabase {
       ban.duration || null
     );
 
-    return result.lastID || 0;
+    return (result.lastID as number) || 0;
   }
 
   /**
    * 删除封禁记录 (软删除)
    */
   async deleteBan(id: number): Promise<void> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       UPDATE bans SET deleted_at = datetime('now') WHERE id = ?
     `);
     await stmt.run(id);
@@ -671,9 +718,9 @@ export class HubDatabase {
    * 清空所有封禁记录
    */
   async purgeBans(): Promise<void> {
-    await this.db.run('DELETE FROM bans');
-    await this.db.run("UPDATE sqlite_sequence SET seq = 0 WHERE name = 'bans'");
-    await this.db.run('VACUUM');
+    await this.run('DELETE FROM bans');
+    await this.run("UPDATE sqlite_sequence SET seq = 0 WHERE name = 'bans'");
+    await this.exec('VACUUM');
   }
 
   /**
@@ -681,13 +728,13 @@ export class HubDatabase {
    */
   async isCertHashBanned(hash: string): Promise<boolean> {
     const now = Math.floor(Date.now() / 1000);
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       SELECT COUNT(*) as count FROM bans 
       WHERE hash = ? 
         AND deleted_at IS NULL
         AND (start + duration > ? OR duration = 0)
     `);
-    const result = await stmt.get(hash, now);
+    const result = await stmt.get(hash, now) as { count: number };
     return result.count > 0;
   }
 
@@ -695,12 +742,12 @@ export class HubDatabase {
    * 根据IP地址检查是否被封禁 (需要实现CIDR匹配)
    */
   async isIPBanned(ip: Buffer): Promise<boolean> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       SELECT address, mask FROM bans 
       WHERE deleted_at IS NULL
         AND address IS NOT NULL
     `);
-    const bans = await stmt.all();
+    const bans = await stmt.all() as Array<{ address: Buffer; mask: number }>;
 
     // 简化版本：需要实现完整的CIDR匹配逻辑
     for (const ban of bans) {
@@ -725,9 +772,8 @@ export class HubDatabase {
       description_blob?: string;
     }>
   > {
-    const stmt = await this.db.prepare('SELECT * FROM channels ORDER BY id ASC');
-    const rows = await stmt.all();
-    return rows.map((row: {
+    const stmt = await this.prepare('SELECT * FROM channels ORDER BY id ASC');
+    const rows = await stmt.all() as Array<{
       id: number;
       name: string;
       position: number;
@@ -735,7 +781,8 @@ export class HubDatabase {
       parent_id: number;
       inherit_acl: number;
       description_blob?: string;
-    }) => ({
+    }>;
+    return rows.map((row) => ({
       ...row,
       inherit_acl: row.inherit_acl === 1,
     }));
@@ -753,8 +800,16 @@ export class HubDatabase {
     inherit_acl: number;
     description_blob?: string;
   } | undefined> {
-    const stmt = await this.db.prepare('SELECT * FROM channels WHERE id = ?');
-    return await stmt.get(id);
+    const stmt = await this.prepare('SELECT * FROM channels WHERE id = ?');
+    return await stmt.get(id) as {
+      id: number;
+      name: string;
+      position: number;
+      max_users: number;
+      parent_id: number;
+      inherit_acl: number;
+      description_blob?: string;
+    } | undefined;
   }
 
   /**
@@ -768,7 +823,7 @@ export class HubDatabase {
     inherit_acl?: boolean;
     description_blob?: string;
   }): Promise<number> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       INSERT INTO channels (name, position, max_users, parent_id, inherit_acl, description_blob)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
@@ -782,7 +837,7 @@ export class HubDatabase {
       channel.description_blob || null
     );
 
-    return result.lastID || 0;
+    return (result.lastID as number) || 0;
   }
 
   /**
@@ -806,7 +861,7 @@ export class HubDatabase {
       typeof value === 'boolean' ? (value ? 1 : 0) : value
     );
 
-    const stmt = await this.db.prepare(`UPDATE channels SET ${fields} WHERE id = ?`);
+    const stmt = await this.prepare(`UPDATE channels SET ${fields} WHERE id = ?`);
     await stmt.run(...values, id);
   }
 
@@ -817,7 +872,7 @@ export class HubDatabase {
     if (id === 0) {
       throw new Error('Cannot delete root channel');
     }
-    const stmt = await this.db.prepare('DELETE FROM channels WHERE id = ?');
+    const stmt = await this.prepare('DELETE FROM channels WHERE id = ?');
     await stmt.run(id);
   }
 
@@ -833,20 +888,28 @@ export class HubDatabase {
     inherit_acl: number;
     description_blob?: string;
   }>> {
-    const stmt = await this.db.prepare(
+    const stmt = await this.prepare(
       'SELECT * FROM channels WHERE parent_id = ? ORDER BY position ASC'
     );
-    return await stmt.all(parent_id);
+    return await stmt.all(parent_id) as Array<{
+      id: number;
+      name: string;
+      position: number;
+      max_users: number;
+      parent_id: number;
+      inherit_acl: number;
+      description_blob?: string;
+    }>;
   }
 
   /**
    * 获取频道链接
    */
   async getChannelLinks(channel_id: number): Promise<number[]> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       SELECT target_id FROM channel_links WHERE channel_id = ?
     `);
-    const rows = await stmt.all(channel_id);
+    const rows = await stmt.all(channel_id) as Array<{ target_id: number }>;
     return rows.map((row) => row.target_id);
   }
 
@@ -854,7 +917,7 @@ export class HubDatabase {
    * 链接两个频道
    */
   async linkChannels(channel_id: number, target_id: number): Promise<void> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       INSERT OR IGNORE INTO channel_links (channel_id, target_id)
       VALUES (?, ?), (?, ?)
     `);
@@ -865,7 +928,7 @@ export class HubDatabase {
    * 取消链接两个频道
    */
   async unlinkChannels(channel_id: number, target_id: number): Promise<void> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       DELETE FROM channel_links 
       WHERE (channel_id = ? AND target_id = ?)
          OR (channel_id = ? AND target_id = ?)
@@ -882,8 +945,8 @@ export class HubDatabase {
       WHERE deleted_at IS NULL
       ORDER BY channel_id ASC, id ASC
     `;
-    const stmt = await this.db.prepare(query);
-    const result = await stmt.all();
+    const stmt = await this.prepare(query);
+    const result = await stmt.all() as ACLData[];
     result.forEach((acl: ACLData) => {
       if (acl.user_id === 0) {
         delete acl.user_id;
@@ -903,8 +966,8 @@ export class HubDatabase {
     `;
     const params = [channel_id];
 
-    const stmt = await this.db.prepare(query);
-    const result = await stmt.all(...params);
+    const stmt = await this.prepare(query);
+    const result = await stmt.all(...params) as ACLData[];
     result.forEach((acl: ACLData) => {
       if (acl.user_id === 0) {
         delete acl.user_id;
@@ -925,7 +988,7 @@ export class HubDatabase {
     allow: number;
     deny: number;
   }): Promise<number> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       INSERT INTO acls (
         created_at, updated_at, channel_id, user_id, "group",
         apply_here, apply_subs, allow, deny
@@ -942,7 +1005,7 @@ export class HubDatabase {
       acl.deny
     );
 
-    return result.lastID || 0;
+    return (result.lastID as number) || 0;
   }
 
   /**
@@ -954,7 +1017,7 @@ export class HubDatabase {
       .join(', ');
     const values = Object.values(updates);
 
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       UPDATE acls SET ${fields}, updated_at = datetime('now') WHERE id = ?
     `);
     await stmt.run(...values, id);
@@ -964,7 +1027,7 @@ export class HubDatabase {
    * 删除 ACL (软删除)
    */
   async deleteACL(id: number): Promise<void> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       UPDATE acls SET deleted_at = datetime('now') WHERE id = ?
     `);
     await stmt.run(id);
@@ -974,7 +1037,7 @@ export class HubDatabase {
    * 清空频道的所有 ACL
    */
   async clearChannelACLs(channel_id: number): Promise<void> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       UPDATE acls SET deleted_at = datetime('now') WHERE channel_id = ?
     `);
     await stmt.run(channel_id);
@@ -984,8 +1047,8 @@ export class HubDatabase {
    * 获取用户最后所在频道
    */
   async getUserLastChannel(user_id: number): Promise<number> {
-    const stmt = await this.db.prepare('SELECT last_channel FROM user_last_channels WHERE id = ?');
-    const row = await stmt.get(user_id);
+    const stmt = await this.prepare('SELECT last_channel FROM user_last_channels WHERE id = ?');
+    const row = await stmt.get(user_id) as { last_channel: number } | undefined;
     return row ? row.last_channel : 0;
   }
 
@@ -993,7 +1056,7 @@ export class HubDatabase {
    * 设置用户最后所在频道
    */
   async setUserLastChannel(user_id: number, channel_id: number): Promise<void> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       INSERT OR REPLACE INTO user_last_channels (id, last_channel)
       VALUES (?, ?)
     `);
@@ -1008,7 +1071,7 @@ export class HubDatabase {
 
     if (!existingRoot) {
       // 插入根频道，ID 固定为 0
-      await this.db.run(
+      await this.run(
         `
         INSERT INTO channels (id, name, position, max_users, parent_id, inherit_acl, description_blob)
         VALUES (0, ?, 0, 0, -1, 1, NULL)
@@ -1019,7 +1082,7 @@ export class HubDatabase {
       logger.info(`Root channel created: ${name}`);
     } else if (existingRoot.name !== name) {
       // 更新根频道名称
-      await this.db.run('UPDATE channels SET name = ? WHERE id = 0', name);
+      await this.run('UPDATE channels SET name = ? WHERE id = 0', name);
       logger.info(`Root channel renamed: ${name}`);
     }
   }
@@ -1213,8 +1276,16 @@ export class HubDatabase {
       params.push(options.offset);
     }
 
-    const stmt = await this.db.prepare(query);
-    return await stmt.all(...params);
+    const stmt = await this.prepare(query);
+    return await stmt.all(...params) as Array<{
+      id: number;
+      event_type: string;
+      edge_id: number | null;
+      session_id: number | null;
+      message: string;
+      metadata: string | null;
+      created_at: number;
+    }>;
   }
 
   // =====================================
@@ -1225,7 +1296,7 @@ export class HubDatabase {
    * 添加频道组
    */
   async addChannelGroup(channelGroup: Omit<ChannelGroupData, 'id'>): Promise<number> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       INSERT INTO channel_groups (channel_id, name, inherit, inheritable, created_at, updated_at)
       VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))
     `);
@@ -1237,7 +1308,7 @@ export class HubDatabase {
       channelGroup.inheritable ? 1 : 0
     );
 
-    return result.lastID || 0;
+    return (result.lastID as number) || 0;
   }
 
   /**
@@ -1266,7 +1337,7 @@ export class HubDatabase {
 
     fields.push("updated_at = datetime('now')");
 
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       UPDATE channel_groups SET ${fields.join(', ')} WHERE id = ?
     `);
     await stmt.run(...values, id);
@@ -1276,7 +1347,7 @@ export class HubDatabase {
    * 删除频道组
    */
   async deleteChannelGroup(id: number): Promise<void> {
-    const stmt = await this.db.prepare('DELETE FROM channel_groups WHERE id = ?');
+    const stmt = await this.prepare('DELETE FROM channel_groups WHERE id = ?');
     await stmt.run(id);
   }
 
@@ -1284,21 +1355,21 @@ export class HubDatabase {
    * 获取频道的所有频道组
    */
   async getChannelGroups(channel_id: number): Promise<ChannelGroupData[]> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       SELECT id, channel_id, name, inherit, inheritable
       FROM channel_groups
       WHERE channel_id = ?
       ORDER BY name
     `);
 
-    const rows = await stmt.all(channel_id);
-    return rows.map((row: {
+    const rows = await stmt.all(channel_id) as Array<{
       id: number;
       channel_id: number;
       name: string;
       inherit: number;
       inheritable: number;
-    }) => ({
+    }>;
+    return rows.map((row) => ({
       id: row.id,
       channel_id: row.channel_id,
       name: row.name,
@@ -1311,13 +1382,19 @@ export class HubDatabase {
    * 获取特定频道组
    */
   async getChannelGroup(channel_id: number, channelGroupName: string): Promise<ChannelGroupData | null> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       SELECT id, channel_id, name, inherit, inheritable
       FROM channel_groups
       WHERE channel_id = ? AND name = ?
     `);
 
-    const row = await stmt.get(channel_id, channelGroupName);
+    const row = await stmt.get(channel_id, channelGroupName) as {
+      id: number;
+      channel_id: number;
+      name: string;
+      inherit: number;
+      inheritable: number;
+    } | undefined;
     if (!row) {
       return null;
     }
@@ -1335,7 +1412,7 @@ export class HubDatabase {
    * 清空频道的所有频道组
    */
   async clearChannelGroups(channel_id: number): Promise<void> {
-    const stmt = await this.db.prepare('DELETE FROM channel_groups WHERE channel_id = ?');
+    const stmt = await this.prepare('DELETE FROM channel_groups WHERE channel_id = ?');
     await stmt.run(channel_id);
   }
 
@@ -1343,7 +1420,7 @@ export class HubDatabase {
    * 添加频道组成员
    */
   async addChannelGroupMember(member: Omit<ChannelGroupMemberData, 'id'>): Promise<number> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       INSERT INTO channel_group_members (channel_group_id, user_id, is_add, created_at)
       VALUES (?, ?, ?, datetime('now'))
     `);
@@ -1354,26 +1431,26 @@ export class HubDatabase {
       member.is_add ? 1 : 0
     );
 
-    return result.lastID || 0;
+    return (result.lastID as number) || 0;
   }
 
   /**
    * 获取频道组成员
    */
   async getChannelGroupMembers(channel_group_id: number): Promise<ChannelGroupMemberData[]> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       SELECT id, channel_group_id, user_id, is_add
       FROM channel_group_members
       WHERE channel_group_id = ?
     `);
 
-    const rows = await stmt.all(channel_group_id);
-    return rows.map((row: {
+    const rows = await stmt.all(channel_group_id) as Array<{
       id: number;
       channel_group_id: number;
       user_id: number;
       is_add: number;
-    }) => ({
+    }>;
+    return rows.map((row) => ({
       id: row.id,
       channel_group_id: row.channel_group_id,
       user_id: row.user_id,
@@ -1385,7 +1462,7 @@ export class HubDatabase {
    * 清空频道组的特定类型成员（add 或 remove）
    */
   async clearChannelGroupMembers(channel_group_id: number, isAdd: boolean): Promise<void> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       DELETE FROM channel_group_members WHERE channel_group_id = ? AND is_add = ?
     `);
     await stmt.run(channel_group_id, isAdd ? 1 : 0);
@@ -1411,10 +1488,10 @@ export class HubDatabase {
       SELECT id FROM channel_hierarchy ORDER BY depth DESC
     `;
     
-    const stmt = await this.db.prepare(query);
-    const rows = await stmt.all(channel_id);
+    const stmt = await this.prepare(query);
+    const rows = await stmt.all(channel_id) as Array<{ id: number }>;
     
-    return rows.map((row: { id: number }) => row.id);
+    return rows.map((row) => row.id);
   }
 
   // ====================
@@ -1425,8 +1502,8 @@ export class HubDatabase {
    * 获取用户的 texture blob hash
    */
   async getUserTextureBlob(user_id: number): Promise<string | null> {
-    const stmt = await this.db.prepare('SELECT texture_blob FROM users WHERE id = ?');
-    const row = await stmt.get(user_id);
+    const stmt = await this.prepare('SELECT texture_blob FROM users WHERE id = ?');
+    const row = await stmt.get(user_id) as { texture_blob: string | null } | undefined;
     return row?.texture_blob || null;
   }
 
@@ -1434,7 +1511,7 @@ export class HubDatabase {
    * 设置用户的 texture blob hash
    */
   async setUserTextureBlob(user_id: number, blobHash: string | null): Promise<void> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       INSERT INTO users (id, name, texture_blob, updated_at)
       VALUES (?, 'user_' || ?, ?, strftime('%s', 'now'))
       ON CONFLICT(id) DO UPDATE SET texture_blob = ?, updated_at = strftime('%s', 'now')
@@ -1446,8 +1523,8 @@ export class HubDatabase {
    * 获取用户的 comment blob hash
    */
   async getUserCommentBlob(user_id: number): Promise<string | null> {
-    const stmt = await this.db.prepare('SELECT comment_blob FROM users WHERE id = ?');
-    const row = await stmt.get(user_id);
+    const stmt = await this.prepare('SELECT comment_blob FROM users WHERE id = ?');
+    const row = await stmt.get(user_id) as { comment_blob: string | null } | undefined;
     return row?.comment_blob || null;
   }
 
@@ -1455,7 +1532,7 @@ export class HubDatabase {
    * 设置用户的 comment blob hash
    */
   async setUserCommentBlob(user_id: number, blobHash: string | null): Promise<void> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       INSERT INTO users (id, name, comment_blob, updated_at)
       VALUES (?, 'user_' || ?, ?, strftime('%s', 'now'))
       ON CONFLICT(id) DO UPDATE SET comment_blob = ?, updated_at = strftime('%s', 'now')
@@ -1467,8 +1544,8 @@ export class HubDatabase {
    * 获取频道的 description blob hash
    */
   async getChannelDescriptionBlob(channel_id: number): Promise<string | null> {
-    const stmt = await this.db.prepare('SELECT description_blob FROM channels WHERE id = ?');
-    const row = await stmt.get(channel_id);
+    const stmt = await this.prepare('SELECT description_blob FROM channels WHERE id = ?');
+    const row = await stmt.get(channel_id) as { description_blob: string | null } | undefined;
     return row?.description_blob || null;
   }
 
@@ -1476,7 +1553,7 @@ export class HubDatabase {
    * 设置频道的 description blob hash
    */
   async setChannelDescriptionBlob(channel_id: number, blobHash: string | null): Promise<void> {
-    const stmt = await this.db.prepare(`
+    const stmt = await this.prepare(`
       UPDATE channels SET description_blob = ? WHERE id = ?
     `);
     await stmt.run(blobHash, channel_id);
@@ -1488,18 +1565,18 @@ export class HubDatabase {
   async close(): Promise<void> {
     try {
       // 优化数据库并等待所有操作完成
-      await this.db.run('PRAGMA optimize');
+      await this.run('PRAGMA optimize');
 
       // 短暂延迟以确保所有待处理的操作完成
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      await this.db.close();
+      await this.manager.close();
       logger.info('Database connection closed');
     } catch (error) {
       // 如果关闭失败，强制关闭
       logger.warn('Error during database close, attempting force close:', error);
       try {
-        await this.db.close();
+        await this.manager.close();
       } catch (e) {
         logger.error('Force close also failed:', e);
       }

@@ -17,8 +17,6 @@
   "dependencies": {
     "@munode/common": "workspace:*",
     "@munode/protocol": "workspace:*",
-    "sqlite": "^5.1.1",
-    "sqlite3": "^5.1.7",
     "lru-cache": "^10.2.0"
   },
   "devDependencies": {
