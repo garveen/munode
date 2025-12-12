@@ -51,9 +51,10 @@ export interface EdgeConfig {
 
 // 网络配置
 export interface NetworkConfig {
-  host: string;
-  port: number;
-  externalHost: string;
+  host: string;            // 实际监听的地址
+  port: number;            // 实际监听的端口
+  externalHost: string;    // 用于其它edge连接的地址（公网地址）
+  externalPort?: number;   // 用于其它edge连接的端口（公网端口），如果未指定则使用port
   region?: string;
 }
 

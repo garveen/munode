@@ -100,6 +100,10 @@ export function validateConfig(config: EdgeConfig): string[] {
     errors.push('network.port must be between 1 and 65535');
   }
 
+  if (config.network.externalPort !== undefined && (config.network.externalPort < 1 || config.network.externalPort > 65535)) {
+    errors.push('network.externalPort must be between 1 and 65535');
+  }
+
   if (config.hubServer) {
     if (!config.hubServer.host) {
       errors.push('hubServer.host is required');
