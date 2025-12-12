@@ -1851,6 +1851,13 @@ export namespace hubedge {
             release?: string;
             os?: string;
             os_version?: string;
+            mute?: boolean;
+            deaf?: boolean;
+            suppress?: boolean;
+            self_mute?: boolean;
+            self_deaf?: boolean;
+            priority_speaker?: boolean;
+            recording?: boolean;
         }) {
             super();
             pb_1.Message.initialize(this, Array.isArray(data) ? data : [], 0, -1, [8], this.#one_of_decls);
@@ -1879,6 +1886,27 @@ export namespace hubedge {
                 }
                 if ("os_version" in data && data.os_version != undefined) {
                     this.os_version = data.os_version;
+                }
+                if ("mute" in data && data.mute != undefined) {
+                    this.mute = data.mute;
+                }
+                if ("deaf" in data && data.deaf != undefined) {
+                    this.deaf = data.deaf;
+                }
+                if ("suppress" in data && data.suppress != undefined) {
+                    this.suppress = data.suppress;
+                }
+                if ("self_mute" in data && data.self_mute != undefined) {
+                    this.self_mute = data.self_mute;
+                }
+                if ("self_deaf" in data && data.self_deaf != undefined) {
+                    this.self_deaf = data.self_deaf;
+                }
+                if ("priority_speaker" in data && data.priority_speaker != undefined) {
+                    this.priority_speaker = data.priority_speaker;
+                }
+                if ("recording" in data && data.recording != undefined) {
+                    this.recording = data.recording;
                 }
             }
         }
@@ -1996,6 +2024,69 @@ export namespace hubedge {
         get has_os_version() {
             return pb_1.Message.getField(this, 13) != null;
         }
+        get mute() {
+            return pb_1.Message.getFieldWithDefault(this, 14, false) as boolean;
+        }
+        set mute(value: boolean) {
+            pb_1.Message.setField(this, 14, value);
+        }
+        get has_mute() {
+            return pb_1.Message.getField(this, 14) != null;
+        }
+        get deaf() {
+            return pb_1.Message.getFieldWithDefault(this, 15, false) as boolean;
+        }
+        set deaf(value: boolean) {
+            pb_1.Message.setField(this, 15, value);
+        }
+        get has_deaf() {
+            return pb_1.Message.getField(this, 15) != null;
+        }
+        get suppress() {
+            return pb_1.Message.getFieldWithDefault(this, 16, false) as boolean;
+        }
+        set suppress(value: boolean) {
+            pb_1.Message.setField(this, 16, value);
+        }
+        get has_suppress() {
+            return pb_1.Message.getField(this, 16) != null;
+        }
+        get self_mute() {
+            return pb_1.Message.getFieldWithDefault(this, 17, false) as boolean;
+        }
+        set self_mute(value: boolean) {
+            pb_1.Message.setField(this, 17, value);
+        }
+        get has_self_mute() {
+            return pb_1.Message.getField(this, 17) != null;
+        }
+        get self_deaf() {
+            return pb_1.Message.getFieldWithDefault(this, 18, false) as boolean;
+        }
+        set self_deaf(value: boolean) {
+            pb_1.Message.setField(this, 18, value);
+        }
+        get has_self_deaf() {
+            return pb_1.Message.getField(this, 18) != null;
+        }
+        get priority_speaker() {
+            return pb_1.Message.getFieldWithDefault(this, 19, false) as boolean;
+        }
+        set priority_speaker(value: boolean) {
+            pb_1.Message.setField(this, 19, value);
+        }
+        get has_priority_speaker() {
+            return pb_1.Message.getField(this, 19) != null;
+        }
+        get recording() {
+            return pb_1.Message.getFieldWithDefault(this, 20, false) as boolean;
+        }
+        set recording(value: boolean) {
+            pb_1.Message.setField(this, 20, value);
+        }
+        get has_recording() {
+            return pb_1.Message.getField(this, 20) != null;
+        }
         static fromObject(data: {
             session_id?: number;
             user_id?: number;
@@ -2010,6 +2101,13 @@ export namespace hubedge {
             release?: string;
             os?: string;
             os_version?: string;
+            mute?: boolean;
+            deaf?: boolean;
+            suppress?: boolean;
+            self_mute?: boolean;
+            self_deaf?: boolean;
+            priority_speaker?: boolean;
+            recording?: boolean;
         }): EdgeReportSessionParams {
             const message = new EdgeReportSessionParams({
                 session_id: data.session_id,
@@ -2038,6 +2136,27 @@ export namespace hubedge {
             if (data.os_version != null) {
                 message.os_version = data.os_version;
             }
+            if (data.mute != null) {
+                message.mute = data.mute;
+            }
+            if (data.deaf != null) {
+                message.deaf = data.deaf;
+            }
+            if (data.suppress != null) {
+                message.suppress = data.suppress;
+            }
+            if (data.self_mute != null) {
+                message.self_mute = data.self_mute;
+            }
+            if (data.self_deaf != null) {
+                message.self_deaf = data.self_deaf;
+            }
+            if (data.priority_speaker != null) {
+                message.priority_speaker = data.priority_speaker;
+            }
+            if (data.recording != null) {
+                message.recording = data.recording;
+            }
             return message;
         }
         toObject() {
@@ -2055,6 +2174,13 @@ export namespace hubedge {
                 release?: string;
                 os?: string;
                 os_version?: string;
+                mute?: boolean;
+                deaf?: boolean;
+                suppress?: boolean;
+                self_mute?: boolean;
+                self_deaf?: boolean;
+                priority_speaker?: boolean;
+                recording?: boolean;
             } = {
                 groups: this.groups
             };
@@ -2094,6 +2220,27 @@ export namespace hubedge {
             if (this.os_version != null) {
                 data.os_version = this.os_version;
             }
+            if (this.mute != null) {
+                data.mute = this.mute;
+            }
+            if (this.deaf != null) {
+                data.deaf = this.deaf;
+            }
+            if (this.suppress != null) {
+                data.suppress = this.suppress;
+            }
+            if (this.self_mute != null) {
+                data.self_mute = this.self_mute;
+            }
+            if (this.self_deaf != null) {
+                data.self_deaf = this.self_deaf;
+            }
+            if (this.priority_speaker != null) {
+                data.priority_speaker = this.priority_speaker;
+            }
+            if (this.recording != null) {
+                data.recording = this.recording;
+            }
             return data;
         }
         serialize(): Uint8Array;
@@ -2126,6 +2273,20 @@ export namespace hubedge {
                 writer.writeString(12, this.os);
             if (this.has_os_version && this.os_version.length)
                 writer.writeString(13, this.os_version);
+            if (this.has_mute)
+                writer.writeBool(14, this.mute);
+            if (this.has_deaf)
+                writer.writeBool(15, this.deaf);
+            if (this.has_suppress)
+                writer.writeBool(16, this.suppress);
+            if (this.has_self_mute)
+                writer.writeBool(17, this.self_mute);
+            if (this.has_self_deaf)
+                writer.writeBool(18, this.self_deaf);
+            if (this.has_priority_speaker)
+                writer.writeBool(19, this.priority_speaker);
+            if (this.has_recording)
+                writer.writeBool(20, this.recording);
             if (!w)
                 return writer.getResultBuffer();
         }
@@ -2173,6 +2334,27 @@ export namespace hubedge {
                         break;
                     case 13:
                         message.os_version = reader.readString();
+                        break;
+                    case 14:
+                        message.mute = reader.readBool();
+                        break;
+                    case 15:
+                        message.deaf = reader.readBool();
+                        break;
+                    case 16:
+                        message.suppress = reader.readBool();
+                        break;
+                    case 17:
+                        message.self_mute = reader.readBool();
+                        break;
+                    case 18:
+                        message.self_deaf = reader.readBool();
+                        break;
+                    case 19:
+                        message.priority_speaker = reader.readBool();
+                        break;
+                    case 20:
+                        message.recording = reader.readBool();
                         break;
                     default: reader.skipField();
                 }

@@ -652,6 +652,14 @@ export class EventSetupManager {
           release: client.client_name,
           os: client.os_name,
           os_version: client.os_version,
+          // Include current state
+          mute: client.mute,
+          deaf: client.deaf,
+          suppress: client.suppress,
+          self_mute: client.self_mute,
+          self_deaf: client.self_deaf,
+          priority_speaker: client.priority_speaker,
+          recording: client.recording,
         });
         this.logger.debug(`Re-reported session ${client.session} (${client.username}) to Hub`);
       } catch (error) {

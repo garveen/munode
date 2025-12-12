@@ -147,6 +147,14 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       release?: string;
       os?: string;
       os_version?: string;
+      // User state fields
+      mute?: boolean;
+      deaf?: boolean;
+      suppress?: boolean;
+      self_mute?: boolean;
+      self_deaf?: boolean;
+      priority_speaker?: boolean;
+      recording?: boolean;
     }
     const session: SessionData = {
       session_id: params.session_id,
@@ -164,6 +172,14 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       release: params.release,
       os: params.os,
       os_version: params.os_version,
+      // Include user state fields
+      mute: params.mute,
+      deaf: params.deaf,
+      suppress: params.suppress,
+      self_mute: params.self_mute,
+      self_deaf: params.self_deaf,
+      priority_speaker: params.priority_speaker,
+      recording: params.recording,
     };
 
     this.logger.info(`Session reported: ${params.username} (user_id: ${params.user_id}), groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);

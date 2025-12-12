@@ -123,6 +123,14 @@ export interface EdgeReportSessionMethod {
     release?: string; // 客户端名称
     os?: string; // 操作系统
     os_version?: string; // 操作系统版本
+    // 用户状态字段
+    mute?: boolean;
+    deaf?: boolean;
+    suppress?: boolean;
+    self_mute?: boolean;
+    self_deaf?: boolean;
+    priority_speaker?: boolean;
+    recording?: boolean;
   };
   result: RPCResponse;
 }

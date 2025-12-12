@@ -417,6 +417,14 @@ export class EdgeControlClient extends EventEmitter {
     release?: string;
     os?: string;
     os_version?: string;
+    // User state fields
+    mute?: boolean;
+    deaf?: boolean;
+    suppress?: boolean;
+    self_mute?: boolean;
+    self_deaf?: boolean;
+    priority_speaker?: boolean;
+    recording?: boolean;
   }): Promise<void> {
     if (!this.isConnected() || (!this.useExternalClient && !this.registered)) {
       return;
