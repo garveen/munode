@@ -211,8 +211,8 @@ export type {
 } from './rpc/rpc-types.js';
 
 // Voice Channel
-export { VoiceChannel } from './voice/voice-packet.js';
-export type { VoicePacket, VoiceEncryptionConfig } from './voice/voice-packet.js';
+// VoiceChannel has been merged into voice-udp-transport.ts
+export type { VoicePacket, VoiceEncryptionConfig } from './voice/voice-udp-transport.js';
 export { VoiceUDPTransport } from './voice/voice-udp-transport.js';
 export type {
   VoiceUDPConfig,

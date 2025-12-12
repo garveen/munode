@@ -113,6 +113,12 @@ export interface VoiceRoutingConfig {
     enableTcpFallback: boolean;   // 仅保留 TCP 降级功能（通过 WebSocket）
   };
   
+  // Edge间语音传输加密配置
+  encryption?: {
+    algorithm: 'aes-128-cbc' | 'aes-256-cbc';  // 加密算法
+    keyRotationInterval?: number;               // 密钥轮换间隔（秒），0表示不轮换
+  };
+  
   // 路由优化调试
   debug?: {
     logRouteChanges: boolean;     // 记录路由变化
