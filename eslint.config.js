@@ -54,6 +54,12 @@ export default [
   },
   prettierConfig,
   {
+    files: ['packages/cli/**/*.ts'],
+    rules: {
+      'no-console': 'off',
+    },
+  },
+  {
     ignores: [
       'dist/',
       'tmp/',

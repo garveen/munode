@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { logger } from '@munode/common';
 
 const program = new Command();
 
@@ -14,7 +13,7 @@ program
   .command('generate:cert')
   .description('Generate certificates')
   .action(() => {
-    logger.info('Generating certificates...');
+    console.log('Generating certificates...');
     // TODO: implement
   });
 
