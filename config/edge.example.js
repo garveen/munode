@@ -14,10 +14,11 @@ export default {
 
   // Network configuration
   network: {
-    host: '0.0.0.0',
-    port: 64738,
-    externalHost: 'edge.example.com', // Public hostname/IP
-    region: 'asia-east', // Server region identifier
+    host: '0.0.0.0',           // 实际监听的地址
+    port: 64738,                // 实际监听的端口
+    externalHost: 'edge.example.com', // 用于其它edge连接的地址（公网地址/域名）
+    externalPort: 64738,        // 用于其它edge连接的端口（公网端口），如果未指定则使用port
+    region: 'asia-east',        // Server region identifier
   },
 
   // Capacity limits

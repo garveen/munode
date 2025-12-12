@@ -133,7 +133,7 @@ export class EdgeClusterManager {
       server_id: this.config.server_id,
       name: this.config.name,
       host: this.config.network.externalHost || this.config.network.host,
-      port: this.config.network.port,
+      port: this.config.network.externalPort ?? this.config.network.port,
       region: this.config.network.region || '',
       capacity: this.config.capacity,
       certificate: '', // TODO: 获取证书
@@ -207,9 +207,9 @@ export class EdgeClusterManager {
       const joinRequest = {
          server_id: this.config.server_id,
         name: this.config.name,
-        host: this.config.network.host,
-        port: this.config.network.port,
-        voicePort: this.config.network.port + 1, // Voice port is main port + 1 by convention
+        host: this.config.network.externalHost || this.config.network.host,
+        port: this.config.network.externalPort ?? this.config.network.port,
+        voicePort: (this.config.network.externalPort ?? this.config.network.port) + 1, // Voice port is main port + 1 by convention
         capacity: this.config.capacity,
       };
 
