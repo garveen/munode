@@ -1,5 +1,4 @@
 import type { Logger } from '@munode/common';
-import * as fs from 'fs';
 import type { HubHandlerFactory } from '../factory.js';
 import type { RPCParams, RPCResult, ChannelData, ACLData, GlobalSession } from '@munode/protocol';
 
@@ -45,14 +44,6 @@ export class SyncHandler implements ISyncHandler {
 
     // 获取所有会话（从内存中的 sessionManager 获取当前活跃会话）
     let sessions: GlobalSession[] = this.factory.getSessionManager().getAllSessions();
-
-    try {
-      fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] HUB fullSync for user_id=${params.for_user_id}, returning ${sessions.length} sessions: ${JSON.stringify(sessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}\n`);
-    } catch (e) {
-      this.logger.warn('Failed to write to debug log:', e);
-    }
-
-    this.logger.info(`[CROSS-EDGE-DEBUG] fullSync called for user_id=${params.for_user_id}, returning ${sessions.length} sessions: ${JSON.stringify(sessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}`);
 
     // If ninja channels are configured and user info is provided, filter sessions
     const channelNinjaEnabled = this.factory.getConfig().channelNinja ?? false;

@@ -5,7 +5,6 @@ import type { HubNotificationParams } from '@munode/protocol';
 import { HandlerFactory } from '../core/handler-factory.js';
 import { EdgeControlClient } from './hub-client.js';
 import { ChannelInfo } from '../types.js';
-import * as fs from 'fs';
 
 /**
  * Hub数据管理器
@@ -110,11 +109,7 @@ export class HubDataManager {
    */
   handleRemoteUserJoined(params: HubNotificationParams<'hub.userJoined'>): void {
     try {
-      const thisEdgeId = this.handlerFactory.config.server_id;
-      fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] EDGE ${thisEdgeId} received userJoined: ${params.username} (session=${params.session_id}, from_edge=${params.edge_id})\n`);
-      
-        this.logger.info(`[CROSS-EDGE-DEBUG] Edge ${thisEdgeId} received userJoined: ${params.username} (session=${params.session_id}, from_edge=${params.edge_id})`);
-        this.logger.info(`Remote user joined: ${params.username} (session ${params.session_id}) from Edge ${params.edge_id}`);
+      this.logger.info(`Remote user joined: ${params.username} (session ${params.session_id}) from Edge ${params.edge_id}`);
 
       // 不要处理来自本Edge的用户
       if (params.edge_id !== this.handlerFactory.config.server_id && this.handlerFactory.stateManager) {
@@ -125,10 +120,6 @@ export class HubDataManager {
 
       // 广播给所有本地已认证的客户端
       const allClients = this.handlerFactory.clientManager.getAllClients();
-      const clientsWithFullList = allClients.filter(c => c.user_id > 0 && c.has_full_user_list);
-      fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] EDGE ${thisEdgeId} has ${allClients.length} local clients, ${clientsWithFullList.length} with full user list: ${JSON.stringify(clientsWithFullList.map(c => ({u: c.username, s: c.session})))}\n`);
-      
-        this.logger.info(`[CROSS-EDGE-DEBUG] Edge ${thisEdgeId} has ${allClients.length} local clients, ${allClients.filter(c => c.user_id > 0 && c.has_full_user_list).length} with full user list`);
       let broadcastCount = 0;
       
       for (const client of allClients) {

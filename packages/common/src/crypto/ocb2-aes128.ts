@@ -117,6 +117,7 @@ export class OCB2AES128 {
 
   /**
    * 加密数据
+   * 性能优化：使用 Buffer.allocUnsafe 减少初始化开销（数据会被完全覆盖）
    */
   encrypt(plainText: Buffer): Buffer {
     if (!this.ready() || !this.encryptCipher) {
@@ -124,7 +125,7 @@ export class OCB2AES128 {
     }
 
     // 递增加密IV
-    const encryptIV = this.encryptIV;
+    const encryptIV = this.encryptIV!;
     for (let i = 0; i < OCB2AES128.BLOCK_SIZE; i++) {
       if (++encryptIV[i] === 256) {
         encryptIV[i] = 0;
@@ -134,9 +135,10 @@ export class OCB2AES128 {
     }
 
     // 复用缓存的 cipher 实例
-    const aesEncrypt = (data: Buffer) => this.encryptCipher.update(data);
+    const aesEncrypt = (data: Buffer) => this.encryptCipher!.update(data);
 
-    const cipherText = Buffer.alloc(plainText.length + 4);
+    // 性能优化：使用 allocUnsafe，数据会被完全填充
+    const cipherText = Buffer.allocUnsafe(plainText.length + 4);
     const tag = this.ocbEncrypt(plainText, cipherText.subarray(4), encryptIV, aesEncrypt);
 
     cipherText[0] = encryptIV[0];
@@ -149,6 +151,7 @@ export class OCB2AES128 {
 
   /**
    * 解密数据
+   * 性能优化：使用 Buffer.allocUnsafe 减少初始化开销（数据会被完全覆盖）
    */
   decrypt(cipherText: Buffer): { data: Buffer; valid: boolean } {
     if (!this.ready() || !this.decryptCipherEnc || !this.decryptCipherDec) {
@@ -156,7 +159,7 @@ export class OCB2AES128 {
     }
 
     if (cipherText.length < 4) {
-      return { data: Buffer.alloc(0), valid: false };
+      return { data: Buffer.allocUnsafe(0), valid: false };
     }
 
     const decryptIV = this.decryptIV;
@@ -239,10 +242,11 @@ export class OCB2AES128 {
     }
 
     // 复用缓存的 cipher 实例
-    const aesEncrypt = (data: Buffer) => this.decryptCipherEnc.update(data);
-    const aesDecrypt = (data: Buffer) => this.decryptCipherDec.update(data);
+    const aesEncrypt = (data: Buffer) => this.decryptCipherEnc!.update(data);
+    const aesDecrypt = (data: Buffer) => this.decryptCipherDec!.update(data);
 
-    const plainText = Buffer.alloc(cipherText.length - 4);
+    // 性能优化：使用 allocUnsafe，数据会被 ocbDecrypt 完全覆盖
+    const plainText = Buffer.allocUnsafe(cipherText.length - 4);
     const tag = this.ocbDecrypt(
       cipherText.subarray(4),
       plainText,
@@ -253,7 +257,7 @@ export class OCB2AES128 {
 
     if (tag.compare(cipherText, 1, 4, 0, 3) !== 0) {
       saveiv.copy(this.decryptIV);
-      return { data: Buffer.alloc(0), valid: false };
+      return { data: Buffer.allocUnsafe(0), valid: false };
     }
 
     this.decryptHistory[decryptIV[0]] = decryptIV[1];
@@ -284,6 +288,7 @@ export class OCB2AES128 {
 
   /**
    * OCB 加密
+   * 性能优化：复用预分配的工作 Buffer
    */
   private ocbEncrypt(
     plainText: Buffer,
@@ -291,8 +296,9 @@ export class OCB2AES128 {
     nonce: Buffer,
     aesEncrypt: (data: Buffer) => Buffer
   ): Buffer {
-    const checksum = Buffer.alloc(OCB2AES128.BLOCK_SIZE);
-    const tmp = Buffer.alloc(OCB2AES128.BLOCK_SIZE);
+    // 复用预分配的 Buffer，减少 GC 压力
+    const checksum = this.workBuffer.checksum;
+    const tmp = this.workBuffer.tmp;
 
     const delta = aesEncrypt(nonce);
     this.zero(checksum);
@@ -332,6 +338,7 @@ export class OCB2AES128 {
 
   /**
    * OCB 解密
+   * 性能优化：复用预分配的工作 Buffer
    */
   private ocbDecrypt(
     cipherText: Buffer,
@@ -340,8 +347,9 @@ export class OCB2AES128 {
     aesEncrypt: (data: Buffer) => Buffer,
     aesDecrypt: (data: Buffer) => Buffer
   ): Buffer {
-    const checksum = Buffer.alloc(OCB2AES128.BLOCK_SIZE);
-    const tmp = Buffer.alloc(OCB2AES128.BLOCK_SIZE);
+    // 复用预分配的 Buffer，减少 GC 压力
+    const checksum = this.workBuffer.checksum;
+    const tmp = this.workBuffer.tmp;
 
     const delta = aesEncrypt(nonce);
     this.zero(checksum);
@@ -381,11 +389,28 @@ export class OCB2AES128 {
 
   /**
    * XOR 操作
+   * 性能优化：使用直接的循环展开，避免 DataView 创建开销
+   * 16 字节展开为 16 个直接操作，编译器可以更好地优化
    */
   private xor(dst: Buffer, a: Buffer, b: Buffer): void {
-    for (let i = 0; i < OCB2AES128.BLOCK_SIZE; i++) {
-      dst[i] = a[i] ^ b[i];
-    }
+    // 循环展开优化：16字节直接展开
+    // V8 JIT 可以更好地优化展开的循环
+    dst[0] = a[0] ^ b[0];
+    dst[1] = a[1] ^ b[1];
+    dst[2] = a[2] ^ b[2];
+    dst[3] = a[3] ^ b[3];
+    dst[4] = a[4] ^ b[4];
+    dst[5] = a[5] ^ b[5];
+    dst[6] = a[6] ^ b[6];
+    dst[7] = a[7] ^ b[7];
+    dst[8] = a[8] ^ b[8];
+    dst[9] = a[9] ^ b[9];
+    dst[10] = a[10] ^ b[10];
+    dst[11] = a[11] ^ b[11];
+    dst[12] = a[12] ^ b[12];
+    dst[13] = a[13] ^ b[13];
+    dst[14] = a[14] ^ b[14];
+    dst[15] = a[15] ^ b[15];
   }
 
   /**
