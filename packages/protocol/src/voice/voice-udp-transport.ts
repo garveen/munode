@@ -6,12 +6,20 @@
  * - Edge和Edge之间的语音包转发
  * - UDP丢包处理
  * - 端到端加密传输
+ * 
+ * Note: VoiceChannel class (previously in voice-packet.ts) has been merged into this file
+ * for better code organization and maintainability.
  */
 
 import dgram from 'dgram';
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
 import { type Logger } from '@munode/common';
+
+// Constants
+const HANDSHAKE_RETRY_INTERVAL_MS = 2000;
+const HANDSHAKE_MAX_ATTEMPTS = 5;
+const ENCRYPTED_PACKET_CACHE_TTL_MS = 5000;
 
 export interface VoiceUDPConfig {
   port: number;
@@ -293,13 +301,13 @@ export class VoiceUDPTransport extends EventEmitter {
     // 设置超时重试
     setTimeout(() => {
       const currentStatus = this.connectionStatus.get(edgeId);
-      if (currentStatus && !currentStatus.handshakeComplete && currentStatus.handshakeAttempts < 5) {
+      if (currentStatus && !currentStatus.handshakeComplete && currentStatus.handshakeAttempts < HANDSHAKE_MAX_ATTEMPTS) {
         this.initiateHandshake(edgeId);
       } else if (currentStatus && !currentStatus.handshakeComplete) {
-        this.logger.warn(`Handshake with edge ${edgeId} failed after 5 attempts`);
+        this.logger.warn(`Handshake with edge ${edgeId} failed after ${HANDSHAKE_MAX_ATTEMPTS} attempts`);
         this.emit('handshake-failed', edgeId);
       }
-    }, 2000);
+    }, HANDSHAKE_RETRY_INTERVAL_MS);
   }
   
   /**
@@ -321,7 +329,8 @@ export class VoiceUDPTransport extends EventEmitter {
         break;
     }
     
-    packet.writeUInt32BE(Date.now() & 0xFFFFFFFF, 5); // Timestamp (lower 32 bits)
+    const TIMESTAMP_MASK = 0xFFFFFFFF;
+    packet.writeUInt32BE(Date.now() & TIMESTAMP_MASK, 5); // Timestamp (lower 32 bits)
     return packet;
   }
   
@@ -448,11 +457,11 @@ export class VoiceUDPTransport extends EventEmitter {
           ...packet,
           data: fullPacket,
         });
-        // 缓存加密后的包，5秒后过期
+        // 缓存加密后的包
         this.encryptedPacketCache.set(cacheKey, cached);
         setTimeout(() => {
           this.encryptedPacketCache.delete(cacheKey);
-        }, 5000);
+        }, ENCRYPTED_PACKET_CACHE_TTL_MS);
       }
       finalPacket = cached;
     } else {

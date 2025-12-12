@@ -650,7 +650,7 @@ export class EdgeControlClient extends EventEmitter {
       });
       this.logger.info(`Notified Hub about connection failure with Edge ${targetEdgeId}`);
     } catch (error) {
-      this.logger.error(`Failed to notify connection failure with Edge ${targetEdgeId}:`, error);
+      this.logger.error(`Failed to notify Hub about connection failure with Edge ${targetEdgeId}:`, error);
     }
   }
 
