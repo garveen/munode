@@ -1,5 +1,8 @@
 import winston from 'winston';
 
+// Export Logger type for use in other packages
+export type Logger = winston.Logger;
+
 const { combine, timestamp, printf, colorize, errors } = winston.format;
 
 // 自定义日志格式

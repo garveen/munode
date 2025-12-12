@@ -1,9 +1,8 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import * as fs from 'fs';
 import type { HubHandlerFactory } from '../factory.js';
 import type { RPCParams, RPCResult, ChannelData, ACLData, GlobalSession } from '@munode/protocol';
 
-const logger = createLogger({ service: 'hub-sync-handler' });
 
 /**
  * Hub 同步处理器接口
@@ -20,8 +19,11 @@ export interface ISyncHandler {
 export class SyncHandler implements ISyncHandler {
   private factory: HubHandlerFactory;
 
+    private logger: Logger;
+
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
+    this.logger = factory.getLogger();
   }
 
   /**
@@ -47,10 +49,10 @@ export class SyncHandler implements ISyncHandler {
     try {
       fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] HUB fullSync for user_id=${params.for_user_id}, returning ${sessions.length} sessions: ${JSON.stringify(sessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}\n`);
     } catch (e) {
-      logger.warn('Failed to write to debug log:', e);
+      this.logger.warn('Failed to write to debug log:', e);
     }
 
-    logger.info(`[CROSS-EDGE-DEBUG] fullSync called for user_id=${params.for_user_id}, returning ${sessions.length} sessions: ${JSON.stringify(sessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}`);
+    this.logger.info(`[CROSS-EDGE-DEBUG] fullSync called for user_id=${params.for_user_id}, returning ${sessions.length} sessions: ${JSON.stringify(sessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}`);
 
     // If ninja channels are configured and user info is provided, filter sessions
     const channelNinjaEnabled = this.factory.getConfig().channelNinja ?? false;
@@ -58,7 +60,7 @@ export class SyncHandler implements ISyncHandler {
 
     if (channelNinjaEnabled && hasNinjaChannels && this.factory.getPermissionChecker() &&
         params.for_user_id !== undefined && params.for_user_id > 0) {
-      logger.debug(`Channel Ninja: Filtering fullSync sessions for user_id=${params.for_user_id}`);
+      this.logger.debug(`Channel Ninja: Filtering fullSync sessions for user_id=${params.for_user_id}`);
 
       // Create user info for the requesting user
       const requestingUserInfo = {
@@ -82,11 +84,11 @@ export class SyncHandler implements ISyncHandler {
         if (canSee) {
           filteredSessions.push(session);
         } else {
-          logger.debug(`Channel Ninja: Hiding session ${session.session_id} (${session.username}) from user ${params.for_user_id}`);
+          this.logger.debug(`Channel Ninja: Hiding session ${session.session_id} (${session.username}) from user ${params.for_user_id}`);
         }
       }
 
-      logger.info(`Channel Ninja: Filtered sessions for user ${params.for_user_id}: ${sessions.length} -> ${filteredSessions.length}`);
+      this.logger.info(`Channel Ninja: Filtered sessions for user ${params.for_user_id}: ${sessions.length} -> ${filteredSessions.length}`);
       sessions = filteredSessions;
     }
 
@@ -141,9 +143,9 @@ export class SyncHandler implements ISyncHandler {
     }
 
     // DEBUG: 打印从数据库/ChannelManager获取的原始数据
-    logger.info(`[handleGetChannels] Got ${dbChannels.length} channels from ${this.factory.getChannelManager() ? 'ChannelManager' : 'Database'}`);
+    this.logger.info(`[handleGetChannels] Got ${dbChannels.length} channels from ${this.factory.getChannelManager() ? 'ChannelManager' : 'Database'}`);
     for (const ch of dbChannels) {
-      logger.info(`[handleGetChannels] Raw channel: id=${ch.id}, name=${ch.name}, parent_id=${ch.parent_id}, keys=${Object.keys(ch).join(',')}`);
+      this.logger.info(`[handleGetChannels] Raw channel: id=${ch.id}, name=${ch.name}, parent_id=${ch.parent_id}, keys=${Object.keys(ch).join(',')}`);
     }
 
     // 映射数据库字段到protocol字段，并加载每个频道的链接
@@ -153,7 +155,7 @@ export class SyncHandler implements ISyncHandler {
 
     // DEBUG: 打印映射后的数据
     for (const ch of channels) {
-      logger.info(`[handleGetChannels] Mapped channel: channel_id=${ch.channel_id}, name=${ch.name}, parent_id=${ch.parent_id}`);
+      this.logger.info(`[handleGetChannels] Mapped channel: channel_id=${ch.channel_id}, name=${ch.name}, parent_id=${ch.parent_id}`);
     }
 
     return { success: true, channels };
@@ -191,7 +193,7 @@ export class SyncHandler implements ISyncHandler {
         return await this.factory.getDatabase().getChannelLinks(channelId);
       }
     } catch (error) {
-      logger.warn(`Failed to get links for channel ${channelId}:`, error);
+      this.logger.warn(`Failed to get links for channel ${channelId}:`, error);
       return [];
     }
   }

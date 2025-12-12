@@ -1,4 +1,4 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import { createHmac, randomBytes } from 'crypto';
 import type {
   RegisteredEdge,
@@ -11,7 +11,6 @@ import type {
 } from './types.js';
 import type { HubDatabase } from './database.js';
 
-const logger = createLogger({ service: 'hub-registry' });
 
 /**
  * 挑战码信息
@@ -37,7 +36,10 @@ export class ServiceRegistry {
   
   // Edge信息不再持久化到数据库，仅存储在内存中
 
-  constructor(config: RegistryConfig, _database: HubDatabase) {
+    private logger: Logger;
+
+  constructor(config: RegistryConfig, _database: HubDatabase, logger: Logger) {
+    this.logger = logger;
     this.config = config;
     // database参数保留以兼容旧代码，但不再使用
     
@@ -70,7 +72,7 @@ export class ServiceRegistry {
         const newChallenge = this.generateChallenge(server_id);
         const challengeTimeout = this.config.challengeTimeout || 60000;
         
-        logger.info(`Generated challenge for Edge ${server_id}`);
+    this.logger.debug(`Generated challenge for Edge ${server_id}`);
         
         return {
           success: false,
@@ -83,7 +85,7 @@ export class ServiceRegistry {
       
       // 第二阶段：验证签名
       if (!challenge) {
-        logger.warn(`Edge ${server_id} missing challenge in response`);
+    this.logger.warn(`Edge ${server_id} missing challenge in response`);
         return {
           success: false,
           error: 'Missing challenge',
@@ -95,7 +97,7 @@ export class ServiceRegistry {
       // challenge 和 challengeResponse 已经是字符串格式
       const isValid = this.verifyChallenge(server_id, challenge, challengeResponse);
       if (!isValid) {
-        logger.warn(`Edge ${server_id} authentication failed`);
+    this.logger.warn(`Edge ${server_id} authentication failed`);
         return {
           success: false,
           error: 'Authentication failed',
@@ -106,12 +108,12 @@ export class ServiceRegistry {
       
       // 验证通过，清理挑战码
       this.challenges.delete(challenge);
-      logger.info(`Edge ${server_id} authenticated successfully`);
+    this.logger.debug(`Edge ${server_id} authenticated successfully`);
     }
 
     // 检查是否已存在
     if (this.edges.has(server_id)) {
-      logger.warn(`Edge Server ${server_id} already registered, updating...`);
+    this.logger.warn(`Edge Server ${server_id} already registered, updating...`);
     }
 
     // 创建 Edge 信息
@@ -140,7 +142,7 @@ export class ServiceRegistry {
     // Edge信息仅存储在内存中，不持久化到数据库
     // Edge是临时运行时节点，重启后需要重新注册
 
-    logger.info(`Edge Server ${server_id} (${name}) registered`, {
+    this.logger.info(`Edge Server ${server_id} (${name}) registered`, {
       host: `${host}:${port}`,
       region,
       capacity,
@@ -199,7 +201,7 @@ export class ServiceRegistry {
       this.heartbeatTimers.delete(server_id);
     }
 
-    logger.info(`Edge Server ${server_id} (${edge.name}) unregistered`);
+    this.logger.info(`Edge Server ${server_id} (${edge.name}) unregistered`);
   }
 
   /**
@@ -274,7 +276,7 @@ export class ServiceRegistry {
 
     for (const [server_id, edge] of this.edges.entries()) {
       if (now - edge.last_seen > timeout) {
-        logger.warn(`Edge Server ${server_id} heartbeat timeout, removing...`);
+    this.logger.warn(`Edge Server ${server_id} heartbeat timeout, removing...`);
         void this.unregister(server_id);
       }
     }
@@ -306,7 +308,7 @@ export class ServiceRegistry {
    * 处理心跳超时
    */
   private handleHeartbeatTimeout( server_id: number): void {
-    logger.warn(`Edge Server ${server_id} heartbeat timeout`);
+    this.logger.warn(`Edge Server ${server_id} heartbeat timeout`);
     void this.unregister(server_id);
   }
 
@@ -351,20 +353,20 @@ export class ServiceRegistry {
     const challengeInfo = this.challenges.get(challenge);
     
     if (!challengeInfo) {
-      logger.warn(`Challenge not found: ${challenge}`);
+    this.logger.warn(`Challenge not found: ${challenge}`);
       return false;
     }
     
     // 检查 server_id 是否匹配
     if (challengeInfo.serverId !== serverId) {
-      logger.warn(`Server ID mismatch: expected ${challengeInfo.serverId}, got ${serverId}`);
+    this.logger.warn(`Server ID mismatch: expected ${challengeInfo.serverId}, got ${serverId}`);
       return false;
     }
     
     // 检查是否超时
     const challengeTimeout = this.config.challengeTimeout || 60000;
     if (Date.now() - challengeInfo.createdAt > challengeTimeout) {
-      logger.warn(`Challenge expired for server ${serverId}`);
+    this.logger.warn(`Challenge expired for server ${serverId}`);
       this.challenges.delete(challenge);
       return false;
     }
@@ -376,7 +378,7 @@ export class ServiceRegistry {
     const isValid = this.constantTimeCompare(response, expectedResponse);
     
     if (!isValid) {
-      logger.warn(`Invalid HMAC response from server ${serverId}`);
+    this.logger.warn(`Invalid HMAC response from server ${serverId}`);
     }
     
     return isValid;
@@ -433,7 +435,7 @@ export class ServiceRegistry {
     for (const [challenge, info] of this.challenges.entries()) {
       if (now - info.createdAt > challengeTimeout) {
         this.challenges.delete(challenge);
-        logger.debug(`Cleaned up expired challenge for server ${info.serverId}`);
+    this.logger.debug(`Cleaned up expired challenge for server ${info.serverId}`);
       }
     }
   }

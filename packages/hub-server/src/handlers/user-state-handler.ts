@@ -1,9 +1,8 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import { HubPermissionChecker, Permission } from '../permission-checker.js';
 import { HubHandlerFactory } from '../factory.js';
 import type { EdgeNotificationParams } from '@munode/protocol';
 
-const logger = createLogger({ service: 'hub-user-state-handler' });
 
 /**
  * 用户状态处理器接口
@@ -27,8 +26,11 @@ export class UserStateHandler implements IUserStateHandler {
   private factory: HubHandlerFactory;
   private permissionChecker: HubPermissionChecker;
 
+    private logger: Logger;
+
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
+    this.logger = factory.getLogger();
     this.permissionChecker = factory.getPermissionChecker();
   }
 
@@ -36,7 +38,7 @@ export class UserStateHandler implements IUserStateHandler {
     try {
       const { edge_id, actor_session, actor_username, userState: userStateObj } = params;
 
-      logger.info(`Hub received UserState from Edge ${edge_id}, actor: ${actor_username}(${actor_session}), target: ${userStateObj.session || actor_session}`);
+      this.logger.info(`Hub received UserState from Edge ${edge_id}, actor: ${actor_username}(${actor_session}), target: ${userStateObj.session || actor_session}`);
 
       const sessionManager = this.factory.getSessionManager();
       const controlService = this.factory.getControlService();
@@ -48,7 +50,7 @@ export class UserStateHandler implements IUserStateHandler {
       // 获取目标会话
       const targetGlobalSession = sessionManager.getSession(targetSession);
       if (!targetGlobalSession) {
-        logger.warn(`Target session ${targetSession} not found in Hub`);
+        this.logger.warn(`Target session ${targetSession} not found in Hub`);
 
         // 向发起Edge回复错误
         controlService.notify(edge_id, 'hub.userStateResponse', {
@@ -62,7 +64,7 @@ export class UserStateHandler implements IUserStateHandler {
       // 获取actor会话（用于权限检查）
       const actorSession = sessionManager.getSession(actor_session);
       if (!actorSession) {
-        logger.warn(`Actor session ${actor_session} not found in Hub`);
+        this.logger.warn(`Actor session ${actor_session} not found in Hub`);
         controlService.notify(edge_id, 'hub.userStateResponse', {
           success: false,
           actor_session,
@@ -179,7 +181,7 @@ export class UserStateHandler implements IUserStateHandler {
               return;
             }
 
-            logger.debug(`User ${actor_username} moving user ${targetGlobalSession.username} with permission check passed`);
+            this.logger.debug(`User ${actor_username} moving user ${targetGlobalSession.username} with permission check passed`);
           }
         } else if (isActorTarget) {
           // 自己移动自己：需要EnterPermission
@@ -207,7 +209,7 @@ export class UserStateHandler implements IUserStateHandler {
         sessionManager.updateSessionChannel(targetSession, userStateObj.channel_id);
         broadcast = true;
 
-        logger.info(`User ${targetGlobalSession.username} moved from channel ${oldChannelId} to ${userStateObj.channel_id}`);
+        this.logger.info(`User ${targetGlobalSession.username} moved from channel ${oldChannelId} to ${userStateObj.channel_id}`);
       }
 
       // 防止actor != target时应用自我操作字段
@@ -215,7 +217,7 @@ export class UserStateHandler implements IUserStateHandler {
           (userStateObj.self_deaf !== undefined || userStateObj.self_mute !== undefined ||
            userStateObj.texture !== undefined || userStateObj.plugin_context !== undefined ||
            userStateObj.plugin_identity !== undefined)) {
-        logger.warn(`Invalid UserState: actor ${actor_session} trying to set self-fields for target ${targetSession}`);
+        this.logger.warn(`Invalid UserState: actor ${actor_session} trying to set self-fields for target ${targetSession}`);
         controlService.notify(edge_id, 'hub.userStateResponse', {
           success: false,
           actor_session,
@@ -277,7 +279,7 @@ export class UserStateHandler implements IUserStateHandler {
             });
             return;
           }
-          logger.debug(`User ${actor_username} has MuteDeafenPermission for user ${targetGlobalSession.username}`);
+          this.logger.debug(`User ${actor_username} has MuteDeafenPermission for user ${targetGlobalSession.username}`);
         }
 
         // Suppress只能由服务器设置（拒绝客户端设置为true）
@@ -346,7 +348,7 @@ export class UserStateHandler implements IUserStateHandler {
         const recordingMessage = userStateObj.recording
           ? `User '${targetGlobalSession.username}' started recording`
           : `User '${targetGlobalSession.username}' stopped recording`;
-        logger.info(recordingMessage);
+        this.logger.info(recordingMessage);
       }
 
       // 处理监听频道（listening_channel_add/remove）
@@ -365,7 +367,7 @@ export class UserStateHandler implements IUserStateHandler {
           if (hasListen) {
             allowedChannels.push(channelId);
           } else {
-            logger.warn(`User ${actor_username} denied Listen permission for channel ${channelId}`);
+            this.logger.warn(`User ${actor_username} denied Listen permission for channel ${channelId}`);
             // 发送权限被拒绝的消息给客户端
             controlService.notify(edge_id, 'hub.permissionDenied', {
               session_id: actor_session,
@@ -379,7 +381,7 @@ export class UserStateHandler implements IUserStateHandler {
         if (allowedChannels.length > 0) {
           broadcastUserState.listening_channel_add = allowedChannels;
           broadcast = true;
-          logger.info(`User ${actor_username} started listening to channels: ${allowedChannels.join(', ')}`);
+          this.logger.info(`User ${actor_username} started listening to channels: ${allowedChannels.join(', ')}`);
         }
 
       }
@@ -388,7 +390,7 @@ export class UserStateHandler implements IUserStateHandler {
         // 移除监听不需要权限检查
         broadcastUserState.listening_channel_remove = userStateObj.listening_channel_remove;
         broadcast = true;
-        logger.info(`User ${actor_username} stopped listening to channels: ${userStateObj.listening_channel_remove.join(', ')}`);
+        this.logger.info(`User ${actor_username} stopped listening to channels: ${userStateObj.listening_channel_remove.join(', ')}`);
       }
 
       if (!broadcast) {
@@ -409,7 +411,7 @@ export class UserStateHandler implements IUserStateHandler {
         userState: broadcastUserState,
       });
 
-      logger.info(`Hub: Broadcasting UserState for session ${targetSession} to all edges, fields: ${Object.keys(broadcastUserState).join(', ')}`);
+      this.logger.info(`Hub: Broadcasting UserState for session ${targetSession} to all edges, fields: ${Object.keys(broadcastUserState).join(', ')}`);
 
       // Check if Channel Ninja feature is enabled and we have ninja channels configured
       const channelNinjaEnabled = config.channelNinja ?? false;
@@ -491,17 +493,17 @@ export class UserStateHandler implements IUserStateHandler {
               target_sessions: sessionIds,
             });
           }
-          logger.info(`Channel Ninja: Sent UserRemove for session ${targetSession} to ${Array.from(invisibleToSessions.values()).flat().length} users who cannot see the new channel`);
+          this.logger.info(`Channel Ninja: Sent UserRemove for session ${targetSession} to ${Array.from(invisibleToSessions.values()).flat().length} users who cannot see the new channel`);
         }
         
-        logger.info(`Channel Ninja: Broadcasted UserState for session ${targetSession} to ${Array.from(visibleToSessions.values()).flat().length} users (ninja filtering applied)`);
+        this.logger.info(`Channel Ninja: Broadcasted UserState for session ${targetSession} to ${Array.from(visibleToSessions.values()).flat().length} users (ninja filtering applied)`);
       } else {
         // No ninja functionality or not configured - broadcast to all edges normally
         controlService.broadcast('hub.userStateBroadcast', broadcastUserState);
       }
 
     } catch (error) {
-      logger.error('Error handling user state notification:', error);
+      this.logger.error('Error handling user state notification:', error);
       // 向发起Edge回复错误
       const controlService = this.factory.getControlService();
       controlService.notify(params.edge_id, 'hub.userStateResponse', {
@@ -517,7 +519,7 @@ export class UserStateHandler implements IUserStateHandler {
     const sessionManager = this.factory.getSessionManager();
     const controlService = this.factory.getControlService();
 
-    logger.info(`User (session ${session_id}) left from Edge ${edge_id}`);
+    this.logger.info(`User (session ${session_id}) left from Edge ${edge_id}`);
 
     // 从会话管理器中移除会话
     sessionManager.removeSession(session_id);

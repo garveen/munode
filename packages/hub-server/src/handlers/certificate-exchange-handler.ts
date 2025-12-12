@@ -14,8 +14,11 @@ export interface ICertificateExchangeHandler {
 export class CertificateExchangeHandler implements ICertificateExchangeHandler {
   private factory: HubHandlerFactory;
 
+  // private logger: Logger; // Uncomment when logging is needed
+
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
+    // this.logger = factory.getLogger(); // Uncomment when logging is needed
   }
 
   /**

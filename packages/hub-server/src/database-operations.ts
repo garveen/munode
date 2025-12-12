@@ -1,7 +1,6 @@
-import { createLogger, type BlobStore } from '@munode/common';
+import type { Logger, BlobStore } from '@munode/common';
 import type { HubDatabase } from './database.js';
 
-const logger = createLogger({ service: 'hub-database-operations' });
 
 /**
  * 数据库操作接口
@@ -116,7 +115,10 @@ export class DatabaseOperations implements IDatabaseOperations {
   private database?: HubDatabase;
   private blobStore?: BlobStore;
 
-  constructor(database?: HubDatabase, blobStore?: BlobStore) {
+    private logger: Logger;
+
+  constructor(database: HubDatabase | undefined, logger: Logger, blobStore?: BlobStore) {
+    this.logger = logger;
     this.database = database;
     this.blobStore = blobStore;
   }
@@ -135,7 +137,7 @@ export class DatabaseOperations implements IDatabaseOperations {
     }
 
     await this.database.addBan(banData);
-    logger.debug('Added ban record', { banData });
+    this.logger.debug('Added ban record', { banData });
   }
 
   async getChannel(channelId: number): Promise<{
@@ -176,7 +178,7 @@ export class DatabaseOperations implements IDatabaseOperations {
     }
 
     await this.database.cleanup();
-    logger.debug('Database cleanup completed');
+    this.logger.debug('Database cleanup completed');
   }
 
   async getActiveEdges(): Promise<Array<{
@@ -255,7 +257,7 @@ export class DatabaseOperations implements IDatabaseOperations {
     }
 
     await this.database.setUserTextureBlob(userId, hash);
-    logger.debug(`Set texture blob for user ${userId}: ${hash}`);
+    this.logger.debug(`Set texture blob for user ${userId}: ${hash}`);
   }
 
   async setUserCommentBlob(userId: number, hash: string): Promise<void> {
@@ -264,7 +266,7 @@ export class DatabaseOperations implements IDatabaseOperations {
     }
 
     await this.database.setUserCommentBlob(userId, hash);
-    logger.debug(`Set comment blob for user ${userId}: ${hash}`);
+    this.logger.debug(`Set comment blob for user ${userId}: ${hash}`);
   }
 
   /**

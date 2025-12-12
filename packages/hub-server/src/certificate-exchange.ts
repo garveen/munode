@@ -1,8 +1,7 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { CertificateInfo, CertificateExchangeResult } from './types.js';
 import type { ServiceRegistry } from './registry.js';
 
-const logger = createLogger({ service: 'hub-cert-exchange' });
 
 /**
  * 证书交换服务
@@ -11,7 +10,10 @@ const logger = createLogger({ service: 'hub-cert-exchange' });
 export class CertificateExchangeService {
   private certificates = new Map<number, CertificateInfo>();
 
-  constructor(_registry: ServiceRegistry) {
+    private logger: Logger;
+
+  constructor(_registry: ServiceRegistry, logger: Logger) {
+    this.logger = logger;
     // 暂时不需要 registry，但保留以备将来使用
   }
 
@@ -35,9 +37,9 @@ export class CertificateExchangeService {
         issuer: cert.issuer,
       });
 
-      logger.info(`Certificate registered for Edge ${server_id}`);
+    this.logger.debug(`Certificate registered for Edge ${server_id}`);
     } catch (error) {
-      logger.error(`Failed to register certificate for Edge ${server_id}:`, error);
+    this.logger.error(`Failed to register certificate for Edge ${server_id}:`, error);
       throw error;
     }
   }
@@ -108,7 +110,7 @@ export class CertificateExchangeService {
 
     for (const server_id of toRemove) {
       this.certificates.delete(server_id);
-      logger.info(`Removed expired certificate for Edge ${server_id}`);
+    this.logger.debug(`Removed expired certificate for Edge ${server_id}`);
     }
   }
 
@@ -121,7 +123,7 @@ export class CertificateExchangeService {
       const forge = require('node-forge');
       return forge.pki.certificateFromPem(pem);
     } catch (error) {
-      logger.error('Failed to parse certificate:', error);
+    this.logger.error('Failed to parse certificate:', error);
       return null;
     }
   }
@@ -138,7 +140,7 @@ export class CertificateExchangeService {
       md.update(der);
       return md.digest().toHex();
     } catch (error) {
-      logger.error('Failed to get certificate fingerprint:', error);
+    this.logger.error('Failed to get certificate fingerprint:', error);
       return '';
     }
   }

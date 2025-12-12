@@ -10,14 +10,18 @@
  * - VoiceTarget
  */
 
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import { mumbleproto, MessageType, Permission, ClientState } from '@munode/protocol';
 import type { ClientInfo, ChannelInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
 import { VoiceTargetData } from '../voice/voice-router.js';
 
 export class ProtocolHandlers {
-  constructor(private factory: HandlerFactory) {}
+  private logger: Logger;
+
+  constructor(private factory: HandlerFactory) {
+    this.logger = factory.logger;
+  }
 
   private get clientManager() { return this.factory.clientManager; }
   private get messageHandler() { return this.factory.messageHandler; }
@@ -34,7 +38,7 @@ export class ProtocolHandlers {
       const client = this.clientManager.getClient(session_id);
 
       if (!client) {
-        logger.warn(`Version message from unknown session: ${session_id}`);
+        this.logger.warn(`Version message from unknown session: ${session_id}`);
         return;
       }
 
@@ -55,11 +59,11 @@ export class ProtocolHandlers {
 
       this.clientManager.updateClient(session_id, updates);
 
-      logger.debug(
+        this.logger.debug(
         `Client ${session_id} version: ${version.release || 'unknown'} on ${version.os || 'unknown'}, state updated to ClientSentVersion`
       );
     } catch (error) {
-      logger.error(`Error handling Version for session ${session_id}:`, error);
+        this.logger.error(`Error handling Version for session ${session_id}:`, error);
     }
   }
 
@@ -72,7 +76,7 @@ export class ProtocolHandlers {
       const client = this.clientManager.getClient(session_id);
 
       if (!client) {
-        logger.warn(`Ping from unknown session: ${session_id}`);
+        this.logger.warn(`Ping from unknown session: ${session_id}`);
         return;
       }
 
@@ -104,9 +108,9 @@ export class ProtocolHandlers {
 
       this.messageHandler.sendMessage(session_id, MessageType.Ping, Buffer.from(pongMessage));
 
-      logger.debug(`Handled ping from session ${session_id}`);
+        this.logger.debug(`Handled ping from session ${session_id}`);
     } catch (error) {
-      logger.error(`Error handling ping for session ${session_id}:`, error);
+        this.logger.error(`Error handling ping for session ${session_id}:`, error);
     }
   }
 
@@ -119,13 +123,13 @@ export class ProtocolHandlers {
       const client = this.clientManager.getClient(session_id);
 
       if (!client) {
-        logger.warn(`CryptSetup from unknown session: ${session_id}`);
+        this.logger.warn(`CryptSetup from unknown session: ${session_id}`);
         return;
       }
 
       if (!cryptSetup.client_nonce || cryptSetup.client_nonce.length === 0) {
         // 客户端请求重新同步
-        logger.info(`Crypt resync request from session ${session_id}`);
+        this.logger.info(`Crypt resync request from session ${session_id}`);
 
         const serverNonce = this.voiceRouter.getClientEncryptIV(session_id);
 
@@ -134,20 +138,20 @@ export class ProtocolHandlers {
         }).serialize();
 
         this.messageHandler.sendMessage(session_id, MessageType.CryptSetup, Buffer.from(response));
-        logger.debug(`Sent crypt resync response to session ${session_id}`);
+        this.logger.debug(`Sent crypt resync response to session ${session_id}`);
       } else {
         // 客户端发送了nonce，更新解密IV
-        logger.info(`Received client nonce from session ${session_id}, updating decrypt IV`);
+        this.logger.info(`Received client nonce from session ${session_id}, updating decrypt IV`);
 
         if (cryptSetup.client_nonce.length === 16) {
           this.voiceRouter.updateClientDecryptIV(session_id, Buffer.from(cryptSetup.client_nonce));
-          logger.debug(`Updated decrypt IV for session ${session_id}`);
+        this.logger.debug(`Updated decrypt IV for session ${session_id}`);
         } else {
-          logger.warn(`Invalid client nonce length: ${cryptSetup.client_nonce.length}`);
+        this.logger.warn(`Invalid client nonce length: ${cryptSetup.client_nonce.length}`);
         }
       }
     } catch (error) {
-      logger.error(`Error handling CryptSetup for session ${session_id}:`, error);
+        this.logger.error(`Error handling CryptSetup for session ${session_id}:`, error);
     }
   }
 
@@ -158,7 +162,7 @@ export class ProtocolHandlers {
     try {
       // 解析查询请求
       const queryRequest = mumbleproto.QueryUsers.deserialize(data);
-      logger.debug(`QueryUsers request from session ${session_id}:`, {
+        this.logger.debug(`QueryUsers request from session ${session_id}:`, {
         ids: queryRequest.ids,
         names: queryRequest.names
       });
@@ -225,9 +229,9 @@ export class ProtocolHandlers {
       const responseMessage = new mumbleproto.QueryUsers(response).serialize();
       this.messageHandler.sendMessage(session_id, MessageType.QueryUsers, Buffer.from(responseMessage));
 
-      logger.debug(`Sent QueryUsers response to session ${session_id}: ${response.ids.length} users`);
+        this.logger.debug(`Sent QueryUsers response to session ${session_id}: ${response.ids.length} users`);
     } catch (error) {
-      logger.error(`Error handling QueryUsers for session ${session_id}:`, error);
+        this.logger.error(`Error handling QueryUsers for session ${session_id}:`, error);
     }
   }
 
@@ -239,19 +243,19 @@ export class ProtocolHandlers {
       const statsRequest = mumbleproto.UserStats.deserialize(data);
 
       if (!statsRequest.session) {
-        logger.warn(`UserStats request without target session from ${session_id}`);
+        this.logger.warn(`UserStats request without target session from ${session_id}`);
         return;
       }
 
       const actor = this.clientManager.getClient(session_id);
       if (!actor) {
-        logger.warn(`UserStats request from invalid actor session: ${session_id}`);
+        this.logger.warn(`UserStats request from invalid actor session: ${session_id}`);
         return;
       }
 
       // UserStats 需要从 Hub 获取完整信息（用户数据库、证书、跨Edge会话等）
       // 发送到 Hub 处理
-      logger.debug(`Forwarding UserStats request to Hub: actor=${session_id}, target=${statsRequest.session}, stats_only=${statsRequest.stats_only}`);
+        this.logger.debug(`Forwarding UserStats request to Hub: actor=${session_id}, target=${statsRequest.session}, stats_only=${statsRequest.stats_only}`);
       
       // 触发事件，由 event-setup-manager 转发到 Hub
       this.messageHandler.emit('userStatsForward', {
@@ -262,7 +266,7 @@ export class ProtocolHandlers {
         stats_only: statsRequest.stats_only || false,
       });
     } catch (error) {
-      logger.error(`Error handling UserStats for session ${session_id}:`, error);
+        this.logger.error(`Error handling UserStats for session ${session_id}:`, error);
     }
   }
 
@@ -274,14 +278,14 @@ export class ProtocolHandlers {
       const voiceTarget = mumbleproto.VoiceTarget.deserialize(data);
 
       if (!voiceTarget.id || voiceTarget.id < 1 || voiceTarget.id >= 0x1f) {
-        logger.warn(`Invalid voice target ID from session ${session_id}: ${voiceTarget.id}`);
+        this.logger.warn(`Invalid voice target ID from session ${session_id}: ${voiceTarget.id}`);
         return;
       }
 
       // 如果没有targets，表示删除该voice target
       if (!voiceTarget.targets || voiceTarget.targets.length === 0) {
         this.voiceRouter.removeVoiceTarget(session_id, voiceTarget.id);
-        logger.debug(`Removed voice target ${voiceTarget.id} for session ${session_id}`);
+        this.logger.debug(`Removed voice target ${voiceTarget.id} for session ${session_id}`);
         
         // 向 Hub 同步删除
         if (this.hubClient) {
@@ -291,7 +295,7 @@ export class ProtocolHandlers {
             config: null,
             timestamp: Date.now(),
           }).catch((err) => {
-            logger.error(`Failed to sync voice target deletion to Hub:`, err);
+        this.logger.error(`Failed to sync voice target deletion to Hub:`, err);
           });
         }
         return;
@@ -325,7 +329,7 @@ export class ProtocolHandlers {
       // 保存voice target配置
       this.voiceRouter.setVoiceTarget(session_id, voiceTarget.id, convertedTargets);
 
-      logger.debug(`Set voice target ${voiceTarget.id} for session ${session_id}: ${voiceTarget.targets.length} targets`);
+        this.logger.debug(`Set voice target ${voiceTarget.id} for session ${session_id}: ${voiceTarget.targets.length} targets`);
       
       // 向 Hub 同步 VoiceTarget 配置
       // 将Mumble protocol格式转换为Hub-Edge proto格式
@@ -366,11 +370,11 @@ export class ProtocolHandlers {
           },
           timestamp: Date.now(),
         }).catch((err) => {
-          logger.error(`Failed to sync voice target to Hub:`, err);
+        this.logger.error(`Failed to sync voice target to Hub:`, err);
         });
       }
     } catch (error) {
-      logger.error(`Error handling VoiceTarget for session ${session_id}:`, error);
+        this.logger.error(`Error handling VoiceTarget for session ${session_id}:`, error);
     }
   }
 }

@@ -142,7 +142,7 @@ export class PacketConnPool extends EventEmitter {
     }
 
     if (toRemove.length > 0) {
-      this.logger.info(`Cleaned up ${toRemove.length} expired UDP connections`);
+      this.logger.debug(`Cleaned up ${toRemove.length} expired UDP connections`);
     }
   }
 

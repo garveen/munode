@@ -11,7 +11,7 @@
  * - ACL 更新通知
  */
 
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import {  mumbleproto } from '@munode/protocol';
 import { MessageType } from '@munode/protocol';
 import type { HubNotificationParams } from '@munode/protocol';
@@ -27,7 +27,11 @@ interface ChannelUpdateFields {
 }
 
 export class HubMessageHandlers {
-  constructor(private factory: HandlerFactory) {}
+  private logger: Logger;
+
+  constructor(private factory: HandlerFactory) {
+    this.logger = factory.logger;
+  }
 
   private get clientManager() { return this.factory.clientManager; }
   private get channelManager() { return this.factory.channelManager; }
@@ -39,7 +43,7 @@ export class HubMessageHandlers {
    */
   handleUserStateBroadcastFromHub(params: HubNotificationParams<'hub.userStateBroadcast'>): void {
     try {
-      logger.info(`Edge: Received UserState broadcast from Hub: ${JSON.stringify(params)}`);
+        this.logger.debug(`Edge: Received UserState broadcast from Hub: ${JSON.stringify(params)}`);
       
       // params is the userState object directly, use the type from HubNotificationParams
       // Build UserState protobuf message with only the fields that are set
@@ -107,7 +111,7 @@ export class HubMessageHandlers {
           const updates: Partial<ClientInfo> = {};
           
           if (userState.has_channel_id && userState.channel_id !== undefined) {
-            logger.info(`[USERSTATE-DEBUG] Moving local client ${client.username} (session ${targetSession}) from channel ${client.channel_id} to ${userState.channel_id}`);
+        this.logger.info(`[USERSTATE-DEBUG] Moving local client ${client.username} (session ${targetSession}) from channel ${client.channel_id} to ${userState.channel_id}`);
             this.clientManager.moveClient(targetSession, userState.channel_id);
           }
           if (userState.has_mute && userState.mute !== undefined) {
@@ -140,7 +144,7 @@ export class HubMessageHandlers {
             for (const channelId of userState.listening_channel_add) {
               client.listeningChannels.add(channelId);
             }
-            logger.debug(`Client ${client.username} now listening to channels: ${Array.from(client.listeningChannels).join(', ')}`);
+        this.logger.debug(`Client ${client.username} now listening to channels: ${Array.from(client.listeningChannels).join(', ')}`);
           }
           
           if (userState.listening_channel_remove && userState.listening_channel_remove.length > 0) {
@@ -148,7 +152,7 @@ export class HubMessageHandlers {
               for (const channelId of userState.listening_channel_remove) {
                 client.listeningChannels.delete(channelId);
               }
-              logger.debug(`Client ${client.username} stopped listening to channels, now: ${Array.from(client.listeningChannels).join(', ')}`);
+        this.logger.debug(`Client ${client.username} stopped listening to channels, now: ${Array.from(client.listeningChannels).join(', ')}`);
             }
           }
           
@@ -175,9 +179,9 @@ export class HubMessageHandlers {
       const broadcasted = targetSessionsSet 
         ? allClients.filter(c => c.user_id > 0 && targetSessionsSet.has(c.session)).length
         : allClients.filter(c => c.user_id > 0).length;
-      logger.debug(`Broadcasted UserState to ${broadcasted} local clients${targetSessionsSet ? ' (filtered)' : ''}`);
+        this.logger.debug(`Broadcasted UserState to ${broadcasted} local clients${targetSessionsSet ? ' (filtered)' : ''}`);
     } catch (error) {
-      logger.error('Error handling UserState broadcast from Hub:', error);
+        this.logger.error('Error handling UserState broadcast from Hub:', error);
     }
   }
 
@@ -189,20 +193,20 @@ export class HubMessageHandlers {
       const { success, actor_session, error, permission_denied, userState } = params;
 
       if (!success) {
-        logger.warn(`UserState request from session ${actor_session} failed: ${error}`);
+        this.logger.warn(`UserState request from session ${actor_session} failed: ${error}`);
         
         // 如果是权限拒绝，发送PermissionDenied消息给客户端
         if (permission_denied) {
           this.factory.messageHandlers.sendPermissionDenied(actor_session, 'userstate', error || 'Permission denied');
         } else {
-          logger.debug(`Sending error notification to session ${actor_session}`);
+        this.logger.debug(`Sending error notification to session ${actor_session}`);
         }
         return;
       }
 
       // 如果成功并且有userState数据，发送给客户端
       if (userState) {
-        logger.debug(`Sending UserState response to session ${actor_session}`);
+        this.logger.debug(`Sending UserState response to session ${actor_session}`);
         
         // Build UserState protobuf message with only the fields that are set
         // Use the same pattern as handleUserStateBroadcastFromHub
@@ -267,10 +271,10 @@ export class HubMessageHandlers {
         // 发送给客户端
         this.messageHandler.sendMessage(actor_session, MessageType.UserState, userStateBuffer);
       } else {
-        logger.debug(`UserState request from session ${actor_session} succeeded (no state data to send)`);
+        this.logger.debug(`UserState request from session ${actor_session} succeeded (no state data to send)`);
       }
     } catch (error) {
-      logger.error('Error handling UserState response from Hub:', error);
+        this.logger.error('Error handling UserState response from Hub:', error);
     }
   }
 
@@ -282,7 +286,7 @@ export class HubMessageHandlers {
       const { success, actor_session, error, permission_denied } = params;
 
       if (!success) {
-        logger.warn(`ChannelState request from session ${actor_session} failed: ${error}`);
+        this.logger.warn(`ChannelState request from session ${actor_session} failed: ${error}`);
         
         if (permission_denied) {
           this.factory.messageHandlers.sendPermissionDenied(actor_session, 'channelstate', error || 'Permission denied');
@@ -290,9 +294,9 @@ export class HubMessageHandlers {
         return;
       }
 
-      logger.debug(`ChannelState request from session ${actor_session} succeeded`);
+        this.logger.debug(`ChannelState request from session ${actor_session} succeeded`);
     } catch (error) {
-      logger.error('Error handling ChannelState response from Hub:', error);
+        this.logger.error('Error handling ChannelState response from Hub:', error);
     }
   }
 
@@ -303,7 +307,7 @@ export class HubMessageHandlers {
     try {
       const channelState = params;
 
-      logger.debug(`Received ChannelState broadcast from Hub: channel ${channelState.channel_id}`);
+        this.logger.debug(`Received ChannelState broadcast from Hub: channel ${channelState.channel_id}`);
 
       // 更新本地频道状态镜像
       if (channelState.channel_id !== undefined) {
@@ -330,7 +334,7 @@ export class HubMessageHandlers {
           if (channelState.links !== undefined && Array.isArray(channelState.links)) {
             // 完整替换链接列表
             updates.links = [...channelState.links];
-            logger.debug(`Updated channel ${existingChannel.id} links to: [${updates.links.join(', ')}]`);
+        this.logger.debug(`Updated channel ${existingChannel.id} links to: [${updates.links.join(', ')}]`);
           } else if (channelState.links_add !== undefined || channelState.links_remove !== undefined) {
             // 基于当前链接进行增量更新
             let newLinks = [...(existingChannel.links || [])];
@@ -341,16 +345,16 @@ export class HubMessageHandlers {
                   newLinks.push(linkId);
                 }
               }
-              logger.debug(`Added links to channel ${existingChannel.id}: [${channelState.links_add.join(', ')}]`);
+        this.logger.debug(`Added links to channel ${existingChannel.id}: [${channelState.links_add.join(', ')}]`);
             }
             
             if (channelState.links_remove !== undefined && Array.isArray(channelState.links_remove)) {
               newLinks = newLinks.filter(linkId => !channelState.links_remove.includes(linkId));
-              logger.debug(`Removed links from channel ${existingChannel.id}: [${channelState.links_remove.join(', ')}]`);
+        this.logger.debug(`Removed links from channel ${existingChannel.id}: [${channelState.links_remove.join(', ')}]`);
             }
             
             updates.links = newLinks;
-            logger.debug(`Channel ${existingChannel.id} final links: [${newLinks.join(', ')}]`);
+        this.logger.debug(`Channel ${existingChannel.id} final links: [${newLinks.join(', ')}]`);
           }
           
           // 应用更新
@@ -362,7 +366,7 @@ export class HubMessageHandlers {
             this.stateManager.addOrUpdateChannel(updatedChannel);
             
             if (existingChannel.id === 0 && updates.links) {
-              logger.info(`[HUB-HANDLER] Updated stateManager channel 0 with links: [${updates.links.join(', ')}]`);
+        this.logger.debug(`[HUB-HANDLER] Updated stateManager channel 0 with links: [${updates.links.join(', ')}]`);
             }
           }
         } else {
@@ -380,7 +384,7 @@ export class HubMessageHandlers {
             links: channelState.links || [], // 使用广播中的链接，而不是硬编码为空数组
           };
 
-          logger.debug(`[CHANNEL-LINKS] Created new channel ${channelState.channel_id} with links: [${newChannelData.links.join(', ')}]`);
+        this.logger.debug(`[CHANNEL-LINKS] Created new channel ${channelState.channel_id} with links: [${newChannelData.links.join(', ')}]`);
           this.channelManager.addOrUpdateChannel(newChannelData);
           this.stateManager.addOrUpdateChannel(newChannelData);
         }
@@ -428,9 +432,9 @@ export class HubMessageHandlers {
         }
       }
 
-      logger.debug(`Broadcasted ChannelState to ${allClients.filter(c => c.user_id > 0).length} local clients`);
+        this.logger.debug(`Broadcasted ChannelState to ${allClients.filter(c => c.user_id > 0).length} local clients`);
     } catch (error) {
-      logger.error('Error handling ChannelState broadcast from Hub:', error);
+        this.logger.error('Error handling ChannelState broadcast from Hub:', error);
     }
   }
 
@@ -442,14 +446,14 @@ export class HubMessageHandlers {
       const { success, actor_session, error } = params;
 
       if (!success) {
-        logger.warn(`UserRemove request from session ${actor_session} failed: ${error}`);
+        this.logger.warn(`UserRemove request from session ${actor_session} failed: ${error}`);
         this.factory.messageHandlers.sendPermissionDenied(actor_session, 'kick', error || 'Operation failed');
         return;
       }
 
-      logger.debug(`UserRemove request from session ${actor_session} succeeded`);
+        this.logger.debug(`UserRemove request from session ${actor_session} succeeded`);
     } catch (error) {
-      logger.error('Error handling UserRemove response from Hub:', error);
+        this.logger.error('Error handling UserRemove response from Hub:', error);
     }
   }
 
@@ -460,7 +464,7 @@ export class HubMessageHandlers {
     try {
       const { session, actor, reason, ban, target_sessions } = params;
 
-      logger.debug(`Received UserRemove broadcast from Hub: target ${session}, ninja mode: ${!!target_sessions}`);
+        this.logger.debug(`Received UserRemove broadcast from Hub: target ${session}, ninja mode: ${!!target_sessions}`);
 
       // 构建UserRemove消息
       const userRemove = new mumbleproto.UserRemove({
@@ -495,16 +499,16 @@ export class HubMessageHandlers {
             session,
             ban ? `Banned: ${reason || ''}` : `Kicked: ${reason || ''}`
           );
-          logger.info(`Disconnected local client ${session} due to ${ban ? 'ban' : 'kick'}`);
+        this.logger.info(`Disconnected local client ${session} due to ${ban ? 'ban' : 'kick'}`);
         }
       }
 
       const broadcasted = targetSessionsSet 
         ? allClients.filter(c => c.user_id > 0 && targetSessionsSet.has(c.session)).length
         : allClients.filter(c => c.user_id > 0).length;
-      logger.debug(`Broadcasted UserRemove to ${broadcasted} local clients${targetSessionsSet ? ' (filtered)' : ''}`);
+        this.logger.debug(`Broadcasted UserRemove to ${broadcasted} local clients${targetSessionsSet ? ' (filtered)' : ''}`);
     } catch (error) {
-      logger.error('Error handling UserRemove broadcast from Hub:', error);
+        this.logger.error('Error handling UserRemove broadcast from Hub:', error);
     }
   }
 
@@ -515,12 +519,12 @@ export class HubMessageHandlers {
     try {
       const { success, error, actor_session } = data;
       
-      logger.info(`ChannelRemove response from Hub: success=${success}, error=${error}`);
+        this.logger.info(`ChannelRemove response from Hub: success=${success}, error=${error}`);
       
       // 找到发起删除的客户端
       const actor = this.clientManager.getClient(actor_session);
       if (!actor) {
-        logger.warn(`ChannelRemove actor ${actor_session} not found on this Edge`);
+        this.logger.warn(`ChannelRemove actor ${actor_session} not found on this Edge`);
         return;
       }
       
@@ -533,10 +537,10 @@ export class HubMessageHandlers {
           0,
           mumbleproto.PermissionDenied.DenyType.Permission
         );
-        logger.info(`Sent PermissionDenied to actor ${actor_session}: ${error}`);
+        this.logger.info(`Sent PermissionDenied to actor ${actor_session}: ${error}`);
       }
     } catch (error) {
-      logger.error('Error handling ChannelRemove response from Hub:', error);
+        this.logger.error('Error handling ChannelRemove response from Hub:', error);
     }
   }
 
@@ -547,12 +551,12 @@ export class HubMessageHandlers {
     try {
       const { channel_id } = data;
       
-      logger.info(`ChannelRemove broadcast from Hub: channel=${channel_id}`);
+        this.logger.info(`ChannelRemove broadcast from Hub: channel=${channel_id}`);
       
       // 更新本地频道镜像 - 删除频道
       this.channelManager.removeChannel(channel_id);
       this.stateManager.removeChannel(channel_id);
-      logger.debug(`Removed channel ${channel_id} from local mirrors`);
+        this.logger.debug(`Removed channel ${channel_id} from local mirrors`);
       
       // 构造ChannelRemove消息并广播给所有本地客户端
       const allClients = this.clientManager.getAllClients();
@@ -569,9 +573,9 @@ export class HubMessageHandlers {
         }
       }
       
-      logger.debug(`Broadcasted ChannelRemove to ${allClients.filter(c => c.user_id > 0).length} local clients`);
+        this.logger.debug(`Broadcasted ChannelRemove to ${allClients.filter(c => c.user_id > 0).length} local clients`);
     } catch (error) {
-      logger.error('Error handling ChannelRemove broadcast from Hub:', error);
+        this.logger.error('Error handling ChannelRemove broadcast from Hub:', error);
     }
   }
 
@@ -582,7 +586,7 @@ export class HubMessageHandlers {
     try {
       const { actor, session, channel_id, tree_id, message } = params;
 
-      logger.debug(
+        this.logger.debug(
         `Received TextMessage broadcast from Hub: from ${actor}`
       );
 
@@ -606,9 +610,9 @@ export class HubMessageHandlers {
         }
       }
 
-      logger.debug(`Broadcasted TextMessage to ${sentCount} local clients`);
+        this.logger.debug(`Broadcasted TextMessage to ${sentCount} local clients`);
     } catch (error) {
-      logger.error('Error handling TextMessage broadcast from Hub:', error);
+        this.logger.error('Error handling TextMessage broadcast from Hub:', error);
     }
   }
 
@@ -654,7 +658,7 @@ export class HubMessageHandlers {
     try {
       const { sender_session, dataID, data, target_sessions } = params;
 
-      logger.debug(
+        this.logger.debug(
         `Received PluginData broadcast from Hub: from ${sender_session}, dataID=${dataID}, target_sessions=${target_sessions?.length ?? 'all'}`
       );
 
@@ -689,9 +693,9 @@ export class HubMessageHandlers {
         }
       }
 
-      logger.debug(`Sent PluginData to ${sentCount} local clients (target_sessions=${target_sessions?.length ?? 'all'})`);
+        this.logger.debug(`Sent PluginData to ${sentCount} local clients (target_sessions=${target_sessions?.length ?? 'all'})`);
     } catch (error) {
-      logger.error('Error handling PluginData broadcast from Hub:', error);
+        this.logger.error('Error handling PluginData broadcast from Hub:', error);
     }
   }
 
@@ -701,10 +705,10 @@ export class HubMessageHandlers {
   handleVoiceDataFromHub(data: HubNotificationParams<'voice.data'>, respond: (result?: unknown, error?: unknown) => void): void {
     try {
       // TODO: 实现VoiceRouter.handleVoiceDataFromHub方法
-      logger.debug('Received voice data from Hub:', data);
+        this.logger.debug('Received voice data from Hub:', data);
       respond({ success: true });
     } catch (error) {
-      logger.error('Error handling voice data from Hub:', error);
+        this.logger.error('Error handling voice data from Hub:', error);
       respond(undefined, { code: -32603, message: 'Internal error' });
     }
   }
@@ -715,13 +719,13 @@ export class HubMessageHandlers {
   handleACLUpdatedNotification(params: { channel_id: number; timestamp: number }): void {
     try {
       const { channel_id } = params;
-      logger.info(`Received ACL update notification for channel ${channel_id}`);
+        this.logger.info(`Received ACL update notification for channel ${channel_id}`);
       
       // 触发频道权限刷新（委托给 PermissionHandlers）
       const permissionHandlers = this.factory.permissionHandlers;
       void permissionHandlers.refreshChannelPermissions(channel_id);
     } catch (error) {
-      logger.error('Error handling ACL update notification:', error);
+        this.logger.error('Error handling ACL update notification:', error);
     }
   }
 
@@ -733,14 +737,14 @@ export class HubMessageHandlers {
       const { actor_session, error, userStats } = params;
 
       if (error) {
-        logger.warn(`UserStats request from session ${actor_session} failed: ${error}`);
+        this.logger.warn(`UserStats request from session ${actor_session} failed: ${error}`);
         // 发送空响应或错误提示
         return;
       }
 
       // 如果有userStats数据，发送给请求的客户端
       if (userStats) {
-        logger.debug(`Sending UserStats response to session ${actor_session}`);
+        this.logger.debug(`Sending UserStats response to session ${actor_session}`);
         
         // 构建 UserStats protobuf 对象
         // Use any here since we're building a protobuf message dynamically
@@ -841,12 +845,12 @@ export class HubMessageHandlers {
         
         this.messageHandler.sendMessage(actor_session, MessageType.UserStats, Buffer.from(responseMessage));
         
-        logger.debug(`Sent UserStats response to session ${actor_session}`);
+        this.logger.debug(`Sent UserStats response to session ${actor_session}`);
       } else {
-        logger.debug(`UserStats response for session ${actor_session}: success (no stats data)`);
+        this.logger.debug(`UserStats response for session ${actor_session}: success (no stats data)`);
       }
     } catch (error) {
-      logger.error('Error handling UserStats response from Hub:', error);
+        this.logger.error('Error handling UserStats response from Hub:', error);
     }
   }
 
@@ -883,7 +887,7 @@ export class HubMessageHandlers {
     };
   }): void {
     try {
-      logger.info('Received voice routing config from Hub:', {
+        this.logger.info('Received voice routing config from Hub:', {
         enabled: params.enabled,
         policy: params.policy ? {
           directRttThreshold: params.policy.directRttThreshold,
@@ -898,9 +902,9 @@ export class HubMessageHandlers {
         hubClient.emit('voiceRoutingConfigReceived', params);
       }
       
-      logger.info(`Voice routing ${params.enabled ? 'enabled' : 'disabled'} by Hub configuration`);
+        this.logger.info(`Voice routing ${params.enabled ? 'enabled' : 'disabled'} by Hub configuration`);
     } catch (error) {
-      logger.error('Error handling voice routing config from Hub:', error);
+        this.logger.error('Error handling voice routing config from Hub:', error);
     }
   }
 
@@ -921,7 +925,7 @@ export class HubMessageHandlers {
     }>;
   }): void {
     try {
-      logger.info(`Received route table update from Hub: ${params.routes.length} routes`);
+        this.logger.info(`Received route table update from Hub: ${params.routes.length} routes`);
 
       // 通知 hubClient 触发 routeTableUpdate 事件
       const hubClient = this.factory.hubClient;
@@ -929,7 +933,7 @@ export class HubMessageHandlers {
         hubClient.emit('routeTableUpdateReceived', params.routes);
       }
       
-      logger.debug('Route table update details:', {
+        this.logger.debug('Route table update details:', {
         routes: params.routes.map(r => ({
           target: r.targetEdgeId,
           type: r.type,
@@ -938,7 +942,7 @@ export class HubMessageHandlers {
         })),
       });
     } catch (error) {
-      logger.error('Error handling route table update from Hub:', error);
+        this.logger.error('Error handling route table update from Hub:', error);
     }
   }
 }

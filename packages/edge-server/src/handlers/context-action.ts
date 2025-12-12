@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import { ClientInfo } from '../types.js';
 import { mumbleproto } from '@munode/protocol';
 
@@ -9,9 +9,11 @@ import { mumbleproto } from '@munode/protocol';
  */
 export class ContextActions extends EventEmitter {
   private clients: Map<number, ClientInfo> = new Map(); // sessionId -> ClientInfo
+  private logger?: Logger;
 
-  constructor() {
+  constructor(logger?: Logger) {
     super();
+    this.logger = logger;
   }
 
   /**
@@ -43,7 +45,7 @@ export class ContextActions extends EventEmitter {
   async handleContextAction(sessionId: number, message: mumbleproto.ContextAction): Promise<void> {
     const client = this.clients.get(sessionId);
     if (!client) {
-      logger.warn(`Unknown client session: ${sessionId}`);
+        this.logger.warn(`Unknown client session: ${sessionId}`);
       return;
     }
 
@@ -80,10 +82,10 @@ export class ContextActions extends EventEmitter {
           break;
 
         default:
-          logger.warn(`Unknown context action: ${action} from session ${sessionId}`);
+        this.logger.warn(`Unknown context action: ${action} from session ${sessionId}`);
       }
     } catch (error) {
-      logger.error(`Context action error for ${action}:`, error);
+        this.logger.error(`Context action error for ${action}:`, error);
       this.emit('permissionDenied', sessionId, (error as Error).message);
     }
   }
@@ -135,7 +137,7 @@ export class ContextActions extends EventEmitter {
       operation: 0, // Add
     });
 
-    logger.info(`User ${client.username} enabled group shout`);
+        this.logger.info(`User ${client.username} enabled group shout`);
   }
 
   /**
@@ -165,7 +167,7 @@ export class ContextActions extends EventEmitter {
       operation: 0, // Add
     });
 
-    logger.info(`User ${client.username} disabled group shout`);
+        this.logger.info(`User ${client.username} disabled group shout`);
   }
 
   // ===== 批量频道移动 =====
@@ -204,7 +206,7 @@ export class ContextActions extends EventEmitter {
     const currentChannelId = client.channel_id;
     this.emit('moveChannelMembers', client.session, currentChannelId, targetChannelId);
 
-    logger.info(
+        this.logger.info(
       `User ${client.username} moved members from channel ${currentChannelId} to ${targetChannelId}`
     );
   }
@@ -221,7 +223,7 @@ export class ContextActions extends EventEmitter {
     const currentChannelId = client.channel_id;
     this.emit('moveChannelMembers', client.session, sourceChannelId, currentChannelId);
 
-    logger.info(
+        this.logger.info(
       `User ${client.username} moved members from channel ${sourceChannelId} to ${currentChannelId}`
     );
   }
@@ -272,7 +274,7 @@ export class ContextActions extends EventEmitter {
       operation: 0, // Add
     });
 
-    logger.info(`SuperUser ${client.username} enabled promiscuous mode`);
+        this.logger.info(`SuperUser ${client.username} enabled promiscuous mode`);
   }
 
   /**
@@ -302,7 +304,7 @@ export class ContextActions extends EventEmitter {
       operation: 0, // Add
     });
 
-    logger.info(`SuperUser ${client.username} disabled promiscuous mode`);
+        this.logger.info(`SuperUser ${client.username} disabled promiscuous mode`);
   }
 
   // ===== 辅助方法 =====

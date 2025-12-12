@@ -87,7 +87,7 @@ export class HubControlService {
     }
 
     // 初始化网络拓扑管理器
-    this._networkTopologyManager = new NetworkTopologyManager(config.voiceRouting);
+    this._networkTopologyManager = new NetworkTopologyManager(config.voiceRouting, factory.getLogger());
     this.setupNetworkTopologyEvents();
 
     const controlConfig: ControlChannelConfig = {

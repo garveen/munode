@@ -1,4 +1,4 @@
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import { VoiceUDPTransport, type VoicePacketHeader as ProtocolVoicePacketHeader } from '@munode/protocol';
 import { HandlerFactory } from '../core/handler-factory.js';
 import { EdgeConfig, RouteType, RouteEntry, EdgeConnectionQuality, VoiceBroadcast } from '../types.js';
@@ -34,6 +34,7 @@ export class VoiceManager {
   private handlerFactory: HandlerFactory;
   private voiceTransport?: VoiceUDPTransport;
   private voiceRoutingManager: VoiceRoutingManager;
+  private logger: Logger;
   
   // TCP 降级状态跟踪
   private tcpFallbackStates: Map<number, TcpFallbackState> = new Map();
@@ -43,9 +44,10 @@ export class VoiceManager {
     this.config = config;
     this.handlerFactory = handlerFactory;
     this.voiceTransport = voiceTransport;
+    this.logger = handlerFactory.logger;
     
     // 初始化语音路由管理器
-    this.voiceRoutingManager = new VoiceRoutingManager(config, logger);
+    this.voiceRoutingManager = new VoiceRoutingManager(config, this.logger);
     this.setupRoutingManagerEvents();
     
     // 启动 TCP 恢复检查
@@ -58,7 +60,7 @@ export class VoiceManager {
   private setupRoutingManagerEvents(): void {
     // 监听路由变更事件
     this.voiceRoutingManager.on('route-changed', (targetEdgeId: number, newRoute: RouteEntry, oldRoute: RouteEntry | null) => {
-      logger.info(`Voice route changed for Edge ${targetEdgeId}: ${oldRoute?.type || 'none'} -> ${newRoute.type}`);
+        this.logger.info(`Voice route changed for Edge ${targetEdgeId}: ${oldRoute?.type || 'none'} -> ${newRoute.type}`);
       
       // 如果从 FALLBACK 切换回 UDP 模式，清除降级状态
       if (oldRoute?.type === RouteType.FALLBACK && newRoute.type !== RouteType.FALLBACK) {
@@ -68,7 +70,7 @@ export class VoiceManager {
 
     // 监听质量降级事件
     this.voiceRoutingManager.on('quality-degraded', (edgeId: number, quality: EdgeConnectionQuality) => {
-      logger.warn(`Voice quality degraded for Edge ${edgeId}: RTT=${quality.rtt}ms, loss=${(quality.packetLoss * 100).toFixed(1)}%`);
+        this.logger.warn(`Voice quality degraded for Edge ${edgeId}: RTT=${quality.rtt}ms, loss=${(quality.packetLoss * 100).toFixed(1)}%`);
     });
 
     // 监听质量更新事件，报告给Hub
@@ -80,9 +82,9 @@ export class VoiceManager {
           jitter: quality.jitter,
           samples: quality.samples,
         });
-        logger.debug(`Reported connection quality to Edge ${edgeId} to Hub`);
+        this.logger.debug(`Reported connection quality to Edge ${edgeId} to Hub`);
       } catch (error) {
-        logger.error(`Failed to report quality to Edge ${edgeId}:`, error);
+        this.logger.error(`Failed to report quality to Edge ${edgeId}:`, error);
       }
     });
   }
@@ -136,7 +138,7 @@ export class VoiceManager {
       
       // 如果降级超过一定时间，尝试恢复 UDP
       if (fallbackDuration > 60000) { // 1 分钟后尝试恢复
-        logger.info(`Attempting to recover UDP for Edge ${edgeId} after ${fallbackDuration}ms of TCP fallback`);
+        this.logger.info(`Attempting to recover UDP for Edge ${edgeId} after ${fallbackDuration}ms of TCP fallback`);
         
         // 通过质量重置触发重新评估路由
         this.voiceRoutingManager.emit('quality-updated', edgeId, {
@@ -161,7 +163,7 @@ export class VoiceManager {
         packetsSent: 0,
         lastCheck: Date.now(),
       });
-      logger.info(`TCP fallback activated for Edge ${edgeId}`);
+        this.logger.info(`TCP fallback activated for Edge ${edgeId}`);
     }
   }
   
@@ -172,7 +174,7 @@ export class VoiceManager {
     if (this.tcpFallbackStates.has(edgeId)) {
       const state = this.tcpFallbackStates.get(edgeId);
       const duration = Date.now() - state.activeSince;
-      logger.info(`TCP fallback deactivated for Edge ${edgeId} after ${duration}ms, ${state.packetsSent} packets sent`);
+        this.logger.info(`TCP fallback deactivated for Edge ${edgeId} after ${duration}ms, ${state.packetsSent} packets sent`);
       this.tcpFallbackStates.delete(edgeId);
     }
   }
@@ -195,10 +197,10 @@ export class VoiceManager {
       // TODO: 实现VoiceRouter.handleVoiceDataFromHub方法
       // 处理来自Hub的语音数据，路由到本地客户端
       // this.handlerFactory.voiceRouter.handleVoiceDataFromHub(data);
-      logger.debug('Received voice data from Hub:', data);
+        this.logger.debug('Received voice data from Hub:', data);
       respond({ success: true });
     } catch (error) {
-      logger.error('Error handling voice data from Hub:', error);
+        this.logger.error('Error handling voice data from Hub:', error);
       respond(undefined, { code: -32603, message: 'Internal error' });
     }
   }
@@ -209,15 +211,15 @@ export class VoiceManager {
    */
   setupVoiceTransportHandlers(): void {
     if (!this.voiceTransport) {
-      logger.debug('Voice transport not available, skipping setup');
+        this.logger.debug('Voice transport not available, skipping setup');
       return;
     }
 
-    logger.debug(`Setting up voice transport handlers for server ${this.config.server_id}`);
+        this.logger.debug(`Setting up voice transport handlers for server ${this.config.server_id}`);
 
     // 监听VoiceRouter的统一广播事件
     this.handlerFactory.voiceRouter.on('broadcastVoicePacket', (broadcast: VoiceBroadcast) => {
-      logger.debug(`Received broadcastVoicePacket event: sender=${broadcast.sender_id}, target=${broadcast.target}`);
+        this.logger.debug(`Received broadcastVoicePacket event: sender=${broadcast.sender_id}, target=${broadcast.target}`);
 
       // 从 Mumble 语音包中提取 codec
       const header = broadcast.packet.readUInt8(0);
@@ -245,11 +247,11 @@ export class VoiceManager {
           this.sendVoiceToEdge(edgeId, voicePacket, broadcast.packet);
           sentCount++;
         } else {
-          logger.debug(`Skipping local edge ${edgeId}`);
+        this.logger.debug(`Skipping local edge ${edgeId}`);
         }
       }
 
-      logger.debug(
+        this.logger.debug(
         `Broadcasted voice to ${sentCount} edges: ` +
         `sender=${broadcast.sender_id}, target=${target}, codec=${codec}, packet_size=${broadcast.packet.length}`
       );
@@ -258,7 +260,7 @@ export class VoiceManager {
     // 监听接收到的UDP语音包（来自其他Edge）
     this.voiceTransport.on('voice-packet', (packet: VoicePacketData, _rinfo: RemoteInfo) => {
       const { header, voiceData } = packet;
-      logger.debug(
+        this.logger.debug(
         `[VOICE-REMOTE] Received voice packet: ` +
         `sender_edge=${header.senderId}, target=${header.targetId}, ` +
         `codec=${header.codec}, data_size=${voiceData.length}`
@@ -278,7 +280,7 @@ export class VoiceManager {
       
       // 忽略loopback包（远程用户的loopback不应该到达这里）
       if (header.targetId === 31) {
-        logger.debug(`[VOICE-REMOTE] Ignoring remote loopback packet`);
+        this.logger.debug(`[VOICE-REMOTE] Ignoring remote loopback packet`);
         return;
       }
 
@@ -287,10 +289,10 @@ export class VoiceManager {
     });
 
     this.voiceTransport.on('error', (error: Error) => {
-      logger.error('Voice UDP transport error:', error);
+        this.logger.error('Voice UDP transport error:', error);
     });
 
-    logger.debug('Voice transport handlers setup complete');
+        this.logger.debug('Voice transport handlers setup complete');
   }
 
   /**
@@ -298,12 +300,12 @@ export class VoiceManager {
    */
   private handleRemoteVoicePacket(voiceData: Buffer, targetId: number): void {
     try {
-      logger.debug(`[VOICE-REMOTE] Processing remote voice packet, target=${targetId}, size=${voiceData.length}`);
+        this.logger.debug(`[VOICE-REMOTE] Processing remote voice packet, target=${targetId}, size=${voiceData.length}`);
       
       // 解析发送者session
       const senderSession = this.parseSessionFromVoicePacket(voiceData);
       if (senderSession === null) {
-        logger.warn('[VOICE-REMOTE] Failed to parse session from remote voice packet');
+        this.logger.warn('[VOICE-REMOTE] Failed to parse session from remote voice packet');
         return;
       }
 
@@ -317,7 +319,7 @@ export class VoiceManager {
       if (targetId === 0) {
         const remoteUser = this.handlerFactory.stateManager.getRemoteUserInfo(senderSession);
         if (!remoteUser) {
-          logger.warn(
+        this.logger.warn(
             `[VOICE-REMOTE] PTT packet from unknown remote user ${senderSession}, ` +
             `cannot determine sender channel`
           );
@@ -326,7 +328,7 @@ export class VoiceManager {
         senderChannelId = remoteUser.channel_id;
       }
 
-      logger.debug(
+        this.logger.debug(
         `[VOICE-REMOTE] Routing remote voice: ` +
         `session=${senderSession}, target=${targetId}, channel=${senderChannelId}, codec=${codec}`
       );
@@ -349,7 +351,7 @@ export class VoiceManager {
         voiceData
       );
     } catch (error) {
-      logger.error('[VOICE-REMOTE] Error handling remote voice packet:', error);
+        this.logger.error('[VOICE-REMOTE] Error handling remote voice packet:', error);
     }
   }
 
@@ -402,7 +404,7 @@ export class VoiceManager {
    */
   private sendVoiceToEdge(targetEdgeId: number, voicePacket: VoicePacketHeader, packetData: Buffer): void {
     if (!this.voiceTransport) {
-      logger.warn(`Cannot send voice to Edge ${targetEdgeId}: no voice transport`);
+        this.logger.warn(`Cannot send voice to Edge ${targetEdgeId}: no voice transport`);
       return;
     }
 
@@ -415,14 +417,14 @@ export class VoiceManager {
           switch (route.type) {
             case RouteType.DIRECT:
               // 直连模式
-              logger.debug(`Sending voice to Edge ${targetEdgeId} via direct route`);
+        this.logger.debug(`Sending voice to Edge ${targetEdgeId} via direct route`);
               this.voiceTransport.sendToEdge(targetEdgeId, voicePacket, packetData);
               break;
               
             case RouteType.RELAY:
               // 中转模式：发送到中转 Edge
               if (route.nextHop) {
-                logger.debug(`Sending voice to Edge ${targetEdgeId} via relay Edge ${route.nextHop}`);
+        this.logger.debug(`Sending voice to Edge ${targetEdgeId} via relay Edge ${route.nextHop}`);
                 // TODO: 实现中转包装协议，传递 finalTarget 信息
                 // 暂时直接转发，假设中转节点会根据内容自行路由
                 this.voiceTransport.sendToEdge(route.nextHop, voicePacket, packetData);
@@ -430,7 +432,7 @@ export class VoiceManager {
                 this.voiceRoutingManager.recordRelayedPacket(packetData.length, targetEdgeId);
               } else {
                 // 没有中转节点，降级到直连
-                logger.warn(`No relay hop for Edge ${targetEdgeId}, falling back to direct`);
+        this.logger.warn(`No relay hop for Edge ${targetEdgeId}, falling back to direct`);
                 this.voiceTransport.sendToEdge(targetEdgeId, voicePacket, packetData);
               }
               break;
@@ -446,16 +448,16 @@ export class VoiceManager {
           }
         } else {
           // 没有路由信息，使用直连
-          logger.debug(`No route for Edge ${targetEdgeId}, using direct`);
+        this.logger.debug(`No route for Edge ${targetEdgeId}, using direct`);
           this.voiceTransport.sendToEdge(targetEdgeId, voicePacket, packetData);
         }
       } else {
         // 路由功能未启用，直接发送
-        logger.debug(`Sending voice to edge ${targetEdgeId}`);
+        this.logger.debug(`Sending voice to edge ${targetEdgeId}`);
         this.voiceTransport.sendToEdge(targetEdgeId, voicePacket, packetData);
       }
     } catch (error) {
-      logger.error(`Failed to send voice to edge ${targetEdgeId}:`, error);
+        this.logger.error(`Failed to send voice to edge ${targetEdgeId}:`, error);
     }
   }
 
@@ -468,14 +470,14 @@ export class VoiceManager {
     finalTargetEdgeId: number
   ): void {
     if (!this.voiceTransport) {
-      logger.warn('Cannot relay voice: no voice transport');
+        this.logger.warn('Cannot relay voice: no voice transport');
       return;
     }
 
     try {
       // 检查是否可以接受中转请求
       if (!this.voiceRoutingManager.canAcceptRelay()) {
-        logger.warn(`Relay capacity exceeded, dropping packet for Edge ${finalTargetEdgeId}`);
+        this.logger.warn(`Relay capacity exceeded, dropping packet for Edge ${finalTargetEdgeId}`);
         return;
       }
 
@@ -484,9 +486,9 @@ export class VoiceManager {
       // 记录中转，传递目标 Edge ID 用于调试
       this.voiceRoutingManager.recordRelayedPacket(voiceData.length, finalTargetEdgeId);
       
-      logger.debug(`Relayed voice packet to Edge ${finalTargetEdgeId}`);
+        this.logger.debug(`Relayed voice packet to Edge ${finalTargetEdgeId}`);
     } catch (error) {
-      logger.error(`Failed to relay voice to Edge ${finalTargetEdgeId}:`, error);
+        this.logger.error(`Failed to relay voice to Edge ${finalTargetEdgeId}:`, error);
     }
   }
 
@@ -512,7 +514,7 @@ export class VoiceManager {
       // 通过 Hub 控制通道发送语音数据
       const hubClient = this.handlerFactory.hubClient;
       if (!hubClient || !hubClient.isConnected()) {
-        logger.warn(`Cannot use TCP fallback: Hub client not connected`);
+        this.logger.warn(`Cannot use TCP fallback: Hub client not connected`);
         return;
       }
       
@@ -525,7 +527,7 @@ export class VoiceManager {
       // 2. Hub 将语音数据转发给目标 Edge
       // 3. 目标 Edge 解包并路由给本地客户端
       
-      logger.debug(`TCP fallback packet queued for Edge ${targetEdgeId}, size=${packetData.length}`);
+        this.logger.debug(`TCP fallback packet queued for Edge ${targetEdgeId}, size=${packetData.length}`);
       
       // 临时实现：直接尝试 UDP 发送（即使可能失败）
       // 这样至少不会完全丢失语音
@@ -537,7 +539,7 @@ export class VoiceManager {
         }
       }
     } catch (error) {
-      logger.error(`Error in TCP fallback for Edge ${targetEdgeId}:`, error);
+        this.logger.error(`Error in TCP fallback for Edge ${targetEdgeId}:`, error);
     }
   }
 }

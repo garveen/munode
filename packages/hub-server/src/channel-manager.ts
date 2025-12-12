@@ -1,7 +1,6 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { HubDatabase } from './database.js';
 
-const logger = createLogger({ service: 'hub-channel-manager' });
 
 export interface ChannelData {
   id: number;
@@ -29,9 +28,11 @@ export interface CreateChannelRequest {
 export class ChannelManager {
   private database: HubDatabase;
   private channelCache: Map<number, ChannelData> = new Map();
+  private logger: Logger;
 
-  constructor(database: HubDatabase) {
+  constructor(database: HubDatabase, logger: Logger) {
     this.database = database;
+    this.logger = logger;
   }
 
   /**
@@ -58,7 +59,7 @@ export class ChannelManager {
       };
       this.channelCache.set(ch.id, channelData);
     }
-    logger.info(`Loaded ${dbChannels.length} channels from database`);
+    this.logger.debug(`Loaded ${dbChannels.length} channels from database`);
   }
 
   /**
@@ -79,7 +80,7 @@ export class ChannelManager {
         description_blob: dbCreated.description_blob,
       };
       this.channelCache.set(id, created);
-      logger.info(`Channel created: ${id} (${created.name})`);
+    this.logger.info(`Channel created: ${id} (${created.name})`);
     }
 
     return id;
@@ -103,7 +104,7 @@ export class ChannelManager {
         description_blob: dbUpdated.description_blob,
       };
       this.channelCache.set(id, updated);
-      logger.info(`Channel updated: ${id}`, updates);
+    this.logger.info(`Channel updated: ${id}`, updates);
     }
   }
 
@@ -113,7 +114,7 @@ export class ChannelManager {
   async deleteChannel(id: number): Promise<void> {
     await this.database.deleteChannel(id);
     this.channelCache.delete(id);
-    logger.info(`Channel deleted: ${id}`);
+    this.logger.info(`Channel deleted: ${id}`);
   }
 
   /**
@@ -151,7 +152,7 @@ export class ChannelManager {
    */
   async linkChannels( channel_id: number,  target_id: number): Promise<void> {
     await this.database.linkChannels(channel_id, target_id);
-    logger.info(`Channels linked: ${channel_id} <-> ${target_id}`);
+    this.logger.info(`Channels linked: ${channel_id} <-> ${target_id}`);
   }
 
   /**
@@ -159,7 +160,7 @@ export class ChannelManager {
    */
   async unlinkChannels( channel_id: number,  target_id: number): Promise<void> {
     await this.database.unlinkChannels(channel_id, target_id);
-    logger.info(`Channels unlinked: ${channel_id} <-> ${target_id}`);
+    this.logger.info(`Channels unlinked: ${channel_id} <-> ${target_id}`);
   }
 
   /**

@@ -1,4 +1,4 @@
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import { HandlerFactory } from '../core/handler-factory.js';
 
 /**
@@ -8,9 +8,11 @@ import { HandlerFactory } from '../core/handler-factory.js';
 export class MessageManager {
   private handlerFactory: HandlerFactory;
   private messageBuffers: Map<number, Buffer> = new Map(); // 缓存每个客户端的不完整消息
+  private logger: Logger;
 
   constructor(handlerFactory: HandlerFactory) {
     this.handlerFactory = handlerFactory;
+    this.logger = handlerFactory.logger;
   }
 
   /**
@@ -26,7 +28,7 @@ export class MessageManager {
       const client = this.handlerFactory.clientManager.getClient(session_id);
 
       if (!client) {
-        logger.warn(`Received data for unknown session: ${session_id}`);
+        this.logger.warn(`Received data for unknown session: ${session_id}`);
         this.messageBuffers.delete(session_id); // 清理缓冲区
         return;
       }
@@ -35,7 +37,7 @@ export class MessageManager {
       while (offset < buffer.length) {
         if (offset + 6 > buffer.length) {
           // 数据不完整，保存到缓冲区等待更多数据
-          logger.debug(
+        this.logger.debug(
             `Incomplete message header from session ${session_id}, offset=${offset}, length=${buffer.length}, buffering...`
           );
           this.messageBuffers.set(session_id, buffer.subarray(offset));
@@ -52,7 +54,7 @@ export class MessageManager {
 
         // 检查消息长度是否合法
         if (messageLength > 10000000) {
-          logger.error(
+        this.logger.error(
             `Oversized message from session ${session_id}: type=${messageType}, length=${messageLength}`
           );
           this.messageBuffers.delete(session_id); // 清理缓冲区
@@ -62,7 +64,7 @@ export class MessageManager {
 
         if (offset + messageLength > buffer.length) {
           // 消息体不完整，保存到缓冲区等待更多数据
-          logger.debug(
+        this.logger.debug(
             `Incomplete message body from session ${session_id}, type=${messageType}, expected=${messageLength}, available=${buffer.length - offset}, buffering...`
           );
           // 保存从消息开始的所有数据（包括头部）
@@ -75,7 +77,7 @@ export class MessageManager {
         offset += messageLength;
 
         // 处理消息
-        logger.debug(
+        this.logger.debug(
           `Received message(tcp): session=${session_id}, type=${messageType}, length=${messageLength}`
         );
         this.handlerFactory.messageHandler.handleMessage(session_id, messageType, messageData);
@@ -84,7 +86,7 @@ export class MessageManager {
       // 所有消息都处理完了，清理缓冲区
       this.messageBuffers.delete(session_id);
     } catch (error) {
-      logger.error(`Error parsing message from session ${session_id}:`, error);
+        this.logger.error(`Error parsing message from session ${session_id}:`, error);
       this.handlerFactory.clientManager.removeClient(session_id);
     }
   }
@@ -103,7 +105,7 @@ export class MessageManager {
     try {
       const socket = this.handlerFactory.clientManager.getSocket(session_id);
       if (!socket) {
-        logger.warn(`Cannot send message to unknown session: ${session_id}`);
+        this.logger.warn(`Cannot send message to unknown session: ${session_id}`);
         return;
       }
 
@@ -116,11 +118,11 @@ export class MessageManager {
       socket.write(header);
       socket.write(messageData);
 
-      logger.debug(
+        this.logger.debug(
         `Sent message: session=${session_id}, type=${messageType}, length=${messageData.length}`
       );
     } catch (error) {
-      logger.error(`Error sending message to session ${session_id}:`, error);
+        this.logger.error(`Error sending message to session ${session_id}:`, error);
       this.handlerFactory.clientManager.removeClient(session_id);
     }
   }

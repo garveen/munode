@@ -12,7 +12,7 @@
  */
 
 import { MessageType, mumbleproto, Permission } from '@munode/protocol';
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import type { ChannelInfo, ClientInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
@@ -20,7 +20,11 @@ import type { HandlerFactory } from '../core/handler-factory.js';
  * 管理员处理器
  */
 export class AdminHandlers {
-  constructor(private factory: HandlerFactory) {}
+  private logger: Logger;
+
+  constructor(private factory: HandlerFactory) {
+    this.logger = factory.logger;
+  }
 
   private get clientManager() { return this.factory.clientManager; }
   private get channelManager() { return this.factory.channelManager; }
@@ -61,9 +65,9 @@ export class AdminHandlers {
       }).serialize();
 
       this.messageHandler.sendMessage(session_id, MessageType.BanList, Buffer.from(response));
-      logger.debug(`Sent BanList to session ${session_id}: ${banList.length} entries`);
+        this.logger.debug(`Sent BanList to session ${session_id}: ${banList.length} entries`);
     } catch (error) {
-      logger.error(`Error handling BanList query for session ${session_id}:`, error);
+        this.logger.error(`Error handling BanList query for session ${session_id}:`, error);
     }
   }
 
@@ -114,7 +118,7 @@ export class AdminHandlers {
           });
         }
 
-        logger.info(`Updated BanList by session ${session_id}: ${banList.bans.length} entries`);
+        this.logger.info(`Updated BanList by session ${session_id}: ${banList.bans.length} entries`);
 
         // 将更新后的封禁列表通过Hub同步到其他Edge
         const allBans = await this.banManager.getAllActiveBans();
@@ -125,7 +129,7 @@ export class AdminHandlers {
 
       }
     } catch (error) {
-      logger.error(`Error handling BanList update for session ${session_id}:`, error);
+        this.logger.error(`Error handling BanList update for session ${session_id}:`, error);
     }
   }
 
@@ -135,7 +139,7 @@ export class AdminHandlers {
   public async handleContextAction(session_id: number, data: Buffer): Promise<void> {
     try {
       const action = mumbleproto.ContextAction.deserialize(data);
-      logger.debug(
+        this.logger.debug(
         `Received ContextAction from session ${session_id}: ${action.action} for session ${action.session} channel ${action.channel_id}`
       );
 
@@ -143,7 +147,7 @@ export class AdminHandlers {
       // 这里只需要将消息传递给它
       // （已经在 setupEventHandlers 中绑定）
     } catch (error) {
-      logger.error(`Error handling ContextAction for session ${session_id}:`, error);
+        this.logger.error(`Error handling ContextAction for session ${session_id}:`, error);
     }
   }
 
@@ -153,14 +157,14 @@ export class AdminHandlers {
   public handleContextActionModify(session_id: number, data: Buffer): void {
     try {
       const modify = mumbleproto.ContextActionModify.deserialize(data);
-      logger.debug(
+        this.logger.debug(
         `Received ContextActionModify from session ${session_id}: ${modify.action} operation ${modify.operation}`
       );
 
       // 自定义 Context Action 注册
       // TODO: 实现自定义 Context Action 的存储和管理
     } catch (error) {
-      logger.error(`Error handling ContextActionModify for session ${session_id}:`, error);
+        this.logger.error(`Error handling ContextActionModify for session ${session_id}:`, error);
     }
   }
 
@@ -172,7 +176,7 @@ export class AdminHandlers {
       const data = Buffer.from(message.serialize());
       this.messageHandler.sendMessage(session_id, MessageType.ContextActionModify, data);
     } catch (error) {
-      logger.error(`Error sending ContextActionModify to session ${session_id}:`, error);
+        this.logger.error(`Error sending ContextActionModify to session ${session_id}:`, error);
     }
   }
 
@@ -187,7 +191,7 @@ export class AdminHandlers {
     try {
       const actor = this.clientManager.getClient(actorSession);
       if (!actor) {
-        logger.warn(`Move request from unknown session: ${actorSession}`);
+        this.logger.warn(`Move request from unknown session: ${actorSession}`);
         return;
       }
 
@@ -195,7 +199,7 @@ export class AdminHandlers {
       const toChannel = this.channelManager.getChannel(toChannelId);
 
       if (!fromChannel || !toChannel) {
-        logger.warn(`Invalid channel IDs: from=${fromChannelId}, to=${toChannelId}`);
+        this.logger.warn(`Invalid channel IDs: from=${fromChannelId}, to=${toChannelId}`);
         this.sendPermissionDenied(
           actorSession,
           'move',
@@ -218,7 +222,7 @@ export class AdminHandlers {
       const usersToMove = this.clientManager.getClientsInChannel(fromChannelId);
 
       if (usersToMove.length === 0) {
-        logger.debug(`No users to move from channel ${fromChannelId}`);
+        this.logger.debug(`No users to move from channel ${fromChannelId}`);
         return;
       }
 
@@ -227,7 +231,7 @@ export class AdminHandlers {
       for (const client of usersToMove) {
         // 检查目标频道的 Enter 权限
         if (!this.hasPermission(client, toChannel, Permission.Enter)) {
-          logger.debug(`User ${client.username} cannot enter target channel ${toChannelId}`);
+        this.logger.debug(`User ${client.username} cannot enter target channel ${toChannelId}`);
           continue;
         }
 
@@ -248,11 +252,11 @@ export class AdminHandlers {
         movedCount++;
       }
 
-      logger.info(
+        this.logger.info(
         `Moved ${movedCount} users from channel ${fromChannelId} to ${toChannelId} by session ${actorSession}`
       );
     } catch (error) {
-      logger.error(
+        this.logger.error(
         `Error moving channel members from ${fromChannelId} to ${toChannelId}:`,
         error
       );
@@ -267,7 +271,7 @@ export class AdminHandlers {
     try {
       const client = this.clientManager.getClient(session_id);
       if (!client) {
-        logger.warn(`SetPromiscuousMode request from unknown session: ${session_id}`);
+        this.logger.warn(`SetPromiscuousMode request from unknown session: ${session_id}`);
         return;
       }
 
@@ -286,7 +290,7 @@ export class AdminHandlers {
       // TODO: 在 ClientInfo 中添加 promiscuous 字段
       // client.promiscuous = enabled;
 
-      logger.info(`Session ${session_id} set promiscuous mode to ${enabled}`);
+        this.logger.info(`Session ${session_id} set promiscuous mode to ${enabled}`);
 
       // 发送确认（通过 TextMessage）
       const confirmMessage = new mumbleproto.TextMessage({
@@ -303,7 +307,7 @@ export class AdminHandlers {
         Buffer.from(confirmMessage.serialize())
       );
     } catch (error) {
-      logger.error(`Error setting promiscuous mode for session ${session_id}:`, error);
+        this.logger.error(`Error setting promiscuous mode for session ${session_id}:`, error);
     }
   }
 
@@ -315,7 +319,7 @@ export class AdminHandlers {
     try {
       const client = this.clientManager.getClient(session_id);
       if (!client) {
-        logger.warn(`ClearUserCache request from unknown session: ${session_id}`);
+        this.logger.warn(`ClearUserCache request from unknown session: ${session_id}`);
         return;
       }
 
@@ -327,7 +331,7 @@ export class AdminHandlers {
 
       // 清除所有客户端的纹理和评论缓存
       // TODO: 实现客户端缓存清理
-      logger.info(`Session ${session_id} requested user cache clear`);
+        this.logger.info(`Session ${session_id} requested user cache clear`);
 
       // 广播 UserState 消息，清除所有用户的纹理和评论
       const allClients = Array.from(this.clientManager.getAllClients().values());
@@ -347,9 +351,9 @@ export class AdminHandlers {
         );
       }
 
-      logger.info(`User cache cleared by session ${session_id}`);
+        this.logger.info(`User cache cleared by session ${session_id}`);
     } catch (error) {
-      logger.error(`Error clearing user cache for session ${session_id}:`, error);
+        this.logger.error(`Error clearing user cache for session ${session_id}:`, error);
     }
   }
 
@@ -362,7 +366,7 @@ export class AdminHandlers {
 
       // 检查 Hub 的 blob 存储是否启用
       if (!this.hubClient) {
-        logger.warn('Hub client not available, cannot handle blob requests');
+        this.logger.warn('Hub client not available, cannot handle blob requests');
         return;
       }
 
@@ -392,10 +396,10 @@ export class AdminHandlers {
                 MessageType.UserState,
                 Buffer.from(userState.serialize())
               );
-              logger.debug(`Sent texture for session ${targetSession} to session ${session_id}`);
+        this.logger.debug(`Sent texture for session ${targetSession} to session ${session_id}`);
             }
           } catch (error) {
-            logger.error(`Error fetching texture for session ${targetSession}:`, error);
+        this.logger.error(`Error fetching texture for session ${targetSession}:`, error);
           }
         }
       }
@@ -426,10 +430,10 @@ export class AdminHandlers {
                 MessageType.UserState,
                 Buffer.from(userState.serialize())
               );
-              logger.debug(`Sent comment for session ${targetSession} to session ${session_id}`);
+        this.logger.debug(`Sent comment for session ${targetSession} to session ${session_id}`);
             }
           } catch (error) {
-            logger.error(`Error fetching comment for session ${targetSession}:`, error);
+        this.logger.error(`Error fetching comment for session ${targetSession}:`, error);
           }
         }
       }
@@ -452,9 +456,9 @@ export class AdminHandlers {
         }
       }
 
-      logger.debug(`Handled RequestBlob from session ${session_id}`);
+        this.logger.debug(`Handled RequestBlob from session ${session_id}`);
     } catch (error) {
-      logger.error(`Error handling RequestBlob for session ${session_id}:`, error);
+        this.logger.error(`Error handling RequestBlob for session ${session_id}:`, error);
     }
   }
 
@@ -467,7 +471,7 @@ export class AdminHandlers {
 
       const actor = this.clientManager.getClient(session_id);
       if (!actor) {
-        logger.warn(`UserList from unknown session: ${session_id}`);
+        this.logger.warn(`UserList from unknown session: ${session_id}`);
         return;
       }
 
@@ -491,14 +495,14 @@ export class AdminHandlers {
         }).serialize();
 
         this.messageHandler.sendMessage(session_id, MessageType.UserList, Buffer.from(response)); 
-        logger.debug(`Sent UserList response to session ${session_id}`);
+        this.logger.debug(`Sent UserList response to session ${session_id}`);
       } else {
         // 用户重命名或注销请求
         // TODO: 实现用户管理功能
-        logger.warn(`UserList modification not implemented: ${userList.users.length} users`);
+        this.logger.warn(`UserList modification not implemented: ${userList.users.length} users`);
       }
     } catch (error) {
-      logger.error(`Error handling UserList for session ${session_id}:`, error);
+        this.logger.error(`Error handling UserList for session ${session_id}:`, error);
     }
   }
 
@@ -573,9 +577,9 @@ export class AdminHandlers {
       });
 
       this.messageHandler.sendMessage(session_id, MessageType.PermissionDenied, Buffer.from(deny.serialize()));
-      logger.debug(`Sent PermissionDenied to session ${session_id}: ${denyName} - ${reason}`);
+        this.logger.debug(`Sent PermissionDenied to session ${session_id}: ${denyName} - ${reason}`);
     } catch (error) {
-      logger.error(`Error sending PermissionDenied to session ${session_id}:`, error);
+        this.logger.error(`Error sending PermissionDenied to session ${session_id}:`, error);
     }
   }
 

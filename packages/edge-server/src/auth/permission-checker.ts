@@ -1,4 +1,4 @@
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import { mumbleproto } from '@munode/protocol';
 import { MessageType, Permission } from '@munode/protocol';
 import type { ChannelInfo } from '../types.js';
@@ -8,7 +8,11 @@ import type { HandlerFactory } from '../core/handler-factory.js';
  * 权限处理器 - 处理ACL和权限查询
  */
 export class PermissionHandlers {
-  constructor(private factory: HandlerFactory) {}
+  private logger: Logger;
+
+  constructor(private factory: HandlerFactory) {
+    this.logger = factory.logger;
+  }
 
   private get clientManager() { return this.factory.clientManager; }
   private get channelManager() { return this.factory.channelManager; }
@@ -28,31 +32,31 @@ export class PermissionHandlers {
       
       const actor = this.clientManager.getClient(session_id);
       if (!actor) {
-        logger.warn(`ACL from unknown session: ${session_id}`);
+        this.logger.warn(`ACL from unknown session: ${session_id}`);
         return;
       }
 
       if (!actor.user_id || actor.user_id <= 0) {
-        logger.warn(`ACL from unauthenticated session: ${session_id}`);
+        this.logger.warn(`ACL from unauthenticated session: ${session_id}`);
         return;
       }
 
       // 使用 has_channel_id 检查 protobuf optional 字段是否真的设置了值（遵循 Copilot 指导）
       if (!acl.has_channel_id) {
-        logger.warn(`ACL without channel_id from session: ${session_id}`);
+        this.logger.warn(`ACL without channel_id from session: ${session_id}`);
         return;
       }
 
       // 必须在集群模式下运行
       if (!this.hubClient) {
-        logger.error('ACL rejected: Hub client not available (standalone mode not supported)');
+        this.logger.error('ACL rejected: Hub client not available (standalone mode not supported)');
         this.factory.messageHandlers.sendPermissionDenied(session_id, 'write', 'Server must be connected to Hub');
         return;
       }
 
       const isQuery = acl.query === true || !acl.acls || acl.acls.length === 0;
       
-      logger.info(`Forwarding ACL ${isQuery ? 'query' : 'update'} from session ${session_id} to Hub, channel: ${acl.channel_id}`);
+        this.logger.info(`Forwarding ACL ${isQuery ? 'query' : 'update'} from session ${session_id} to Hub, channel: ${acl.channel_id}`);
 
       // 转发到 Hub（使用 RPC call）
       const result = await this.hubClient.call('edge.handleACL', {
@@ -65,11 +69,11 @@ export class PermissionHandlers {
         raw_data: data.toString('base64'),
       });
 
-      logger.debug(`ACL request completed, success: ${result?.success}`);
+        this.logger.debug(`ACL request completed, success: ${result?.success}`);
 
       // 处理响应
       if (!result?.success) {
-        logger.warn(`ACL request failed: ${result?.error}`);
+        this.logger.warn(`ACL request failed: ${result?.error}`);
         
         // 如果是权限拒绝，发送 PermissionDenied 消息
         if (result?.permission_denied) {
@@ -82,10 +86,10 @@ export class PermissionHandlers {
       if (isQuery && result.raw_data) {
         const aclData = Buffer.from(result.raw_data, 'base64');
         this.messageHandler.sendMessage(session_id, MessageType.ACL, aclData);
-        logger.info(`Forwarded ACL query response to session ${session_id} for channel ${acl.channel_id}`);
+        this.logger.info(`Forwarded ACL query response to session ${session_id} for channel ${acl.channel_id}`);
       }
     } catch (error) {
-      logger.error(`Error handling ACL for session ${session_id}:`, error);
+        this.logger.error(`Error handling ACL for session ${session_id}:`, error);
     }
   }
 
@@ -100,26 +104,26 @@ export class PermissionHandlers {
       // 获取执行操作的客户端
       const actor = this.clientManager.getClient(session_id);
       if (!actor) {
-        logger.warn(`PermissionQuery from unauthenticated session: ${session_id}`);
+        this.logger.warn(`PermissionQuery from unauthenticated session: ${session_id}`);
         return;
       }
 
       if (!actor.user_id || actor.user_id <= 0) {
-        logger.warn(`PermissionQuery from unauthenticated session: ${session_id}`);
+        this.logger.warn(`PermissionQuery from unauthenticated session: ${session_id}`);
         return;
       }
 
-      logger.debug(`PermissionQuery from session ${session_id}: user_id=${actor.user_id}, username=${actor.username}, groups=${JSON.stringify(actor.groups)}`);
+        this.logger.debug(`PermissionQuery from session ${session_id}: user_id=${actor.user_id}, username=${actor.username}, groups=${JSON.stringify(actor.groups)}`);
 
       // 使用 has_channel_id 检查 protobuf optional 字段是否真的设置了值（遵循 Copilot 指导）
       if (!permQuery.has_channel_id) {
-        logger.warn(`PermissionQuery without channel_id from session: ${session_id}`);
+        this.logger.warn(`PermissionQuery without channel_id from session: ${session_id}`);
         return;
       }
 
       // 必须在集群模式下运行
       if (!this.hubClient) {
-        logger.error('PermissionQuery rejected: Hub client not available');
+        this.logger.error('PermissionQuery rejected: Hub client not available');
         // 返回默认权限
         const defaultPerms = 0x30e; // Traverse | Enter | Speak | Whisper | TextMessage
         const permissionQueryResponse = new mumbleproto.PermissionQuery({
@@ -135,7 +139,7 @@ export class PermissionHandlers {
         return;
       }
 
-      logger.debug(`Forwarding PermissionQuery from session ${session_id} to Hub, channel: ${permQuery.channel_id}`);
+        this.logger.debug(`Forwarding PermissionQuery from session ${session_id} to Hub, channel: ${permQuery.channel_id}`);
 
       // 转发到 Hub（使用 RPC call）
       const result = await this.hubClient.call('edge.handlePermissionQuery', {
@@ -147,7 +151,7 @@ export class PermissionHandlers {
       });
 
       if (!result?.success || result.permissions === undefined) {
-        logger.warn(`PermissionQuery failed: ${result?.error}`);
+        this.logger.warn(`PermissionQuery failed: ${result?.error}`);
         // 返回默认权限
         const defaultPerms = 0x30e;
         const permissionQueryResponse = new mumbleproto.PermissionQuery({
@@ -176,9 +180,9 @@ export class PermissionHandlers {
         Buffer.from(permissionQueryResponse.serialize())
       );
 
-      logger.debug(`Sent permission query response for channel ${permQuery.channel_id} to session ${session_id}: ${result.permissions}`);
+        this.logger.debug(`Sent permission query response for channel ${permQuery.channel_id} to session ${session_id}: ${result.permissions}`);
     } catch (error) {
-      logger.error(`Error handling PermissionQuery for session ${session_id}:`, error);
+        this.logger.error(`Error handling PermissionQuery for session ${session_id}:`, error);
     }
   }
 
@@ -193,7 +197,7 @@ export class PermissionHandlers {
       // 获取频道信息
       const channel = this.channelManager.getChannel(channel_id);
       if (!channel) {
-        logger.warn(`Cannot refresh permissions for unknown channel: ${channel_id}`);
+        this.logger.warn(`Cannot refresh permissions for unknown channel: ${channel_id}`);
         return;
       }
 
@@ -220,12 +224,12 @@ export class PermissionHandlers {
             }
           }
           
-          logger.debug(`Reloaded ${aclData.length} ACL entries for channel ${channel_id}`);
+        this.logger.debug(`Reloaded ${aclData.length} ACL entries for channel ${channel_id}`);
           
           // Clear permission cache
           this.permissionManager.clearCache();
         } catch (error) {
-          logger.error(`Failed to reload ACLs from Hub for channel ${channel_id}:`, error);
+        this.logger.error(`Failed to reload ACLs from Hub for channel ${channel_id}:`, error);
         }
       }
 
@@ -234,11 +238,11 @@ export class PermissionHandlers {
       const authenticatedClients = allClients.filter(c => c.user_id && c.user_id > 0);
       
       if (authenticatedClients.length === 0) {
-        logger.debug(`No authenticated users, skipping permission refresh`);
+        this.logger.debug(`No authenticated users, skipping permission refresh`);
         return;
       }
 
-      logger.info(`Refreshing permissions for ${authenticatedClients.length} users due to ACL change in channel ${channel_id}`);
+        this.logger.info(`Refreshing permissions for ${authenticatedClients.length} users due to ACL change in channel ${channel_id}`);
 
       // 向所有已认证客户端发送带 flush=true 的 PermissionQuery
       // 这会清空客户端的权限缓存，客户端会重新请求需要的权限
@@ -268,18 +272,18 @@ export class PermissionHandlers {
           Buffer.from(permissionQueryResponse.serialize())
         );
 
-        logger.debug(`Sent flush PermissionQuery to session ${client.session} for channel ${client.channel_id}`);
+        this.logger.debug(`Sent flush PermissionQuery to session ${client.session} for channel ${client.channel_id}`);
       }
 
       // 获取频道内的所有用户，更新他们的 suppress 状态
       const clientsInChannel = this.clientManager.getClientsInChannel(channel_id);
       
       if (clientsInChannel.length === 0) {
-        logger.debug(`No users in channel ${channel_id}, skipping suppress state update`);
+        this.logger.debug(`No users in channel ${channel_id}, skipping suppress state update`);
         return;
       }
 
-      logger.info(`Updating suppress state for ${clientsInChannel.length} users in channel ${channel_id}`);
+        this.logger.info(`Updating suppress state for ${clientsInChannel.length} users in channel ${channel_id}`);
 
       // 对每个用户重新计算 suppress 状态
       for (const client of clientsInChannel) {
@@ -300,7 +304,7 @@ export class PermissionHandlers {
 
         // 如果 suppress 状态改变，更新并广播
         if (client.suppress !== newSuppress) {
-          logger.debug(
+        this.logger.debug(
             `User ${client.username} in channel ${channel_id}: suppress changed from ${client.suppress} to ${newSuppress}`
           );
 
@@ -344,9 +348,9 @@ export class PermissionHandlers {
         }
       }
 
-      logger.info(`Permission refresh completed for channel ${channel_id}`);
+        this.logger.info(`Permission refresh completed for channel ${channel_id}`);
     } catch (error) {
-      logger.error(`Failed to refresh permissions for channel ${channel_id}:`, error);
+        this.logger.error(`Failed to refresh permissions for channel ${channel_id}:`, error);
     }
   }
 
@@ -388,10 +392,10 @@ export class PermissionHandlers {
 
       // Fallback: 如果本地无法检查，返回 false
       // TODO: 可以考虑添加 Hub RPC 接口来检查权限
-      logger.debug(`Cannot check permission locally for user ${client.user_id} on channel ${channel_id}`);
+        this.logger.debug(`Cannot check permission locally for user ${client.user_id} on channel ${channel_id}`);
       return false;
     } catch (error) {
-      logger.error(`Error checking permission:`, error);
+        this.logger.error(`Error checking permission:`, error);
       return false;
     }
   }

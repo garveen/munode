@@ -1,9 +1,8 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { HubHandlerFactory } from '../factory.js';
 import { HubPermissionChecker, Permission } from '../permission-checker.js';
 import type { EdgeNotificationParams } from '@munode/protocol';
 
-const logger = createLogger({ service: 'hub-notification-handler' });
 
 /**
  * Hub 通知处理器接口
@@ -21,8 +20,11 @@ export class NotificationHandler implements INotificationHandler {
   private factory: HubHandlerFactory;
   private permissionChecker: HubPermissionChecker;
 
+    private logger: Logger;
+
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
+    this.logger = factory.getLogger();
     this.permissionChecker = factory.getPermissionChecker();
   }
 
@@ -33,7 +35,7 @@ export class NotificationHandler implements INotificationHandler {
     try {
       const { edge_id, actor_session, actor_username, target_session, reason, ban } = params;
 
-      logger.info(`Hub received UserRemove from Edge ${edge_id}, actor: ${actor_username}(${actor_session}), target: ${target_session}, ban: ${ban}`);
+      this.logger.info(`Hub received UserRemove from Edge ${edge_id}, actor: ${actor_username}(${actor_session}), target: ${target_session}, ban: ${ban}`);
 
       const sessionManager = this.factory.getSessionManager();
       const databaseOperations = this.factory.getDatabaseOperations();
@@ -111,9 +113,9 @@ export class NotificationHandler implements INotificationHandler {
             duration: 0,
           });
         }
-        logger.info(`User ${targetSession.username} (session ${target_session}) banned by ${actor_username}, reason: ${reason}`);
+        this.logger.info(`User ${targetSession.username} (session ${target_session}) banned by ${actor_username}, reason: ${reason}`);
       } else {
-        logger.info(`User ${targetSession.username} (session ${target_session}) kicked by ${actor_username}, reason: ${reason}`);
+        this.logger.info(`User ${targetSession.username} (session ${target_session}) kicked by ${actor_username}, reason: ${reason}`);
       }
 
       // 向发起Edge回复成功
@@ -136,9 +138,9 @@ export class NotificationHandler implements INotificationHandler {
       // 从会话管理器移除目标会话
       sessionManager.removeSession(target_session);
 
-      logger.debug(`Broadcasted UserRemove for session ${target_session} to all edges`);
+      this.logger.debug(`Broadcasted UserRemove for session ${target_session} to all edges`);
     } catch (error) {
-      logger.error('Error handling UserRemove notification:', error);
+      this.logger.error('Error handling UserRemove notification:', error);
     }
   }
 
@@ -149,14 +151,14 @@ export class NotificationHandler implements INotificationHandler {
     try {
       const { edge_id, actor_session, actor_username, pluginData, receiver_sessions, dataID, data } = params;
 
-      logger.info(`Hub received PluginDataTransmission from Edge ${edge_id}, actor: ${actor_username}(${actor_session})`);
+      this.logger.info(`Hub received PluginDataTransmission from Edge ${edge_id}, actor: ${actor_username}(${actor_session})`);
 
       const sessionManager = this.factory.getSessionManager();
 
       // 获取actor会话
       const actorSession = sessionManager.getSession(actor_session);
       if (!actorSession) {
-        logger.warn(`Actor session ${actor_session} not found in Hub`);
+        this.logger.warn(`Actor session ${actor_session} not found in Hub`);
         return;
       }
 
@@ -198,7 +200,7 @@ export class NotificationHandler implements INotificationHandler {
       }
 
       if (targetSessions.length === 0) {
-        logger.warn(`PluginDataTransmission from ${actor_username} has no valid targets`);
+        this.logger.warn(`PluginDataTransmission from ${actor_username} has no valid targets`);
         return;
       }
 
@@ -223,11 +225,11 @@ export class NotificationHandler implements INotificationHandler {
           const values = Object.keys(obj).sort((a, b) => Number(a) - Number(b)).map(k => obj[k]);
           dataBuffer = Buffer.from(values);
         } else {
-          logger.warn('Unexpected object format for plugin data, using empty buffer');
+          this.logger.warn('Unexpected object format for plugin data, using empty buffer');
           dataBuffer = Buffer.alloc(0);
         }
       } else {
-        logger.warn(`Unexpected data type for plugin data: ${typeof actualData}, using empty buffer`);
+        this.logger.warn(`Unexpected data type for plugin data: ${typeof actualData}, using empty buffer`);
         dataBuffer = Buffer.alloc(0);
       }
 
@@ -241,9 +243,9 @@ export class NotificationHandler implements INotificationHandler {
         });
       }
 
-      logger.info(`Broadcasted PluginDataTransmission from ${actor_username} to ${targetSessions.length} users across ${targetSessionsByEdge.size} edges`);
+      this.logger.info(`Broadcasted PluginDataTransmission from ${actor_username} to ${targetSessions.length} users across ${targetSessionsByEdge.size} edges`);
     } catch (error) {
-      logger.error('Error handling PluginDataTransmission notification:', error);
+      this.logger.error('Error handling PluginDataTransmission notification:', error);
     }
   }
 
@@ -254,7 +256,7 @@ export class NotificationHandler implements INotificationHandler {
     try {
       const { edge_id, actor_session, target_session, stats_only } = params;
 
-      logger.info(`Hub received UserStats request from Edge ${edge_id}, actor: ${actor_session}, target: ${target_session}`);
+      this.logger.info(`Hub received UserStats request from Edge ${edge_id}, actor: ${actor_session}, target: ${target_session}`);
 
       const sessionManager = this.factory.getSessionManager();
       const permissionChecker = this.factory.getPermissionChecker();
@@ -264,7 +266,7 @@ export class NotificationHandler implements INotificationHandler {
       const targetSession = sessionManager.getSession(target_session);
 
       if (!actorSession) {
-        logger.warn(`Actor session ${actor_session} not found in Hub`);
+        this.logger.warn(`Actor session ${actor_session} not found in Hub`);
         this.factory.getControlService().notify(edge_id, 'hub.userStatsResponse', {
           actor_session,
           error: 'Actor session not found',
@@ -273,7 +275,7 @@ export class NotificationHandler implements INotificationHandler {
       }
 
       if (!targetSession) {
-        logger.warn(`Target session ${target_session} not found in Hub`);
+        this.logger.warn(`Target session ${target_session} not found in Hub`);
         this.factory.getControlService().notify(edge_id, 'hub.userStatsResponse', {
           actor_session,
           error: 'Target session not found',
@@ -303,7 +305,7 @@ export class NotificationHandler implements INotificationHandler {
           Permission.Enter
         );
         if (!hasEnter) {
-          logger.warn(`Permission denied for UserStats: actor ${actor_session} cannot enter target ${target_session} channel`);
+          this.logger.warn(`Permission denied for UserStats: actor ${actor_session} cannot enter target ${target_session} channel`);
           this.factory.getControlService().notify(edge_id, 'hub.userStatsResponse', {
             actor_session,
             error: 'Permission denied: Cannot view user stats',
@@ -434,9 +436,9 @@ export class NotificationHandler implements INotificationHandler {
         userStats,
       });
 
-      logger.info(`Sent UserStats response to Edge ${edge_id} for session ${target_session}`);
+      this.logger.info(`Sent UserStats response to Edge ${edge_id} for session ${target_session}`);
     } catch (error) {
-      logger.error('Error handling UserStats notification:', error);
+      this.logger.error('Error handling UserStats notification:', error);
     }
   }
 

@@ -14,8 +14,11 @@ export interface IChannelHandler {
 export class ChannelHandler implements IChannelHandler {
   private factory: HubHandlerFactory;
 
+  // private logger: Logger; // Uncomment when logging is needed
+
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
+    // this.logger = factory.getLogger(); // Uncomment when logging is needed
   }
 
   /**

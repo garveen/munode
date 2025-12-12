@@ -1,4 +1,5 @@
 import { createLogger, BlobStore } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { HubConfig } from './types.js';
 import { ServiceRegistry } from './registry.js';
 import { GlobalSessionManager } from './session-manager.js';
@@ -11,14 +12,13 @@ import { applyConfigDefaults } from './config-defaults.js';
 import { WebApiService } from './web-api-service.js';
 import { HubHandlerFactory } from './factory.js';
 
-const logger = createLogger({ service: 'hub-server' });
-
 /**
  * Hub Server 主类
  * 负责协调分布式 Mumble 服务器集群
  */
 export class HubServer {
   private config: HubConfig;
+  private logger: Logger;
   private registry: ServiceRegistry;
   private sessionManager!: GlobalSessionManager;
   private voiceTargetSync!: VoiceTargetSyncService;
@@ -38,7 +38,13 @@ export class HubServer {
     // 验证配置
     validateHubConfig(this.config);
     
-    logger.info('Hub Server configuration validated and initialized');
+    // 创建logger实例
+    this.logger = createLogger({ 
+      service: `hub-${config.server_id}`,
+      level: config.logLevel || 'info'
+    });
+    
+    this.logger.debug('Hub Server configuration validated and initialized');
   }
 
   /**
@@ -51,7 +57,7 @@ export class HubServer {
     this.controlService = new HubControlService(
       this.config,
     );
-    this.factory = await HubHandlerFactory.getInstance(this.config, this.database, this.controlService);
+    this.factory = await HubHandlerFactory.getInstance(this.config, this.database, this.controlService, this.logger);
     await this.controlService.initialize(this.factory);
 
     this.registry = this.factory.getRegistry();
@@ -63,9 +69,9 @@ export class HubServer {
     if (this.config.blobStore.enabled) {
       this.blobStore = new BlobStore(this.config.blobStore.path, true);
       await this.blobStore.init();
-      logger.info('BlobStore enabled');
+    this.logger.debug('BlobStore enabled');
     } else {
-      logger.info('BlobStore disabled');
+    this.logger.debug('BlobStore disabled');
     }
 
 
@@ -94,11 +100,11 @@ export class HubServer {
       });
 
       this.voiceTransport.on('error', (error) => {
-        logger.error('Voice UDP transport error:', error);
+    this.logger.error('Voice UDP transport error:', error);
       });
     }
 
-    logger.info('Hub Server initialized', {
+    this.logger.debug('Hub Server initialized', {
        server_id: this.config.server_id,
       host: this.config.host,
       port: this.config.port,
@@ -116,7 +122,7 @@ export class HubServer {
     }
 
     try {
-      logger.info('Starting Hub Server...');
+    this.logger.debug('Starting Hub Server...');
 
       // 初始化组件
       await this.init();
@@ -130,7 +136,7 @@ export class HubServer {
       // 启动语音 UDP 传输
       if (this.voiceTransport) {
         await this.voiceTransport.start(); 
-        logger.info('Voice UDP transport started', {
+    this.logger.debug('Voice UDP transport started', {
           port: this.config.voicePort,
         });
       }
@@ -149,11 +155,11 @@ export class HubServer {
       this.startCleanupTasks();
 
       this.started = true;
-      logger.info('Hub Server started successfully', {
+    this.logger.info('Hub Server started successfully', {
         address: `${this.config.host}:${this.config.port}`,
       });
     } catch (error) {
-      logger.error('Failed to start Hub Server:', error);
+    this.logger.error('Failed to start Hub Server:', error);
       throw error;
     }
   }
@@ -168,7 +174,7 @@ export class HubServer {
 
     try {
       this.stopping = true;
-      logger.info('Stopping Hub Server...');
+    this.logger.info('Stopping Hub Server...');
 
       // 停止清理任务
       this.stopCleanupTasks();
@@ -181,7 +187,7 @@ export class HubServer {
       // 停止语音 UDP 传输
       if (this.voiceTransport) {
         this.voiceTransport.stop();
-        logger.info('Voice UDP transport stopped');
+    this.logger.debug('Voice UDP transport stopped');
       }
 
       // 停止控制信道服务（这会触发 Edge 断开连接）
@@ -201,10 +207,10 @@ export class HubServer {
 
       this.started = false;
       this.stopping = false;
-      logger.info('Hub Server stopped');
+    this.logger.info('Hub Server stopped');
     } catch (error) {
       this.stopping = false;
-      logger.error('Error stopping Hub Server:', error);
+    this.logger.error('Error stopping Hub Server:', error);
       throw error;
     }
   }
@@ -249,7 +255,7 @@ export class HubServer {
       this.sessionManager.cleanup();
     }, 300000); // 每5分钟清理一次
 
-    logger.debug('Cleanup tasks started');
+    this.logger.debug('Cleanup tasks started');
   }
 
   /**
@@ -258,7 +264,7 @@ export class HubServer {
   private stopCleanupTasks(): void {
     // 清理定时器
     // 注意：实际实现中需要保存定时器引用
-    logger.debug('Cleanup tasks stopped');
+    this.logger.debug('Cleanup tasks stopped');
   }
 
   /**
@@ -278,11 +284,11 @@ export class HubServer {
       // 重启后所有用户需要重新登录
       // VoiceTarget 配置也是会话相关的，同样不持久化
 
-      logger.info('Persistent data loaded', {
+    this.logger.debug('Persistent data loaded', {
         edges: edges.length,
       });
     } catch (error) {
-      logger.error('Failed to load persistent data:', error);
+    this.logger.error('Failed to load persistent data:', error);
       // 继续启动，但记录错误
     }
   }
@@ -323,7 +329,7 @@ export class HubServer {
         this.voiceTransport.broadcast(header, Buffer.from(packet.data), packet.source_session);
       }
     } catch (error) {
-      logger.error('Error handling voice packet:', error);
+    this.logger.error('Error handling voice packet:', error);
     }
   }
 
@@ -334,7 +340,7 @@ export class HubServer {
   registerEdgeVoiceEndpoint( edge_id: number, host: string, port: number): void {
     if (this.voiceTransport) {
       this.voiceTransport.registerEndpoint(edge_id, host, port);
-      logger.debug(`Registered voice endpoint for Edge ${edge_id}: ${host}:${port}`);
+    this.logger.debug(`Registered voice endpoint for Edge ${edge_id}: ${host}:${port}`);
     }
   }
 
@@ -345,7 +351,7 @@ export class HubServer {
   unregisterEdgeVoiceEndpoint( edge_id: number): void {
     if (this.voiceTransport) {
       this.voiceTransport.unregisterEndpoint(edge_id);
-      logger.debug(`Unregistered voice endpoint for Edge ${edge_id}`);
+    this.logger.debug(`Unregistered voice endpoint for Edge ${edge_id}`);
     }
   }
 }

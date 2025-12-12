@@ -9,11 +9,10 @@
  */
 
 import { EventEmitter } from 'events';
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import { DEFAULT_ROUTING_POLICY, RouteValidator, type ValidationResult } from '@munode/protocol';
 import type { RoutingPolicy, VoiceRoutingConfig } from './types.js';
 
-const logger = createLogger({ service: 'network-topology-manager' });
 
 /**
  * Edge 间连接质量
@@ -96,9 +95,13 @@ export class NetworkTopologyManager extends EventEmitter {
   // 性能优化：统计信息缓存
   private statsCache: Map<number, { stats: any; timestamp: number }> = new Map();
   private readonly STATS_CACHE_TTL = 3000; // 3秒缓存
+  
+  // Logger实例
+  private logger: Logger;
 
-  constructor(config?: VoiceRoutingConfig) {
+  constructor(config: VoiceRoutingConfig | undefined, logger: Logger) {
     super();
+    this.logger = logger;
     this.policy = {
       directRttThreshold: config?.policy?.directRttThreshold ?? DEFAULT_ROUTING_POLICY.directRttThreshold,
       directLossThreshold: config?.policy?.directLossThreshold ?? DEFAULT_ROUTING_POLICY.directLossThreshold,
@@ -115,7 +118,7 @@ export class NetworkTopologyManager extends EventEmitter {
     
     this._isEnabled = config?.enabled ?? false;
     
-    logger.info('NetworkTopologyManager initialized', {
+    this.logger.info('NetworkTopologyManager initialized', {
       enabled: this._isEnabled,
       policy: this.policy,
     });
@@ -126,7 +129,7 @@ export class NetworkTopologyManager extends EventEmitter {
    */
   start(): void {
     if (!this._isEnabled) {
-      logger.debug('NetworkTopologyManager is disabled');
+    this.logger.debug('NetworkTopologyManager is disabled');
       return;
     }
     
@@ -135,7 +138,7 @@ export class NetworkTopologyManager extends EventEmitter {
       this.computeAndPushRouteTables();
     }, this.policy.routeTableUpdateInterval);
     
-    logger.info('NetworkTopologyManager started', {
+    this.logger.info('NetworkTopologyManager started', {
       updateInterval: this.policy.routeTableUpdateInterval,
     });
   }
@@ -149,7 +152,7 @@ export class NetworkTopologyManager extends EventEmitter {
       this.updateTimer = undefined;
     }
     
-    logger.info('NetworkTopologyManager stopped');
+    this.logger.info('NetworkTopologyManager stopped');
   }
 
   /**
@@ -180,7 +183,7 @@ export class NetworkTopologyManager extends EventEmitter {
     if (!this.edges.has(edgeId)) {
       this.edges.add(edgeId);
       this.routingTables.set(edgeId, new Map());
-      logger.info(`Edge ${edgeId} added to topology`);
+    this.logger.info(`Edge ${edgeId} added to topology`);
       
       // 触发路由表重新计算
       if (this._isEnabled) {
@@ -204,7 +207,7 @@ export class NetworkTopologyManager extends EventEmitter {
         }
       }
       
-      logger.info(`Edge ${edgeId} removed from topology`);
+    this.logger.info(`Edge ${edgeId} removed from topology`);
       
       // 触发路由表重新计算
       if (this._isEnabled) {
@@ -227,7 +230,7 @@ export class NetworkTopologyManager extends EventEmitter {
     const key = this.getLinkKey(link.sourceEdgeId, link.targetEdgeId);
     this.links.set(key, link);
     
-    logger.debug(`Link updated: ${link.sourceEdgeId} -> ${link.targetEdgeId}`, {
+    this.logger.debug(`Link updated: ${link.sourceEdgeId} -> ${link.targetEdgeId}`, {
       rtt: link.quality.rtt,
       packetLoss: link.quality.packetLoss,
     });
@@ -438,7 +441,7 @@ export class NetworkTopologyManager extends EventEmitter {
    * 计算并推送路由表到所有 Edge
    */
   private computeAndPushRouteTables(): void {
-    logger.debug('Computing global routing tables');
+    this.logger.debug('Computing global routing tables');
     
     const globalTable = this.computeGlobalRoutingTable();
     
@@ -450,7 +453,7 @@ export class NetworkTopologyManager extends EventEmitter {
       const routes = Array.from(routeTable.values());
       this.emit('routeTableUpdated', edgeId, routes);
       
-      logger.debug(`Route table for Edge ${edgeId}:`, {
+    this.logger.debug(`Route table for Edge ${edgeId}:`, {
         routes: routes.map(r => ({
           target: r.targetEdgeId,
           type: r.type,
@@ -460,7 +463,7 @@ export class NetworkTopologyManager extends EventEmitter {
       });
     }
     
-    logger.info(`Computed routing tables for ${globalTable.size} edges`);
+    this.logger.info(`Computed routing tables for ${globalTable.size} edges`);
   }
 
   /**

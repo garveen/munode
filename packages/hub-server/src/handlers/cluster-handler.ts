@@ -1,8 +1,7 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { HubHandlerFactory } from '../factory.js';
 import type { RPCParams, RPCResult } from '@munode/protocol';
 
-const logger = createLogger({ service: 'hub-cluster-handler' });
 
 /**
  * Hub 集群处理器接口
@@ -21,15 +20,18 @@ export interface IClusterHandler {
 export class ClusterHandler implements IClusterHandler {
   private factory: HubHandlerFactory;
 
+    private logger: Logger;
+
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
+    this.logger = factory.getLogger();
   }
 
   /**
    * 处理Edge加入集群
    */
   async handleEdgeJoin(params: RPCParams<'edge.join'>): Promise<RPCResult<'edge.join'>> {
-    logger.info(`Edge ${params.server_id} requesting to join cluster`);
+    this.logger.info(`Edge ${params.server_id} requesting to join cluster`);
 
     // 获取所有已注册的Edge作为Peer列表
     const allEdges = this.factory.getRegistry().getEdgeList();
@@ -46,7 +48,7 @@ export class ClusterHandler implements IClusterHandler {
     // 生成加入令牌
     const token = `token-${params.server_id}-${Date.now()}`;
 
-    logger.info(`Edge ${params.server_id} join request accepted, peers: ${peers.length}`);
+    this.logger.info(`Edge ${params.server_id} join request accepted, peers: ${peers.length}`);
 
     return {
       success: true,
@@ -60,7 +62,7 @@ export class ClusterHandler implements IClusterHandler {
    * 处理Edge加入完成
    */
   async handleEdgeJoinComplete(params: RPCParams<'edge.joinComplete'>): Promise<RPCResult<'edge.joinComplete'>> {
-    logger.info(
+    this.logger.info(
       `Edge ${params.server_id} completed join, connected peers: ${params.connectedPeers.join(',')}`
     );
 
@@ -83,20 +85,20 @@ export class ClusterHandler implements IClusterHandler {
    * 处理Edge报告对等节点断开
    */
   async handleEdgeReportPeerDisconnect(params: RPCParams<'edge.reportPeerDisconnect'>): Promise<RPCResult<'edge.reportPeerDisconnect'>> {
-    logger.warn(`Peer disconnect reported: Edge ${params.localEdgeId} <-> Edge ${params.remoteEdgeId}`);
+    this.logger.warn(`Peer disconnect reported: Edge ${params.localEdgeId} <-> Edge ${params.remoteEdgeId}`);
 
     // 获取远程Edge的客户端数量
     const remoteEdge = this.factory.getRegistry().getEdge(params.remoteEdgeId);
     const remoteClientCount = remoteEdge?.stats?.user_count || 0;
 
-    logger.info(`Comparing client counts: local=${params.localClientCount}, remote=${remoteClientCount}`);
+    this.logger.info(`Comparing client counts: local=${params.localClientCount}, remote=${remoteClientCount}`);
 
     // 比较客户端数量，让客户端少的Edge断开重连
     if (params.localClientCount < remoteClientCount) {
-      logger.info(`Instructing Edge ${params.localEdgeId} to disconnect (fewer clients)`);
+      this.logger.info(`Instructing Edge ${params.localEdgeId} to disconnect (fewer clients)`);
       return { action: 'disconnect' };
     } else if (params.localClientCount > remoteClientCount) {
-      logger.info(`Instructing Edge ${params.remoteEdgeId} to disconnect (fewer clients)`);
+      this.logger.info(`Instructing Edge ${params.remoteEdgeId} to disconnect (fewer clients)`);
       // 通知远程Edge断开
       this.factory.getControlService().notify(params.remoteEdgeId, 'edge.forceDisconnect', {
         reason: 'Peer connection failed, fewer clients',
@@ -120,7 +122,7 @@ export class ClusterHandler implements IClusterHandler {
    */
   async handleEdgeReportQuality(params: { edge_id: number; target_edge_id: number; quality: { rtt: number; packetLoss: number; jitter: number; samples: number } }): Promise<{ success: boolean }> {
     try {
-      logger.debug(`Edge ${params.edge_id} reported quality to Edge ${params.target_edge_id}:`, params.quality);
+      this.logger.debug(`Edge ${params.edge_id} reported quality to Edge ${params.target_edge_id}:`, params.quality);
 
       // 更新网络拓扑中的链接质量
       this.factory.getNetworkTopologyManager().handleQualityReport(
@@ -137,7 +139,7 @@ export class ClusterHandler implements IClusterHandler {
 
       return { success: true };
     } catch (error) {
-      logger.error('Error handling quality report:', error);
+      this.logger.error('Error handling quality report:', error);
       return { success: false };
     }
   }

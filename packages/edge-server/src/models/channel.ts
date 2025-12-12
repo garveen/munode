@@ -265,7 +265,7 @@ export class ChannelManager extends EventEmitter {
       channel.links = Array.from(links);
     }
 
-    this.logger.info(`Channel ID updated: ${oldId} -> ${newId}, name=${channel.name}`);
+    this.logger.debug(`Channel ID updated: ${oldId} -> ${newId}, name=${channel.name}`);
     this.emit('channel_idUpdated', oldId, newId);
     return true;
   }
@@ -389,7 +389,7 @@ export class ChannelManager extends EventEmitter {
     }
 
     this.invalidateCache(); // 使缓存失效
-    this.logger.info(`Channels linked: ${channel_id1} <-> ${channel_id2}`);
+    this.logger.debug(`Channels linked: ${channel_id1} <-> ${channel_id2}`);
     this.emit('channelsLinked', channel_id1, channel_id2);
     return true;
   }
@@ -415,7 +415,7 @@ export class ChannelManager extends EventEmitter {
     channel2.links = Array.from(links2);
 
     this.invalidateCache(); // 使缓存失效
-    this.logger.info(`Channels unlinked: ${channel_id1} <-> ${channel_id2}`);
+    this.logger.debug(`Channels unlinked: ${channel_id1} <-> ${channel_id2}`);
     this.emit('channelsUnlinked', channel_id1, channel_id2);
     return true;
   }
@@ -464,7 +464,7 @@ export class ChannelManager extends EventEmitter {
     }
 
     channel.position = newPosition;
-    this.logger.info(`Channel moved: id=${channel_id}, position=${newPosition}`);
+    this.logger.debug(`Channel moved: id=${channel_id}, position=${newPosition}`);
     this.emit('channelMoved', channel);
     return true;
   }
@@ -480,7 +480,7 @@ export class ChannelManager extends EventEmitter {
 
     const oldName = channel.name;
     channel.name = newName;
-    this.logger.info(`Channel renamed: id=${channel_id}, oldName=${oldName}, newName=${newName}`);
+    this.logger.debug(`Channel renamed: id=${channel_id}, oldName=${oldName}, newName=${newName}`);
     this.emit('channelRenamed', channel);
     return true;
   }
