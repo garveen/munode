@@ -393,9 +393,11 @@ export class MessageHandlers {
               userStateData.hash = session.cert_hash;
             }
             // 只添加值为 true 的状态字段（参考 Murmur 实现）
+            // 注意：deaf 和 self_deaf 可以与 mute/self_mute 同时存在，不使用 else if
             if (session.deaf === true) {
               userStateData.deaf = true;
-            } else if (session.mute === true) {
+            }
+            if (session.mute === true) {
               userStateData.mute = true;
             }
             if (session.suppress === true) userStateData.suppress = true;
@@ -403,7 +405,8 @@ export class MessageHandlers {
             if (session.recording === true) userStateData.recording = true;
             if (session.self_deaf === true) {
               userStateData.self_deaf = true;
-            } else if (session.self_mute === true) {
+            }
+            if (session.self_mute === true) {
               userStateData.self_mute = true;
             }
             
