@@ -4,9 +4,6 @@
  */
 
 import type { HubConfig } from './types.js';
-import { createLogger } from '@munode/common';
-
-const logger = createLogger({ service: 'hub-config-validator' });
 
 /**
  * 配置验证错误
@@ -220,7 +217,6 @@ export function validateHubConfig(config: HubConfig): void {
   // 如果有错误，抛出异常
   if (errors.length > 0) {
     const errorMessage = 'Configuration validation failed:\n  ' + errors.join('\n  ');
-    logger.error(errorMessage);
     throw new ConfigValidationError(errorMessage);
   }
   
@@ -241,6 +237,6 @@ export function validateHubConfig(config: HubConfig): void {
   }
   
   if (warnings.length > 0) {
-    warnings.forEach(warning => logger.warn(warning));
+    warnings.forEach(warning => console.warn('[config-validator]', warning));
   }
 }

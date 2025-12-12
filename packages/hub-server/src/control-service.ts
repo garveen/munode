@@ -1,4 +1,4 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import {
   ControlChannelServer,
   ControlChannelConfig,
@@ -36,8 +36,6 @@ import { type IBlobHandler } from './handlers/blob-handler.js';
 // Import TypedRPCResponse type
 type TypedRPCResponse = hubedgeRpc.TypedRPCResponse;
 
-const logger = createLogger({ service: 'hub-control' });
-
 /**
  * Hub Server 控制信道服务
  * 基于 MessagePack + WebSocket 的 RPC 服务
@@ -51,6 +49,7 @@ export class HubControlService {
   private _ninjaChannels: Set<number>; // Set of channel IDs that are ninja channels
   private _networkTopologyManager: NetworkTopologyManager; // 网络拓扑管理器
   private isStopping = false; // 标记服务是否正在停止
+  private logger: Logger;
 
   // 处理器实例 - 通过工厂获取
   private userStateHandler: IUserStateHandler;
@@ -68,8 +67,10 @@ export class HubControlService {
 
   constructor(
     config: HubConfig,
+    logger: Logger,
   ) {
     this.config = config;
+    this.logger = logger;
   }
   async initialize(factory: HubFactory): Promise<void> {
     this.factory = factory;
@@ -80,10 +81,10 @@ export class HubControlService {
 
 
     // Initialize ninja channels set from config
-    logger.info(`Channel Ninja config: channelNinja=${config.channelNinja}, ninjaChannels=${JSON.stringify(config.ninjaChannels)}`);
+    this.logger.info(`Channel Ninja config: channelNinja=${config.channelNinja}, ninjaChannels=${JSON.stringify(config.ninjaChannels)}`);
     this._ninjaChannels = new Set(config.ninjaChannels || []);
     if (this._ninjaChannels.size > 0) {
-      logger.info(`Channel Ninja enabled with ${this._ninjaChannels.size} ninja channels: [${Array.from(this._ninjaChannels).join(', ')}]`);
+      this.logger.info(`Channel Ninja enabled with ${this._ninjaChannels.size} ninja channels: [${Array.from(this._ninjaChannels).join(', ')}]`);
     }
 
     // 初始化网络拓扑管理器
@@ -155,7 +156,7 @@ export class HubControlService {
       return;
     }
     
-    logger.info(`Pushing route table to Edge ${edgeId}:`, {
+    this.logger.info(`Pushing route table to Edge ${edgeId}:`, {
       routeCount: routes.length,
       routes: routes.map(r => ({
         target: r.targetEdgeId,
@@ -177,7 +178,7 @@ export class HubControlService {
   private setupEventHandlers(): void {
     // 监听连接
     this.server.on('connect', (_channel: RPCChannel) => {
-      logger.info('Edge connected to control channel');
+      this.logger.info('Edge connected to control channel');
     });
 
     // Handle disconnect
@@ -187,7 +188,7 @@ export class HubControlService {
         if (ch === channel) {
           this.edgeChannels.delete(edge_id);
           this.removeEdgeChannel(edge_id);
-          logger.info(`Edge ${edge_id} disconnected from control channel`);
+          this.logger.info(`Edge ${edge_id} disconnected from control channel`);
           
           // Clean up all user sessions on this Edge and notify other Edges
           this.cleanupEdgeSessions(edge_id);
@@ -259,7 +260,7 @@ export class HubControlService {
         break;
 
       default:
-        logger.debug(`Unknown notification method: ${method}`);
+        this.logger.debug(`Unknown notification method: ${method}`);
     }
   }
 
@@ -312,7 +313,7 @@ export class HubControlService {
     // 使用批量注册方法
     this.typedServer.registerHandlers(handlers);
     
-    logger.info(`Registered ${handlers.length} RPC handlers: ${handlers.map(h => h.method).join(', ')}`);
+    this.logger.info(`Registered ${handlers.length} RPC handlers: ${handlers.map(h => h.method).join(', ')}`);
   }
 
    
@@ -327,7 +328,7 @@ export class HubControlService {
       // 将Edge与RPCChannel关联
       this.edgeChannels.set(params.server_id, _channel);
       this.setEdgeChannel(params.server_id, _channel);
-      logger.info(`Edge ${params.server_id} registered successfully`);
+      this.logger.info(`Edge ${params.server_id} registered successfully`);
       
       // 添加 Edge 到网络拓扑
       this._networkTopologyManager.addEdge(params.server_id);
@@ -347,7 +348,7 @@ export class HubControlService {
     
     // 只在启用时推送配置
     if (!voiceRoutingConfig?.enabled) {
-      logger.debug(`Voice routing disabled, not pushing config to Edge ${edgeId}`);
+      this.logger.debug(`Voice routing disabled, not pushing config to Edge ${edgeId}`);
       return;
     }
     
@@ -358,7 +359,7 @@ export class HubControlService {
       hubRelay: voiceRoutingConfig.hubRelay || DEFAULT_HUB_RELAY_CONFIG,
     };
     
-    logger.info(`Pushing voice routing config to Edge ${edgeId}:`, {
+    this.logger.info(`Pushing voice routing config to Edge ${edgeId}:`, {
       enabled: configToPush.enabled,
       policyThresholds: {
         directRttThreshold: configToPush.policy.directRttThreshold,
@@ -376,7 +377,7 @@ export class HubControlService {
     const voiceRoutingConfig = this.config.voiceRouting;
     
     if (!voiceRoutingConfig?.enabled) {
-      logger.debug('Voice routing disabled, not broadcasting config');
+      this.logger.debug('Voice routing disabled, not broadcasting config');
       return;
     }
     
@@ -389,7 +390,7 @@ export class HubControlService {
    * 启动控制信道服务
    */
   async start(): Promise<void> {
-    logger.info(`Starting Hub control channel server on port ${this.config.controlPort || 8443}`);
+    this.logger.info(`Starting Hub control channel server on port ${this.config.controlPort || 8443}`);
     // 启动网络拓扑管理器
     this._networkTopologyManager.start();
     // 服务器在构造函数中已经启动
@@ -399,19 +400,19 @@ export class HubControlService {
    * 停止控制信道服务
    */
   async stop(): Promise<void> {
-    logger.info('Stopping Hub control channel server');
+    this.logger.info('Stopping Hub control channel server');
     this.isStopping = true; // 设置停止标志，拒绝新请求
     
     // 停止网络拓扑管理器
     this._networkTopologyManager.stop();
     
     // 主动关闭所有 Edge 连接
-    logger.info(`Closing ${this.edgeChannels.size} edge connections`);
+    this.logger.info(`Closing ${this.edgeChannels.size} edge connections`);
     for (const [edgeId, channel] of this.edgeChannels.entries()) {
       try {
         channel.close();
       } catch (error) {
-        logger.warn(`Error closing edge ${edgeId} channel:`, error);
+        this.logger.warn(`Error closing edge ${edgeId} channel:`, error);
       }
     }
     this.edgeChannels.clear();
@@ -419,12 +420,12 @@ export class HubControlService {
     // 关闭服务器
     this.server.close();
     
-    logger.info('Hub control channel server stopped');
+    this.logger.info('Hub control channel server stopped');
   }
 
   
   broadcast(method: string, params?: ChannelNotificationParams): void {
-    logger.debug(`Broadcasting ${method} to all edges`);
+    this.logger.debug(`Broadcasting ${method} to all edges`);
     // Fire and forget - 不等待广播完成
     void this.server.broadcast(method, params);
     
@@ -434,7 +435,7 @@ export class HubControlService {
    * 广播通知给除指定Edge外的所有连接的Edge
    */
   broadcastExcept(excludeEdgeId: number, method: string, params?: ChannelNotificationParams): void {
-    logger.debug(`Broadcasting ${method} to all edges except ${excludeEdgeId}`);
+    this.logger.debug(`Broadcasting ${method} to all edges except ${excludeEdgeId}`);
     for (const [edgeId, channel] of this.edgeChannels.entries()) {
       if (edgeId === excludeEdgeId) {
         continue;
@@ -442,7 +443,7 @@ export class HubControlService {
       try {
         channel.notify(method, params);
       } catch (error) {
-        logger.error(`Failed to notify Edge ${edgeId}:`, error);
+        this.logger.error(`Failed to notify Edge ${edgeId}:`, error);
       }
     }
   }
@@ -454,21 +455,21 @@ export class HubControlService {
         channel.notify(method, params);
 
       } catch (error) {
-        logger.error(`Failed to notify Edge ${edgeId}:`, error);
+        this.logger.error(`Failed to notify Edge ${edgeId}:`, error);
       }
     } else {
-      logger.warn(`No channel found for Edge ${edgeId}`);
+      this.logger.warn(`No channel found for Edge ${edgeId}`);
     }
   }
 
   setEdgeChannel(edgeId: number, channel: RPCChannel): void {
     this.edgeChannels.set(edgeId, channel);
-    logger.debug(`Set channel for Edge ${edgeId}`);
+    this.logger.debug(`Set channel for Edge ${edgeId}`);
   }
 
   removeEdgeChannel(edgeId: number): void {
     this.edgeChannels.delete(edgeId);
-    logger.debug(`Removed channel for Edge ${edgeId}`);
+    this.logger.debug(`Removed channel for Edge ${edgeId}`);
   }
 
   /**
@@ -479,7 +480,7 @@ export class HubControlService {
       const sessionManager = this.factory.getSessionManager();
       const sessions = sessionManager.getEdgeSessions(edgeId);
 
-      logger.info(`Cleaning up ${sessions.length} sessions from Edge ${edgeId}`);
+      this.logger.info(`Cleaning up ${sessions.length} sessions from Edge ${edgeId}`);
 
       // 通知其他Edge这些用户离开了
       for (const session of sessions) {
@@ -493,7 +494,7 @@ export class HubControlService {
         });
       }
     } catch (error) {
-      logger.error(`Error cleaning up Edge ${edgeId} sessions:`, error);
+      this.logger.error(`Error cleaning up Edge ${edgeId} sessions:`, error);
     }
   }
 }

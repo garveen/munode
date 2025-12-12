@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import {
   hubedge,
   mumbleproto,
@@ -7,8 +7,6 @@ import {
   ChannelNotificationParams,
 } from '@munode/protocol';
 import type { GlobalSessionManager } from '../session-manager.js';
-
-const logger = createLogger({ service: 'hub-message-router' });
 
 /**
  * 客户端消息路由器 (Hub 端)
@@ -24,12 +22,15 @@ export class ClientMessageRouter extends EventEmitter {
     notify: (edgeId: number, method: string, params?: ChannelNotificationParams) => void;
     sendRelayToEdge?: (edgeId: number, message: hubedge.ClientMessageRelay) => void;
   } | null = null;
+  private logger: Logger;
 
   constructor(
-    sessionManager: GlobalSessionManager
+    sessionManager: GlobalSessionManager,
+    logger: Logger
   ) {
     super();
     this.sessionManager = sessionManager;
+    this.logger = logger;
   }
 
   /**
@@ -51,7 +52,7 @@ export class ClientMessageRouter extends EventEmitter {
     try {
       const { session_id, direction, routing } = relay;
 
-      logger.debug(
+      this.logger.debug(
         `Routing message: session=${session_id}, direction=${direction}, ` +
         `routing=${routing ? hubedge.RoutingType[routing.type] : 'none'}`
       );
@@ -65,7 +66,7 @@ export class ClientMessageRouter extends EventEmitter {
         await this.distributeToClients(relay);
       }
     } catch (error) {
-      logger.error('Error routing message:', error);
+      this.logger.error('Error routing message:', error);
       throw error;
     }
   }
@@ -79,11 +80,11 @@ export class ClientMessageRouter extends EventEmitter {
     // 提取消息类型
     const messageType = this.getMessageType(relay);
     if (!messageType) {
-      logger.warn('No valid message type in relay');
+      this.logger.warn('No valid message type in relay');
       return;
     }
 
-    logger.debug(
+    this.logger.debug(
       `Handling client message: session=${relay.session_id}, type=${MessageType[messageType]}`
     );
 
@@ -135,7 +136,7 @@ export class ClientMessageRouter extends EventEmitter {
         break;
 
       default:
-        logger.warn(`Unknown routing type: ${routing.type}`);
+        this.logger.warn(`Unknown routing type: ${routing.type}`);
     }
   }
 
@@ -147,7 +148,7 @@ export class ClientMessageRouter extends EventEmitter {
     routing: hubedge.RelayRouting
   ): Promise<void> {
     if (routing.target_sessions.length === 0) {
-      logger.warn('Unicast without target sessions');
+      this.logger.warn('Unicast without target sessions');
       return;
     }
 
@@ -165,7 +166,7 @@ export class ClientMessageRouter extends EventEmitter {
     const targetSessions = routing.target_sessions;
     const excludeSessions = new Set(routing.exclude_sessions);
 
-    logger.debug(
+    this.logger.debug(
       `Multicasting to ${targetSessions.length} sessions, excluding ${excludeSessions.size}`
     );
 
@@ -184,7 +185,7 @@ export class ClientMessageRouter extends EventEmitter {
     routing: hubedge.RelayRouting
   ): Promise<void> {
     if (!routing.has_target_channel) {
-      logger.warn('Channel broadcast without target channel');
+      this.logger.warn('Channel broadcast without target channel');
       return;
     }
 
@@ -194,7 +195,7 @@ export class ClientMessageRouter extends EventEmitter {
     // 获取频道内的所有用户
     const sessions = this.sessionManager.getChannelSessions(channelId).map(s => s.session_id);
 
-    logger.debug(
+    this.logger.debug(
       `Broadcasting to channel ${channelId}: ${sessions.length} users, excluding ${excludeSessions.size}`
     );
 
@@ -215,7 +216,7 @@ export class ClientMessageRouter extends EventEmitter {
     const excludeSessions = new Set(routing.exclude_sessions);
     const allSessions = this.sessionManager.getAllSessions();
 
-    logger.debug(
+    this.logger.debug(
       `Broadcasting globally to ${allSessions.length} users, excluding ${excludeSessions.size}`
     );
 
@@ -240,14 +241,14 @@ export class ClientMessageRouter extends EventEmitter {
       // 获取会话信息
       const session = this.sessionManager.getSession(sessionId);
       if (!session) {
-        logger.debug(`Session not found: ${sessionId}`);
+        this.logger.debug(`Session not found: ${sessionId}`);
         return;
       }
 
       // 获取会话所在的 Edge
       const edgeId = session.edge_id;
       if (!edgeId) {
-        logger.warn(`No edge_id for session ${sessionId}`);
+        this.logger.warn(`No edge_id for session ${sessionId}`);
         return;
       }
 
@@ -265,9 +266,9 @@ export class ClientMessageRouter extends EventEmitter {
       // 通过 ControlService 发送到 Edge
       await this.controlService.sendRelayToEdge(edgeId, targetRelay);
 
-      logger.debug(`Sent message to session ${sessionId} on edge ${edgeId}`);
+      this.logger.debug(`Sent message to session ${sessionId} on edge ${edgeId}`);
     } catch (error) {
-      logger.error(`Error sending message to session ${sessionId}:`, error);
+      this.logger.error(`Error sending message to session ${sessionId}:`, error);
     }
   }
 

@@ -4,15 +4,13 @@
  */
 
 import { DatabaseWorkerManager } from './database-worker-manager.js';
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { DatabaseConfig, RegisteredEdge, VoiceTargetConfig } from './types.js';
 import { GlobalSession } from '@munode/protocol';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { ACLData } from './acl-manager.js';
 import type { ChannelGroupData, ChannelGroupMemberData } from './channel-group-manager.js';
-
-const logger = createLogger({ service: 'hub-database' });
 
 /**
  * 准备好的语句包装器
@@ -48,10 +46,12 @@ class StatementWrapper {
 export class HubDatabase {
   private manager: DatabaseWorkerManager;
   private config: DatabaseConfig;
+  private logger: Logger;
 
-  constructor(config: DatabaseConfig) {
+  constructor(config: DatabaseConfig, logger: Logger) {
     this.config = config;
-    this.manager = new DatabaseWorkerManager();
+    this.logger = logger;
+    this.manager = new DatabaseWorkerManager(logger);
   }
 
   /**
@@ -317,7 +317,7 @@ export class HubDatabase {
     `;
 
     await this.exec(schema);
-    logger.info('Database schema initialized (Go-compatible)');
+    this.logger.info('Database schema initialized (Go-compatible)');
 
     // 迁移旧的列名
     await this.migrateSchema();
@@ -339,10 +339,10 @@ export class HubDatabase {
       const hasDescriptionBlob = (columns as Array<{ name: string }>).some((col) => col.name === 'description_blob');
 
       if (hasDescription && !hasDescriptionBlob) {
-        logger.info('Migrating channels table: renaming description to description_blob');
+        this.logger.info('Migrating channels table: renaming description to description_blob');
         await this.exec('ALTER TABLE channels RENAME COLUMN description TO description_blob');
       } else if (hasDescription && hasDescriptionBlob) {
-        logger.warn(
+        this.logger.warn(
           'Channels table has both description and description_blob columns, this should not happen'
         );
       }
@@ -350,7 +350,7 @@ export class HubDatabase {
       // 检查其他可能的迁移...
 
     } catch (error) {
-      logger.error('Schema migration failed:', error);
+      this.logger.error('Schema migration failed:', error);
       // 不抛出错误，继续启动
     }
   }
@@ -566,7 +566,7 @@ export class HubDatabase {
     const deletedLogs = logResult.changes || 0;
 
     if (deletedSessions > 0 || deletedLogs > 0) {
-      logger.info(`Database cleanup: ${deletedSessions} sessions, ${deletedLogs} logs`);
+      this.logger.info(`Database cleanup: ${deletedSessions} sessions, ${deletedLogs} logs`);
     }
   }
 
@@ -576,7 +576,7 @@ export class HubDatabase {
   private startBackupTask(): void {
     // 在测试环境下跳过备份任务
     if (process.env.NODE_ENV === 'test') {
-      logger.info('Skipping backup task in test environment');
+      this.logger.info('Skipping backup task in test environment');
       return;
     }
 
@@ -584,7 +584,7 @@ export class HubDatabase {
       try {
         await this.createBackup();
       } catch (error) {
-        logger.error('Database backup failed:', error);
+        this.logger.error('Database backup failed:', error);
       }
     }, this.config.backupInterval);
   }
@@ -603,12 +603,12 @@ export class HubDatabase {
       // 使用 VACUUM INTO 创建备份
       await this.exec(`VACUUM INTO '${backupPath}'`);
 
-      logger.info(`Database backup created: ${backupPath}`);
+      this.logger.info(`Database backup created: ${backupPath}`);
 
       // 清理旧备份 (保留30天)
       await this.cleanupOldBackups();
     } catch (error) {
-      logger.error('Failed to create database backup:', error);
+      this.logger.error('Failed to create database backup:', error);
     }
   }
 
@@ -630,11 +630,11 @@ export class HubDatabase {
 
         if (age > maxAge) {
           await fs.unlink(filePath);
-          logger.info(`Deleted old backup: ${file}`);
+          this.logger.info(`Deleted old backup: ${file}`);
         }
       }
     } catch (error) {
-      logger.error('Failed to cleanup old backups:', error);
+      this.logger.error('Failed to cleanup old backups:', error);
     }
   }
 
@@ -1079,11 +1079,11 @@ export class HubDatabase {
         name
       );
 
-      logger.info(`Root channel created: ${name}`);
+      this.logger.info(`Root channel created: ${name}`);
     } else if (existingRoot.name !== name) {
       // 更新根频道名称
       await this.run('UPDATE channels SET name = ? WHERE id = 0', name);
-      logger.info(`Root channel renamed: ${name}`);
+      this.logger.info(`Root channel renamed: ${name}`);
     }
   }
 
@@ -1114,7 +1114,7 @@ export class HubDatabase {
       },
     });
 
-    logger.info(`[Audit] ${message}`);
+    this.logger.info(`[Audit] ${message}`);
   }
 
   /**
@@ -1147,7 +1147,7 @@ export class HubDatabase {
       },
     });
 
-    logger.info(`[Audit] ${message}`);
+    this.logger.info(`[Audit] ${message}`);
   }
 
   /**
@@ -1179,7 +1179,7 @@ export class HubDatabase {
       },
     });
 
-    logger.info(`[Audit] ${message}`);
+    this.logger.info(`[Audit] ${message}`);
   }
 
   /**
@@ -1211,7 +1211,7 @@ export class HubDatabase {
       },
     });
 
-    logger.info(`[Audit] ${message}`);
+    this.logger.info(`[Audit] ${message}`);
   }
 
   /**
@@ -1571,14 +1571,14 @@ export class HubDatabase {
       await new Promise(resolve => setTimeout(resolve, 100));
 
       await this.manager.close();
-      logger.info('Database connection closed');
+      this.logger.info('Database connection closed');
     } catch (error) {
       // 如果关闭失败，强制关闭
-      logger.warn('Error during database close, attempting force close:', error);
+      this.logger.warn('Error during database close, attempting force close:', error);
       try {
         await this.manager.close();
       } catch (e) {
-        logger.error('Force close also failed:', e);
+        this.logger.error('Force close also failed:', e);
       }
     }
   }

@@ -6,9 +6,7 @@
 import { Worker } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { createLogger } from '@munode/common';
-
-const logger = createLogger({ service: 'database-worker-manager' });
+import type { Logger } from '@munode/common';
 
 interface WorkerMessage {
   id: number;
@@ -39,8 +37,10 @@ export class DatabaseWorkerManager {
   private pendingRequests = new Map<number, PendingRequest>();
   private workerPath: string;
   private isInitialized = false;
+  private logger: Logger;
 
-  constructor() {
+  constructor(logger: Logger) {
+    this.logger = logger;
     // 计算 worker 文件路径
     // 在 ESM 中，我们需要使用 import.meta.url 来获取当前文件路径
     const currentFile = fileURLToPath(import.meta.url);
@@ -86,7 +86,7 @@ export class DatabaseWorkerManager {
 
     // 监听 Worker 错误
     this.worker.on('error', (error: Error) => {
-      logger.error('Worker error:', error);
+      this.logger.error('Worker error:', error);
       // 拒绝所有待处理的请求
       for (const [id, request] of this.pendingRequests) {
         request.reject(new Error(`Worker error: ${error.message}`));
@@ -97,7 +97,7 @@ export class DatabaseWorkerManager {
     // 监听 Worker 退出
     this.worker.on('exit', (code: number) => {
       if (code !== 0) {
-        logger.error(`Worker exited with code ${code}`);
+        this.logger.error(`Worker exited with code ${code}`);
         // 拒绝所有待处理的请求
         for (const [id, request] of this.pendingRequests) {
           request.reject(new Error(`Worker exited with code ${code}`));
@@ -109,7 +109,7 @@ export class DatabaseWorkerManager {
     // 初始化数据库
     await this.sendMessage({ type: 'init', dbPath });
     this.isInitialized = true;
-    logger.info('Database worker initialized', { dbPath });
+    this.logger.info('Database worker initialized', { dbPath });
   }
 
   /**
@@ -162,9 +162,9 @@ export class DatabaseWorkerManager {
       await this.worker.terminate();
       this.worker = null;
       this.isInitialized = false;
-      logger.info('Database worker closed');
+      this.logger.info('Database worker closed');
     } catch (error) {
-      logger.error('Error closing database worker:', error);
+      this.logger.error('Error closing database worker:', error);
       // 强制终止 Worker
       if (this.worker) {
         await this.worker.terminate();
@@ -218,7 +218,7 @@ export class DatabaseWorkerManager {
   private handleWorkerResponse(response: WorkerResponse): void {
     const request = this.pendingRequests.get(response.id);
     if (!request) {
-      logger.warn('Received response for unknown request', { id: response.id });
+      this.logger.warn('Received response for unknown request', { id: response.id });
       return;
     }
 
