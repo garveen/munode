@@ -137,6 +137,13 @@ export class HubDataManager {
             listening_channel_add: number[];
             listening_channel_remove: number[];
             hash?: string;
+            mute?: boolean;
+            deaf?: boolean;
+            suppress?: boolean;
+            self_mute?: boolean;
+            self_deaf?: boolean;
+            priority_speaker?: boolean;
+            recording?: boolean;
           }
           const userStateData: UserStateData = {
             session: params.session_id,
@@ -151,6 +158,29 @@ export class HubDataManager {
           // 只有接收方是已注册用户时，才发送证书哈希
           if (params.cert_hash && receiverIsRegistered) {
             userStateData.hash = params.cert_hash;
+          }
+
+          // Include user state fields if they are defined
+          if (params.mute !== undefined) {
+            userStateData.mute = params.mute;
+          }
+          if (params.deaf !== undefined) {
+            userStateData.deaf = params.deaf;
+          }
+          if (params.suppress !== undefined) {
+            userStateData.suppress = params.suppress;
+          }
+          if (params.self_mute !== undefined) {
+            userStateData.self_mute = params.self_mute;
+          }
+          if (params.self_deaf !== undefined) {
+            userStateData.self_deaf = params.self_deaf;
+          }
+          if (params.priority_speaker !== undefined) {
+            userStateData.priority_speaker = params.priority_speaker;
+          }
+          if (params.recording !== undefined) {
+            userStateData.recording = params.recording;
           }
 
           const userState = new mumbleproto.UserState(userStateData);

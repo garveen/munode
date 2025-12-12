@@ -230,6 +230,13 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           groups: session.groups || [],
           cert_hash: session.cert_hash,
           target_sessions: sessionIds,
+          mute: session.mute,
+          deaf: session.deaf,
+          suppress: session.suppress,
+          self_mute: session.self_mute,
+          self_deaf: session.self_deaf,
+          priority_speaker: session.priority_speaker,
+          recording: session.recording,
         });
       }
 
@@ -265,6 +272,13 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         channel_id: actualChannelId,
         groups: session.groups || [],
         cert_hash: session.cert_hash,
+        mute: session.mute,
+        deaf: session.deaf,
+        suppress: session.suppress,
+        self_mute: session.self_mute,
+        self_deaf: session.self_deaf,
+        priority_speaker: session.priority_speaker,
+        recording: session.recording,
       });
 
       this.logger.info(`Session ${params.session_id} reported from Edge ${params.edge_server_id}, broadcasted to all edges`);

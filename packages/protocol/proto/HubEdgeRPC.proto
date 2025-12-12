@@ -319,6 +319,14 @@ message GlobalSessionProto {
   optional string cert_hash = 7;
   optional int64 connected_at = 8;
   repeated string groups = 9;
+  // User state fields
+  optional bool mute = 10;
+  optional bool deaf = 11;
+  optional bool suppress = 12;
+  optional bool self_mute = 13;
+  optional bool self_deaf = 14;
+  optional bool priority_speaker = 15;
+  optional bool recording = 16;
 }
 
 message EdgeInfoProto {
@@ -670,6 +678,14 @@ message HubUserJoinedParams {
   required uint32 channel_id = 5;
   repeated string groups = 6;
   optional string cert_hash = 7;
+  // User state fields
+  optional bool mute = 8;
+  optional bool deaf = 9;
+  optional bool suppress = 10;
+  optional bool self_mute = 11;
+  optional bool self_deaf = 12;
+  optional bool priority_speaker = 13;
+  optional bool recording = 14;
 }
 
 // ---------------------------------------------------------------------------

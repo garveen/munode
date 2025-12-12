@@ -1019,6 +1019,14 @@ export interface HubUserJoinedNotification {
     channel_id: number;
     cert_hash?: string;
     target_sessions?: number[]; // Optional: for ninja channel filtering
+    // User state fields
+    mute?: boolean;
+    deaf?: boolean;
+    suppress?: boolean;
+    self_mute?: boolean;
+    self_deaf?: boolean;
+    priority_speaker?: boolean;
+    recording?: boolean;
   };
 }
 
