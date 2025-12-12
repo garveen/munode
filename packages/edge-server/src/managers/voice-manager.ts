@@ -185,6 +185,24 @@ export class VoiceManager {
   getVoiceTransport(): VoiceUDPTransport | undefined {
     return this.voiceTransport;
   }
+  
+  /**
+   * 更新语音UDP传输的加密密钥
+   */
+  updateEncryptionKey(algorithm: string, keyBase64: string, version: number): void {
+    if (!this.voiceTransport) {
+      this.logger.warn('Voice transport not available, cannot update encryption key');
+      return;
+    }
+    
+    try {
+      const key = Buffer.from(keyBase64, 'base64');
+      this.voiceTransport.updateEncryptionKey(key, algorithm);
+      this.logger.info(`Updated voice encryption key (version ${version}, algorithm: ${algorithm})`);
+    } catch (error) {
+      this.logger.error('Failed to update voice encryption key:', error);
+    }
+  }
 
   /**
    * 处理来自Hub的语音数据路由
