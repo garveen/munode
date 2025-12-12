@@ -670,6 +670,14 @@ message HubUserJoinedParams {
   required uint32 channel_id = 5;
   repeated string groups = 6;
   optional string cert_hash = 7;
+  // User state fields
+  optional bool mute = 8;
+  optional bool deaf = 9;
+  optional bool suppress = 10;
+  optional bool self_mute = 11;
+  optional bool self_deaf = 12;
+  optional bool priority_speaker = 13;
+  optional bool recording = 14;
 }
 
 // ---------------------------------------------------------------------------

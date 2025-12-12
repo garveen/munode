@@ -50,6 +50,14 @@ export interface UserJoinedParams {
   channel_id: number;
   groups?: string[];
   cert_hash?: string;
+  // User state fields
+  mute?: boolean;
+  deaf?: boolean;
+  suppress?: boolean;
+  self_mute?: boolean;
+  self_deaf?: boolean;
+  priority_speaker?: boolean;
+  recording?: boolean;
 }
 
 export interface UserLeftParams {
@@ -307,6 +315,13 @@ export class RPCChannel extends EventEmitter {
           channel_id: p.channel_id,
           groups: p.groups ?? [],
           cert_hash: p.cert_hash,
+          mute: p.mute,
+          deaf: p.deaf,
+          suppress: p.suppress,
+          self_mute: p.self_mute,
+          self_deaf: p.self_deaf,
+          priority_speaker: p.priority_speaker,
+          recording: p.recording,
         });
         break;
       }
@@ -604,6 +619,13 @@ export class RPCChannel extends EventEmitter {
             channel_id: typedNotification.user_joined.channel_id,
             groups: typedNotification.user_joined.groups,
             cert_hash: typedNotification.user_joined.cert_hash,
+            mute: typedNotification.user_joined.mute,
+            deaf: typedNotification.user_joined.deaf,
+            suppress: typedNotification.user_joined.suppress,
+            self_mute: typedNotification.user_joined.self_mute,
+            self_deaf: typedNotification.user_joined.self_deaf,
+            priority_speaker: typedNotification.user_joined.priority_speaker,
+            recording: typedNotification.user_joined.recording,
           };
         }
         break;
