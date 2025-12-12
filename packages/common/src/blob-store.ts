@@ -1,13 +1,11 @@
 import { createHash } from 'crypto';
 import { promises as fs, constants } from 'fs';
 import * as path from 'path';
-import { createLogger } from './logger/logger.js';
+import type { Logger } from './logger/logger.js';
 
 interface NodeJSError extends Error {
   code?: string;
 }
-
-const logger = createLogger({ service: 'blob-store' });
 
 /**
  * 内容可寻址的 Blob 存储
@@ -25,15 +23,18 @@ const logger = createLogger({ service: 'blob-store' });
 export class BlobStore {
   private dir: string;
   private enabled: boolean;
+  private logger?: Logger;
 
   /**
    * 创建 BlobStore 实例
    * @param dir - blob 存储目录
    * @param enabled - 是否启用 blob 存储
+   * @param logger - 可选的logger实例
    */
-  constructor(dir: string, enabled = true) {
+  constructor(dir: string, enabled = true, logger?: Logger) {
     this.dir = dir;
     this.enabled = enabled;
+    this.logger = logger;
   }
 
   /**
@@ -41,15 +42,15 @@ export class BlobStore {
    */
   async init(): Promise<void> {
     if (!this.enabled) {
-      logger.info('BlobStore is disabled');
+      this.logger?.info('BlobStore is disabled');
       return;
     }
 
     try {
       await fs.mkdir(this.dir, { recursive: true, mode: 0o750 });
-      logger.info(`BlobStore initialized at ${this.dir}`);
+      this.logger?.info(`BlobStore initialized at ${this.dir}`);
     } catch (error) {
-      logger.error('Failed to initialize BlobStore:', error);
+      this.logger?.error('Failed to initialize BlobStore:', error);
       throw error;
     }
   }
@@ -79,7 +80,7 @@ export class BlobStore {
     // 检查是否已存在
     const exists = await this.exists(key);
     if (exists) {
-      logger.debug(`Blob ${key} already exists`);
+      this.logger?.debug(`Blob ${key} already exists`);
       return key;
     }
 
@@ -106,7 +107,7 @@ export class BlobStore {
       // 原子性重命名
       await fs.rename(tmppath, blobpath);
       
-      logger.debug(`Blob stored: ${key} (${data.length} bytes)`);
+      this.logger?.debug(`Blob stored: ${key} (${data.length} bytes)`);
       return key;
     } catch (error) {
       // 清理临时文件
@@ -130,7 +131,7 @@ export class BlobStore {
     }
 
     if (!this.isValidKey(key)) {
-      logger.warn(`Invalid blob key: ${key}`);
+      this.logger?.warn(`Invalid blob key: ${key}`);
       return null;
     }
 
@@ -146,19 +147,19 @@ export class BlobStore {
       const actualKey = hash.digest('hex');
       
       if (actualKey !== key) {
-        logger.error(`Blob corruption detected: ${key} (actual: ${actualKey})`);
+        this.logger?.error(`Blob corruption detected: ${key} (actual: ${actualKey})`);
         return null;
       }
 
-      logger.debug(`Blob retrieved: ${key} (${data.length} bytes)`);
+      this.logger?.debug(`Blob retrieved: ${key} (${data.length} bytes)`);
       return data;
     } catch (error) {
       const err = error as NodeJSError;
       if (err.code === 'ENOENT') {
-        logger.debug(`Blob not found: ${key}`);
+        this.logger?.debug(`Blob not found: ${key}`);
         return null;
       }
-      logger.error(`Error reading blob ${key}:`, error);
+      this.logger?.error(`Error reading blob ${key}:`, error);
       throw error;
     }
   }
@@ -207,14 +208,14 @@ export class BlobStore {
 
     try {
       await fs.unlink(blobpath);
-      logger.debug(`Blob deleted: ${key}`);
+      this.logger?.debug(`Blob deleted: ${key}`);
       return true;
     } catch (error) {
       const err = error as NodeJSError;
       if (err.code === 'ENOENT') {
         return false;
       }
-      logger.error(`Error deleting blob ${key}:`, error);
+      this.logger?.error(`Error deleting blob ${key}:`, error);
       throw error;
     }
   }
@@ -270,7 +271,7 @@ export class BlobStore {
         totalSize,
       };
     } catch (error) {
-      logger.error('Error getting blob stats:', error);
+      this.logger?.error('Error getting blob stats:', error);
       return { enabled: true, totalBlobs: 0, totalSize: 0 };
     }
   }

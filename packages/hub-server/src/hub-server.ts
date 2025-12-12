@@ -52,10 +52,11 @@ export class HubServer {
    */
   async init(): Promise<void> {
     // 初始化数据库
-    this.database = new HubDatabase(this.config.database);
+    this.database = new HubDatabase(this.config.database, this.logger);
     await this.database.init();
     this.controlService = new HubControlService(
       this.config,
+      this.logger,
     );
     this.factory = await HubHandlerFactory.getInstance(this.config, this.database, this.controlService, this.logger);
     await this.controlService.initialize(this.factory);
@@ -67,7 +68,7 @@ export class HubServer {
 
     // 初始化 BlobStore（如果启用）
     if (this.config.blobStore.enabled) {
-      this.blobStore = new BlobStore(this.config.blobStore.path, true);
+      this.blobStore = new BlobStore(this.config.blobStore.path, true, this.logger);
       await this.blobStore.init();
     this.logger.debug('BlobStore enabled');
     } else {
@@ -82,7 +83,8 @@ export class HubServer {
         this.config.webApi,
         this.config.server_id,
         this.registry,
-        this.sessionManager
+        this.sessionManager,
+        this.logger
       );
     }
 

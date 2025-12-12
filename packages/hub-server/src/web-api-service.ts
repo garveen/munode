@@ -12,13 +12,11 @@
  */
 
 import * as http from 'http';
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { WebApiConfig } from './types.js';
 import type { ServiceRegistry } from './registry.js';
 import type { GlobalSessionManager } from './session-manager.js';
 import type { NetworkTopologyManager } from './network-topology-manager.js';
-
-const logger = createLogger({ service: 'hub-web-api' });
 
 /**
  * Hub 状态响应
@@ -86,18 +84,21 @@ export class WebApiService {
   private networkTopologyManager?: NetworkTopologyManager;
   private startTime: number = 0;
   private serverId: number;
+  private logger: Logger;
 
   constructor(
     config: WebApiConfig,
     serverId: number,
     registry: ServiceRegistry,
     sessionManager: GlobalSessionManager,
+    logger: Logger,
     networkTopologyManager?: NetworkTopologyManager
   ) {
     this.config = config;
     this.serverId = serverId;
     this.registry = registry;
     this.sessionManager = sessionManager;
+    this.logger = logger;
     this.networkTopologyManager = networkTopologyManager;
   }
 
@@ -106,7 +107,7 @@ export class WebApiService {
    */
   async start(): Promise<void> {
     if (!this.config.enabled) {
-      logger.info('Web API service is disabled');
+      this.logger.info('Web API service is disabled');
       return;
     }
 
@@ -121,12 +122,12 @@ export class WebApiService {
 
     return new Promise((resolve, reject) => {
       this.server.listen(port, host, () => {
-        logger.info(`Web API service started on ${host}:${port}`);
+        this.logger.info(`Web API service started on ${host}:${port}`);
         resolve();
       });
 
       this.server.on('error', (error) => {
-        logger.error('Web API server error:', error);
+        this.logger.error('Web API server error:', error);
         reject(error);
       });
     });
@@ -139,7 +140,7 @@ export class WebApiService {
     if (this.server) {
       return new Promise((resolve) => {
         this.server.close(() => {
-          logger.info('Web API service stopped');
+          this.logger.info('Web API service stopped');
           this.server = null;
           resolve();
         });
@@ -203,7 +204,7 @@ export class WebApiService {
         this.sendError(res, 404, 'Not Found');
       }
     } catch (error) {
-      logger.error('Error handling request:', error);
+      this.logger.error('Error handling request:', error);
       this.sendError(res, 500, 'Internal Server Error');
     }
   }
