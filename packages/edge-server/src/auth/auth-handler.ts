@@ -172,7 +172,7 @@ export class AuthHandlers {
 
         if (Object.keys(updateFields).length > 0) {
           this.clientManager.updateClient(session_id, updateFields);
-        this.logger.debug(`Applied PreConnectUserState for session ${session_id}`, {
+          this.logger.debug(`Applied PreConnectUserState for session ${session_id}`, {
             self_mute: preState.self_mute,
             self_deaf: preState.self_deaf,
           });
