@@ -389,32 +389,28 @@ export class OCB2AES128 {
 
   /**
    * XOR 操作
-   * 性能优化：使用 BigUint64 批量操作，减少循环次数
-   * 16 字节 = 2 个 8 字节操作，比 16 次单字节操作快
+   * 性能优化：使用直接的循环展开，避免 DataView 创建开销
+   * 16 字节展开为 16 个直接操作，编译器可以更好地优化
    */
   private xor(dst: Buffer, a: Buffer, b: Buffer): void {
-    // 使用 DataView 进行 8 字节批量操作
-    // 注意：必须检查对齐，否则在某些平台上可能出错
-    // Buffer 通常是对齐的，但为了安全起见，我们使用 try-catch
-    try {
-      const dstView = new DataView(dst.buffer, dst.byteOffset, dst.byteLength);
-      const aView = new DataView(a.buffer, a.byteOffset, a.byteLength);
-      const bView = new DataView(b.buffer, b.byteOffset, b.byteLength);
-      
-      // 16 字节 = 2 个 BigUint64 (8字节)
-      const a0 = aView.getBigUint64(0, false); // big-endian
-      const b0 = bView.getBigUint64(0, false);
-      dstView.setBigUint64(0, a0 ^ b0, false);
-      
-      const a1 = aView.getBigUint64(8, false);
-      const b1 = bView.getBigUint64(8, false);
-      dstView.setBigUint64(8, a1 ^ b1, false);
-    } catch {
-      // 回退到逐字节操作（不应该发生，但保持安全）
-      for (let i = 0; i < OCB2AES128.BLOCK_SIZE; i++) {
-        dst[i] = a[i] ^ b[i];
-      }
-    }
+    // 循环展开优化：16字节直接展开
+    // V8 JIT 可以更好地优化展开的循环
+    dst[0] = a[0] ^ b[0];
+    dst[1] = a[1] ^ b[1];
+    dst[2] = a[2] ^ b[2];
+    dst[3] = a[3] ^ b[3];
+    dst[4] = a[4] ^ b[4];
+    dst[5] = a[5] ^ b[5];
+    dst[6] = a[6] ^ b[6];
+    dst[7] = a[7] ^ b[7];
+    dst[8] = a[8] ^ b[8];
+    dst[9] = a[9] ^ b[9];
+    dst[10] = a[10] ^ b[10];
+    dst[11] = a[11] ^ b[11];
+    dst[12] = a[12] ^ b[12];
+    dst[13] = a[13] ^ b[13];
+    dst[14] = a[14] ^ b[14];
+    dst[15] = a[15] ^ b[15];
   }
 
   /**
