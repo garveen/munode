@@ -96,10 +96,13 @@ export class EdgeServer extends EventEmitter {
 
     // 初始化语音 UDP 传输（集群模式下启用）
     const voicePort = this.config.network.port + 1; // 使用主端口+1作为语音端口
-    this.voiceTransport = new VoiceUDPTransport({
-      port: voicePort,
-      host: this.config.network.host,
-    });
+    this.voiceTransport = new VoiceUDPTransport(
+      {
+        port: voicePort,
+        host: this.config.network.host,
+      }, 
+      this.logger,
+    );
 
 
     // 初始化处理器工厂（自动创建所有核心组件和处理器）

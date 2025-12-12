@@ -90,10 +90,13 @@ export class HubServer {
 
     // 初始化语音 UDP 传输（如果配置了端口）
     if (this.config.voicePort) {
-      this.voiceTransport = new VoiceUDPTransport({
-        port: this.config.voicePort,
-        host: this.config.host,
-      });
+      this.voiceTransport = new VoiceUDPTransport(
+        {
+          port: this.config.voicePort,
+          host: this.config.host,
+        },
+        this.logger,
+      );
 
       // 监听语音包事件
       this.voiceTransport.on('packet', (packet) => {

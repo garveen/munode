@@ -39,7 +39,7 @@ export class HubDataManager {
       
       // DEBUG: 打印每个从Hub收到的频道数据
       for (const ch of channels) {
-        this.logger.info(`[hub-data-sync] Hub returned channel: id=${ch.channel_id}, name=${ch.name}, parent_id=${ch.parent_id}`);
+        this.logger.debug(`[hub-data-sync] Hub returned channel: id=${ch.channel_id}, name=${ch.name}, parent_id=${ch.parent_id}`);
       }
 
       // 重建频道树结构

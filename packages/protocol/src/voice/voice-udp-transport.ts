@@ -10,6 +10,7 @@
 import dgram from 'dgram';
 import { EventEmitter } from 'events';
 import { VoiceChannel } from './voice-packet.js';
+import { type Logger } from '@munode/common';
 
 export interface VoiceUDPConfig {
   port: number;
@@ -35,6 +36,7 @@ export class VoiceUDPTransport extends EventEmitter {
   private config: VoiceUDPConfig;
   private voiceChannel: VoiceChannel | null = null;
   private remoteEndpoints = new Map<number, RemoteEndpoint>(); // edgeId -> endpoint
+  private logger: Logger;
   private stats = {
     packetsSent: 0,
     packetsReceived: 0,
@@ -43,9 +45,10 @@ export class VoiceUDPTransport extends EventEmitter {
     errors: 0,
   };
 
-  constructor(config: VoiceUDPConfig) {
+  constructor(config: VoiceUDPConfig, logger: Logger) {
     super();
     this.config = config;
+    this.logger = logger;
 
     // 如果提供了加密密钥，创建VoiceChannel
     if (config.encryptionKey) {
@@ -69,13 +72,13 @@ export class VoiceUDPTransport extends EventEmitter {
 
       this.socket.on('error', (error) => {
         this.stats.errors++;
-        console.error('Voice UDP error:', error);
+        this.logger.error('Voice UDP error:', error);
         this.emit('error', error);
       });
 
       this.socket.on('listening', () => {
         const address = this.socket.address();
-        console.info(`Voice UDP listening on ${address.address}:${address.port}`);
+        this.logger.info(`Voice UDP listening on ${address.address}:${address.port}`);
         this.emit('listening', address);
         resolve();
       });
@@ -103,7 +106,7 @@ export class VoiceUDPTransport extends EventEmitter {
    */
   registerEndpoint(edgeId: number, host: string, port: number): void {
     this.remoteEndpoints.set(edgeId, { host, port });
-    console.debug(`Registered voice endpoint for edge ${edgeId}: ${host}:${port}`);
+    this.logger.debug(`Registered voice endpoint for edge ${edgeId}: ${host}:${port}`);
   }
 
   /**
@@ -111,7 +114,7 @@ export class VoiceUDPTransport extends EventEmitter {
    */
   unregisterEndpoint(edgeId: number): void {
     this.remoteEndpoints.delete(edgeId);
-    console.debug(`Unregistered voice endpoint for edge ${edgeId}`);
+    this.logger.debug(`Unregistered voice endpoint for edge ${edgeId}`);
   }
 
   /**
@@ -127,7 +130,7 @@ export class VoiceUDPTransport extends EventEmitter {
   sendToEdge(edgeId: number, packet: VoicePacketHeader, voiceData: Buffer): void {
     const endpoint = this.remoteEndpoints.get(edgeId);
     if (!endpoint) {
-      console.warn(`No endpoint registered for edge ${edgeId}`);
+      this.logger.warn(`No endpoint registered for edge ${edgeId}`);
       return;
     }
 
@@ -147,6 +150,7 @@ export class VoiceUDPTransport extends EventEmitter {
     }
 
     // 发送
+    this.logger.info(`sending to edge: ${edgeId}`, endpoint);
     this.sendPacket(finalPacket, endpoint.host, endpoint.port);
   }
 
@@ -178,7 +182,7 @@ export class VoiceUDPTransport extends EventEmitter {
     let sentCount = 0;
     for (const [edgeId, endpoint] of this.remoteEndpoints) {
       if (edgeId === excludeEdge) {
-        console.debug(`Skipping broadcast to self edge ${edgeId}`);
+        this.logger.debug(`Skipping broadcast to self edge ${edgeId}`);
         continue;
       }
       this.sendPacket(finalPacket, endpoint.host, endpoint.port);
@@ -186,7 +190,7 @@ export class VoiceUDPTransport extends EventEmitter {
     }
     
     if (sentCount > 0) {
-      console.debug(
+      this.logger.debug(
         `Broadcasted voice packet to ${sentCount} peers: ` +
         `sender=${packet.senderId}, target=${packet.targetId}, ` +
         `codec=${packet.codec}, total_size=${finalPacket.length}`
@@ -207,7 +211,7 @@ export class VoiceUDPTransport extends EventEmitter {
       if (this.voiceChannel) {
         const decrypted = this.voiceChannel.decodePacket(data);
         if (!decrypted) {
-          console.warn('Failed to decrypt voice packet');
+          this.logger.warn('Failed to decrypt voice packet');
           this.stats.errors++;
           return;
         }
@@ -228,7 +232,7 @@ export class VoiceUDPTransport extends EventEmitter {
       // 解析包头（自定义14字节header）
       const packet = this.decodePacket(decryptedData);
       if (!packet) {
-        console.warn('Failed to parse voice packet');
+        this.logger.warn('Failed to parse voice packet');
         this.stats.errors++;
         return;
       }
@@ -238,7 +242,7 @@ export class VoiceUDPTransport extends EventEmitter {
       this.emit('voice-packet', packet, rinfo);
     } catch (error) {
       this.stats.errors++;
-      console.error('Error handling incoming voice packet:', error);
+      this.logger.error('Error handling incoming voice packet:', error);
     }
   }
 
@@ -284,14 +288,14 @@ export class VoiceUDPTransport extends EventEmitter {
    */
   private sendPacket(data: Buffer, host: string, port: number): void {
     if (!this.socket) {
-      console.warn('UDP socket not initialized');
+      this.logger.warn('UDP socket not initialized');
       return;
     }
 
     this.socket.send(data, port, host, (error) => {
       if (error) {
         this.stats.errors++;
-        console.error('Error sending voice packet:', error);
+        this.logger.error('Error sending voice packet:', error);
       } else {
         this.stats.packetsSent++;
         this.stats.bytesSent += data.length;
@@ -341,7 +345,7 @@ export class VoiceUDPTransport extends EventEmitter {
         key,
       });
     }
-    console.info('Voice UDP encryption key updated');
+    this.logger.info('Voice UDP encryption key updated');
   }
 
   /**
