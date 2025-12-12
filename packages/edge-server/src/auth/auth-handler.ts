@@ -15,13 +15,6 @@ import type { ClientInfo, AuthResult } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
 export class AuthHandlers {
-  private preConnectUserState: Map<number, {
-    self_mute?: boolean;
-    self_deaf?: boolean;
-    plugin_context?: Buffer;
-    plugin_identity?: string;
-    comment?: string;
-  }> = new Map();
   private logger: Logger;
 
   constructor(private factory: HandlerFactory) {
@@ -34,6 +27,7 @@ export class AuthHandlers {
   private get authManager() { return this.factory.authManager; }
   private get config() { return this.factory.config; }
   private get hubClient() { return this.factory.hubClient; }
+  private get stateHandlers() { return this.factory.stateHandlers; }
 
   /**
    * 处理认证请求
@@ -160,9 +154,38 @@ export class AuthHandlers {
 
       this.messageHandler.sendMessage(session_id, MessageType.CodecVersion, Buffer.from(codecVersionMessage));
 
-      // 3. 上报会话到 Hub（必须在发送用户列表之前！）
+      // 3. 应用 PreConnectUserState（必须在上报到 Hub 之前！）
+      // 从 StateHandlers 获取 PreConnect 状态并应用到客户端
+      const preState = this.stateHandlers.getPreConnectUserState(session_id);
+      if (preState) {
+        const updateFields: Partial<ClientInfo> = {};
+
+        if (preState.self_mute !== undefined) {
+          updateFields.self_mute = preState.self_mute;
+        }
+        if (preState.self_deaf !== undefined) {
+          updateFields.self_deaf = preState.self_deaf;
+        }
+        if (preState.comment !== undefined) {
+          updateFields.comment = preState.comment;
+        }
+
+        if (Object.keys(updateFields).length > 0) {
+          this.clientManager.updateClient(session_id, updateFields);
+        this.logger.debug(`Applied PreConnectUserState for session ${session_id}`, {
+            self_mute: preState.self_mute,
+            self_deaf: preState.self_deaf,
+          });
+        }
+
+        // 清理已应用的 PreConnect 状态
+        this.stateHandlers.clearPreConnectUserState(session_id);
+      }
+
+      // 4. 上报会话到 Hub（必须在发送用户列表之前！）
       // 这样其他用户在调用 fullSync 时就能看到这个新用户
       // 移到这里可以避免竞态条件：用户B登录时可能看不到刚登录的用户A
+      // PreConnect 状态已在步骤 3 应用，所以这里会包含正确的 self_mute/self_deaf
       const clientBeforeSync = this.clientManager.getClient(session_id);
       if (!clientBeforeSync) {
         throw new Error(`Client ${session_id} not found before sync`);
@@ -187,7 +210,7 @@ export class AuthHandlers {
             release: clientBeforeSync.client_name,
             os: clientBeforeSync.os_name,
             os_version: clientBeforeSync.os_version,
-            // Include initial state (all false by default at authentication time)
+            // Include user state (PreConnect state has been applied in step 3)
             mute: clientBeforeSync.mute ?? false,
             deaf: clientBeforeSync.deaf ?? false,
             suppress: clientBeforeSync.suppress ?? false,
@@ -203,37 +226,11 @@ export class AuthHandlers {
         }
       }
 
-      // 4. 发送频道树
+      // 5. 发送频道树
       this.sendChannelTree(session_id);
 
-      // 5. 发送所有其他用户的状态
+      // 6. 发送所有其他用户的状态
       await this.sendUserListToClient(session_id);
-
-      // 6. 应用 PreConnectUserState
-      const preState = this.preConnectUserState.get(session_id);
-      if (preState) {
-        const updateFields: Partial<ClientInfo> = {};
-
-        if (preState.self_mute !== undefined) {
-          updateFields.self_mute = preState.self_mute;
-        }
-        if (preState.self_deaf !== undefined) {
-          updateFields.self_deaf = preState.self_deaf;
-        }
-        if (preState.comment !== undefined) {
-          updateFields.comment = preState.comment;
-        }
-
-        if (Object.keys(updateFields).length > 0) {
-          this.clientManager.updateClient(session_id, updateFields);
-        this.logger.debug(`Applied PreConnectUserState for session ${session_id}`, {
-            self_mute: preState.self_mute,
-            self_deaf: preState.self_deaf,
-          });
-        }
-
-        this.preConnectUserState.delete(session_id);
-      }
 
       // 7. 标记客户端已接收完整用户列表
       this.clientManager.updateClient(session_id, {
@@ -349,30 +346,6 @@ export class AuthHandlers {
     
     // 认证失败时断开客户端连接
     this.clientManager.forceDisconnect(session_id, `Authentication failed: ${reason}`);
-  }
-
-  /**
-   * 保存 PreConnect 用户状态
-   */
-  savePreConnectUserState(
-    session_id: number,
-    state: {
-      self_mute?: boolean;
-      self_deaf?: boolean;
-      plugin_context?: Buffer;
-      plugin_identity?: string;
-      comment?: string;
-    }
-  ): void {
-    this.preConnectUserState.set(session_id, state);
-        this.logger.debug(`Saved PreConnectUserState for session ${session_id}`);
-  }
-
-  /**
-   * 清理 PreConnect 用户状态
-   */
-  clearPreConnectUserState(session_id: number): void {
-    this.preConnectUserState.delete(session_id);
   }
 
   /**
