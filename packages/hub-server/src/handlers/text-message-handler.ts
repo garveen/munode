@@ -1,9 +1,8 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import { HubPermissionChecker, Permission } from '../permission-checker.js';
 import { HubHandlerFactory } from '../factory.js';
 import type { EdgeNotificationParams } from '@munode/protocol';
 
-const logger = createLogger({ service: 'hub-text-message-handler' });
 
 /**
  * 文本消息处理器接口
@@ -22,8 +21,11 @@ export class TextMessageHandler implements ITextMessageHandler {
   private factory: HubHandlerFactory;
   private permissionChecker: HubPermissionChecker;
 
+    private logger: Logger;
+
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
+    this.logger = factory.getLogger();
     this.permissionChecker = factory.getPermissionChecker();
   }
 
@@ -31,7 +33,7 @@ export class TextMessageHandler implements ITextMessageHandler {
     try {
       const { edge_id, actor_session, actor_username, session, channel_id, tree_id, message } = params;
 
-      logger.info(`Hub received TextMessage from Edge ${edge_id}, actor: ${actor_username}(${actor_session})`);
+      this.logger.info(`Hub received TextMessage from Edge ${edge_id}, actor: ${actor_username}(${actor_session})`);
 
       const sessionManager = this.factory.getSessionManager();
       const permissionChecker = this.factory.getPermissionChecker();
@@ -41,7 +43,7 @@ export class TextMessageHandler implements ITextMessageHandler {
       // 获取actor会话
       const actorSession = sessionManager.getSession(actor_session);
       if (!actorSession) {
-        logger.warn(`Actor session ${actor_session} not found in Hub`);
+        this.logger.warn(`Actor session ${actor_session} not found in Hub`);
         return;
       }
 
@@ -80,7 +82,7 @@ export class TextMessageHandler implements ITextMessageHandler {
             );
 
             if (!hasPermission) {
-              logger.warn(`Actor ${actor_username} denied TextMessage permission for channel ${channelId}`);
+              this.logger.warn(`Actor ${actor_username} denied TextMessage permission for channel ${channelId}`);
               // 发送权限拒绝通知给发起Edge
               this.factory.getControlService().notify(edge_id, 'hub.textMessageDenied', {
                 actor_session,
@@ -118,7 +120,7 @@ export class TextMessageHandler implements ITextMessageHandler {
             );
 
             if (!hasPermission) {
-              logger.warn(`Actor ${actor_username} denied TextMessage permission for channel tree ${rootChannelId}`);
+              this.logger.warn(`Actor ${actor_username} denied TextMessage permission for channel tree ${rootChannelId}`);
               this.factory.getControlService().notify(edge_id, 'hub.textMessageDenied', {
                 actor_session,
                 reason: 'TextMessage permission denied',
@@ -163,7 +165,7 @@ export class TextMessageHandler implements ITextMessageHandler {
       }
 
       if (targetSessions.length === 0) {
-        logger.warn(`TextMessage from ${actor_username} has no valid targets`);
+        this.logger.warn(`TextMessage from ${actor_username} has no valid targets`);
         return;
       }
 
@@ -178,9 +180,9 @@ export class TextMessageHandler implements ITextMessageHandler {
         });
       }
 
-      logger.info(`Broadcasted TextMessage from ${actor_username} to ${targetSessions.length} users across ${targetSessionsByEdge.size} edges`);
+      this.logger.info(`Broadcasted TextMessage from ${actor_username} to ${targetSessions.length} users across ${targetSessionsByEdge.size} edges`);
     } catch (error) {
-      logger.error('Error handling TextMessage notification:', error);
+      this.logger.error('Error handling TextMessage notification:', error);
     }
   }
 }

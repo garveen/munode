@@ -1,8 +1,7 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { HubHandlerFactory } from '../factory.js';
 import type { RPCParams, RPCResult } from '@munode/protocol';
 
-const logger = createLogger({ service: 'hub-edge-handler' });
 
 /**
  * Hub Edge处理器接口
@@ -17,8 +16,11 @@ export interface IEdgeHandler {
 export class EdgeHandler implements IEdgeHandler {
   private factory: HubHandlerFactory;
 
+    private logger: Logger;
+
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
+    this.logger = factory.getLogger();
   }
 
   /**
@@ -31,7 +33,7 @@ export class EdgeHandler implements IEdgeHandler {
     if (result.success) {
       // 将Edge与RPCChannel关联
       // 注意：这里需要从外部传入channel，但由于handler模式，我们假设在control-service中处理
-      logger.info(`Edge ${params.server_id} registered successfully`);
+      this.logger.info(`Edge ${params.server_id} registered successfully`);
 
       // 添加 Edge 到网络拓扑
       this.factory.getNetworkTopologyManager().addEdge(params.server_id);

@@ -1,8 +1,7 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import { HubHandlerFactory } from '../factory.js';
 import type { RPCParams, RPCResult } from '@munode/protocol';
 
-const logger = createLogger({ service: 'hub-voice-routing-handler' });
 
 /**
  * 语音路由处理器接口
@@ -30,8 +29,11 @@ export interface IVoiceRoutingHandler {
 export class VoiceRoutingHandler implements IVoiceRoutingHandler {
   private factory: HubHandlerFactory;
 
+    private logger: Logger;
+
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
+    this.logger = factory.getLogger();
   }
 
   async handleSyncVoiceTarget(params: RPCParams<'edge.syncVoiceTarget'>): Promise<RPCResult<'edge.syncVoiceTarget'>> {
@@ -42,7 +44,7 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
     voiceTargetSync.syncVoiceTarget(params);
 
     // 广播 VoiceTarget 更新到所有其他 Edge（除了发送者）
-    logger.info(
+    this.logger.info(
       `Broadcasting VoiceTarget update: Edge ${params.edge_id}, Session ${params.client_session}, Target ${params.target_id}`
     );
 

@@ -3,7 +3,7 @@
  * 实现完整的Mumble ACL权限检查系统，供Hub使用
  */
 
-import { logger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { HubDatabase } from './database.js';
 import type { GlobalSession } from '@munode/protocol';
 import type { ChannelGroupManager } from './channel-group-manager.js';
@@ -80,6 +80,7 @@ export class HubPermissionChecker {
   private aclCache: Map<string, Permission> = new Map();
   private channelTreeCache: Map<number, ChannelInfo> | null = null;
   private channelACLCache: Map<number, ACLEntry[]> = new Map();
+  private logger: Logger;
 
   // 默认权限：非注册用户的基本权限
   // 注意：Listen 权限允许用户监听其他频道（重要的语音路由功能）
@@ -94,6 +95,7 @@ export class HubPermissionChecker {
   constructor(factory: HubHandlerFactory) {
     this.database = factory.getDatabase();
     this.channelGroupManager = factory.getChannelGroupManager();
+    this.logger = factory.getLogger();
   }
 
   /**
@@ -272,7 +274,7 @@ export class HubPermissionChecker {
   private isSuperUser(user: UserInfo): boolean {
     // 基于用户组检查
     const isSuperUser = user.groups?.includes('admin') || user.groups?.includes('superuser') || false;
-    logger.debug(`isSuperUser check for user ${user.user_id}: groups=${JSON.stringify(user.groups)}, result=${isSuperUser}`);
+    this.logger.debug(`isSuperUser check for user ${user.user_id}: groups=${JSON.stringify(user.groups)}, result=${isSuperUser}`);
     return isSuperUser;
   }
 

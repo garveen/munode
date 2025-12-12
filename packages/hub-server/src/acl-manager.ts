@@ -1,7 +1,6 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { HubDatabase } from './database.js';
 
-const logger = createLogger({ service: 'hub-acl-manager' });
 
 export interface ACLData {
   id: number;
@@ -32,7 +31,10 @@ export class ACLManager {
   private database: HubDatabase;
   private aclCache: Map<number, ACLData[]> = new Map(); // key: channel_id
 
-  constructor(database: HubDatabase) {
+    private logger: Logger;
+
+  constructor(database: HubDatabase, logger: Logger) {
+    this.logger = logger;
     this.database = database;
   }
 
@@ -70,7 +72,7 @@ export class ACLManager {
     const id = await this.database.addACL(acl);
     this.invalidateCache(request.channel_id);
 
-    logger.info(`ACL added: ${id} for channel ${request.channel_id}`);
+    this.logger.info(`ACL added: ${id} for channel ${request.channel_id}`);
     // 广播变更到 Edge Servers
     await this.getChannelACLs(request.channel_id);
 
@@ -88,7 +90,7 @@ export class ACLManager {
       await this.database.updateACL(id, updates);
       this.invalidateCache(channel_id);
 
-      logger.info(`ACL updated: ${id}`, updates);
+    this.logger.info(`ACL updated: ${id}`, updates);
       // 广播变更到 Edge Servers
       await this.getChannelACLs(channel_id);
     }
@@ -104,7 +106,7 @@ export class ACLManager {
       await this.database.deleteACL(id);
       this.invalidateCache(channel_id);
 
-      logger.info(`ACL deleted: ${id}`);
+    this.logger.info(`ACL deleted: ${id}`);
     }
   }
 
@@ -134,7 +136,7 @@ export class ACLManager {
     const allAcls = await this.database.getChannelACLs(channel_id);
     this.aclCache.set(channel_id, allAcls);
 
-    logger.info(`ACLs saved for channel ${channel_id}: ${acls.length} entries, IDs: ${aclIds.join(',')}`);
+    this.logger.info(`ACLs saved for channel ${channel_id}: ${acls.length} entries, IDs: ${aclIds.join(',')}`);
     return aclIds;
   }
 
@@ -159,7 +161,7 @@ export class ACLManager {
     // 如果缓存中找不到，从数据库查找
     // 这需要数据库支持按 ACL ID 查询
     // 暂时返回 null，实际实现中应该添加数据库方法
-    logger.warn(`Cannot find channel for ACL ${aclId}`);
+    this.logger.warn(`Cannot find channel for ACL ${aclId}`);
     return null;
   }
 
@@ -178,6 +180,6 @@ export class ACLManager {
       const acls = await this.database.getChannelACLs(channel_id);
       this.aclCache.set(channel_id, acls);
     }
-    logger.info(`Preloaded ACLs for ${channelIds.length} channels`);
+    this.logger.info(`Preloaded ACLs for ${channelIds.length} channels`);
   }
 }

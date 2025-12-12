@@ -1,4 +1,5 @@
 import { BlobStore } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { HubConfig } from './types.js';
 import { ServiceRegistry } from './registry.js';
 import { GlobalSessionManager } from './session-manager.js';
@@ -38,6 +39,7 @@ export class HubHandlerFactory {
 
   // 核心服务实例
   private config: HubConfig;
+  private logger: Logger;
   private registry: ServiceRegistry;
   private sessionManager: GlobalSessionManager;
   private voiceTargetSync: VoiceTargetSyncService;
@@ -71,31 +73,32 @@ export class HubHandlerFactory {
 
   private controlService: HubControlService;
 
-  private constructor(config: HubConfig, database: HubDatabase) {
+  private constructor(config: HubConfig, database: HubDatabase, logger: Logger) {
     this.config = config;
     this.database = database;
+    this.logger = logger;
 
     // 初始化同步广播器
 
     // 初始化业务逻辑层
-    this.channelManager = new ChannelManager(this.database);
-    this.aclManager = new ACLManager(this.database);
-    this.channelGroupManager = new ChannelGroupManager(this.database);
-    this.banManager = new BanManager(this.database);
+    this.channelManager = new ChannelManager(this.database, this.logger);
+    this.aclManager = new ACLManager(this.database, this.logger);
+    this.channelGroupManager = new ChannelGroupManager(this.database, this.logger);
+    this.banManager = new BanManager(this.database, this.logger);
 
     // 初始化核心服务
-    this.registry = new ServiceRegistry(this.config.registry, this.database);
-    this.sessionManager = new GlobalSessionManager(); // 不再传递 database
-    this.voiceTargetSync = new VoiceTargetSyncService(this.sessionManager);
-    this.certExchange = new CertificateExchangeService(this.registry);
-    this.authManager = new HubAuthManager(this.config);
+    this.registry = new ServiceRegistry(this.config.registry, this.database, this.logger);
+    this.sessionManager = new GlobalSessionManager(this.logger); // 传递logger
+    this.voiceTargetSync = new VoiceTargetSyncService(this.sessionManager, this.logger);
+    this.certExchange = new CertificateExchangeService(this.registry, this.logger);
+    this.authManager = new HubAuthManager(this.config, this.logger);
     this.syncHandler = new SyncHandler(this);
     this.authenticationHandler = new AuthenticationHandler(this);
     this.permissionChecker = new HubPermissionChecker(this);
-    this.networkTopologyManager = new NetworkTopologyManager(this.config.voiceRouting);
+    this.networkTopologyManager = new NetworkTopologyManager(this.config.voiceRouting, this.logger);
     this.userStateHandler = new UserStateHandler(this);
     this.channelStateHandler = new ChannelStateHandler(this);
-    this.databaseOperations = new DatabaseOperations(this.database);
+    this.databaseOperations = new DatabaseOperations(this.database, this.logger);
     this.voiceRoutingHandler = new VoiceRoutingHandler(this);
     this.textMessageHandler = new TextMessageHandler(this);
     this.notificationHandler = new NotificationHandler(this);
@@ -108,9 +111,9 @@ export class HubHandlerFactory {
     this.edgeHandler = new EdgeHandler(this);
   }
 
-  static async getInstance(config: HubConfig, database: HubDatabase, controlService: HubControlService): Promise<HubHandlerFactory> {
+  static async getInstance(config: HubConfig, database: HubDatabase, controlService: HubControlService, logger: Logger): Promise<HubHandlerFactory> {
     if (!HubHandlerFactory.instance) {
-      HubHandlerFactory.instance = new HubHandlerFactory(config, database);
+      HubHandlerFactory.instance = new HubHandlerFactory(config, database, logger);
       HubHandlerFactory.instance.controlService = controlService;
       await HubHandlerFactory.instance.channelManager.init();
       await HubHandlerFactory.instance.aclManager.init();
@@ -129,6 +132,13 @@ export class HubHandlerFactory {
 
   getControlService(): HubControlService {
     return this.controlService;
+  }
+
+  /**
+   * 获取Logger实例
+   */
+  getLogger(): Logger {
+    return this.logger;
   }
 
   /**

@@ -1,7 +1,6 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { HubDatabase } from './database.js';
 
-const logger = createLogger({ service: 'hub-channel-group-manager' });
 
 /**
  * 频道组数据
@@ -64,7 +63,10 @@ export class ChannelGroupManager {
   private database: HubDatabase;
   private channelGroupCache: Map<number, Map<string, FullChannelGroupInfo>> = new Map(); // channel_id -> channel_group_name -> ChannelGroupInfo
 
-  constructor(database: HubDatabase) {
+    private logger: Logger;
+
+  constructor(database: HubDatabase, logger: Logger) {
+    this.logger = logger;
     this.database = database;
   }
 
@@ -72,7 +74,7 @@ export class ChannelGroupManager {
    * 初始化频道组管理器
    */
   async init(): Promise<void> {
-    logger.info('ChannelGroupManager initialized');
+    this.logger.info('ChannelGroupManager initialized');
   }
 
   /**
@@ -145,7 +147,7 @@ export class ChannelGroupManager {
     // 清除缓存
     this.invalidateCache(request.channel_id);
 
-    logger.info(`Channel group created: ${request.name} in channel ${request.channel_id}`);
+    this.logger.info(`Channel group created: ${request.name} in channel ${request.channel_id}`);
     return channelGroupId;
   }
 
@@ -196,7 +198,7 @@ export class ChannelGroupManager {
     // 清除缓存
     this.invalidateCache(channel_id);
 
-    logger.info(`Channel group updated: ${channelGroupName} in channel ${channel_id}`);
+    this.logger.info(`Channel group updated: ${channelGroupName} in channel ${channel_id}`);
   }
 
   /**
@@ -213,7 +215,7 @@ export class ChannelGroupManager {
     // 清除缓存
     this.invalidateCache(channel_id);
 
-    logger.info(`Channel group deleted: ${channelGroupName} from channel ${channel_id}`);
+    this.logger.info(`Channel group deleted: ${channelGroupName} from channel ${channel_id}`);
   }
 
   /**
@@ -231,7 +233,7 @@ export class ChannelGroupManager {
     // 清除缓存
     this.invalidateCache(channel_id);
 
-    logger.info(`Saved ${channelGroups.length} channel groups for channel ${channel_id}`);
+    this.logger.info(`Saved ${channelGroups.length} channel groups for channel ${channel_id}`);
   }
 
   /**

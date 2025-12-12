@@ -1,7 +1,6 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import { GlobalSession } from '@munode/protocol';
 
-const logger = createLogger({ service: 'hub-session-manager' });
 
 /**
  * 全局会话管理器
@@ -14,7 +13,10 @@ export class GlobalSessionManager {
   private channelSessions = new Map<number, Set<number>>();
   private nextSessionId = 1; // Session ID 分配器
 
-  constructor() {
+    private logger: Logger;
+
+  constructor(logger: Logger) {
+    this.logger = logger;
     // 不再需要 database 依赖
   }
 
@@ -48,7 +50,7 @@ export class GlobalSessionManager {
     // 注意：会话仅保存在内存中，不持久化
     // 重启后所有用户需要重新登录
 
-    logger.debug(`Session reported: ${session.session_id} (${session.username})`);
+    this.logger.debug(`Session reported: ${session.session_id} (${session.username})`);
   }
 
   /**
@@ -78,7 +80,7 @@ export class GlobalSessionManager {
 
     // 注意：会话仅保存在内存中，不持久化
 
-    logger.debug(`Session ${session_id} moved to channel ${newchannel_id}`);
+    this.logger.debug(`Session ${session_id} moved to channel ${newchannel_id}`);
   }
 
   /**
@@ -95,7 +97,7 @@ export class GlobalSessionManager {
   }): void {
     const session = this.sessions.get(session_id);
     if (!session) {
-      logger.warn(`Cannot update state: session ${session_id} not found`);
+    this.logger.warn(`Cannot update state: session ${session_id} not found`);
       return;
     }
 
@@ -108,7 +110,7 @@ export class GlobalSessionManager {
 
     // TODO: 持久化到数据库（如果需要）
     
-    logger.debug(`Updated state for session ${session_id}:`, updates);
+    this.logger.debug(`Updated state for session ${session_id}:`, updates);
   }
 
   /**
@@ -142,7 +144,7 @@ export class GlobalSessionManager {
 
     // 注意：会话仅保存在内存中，不需要从数据库删除
 
-    logger.debug(`Session removed: ${session_id} (${session.username})`);
+    this.logger.debug(`Session removed: ${session_id} (${session.username})`);
     
     // 返回被移除的会话信息，供调用者使用（如广播）
     return session;
@@ -226,7 +228,7 @@ export class GlobalSessionManager {
     }
 
     if (toRemove.length > 0) {
-      logger.info(`Cleaned up ${toRemove.length} stale sessions`);
+    this.logger.info(`Cleaned up ${toRemove.length} stale sessions`);
     }
   }
 }

@@ -1,10 +1,9 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import { mumbleproto } from '@munode/protocol';
 import type { HubHandlerFactory } from '../factory.js';
 import type { RPCParams, RPCResult } from '@munode/protocol';
 import { HubPermissionChecker, Permission } from '../permission-checker.js';
 
-const logger = createLogger({ service: 'hub-acl-handler' });
 
 /**
  * Hub ACL处理器接口
@@ -22,8 +21,11 @@ export class ACLHandler implements IACLHandler {
   private factory: HubHandlerFactory;
   private hubPermissionChecker: HubPermissionChecker;
 
+    private logger: Logger;
+
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
+    this.logger = factory.getLogger();
     this.hubPermissionChecker = this.factory.getPermissionChecker();
   }
 
@@ -34,10 +36,10 @@ export class ACLHandler implements IACLHandler {
     try {
       const { edge_id, actor_session, channel_id, query, raw_data } = params;
 
-      logger.info(`Hub received ACL request from Edge ${edge_id}, actor: ${actor_session}, channel: ${channel_id}, query: ${query}`);
+      this.logger.info(`Hub received ACL request from Edge ${edge_id}, actor: ${actor_session}, channel: ${channel_id}, query: ${query}`);
 
       if (!this.factory.getDatabase()) {
-        logger.error('Database not available');
+        this.logger.error('Database not available');
         return { success: false, error: 'Database not available' };
       }
 
@@ -50,7 +52,7 @@ export class ACLHandler implements IACLHandler {
         ? this.factory.getChannelManager().getChannel(channel_id)
         : await this.factory.getDatabase().getChannel(channel_id);
       if (!channel) {
-        logger.warn(`ACL for non-existent channel: ${channel_id}`);
+        this.logger.warn(`ACL for non-existent channel: ${channel_id}`);
         return { success: false, error: 'Channel not found' };
       }
 
@@ -62,13 +64,13 @@ export class ACLHandler implements IACLHandler {
       if (this.factory.getPermissionChecker() && this.factory.getSessionManager()) {
         const actorGlobalSession = this.factory.getSessionManager().getSession(actor_session);
         if (!actorGlobalSession) {
-          logger.warn(`ACL request from unknown session: ${actor_session}`);
+          this.logger.warn(`ACL request from unknown session: ${actor_session}`);
           return { success: false, error: 'Session not found' };
         }
 
         const actorUserInfo = this.hubPermissionChecker.sessionToUserInfo(actorGlobalSession, actorGlobalSession.channel_id);
 
-        logger.debug(`ACL permission check for user ${actorUserInfo.user_id} (${actorGlobalSession.username}), groups: ${JSON.stringify(actorUserInfo.groups)}`);
+        this.logger.debug(`ACL permission check for user ${actorUserInfo.user_id} (${actorGlobalSession.username}), groups: ${JSON.stringify(actorUserInfo.groups)}`);
 
         // 检查三个位置的 Write 权限
         const hasWriteOnChannel = await this.hubPermissionChecker.hasPermission(
@@ -93,7 +95,7 @@ export class ACLHandler implements IACLHandler {
         );        const hasWritePermission = hasWriteOnChannel || hasWriteOnParent || hasWriteOnRoot;
 
         if (!hasWritePermission) {
-          logger.warn(`ACL request denied for session ${actor_session}: no Write permission on channel ${channel.name}`);
+          this.logger.warn(`ACL request denied for session ${actor_session}: no Write permission on channel ${channel.name}`);
           return {
             success: false,
             error: 'Permission denied: Write permission required',
@@ -101,12 +103,12 @@ export class ACLHandler implements IACLHandler {
           };
         }
 
-        logger.debug(`ACL request permission granted for session ${actor_session}`);
+        this.logger.debug(`ACL request permission granted for session ${actor_session}`);
       }
 
       if (query) {
         // === 查询 ACL ===
-        logger.debug(`Processing ACL query for channel ${channel_id}`);
+        this.logger.debug(`Processing ACL query for channel ${channel_id}`);
 
         // 构建频道链：从当前频道向上遍历到根频道或不继承ACL的频道
         const channelsInChain: Array<{ id: number; inherit_acl: boolean; parent_id: number }> = [];
@@ -128,7 +130,7 @@ export class ACLHandler implements IACLHandler {
           }
         }
 
-        logger.debug(`Built channel chain for ACL query: ${channelsInChain.map(c => c.id).join(' -> ')}`);
+        this.logger.debug(`Built channel chain for ACL query: ${channelsInChain.map(c => c.id).join(' -> ')}`);
 
         // 收集所有相关的 ACL（包括继承的）
         const allACLs: mumbleproto.ACL.ChanACL[] = [];
@@ -137,7 +139,7 @@ export class ACLHandler implements IACLHandler {
           const channelACLs = this.factory.getAclManager()
             ? await this.factory.getAclManager().getChannelACLs(iterChannel.id)
             : await this.factory.getDatabase().getChannelACLs(iterChannel.id);
-          logger.debug(`Channel ${iterChannel.id} has ${channelACLs.length} ACL entries`);
+          this.logger.debug(`Channel ${iterChannel.id} has ${channelACLs.length} ACL entries`);
 
           for (const aclEntry of channelACLs) {
             // 如果是当前频道，或者 ACL 应用于子频道，则包含此 ACL
@@ -166,7 +168,7 @@ export class ACLHandler implements IACLHandler {
           }
         }
 
-        logger.debug(`Collected ${allACLs.length} total ACL entries`);
+        this.logger.debug(`Collected ${allACLs.length} total ACL entries`);
 
         // 收集频道组信息（包括继承的组）
         const allGroups: mumbleproto.ACL.ChanGroup[] = [];
@@ -196,7 +198,7 @@ export class ACLHandler implements IACLHandler {
           }
         }
 
-        logger.debug(`Collected ${allGroups.length} total groups`);
+        this.logger.debug(`Collected ${allGroups.length} total groups`);
 
         // 构建 ACL 响应 - 确保groups字段总是存在
         const aclResponse = new mumbleproto.ACL({
@@ -208,9 +210,9 @@ export class ACLHandler implements IACLHandler {
         });
 
         const responseData = aclResponse.serialize();
-        logger.debug(`ACL response built: ${allACLs.length} ACLs, ${allGroups.length} groups`);
+        this.logger.debug(`ACL response built: ${allACLs.length} ACLs, ${allGroups.length} groups`);
 
-        logger.info(`ACL query completed for channel ${channel_id}`);
+        this.logger.info(`ACL query completed for channel ${channel_id}`);
         return {
           success: true,
           channel_id,
@@ -218,7 +220,7 @@ export class ACLHandler implements IACLHandler {
         };
       } else {
         // === 更新 ACL ===
-        logger.debug(`Processing ACL update for channel ${channel_id}`);
+        this.logger.debug(`Processing ACL update for channel ${channel_id}`);
 
         const acls = acl.acls ?? [];
 
@@ -235,7 +237,7 @@ export class ACLHandler implements IACLHandler {
         // 使用 ACLManager 保存 ACL
         if (this.factory.getAclManager()) {
           await this.factory.getAclManager().saveACLs(channel_id, aclData);
-          logger.info(`ACL updated for channel ${channel_id}: ${aclData.length} entries`);
+          this.logger.info(`ACL updated for channel ${channel_id}: ${aclData.length} entries`);
         }
 
         // 更新频道的 inherit_acl 设置
@@ -245,12 +247,12 @@ export class ACLHandler implements IACLHandler {
           } else {
             await this.factory.getDatabase().updateChannel(channel_id, { inherit_acl: acl.inherit_acls });
           }
-          logger.info(`Channel ${channel_id} inherit_acl updated to ${acl.inherit_acls}`);
+          this.logger.info(`Channel ${channel_id} inherit_acl updated to ${acl.inherit_acls}`);
         }
 
         // 处理频道组更新
         if (this.factory.getChannelGroupManager() && acl.groups && acl.groups.length > 0) {
-          logger.info(`Channel ${channel_id} channel groups update requested: ${acl.groups.length} groups`);
+          this.logger.info(`Channel ${channel_id} channel groups update requested: ${acl.groups.length} groups`);
 
           // 只保存非继承的组
           const channelGroupsToSave = acl.groups
@@ -265,25 +267,25 @@ export class ACLHandler implements IACLHandler {
             }));
 
           await this.factory.getChannelGroupManager().saveChannelGroups(channel_id, channelGroupsToSave);
-          logger.info(`Saved ${channelGroupsToSave.length} channel groups for channel ${channel_id}`);
+          this.logger.info(`Saved ${channelGroupsToSave.length} channel groups for channel ${channel_id}`);
         }
 
         // 通知所有 Edge 刷新该频道的权限
         // 这会触发 Edge 重新计算频道内所有用户的 suppress 状态
-        logger.info(`Broadcasting ACL update notification for channel ${channel_id}`);
+        this.logger.info(`Broadcasting ACL update notification for channel ${channel_id}`);
         this.factory.getControlService().broadcast('edge.aclUpdated', {
           channel_id,
           timestamp: Date.now(),
         });
 
-        logger.info(`ACL update completed for channel ${channel_id}`);
+        this.logger.info(`ACL update completed for channel ${channel_id}`);
         return {
           success: true,
           channel_id
         };
       }
     } catch (error) {
-      logger.error('Error handling ACL request:', error);
+      this.logger.error('Error handling ACL request:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   }
@@ -295,17 +297,17 @@ export class ACLHandler implements IACLHandler {
     try {
       const { edge_id, actor_session, channel_id } = params;
 
-      logger.debug(`Hub received PermissionQuery from Edge ${edge_id}, actor: ${actor_session}, channel: ${channel_id}`);
+      this.logger.debug(`Hub received PermissionQuery from Edge ${edge_id}, actor: ${actor_session}, channel: ${channel_id}`);
 
       // 获取会话信息
       if (!this.factory.getSessionManager()) {
-        logger.error('SessionManager not available');
+        this.logger.error('SessionManager not available');
         return { success: false, error: 'SessionManager not available' };
       }
 
       const actorGlobalSession = this.factory.getSessionManager().getSession(actor_session);
       if (!actorGlobalSession) {
-        logger.warn(`PermissionQuery from unknown session: ${actor_session}`);
+        this.logger.warn(`PermissionQuery from unknown session: ${actor_session}`);
         return {
           success: false,
           error: 'Session not found'
@@ -315,24 +317,24 @@ export class ACLHandler implements IACLHandler {
       // 转换为 UserInfo
       const actorUserInfo = this.hubPermissionChecker.sessionToUserInfo(actorGlobalSession, actorGlobalSession.channel_id);
 
-      logger.debug(`PermissionQuery for user ${actorUserInfo.user_id} (${actorGlobalSession.username}), groups: ${JSON.stringify(actorUserInfo.groups)}, channel: ${channel_id}`);
+      this.logger.debug(`PermissionQuery for user ${actorUserInfo.user_id} (${actorGlobalSession.username}), groups: ${JSON.stringify(actorUserInfo.groups)}, channel: ${channel_id}`);
 
       // 计算权限
       if (!this.factory.getPermissionChecker()) {
-        logger.error('PermissionChecker not available');
+        this.logger.error('PermissionChecker not available');
         return { success: false, error: 'PermissionChecker not available' };
       }
 
       const permissions = await this.factory.getPermissionChecker().calculatePermission(channel_id, actorUserInfo);
 
-      logger.debug(`PermissionQuery result for session ${actor_session} on channel ${channel_id}: ${permissions} (0x${permissions.toString(16)})`);
+      this.logger.debug(`PermissionQuery result for session ${actor_session} on channel ${channel_id}: ${permissions} (0x${permissions.toString(16)})`);
 
       return {
         success: true,
         permissions,
       };
     } catch (error) {
-      logger.error(`PermissionQuery error:`, error);
+      this.logger.error(`PermissionQuery error:`, error);
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Internal server error',

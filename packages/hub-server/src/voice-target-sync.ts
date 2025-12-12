@@ -1,9 +1,8 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { GlobalSessionManager } from './session-manager.js';
 import type { VoiceTargetConfig, VoiceTarget } from './types.js';
 import { GlobalSession } from '@munode/protocol';
 
-const logger = createLogger({ service: 'hub-voice-target-sync' });
 
 /**
  * VoiceTarget 同步服务
@@ -14,7 +13,10 @@ export class VoiceTargetSyncService {
   private configs = new Map<number, Map<number, Map<number, VoiceTarget>>>();
   private sessionManager: GlobalSessionManager;
 
-  constructor(sessionManager: GlobalSessionManager) {
+    private logger: Logger;
+
+  constructor(sessionManager: GlobalSessionManager, logger: Logger) {
+    this.logger = logger;
     this.sessionManager = sessionManager;
   }
 
@@ -39,13 +41,13 @@ export class VoiceTargetSyncService {
     if (vtConfig === null) {
       // 删除配置
       clientConfigs.delete(target_id);
-      logger.info(
+    this.logger.info(
         `VoiceTarget deleted: Edge ${edge_id}, Session ${client_session}, Target ${target_id}`
       );
     } else {
       // 更新配置
       clientConfigs.set(target_id, vtConfig);
-      logger.info(
+    this.logger.info(
         `VoiceTarget synced: Edge ${edge_id}, Session ${client_session}, Target ${target_id}`
       );
     }
@@ -142,6 +144,6 @@ export class VoiceTargetSyncService {
         this.configs.delete(edge_id);
       }
     }
-    logger.debug(`Cleaned up VoiceTarget configs for Edge ${edge_id}, Session ${client_session}`);
+    this.logger.debug(`Cleaned up VoiceTarget configs for Edge ${edge_id}, Session ${client_session}`);
   }
 }

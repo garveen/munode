@@ -1,8 +1,7 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { HubHandlerFactory } from '../factory.js';
 import type { RPCParams, RPCResult } from '@munode/protocol';
 
-const logger = createLogger({ service: 'hub-blob-handler' });
 
 /**
  * Hub Blob处理器接口
@@ -22,8 +21,11 @@ export interface IBlobHandler {
 export class BlobHandler implements IBlobHandler {
   private factory: HubHandlerFactory;
 
+    private logger: Logger;
+
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
+    this.logger = factory.getLogger();
   }
 
   /**
@@ -36,10 +38,10 @@ export class BlobHandler implements IBlobHandler {
 
     try {
       const hash = await this.factory.getBlobStore().put(params.data);
-      logger.debug(`Blob stored: ${hash}`);
+      this.logger.debug(`Blob stored: ${hash}`);
       return { success: true, hash };
     } catch (error) {
-      logger.error('Error storing blob:', error);
+      this.logger.error('Error storing blob:', error);
       return { success: false, error: String(error) };
     }
   }
@@ -59,7 +61,7 @@ export class BlobHandler implements IBlobHandler {
       }
       return { success: true, data };
     } catch (error) {
-      logger.error(`Error retrieving blob ${params.hash}:`, error);
+      this.logger.error(`Error retrieving blob ${params.hash}:`, error);
       return { success: false, error: String(error) };
     }
   }
@@ -89,7 +91,7 @@ export class BlobHandler implements IBlobHandler {
 
       return { success: true, data, hash };
     } catch (error) {
-      logger.error(`Error getting user texture for user ${params.user_id}:`, error);
+      this.logger.error(`Error getting user texture for user ${params.user_id}:`, error);
       return { success: false, error: String(error) };
     }
   }
@@ -119,7 +121,7 @@ export class BlobHandler implements IBlobHandler {
 
       return { success: true, data, hash };
     } catch (error) {
-      logger.error(`Error getting user comment for user ${params.user_id}:`, error);
+      this.logger.error(`Error getting user comment for user ${params.user_id}:`, error);
       return { success: false, error: String(error) };
     }
   }
@@ -141,10 +143,10 @@ export class BlobHandler implements IBlobHandler {
       const hash = await this.factory.getDatabaseOperations().putBlobData(params.data);
 
       // 保存 hash 到数据库
-      await this.factory.getDatabaseOperations().setUserTextureBlob(params.user_id, hash);      logger.info(`Set user texture for user ${params.user_id}: ${hash}`);
+      await this.factory.getDatabaseOperations().setUserTextureBlob(params.user_id, hash);      this.logger.info(`Set user texture for user ${params.user_id}: ${hash}`);
       return { success: true, hash };
     } catch (error) {
-      logger.error(`Error setting user texture for user ${params.user_id}:`, error);
+      this.logger.error(`Error setting user texture for user ${params.user_id}:`, error);
       return { success: false, error: String(error) };
     }
   }
@@ -166,10 +168,10 @@ export class BlobHandler implements IBlobHandler {
       const hash = await this.factory.getDatabaseOperations().putBlobData(params.data);
 
       // 保存 hash 到数据库
-      await this.factory.getDatabaseOperations().setUserCommentBlob(params.user_id, hash);      logger.info(`Set user comment for user ${params.user_id}: ${hash}`);
+      await this.factory.getDatabaseOperations().setUserCommentBlob(params.user_id, hash);      this.logger.info(`Set user comment for user ${params.user_id}: ${hash}`);
       return { success: true, hash };
     } catch (error) {
-      logger.error(`Error setting user comment for user ${params.user_id}:`, error);
+      this.logger.error(`Error setting user comment for user ${params.user_id}:`, error);
       return { success: false, error: String(error) };
     }
   }

@@ -1,9 +1,8 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import { HubPermissionChecker, Permission } from '../permission-checker.js';
 import { HubHandlerFactory } from '../factory.js';
 import type { EdgeNotificationParams } from '@munode/protocol';
 
-const logger = createLogger({ service: 'hub-channel-state-handler' });
 
 /**
  * 频道状态处理器接口
@@ -27,8 +26,11 @@ export class ChannelStateHandler implements IChannelStateHandler {
   private factory: HubHandlerFactory;
   private permissionChecker: HubPermissionChecker;
 
+    private logger: Logger;
+
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
+    this.logger = factory.getLogger();
     this.permissionChecker = factory.getPermissionChecker();
   }
 
@@ -36,7 +38,7 @@ export class ChannelStateHandler implements IChannelStateHandler {
     try {
       const { edge_id, actor_session, actor_username, channelState: channelStateObj, has_channel_id } = params;
 
-      logger.info(`Hub received ChannelState from Edge ${edge_id}, actor: ${actor_username}(${actor_session}), has_channel_id: ${has_channel_id}`);
+      this.logger.info(`Hub received ChannelState from Edge ${edge_id}, actor: ${actor_username}(${actor_session}), has_channel_id: ${has_channel_id}`);
 
       const sessionManager = this.factory.getSessionManager();
       const permissionChecker = this.factory.getPermissionChecker();
@@ -132,12 +134,12 @@ export class ChannelStateHandler implements IChannelStateHandler {
           const createdId = await channelManager.createChannel(channelData);
           // 验证创建的频道 ID 与预期一致
           if (createdId !== channelId) {
-            logger.warn(`Expected channel ID ${channelId}, but database returned ${createdId}`);
+            this.logger.warn(`Expected channel ID ${channelId}, but database returned ${createdId}`);
             channelId = createdId; // 使用数据库返回的实际 ID
           }
-          logger.info(`Created new channel: ${channelData.name} (ID: ${channelId})`);
+          this.logger.info(`Created new channel: ${channelData.name} (ID: ${channelId})`);
         } catch (error) {
-          logger.error(`Failed to create channel ${channelId}:`, error);
+          this.logger.error(`Failed to create channel ${channelId}:`, error);
           this.factory.getControlService().notify(edge_id, 'hub.channelStateResponse', {
             success: false,
             actor_session,
@@ -189,9 +191,9 @@ export class ChannelStateHandler implements IChannelStateHandler {
             for (const targetId of channelStateObj.links_add) {
               try {
                 await database.linkChannels(channelId, targetId);
-                logger.info(`Linked channels: ${channelId} <-> ${targetId}`);
+                this.logger.info(`Linked channels: ${channelId} <-> ${targetId}`);
               } catch (error) {
-                logger.error(`Failed to link channels ${channelId} and ${targetId}:`, error);
+                this.logger.error(`Failed to link channels ${channelId} and ${targetId}:`, error);
               }
             }
           }
@@ -201,9 +203,9 @@ export class ChannelStateHandler implements IChannelStateHandler {
             for (const targetId of channelStateObj.links_remove) {
               try {
                 await database.unlinkChannels(channelId, targetId);
-                logger.info(`Unlinked channels: ${channelId} <-> ${targetId}`);
+                this.logger.info(`Unlinked channels: ${channelId} <-> ${targetId}`);
               } catch (error) {
-                logger.error(`Failed to unlink channels ${channelId} and ${targetId}:`, error);
+                this.logger.error(`Failed to unlink channels ${channelId} and ${targetId}:`, error);
               }
             }
           }
@@ -211,9 +213,9 @@ export class ChannelStateHandler implements IChannelStateHandler {
 
         try {
           await channelManager.updateChannel(channelId, updateData);
-          logger.info(`Updated channel: ${updateData.name || channelId} (ID: ${channelId})`);
+          this.logger.info(`Updated channel: ${updateData.name || channelId} (ID: ${channelId})`);
         } catch (error) {
-          logger.error(`Failed to update channel ${channelId}:`, error);
+          this.logger.error(`Failed to update channel ${channelId}:`, error);
           this.factory.getControlService().notify(edge_id, 'hub.channelStateResponse', {
             success: false,
             actor_session,
@@ -236,9 +238,9 @@ export class ChannelStateHandler implements IChannelStateHandler {
         try {
           const database = this.factory.getDatabase();
           currentLinks = await database.getChannelLinks(channelId);
-          logger.info(`Current links for channel ${channelId}: [${currentLinks.join(', ')}]`);
+          this.logger.info(`Current links for channel ${channelId}: [${currentLinks.join(', ')}]`);
         } catch (error) {
-          logger.error(`Failed to get channel links for ${channelId}:`, error);
+          this.logger.error(`Failed to get channel links for ${channelId}:`, error);
         }
       }
 
@@ -278,10 +280,10 @@ export class ChannelStateHandler implements IChannelStateHandler {
 
       this.factory.getControlService().broadcast('hub.channelStateBroadcast', broadcastData);
 
-      logger.info(`Hub: Broadcasting ChannelState for channel ${channelId} to all edges`);
+      this.logger.info(`Hub: Broadcasting ChannelState for channel ${channelId} to all edges`);
 
     } catch (error) {
-      logger.error('Error handling channel state notification:', error);
+      this.logger.error('Error handling channel state notification:', error);
       this.factory.getControlService().notify(params.edge_id, 'hub.channelStateResponse', {
         success: false,
         actor_session: params.actor_session,
@@ -294,7 +296,7 @@ export class ChannelStateHandler implements IChannelStateHandler {
     try {
       const { edge_id, actor_session, actor_username, channel_id } = params;
 
-      logger.info(`Hub received ChannelRemove from Edge ${edge_id}, actor: ${actor_username}(${actor_session}), channel: ${channel_id}`);
+      this.logger.info(`Hub received ChannelRemove from Edge ${edge_id}, actor: ${actor_username}(${actor_session}), channel: ${channel_id}`);
 
       const sessionManager = this.factory.getSessionManager();
       const permissionChecker = this.factory.getPermissionChecker();
@@ -366,9 +368,9 @@ export class ChannelStateHandler implements IChannelStateHandler {
 
       try {
         await channelManager.deleteChannel(channel_id);
-        logger.info(`Removed channel: ${channel.name} (ID: ${channel_id})`);
+        this.logger.info(`Removed channel: ${channel.name} (ID: ${channel_id})`);
       } catch (error) {
-        logger.error(`Failed to remove channel ${channel_id}:`, error);
+        this.logger.error(`Failed to remove channel ${channel_id}:`, error);
         this.factory.getControlService().notify(edge_id, 'hub.channelRemoveResponse', {
           success: false,
           actor_session,
@@ -389,10 +391,10 @@ export class ChannelStateHandler implements IChannelStateHandler {
         channel_id,
       });
 
-      logger.info(`Hub: Broadcasting ChannelRemove for channel ${channel_id} to all edges`);
+      this.logger.info(`Hub: Broadcasting ChannelRemove for channel ${channel_id} to all edges`);
 
     } catch (error) {
-      logger.error('Error handling channel remove notification:', error);
+      this.logger.error('Error handling channel remove notification:', error);
       this.factory.getControlService().notify(params.edge_id, 'hub.channelRemoveResponse', {
         success: false,
         actor_session: params.actor_session,

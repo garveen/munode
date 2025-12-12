@@ -3,10 +3,9 @@
  * 集中管理用户认证，Edge 通过 RPC 调用 Hub 进行认证
  */
 
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { HubConfig, ExternalAuthRequest } from './types.js';
 
-const logger = createLogger({ service: 'hub-auth-manager' });
 
 /**
  * 认证配置
@@ -82,7 +81,10 @@ export class HubAuthManager {
   private config: AuthConfig;
   private authCache: Map<string, AuthCacheItem> = new Map();
 
-  constructor(hubConfig: HubConfig) {
+    private logger: Logger;
+
+  constructor(hubConfig: HubConfig, logger: Logger) {
+    this.logger = logger;
     // 从 Hub 配置中提取认证配置
     this.config = (hubConfig as { auth?: AuthConfig }).auth || {};
     
@@ -108,14 +110,14 @@ export class HubAuthManager {
     this.config.responseFields.reasonField = this.config.responseFields.reasonField || 'reason';
 
     if (this.config.callback) {
-      logger.info('Hub Authentication Manager initialized with callback function');
+    this.logger.info('Hub Authentication Manager initialized with callback function');
     } else if (this.config.apiUrl) {
-      logger.info('Hub Authentication Manager initialized with API URL', { 
+    this.logger.info('Hub Authentication Manager initialized with API URL', { 
         apiUrl: this.config.apiUrl,
         contentType: this.config.contentType 
       });
     } else {
-      logger.info('Hub Authentication Manager initialized with local authentication');
+    this.logger.info('Hub Authentication Manager initialized with local authentication');
     }
 
     // 定期清理过期缓存
@@ -129,7 +131,7 @@ export class HubAuthManager {
    */
   async authenticate(request: AuthRequest): Promise<AuthResult> {
     try {
-      logger.info(`Authenticating user: username=${request.username}, server_id=${request.server_id}`);
+    this.logger.info(`Authenticating user: username=${request.username}, server_id=${request.server_id}`);
 
       // 检查缓存 - 使用密码的哈希值而不是明文
       const crypto = await import('crypto');
@@ -137,7 +139,7 @@ export class HubAuthManager {
       const cacheKey = `${request.username}:${passwordHash}`;
       const cached = this.authCache.get(cacheKey);
       if (cached && Date.now() - cached.timestamp < (this.config.cacheTTL || 300000)) {
-        logger.debug(`Auth cache hit for user: ${request.username}`);
+    this.logger.debug(`Auth cache hit for user: ${request.username}`);
         return cached.result;
       }
 
@@ -153,18 +155,18 @@ export class HubAuthManager {
       }
 
       if (authResult.success) {
-        logger.info(
+    this.logger.info(
           `Authentication successful: username=${request.username}, userId=${authResult.user_id}`
         );
       } else {
-        logger.warn(
+    this.logger.warn(
           `Authentication failed: username=${request.username}, reason=${authResult.reason}`
         );
       }
 
       return authResult;
     } catch (error) {
-      logger.error(`Authentication error for user ${request.username}:`, error);
+    this.logger.error(`Authentication error for user ${request.username}:`, error);
       return {
         success: false,
         reason: 'Internal authentication error',
@@ -194,13 +196,13 @@ export class HubAuthManager {
           certificate_hash: request.client_info.certificate_hash,
         };
         
-        logger.debug('Authenticating with callback function', { username: request.username });
+    this.logger.debug('Authenticating with callback function', { username: request.username });
         const result = await this.config.callback(externalRequest);
         
-        logger.info(`Callback auth result for ${request.username}: success=${result.success}`);
+    this.logger.info(`Callback auth result for ${request.username}: success=${result.success}`);
         return result;
       } catch (error) {
-        logger.error('Callback authentication error:', error);
+    this.logger.error('Callback authentication error:', error);
         return {
           success: false,
           reason: 'Authentication callback error',
@@ -268,11 +270,11 @@ export class HubAuthManager {
           }
         }
         body = params.toString();
-        logger.debug(`Auth API request to ${authUrl} (form-urlencoded):`, { body });
+    this.logger.debug(`Auth API request to ${authUrl} (form-urlencoded):`, { body });
       } else {
         // JSON 编码（默认）
         body = JSON.stringify(requestData);
-        logger.debug(`Auth API request to ${authUrl} (json):`, requestData);
+    this.logger.debug(`Auth API request to ${authUrl} (json):`, requestData);
       }
 
       const response = await fetch(authUrl, {
@@ -284,7 +286,7 @@ export class HubAuthManager {
 
       if (!response.ok) {
         const errorText = await response.text();
-        logger.error(`Auth API error: ${response.status} - ${errorText}`);
+    this.logger.error(`Auth API error: ${response.status} - ${errorText}`);
 
         // 根据 HTTP 状态码确定 reject 类型
         if (response.status === 401 || response.status === 403) {
@@ -310,7 +312,7 @@ export class HubAuthManager {
       }
 
       const result = await response.json();
-      logger.info(`Auth API response for user ${request.username}:`, result);
+    this.logger.info(`Auth API response for user ${request.username}:`, result);
 
       // 使用配置的字段名提取响应数据
       const fields = this.config.responseFields || {};
@@ -340,17 +342,17 @@ export class HubAuthManager {
             : 0, // mumbleproto.Reject.RejectType.None
       };
 
-      logger.info(`Normalized auth result for ${request.username}: userId=${normalized.user_id}, groups=${JSON.stringify(normalized.groups)}`);
+    this.logger.info(`Normalized auth result for ${request.username}: userId=${normalized.user_id}, groups=${JSON.stringify(normalized.groups)}`);
       return normalized;
     } catch (error) {
-      logger.error('External auth API error:', error);
+    this.logger.error('External auth API error:', error);
 
       // 如果允许缓存回退，尝试从缓存认证
       if (this.config.allowCacheFallback) {
         const cacheKey = `${request.username}:${request.password}`;
         const cached = this.authCache.get(cacheKey);
         if (cached) {
-          logger.warn(`Using cached auth for user ${request.username} due to API error`);
+    this.logger.warn(`Using cached auth for user ${request.username} due to API error`);
           return cached.result;
         }
       }
@@ -415,7 +417,7 @@ export class HubAuthManager {
     }
 
     if (toDelete.length > 0) {
-      logger.debug(`Cleaned up ${toDelete.length} expired auth cache entries`);
+    this.logger.debug(`Cleaned up ${toDelete.length} expired auth cache entries`);
     }
   }
 

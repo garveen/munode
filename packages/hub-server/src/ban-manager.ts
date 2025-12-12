@@ -1,7 +1,6 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { HubDatabase } from './database.js';
 
-const logger = createLogger({ service: 'hub-ban-manager' });
 
 export interface BanData {
   id: number;
@@ -41,7 +40,10 @@ export class BanManager {
   private certBanIndex: Map<string, number> = new Map(); // hash -> ban.id
   private ipBans: BanData[] = []; // 需要遍历检查的 IP 封禁
 
-  constructor(database: HubDatabase) {
+    private logger: Logger;
+
+  constructor(database: HubDatabase, logger: Logger) {
+    this.logger = logger;
     this.database = database;
     // 异步初始化将在外部调用
   }
@@ -73,7 +75,7 @@ export class BanManager {
       }
     }
 
-    logger.info(`Loaded ${bans.length} bans from database`, {
+    this.logger.info(`Loaded ${bans.length} bans from database`, {
       certBans: this.certBanIndex.size,
       ipBans: this.ipBans.length,
     });
@@ -114,7 +116,7 @@ export class BanManager {
         this.ipBans.push(created);
       }
 
-      logger.info(`Ban added: ${id}`, {
+    this.logger.info(`Ban added: ${id}`, {
         hash: created.hash,
         hasAddress: !!created.address,
         reason: created.reason,
@@ -142,7 +144,7 @@ export class BanManager {
       this.ipBans = this.ipBans.filter((b) => b.id !== id);
     }
 
-    logger.info(`Ban removed: ${id}`);
+    this.logger.info(`Ban removed: ${id}`);
   }
 
   /**
@@ -154,7 +156,7 @@ export class BanManager {
     this.certBanIndex.clear();
     this.ipBans = [];
 
-    logger.warn('All bans purged');
+    this.logger.warn('All bans purged');
     // TODO: 广播变更到 Edge Servers
   }
 
@@ -245,7 +247,7 @@ export class BanManager {
     }
 
     if (toRemove.length > 0) {
-      logger.info(`Cleaned up ${toRemove.length} expired bans`);
+    this.logger.info(`Cleaned up ${toRemove.length} expired bans`);
     }
   }
 }

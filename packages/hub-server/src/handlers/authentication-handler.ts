@@ -1,9 +1,8 @@
-import { createLogger } from '@munode/common';
+import type { Logger } from '@munode/common';
 import { HubPermissionChecker } from '../permission-checker.js';
 import { HubHandlerFactory } from '../factory.js';
 import type { RPCParams, RPCResult } from '@munode/protocol';
 
-const logger = createLogger({ service: 'hub-authentication-handler' });
 
 /**
  * 认证处理器接口
@@ -32,22 +31,25 @@ export class AuthenticationHandler implements IAuthenticationHandler {
   private factory: HubHandlerFactory;
   private permissionChecker: HubPermissionChecker;
 
+    private logger: Logger;
+
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
+    this.logger = factory.getLogger();
     this.permissionChecker = factory.getPermissionChecker();
   }
 
   async handleAllocateSessionId(params: RPCParams<'edge.allocateSessionId'>): Promise<RPCResult<'edge.allocateSessionId'>> {
     const sessionManager = this.factory.getSessionManager();
     const session_id = sessionManager.allocateSessionId();
-    logger.debug(`Allocated session ID ${session_id} for Edge ${params.edge_id}`);
+    this.logger.debug(`Allocated session ID ${session_id} for Edge ${params.edge_id}`);
     return { session_id };
   }
 
   async handleAuthenticateUser(params: RPCParams<'edge.authenticateUser'>): Promise<RPCResult<'edge.authenticateUser'>> {
     const authManager = this.factory.getAuthManager();
     if (!authManager) {
-      logger.error('Auth manager not initialized');
+      this.logger.error('Auth manager not initialized');
       return {
         success: false,
         reason: 'Authentication service not available',
@@ -55,7 +57,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
     }
 
     try {
-      logger.info(`Authentication request from Edge ${params.server_id} for user: ${params.username}, session: ${params.session_id}`);
+      this.logger.info(`Authentication request from Edge ${params.server_id} for user: ${params.username}, session: ${params.session_id}`);
 
       const authResult = await authManager.authenticate({
         session_id: params.session_id,
@@ -68,7 +70,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
 
       return authResult;
     } catch (error) {
-      logger.error(`Authentication error for user ${params.username}:`, error);
+      this.logger.error(`Authentication error for user ${params.username}:`, error);
       return {
         success: false,
         reason: 'Internal authentication error',
@@ -119,7 +121,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           // User was in a hidden channel but no longer has permission
           // Move them to the default channel
           const defaultChannel = config.defaultChannel ?? 0;
-          logger.info(`Channel Ninja: User ${params.username} was in ninja channel ${actualChannelId} but has no permission, moving to default channel ${defaultChannel}`);
+          this.logger.info(`Channel Ninja: User ${params.username} was in ninja channel ${actualChannelId} but has no permission, moving to default channel ${defaultChannel}`);
           actualChannelId = defaultChannel;
         }
       }
@@ -164,16 +166,16 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       os_version: params.os_version,
     };
 
-    logger.info(`Session reported: ${params.username} (user_id: ${params.user_id}), groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);
+    this.logger.info(`Session reported: ${params.username} (user_id: ${params.user_id}), groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);
 
     // 上报会话
     sessionManager.reportSession(session);
 
-    logger.info(`Session reported: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id}, user_id=${params.user_id}, channel=${actualChannelId})`);
+    this.logger.info(`Session reported: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id}, user_id=${params.user_id}, channel=${actualChannelId})`);
 
     // Handle ninja channel visibility for the userJoined broadcast
     if (config.channelNinja && config.ninjaChannels?.length > 0 && permissionChecker) {
-      logger.debug(`Channel Ninja: Filtering userJoined broadcast for ${params.username}`);
+      this.logger.debug(`Channel Ninja: Filtering userJoined broadcast for ${params.username}`);
       
       // Filter which existing users should see this new user
       const allSessions = sessionManager.getAllSessions();
@@ -234,10 +236,10 @@ export class AuthenticationHandler implements IAuthenticationHandler {
 
       // Note: visibleUsers notification is no longer needed - Edge relies on fullSync
 
-      logger.info(`Session ${params.session_id} reported with ninja filtering: visible to ${Array.from(visibleToSessions.values()).flat().length} users, can see ${usersNewUserCanSee.length} users`);
+      this.logger.info(`Session ${params.session_id} reported with ninja filtering: visible to ${Array.from(visibleToSessions.values()).flat().length} users, can see ${usersNewUserCanSee.length} users`);
     } else {
       // Broadcast new user joined notification to all edges (no ninja filtering)
-      logger.debug(`Broadcasting userJoined (no ninja) to all edges: ${params.username}`);
+      this.logger.debug(`Broadcasting userJoined (no ninja) to all edges: ${params.username}`);
 
       this.factory.getControlService().broadcast('hub.userJoined', {
         session_id: params.session_id,
@@ -249,7 +251,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         cert_hash: session.cert_hash,
       });
 
-      logger.info(`Session ${params.session_id} reported from Edge ${params.edge_server_id}, broadcasted to all edges`);
+      this.logger.info(`Session ${params.session_id} reported from Edge ${params.edge_server_id}, broadcasted to all edges`);
     }
 
     return { success: true }; // Success response
