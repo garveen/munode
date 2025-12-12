@@ -384,6 +384,74 @@ export class EventSetupManager {
             // Process sync data
             this.handlerFactory.stateManager.loadSnapshot(syncData);
         this.logger.info('Full sync completed successfully');
+            
+            // Process sessions from fullSync - broadcast remote users to local clients
+            // This is critical after edge reconnection to ensure all clients see users on other edges
+            if (syncData.sessions && Array.isArray(syncData.sessions)) {
+              const localEdgeId = this.handlerFactory.config.server_id;
+              const remoteSessionCount = syncData.sessions.filter(s => s.edge_id !== localEdgeId).length;
+              this.logger.info(`Processing ${remoteSessionCount} remote user sessions from fullSync`);
+              
+              for (const session of syncData.sessions) {
+                // Only process sessions from other edges
+                if (session.edge_id !== localEdgeId) {
+                  // Add to remote users map
+                  this.handlerFactory.stateManager.addRemoteUser(
+                    session.session_id,
+                    session.edge_id,
+                    session.channel_id ?? 0
+                  );
+                  
+                  // Broadcast to all local authenticated clients (similar to handleRemoteUserJoined)
+                  const allClients = this.handlerFactory.clientManager.getAllClients();
+                  for (const client of allClients) {
+                    if (client.user_id > 0 && client.has_full_user_list) {
+                      // Build UserState message for this remote user
+                      const userStateData: {
+                        session: number;
+                        user_id: number;
+                        name: string;
+                        channel_id: number;
+                        temporary_access_tokens: string[];
+                        listening_channel_add: number[];
+                        listening_channel_remove: number[];
+                        hash?: string;
+                      } = {
+                        session: session.session_id,
+                        user_id: session.user_id,
+                        name: session.username,
+                        channel_id: session.channel_id ?? 0,
+                        temporary_access_tokens: [],
+                        listening_channel_add: [],
+                        listening_channel_remove: [],
+                      };
+                      
+                      // Only registered users can see cert hash
+                      if (session.cert_hash && client.user_id > 0) {
+                        userStateData.hash = session.cert_hash;
+                      }
+                      
+                      const mumbleproto = await import('@munode/protocol').then(m => m.mumbleproto);
+                      const MessageType = await import('@munode/protocol').then(m => m.MessageType);
+                      const userState = new mumbleproto.UserState(userStateData);
+                      const userStateMessage = userState.serialize();
+                      
+                      this.handlerFactory.messageHandler.sendMessage(
+                        client.session,
+                        MessageType.UserState,
+                        Buffer.from(userStateMessage)
+                      );
+                    }
+                  }
+                }
+              }
+              
+              if (remoteSessionCount > 0) {
+                const localClientCount = this.handlerFactory.clientManager.getAllClients()
+                  .filter(c => c.user_id > 0 && c.has_full_user_list).length;
+                this.logger.info(`Broadcasted ${remoteSessionCount} remote users to ${localClientCount} local clients after reconnect`);
+              }
+            }
           } catch (error) {
         this.logger.error('Failed to sync with Hub:', error);
           }

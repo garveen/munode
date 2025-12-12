@@ -277,13 +277,16 @@ export class AuthHandlers {
       // 5. 发送频道树
       this.sendChannelTree(session_id);
 
-      // 6. 发送所有其他用户的状态
-      await this.sendUserListToClient(session_id);
-
-      // 7. 标记客户端已接收完整用户列表
+      // 6. 标记客户端即将接收用户列表
+      // 重要：必须在 sendUserListToClient 之前设置此标志
+      // 这样在用户列表传输过程中，如果其他用户改变状态，Hub 广播的状态更新会被正确处理
+      // 参考 Murmur 实现：https://github.com/mumble-voip/mumble/blob/master/src/murmur/Server.cpp
       this.clientManager.updateClient(session_id, {
         has_full_user_list: true,
       });
+
+      // 7. 发送所有其他用户的状态
+      await this.sendUserListToClient(session_id);
 
       // 8. 获取更新后的客户端信息
       const updatedClient = this.clientManager.getClient(session_id);
