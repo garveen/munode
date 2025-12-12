@@ -1,20 +1,24 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import { RPCChannel, Message, NotificationParams } from '../rpc/rpc-channel.js';
+import type { Logger } from '@munode/common';
 import { EventEmitter } from 'events';
 import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
 
 export interface ControlChannelConfig {
   port: number;
   host?: string;
+  logger?: Logger;
 }
 
 export class ControlChannelServer extends EventEmitter {
   private wss: WebSocketServer;
   private channels = new Map<WebSocket, RPCChannel>();
   private ready: Promise<void>;
+  private logger?: Logger;
 
   constructor(config: ControlChannelConfig) {
     super();
+    this.logger = config.logger;
     
     // 创建 Promise 来跟踪服务器就绪状态
     this.ready = new Promise((resolve, reject) => {
@@ -45,7 +49,7 @@ export class ControlChannelServer extends EventEmitter {
   }
 
   private handleConnection(ws: WebSocket): void {
-    const channel = new RPCChannel(ws);
+    const channel = new RPCChannel(ws, this.logger);
     this.channels.set(ws, channel);
 
     // 监听请求

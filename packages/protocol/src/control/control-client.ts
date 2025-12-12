@@ -2,12 +2,14 @@ import WebSocket from 'ws';
 import { RPCChannel, type NotificationParams } from '../rpc/rpc-channel.js';
 import { TypedRPCClient, createTypedRPCClient } from '../rpc/typed-rpc-client.js';
 import type { RPCParams, RPCResult, EdgeToHubMethods } from '../rpc/rpc-types.js';
+import type { Logger } from '@munode/common';
 import { EventEmitter } from 'events';
 
 export interface ControlChannelClientConfig {
   host: string;
   port: number;
   tls?: boolean;
+  logger?: Logger;
 }
 
 export class ControlChannelClient extends EventEmitter {
@@ -16,9 +18,11 @@ export class ControlChannelClient extends EventEmitter {
   private typedClient: TypedRPCClient | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private isConnecting = false;
+  private logger?: Logger;
 
   constructor(private config: ControlChannelClientConfig) {
     super();
+    this.logger = config.logger;
   }
 
   /**
@@ -39,7 +43,7 @@ export class ControlChannelClient extends EventEmitter {
 
       this.ws.on('open', () => {
         this.isConnecting = false;
-        this.channel = new RPCChannel(this.ws);
+        this.channel = new RPCChannel(this.ws, this.logger);
         this.typedClient = createTypedRPCClient(this.channel);
         this.setupChannel();
         this.emit('connect');

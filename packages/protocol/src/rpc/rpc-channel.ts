@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import { hubedge } from '../generated/proto/HubEdge.js';
 import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
-import { logger } from '@munode/common';
+import type { Logger } from '@munode/common';
 
 const { EdgeHubPacket, PacketType, RPCError: ProtoRPCError, Heartbeat, HeartbeatAck } = hubedge;
 
@@ -176,10 +176,12 @@ export class RPCChannel extends EventEmitter {
   private pendingRequests = new Map<string, PendingRequest>();
   private requestTimeout = 30000;
   private heartbeatSeq = 0;
+  private logger?: Logger;
 
-  constructor(ws: WebSocket) {
+  constructor(ws: WebSocket, logger?: Logger) {
     super();
     this.ws = ws;
+    this.logger = logger;
     this.setupWebSocket();
   }
 
@@ -401,7 +403,7 @@ export class RPCChannel extends EventEmitter {
     }
 
     if (error) {
-      logger.error(`RPC Error response for ${method}:`, error);
+      this.logger?.error(`RPC Error response for ${method}:`, error);
       const packet = new EdgeHubPacket({
         type: PacketType.PACKET_TYPE_RPC_ERROR,
         rpc_error: new ProtoRPCError({

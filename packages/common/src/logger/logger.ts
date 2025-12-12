@@ -66,9 +66,6 @@ export function createLogger(options: {
   return loggerInstance;
 }
 
-// 默认 logger，使用全局日志级别
-export const logger = createLogger({ level: getGlobalLogLevel() });
-
 /**
  * 设置全局日志级别
  * 会更新所有已创建的logger实例
