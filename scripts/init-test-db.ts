@@ -28,7 +28,7 @@ async function initTestDatabase() {
       path: dbPath,
       backupDir: './data/backups',
       backupInterval: 3600000, // 1小时
-    });
+    }, logger);
 
     // 设置测试环境变量以禁用备份
     process.env.NODE_ENV = 'test';
