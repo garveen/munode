@@ -37,7 +37,7 @@ export class CertificateExchangeService {
         issuer: cert.issuer,
       });
 
-    this.logger.info(`Certificate registered for Edge ${server_id}`);
+    this.logger.debug(`Certificate registered for Edge ${server_id}`);
     } catch (error) {
     this.logger.error(`Failed to register certificate for Edge ${server_id}:`, error);
       throw error;
@@ -110,7 +110,7 @@ export class CertificateExchangeService {
 
     for (const server_id of toRemove) {
       this.certificates.delete(server_id);
-    this.logger.info(`Removed expired certificate for Edge ${server_id}`);
+    this.logger.debug(`Removed expired certificate for Edge ${server_id}`);
     }
   }
 

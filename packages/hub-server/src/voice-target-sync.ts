@@ -41,13 +41,13 @@ export class VoiceTargetSyncService {
     if (vtConfig === null) {
       // 删除配置
       clientConfigs.delete(target_id);
-    this.logger.info(
+    this.logger.debug(
         `VoiceTarget deleted: Edge ${edge_id}, Session ${client_session}, Target ${target_id}`
       );
     } else {
       // 更新配置
       clientConfigs.set(target_id, vtConfig);
-    this.logger.info(
+    this.logger.debug(
         `VoiceTarget synced: Edge ${edge_id}, Session ${client_session}, Target ${target_id}`
       );
     }

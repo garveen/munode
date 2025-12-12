@@ -110,14 +110,14 @@ export class HubAuthManager {
     this.config.responseFields.reasonField = this.config.responseFields.reasonField || 'reason';
 
     if (this.config.callback) {
-    this.logger.info('Hub Authentication Manager initialized with callback function');
+    this.logger.debug('Hub Authentication Manager initialized with callback function');
     } else if (this.config.apiUrl) {
-    this.logger.info('Hub Authentication Manager initialized with API URL', { 
+    this.logger.debug('Hub Authentication Manager initialized with API URL', { 
         apiUrl: this.config.apiUrl,
         contentType: this.config.contentType 
       });
     } else {
-    this.logger.info('Hub Authentication Manager initialized with local authentication');
+    this.logger.debug('Hub Authentication Manager initialized with local authentication');
     }
 
     // 定期清理过期缓存

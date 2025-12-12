@@ -44,7 +44,7 @@ export class HubServer {
       level: config.logLevel || 'info'
     });
     
-    this.logger.info('Hub Server configuration validated and initialized');
+    this.logger.debug('Hub Server configuration validated and initialized');
   }
 
   /**
@@ -69,9 +69,9 @@ export class HubServer {
     if (this.config.blobStore.enabled) {
       this.blobStore = new BlobStore(this.config.blobStore.path, true);
       await this.blobStore.init();
-    this.logger.info('BlobStore enabled');
+    this.logger.debug('BlobStore enabled');
     } else {
-    this.logger.info('BlobStore disabled');
+    this.logger.debug('BlobStore disabled');
     }
 
 
@@ -104,7 +104,7 @@ export class HubServer {
       });
     }
 
-    this.logger.info('Hub Server initialized', {
+    this.logger.debug('Hub Server initialized', {
        server_id: this.config.server_id,
       host: this.config.host,
       port: this.config.port,
@@ -122,7 +122,7 @@ export class HubServer {
     }
 
     try {
-    this.logger.info('Starting Hub Server...');
+    this.logger.debug('Starting Hub Server...');
 
       // 初始化组件
       await this.init();
@@ -136,7 +136,7 @@ export class HubServer {
       // 启动语音 UDP 传输
       if (this.voiceTransport) {
         await this.voiceTransport.start(); 
-    this.logger.info('Voice UDP transport started', {
+    this.logger.debug('Voice UDP transport started', {
           port: this.config.voicePort,
         });
       }
@@ -187,7 +187,7 @@ export class HubServer {
       // 停止语音 UDP 传输
       if (this.voiceTransport) {
         this.voiceTransport.stop();
-    this.logger.info('Voice UDP transport stopped');
+    this.logger.debug('Voice UDP transport stopped');
       }
 
       // 停止控制信道服务（这会触发 Edge 断开连接）
@@ -284,7 +284,7 @@ export class HubServer {
       // 重启后所有用户需要重新登录
       // VoiceTarget 配置也是会话相关的，同样不持久化
 
-    this.logger.info('Persistent data loaded', {
+    this.logger.debug('Persistent data loaded', {
         edges: edges.length,
       });
     } catch (error) {

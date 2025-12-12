@@ -73,7 +73,7 @@ export class VoiceRouter extends EventEmitter {
     super();
     this.config = config;
     this.logger = logger;
-    this.logger.info('VoiceRouter initialized with event-driven cache');
+    this.logger.debug('VoiceRouter initialized with event-driven cache');
   }
 
   /**
@@ -120,7 +120,7 @@ export class VoiceRouter extends EventEmitter {
       }
     }
     
-    this.logger.info(
+    this.logger.debug(
       `Set crypto for client ${session_id}: ` +
       `key=${key.toString('hex')}, ` +
       `encryptIV=${encryptIV.toString('hex')}, ` +
@@ -271,7 +271,7 @@ export class VoiceRouter extends EventEmitter {
    */
   handleVoiceTunnel(session_id: number, data: Buffer): void {
     try {
-      this.logger.info(`[TCP-VOICE] Received voice tunnel from session ${session_id}, data length: ${data.length}`);
+      this.logger.debug(`[TCP-VOICE] Received voice tunnel from session ${session_id}, data length: ${data.length}`);
       
       // 注意：根据 Mumble 协议，UDPTunnel 消息的 data 直接就是语音包数据
       // 不像其他消息类型需要 protobuf 反序列化
@@ -291,7 +291,7 @@ export class VoiceRouter extends EventEmitter {
         return;
       }
 
-      this.logger.info(`[TCP-VOICE] Decrypting voice packet from session ${session_id}`);
+      this.logger.debug(`[TCP-VOICE] Decrypting voice packet from session ${session_id}`);
       // 解密语音包
       const decrypted = crypto.decrypt(data);
       if (!decrypted.valid) {
@@ -300,7 +300,7 @@ export class VoiceRouter extends EventEmitter {
       }
 
       const voicePacketData = decrypted.data;
-      this.logger.info(`[TCP-VOICE] Voice packet decrypted: ${data.length} -> ${voicePacketData.length} bytes`);
+      this.logger.debug(`[TCP-VOICE] Voice packet decrypted: ${data.length} -> ${voicePacketData.length} bytes`);
       
       // 解析语音包
       const packet = this.parseVoicePacket(voicePacketData);
@@ -310,7 +310,7 @@ export class VoiceRouter extends EventEmitter {
       }
 
       packet.sender_session = session_id;
-      this.logger.info(
+      this.logger.debug(
         `[TCP-VOICE] Voice tunnel: sender=${session_id}, target=${packet.target}, codec=${packet.codec}, packet_size=${voicePacketData.length}`
       );
 
@@ -406,7 +406,7 @@ export class VoiceRouter extends EventEmitter {
         return;
       }
       
-      this.logger.info(
+      this.logger.debug(
         `[VOICE-REMOTE] Found VoiceTarget for session ${packet.sender_session}, ` +
         `target ${packet.target}, config=${JSON.stringify(voiceTarget)}`
       );
@@ -813,7 +813,7 @@ export class VoiceRouter extends EventEmitter {
       sentCount++;
     }
 
-    this.logger.info(`[VOICE] Whisper from ${sender ? sender.username : 'remote-' + packet.sender_session} sent to ${sentCount} clients using voice target ${packet.target} (indexed lookup)`);
+    this.logger.debug(`[VOICE] Whisper from ${sender ? sender.username : 'remote-' + packet.sender_session} sent to ${sentCount} clients using voice target ${packet.target} (indexed lookup)`);
 
     // 触发事件供VoiceManager进行跨Edge广播
     // 但如果是远程语音包处理（skipBroadcast=true），则跳过广播避免循环
@@ -1372,13 +1372,13 @@ export class VoiceRouter extends EventEmitter {
       return;
     }
 
-    this.logger.info(`[TCP-VOICE] Sending voice via TCP to ${client.username} (${client.session}), voice data size: ${voiceData.length}`);
+    this.logger.debug(`[TCP-VOICE] Sending voice via TCP to ${client.username} (${client.session}), voice data size: ${voiceData.length}`);
 
     // 加密语音数据
     let encrypted: Buffer;
     try {
       encrypted = crypto.encrypt(voiceData);
-      this.logger.info(`[TCP-VOICE] Encrypted voice data size: ${encrypted.length}`);
+      this.logger.debug(`[TCP-VOICE] Encrypted voice data size: ${encrypted.length}`);
     } catch (error) {
       this.logger.error(`Failed to encrypt voice packet for client ${client.session}:`, error);
       return;
@@ -1386,9 +1386,9 @@ export class VoiceRouter extends EventEmitter {
 
     // 将加密的语音数据包装到UDPTunnel protobuf消息中
     // 这样客户端接收时可以正确解析
-    this.logger.info(`[TCP-VOICE] Emitting sendTCPVoicePacket event for ${client.username} (${client.session}), encrypted size: ${encrypted.length}`);
+    this.logger.debug(`[TCP-VOICE] Emitting sendTCPVoicePacket event for ${client.username} (${client.session}), encrypted size: ${encrypted.length}`);
     this.emit('sendTCPVoicePacket', client.session, encrypted);
-    this.logger.info(`[TCP-VOICE] Event emitted successfully`);
+    this.logger.debug(`[TCP-VOICE] Event emitted successfully`);
   }
   
   // ===== 缓存管理方法（事件驱动，主动重建） =====
@@ -1458,7 +1458,7 @@ export class VoiceRouter extends EventEmitter {
       this.rebuildChannelCache(channel.id);
     }
     
-    this.logger.info(`[VOICE-CACHE] Rebuilt PTT cache for ${channels.length} channels`);
+    this.logger.debug(`[VOICE-CACHE] Rebuilt PTT cache for ${channels.length} channels`);
   }
   
   /**
@@ -1471,7 +1471,7 @@ export class VoiceRouter extends EventEmitter {
     this.serializedPacketCache.clear();
     
     if (count > 0) {
-      this.logger.info(`[VOICE-CACHE] Cleared all caches: ${count} routing entries`);
+      this.logger.debug(`[VOICE-CACHE] Cleared all caches: ${count} routing entries`);
     }
   }
   

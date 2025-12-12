@@ -132,13 +132,13 @@ export class EdgeControlClient extends EventEmitter {
 
     try {
       // 第一阶段：请求挑战码
-      this.logger.info('Requesting challenge from Hub...');
+      this.logger.debug('Requesting challenge from Hub...');
       const challengeResponse = await this.client.call('edge.register', registerParams);
       
       // 如果 Hub 返回了 challenge，进行第二阶段认证
       if (!challengeResponse.success && challengeResponse.challenge) {
         const challenge = challengeResponse.challenge;
-        this.logger.info('Received challenge, computing response...');
+        this.logger.debug('Received challenge, computing response...');
         
         // 计算 HMAC 签名
         const hmacSecret = this.config.hubServer?.hmacSecret;
@@ -155,7 +155,7 @@ export class EdgeControlClient extends EventEmitter {
           challenge_response: challengeResponseValue,
         };
         
-        this.logger.info('Submitting challenge response...');
+        this.logger.debug('Submitting challenge response...');
         const finalResponse = await this.client.call('edge.register', authParams);
         
         if (!finalResponse.success) {
@@ -163,7 +163,7 @@ export class EdgeControlClient extends EventEmitter {
         }
         
         this.registered = true;
-        this.logger.info(`Registered with Hub: ${JSON.stringify(finalResponse)}`);
+        this.logger.debug(`Registered with Hub: ${JSON.stringify(finalResponse)}`);
         this.emit('registered', finalResponse);
       } else if (challengeResponse.success) {
         // Hub 未启用认证，直接注册成功

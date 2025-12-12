@@ -111,7 +111,7 @@ export class UDPMonitor extends EventEmitter {
       this.emit('connectionUnstable', sessionId, stats);
     } else if (!stats.unstable && wasUnstable) {
       this.unstableSessions.delete(sessionId);
-      this.logger.info(`UDP connection stabilized for session ${sessionId}`);
+      this.logger.debug(`UDP connection stabilized for session ${sessionId}`);
       this.emit('connectionStabilized', sessionId, stats);
     }
 
@@ -244,6 +244,6 @@ export class UDPMonitor extends EventEmitter {
     this.pingHistory.clear();
     this.packetStats.clear();
     this.unstableSessions.clear();
-    this.logger.info('UDP monitor stats reset');
+    this.logger.debug('UDP monitor stats reset');
   }
 }

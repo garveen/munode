@@ -132,7 +132,7 @@ export class VoiceRoutingManager extends EventEmitter {
     // 初始化中转统计
     this.relayStats = this.initRelayStats();
     
-    this.logger.info(`VoiceRoutingManager initialized for Edge ${this.serverId}`);
+    this.logger.debug(`VoiceRoutingManager initialized for Edge ${this.serverId}`);
   }
 
   /**
@@ -181,7 +181,7 @@ export class VoiceRoutingManager extends EventEmitter {
    * 启动路由管理器
    */
   async start(): Promise<void> {
-    this.logger.info(`Starting VoiceRoutingManager, enabled: ${this._isEnabled}`);
+    this.logger.debug(`Starting VoiceRoutingManager, enabled: ${this._isEnabled}`);
     
     if (!this._isEnabled) {
       this.logger.debug('Voice routing is disabled, skipping timer setup');
@@ -201,14 +201,14 @@ export class VoiceRoutingManager extends EventEmitter {
     // 启动指标清理定时器
     this.startMetricsCleanup();
     
-    this.logger.info('VoiceRoutingManager started');
+    this.logger.debug('VoiceRoutingManager started');
   }
 
   /**
    * 停止路由管理器
    */
   async stop(): Promise<void> {
-    this.logger.info('Stopping VoiceRoutingManager');
+    this.logger.debug('Stopping VoiceRoutingManager');
     
     if (this.localRouteUpdateTimer) {
       clearInterval(this.localRouteUpdateTimer);
@@ -230,7 +230,7 @@ export class VoiceRoutingManager extends EventEmitter {
     this.validationCache.clear();
     this.statsCache = null;
     
-    this.logger.info('VoiceRoutingManager stopped');
+    this.logger.debug('VoiceRoutingManager stopped');
   }
 
   /**
@@ -242,11 +242,11 @@ export class VoiceRoutingManager extends EventEmitter {
     
     if (enabled && !wasEnabled) {
       // 启用功能
-      this.logger.info('Voice routing enabled by Hub configuration');
+      this.logger.debug('Voice routing enabled by Hub configuration');
       this.start();
     } else if (!enabled && wasEnabled) {
       // 禁用功能
-      this.logger.info('Voice routing disabled by Hub configuration');
+      this.logger.debug('Voice routing disabled by Hub configuration');
       this.stop();
     }
   }
@@ -256,7 +256,7 @@ export class VoiceRoutingManager extends EventEmitter {
    */
   updateHubPolicy(policy: EdgeRoutingPolicy): void {
     this.voiceRoutingConfig.hubPolicy = policy;
-    this.logger.info('Hub routing policy updated', { policy });
+    this.logger.debug('Hub routing policy updated', { policy });
     
     // 触发路由重新计算
     this.emit('policy-updated', policy);
@@ -266,7 +266,7 @@ export class VoiceRoutingManager extends EventEmitter {
    * 处理 Hub 推送的路由表
    */
   handleHubRouteTable(routes: RouteEntry[]): void {
-    this.logger.info(`Received ${routes.length} routes from Hub`);
+    this.logger.debug(`Received ${routes.length} routes from Hub`);
     
     this.hubRouteTable.clear();
     for (const route of routes) {
@@ -331,10 +331,10 @@ export class VoiceRoutingManager extends EventEmitter {
     
     // 记录路由变化
     if (oldRoute) {
-      this.logger.info(`Route updated: Edge ${route.targetEdgeId}, ` +
+      this.logger.debug(`Route updated: Edge ${route.targetEdgeId}, ` +
                   `${oldRoute.type} -> ${route.type}, cost: ${route.cost.toFixed(2)}`);
     } else {
-      this.logger.info(`Route added: Edge ${route.targetEdgeId}, ` +
+      this.logger.debug(`Route added: Edge ${route.targetEdgeId}, ` +
                   `type: ${route.type}, cost: ${route.cost.toFixed(2)}`);
     }
     

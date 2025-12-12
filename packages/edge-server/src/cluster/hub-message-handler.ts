@@ -43,7 +43,7 @@ export class HubMessageHandlers {
    */
   handleUserStateBroadcastFromHub(params: HubNotificationParams<'hub.userStateBroadcast'>): void {
     try {
-        this.logger.info(`Edge: Received UserState broadcast from Hub: ${JSON.stringify(params)}`);
+        this.logger.debug(`Edge: Received UserState broadcast from Hub: ${JSON.stringify(params)}`);
       
       // params is the userState object directly, use the type from HubNotificationParams
       // Build UserState protobuf message with only the fields that are set
@@ -366,7 +366,7 @@ export class HubMessageHandlers {
             this.stateManager.addOrUpdateChannel(updatedChannel);
             
             if (existingChannel.id === 0 && updates.links) {
-        this.logger.info(`[HUB-HANDLER] Updated stateManager channel 0 with links: [${updates.links.join(', ')}]`);
+        this.logger.debug(`[HUB-HANDLER] Updated stateManager channel 0 with links: [${updates.links.join(', ')}]`);
             }
           }
         } else {

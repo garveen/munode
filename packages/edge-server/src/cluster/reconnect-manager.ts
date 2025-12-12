@@ -74,7 +74,7 @@ export class ReconnectManager extends EventEmitter {
           this.reconnectAttempts++;
           const elapsed = Date.now() - startTime;
 
-          this.logger.info(`Hub reconnect attempt ${this.reconnectAttempts} (elapsed: ${elapsed}ms)`);
+          this.logger.debug(`Hub reconnect attempt ${this.reconnectAttempts} (elapsed: ${elapsed}ms)`);
 
           this.callbacks
             .connectToHub()
@@ -130,38 +130,38 @@ export class ReconnectManager extends EventEmitter {
 
     try {
       // 1. 通知所有客户端（可选，取决于ClientManager的实现）
-      this.logger.info('Step 1/5: Notifying clients');
+      this.logger.debug('Step/5: Notifying clients');
       // this.notifyAllClients('Server is reconnecting, please wait...');
 
       // 2. 断开所有Peer连接
-      this.logger.info('Step 2/5: Disconnecting from peers');
+      this.logger.debug('Step/5: Disconnecting from peers');
       this.callbacks.disconnectAllPeers();
 
       // 3. 断开所有客户端
-      this.logger.info('Step 3/5: Disconnecting clients');
+      this.logger.debug('Step/5: Disconnecting clients');
       this.callbacks.disconnectAllClients();
 
       // 4. 断开Hub
-      this.logger.info('Step 4/5: Disconnecting from Hub');
+      this.logger.debug('Step/5: Disconnecting from Hub');
       this.callbacks.disconnectFromHub();
 
       // 5. 清理状态
-      this.logger.info('Step 5/5: Clearing state');
+      this.logger.debug('Step/5: Clearing state');
       this.callbacks.clearState();
 
       this.logger.warn('=== Full disconnect complete ===');
       this.emit('full-disconnect-complete');
 
       // 6. 延迟后重新加入
-      this.logger.info(`Waiting ${this.config.rejoinDelay}ms before rejoin...`);
+      this.logger.debug(`Waiting ${this.config.rejoinDelay}ms before rejoin......`);
       await this.sleep(this.config.rejoinDelay);
 
-      this.logger.info('=== Starting rejoin procedure ===');
+      this.logger.debug('=== Starting rejoin procedure ===');
       this.emit('rejoin-started');
 
       await this.callbacks.joinCluster();
 
-      this.logger.info('=== Rejoin complete ===');
+      this.logger.debug('=== Rejoin complete ===');
       this.emit('rejoin-complete');
     } catch (error) {
       this.logger.error('Failed to rejoin cluster:', error);

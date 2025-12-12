@@ -74,7 +74,7 @@ export class ChannelGroupManager {
    * 初始化频道组管理器
    */
   async init(): Promise<void> {
-    this.logger.info('ChannelGroupManager initialized');
+    this.logger.debug('ChannelGroupManager initialized');
   }
 
   /**
@@ -233,7 +233,7 @@ export class ChannelGroupManager {
     // 清除缓存
     this.invalidateCache(channel_id);
 
-    this.logger.info(`Saved ${channelGroups.length} channel groups for channel ${channel_id}`);
+    this.logger.debug(`Saved ${channelGroups.length} channel groups for channel ${channel_id}`);
   }
 
   /**

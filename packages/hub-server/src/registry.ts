@@ -72,7 +72,7 @@ export class ServiceRegistry {
         const newChallenge = this.generateChallenge(server_id);
         const challengeTimeout = this.config.challengeTimeout || 60000;
         
-    this.logger.info(`Generated challenge for Edge ${server_id}`);
+    this.logger.debug(`Generated challenge for Edge ${server_id}`);
         
         return {
           success: false,
@@ -108,7 +108,7 @@ export class ServiceRegistry {
       
       // 验证通过，清理挑战码
       this.challenges.delete(challenge);
-    this.logger.info(`Edge ${server_id} authenticated successfully`);
+    this.logger.debug(`Edge ${server_id} authenticated successfully`);
     }
 
     // 检查是否已存在

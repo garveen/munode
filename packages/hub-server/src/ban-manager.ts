@@ -75,7 +75,7 @@ export class BanManager {
       }
     }
 
-    this.logger.info(`Loaded ${bans.length} bans from database`, {
+    this.logger.debug(`Loaded ${bans.length} bans from database`, {
       certBans: this.certBanIndex.size,
       ipBans: this.ipBans.length,
     });
@@ -247,7 +247,7 @@ export class BanManager {
     }
 
     if (toRemove.length > 0) {
-    this.logger.info(`Cleaned up ${toRemove.length} expired bans`);
+    this.logger.debug(`Cleaned up ${toRemove.length} expired bans`);
     }
   }
 }

@@ -59,7 +59,7 @@ export class ChannelManager {
       };
       this.channelCache.set(ch.id, channelData);
     }
-    this.logger.info(`Loaded ${dbChannels.length} channels from database`);
+    this.logger.debug(`Loaded ${dbChannels.length} channels from database`);
   }
 
   /**
