@@ -384,6 +384,77 @@ export class EventSetupManager {
             // Process sync data
             this.handlerFactory.stateManager.loadSnapshot(syncData);
         this.logger.info('Full sync completed successfully');
+            
+            // Process sessions from fullSync - broadcast remote users to local clients
+            // This is critical after edge reconnection to ensure all clients see users on other edges
+            if (syncData.sessions && Array.isArray(syncData.sessions)) {
+              const localEdgeId = this.handlerFactory.config.server_id;
+              const remoteSessionCount = syncData.sessions.filter(s => s.edge_id !== localEdgeId).length;
+              this.logger.info(`Processing ${remoteSessionCount} remote user sessions from fullSync`);
+              
+              // Import protocol dependencies once before the loop
+              const mumbleproto = await import('@munode/protocol').then(m => m.mumbleproto);
+              const MessageType = await import('@munode/protocol').then(m => m.MessageType);
+              
+              // Get local clients once before the loop
+              const allClients = this.handlerFactory.clientManager.getAllClients();
+              const authenticatedClients = allClients.filter(c => c.user_id > 0 && c.has_full_user_list);
+              
+              for (const session of syncData.sessions) {
+                // Only process sessions from other edges
+                if (session.edge_id !== localEdgeId) {
+                  // Add to remote users map
+                  this.handlerFactory.stateManager.addRemoteUser(
+                    session.session_id,
+                    session.edge_id,
+                    session.channel_id ?? 0
+                  );
+                  
+                  // Build UserState message for this remote user (once per session)
+                  const userStateData: {
+                    session: number;
+                    user_id: number;
+                    name: string;
+                    channel_id: number;
+                    temporary_access_tokens: string[];
+                    listening_channel_add: number[];
+                    listening_channel_remove: number[];
+                    hash?: string;
+                  } = {
+                    session: session.session_id,
+                    user_id: session.user_id,
+                    name: session.username,
+                    channel_id: session.channel_id ?? 0,
+                    temporary_access_tokens: [],
+                    listening_channel_add: [],
+                    listening_channel_remove: [],
+                  };
+                  
+                  // Only registered users can see cert hash
+                  const includeHash = session.cert_hash !== undefined;
+                  if (includeHash) {
+                    userStateData.hash = session.cert_hash;
+                  }
+                  
+                  const userState = new mumbleproto.UserState(userStateData);
+                  const userStateMessage = userState.serialize();
+                  const userStateBuffer = Buffer.from(userStateMessage);
+                  
+                  // Broadcast to all local authenticated clients
+                  for (const client of authenticatedClients) {
+                    this.handlerFactory.messageHandler.sendMessage(
+                      client.session,
+                      MessageType.UserState,
+                      userStateBuffer
+                    );
+                  }
+                }
+              }
+              
+              if (remoteSessionCount > 0) {
+                this.logger.info(`Broadcasted ${remoteSessionCount} remote users to ${authenticatedClients.length} local clients after reconnect`);
+              }
+            }
           } catch (error) {
         this.logger.error('Failed to sync with Hub:', error);
           }
