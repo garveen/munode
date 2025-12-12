@@ -68,6 +68,9 @@ export class VoiceRouter extends EventEmitter {
     ttl: 1000, // 1秒 TTL，语音包时效性很强
     updateAgeOnGet: false, // 获取时不更新 TTL
   });
+  
+  // 性能优化：复用 UDP 发送错误处理器，避免为每个包创建新的回调函数
+  private udpErrorHandlers: Map<number, (err?: Error) => void> = new Map();
 
   constructor(config: EdgeConfig, logger: Logger) {
     super();
@@ -133,6 +136,8 @@ export class VoiceRouter extends EventEmitter {
    */
   removeClientCrypto(session_id: number): void {
     this.clientCryptos.delete(session_id);
+    // 性能优化：同时清理错误处理器
+    this.udpErrorHandlers.delete(session_id);
     this.logger.debug(`Removed crypto for client ${session_id}`);
   }
 
@@ -1321,6 +1326,7 @@ export class VoiceRouter extends EventEmitter {
 
   /**
    * 通过UDP发送语音包到客户端
+   * 性能优化：复用错误处理器，避免为每个包创建新的回调函数
    */
   private sendVoicePacketViaUDP(client: ClientInfo, voiceData: Buffer): void {
     if (!this.udpServer) {
@@ -1344,17 +1350,24 @@ export class VoiceRouter extends EventEmitter {
       return;
     }
 
-    // 发送UDP包
-    try {
-      this.udpServer.send(encrypted, client.udp_port, client.udp_ip, (err) => {
+    // 性能优化：复用每个客户端的错误处理器，避免每次发送都创建新函数
+    let errorHandler = this.udpErrorHandlers.get(client.session);
+    if (!errorHandler) {
+      errorHandler = (err?: Error) => {
         if (err) {
-          this.logger.error(`Failed to send voice packet via UDP to ${client.username} (${client.session}):`, err);
+          this.logger.error(`Failed to send voice packet via UDP to session ${client.session}:`, err);
           // UDP发送失败，标记客户端UDP为不可用
           if (this.clientManager) {
             this.clientManager.updateClient(client.session, { udp: false });
           }
         }
-      });
+      };
+      this.udpErrorHandlers.set(client.session, errorHandler);
+    }
+
+    // 发送UDP包
+    try {
+      this.udpServer.send(encrypted, client.udp_port, client.udp_ip, errorHandler);
     } catch (error) {
       this.logger.error(`Error sending voice packet via UDP to ${client.username} (${client.session}):`, error);
     }

@@ -117,6 +117,7 @@ export class OCB2AES128 {
 
   /**
    * 加密数据
+   * 性能优化：使用 Buffer.allocUnsafe 减少初始化开销（数据会被完全覆盖）
    */
   encrypt(plainText: Buffer): Buffer {
     if (!this.ready() || !this.encryptCipher) {
@@ -124,7 +125,7 @@ export class OCB2AES128 {
     }
 
     // 递增加密IV
-    const encryptIV = this.encryptIV;
+    const encryptIV = this.encryptIV!;
     for (let i = 0; i < OCB2AES128.BLOCK_SIZE; i++) {
       if (++encryptIV[i] === 256) {
         encryptIV[i] = 0;
@@ -134,9 +135,10 @@ export class OCB2AES128 {
     }
 
     // 复用缓存的 cipher 实例
-    const aesEncrypt = (data: Buffer) => this.encryptCipher.update(data);
+    const aesEncrypt = (data: Buffer) => this.encryptCipher!.update(data);
 
-    const cipherText = Buffer.alloc(plainText.length + 4);
+    // 性能优化：使用 allocUnsafe，数据会被完全填充
+    const cipherText = Buffer.allocUnsafe(plainText.length + 4);
     const tag = this.ocbEncrypt(plainText, cipherText.subarray(4), encryptIV, aesEncrypt);
 
     cipherText[0] = encryptIV[0];
@@ -149,6 +151,7 @@ export class OCB2AES128 {
 
   /**
    * 解密数据
+   * 性能优化：使用 Buffer.allocUnsafe 减少初始化开销（数据会被完全覆盖）
    */
   decrypt(cipherText: Buffer): { data: Buffer; valid: boolean } {
     if (!this.ready() || !this.decryptCipherEnc || !this.decryptCipherDec) {
@@ -156,7 +159,7 @@ export class OCB2AES128 {
     }
 
     if (cipherText.length < 4) {
-      return { data: Buffer.alloc(0), valid: false };
+      return { data: Buffer.allocUnsafe(0), valid: false };
     }
 
     const decryptIV = this.decryptIV;
@@ -239,10 +242,11 @@ export class OCB2AES128 {
     }
 
     // 复用缓存的 cipher 实例
-    const aesEncrypt = (data: Buffer) => this.decryptCipherEnc.update(data);
-    const aesDecrypt = (data: Buffer) => this.decryptCipherDec.update(data);
+    const aesEncrypt = (data: Buffer) => this.decryptCipherEnc!.update(data);
+    const aesDecrypt = (data: Buffer) => this.decryptCipherDec!.update(data);
 
-    const plainText = Buffer.alloc(cipherText.length - 4);
+    // 性能优化：使用 allocUnsafe，数据会被 ocbDecrypt 完全覆盖
+    const plainText = Buffer.allocUnsafe(cipherText.length - 4);
     const tag = this.ocbDecrypt(
       cipherText.subarray(4),
       plainText,
@@ -253,7 +257,7 @@ export class OCB2AES128 {
 
     if (tag.compare(cipherText, 1, 4, 0, 3) !== 0) {
       saveiv.copy(this.decryptIV);
-      return { data: Buffer.alloc(0), valid: false };
+      return { data: Buffer.allocUnsafe(0), valid: false };
     }
 
     this.decryptHistory[decryptIV[0]] = decryptIV[1];
@@ -284,6 +288,7 @@ export class OCB2AES128 {
 
   /**
    * OCB 加密
+   * 性能优化：复用预分配的工作 Buffer
    */
   private ocbEncrypt(
     plainText: Buffer,
@@ -291,8 +296,9 @@ export class OCB2AES128 {
     nonce: Buffer,
     aesEncrypt: (data: Buffer) => Buffer
   ): Buffer {
-    const checksum = Buffer.alloc(OCB2AES128.BLOCK_SIZE);
-    const tmp = Buffer.alloc(OCB2AES128.BLOCK_SIZE);
+    // 复用预分配的 Buffer，减少 GC 压力
+    const checksum = this.workBuffer.checksum;
+    const tmp = this.workBuffer.tmp;
 
     const delta = aesEncrypt(nonce);
     this.zero(checksum);
@@ -332,6 +338,7 @@ export class OCB2AES128 {
 
   /**
    * OCB 解密
+   * 性能优化：复用预分配的工作 Buffer
    */
   private ocbDecrypt(
     cipherText: Buffer,
@@ -340,8 +347,9 @@ export class OCB2AES128 {
     aesEncrypt: (data: Buffer) => Buffer,
     aesDecrypt: (data: Buffer) => Buffer
   ): Buffer {
-    const checksum = Buffer.alloc(OCB2AES128.BLOCK_SIZE);
-    const tmp = Buffer.alloc(OCB2AES128.BLOCK_SIZE);
+    // 复用预分配的 Buffer，减少 GC 压力
+    const checksum = this.workBuffer.checksum;
+    const tmp = this.workBuffer.tmp;
 
     const delta = aesEncrypt(nonce);
     this.zero(checksum);
@@ -381,10 +389,31 @@ export class OCB2AES128 {
 
   /**
    * XOR 操作
+   * 性能优化：使用 BigUint64 批量操作，减少循环次数
+   * 16 字节 = 2 个 8 字节操作，比 16 次单字节操作快
    */
   private xor(dst: Buffer, a: Buffer, b: Buffer): void {
-    for (let i = 0; i < OCB2AES128.BLOCK_SIZE; i++) {
-      dst[i] = a[i] ^ b[i];
+    // 使用 DataView 进行 8 字节批量操作
+    // 注意：必须检查对齐，否则在某些平台上可能出错
+    // Buffer 通常是对齐的，但为了安全起见，我们使用 try-catch
+    try {
+      const dstView = new DataView(dst.buffer, dst.byteOffset, dst.byteLength);
+      const aView = new DataView(a.buffer, a.byteOffset, a.byteLength);
+      const bView = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      
+      // 16 字节 = 2 个 BigUint64 (8字节)
+      const a0 = aView.getBigUint64(0, false); // big-endian
+      const b0 = bView.getBigUint64(0, false);
+      dstView.setBigUint64(0, a0 ^ b0, false);
+      
+      const a1 = aView.getBigUint64(8, false);
+      const b1 = bView.getBigUint64(8, false);
+      dstView.setBigUint64(8, a1 ^ b1, false);
+    } catch {
+      // 回退到逐字节操作（不应该发生，但保持安全）
+      for (let i = 0; i < OCB2AES128.BLOCK_SIZE; i++) {
+        dst[i] = a[i] ^ b[i];
+      }
     }
   }
 
