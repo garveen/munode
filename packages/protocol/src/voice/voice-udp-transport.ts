@@ -665,6 +665,10 @@ export class VoiceUDPTransport extends EventEmitter {
   updateEncryptionKey(key: Buffer, algorithm?: string): void {
     const algo = algorithm || this.config.encryptionAlgorithm || 'aes-128-cbc';
     
+    // 更新配置
+    this.config.encryptionKey = key;
+    this.config.encryptionAlgorithm = algo;
+    
     if (this.voiceChannel) {
       this.voiceChannel.updateKey(key);
     } else {
@@ -684,10 +688,10 @@ export class VoiceUDPTransport extends EventEmitter {
    * 获取加密配置
    */
   getEncryptionConfig(): VoiceEncryptionConfig | null {
-    if (!this.voiceChannel) return null;
+    if (!this.voiceChannel || !this.config.encryptionKey) return null;
     return {
       algorithm: this.config.encryptionAlgorithm || 'aes-128-cbc',
-      key: this.config.encryptionKey!,
+      key: this.config.encryptionKey,
     };
   }
 
