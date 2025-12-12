@@ -39,7 +39,7 @@ export class SyncHandler implements ISyncHandler {
 
     // 映射数据库字段到protocol字段，并加载每个频道的链接
     const channels: ChannelData[] = await Promise.all(
-      dbChannels.map(ch => this.mapChannelToProtocol(ch, false))
+      dbChannels.map(ch => this.mapChannelToProtocol(ch))
     );
 
     // 获取所有会话（从内存中的 sessionManager 获取当前活跃会话）
@@ -141,7 +141,7 @@ export class SyncHandler implements ISyncHandler {
 
     // 映射数据库字段到protocol字段，并加载每个频道的链接
     const channels: ChannelData[] = await Promise.all(
-      dbChannels.map(ch => this.mapChannelToProtocol(ch, true))
+      dbChannels.map(ch => this.mapChannelToProtocol(ch))
     );
 
     // DEBUG: 打印映射后的数据
@@ -201,12 +201,12 @@ export class SyncHandler implements ISyncHandler {
     parent_id: number;
     inherit_acl: number;
     description_blob?: string;
-  }, includeRegisterName: boolean = false): Promise<ChannelData> {
+  }): Promise<ChannelData> {
     const links = await this.loadChannelLinks(ch.id);
 
     return {
       channel_id: ch.id,
-      name: includeRegisterName && ch.id === 0 ? (this.factory.getConfig().registerName || 'Root') : ch.name,
+      name: ch.id === 0 ? (this.factory.getConfig().registerName || 'Root') : ch.name,
       parent_id: ch.parent_id >= 0 ? ch.parent_id : undefined, // Skip negative parent_ids (root channel)
       position: ch.position,
       max_users: ch.max_users,
