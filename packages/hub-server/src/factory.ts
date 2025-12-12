@@ -27,7 +27,6 @@ import { ACLHandler, type IACLHandler } from './handlers/acl-handler.js';
 import { ChannelHandler, type IChannelHandler } from './handlers/channel-handler.js';
 import { ClusterHandler, type IClusterHandler } from './handlers/cluster-handler.js';
 import { BlobHandler, type IBlobHandler } from './handlers/blob-handler.js';
-import { EdgeHandler, type IEdgeHandler } from './handlers/edge-handler.js';
 import { HubControlService } from './control-service.js';
 
 
@@ -69,7 +68,6 @@ export class HubHandlerFactory {
   private channelHandler: IChannelHandler;
   private clusterHandler: IClusterHandler;
   private blobHandler: IBlobHandler;
-  private edgeHandler: IEdgeHandler;
 
   private controlService: HubControlService;
 
@@ -108,7 +106,6 @@ export class HubHandlerFactory {
     this.channelHandler = new ChannelHandler(this);
     this.clusterHandler = new ClusterHandler(this);
     this.blobHandler = new BlobHandler(this);
-    this.edgeHandler = new EdgeHandler(this);
   }
 
   static async getInstance(config: HubConfig, database: HubDatabase, controlService: HubControlService, logger: Logger): Promise<HubHandlerFactory> {
@@ -232,13 +229,6 @@ export class HubHandlerFactory {
    */
   getBlobHandler(): IBlobHandler {
     return this.blobHandler;
-  }
-
-  /**
-   * 获取Edge处理器
-   */
-  getEdgeHandler(): IEdgeHandler {
-    return this.edgeHandler;
   }
 
   // 其他getter方法用于访问核心服务

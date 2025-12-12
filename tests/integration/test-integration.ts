@@ -297,7 +297,7 @@ function createHubConfig(): HubConfig {
       path: path.join(__dirname, 'data/blobs'),
     },
     webApi: {
-      enabled: false,
+      enabled: true,
       port: 8081,
       cors: false,
     },
