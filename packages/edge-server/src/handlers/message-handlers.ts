@@ -3,7 +3,6 @@ import { mumbleproto } from '@munode/protocol';
 import { MessageType } from '@munode/protocol';
 import type { ChannelInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
-import * as fs from 'fs';
 
 /**
  * 消息处理器 - 处理文本消息和频道/用户列表发送
@@ -358,10 +357,6 @@ export class MessageHandlers {
           for_user_cert_hash: receiverClient.cert_hash,
         });
         const allSessions = syncData.sessions || [];
-        
-        fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] EDGE ${this.config.server_id} Client ${receiverClient.username} (session=${session_id}) received ${allSessions.length} sessions from fullSync\n`);
-        
-        this.logger.info(`[CROSS-EDGE-DEBUG] Client ${receiverClient.username} (session=${session_id}) received ${allSessions.length} sessions from fullSync: ${JSON.stringify(allSessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}`);
         
         let sentCount = 0;
         for (const session of allSessions) {
