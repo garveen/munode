@@ -197,7 +197,28 @@ export class AuthHandlers {
         this.logger.warn(`hubClient is not connected, cannot report session ${session_id} to Hub`);
       } else {
         try {
-          await this.hubClient.reportSession({
+          // 只上报已显式设置的状态字段
+          const reportData: {
+            session_id: number;
+            user_id: number;
+            username: string;
+            channel_id: number;
+            startTime: Date;
+            ip_address: string;
+            groups: string[];
+            cert_hash?: string;
+            version?: string;
+            release?: string;
+            os?: string;
+            os_version?: string;
+            mute?: boolean;
+            deaf?: boolean;
+            suppress?: boolean;
+            self_mute?: boolean;
+            self_deaf?: boolean;
+            priority_speaker?: boolean;
+            recording?: boolean;
+          } = {
             session_id: session_id,
             user_id: clientBeforeSync.user_id,
             username: clientBeforeSync.username,
@@ -205,21 +226,48 @@ export class AuthHandlers {
             startTime: clientBeforeSync.connected_at || new Date(),
             ip_address: clientBeforeSync.ip_address,
             groups: clientBeforeSync.groups,
-            cert_hash: clientBeforeSync.cert_hash,
-            version: clientBeforeSync.version,
-            release: clientBeforeSync.client_name,
-            os: clientBeforeSync.os_name,
-            os_version: clientBeforeSync.os_version,
-            // Include user state (PreConnect state has been applied in step 3)
-            mute: clientBeforeSync.mute ?? false,
-            deaf: clientBeforeSync.deaf ?? false,
-            suppress: clientBeforeSync.suppress ?? false,
-            self_mute: clientBeforeSync.self_mute ?? false,
-            self_deaf: clientBeforeSync.self_deaf ?? false,
-            priority_speaker: clientBeforeSync.priority_speaker ?? false,
-            recording: clientBeforeSync.recording ?? false,
-          });
-        this.logger.info(`Reported session ${session_id} (${clientBeforeSync.username}) to Hub (before user list sync)`);
+          };
+          
+          // 只添加已显式设置的字段
+          if (clientBeforeSync.cert_hash) reportData.cert_hash = clientBeforeSync.cert_hash;
+          if (clientBeforeSync.version) reportData.version = clientBeforeSync.version;
+          if (clientBeforeSync.client_name) reportData.release = clientBeforeSync.client_name;
+          if (clientBeforeSync.os_name) reportData.os = clientBeforeSync.os_name;
+          if (clientBeforeSync.os_version) reportData.os_version = clientBeforeSync.os_version;
+          
+          // 只上报值为 true 的状态字段（参考 Murmur 实现）
+          const reportedFields: string[] = [];
+          if (clientBeforeSync.mute === true) {
+            reportData.mute = true;
+            reportedFields.push('mute');
+          }
+          if (clientBeforeSync.deaf === true) {
+            reportData.deaf = true;
+            reportedFields.push('deaf');
+          }
+          if (clientBeforeSync.suppress === true) {
+            reportData.suppress = true;
+            reportedFields.push('suppress');
+          }
+          if (clientBeforeSync.self_mute === true) {
+            reportData.self_mute = true;
+            reportedFields.push('self_mute');
+          }
+          if (clientBeforeSync.self_deaf === true) {
+            reportData.self_deaf = true;
+            reportedFields.push('self_deaf');
+          }
+          if (clientBeforeSync.priority_speaker === true) {
+            reportData.priority_speaker = true;
+            reportedFields.push('priority_speaker');
+          }
+          if (clientBeforeSync.recording === true) {
+            reportData.recording = true;
+            reportedFields.push('recording');
+          }
+          
+          await this.hubClient.reportSession(reportData);
+          this.logger.info(`Reported session ${session_id} (${clientBeforeSync.username}) to Hub${reportedFields.length > 0 ? ` with state: [${reportedFields.join(', ')}]` : ' (no state fields)'}`);
         } catch (error) {
         this.logger.error(`Failed to report session ${session_id} to Hub:`, error);
           // Continue even if Hub report fails - local operations should still work
@@ -245,22 +293,48 @@ export class AuthHandlers {
 
       // 9. 发送当前用户的完整状态（必须在 ServerSync 之前）
       // 这是协议握手的关键步骤，客户端期望先收到自己的状态再收到 ServerSync
-      const currentUserState = new mumbleproto.UserState({
+      // 只发送已显式设置的状态字段
+      const currentUserStateData: {
+        session: number;
+        name: string;
+        user_id: number;
+        channel_id: number;
+        temporary_access_tokens: string[];
+        listening_channel_add: number[];
+        listening_channel_remove: number[];
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
+        self_mute?: boolean;
+        self_deaf?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
+      } = {
         session: session_id,
         name: updatedClient.username,
         user_id: updatedClient.user_id,
         channel_id: updatedClient.channel_id,
-        mute: updatedClient.mute || false,
-        deaf: updatedClient.deaf || false,
-        suppress: updatedClient.suppress || false,
-        self_mute: updatedClient.self_mute || false,
-        self_deaf: updatedClient.self_deaf || false,
-        priority_speaker: updatedClient.priority_speaker || false,
-        recording: updatedClient.recording || false,
         temporary_access_tokens: [],
         listening_channel_add: [],
         listening_channel_remove: [],
-      }).serialize();
+      };
+      
+      // 只添加值为 true 的状态字段（参考 Murmur 实现）
+      if (updatedClient.deaf === true) {
+        currentUserStateData.deaf = true;
+      } else if (updatedClient.mute === true) {
+        currentUserStateData.mute = true;
+      }
+      if (updatedClient.suppress === true) currentUserStateData.suppress = true;
+      if (updatedClient.priority_speaker === true) currentUserStateData.priority_speaker = true;
+      if (updatedClient.recording === true) currentUserStateData.recording = true;
+      if (updatedClient.self_deaf === true) {
+        currentUserStateData.self_deaf = true;
+      } else if (updatedClient.self_mute === true) {
+        currentUserStateData.self_mute = true;
+      }
+      
+      const currentUserState = new mumbleproto.UserState(currentUserStateData).serialize();
 
       this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(currentUserState));
         this.logger.debug(`Sent UserState for session ${session_id}: username=${updatedClient.username}, channel_id=${updatedClient.channel_id}`);
@@ -286,7 +360,8 @@ export class AuthHandlers {
       );
 
       // 11. 广播新用户加入给其他已认证客户端
-      // broadcastUserStateToAuthenticatedClients 会根据接收方是否为注册用户决定是否发送证书哈希
+      // 参考 Mumble/Murmur 实现：新用户加入时只广播基本信息，不包含状态字段
+      // 状态字段只在用户显式改变时才广播
       const broadcastStateData: {
         session: number;
         user_id: number;
@@ -296,13 +371,6 @@ export class AuthHandlers {
         listening_channel_add: number[];
         listening_channel_remove: number[];
         hash?: string;
-        mute?: boolean;
-        deaf?: boolean;
-        suppress?: boolean;
-        self_mute?: boolean;
-        self_deaf?: boolean;
-        priority_speaker?: boolean;
-        recording?: boolean;
       } = {
         session: session_id,
         name: updatedClient.username,
@@ -313,15 +381,11 @@ export class AuthHandlers {
         listening_channel_remove: [],
       };
       
-      // 添加非 false 的状态字段
+      // 只添加证书哈希（如果有）
       if (updatedClient.cert_hash) broadcastStateData.hash = updatedClient.cert_hash;
-      if (updatedClient.mute) broadcastStateData.mute = true;
-      if (updatedClient.deaf) broadcastStateData.deaf = true;
-      if (updatedClient.suppress) broadcastStateData.suppress = true;
-      if (updatedClient.self_mute) broadcastStateData.self_mute = true;
-      if (updatedClient.self_deaf) broadcastStateData.self_deaf = true;
-      if (updatedClient.priority_speaker) broadcastStateData.priority_speaker = true;
-      if (updatedClient.recording) broadcastStateData.recording = true;
+      
+      // 注意：不广播状态字段（mute, deaf, self_mute, self_deaf, priority_speaker, recording）
+      // 这些字段只在用户显式改变时才通过 UserState 消息单独广播
       
       const broadcastState = new mumbleproto.UserState(broadcastStateData);
       this.broadcastUserState(broadcastState, session_id);

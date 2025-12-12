@@ -160,27 +160,25 @@ export class HubDataManager {
             userStateData.hash = params.cert_hash;
           }
 
-          // Include user state fields if they are defined
-          if (params.mute !== undefined) {
-            userStateData.mute = params.mute;
+          // 只包含值为 true 的状态字段（参考 Murmur 实现）
+          if (params.deaf === true) {
+            userStateData.deaf = true;
+          } else if (params.mute === true) {
+            userStateData.mute = true;
           }
-          if (params.deaf !== undefined) {
-            userStateData.deaf = params.deaf;
+          if (params.suppress === true) {
+            userStateData.suppress = true;
           }
-          if (params.suppress !== undefined) {
-            userStateData.suppress = params.suppress;
+          if (params.priority_speaker === true) {
+            userStateData.priority_speaker = true;
           }
-          if (params.self_mute !== undefined) {
-            userStateData.self_mute = params.self_mute;
+          if (params.recording === true) {
+            userStateData.recording = true;
           }
-          if (params.self_deaf !== undefined) {
-            userStateData.self_deaf = params.self_deaf;
-          }
-          if (params.priority_speaker !== undefined) {
-            userStateData.priority_speaker = params.priority_speaker;
-          }
-          if (params.recording !== undefined) {
-            userStateData.recording = params.recording;
+          if (params.self_deaf === true) {
+            userStateData.self_deaf = true;
+          } else if (params.self_mute === true) {
+            userStateData.self_mute = true;
           }
 
           const userState = new mumbleproto.UserState(userStateData);

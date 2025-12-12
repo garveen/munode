@@ -172,17 +172,40 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       release: params.release,
       os: params.os,
       os_version: params.os_version,
-      // Include user state fields
-      mute: params.mute,
-      deaf: params.deaf,
-      suppress: params.suppress,
-      self_mute: params.self_mute,
-      self_deaf: params.self_deaf,
-      priority_speaker: params.priority_speaker,
-      recording: params.recording,
     };
-
-    this.logger.info(`Session reported: ${params.username} (user_id: ${params.user_id}), groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);
+    
+    // 只保存值为 true 的状态字段（参考 Murmur 实现）
+    const reportedStateFields: string[] = [];
+    if (params.mute === true) {
+      session.mute = true;
+      reportedStateFields.push('mute');
+    }
+    if (params.deaf === true) {
+      session.deaf = true;
+      reportedStateFields.push('deaf');
+    }
+    if (params.suppress === true) {
+      session.suppress = true;
+      reportedStateFields.push('suppress');
+    }
+    if (params.self_mute === true) {
+      session.self_mute = true;
+      reportedStateFields.push('self_mute');
+    }
+    if (params.self_deaf === true) {
+      session.self_deaf = true;
+      reportedStateFields.push('self_deaf');
+    }
+    if (params.priority_speaker === true) {
+      session.priority_speaker = true;
+      reportedStateFields.push('priority_speaker');
+    }
+    if (params.recording === true) {
+      session.recording = true;
+      reportedStateFields.push('recording');
+    }
+    
+    this.logger.info(`Session reported: ${params.username} (user_id: ${params.user_id})${reportedStateFields.length > 0 ? `, state: [${reportedStateFields.join(', ')}]` : ''}, groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);
 
     // 上报会话
     sessionManager.reportSession(session);
@@ -221,7 +244,23 @@ export class AuthenticationHandler implements IAuthenticationHandler {
 
       // Send userJoined to visible sessions only
       for (const [edgeId, sessionIds] of visibleToSessions.entries()) {
-        this.factory.getControlService().notify(edgeId, 'hub.userJoined', {
+        const userJoinedData: {
+          session_id: number;
+          edge_id: number;
+          user_id: number;
+          username: string;
+          channel_id: number;
+          groups: string[];
+          cert_hash: string;
+          target_sessions: number[];
+          mute?: boolean;
+          deaf?: boolean;
+          suppress?: boolean;
+          self_mute?: boolean;
+          self_deaf?: boolean;
+          priority_speaker?: boolean;
+          recording?: boolean;
+        } = {
           session_id: params.session_id,
           edge_id: params.edge_server_id,
           user_id: params.user_id,
@@ -230,14 +269,24 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           groups: session.groups || [],
           cert_hash: session.cert_hash,
           target_sessions: sessionIds,
-          mute: session.mute,
-          deaf: session.deaf,
-          suppress: session.suppress,
-          self_mute: session.self_mute,
-          self_deaf: session.self_deaf,
-          priority_speaker: session.priority_speaker,
-          recording: session.recording,
-        });
+        };
+        
+        // 只添加值为 true 的状态字段（参考 Murmur 实现）
+        if (session.deaf === true) {
+          userJoinedData.deaf = true;
+        } else if (session.mute === true) {
+          userJoinedData.mute = true;
+        }
+        if (session.suppress === true) userJoinedData.suppress = true;
+        if (session.priority_speaker === true) userJoinedData.priority_speaker = true;
+        if (session.recording === true) userJoinedData.recording = true;
+        if (session.self_deaf === true) {
+          userJoinedData.self_deaf = true;
+        } else if (session.self_mute === true) {
+          userJoinedData.self_mute = true;
+        }
+        
+        this.factory.getControlService().notify(edgeId, 'hub.userJoined', userJoinedData);
       }
 
       // Also check which users the new user can see (they need to send their state to the new user)
@@ -264,7 +313,22 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       // Broadcast new user joined notification to all edges (no ninja filtering)
       this.logger.debug(`Broadcasting userJoined (no ninja) to all edges: ${params.username}`);
 
-      this.factory.getControlService().broadcast('hub.userJoined', {
+      const userJoinedData: {
+        session_id: number;
+        edge_id: number;
+        user_id: number;
+        username: string;
+        channel_id: number;
+        groups: string[];
+        cert_hash: string;
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
+        self_mute?: boolean;
+        self_deaf?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
+      } = {
         session_id: params.session_id,
         edge_id: params.edge_server_id,
         user_id: params.user_id,
@@ -272,14 +336,24 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         channel_id: actualChannelId,
         groups: session.groups || [],
         cert_hash: session.cert_hash,
-        mute: session.mute,
-        deaf: session.deaf,
-        suppress: session.suppress,
-        self_mute: session.self_mute,
-        self_deaf: session.self_deaf,
-        priority_speaker: session.priority_speaker,
-        recording: session.recording,
-      });
+      };
+      
+      // 只添加值为 true 的状态字段（参考 Murmur 实现）
+      if (session.deaf === true) {
+        userJoinedData.deaf = true;
+      } else if (session.mute === true) {
+        userJoinedData.mute = true;
+      }
+      if (session.suppress === true) userJoinedData.suppress = true;
+      if (session.priority_speaker === true) userJoinedData.priority_speaker = true;
+      if (session.recording === true) userJoinedData.recording = true;
+      if (session.self_deaf === true) {
+        userJoinedData.self_deaf = true;
+      } else if (session.self_mute === true) {
+        userJoinedData.self_mute = true;
+      }
+      
+      this.factory.getControlService().broadcast('hub.userJoined', userJoinedData);
 
       this.logger.info(`Session ${params.session_id} reported from Edge ${params.edge_server_id}, broadcasted to all edges`);
     }

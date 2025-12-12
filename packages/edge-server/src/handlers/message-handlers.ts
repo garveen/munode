@@ -392,13 +392,20 @@ export class MessageHandlers {
             if (session.cert_hash && receiverIsRegistered) {
               userStateData.hash = session.cert_hash;
             }
-            if (session.mute) userStateData.mute = session.mute;
-            if (session.deaf) userStateData.deaf = session.deaf;
-            if (session.suppress) userStateData.suppress = session.suppress;
-            if (session.self_mute) userStateData.self_mute = session.self_mute;
-            if (session.self_deaf) userStateData.self_deaf = session.self_deaf;
-            if (session.priority_speaker) userStateData.priority_speaker = session.priority_speaker;
-            if (session.recording) userStateData.recording = session.recording;
+            // 只添加值为 true 的状态字段（参考 Murmur 实现）
+            if (session.deaf === true) {
+              userStateData.deaf = true;
+            } else if (session.mute === true) {
+              userStateData.mute = true;
+            }
+            if (session.suppress === true) userStateData.suppress = true;
+            if (session.priority_speaker === true) userStateData.priority_speaker = true;
+            if (session.recording === true) userStateData.recording = true;
+            if (session.self_deaf === true) {
+              userStateData.self_deaf = true;
+            } else if (session.self_mute === true) {
+              userStateData.self_mute = true;
+            }
             
             const userState = new mumbleproto.UserState(userStateData);
             this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(userState.serialize())); 
