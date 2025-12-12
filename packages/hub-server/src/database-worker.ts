@@ -176,6 +176,9 @@ function handleMessage(message: WorkerMessage): void {
         }
         response.success = true;
         response.result = { closed: true };
+        // 发送响应后退出线程
+        parentPort?.postMessage(response);
+        process.exit(0);
         break;
 
       default:

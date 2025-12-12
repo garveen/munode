@@ -56,27 +56,40 @@ export class AuthManager {
     // 这里通过事件监听来处理认证结果
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
+        cleanup();
         reject(new Error('Authentication timeout'));
       }, 30000); // 30秒超时
 
-      const onServerSync = (message: mumbleproto.ServerSync) => {
+      const cleanup = () => {
         clearTimeout(timeout);
         this.client.removeListener('serverSync', onServerSync);
         this.client.removeListener('reject', onReject);
+        this.client.removeListener('connectionStateChanged', onConnectionStateChanged);
+      };
+
+      const onServerSync = (message: mumbleproto.ServerSync) => {
+        cleanup();
         this.handleServerSync(message);
         resolve();
       };
 
       const onReject = (message: mumbleproto.Reject) => {
-        clearTimeout(timeout);
-        this.client.removeListener('serverSync', onServerSync);
-        this.client.removeListener('reject', onReject);
+        cleanup();
         this.handleReject(message);
         reject(new Error(`Authentication failed: ${message.reason || 'Unknown reason'}`));
       };
 
+      const onConnectionStateChanged = (state: string) => {
+        // 如果连接在认证过程中断开，拒绝认证Promise
+        if (state === 'disconnected' || state === 'disconnecting') {
+          cleanup();
+          reject(new Error('Connection closed during authentication'));
+        }
+      };
+
       this.client.on('serverSync', onServerSync);
       this.client.on('reject', onReject);
+      this.client.on('connectionStateChanged', onConnectionStateChanged);
     });
   }
 

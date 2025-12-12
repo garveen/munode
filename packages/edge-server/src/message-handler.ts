@@ -272,12 +272,17 @@ export class MessageHandler extends EventEmitter {
     try {
       const banList = mumbleproto.BanList.deserialize(data);
 
-      // 如果消息为空，则返回所有活跃封禁
-      if (!banList.bans || banList.bans.length === 0) {
+      // 根据 query 字段判断是查询还是更新
+      // query=true 或 query 未设置且 bans 为空 → 查询
+      // query=false 或有 bans 数据 → 更新（包括清空）
+      const isQuery = banList.has_query ? banList.query : (!banList.bans || banList.bans.length === 0);
+      
+      if (isQuery) {
+        // 查询封禁列表
         this.emit('banListQuery', session_id);
       } else {
-        // 处理封禁管理命令（添加/移除封禁）
-        this.emit('banListUpdate', session_id, banList.bans);
+        // 更新封禁列表（可以是空列表以清除所有封禁）
+        this.emit('banListUpdate', session_id, banList.bans || []);
       }
     } catch (error) {
       this.logger.error('Failed to decode BanList message:', error);

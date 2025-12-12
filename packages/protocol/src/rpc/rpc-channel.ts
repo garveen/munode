@@ -380,6 +380,11 @@ export class RPCChannel extends EventEmitter {
    * Send typed response
    */
   respond(id: string, method: string, response: hubedgeRpc.TypedRPCResponse, error?: { code: number; message: string; data?: string }): void {
+    if (this.ws.readyState !== WebSocket.OPEN) {
+      // Connection is closed, silently ignore the response
+      return;
+    }
+
     if (error) {
       logger.error(`RPC Error response for ${method}:`, error);
       const packet = new EdgeHubPacket({

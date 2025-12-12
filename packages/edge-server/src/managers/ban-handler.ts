@@ -5,6 +5,28 @@ import { HandlerFactory } from '../core/handler-factory.js';
 import { ClientInfo } from '../types.js';
 
 /**
+ * 将Buffer转换为IP地址字符串
+ */
+function bufferToIPAddress(buffer: Buffer | Uint8Array): string {
+  // 确保是Buffer
+  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  
+  if (buf.length === 4) {
+    // IPv4
+    return buf.join('.');
+  } else if (buf.length === 16) {
+    // IPv6 - 转换为冒号分隔的十六进制格式
+    const parts: string[] = [];
+    for (let i = 0; i < 16; i += 2) {
+      parts.push(buf.readUInt16BE(i).toString(16));
+    }
+    return parts.join(':');
+  } else {
+    throw new Error(`Invalid IP address buffer length: ${buf.length}`);
+  }
+}
+
+/**
  * 封禁处理器
  * 负责处理封禁列表查询、更新和管理
  */
@@ -53,7 +75,10 @@ export class BanHandler {
   }
 
   /**
-   * 处理封禁列表更新（添加/移除封禁）
+   * 处理封禁列表更新（替换整个封禁列表）
+   * 
+   * 根据 Mumble 协议，当客户端发送 BanList 消息时，应该替换整个封禁列表，而不是追加。
+   * 空列表表示清除所有封禁。
    */
   async handleBanListUpdate(
      session_id: number,
@@ -75,11 +100,19 @@ export class BanHandler {
         return;
       }
 
+      // 第一步：清除所有现有封禁
+      const existingBans = await this.handlerFactory.banManager.getAllActiveBans();
+      for (const ban of existingBans) {
+        await this.handlerFactory.banManager.removeBan(ban.id);
+      }
+      logger.info(`Admin ${client.username} cleared ${existingBans.length} existing bans`);
+
+      // 第二步：添加新的封禁列表
       for (const entry of banEntries) {
         try {
           if (entry.address && entry.address.length > 0) {
-            // IP 封禁
-            const ipAddress = entry.address.toString();
+            // IP 封禁 - 将Buffer转换为IP地址字符串
+            const ipAddress = bufferToIPAddress(entry.address);
             const banId = await this.handlerFactory.banManager.addBan({
               address: ipAddress,
               mask: entry.mask || 32,
