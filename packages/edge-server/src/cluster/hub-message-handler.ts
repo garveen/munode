@@ -631,16 +631,14 @@ export class HubMessageHandlers {
       return data;
     }
     if (typeof data === 'object') {
-      const obj = data as any;
-      
       // Handle { type: 'Buffer', data: [...] } format (Node.js Buffer.toJSON())
-      if (obj.type === 'Buffer' && Array.isArray(obj.data)) {
-        return Buffer.from(obj.data);
+      if (data.type === 'Buffer' && Array.isArray(data.data)) {
+        return Buffer.from(data.data);
       }
       
       // Handle array-like object with numeric keys (msgpack serialization of Uint8Array/Buffer)
-      if (Object.keys(obj).every((k: string) => !isNaN(Number(k)))) {
-        const values = Object.keys(obj).sort((a, b) => Number(a) - Number(b)).map(k => obj[k]);
+      if (Object.keys(data).every((k: string) => !isNaN(Number(k)))) {
+        const values = Object.keys(data).sort((a, b) => Number(a) - Number(b)).map(k => data[k]);
         return Buffer.from(values);
       }
     }
@@ -933,7 +931,7 @@ export class HubMessageHandlers {
         hubClient.emit('routeTableUpdateReceived', params.routes);
       }
       
-        this.logger.debug('Route table update details:', {
+        this.logger.info('Route table update details:', {
         routes: params.routes.map(r => ({
           target: r.targetEdgeId,
           type: r.type,

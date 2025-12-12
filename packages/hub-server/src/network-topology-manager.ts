@@ -453,7 +453,7 @@ export class NetworkTopologyManager extends EventEmitter {
       const routes = Array.from(routeTable.values());
       this.emit('routeTableUpdated', edgeId, routes);
       
-    this.logger.debug(`Route table for Edge ${edgeId}:`, {
+    this.logger.info(`Route table for Edge ${edgeId}:`, {
         routes: routes.map(r => ({
           target: r.targetEdgeId,
           type: r.type,

@@ -389,7 +389,7 @@ export class ChannelManager extends EventEmitter {
     }
 
     this.invalidateCache(); // 使缓存失效
-    this.logger.debug(`Channels linked: ${channel_id1} <-> ${channel_id2}`);
+    this.logger.info(`Channels linked: ${channel_id1} <-> ${channel_id2}`);
     this.emit('channelsLinked', channel_id1, channel_id2);
     return true;
   }
@@ -415,7 +415,7 @@ export class ChannelManager extends EventEmitter {
     channel2.links = Array.from(links2);
 
     this.invalidateCache(); // 使缓存失效
-    this.logger.debug(`Channels unlinked: ${channel_id1} <-> ${channel_id2}`);
+    this.logger.info(`Channels unlinked: ${channel_id1} <-> ${channel_id2}`);
     this.emit('channelsUnlinked', channel_id1, channel_id2);
     return true;
   }
