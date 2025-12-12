@@ -309,6 +309,24 @@ export class VoiceManager {
     this.voiceTransport.on('error', (error: Error) => {
         this.logger.error('Voice UDP transport error:', error);
     });
+    
+    // 监听Edge连接事件
+    this.voiceTransport.on('edge-connected', (edgeId: number) => {
+      this.logger.info(`UDP connection established with Edge ${edgeId}`);
+    });
+    
+    // 监听Edge连接失败事件
+    this.voiceTransport.on('handshake-failed', async (edgeId: number) => {
+      this.logger.warn(`UDP handshake failed with Edge ${edgeId}`);
+      
+      // 通知Hub连接失败
+      try {
+        await this.handlerFactory.hubClient.notifyConnectionFailure(edgeId);
+        this.logger.debug(`Notified Hub about connection failure with Edge ${edgeId}`);
+      } catch (error) {
+        this.logger.error(`Failed to notify Hub about connection failure:`, error);
+      }
+    });
 
         this.logger.debug('Voice transport handlers setup complete');
   }
