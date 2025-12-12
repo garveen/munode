@@ -47,6 +47,9 @@ export class HandlerFactory {
   public readonly stateManager: EdgeStateManager;
   public readonly aclMap: Map<number, ACLEntry[]>;
 
+  // Logger实例
+  public readonly logger: Logger;
+
   // 处理器实例
   public readonly protocolHandlers: ProtocolHandlers;
   public readonly hubMessageHandlers: HubMessageHandlers;
@@ -64,6 +67,7 @@ export class HandlerFactory {
   ) {
     this.config = config;
     this.hubClient = hubClient;
+    this.logger = logger;
     
     // 初始化核心组件
     this.clientManager = new ClientManager(config, logger);
@@ -73,7 +77,7 @@ export class HandlerFactory {
     this.voiceRouter = new VoiceRouter(config, logger);
     this.authManager = new AuthManager(config, logger, hubClient);
     this.banManager = new BanManager(logger, 1024);
-    this.contextActions = new ContextActions();
+    this.contextActions = new ContextActions(logger);
     this.permissionManager = new PermissionManager(logger);
     this.aclMap = new Map();
     

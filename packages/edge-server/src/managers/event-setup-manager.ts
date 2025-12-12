@@ -1,4 +1,4 @@
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import { HandlerFactory } from '../core/handler-factory.js';
 import { EdgeControlClient } from '../cluster/hub-client.js';
 import { VoiceManager } from './voice-manager.js';
@@ -20,6 +20,7 @@ export class EventSetupManager {
   private banHandler?: BanHandler;
   private messageManager?: MessageManager;
   private config: EdgeConfig;
+  private logger: Logger;
 
   constructor(
     handlerFactory: HandlerFactory,
@@ -37,6 +38,7 @@ export class EventSetupManager {
     this.hubDataManager = hubDataManager;
     this.banHandler = banHandler;
     this.messageManager = messageManager;
+    this.logger = handlerFactory.logger;
   }
 
   /**
@@ -178,9 +180,9 @@ export class EventSetupManager {
     }) => {
       if (this.hubClient) {
         this.hubClient.notify('hub.handleUserStats', params);
-        logger.debug(`Forwarded UserStats request to Hub: session=${params.session_id}`);
+        this.logger.debug(`Forwarded UserStats request to Hub: session=${params.session_id}`);
       } else {
-        logger.error('Cannot forward UserStats: Hub client not available');
+        this.logger.error('Cannot forward UserStats: Hub client not available');
       }
     });
 
@@ -295,7 +297,7 @@ export class EventSetupManager {
         reason: undefined,
       });
 
-      logger.info(`User ${client.username} (session ${client.session}) left, notified Hub for broadcast`);
+        this.logger.info(`User ${client.username} (session ${client.session}) left, notified Hub for broadcast`);
     });
 
     this.handlerFactory.clientManager.on(
@@ -304,7 +306,7 @@ export class EventSetupManager {
         // 频道移动的广播由 handleUserState 统一处理
         // 这里只记录日志
         if (client.user_id > 0) {
-          logger.debug(
+        this.logger.debug(
             `Client ${client.username} moved from channel ${oldchannel_id} to ${newchannel_id}`
           );
         }
@@ -317,7 +319,7 @@ export class EventSetupManager {
     // 频道管理器事件 - 主动重建缓存
     this.handlerFactory.channelManager.on('channelsLinked', (channel_id1: number, channel_id2: number) => {
       // 频道链接变化，重建相关的PTT缓存
-      logger.debug(`Channels linked: ${channel_id1} <-> ${channel_id2}, rebuilding cache`);
+        this.logger.debug(`Channels linked: ${channel_id1} <-> ${channel_id2}, rebuilding cache`);
       this.handlerFactory.voiceRouter.rebuildChannelCache(channel_id1);
       this.handlerFactory.voiceRouter.rebuildChannelCache(channel_id2);
       // 由于链接是传递的，需要重建所有相关频道的缓存
@@ -327,7 +329,7 @@ export class EventSetupManager {
     
     this.handlerFactory.channelManager.on('channelsUnlinked', (channel_id1: number, channel_id2: number) => {
       // 频道链接取消，重建相关的PTT缓存
-      logger.debug(`Channels unlinked: ${channel_id1} <-> ${channel_id2}, rebuilding cache`);
+        this.logger.debug(`Channels unlinked: ${channel_id1} <-> ${channel_id2}, rebuilding cache`);
       this.handlerFactory.voiceRouter.rebuildChannelCache(channel_id1);
       this.handlerFactory.voiceRouter.rebuildChannelCache(channel_id2);
     });
@@ -335,7 +337,7 @@ export class EventSetupManager {
     this.handlerFactory.channelManager.on('channelUpdated', (channel: ChannelInfo) => {
       // 频道更新可能包括链接变化，重建该频道的PTT缓存
       if (channel && channel.id !== undefined) {
-        logger.debug(`Channel ${channel.id} updated, rebuilding cache`);
+        this.logger.debug(`Channel ${channel.id} updated, rebuilding cache`);
         this.handlerFactory.voiceRouter.rebuildChannelCache(channel.id);
       }
     });
@@ -358,11 +360,11 @@ export class EventSetupManager {
         // 通过TCP隧道（UDPTunnel消息）发送语音包
         // 注意：根据 Mumble 协议，UDPTunnel 消息的 payload 直接就是语音包数据
         // 不需要 protobuf 包装，这是一个性能优化
-        logger.info(`[TCP-VOICE] Sending voice data (${voiceData.length} bytes) as UDPTunnel to session ${session_id}`);
+        this.logger.info(`[TCP-VOICE] Sending voice data (${voiceData.length} bytes) as UDPTunnel to session ${session_id}`);
         this.messageManager.sendMessageToClient(session_id, MessageType.UDPTunnel, voiceData);
-        logger.info(`[TCP-VOICE] UDPTunnel message sent successfully to session ${session_id}`);
+        this.logger.info(`[TCP-VOICE] UDPTunnel message sent successfully to session ${session_id}`);
       } catch (error) {
-        logger.error(`Failed to send UDPTunnel message for session ${session_id}:`, error);
+        this.logger.error(`Failed to send UDPTunnel message for session ${session_id}:`, error);
       }
     });
 
@@ -370,20 +372,20 @@ export class EventSetupManager {
     if (this.hubClient) {
       this.hubClient.on('connected', () => {
         void (async () => {
-          logger.info('Connected to Hub Server');
+        this.logger.info('Connected to Hub Server');
 
           // 加载频道和ACL数据
           await this.hubDataManager.loadDataFromHub();
 
           // 连接成功后立即请求完整同步
           try {
-            logger.info('Requesting full sync from Hub...');
+        this.logger.info('Requesting full sync from Hub...');
             const syncData = await this.hubClient.requestFullSync();
             // Process sync data
             this.handlerFactory.stateManager.loadSnapshot(syncData);
-            logger.info('Full sync completed successfully');
+        this.logger.info('Full sync completed successfully');
           } catch (error) {
-            logger.error('Failed to sync with Hub:', error);
+        this.logger.error('Failed to sync with Hub:', error);
           }
 
           // Important: Re-report all authenticated local sessions to Hub
@@ -398,15 +400,15 @@ export class EventSetupManager {
       });
 
       this.hubClient.on('disconnected', () => {
-        logger.warn('Disconnected from Hub Server');
+        this.logger.warn('Disconnected from Hub Server');
       });
 
       this.hubClient.on('error', (error) => {
-        logger.error('Hub client error:', error);
+        this.logger.error('Hub client error:', error);
       });
 
       this.hubClient.on('registered', (response) => {
-        logger.info('Successfully registered with Hub:', response);
+        this.logger.info('Successfully registered with Hub:', response);
         
         // 重连后重新报告所有本地已认证用户到Hub
         // 这解决了Edge断线重连后，Hub丢失用户会话信息的问题
@@ -414,19 +416,19 @@ export class EventSetupManager {
       });
 
       this.hubClient.on('heartbeat', (response) => {
-        logger.debug('Hub heartbeat response:', response);
+        this.logger.debug('Hub heartbeat response:', response);
       });
 
       this.hubClient.on('heartbeatFailed', (error) => {
-        logger.warn('Hub heartbeat failed:', error);
+        this.logger.warn('Hub heartbeat failed:', error);
       });
 
       this.hubClient.on('sessionUpdate', (data) => {
-        logger.debug('Session update:', data);
+        this.logger.debug('Session update:', data);
       });
 
       this.hubClient.on('voiceTargetUpdate', (data) => {
-        logger.debug('Voice target update:', data);
+        this.logger.debug('Voice target update:', data);
       });
 
       // 监听来自 Hub 的 VoiceTarget 同步
@@ -444,14 +446,14 @@ export class EventSetupManager {
           }>;
         } | null;
       }) => {
-        logger.info(
+        this.logger.info(
           `Received VoiceTarget sync from Hub: Edge ${params.edge_id}, Session ${params.client_session}, Target ${params.target_id}`
         );
         
         // 更新本地 VoiceRouter 的配置
         if (params.config === null) {
           // 删除 VoiceTarget
-          logger.info(`Removing VoiceTarget: session=${params.client_session}, target=${params.target_id}`);
+        this.logger.info(`Removing VoiceTarget: session=${params.client_session}, target=${params.target_id}`);
           this.handlerFactory.voiceRouter.removeVoiceTarget(params.client_session, params.target_id);
         } else if (params.config) {
           // 将Hub-Edge格式转换回 Mumble protocol格式
@@ -487,17 +489,17 @@ export class EventSetupManager {
           }
           
           if (targets.length > 0) {
-            logger.info(`Setting VoiceTarget: session=${params.client_session}, target=${params.target_id}, targets count=${targets.length}`);
+        this.logger.info(`Setting VoiceTarget: session=${params.client_session}, target=${params.target_id}, targets count=${targets.length}`);
             this.handlerFactory.voiceRouter.setVoiceTarget(
               params.client_session,
               params.target_id,
               targets
             );
           } else {
-            logger.warn(`VoiceTarget has no targets: ${JSON.stringify(params)}`);
+        this.logger.warn(`VoiceTarget has no targets: ${JSON.stringify(params)}`);
           }
         } else {
-          logger.warn(`Invalid VoiceTarget config: ${JSON.stringify(params)}`);
+        this.logger.warn(`Invalid VoiceTarget config: ${JSON.stringify(params)}`);
         }
       });
 
@@ -511,31 +513,31 @@ export class EventSetupManager {
         // 处理集群事件
         if (message.method === 'edge.peerJoined') {
           const data = message.params;
-          logger.info('Edge joined cluster:', data);
+        this.logger.info('Edge joined cluster:', data);
 
           // 尝试注册新Edge的语音端口（非强制，允许失败）
           if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.voicePort && data.id !== this.config.server_id) {
             try {
               this.voiceManager.getVoiceTransport().registerEndpoint(data.id, data.host, data.voicePort);
-              logger.info(`Registered voice endpoint for new Edge ${data.id}: ${data.host}:${data.voicePort}`);
+        this.logger.info(`Registered voice endpoint for new Edge ${data.id}: ${data.host}:${data.voicePort}`);
             } catch (error) {
               // 端点注册失败不影响其他功能
-              logger.warn(`Failed to register voice endpoint for Edge ${data.id}:`, error);
+        this.logger.warn(`Failed to register voice endpoint for Edge ${data.id}:`, error);
             }
           }
         } else if (message.method === 'edge.peerLeft') {
           const data = message.params;
-          logger.info('Edge left cluster:', data);
+        this.logger.info('Edge left cluster:', data);
 
           // 移除该Edge的语音端口注册
           if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.id) {
             this.voiceManager.getVoiceTransport().unregisterEndpoint(data.id);
-            logger.info(`Unregistered voice endpoint for Edge ${data.id}`);
+        this.logger.info(`Unregistered voice endpoint for Edge ${data.id}`);
           }
         }
         // 处理用户事件
         else if (message.method === 'hub.userJoined') {
-          logger.debug(`[EDGE-DEBUG] Received hub.userJoined notification: ${JSON.stringify(message.params)}`);
+        this.logger.debug(`[EDGE-DEBUG] Received hub.userJoined notification: ${JSON.stringify(message.params)}`);
           this.hubDataManager.handleRemoteUserJoined(message.params);
         } else if (message.method === 'hub.userLeft') {
           this.hubDataManager.handleRemoteUserLeft(message.params);
@@ -602,9 +604,9 @@ export class EventSetupManager {
         state: ClientState.ServerSentVersion,
       });
 
-      logger.debug(`Sent server version to session ${session_id}, state updated to ServerSentVersion`);
+        this.logger.debug(`Sent server version to session ${session_id}, state updated to ServerSentVersion`);
     } catch (error) {
-      logger.error(`Failed to send server version to session ${session_id}:`, error);
+        this.logger.error(`Failed to send server version to session ${session_id}:`, error);
     }
   }
 
@@ -621,7 +623,7 @@ export class EventSetupManager {
    */
   private async reReportLocalSessionsToHub(): Promise<void> {
     if (!this.hubClient || !this.hubClient.isConnected()) {
-      logger.warn('Cannot re-report sessions: Hub client not connected');
+        this.logger.warn('Cannot re-report sessions: Hub client not connected');
       return;
     }
 
@@ -629,11 +631,11 @@ export class EventSetupManager {
     const authenticatedClients = allClients.filter(client => client.user_id > 0);
 
     if (authenticatedClients.length === 0) {
-      logger.debug('No authenticated users to re-report to Hub');
+        this.logger.debug('No authenticated users to re-report to Hub');
       return;
     }
 
-    logger.info(`Re-reporting ${authenticatedClients.length} local users to Hub after reconnection`);
+        this.logger.info(`Re-reporting ${authenticatedClients.length} local users to Hub after reconnection`);
 
     for (const client of authenticatedClients) {
       try {
@@ -651,12 +653,12 @@ export class EventSetupManager {
           os: client.os_name,
           os_version: client.os_version,
         });
-        logger.debug(`Re-reported session ${client.session} (${client.username}) to Hub`);
+        this.logger.debug(`Re-reported session ${client.session} (${client.username}) to Hub`);
       } catch (error) {
-        logger.error(`Failed to re-report session ${client.session} to Hub:`, error);
+        this.logger.error(`Failed to re-report session ${client.session} to Hub:`, error);
       }
     }
 
-    logger.info(`Completed re-reporting ${authenticatedClients.length} users to Hub`);
+        this.logger.info(`Completed re-reporting ${authenticatedClients.length} users to Hub`);
   }
 }

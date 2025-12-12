@@ -1,4 +1,4 @@
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import { mumbleproto } from '@munode/protocol';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
@@ -14,8 +14,11 @@ export class StateHandlers {
     plugin_identity?: string;
     comment?: string;
   }> = new Map();
+  private logger: Logger;
 
-  constructor(private factory: HandlerFactory) {}
+  constructor(private factory: HandlerFactory) {
+    this.logger = factory.logger;
+  }
 
   private get clientManager() { return this.factory.clientManager; }
   private get config() { return this.factory.config; }
@@ -39,7 +42,7 @@ export class StateHandlers {
       // 获取执行操作的客户端（actor）
       const actor = this.clientManager.getClient(session_id);
       if (!actor) {
-        logger.warn(`mumbleproto.UserState from unknown session: ${session_id}`);
+        this.logger.warn(`mumbleproto.UserState from unknown session: ${session_id}`);
         return;
       }
 
@@ -74,7 +77,7 @@ export class StateHandlers {
         // 保存 PreConnect 状态
         if (Object.keys(preState).length > 0) {
           this.preConnectUserState.set(session_id, preState);
-          logger.debug(`Saved PreConnectUserState for session ${session_id}: ${Object.keys(preState).join(', ')}`);
+        this.logger.debug(`Saved PreConnectUserState for session ${session_id}: ${Object.keys(preState).join(', ')}`);
         }
         
         return;
@@ -82,7 +85,7 @@ export class StateHandlers {
 
       // 必须在集群模式下运行
       if (!this.hubClient) {
-        logger.error('UserState rejected: Hub client not available (standalone mode not supported)');
+        this.logger.error('UserState rejected: Hub client not available (standalone mode not supported)');
         this.factory.messageHandlers.sendPermissionDenied(session_id, 'connection', 'Server must be connected to Hub');
         return;
       }
@@ -167,7 +170,7 @@ export class StateHandlers {
       if (userState.has_texture && userState.texture && userState.texture.length > 0) {
         // 异步上传texture到Hub，不阻塞当前处理
         this.uploadUserTexture(actor.user_id, userState.texture).catch(error => {
-          logger.error(`Failed to upload texture for user ${actor.user_id}:`, error);
+        this.logger.error(`Failed to upload texture for user ${actor.user_id}:`, error);
         });
       }
 
@@ -175,7 +178,7 @@ export class StateHandlers {
         // 如果comment超过128字节，上传到blob存储
         // 参考 Go 实现：小于128字节的comment直接存储在消息中
         this.uploadUserComment(actor.user_id, Buffer.from(userState.comment, 'utf-8')).catch(error => {
-          logger.error(`Failed to upload comment for user ${actor.user_id}:`, error);
+        this.logger.error(`Failed to upload comment for user ${actor.user_id}:`, error);
         });
       }
       
@@ -196,9 +199,9 @@ export class StateHandlers {
         userState: userStateToSend,
       });
 
-      logger.debug(`Forwarded UserState from session ${session_id} to Hub, fields: ${Object.keys(userStateToSend).filter(k => k !== 'session' && k !== 'actor').join(', ')}`);
+        this.logger.debug(`Forwarded UserState from session ${session_id} to Hub, fields: ${Object.keys(userStateToSend).filter(k => k !== 'session' && k !== 'actor').join(', ')}`);
     } catch (error) {
-      logger.error(`Error handling mumbleproto.UserState for session ${session_id}:`, error);
+        this.logger.error(`Error handling mumbleproto.UserState for session ${session_id}:`, error);
     }
   }
 
@@ -216,19 +219,19 @@ export class StateHandlers {
       // 获取执行操作的客户端（actor）
       const actor = this.clientManager.getClient(session_id);
       if (!actor) {
-        logger.warn(`mumbleproto.UserRemove from unknown session: ${session_id}`);
+        this.logger.warn(`mumbleproto.UserRemove from unknown session: ${session_id}`);
         return;
       }
 
       // 获取要被移除的客户端
       if (!userRemove.session) {
-        logger.warn(`mumbleproto.UserRemove without target session`);
+        this.logger.warn(`mumbleproto.UserRemove without target session`);
         return;
       }
 
       // 必须在集群模式下运行
       if (!this.hubClient) {
-        logger.error('UserRemove rejected: Hub client not available (standalone mode not supported)');
+        this.logger.error('UserRemove rejected: Hub client not available (standalone mode not supported)');
         this.factory.messageHandlers.sendPermissionDenied(session_id, 'kick', 'Server must be connected to Hub');
         return;
       }
@@ -244,9 +247,9 @@ export class StateHandlers {
         ban: userRemove.ban || false,
       });
 
-      logger.debug(`Forwarded UserRemove from session ${session_id} to Hub`);
+        this.logger.debug(`Forwarded UserRemove from session ${session_id} to Hub`);
     } catch (error) {
-      logger.error(`Error handling mumbleproto.UserRemove for session ${session_id}:`, error);
+        this.logger.error(`Error handling mumbleproto.UserRemove for session ${session_id}:`, error);
     }
   }
 
@@ -260,20 +263,20 @@ export class StateHandlers {
   async handleChannelState(session_id: number, data: Buffer): Promise<void> {
     try {
       const channelState = mumbleproto.ChannelState.deserialize(data);
-      logger.debug(
+        this.logger.debug(
         `Decoded mumbleproto.ChannelState from session ${session_id}: ${JSON.stringify(channelState)}`
       );
 
       // 获取执行操作的客户端
       const actor = this.clientManager.getClient(session_id);
       if (!actor) {
-        logger.warn(`mumbleproto.ChannelState from unauthenticated session: ${session_id}`);
+        this.logger.warn(`mumbleproto.ChannelState from unauthenticated session: ${session_id}`);
         return;
       }
 
       // 必须在集群模式下运行
       if (!this.hubClient) {
-        logger.error('ChannelState rejected: Hub client not available (standalone mode not supported)');
+        this.logger.error('ChannelState rejected: Hub client not available (standalone mode not supported)');
         this.factory.messageHandlers.sendPermissionDenied(session_id, 'make_channel', 'Server must be connected to Hub');
         return;
       }
@@ -290,9 +293,9 @@ export class StateHandlers {
         raw_data: data.toString('base64'),
       });
 
-      logger.debug(`Forwarded ChannelState from session ${session_id} to Hub`);
+        this.logger.debug(`Forwarded ChannelState from session ${session_id} to Hub`);
     } catch (error) {
-      logger.error(`Error handling mumbleproto.ChannelState for session ${session_id}:`, error);
+        this.logger.error(`Error handling mumbleproto.ChannelState for session ${session_id}:`, error);
     }
   }
 
@@ -306,12 +309,12 @@ export class StateHandlers {
       // 获取执行操作的客户端
       const actor = this.clientManager.getClient(session_id);
       if (!actor) {
-        logger.warn(`mumbleproto.ChannelRemove from unauthenticated session: ${session_id}`);
+        this.logger.warn(`mumbleproto.ChannelRemove from unauthenticated session: ${session_id}`);
         return;
       }
 
       if (channelRemove.channel_id === undefined) {
-        logger.warn(`mumbleproto.ChannelRemove without channel_id from session: ${session_id}`);
+        this.logger.warn(`mumbleproto.ChannelRemove without channel_id from session: ${session_id}`);
         return;
       }
 
@@ -323,15 +326,15 @@ export class StateHandlers {
         actor_username: actor.username,
         channel_id: channelRemove.channel_id,
         });
-        logger.debug(`Forwarded ChannelRemove from session ${session_id} to Hub`);
+        this.logger.debug(`Forwarded ChannelRemove from session ${session_id} to Hub`);
     } catch (error) {
-        logger.error('Error forwarding ChannelRemove to Hub:', error);
+        this.logger.error('Error forwarding ChannelRemove to Hub:', error);
         this.factory.messageHandlers.sendPermissionDenied(session_id, 'channel_remove', 'Internal error');
     }
     return;
 
     } catch (error) {
-      logger.error(`Error handling mumbleproto.ChannelRemove for session ${session_id}:`, error);
+        this.logger.error(`Error handling mumbleproto.ChannelRemove for session ${session_id}:`, error);
     }
   }
 
@@ -364,9 +367,9 @@ export class StateHandlers {
         throw new Error(result.error || 'Failed to upload texture');
       }
 
-      logger.info(`Uploaded texture for user ${user_id}: ${result.hash}`);
+        this.logger.info(`Uploaded texture for user ${user_id}: ${result.hash}`);
     } catch (error) {
-      logger.error(`Error uploading texture for user ${user_id}:`, error);
+        this.logger.error(`Error uploading texture for user ${user_id}:`, error);
       throw error;
     }
   }
@@ -386,9 +389,9 @@ export class StateHandlers {
         throw new Error(result.error || 'Failed to upload comment');
       }
 
-      logger.info(`Uploaded comment for user ${user_id}: ${result.hash}`);
+        this.logger.info(`Uploaded comment for user ${user_id}: ${result.hash}`);
     } catch (error) {
-      logger.error(`Error uploading comment for user ${user_id}:`, error);
+        this.logger.error(`Error uploading comment for user ${user_id}:`, error);
       throw error;
     }
   }

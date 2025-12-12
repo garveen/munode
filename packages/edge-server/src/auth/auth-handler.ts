@@ -8,7 +8,7 @@
  * - 证书指纹上报
  */
 
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import { mumbleproto, MessageType, ClientState } from '@munode/protocol';
 import { randomFillSync } from 'crypto';
 import type { ClientInfo, AuthResult } from '../types.js';
@@ -22,8 +22,11 @@ export class AuthHandlers {
     plugin_identity?: string;
     comment?: string;
   }> = new Map();
+  private logger: Logger;
 
-  constructor(private factory: HandlerFactory) {}
+  constructor(private factory: HandlerFactory) {
+    this.logger = factory.logger;
+  }
 
   private get clientManager() { return this.factory.clientManager; }
   private get messageHandler() { return this.factory.messageHandler; }
@@ -40,7 +43,7 @@ export class AuthHandlers {
       const client = this.clientManager.getClient(session_id);
 
       if (!client) {
-        logger.warn(`Authentication attempt for unknown session: ${session_id}`);
+        this.logger.warn(`Authentication attempt for unknown session: ${session_id}`);
         return;
       }
 
@@ -48,7 +51,7 @@ export class AuthHandlers {
       if (client.state !== ClientState.Connected && 
           client.state !== ClientState.ServerSentVersion &&
           client.state !== ClientState.ClientSentVersion) {
-        logger.warn(
+        this.logger.warn(
           `Authentication attempt in wrong state for session ${session_id}: state=${client.state}`
         );
         this.sendReject(
@@ -64,7 +67,7 @@ export class AuthHandlers {
 
       // 检查是否已经认证
       if (client.username) {
-        logger.warn(`Session ${session_id} already authenticated`);
+        this.logger.warn(`Session ${session_id} already authenticated`);
         this.sendReject(session_id, 'Already authenticated');
         return;
       }
@@ -102,7 +105,7 @@ export class AuthHandlers {
         );
       }
     } catch (error) {
-      logger.error(`Authentication error for session ${session_id}:`, error);
+        this.logger.error(`Authentication error for session ${session_id}:`, error);
       this.sendReject(session_id, 'Internal authentication error', mumbleproto.Reject.RejectType.None);
     }
   }
@@ -125,7 +128,7 @@ export class AuthHandlers {
         state: ClientState.Authenticated, // 认证完成
       });
       
-      logger.info(`Auth success: user=${authResult.username}, user_id=${authResult.user_id}, groups=${JSON.stringify(authResult.groups)}, state=Authenticated`);
+        this.logger.info(`Auth success: user=${authResult.username}, user_id=${authResult.user_id}, groups=${JSON.stringify(authResult.groups)}, state=Authenticated`);
 
       // 1. 生成加密密钥并发送 CryptSetup
       const cryptKey = Buffer.alloc(16);
@@ -166,9 +169,9 @@ export class AuthHandlers {
       }
       
       if (!this.hubClient) {
-        logger.warn(`hubClient is undefined, cannot report session ${session_id} to Hub`);
+        this.logger.warn(`hubClient is undefined, cannot report session ${session_id} to Hub`);
       } else if (!this.hubClient.isConnected()) {
-        logger.warn(`hubClient is not connected, cannot report session ${session_id} to Hub`);
+        this.logger.warn(`hubClient is not connected, cannot report session ${session_id} to Hub`);
       } else {
         try {
           await this.hubClient.reportSession({
@@ -185,9 +188,9 @@ export class AuthHandlers {
             os: clientBeforeSync.os_name,
             os_version: clientBeforeSync.os_version,
           });
-          logger.info(`Reported session ${session_id} (${clientBeforeSync.username}) to Hub (before user list sync)`);
+        this.logger.info(`Reported session ${session_id} (${clientBeforeSync.username}) to Hub (before user list sync)`);
         } catch (error) {
-          logger.error(`Failed to report session ${session_id} to Hub:`, error);
+        this.logger.error(`Failed to report session ${session_id} to Hub:`, error);
           // Continue even if Hub report fails - local operations should still work
         }
       }
@@ -215,7 +218,7 @@ export class AuthHandlers {
 
         if (Object.keys(updateFields).length > 0) {
           this.clientManager.updateClient(session_id, updateFields);
-          logger.debug(`Applied PreConnectUserState for session ${session_id}`, {
+        this.logger.debug(`Applied PreConnectUserState for session ${session_id}`, {
             self_mute: preState.self_mute,
             self_deaf: preState.self_deaf,
           });
@@ -255,7 +258,7 @@ export class AuthHandlers {
       }).serialize();
 
       this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(currentUserState));
-      logger.debug(`Sent UserState for session ${session_id}: username=${updatedClient.username}, channel_id=${updatedClient.channel_id}`);
+        this.logger.debug(`Sent UserState for session ${session_id}: username=${updatedClient.username}, channel_id=${updatedClient.channel_id}`);
 
       // 10. 发送 ServerSync 消息（放在 UserState 之后）
       const serverSyncMessage = new mumbleproto.ServerSync({
@@ -272,7 +275,7 @@ export class AuthHandlers {
         state: ClientState.Ready,
       });
 
-      logger.info(
+        this.logger.info(
         `User authenticated and ready: session=${session_id}, ` +
         `username=${updatedClient.username}, user_id=${updatedClient.user_id}, state=Ready`
       );
@@ -317,10 +320,10 @@ export class AuthHandlers {
       
       const broadcastState = new mumbleproto.UserState(broadcastStateData);
       this.broadcastUserState(broadcastState, session_id);
-      logger.debug(`Broadcasted UserState for new user ${updatedClient.username} (session ${session_id})`);
+        this.logger.debug(`Broadcasted UserState for new user ${updatedClient.username} (session ${session_id})`);
 
     } catch (error) {
-      logger.error(`Error in handleAuthSuccess for session ${session_id}:`, error);
+        this.logger.error(`Error in handleAuthSuccess for session ${session_id}:`, error);
       this.sendReject(session_id, 'Authentication setup failed');
     }
   }
@@ -333,7 +336,7 @@ export class AuthHandlers {
     reason: string,
     rejectType: mumbleproto.Reject.RejectType = mumbleproto.Reject.RejectType.None
   ): void {
-    logger.warn(`Authentication failed for session ${session_id}: ${reason}`);
+        this.logger.warn(`Authentication failed for session ${session_id}: ${reason}`);
     this.sendReject(session_id, reason, rejectType);
     
     // 认证失败时断开客户端连接
@@ -354,7 +357,7 @@ export class AuthHandlers {
     }
   ): void {
     this.preConnectUserState.set(session_id, state);
-    logger.debug(`Saved PreConnectUserState for session ${session_id}`);
+        this.logger.debug(`Saved PreConnectUserState for session ${session_id}`);
   }
 
   /**

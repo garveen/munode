@@ -1,6 +1,6 @@
 import type { TLSSocket } from 'tls';
 import type { RemoteInfo } from 'dgram';
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import type { ClientInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
@@ -9,8 +9,11 @@ import type { HandlerFactory } from '../core/handler-factory.js';
  */
 export class ConnectionHandlers {
   private udpAddressToSession: Map<string, number> = new Map(); // "ip:port" -> session_id
+  private logger: Logger;
 
-  constructor(private factory: HandlerFactory) {}
+  constructor(private factory: HandlerFactory) {
+    this.logger = factory.logger;
+  }
 
   private get clientManager() { return this.factory.clientManager; }
   private get voiceRouter() { return this.factory.voiceRouter; }
@@ -22,7 +25,7 @@ export class ConnectionHandlers {
    */
   async handleTLSConnection(socket: TLSSocket): Promise<void> {
     const clientAddress = `${socket.remoteAddress}:${socket.remotePort}`;
-    logger.debug(`New TLS connection from ${clientAddress}`);
+    this.logger.debug(`New TLS connection from ${clientAddress}`);
 
     try {
       // 获取证书哈希
@@ -34,13 +37,13 @@ export class ConnectionHandlers {
         }
       } catch (error) {
         // 证书获取失败，继续处理
-        logger.debug('Failed to get peer certificate:', error);
+        this.logger.debug('Failed to get peer certificate:', error);
       }
 
       // 检查封禁
       const banCheck = await this.banManager.checkConnection(socket.remoteAddress, cert_hash);
       if (banCheck.banned) {
-        logger.warn(
+        this.logger.warn(
           `Rejected TLS connection from banned client: ${socket.remoteAddress}, cert: ${cert_hash?.substring(0, 8)}..., reason: ${banCheck.reason}`
         );
         socket.destroy();
@@ -51,9 +54,9 @@ export class ConnectionHandlers {
       let sessionId: number;
     try {
         sessionId = await this.hubClient.allocateSessionId();
-        logger.debug(`Allocated session ID ${sessionId} from Hub for ${clientAddress}`);
+        this.logger.debug(`Allocated session ID ${sessionId} from Hub for ${clientAddress}`);
     } catch (error) {
-        logger.error('Failed to allocate session ID from Hub:', error);
+        this.logger.error('Failed to allocate session ID from Hub:', error);
         socket.destroy();
         return;
     }
@@ -64,10 +67,10 @@ export class ConnectionHandlers {
       
       // 记录证书信息
       if (cert_hash) {
-        logger.debug(`Client session ${sessionId} has certificate hash: ${cert_hash.substring(0, 16)}...`);
+        this.logger.debug(`Client session ${sessionId} has certificate hash: ${cert_hash.substring(0, 16)}...`);
       }
     } catch (error) {
-      logger.error('Error handling TLS connection:', error);
+        this.logger.error('Error handling TLS connection:', error);
       socket.destroy();
     }
   }
@@ -81,7 +84,7 @@ export class ConnectionHandlers {
    */
   handleUDPMessage(msg: Buffer, rinfo: RemoteInfo): void {
     const addressKey = `${rinfo.address}:${rinfo.port}`;
-    logger.debug(`[UDP] Received ${msg.length} bytes from ${addressKey}`);
+        this.logger.debug(`[UDP] Received ${msg.length} bytes from ${addressKey}`);
     let session_id: number | undefined;
     let needsUpdate = false;
     let decryptedData: Buffer | null = null; // 存储解密后的数据
@@ -91,7 +94,7 @@ export class ConnectionHandlers {
 
     if (!session_id) {
       // 2. 没有精确映射，尝试匹配同一IP的客户端
-      logger.debug(`No UDP mapping for ${addressKey}, trying to match by IP and decryption`);
+        this.logger.debug(`No UDP mapping for ${addressKey}, trying to match by IP and decryption`);
 
       const clients = this.clientManager.getAllClients();
       let matchedClient: ClientInfo | null = null;
@@ -116,17 +119,17 @@ export class ConnectionHandlers {
             // 所以后续不应该再次调用 decrypt
             matchedClient = client;
             decryptedData = decrypted.data; // 保存解密后的数据
-            logger.debug(`UDP address matched by decryption: ${addressKey} -> session ${client.session} (${client.username})`);
+        this.logger.debug(`UDP address matched by decryption: ${addressKey} -> session ${client.session} (${client.username})`);
             break;
           }
         } catch (_error) {
           // 解密失败，继续尝试下一个客户端
-          logger.debug(`Failed to decrypt UDP packet with client ${client.session} key`);
+        this.logger.debug(`Failed to decrypt UDP packet with client ${client.session} key`);
         }
       }
 
       if (!matchedClient) {
-        logger.warn(`Unable to match any client for UDP address: ${addressKey}`);
+        this.logger.warn(`Unable to match any client for UDP address: ${addressKey}`);
         return;
       }
 
@@ -142,7 +145,7 @@ export class ConnectionHandlers {
     const client = this.clientManager.getClient(session_id);
     if (client && (client.udp_ip !== rinfo.address || client.udp_port !== rinfo.port)) {
       needsUpdate = true;
-      logger.debug(`UDP address changed for session ${session_id}: ${client.udp_ip}:${client.udp_port} -> ${rinfo.address}:${rinfo.port}`);
+        this.logger.debug(`UDP address changed for session ${session_id}: ${client.udp_ip}:${client.udp_port} -> ${rinfo.address}:${rinfo.port}`);
     }
 
     // 5. 更新映射和客户端信息（如果需要）
@@ -162,7 +165,7 @@ export class ConnectionHandlers {
         udp_port: rinfo.port,
       });
 
-      logger.debug(`Updated UDP mapping: ${addressKey} -> session ${session_id}`);
+        this.logger.debug(`Updated UDP mapping: ${addressKey} -> session ${session_id}`);
     }
 
     // 6. 转发消息到 VoiceRouter
@@ -182,7 +185,7 @@ export class ConnectionHandlers {
     if (client && client.udp_ip && client.udp_port) {
       const addressKey = `${client.udp_ip}:${client.udp_port}`;
       this.udpAddressToSession.delete(addressKey);
-      logger.debug(`Cleared UDP mapping for session ${session_id}: ${addressKey}`);
+        this.logger.debug(`Cleared UDP mapping for session ${session_id}: ${addressKey}`);
     }
   }
 

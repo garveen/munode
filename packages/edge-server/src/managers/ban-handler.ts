@@ -1,4 +1,4 @@
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import { MessageType } from '@munode/protocol';
 import { mumbleproto } from '@munode/protocol';
 import { HandlerFactory } from '../core/handler-factory.js';
@@ -32,9 +32,11 @@ function bufferToIPAddress(buffer: Buffer | Uint8Array): string {
  */
 export class BanHandler {
   private handlerFactory: HandlerFactory;
+  private logger: Logger;
 
   constructor(handlerFactory: HandlerFactory) {
     this.handlerFactory = handlerFactory;
+    this.logger = handlerFactory.logger;
   }
 
   /**
@@ -67,9 +69,9 @@ export class BanHandler {
       const banListMessage = Buffer.from(new mumbleproto.BanList({ bans: banEntries }).serialize());
       this.handlerFactory.messageHandler.sendMessage(session_id, MessageType.BanList, banListMessage);
 
-      logger.info(`Sent ban list to session ${session_id}: ${bans.length} bans`);
+        this.logger.info(`Sent ban list to session ${session_id}: ${bans.length} bans`);
     } catch (error) {
-      logger.error('Error handling ban list query:', error);
+        this.logger.error('Error handling ban list query:', error);
       this.handlerFactory.messageHandlers.sendPermissionDenied(session_id, 'ban', 'Internal error');
     }
   }
@@ -105,7 +107,7 @@ export class BanHandler {
       for (const ban of existingBans) {
         await this.handlerFactory.banManager.removeBan(ban.id);
       }
-      logger.info(`Admin ${client.username} cleared ${existingBans.length} existing bans`);
+        this.logger.info(`Admin ${client.username} cleared ${existingBans.length} existing bans`);
 
       // 第二步：添加新的封禁列表
       for (const entry of banEntries) {
@@ -121,7 +123,7 @@ export class BanHandler {
               duration: entry.duration || 0,
               createdBy: client.username,
             });
-            logger.info(`Admin ${client.username} banned IP ${ipAddress} (ID: ${banId})`);
+        this.logger.info(`Admin ${client.username} banned IP ${ipAddress} (ID: ${banId})`);
           } else if (entry.hash) {
             // 证书封禁
             const banId = await this.handlerFactory.banManager.addBan({
@@ -131,7 +133,7 @@ export class BanHandler {
               duration: entry.duration || 0,
               createdBy: client.username,
             });
-            logger.info(
+        this.logger.info(
               `Admin ${client.username} banned certificate ${entry.hash.substring(0, 8)}... (ID: ${banId})`
             );
           } else if (entry.name) {
@@ -143,17 +145,17 @@ export class BanHandler {
               duration: entry.duration || 0,
               createdBy: client.username,
             });
-            logger.info(`Admin ${client.username} banned user ${entry.name} (ID: ${banId})`);
+        this.logger.info(`Admin ${client.username} banned user ${entry.name} (ID: ${banId})`);
           }
         } catch (error) {
-          logger.error('Error processing ban entry:', error);
+        this.logger.error('Error processing ban entry:', error);
         }
       }
 
       // 重新发送更新后的封禁列表
       await this.handleBanListQuery(session_id);
     } catch (error) {
-      logger.error('Error handling ban list update:', error);
+        this.logger.error('Error handling ban list update:', error);
       this.handlerFactory.messageHandlers.sendPermissionDenied(session_id, 'ban', 'Internal error');
     }
   }

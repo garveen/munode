@@ -1,4 +1,4 @@
-import { logger } from '@munode/common';
+import type { Logger } from 'winston';
 import { mumbleproto } from '@munode/protocol';
 import { MessageType } from '@munode/protocol';
 import type { ChannelInfo } from '../types.js';
@@ -9,7 +9,11 @@ import * as fs from 'fs';
  * 消息处理器 - 处理文本消息和频道/用户列表发送
  */
 export class MessageHandlers {
-  constructor(private factory: HandlerFactory) {}
+  private logger: Logger;
+
+  constructor(private factory: HandlerFactory) {
+    this.logger = factory.logger;
+  }
 
   private get clientManager() { return this.factory.clientManager; }
   private get messageHandler() { return this.factory.messageHandler; }
@@ -29,19 +33,19 @@ export class MessageHandlers {
       // 获取执行操作的客户端
       const actor = this.clientManager.getClient(session_id);
       if (!actor) {
-        logger.warn(`TextMessage from unauthenticated session: ${session_id}`);
+        this.logger.warn(`TextMessage from unauthenticated session: ${session_id}`);
         return;
       }
 
       // 检查客户端是否已认证
       if (!actor.user_id || actor.user_id <= 0) {
-        logger.warn(`TextMessage from unauthenticated session: ${session_id}`);
+        this.logger.warn(`TextMessage from unauthenticated session: ${session_id}`);
         return;
       }
 
       // 必须在集群模式下运行
       if (!this.hubClient) {
-        logger.error('TextMessage rejected: Hub client not available (standalone mode not supported)');
+        this.logger.error('TextMessage rejected: Hub client not available (standalone mode not supported)');
         this.sendPermissionDenied(session_id, 'text_message', 'Server must be connected to Hub');
         return;
       }
@@ -65,9 +69,9 @@ export class MessageHandlers {
         },
       });
 
-      logger.debug(`Forwarded TextMessage from session ${session_id} to Hub`);
+        this.logger.debug(`Forwarded TextMessage from session ${session_id} to Hub`);
     } catch (error) {
-      logger.error(`Error handling TextMessage for session ${session_id}:`, error);
+        this.logger.error(`Error handling TextMessage for session ${session_id}:`, error);
     }
   }
 
@@ -80,24 +84,24 @@ export class MessageHandlers {
     try {
       const pluginData = mumbleproto.PluginDataTransmission.deserialize(data);
 
-      logger.debug(`Received PluginDataTransmission from session ${session_id}, dataID=${pluginData.dataID}, data.length=${pluginData.data?.length}, receivers=${pluginData.receiverSessions?.length}`);
+        this.logger.debug(`Received PluginDataTransmission from session ${session_id}, dataID=${pluginData.dataID}, data.length=${pluginData.data?.length}, receivers=${pluginData.receiverSessions?.length}`);
 
       // 获取执行操作的客户端
       const actor = this.clientManager.getClient(session_id);
       if (!actor) {
-        logger.warn(`PluginDataTransmission from unauthenticated session: ${session_id}`);
+        this.logger.warn(`PluginDataTransmission from unauthenticated session: ${session_id}`);
         return;
       }
 
       // 检查客户端是否已认证
       if (!actor.user_id || actor.user_id <= 0) {
-        logger.warn(`PluginDataTransmission from unauthenticated session: ${session_id}`);
+        this.logger.warn(`PluginDataTransmission from unauthenticated session: ${session_id}`);
         return;
       }
 
       // 必须在集群模式下运行
       if (!this.hubClient) {
-        logger.error('PluginDataTransmission rejected: Hub client not available (standalone mode not supported)');
+        this.logger.error('PluginDataTransmission rejected: Hub client not available (standalone mode not supported)');
         return;
       }
 
@@ -117,9 +121,9 @@ export class MessageHandlers {
         receiver_sessions: pluginData.receiverSessions || [],
       });
 
-      logger.debug(`Forwarded PluginDataTransmission from session ${session_id} to Hub`);
+        this.logger.debug(`Forwarded PluginDataTransmission from session ${session_id} to Hub`);
     } catch (error) {
-      logger.error(`Error handling PluginDataTransmission for session ${session_id}:`, error);
+        this.logger.error(`Error handling PluginDataTransmission for session ${session_id}:`, error);
     }
   }
 
@@ -144,7 +148,7 @@ export class MessageHandlers {
       channel.parent_id === channel.id
     ) {
       // 如果 parent_id 无效或指向自己，使用根频道作为父频道
-      logger.warn(
+        this.logger.warn(
         `Channel ${channel.id} (${channel.name}) has invalid parent_id=${channel.parent_id}, using root channel (0) as parent`
       );
       return 0;
@@ -172,9 +176,9 @@ export class MessageHandlers {
     if (this.stateManager) {
       const stateChannels = this.stateManager.getAllChannels();
       
-      logger.debug(`[sendChannelTree] DEBUG: stateManager.getAllChannels() returned ${stateChannels.length} channels`);
+        this.logger.debug(`[sendChannelTree] DEBUG: stateManager.getAllChannels() returned ${stateChannels.length} channels`);
       stateChannels.forEach(ch => {
-        logger.debug(`[sendChannelTree] DEBUG: Channel from state: id=${ch.channel_id}, name=${ch.name}, parent_id=${ch.parent_id}`);
+        this.logger.debug(`[sendChannelTree] DEBUG: Channel from state: id=${ch.channel_id}, name=${ch.name}, parent_id=${ch.parent_id}`);
       });
       
       // 转换ChannelData为ChannelInfo
@@ -191,7 +195,7 @@ export class MessageHandlers {
         links: ch.links || [],
       }));
       
-      logger.debug(
+        this.logger.debug(
         `[sendChannelTree] Cluster mode: sending ${channels.length} channels from stateManager to session ${session_id}`
       );
     } else {
@@ -199,7 +203,7 @@ export class MessageHandlers {
     }
 
     if (!channels || channels.length === 0) {
-      logger.warn(`[sendChannelTree] No channels to send`);
+        this.logger.warn(`[sendChannelTree] No channels to send`);
       return;
     }
 
@@ -225,7 +229,7 @@ export class MessageHandlers {
       }
     }
 
-    logger.debug(`[sendChannelTree] Starting BFS channel tree traversal for session ${session_id}`);
+        this.logger.debug(`[sendChannelTree] Starting BFS channel tree traversal for session ${session_id}`);
 
     // === Pass 1: BFS遍历发送所有频道的完整信息 ===
     const queue: ChannelInfo[] = [];
@@ -235,7 +239,7 @@ export class MessageHandlers {
     // 从根频道开始
     const rootChannel = channelMap.get(0);
     if (!rootChannel) {
-      logger.error('[sendChannelTree] Root channel (ID=0) not found!');
+        this.logger.error('[sendChannelTree] Root channel (ID=0) not found!');
       return;
     }
     
@@ -281,7 +285,7 @@ export class MessageHandlers {
       
       const channelState = new mumbleproto.ChannelState(channelStateData);
 
-      logger.debug(
+        this.logger.debug(
         `[sendChannelTree] BFS: channel ${channel.id} (${channel.name}), ` +
         `parent=${parentId === undefined ? 'NONE' : parentId}, ` +
         `has_parent=${channelState.has_parent}, ` +
@@ -317,7 +321,7 @@ export class MessageHandlers {
         links_remove: [],
       });
 
-      logger.debug(
+        this.logger.debug(
         `[sendChannelTree] Links: channel ${channel.id} links: [${channel.links.join(', ')}]`
       );
 
@@ -325,7 +329,7 @@ export class MessageHandlers {
       this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(channelStateMessage));
     }
 
-    logger.info(
+        this.logger.info(
       `[sendChannelTree] Completed BFS channel tree traversal. Sent ${visited.size} channels (${channelsToSendLinks.length} with links) to session ${session_id}`
     );
   }
@@ -337,7 +341,7 @@ export class MessageHandlers {
   async sendUserListToClient(session_id: number): Promise<void> {
     const receiverClient = this.clientManager.getClient(session_id);
     if (!receiverClient) {
-      logger.warn(`Client session ${session_id} not found for sendUserList`);
+        this.logger.warn(`Client session ${session_id} not found for sendUserList`);
       return;
     }
     
@@ -357,7 +361,7 @@ export class MessageHandlers {
         
         fs.appendFileSync('/tmp/cross-edge-debug.log', `[${new Date().toISOString()}] EDGE ${this.config.server_id} Client ${receiverClient.username} (session=${session_id}) received ${allSessions.length} sessions from fullSync\n`);
         
-        logger.info(`[CROSS-EDGE-DEBUG] Client ${receiverClient.username} (session=${session_id}) received ${allSessions.length} sessions from fullSync: ${JSON.stringify(allSessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}`);
+        this.logger.info(`[CROSS-EDGE-DEBUG] Client ${receiverClient.username} (session=${session_id}) received ${allSessions.length} sessions from fullSync: ${JSON.stringify(allSessions.map(s => ({u: s.username, s: s.session_id, e: s.edge_id})))}`);
         
         let sentCount = 0;
         for (const session of allSessions) {
@@ -407,13 +411,13 @@ export class MessageHandlers {
           }
         }
         
-        logger.debug(`Sent user list to session ${session_id} (${sentCount} users, receiver_registered=${receiverIsRegistered})`);
+        this.logger.debug(`Sent user list to session ${session_id} (${sentCount} users, receiver_registered=${receiverIsRegistered})`);
       } catch (error) {
-        logger.error(`Failed to get user list from Hub for session ${session_id}:`, error);
+        this.logger.error(`Failed to get user list from Hub for session ${session_id}:`, error);
         this.sendLocalUserListToClient(session_id);
       }
     } else {
-      logger.warn(`Hub not connected, sending local users only to session ${session_id}`);
+        this.logger.warn(`Hub not connected, sending local users only to session ${session_id}`);
       this.sendLocalUserListToClient(session_id);
     }
   }
@@ -461,7 +465,7 @@ export class MessageHandlers {
       }
     }
     
-    logger.debug(`Sent local user list to session ${session_id} (${clients.filter(c => c.user_id > 0 && c.session !== session_id).length} users, registered=${receiverIsRegistered})`);
+        this.logger.debug(`Sent local user list to session ${session_id} (${clients.filter(c => c.user_id > 0 && c.session !== session_id).length} users, registered=${receiverIsRegistered})`);
   }
 
   /**
@@ -543,11 +547,11 @@ export class MessageHandlers {
       const message = new mumbleproto.PermissionDenied(permissionDenied).serialize();
       this.messageHandler.sendMessage(session_id, MessageType.PermissionDenied, Buffer.from(message));
 
-      logger.warn(
+        this.logger.warn(
         `Permission denied for session ${session_id}: type=${permissionDenied.type}, permission=${permission}, reason=${reason}, channel=${channel_id || 'N/A'}`
       );
     } catch (error) {
-      logger.error(`Error sending mumbleproto.PermissionDenied to session ${session_id}:`, error);
+        this.logger.error(`Error sending mumbleproto.PermissionDenied to session ${session_id}:`, error);
     }
   }
 
@@ -559,7 +563,7 @@ export class MessageHandlers {
     reason: string,
     rejectType: mumbleproto.Reject.RejectType = mumbleproto.Reject.RejectType.None
   ): void {
-    logger.debug(`Sending reject to session ${session_id}: type=${rejectType}, reason=${reason}`);
+        this.logger.debug(`Sending reject to session ${session_id}: type=${rejectType}, reason=${reason}`);
 
     const rejectMessage = new mumbleproto.Reject({
       type: rejectType,
@@ -627,7 +631,7 @@ export class MessageHandlers {
         }
       }
       
-      logger.debug(
+        this.logger.debug(
         `Broadcasted UserState (with cert_hash permission check) to ${broadcastCount} authenticated clients`
       );
     } else {
@@ -641,7 +645,7 @@ export class MessageHandlers {
         }
       }
       
-      logger.debug(
+        this.logger.debug(
         `Broadcasted UserState to ${clients.filter(c => c.has_full_user_list && c.session !== excludeSession).length} authenticated clients`
       );
     }
