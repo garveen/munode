@@ -12,7 +12,7 @@ import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import type { Logger } from '@munode/common';
 import { RPCChannel } from '../rpc/rpc-channel.js';
-import type { hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
+import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
 import type { NotificationParams } from '../rpc/rpc-channel.js';
 
 export interface ConnectionPoolConfig {

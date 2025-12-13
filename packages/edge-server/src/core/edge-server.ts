@@ -241,7 +241,11 @@ export class EdgeServer extends EventEmitter {
       
       // 2. 清理本地状态
       this.logger.info('Clearing local state...');
-      this.clientManager.clear();
+      // Clear all clients from manager
+      const remainingClients = this.clientManager.getAllClients();
+      for (const client of remainingClients) {
+        this.clientManager.removeClient(client.session);
+      }
       // channelManager 保留，因为频道结构需要从 Hub 重新同步
       
       // 3. 等待一下让连接完全关闭
