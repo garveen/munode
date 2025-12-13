@@ -469,16 +469,16 @@ export class NotificationHandler implements INotificationHandler {
   }>();
 
   /**
-   * 处理Edge连接失败通知
-   * Edge间直连失败时上报，但不一定需要退出
+   * Handle Edge connection failure notification
+   * Reported when direct connection between Edges fails, but exit may not be necessary
    */
   async handleConnectionFailureNotification(params: { edge_id: number; target_edge_id: number; timestamp: number }): Promise<void> {
     try {
       const { edge_id, target_edge_id, timestamp } = params;
       this.logger.warn(`Edge ${edge_id} reported connection failure to Edge ${target_edge_id} at ${timestamp}`);
       
-      // 记录失败但不立即采取行动
-      // 连接失败不意味着需要退出，因为可能可以通过其他Edge路由
+      // Record failure but don't take immediate action
+      // Connection failure doesn't mean exit is needed, as routing through other Edges may be possible
       const failureKey = this.getFailureKey(edge_id, target_edge_id);
       let report = this.connectionFailureReports.get(failureKey);
       
@@ -500,8 +500,8 @@ export class NotificationHandler implements INotificationHandler {
   }
 
   /**
-   * 处理Edge重连失败通知（双向都失败时）
-   * 这是更严重的情况，需要检查是否形成了断连的集群
+   * Handle Edge reconnection failure notification (when both directions fail)
+   * This is a more serious situation requiring check for disconnected clusters
    */
   async handleReconnectFailureNotification(params: { edge_id: number; target_edge_id: number; timestamp: number }): Promise<void> {
     try {
@@ -529,7 +529,7 @@ export class NotificationHandler implements INotificationHandler {
         if (timeDiff < REPORT_TIMEOUT) {
           this.logger.warn(`Both Edge ${report.edgeA} and Edge ${report.edgeB} reported reconnect failure, initiating arbitration`);
           await this.performArbitration(report.edgeA, report.edgeB);
-          // 清除报告记录
+          // Clear report record
           this.connectionFailureReports.delete(failureKey);
         }
       }
@@ -539,13 +539,13 @@ export class NotificationHandler implements INotificationHandler {
   }
 
   /**
-   * 执行仲裁：检查网络拓扑，确定是否需要某些Edge退出
+   * Perform arbitration: check network topology to determine if some Edges need to exit
    * 
-   * 仲裁逻辑：
-   * 1. 检查两个Edge之间是否可以通过其他Edge路由连接
-   * 2. 如果不能路由连接，说明形成了两个断连的集群
-   * 3. 检测所有断连的集群
-   * 4. 选择用户数最少的集群，让这些Edge退出
+   * Arbitration logic:
+   * 1. Check if the two Edges can connect through routing via other Edges
+   * 2. If routing connection is not possible, disconnected clusters have formed
+   * 3. Detect all disconnected clusters
+   * 4. Select cluster with fewest users and request those Edges to exit
    */
   private async performArbitration(edgeA: number, edgeB: number): Promise<void> {
     try {
@@ -557,17 +557,17 @@ export class NotificationHandler implements INotificationHandler {
         return;
       }
       
-      // 检查是否可以通过路由连接
+      // Check if connection is possible through routing
       const path = topologyManager.findBestPath(edgeA, edgeB);
       if (path && path.path.length > 0) {
         this.logger.info(`Edge ${edgeA} and ${edgeB} can still connect via routing: ${path.path.join(' -> ')}`);
-        // 可以路由连接，无需退出
+        // Routing connection possible, no exit needed
         return;
       }
       
       this.logger.warn(`Edge ${edgeA} and ${edgeB} cannot connect via any routing path, detecting disconnected clusters`);
       
-      // 检测断连的集群
+      // Detect disconnected clusters
       const clusters = this.detectDisconnectedClusters();
       
       if (clusters.length <= 1) {
@@ -577,7 +577,7 @@ export class NotificationHandler implements INotificationHandler {
       
       this.logger.warn(`Detected ${clusters.length} disconnected edge clusters`);
       
-      // 计算每个集群的用户数
+      // Calculate user count for each cluster
       const sessionManager = this.factory.getSessionManager();
       const clusterStats = clusters.map((cluster, index) => {
         const userCount = cluster.reduce((sum, edgeId) => {
@@ -592,7 +592,7 @@ export class NotificationHandler implements INotificationHandler {
         };
       });
       
-      // 按用户数排序，找出最小的集群
+      // Sort by user count to find smallest cluster
       clusterStats.sort((a, b) => a.userCount - b.userCount);
       
       this.logger.info('Cluster statistics:', clusterStats.map(c => ({
@@ -600,15 +600,15 @@ export class NotificationHandler implements INotificationHandler {
         users: c.userCount,
       })));
       
-      // 选择用户数最少的集群退出
+      // Select cluster with fewest users to exit
       const smallestCluster = clusterStats[0];
       
       if (smallestCluster.userCount === 0 && clusterStats.length > 1) {
-        // 如果最小集群没有用户，直接让它们退出
+        // If smallest cluster has no users, directly request shutdown
         this.logger.warn(`Cluster ${smallestCluster.edges.join(', ')} has no users, requesting shutdown`);
         await this.shutdownEdgeCluster(smallestCluster.edges);
       } else if (smallestCluster.userCount > 0) {
-        // 如果最小集群有用户，需要让这些Edge断开客户端并退出
+        // If smallest cluster has users, request graceful shutdown with client disconnection
         this.logger.warn(`Cluster ${smallestCluster.edges.join(', ')} has ${smallestCluster.userCount} users, requesting graceful shutdown`);
         await this.shutdownEdgeCluster(smallestCluster.edges);
       }
@@ -619,8 +619,11 @@ export class NotificationHandler implements INotificationHandler {
   }
 
   /**
-   * 检测断连的Edge集群
-   * 使用并查集(Union-Find)算法
+   * Detect disconnected Edge clusters
+   * Uses Union-Find algorithm
+   * 
+   * Performance: O(n² * Dijkstra) where n is number of edges
+   * For large clusters, consider caching connectivity or using BFS
    */
   private detectDisconnectedClusters(): number[][] {
     const topologyManager = this.factory.getNetworkTopologyManager();
@@ -630,32 +633,31 @@ export class NotificationHandler implements INotificationHandler {
       return [];
     }
     
-    // 并查集
+    // Union-Find data structure
     const parent = new Map<number, number>();
     const rank = new Map<number, number>();
     
-    // 初始化
+    // Initialize
     for (const edge of allEdges) {
       parent.set(edge, edge);
       rank.set(edge, 0);
     }
     
-    // 查找根节点
+    // Find root with path compression
     const find = (x: number): number => {
       if (parent.get(x) !== x) {
-        parent.set(x, find(parent.get(x)!)); // 路径压缩
+        parent.set(x, find(parent.get(x)!));
       }
       return parent.get(x)!;
     };
     
-    // 合并集合
+    // Union by rank
     const union = (x: number, y: number): void => {
       const rootX = find(x);
       const rootY = find(y);
       
       if (rootX === rootY) return;
       
-      // 按秩合并
       const rankX = rank.get(rootX) ?? 0;
       const rankY = rank.get(rootY) ?? 0;
       
@@ -669,13 +671,14 @@ export class NotificationHandler implements INotificationHandler {
       }
     };
     
-    // 遍历所有Edge对，如果可以路由连接则合并
+    // Check connectivity for all edge pairs
+    // Note: This is O(n²) but typically n is small (< 10 edges in most deployments)
     for (let i = 0; i < allEdges.length; i++) {
       for (let j = i + 1; j < allEdges.length; j++) {
         const edgeA = allEdges[i];
         const edgeB = allEdges[j];
         
-        // 检查是否可以通过路由连接
+        // Check if connection is possible through routing
         const path = topologyManager.findBestPath(edgeA, edgeB);
         if (path && path.path.length > 0) {
           union(edgeA, edgeB);
@@ -683,7 +686,7 @@ export class NotificationHandler implements INotificationHandler {
       }
     }
     
-    // 收集所有集群
+    // Collect all clusters
     const clusters = new Map<number, number[]>();
     for (const edge of allEdges) {
       const root = find(edge);
@@ -697,8 +700,8 @@ export class NotificationHandler implements INotificationHandler {
   }
 
   /**
-   * 请求Edge集群关闭
-   * 向集群中的所有Edge发送关闭通知，要求它们断开所有客户端连接并退出
+   * Request Edge cluster shutdown
+   * Send shutdown notifications to all Edges in the cluster, requiring them to disconnect clients and exit
    */
   private async shutdownEdgeCluster(edges: number[]): Promise<void> {
     for (const edgeId of edges) {
@@ -716,8 +719,8 @@ export class NotificationHandler implements INotificationHandler {
   }
 
   /**
-   * 生成失败记录的唯一键
-   * 确保edgeA-edgeB和edgeB-edgeA使用相同的键
+   * Generate unique key for failure records
+   * Ensure edgeA-edgeB and edgeB-edgeA use the same key
    */
   private getFailureKey(edgeA: number, edgeB: number): string {
     const min = Math.min(edgeA, edgeB);
