@@ -23,6 +23,7 @@ export class VoiceChannel {
 
   /**
    * 编码语音包（包含加密）
+   * 性能优化：避免多次 Buffer.concat
    */
   encodePacket(packet: VoicePacket): Buffer {
     // 编码明文包头 + 数据
@@ -41,17 +42,23 @@ export class VoiceChannel {
     const cipher = crypto.createCipheriv(this.config.algorithm, this.config.key, iv);
 
     // 加密整个包
-    const encryptedData = Buffer.concat([
-      cipher.update(plainBuffer),
-      cipher.final()
-    ]);
+    const encrypted1 = cipher.update(plainBuffer);
+    const encrypted2 = cipher.final();
 
+    // 性能优化：直接组装 buffer，避免多次 Buffer.concat
     // 返回格式: IV(16) + 加密数据
-    return Buffer.concat([iv, encryptedData]);
+    const totalSize = 16 + encrypted1.length + encrypted2.length;
+    const result = Buffer.allocUnsafe(totalSize);
+    iv.copy(result, 0);
+    encrypted1.copy(result, 16);
+    encrypted2.copy(result, 16 + encrypted1.length);
+    
+    return result;
   }
 
   /**
    * 解码语音包（包含解密）
+   * 性能优化：避免 Buffer.concat
    */
   decodePacket(buffer: Buffer): VoicePacket | null {
     if (buffer.length < 16 + 14) return null; // IV + 最小包头
@@ -64,10 +71,12 @@ export class VoiceChannel {
       const decipher = crypto.createDecipheriv(this.config.algorithm, this.config.key, iv);
 
       // 解密数据
-      const decryptedData = Buffer.concat([
-        decipher.update(encryptedData),
-        decipher.final()
-      ]);
+      // 性能优化：直接组装 buffer，避免 Buffer.concat
+      const decrypted1 = decipher.update(encryptedData);
+      const decrypted2 = decipher.final();
+      const decryptedData = Buffer.allocUnsafe(decrypted1.length + decrypted2.length);
+      decrypted1.copy(decryptedData, 0);
+      decrypted2.copy(decryptedData, decrypted1.length);
 
       // 验证解密后的数据长度
       if (decryptedData.length < 14) return null;

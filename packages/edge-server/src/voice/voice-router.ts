@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import type { Logger } from 'winston';
 import type { RemoteInfo } from 'dgram';
 import { EdgeConfig, VoicePacket, VoiceBroadcast, ClientInfo } from '../types.js';
-import { OCB2AES128 } from '@munode/common';
+import { OCB2AES128, globalBufferPool } from '@munode/common';
 import type { Socket as UDPSocket } from 'dgram';
 import { LRUCache } from 'lru-cache';
 import type { ClientManager } from '../client/client-manager.js';
@@ -987,6 +987,8 @@ export class VoiceRouter extends EventEmitter {
    * 
    * 因此转发格式为: [header][varint(session)][原始buf[1:]]
    * 最终包结构: [header][session][sequence][voice_data]
+   * 
+   * 性能优化：使用 buffer 池避免频繁的 GC
    */
   private serializeVoicePacket(packet: VoicePacket): Buffer {
     // 创建新的header，保留codec和target
@@ -994,25 +996,36 @@ export class VoiceRouter extends EventEmitter {
     // Go中对于本地转发会清零target，但跨Edge转发需要保留
     const header = (packet.codec << 5) | (packet.target & 0x1f);
     
-    // 编码新的会话ID为varint格式（使用发送者的session ID）
-    // Go: outgoing.PutUint32(client.Session())
-    const sessionVarint = this.encodeVarint(packet.sender_session);
+    // 计算 session varint 所需的字节数
+    const sessionValue = packet.sender_session >>> 0;
+    let varintLength: number;
+    if (sessionValue < 0x80) {
+      varintLength = 1;
+    } else if (sessionValue < 0x4000) {
+      varintLength = 2;
+    } else if (sessionValue < 0x200000) {
+      varintLength = 3;
+    } else {
+      varintLength = 5;
+    }
     
     // packet.data 是原始接收包中byte 1之后的所有数据
     // 包含了：[varint(sequence)] + [voice_data]
     // Go: outgoing.PutBytes(buf[1:])
     // 所以转发包是: [header] + [session varint] + [sequence varint] + [voice_data]
-    const totalLength = 1 + sessionVarint.length + packet.data.length;
-    const buffer = Buffer.allocUnsafe(totalLength);
+    const totalLength = 1 + varintLength + packet.data.length;
+    
+    // 使用 buffer 池获取 buffer（性能优化）
+    const buffer = globalBufferPool.acquire(totalLength);
     
     // 写入header
-    buffer.writeUInt8(header, 0);
+    buffer[0] = header;
     
-    // 写入新的session varint
-    sessionVarint.copy(buffer, 1);
+    // 直接将 session varint 编码到 buffer 中，避免创建临时 buffer
+    this.encodeVarintTo(packet.sender_session, buffer, 1);
     
     // 写入整个原始payload（sequence + voice_data）
-    packet.data.copy(buffer, 1 + sessionVarint.length);
+    packet.data.copy(buffer, 1 + varintLength);
     
     return buffer;
   }
@@ -1027,47 +1040,51 @@ export class VoiceRouter extends EventEmitter {
    * - 0xC0-0x1FFFFFFF: 3字节（最高3位为110）
    * - 0xF0: 4字节完整32位整数前缀
    * - 0xF4: 8字节完整64位整数前缀
+   * 
+   * 性能优化：将结果直接写入提供的 buffer，避免创建临时 Buffer
+   * 
+   * @param value 要编码的值
+   * @param targetBuffer 目标 buffer
+   * @param offset 写入偏移量
+   * @returns 写入的字节数
    */
-  private encodeVarint(value: number): Buffer {
+  private encodeVarintTo(value: number, targetBuffer: Buffer, offset: number): number {
     const i = value >>> 0; // 确保是无符号32位整数
     
     if (i < 0x80) {
       // 单字节: 0x00-0x7F
-      return Buffer.from([i]);
+      targetBuffer[offset] = i;
+      return 1;
     } else if (i < 0x4000) {
       // 双字节: 0x80-0x3FFF
       // 最高2位为10，后14位存储值
-      return Buffer.from([
-        (i >> 8) | 0x80,
-        i & 0xff
-      ]);
+      targetBuffer[offset] = (i >> 8) | 0x80;
+      targetBuffer[offset + 1] = i & 0xff;
+      return 2;
     } else if (i < 0x200000) {
       // 3字节: 0xC0-0x1FFFFFFF
       // 最高3位为110，后21位存储值
-      return Buffer.from([
-        (i >> 16) | 0xc0,
-        (i >> 8) & 0xff,
-        i & 0xff
-      ]);
+      targetBuffer[offset] = (i >> 16) | 0xc0;
+      targetBuffer[offset + 1] = (i >> 8) & 0xff;
+      targetBuffer[offset + 2] = i & 0xff;
+      return 3;
     } else if (i < 0x100000000) {
       // 完整32位整数: 前缀0xF0 + 4字节数据
-      return Buffer.from([
-        0xf0,
-        (i >> 24) & 0xff,
-        (i >> 16) & 0xff,
-        (i >> 8) & 0xff,
-        i & 0xff
-      ]);
+      targetBuffer[offset] = 0xf0;
+      targetBuffer[offset + 1] = (i >> 24) & 0xff;
+      targetBuffer[offset + 2] = (i >> 16) & 0xff;
+      targetBuffer[offset + 3] = (i >> 8) & 0xff;
+      targetBuffer[offset + 4] = i & 0xff;
+      return 5;
     } else {
       // 理论上不应该到这里（32位session ID）
       this.logger.warn(`Session ID ${value} too large for varint encoding`);
-      return Buffer.from([
-        0xf0,
-        (i >> 24) & 0xff,
-        (i >> 16) & 0xff,
-        (i >> 8) & 0xff,
-        i & 0xff
-      ]);
+      targetBuffer[offset] = 0xf0;
+      targetBuffer[offset + 1] = (i >> 24) & 0xff;
+      targetBuffer[offset + 2] = (i >> 16) & 0xff;
+      targetBuffer[offset + 3] = (i >> 8) & 0xff;
+      targetBuffer[offset + 4] = i & 0xff;
+      return 5;
     }
   }
 

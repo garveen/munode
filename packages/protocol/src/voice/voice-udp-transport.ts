@@ -554,13 +554,18 @@ export class VoiceUDPTransport extends EventEmitter {
     const cipher = crypto.createCipheriv(this.encryptionConfig.algorithm, this.encryptionConfig.key, iv);
 
     // 加密整个包
-    const encryptedData = Buffer.concat([
-      cipher.update(plainBuffer),
-      cipher.final()
-    ]);
-
+    const encrypted1 = cipher.update(plainBuffer);
+    const encrypted2 = cipher.final();
+    
+    // 性能优化：直接组装 buffer，避免多次 Buffer.concat
     // 返回格式: IV(16) + 加密数据
-    return Buffer.concat([iv, encryptedData]);
+    const totalSize = 16 + encrypted1.length + encrypted2.length;
+    const result = Buffer.allocUnsafe(totalSize);
+    iv.copy(result, 0);
+    encrypted1.copy(result, 16);
+    encrypted2.copy(result, 16 + encrypted1.length);
+    
+    return result;
   }
 
   /**
@@ -581,10 +586,12 @@ export class VoiceUDPTransport extends EventEmitter {
       const decipher = crypto.createDecipheriv(this.encryptionConfig.algorithm, this.encryptionConfig.key, iv);
 
       // 解密数据
-      const decryptedData = Buffer.concat([
-        decipher.update(encryptedData),
-        decipher.final()
-      ]);
+      // 性能优化：直接组装 buffer，避免 Buffer.concat
+      const decrypted1 = decipher.update(encryptedData);
+      const decrypted2 = decipher.final();
+      const decryptedData = Buffer.allocUnsafe(decrypted1.length + decrypted2.length);
+      decrypted1.copy(decryptedData, 0);
+      decrypted2.copy(decryptedData, decrypted1.length);
 
       // 验证解密后的数据长度
       if (decryptedData.length < 14) return null;
@@ -606,6 +613,7 @@ export class VoiceUDPTransport extends EventEmitter {
 
   /**
    * 发送语音包到指定Edge
+   * 性能优化：使用 buffer 池，避免 Buffer.concat
    */
   sendToEdge(edgeId: number, packet: VoicePacketHeader, voiceData: Buffer): void {
     const endpoint = this.remoteEndpoints.get(edgeId);
@@ -616,7 +624,12 @@ export class VoiceUDPTransport extends EventEmitter {
 
     // 编码包头
     const headerBuffer = this.encodePacketHeader(packet);
-    const fullPacket = Buffer.concat([headerBuffer, voiceData]);
+    
+    // 性能优化：直接复制到新 buffer，避免 Buffer.concat
+    const fullPacketSize = headerBuffer.length + voiceData.length;
+    const fullPacket = Buffer.allocUnsafe(fullPacketSize);
+    headerBuffer.copy(fullPacket, 0);
+    voiceData.copy(fullPacket, headerBuffer.length);
 
     // 加密（如果启用）
     let finalPacket: Buffer;
@@ -638,6 +651,7 @@ export class VoiceUDPTransport extends EventEmitter {
    * 广播语音包到所有Edge（除了excludeEdge）
    * 注意：Edge间broadcast不需要缓存，因为每次都是实时数据
    * 优化：如果发送给多个Edge，复用加密后的数据（但不持久化缓存）
+   * 性能优化：避免 Buffer.concat，直接复制
    */
   broadcast(
     packet: VoicePacketHeader,
@@ -646,8 +660,13 @@ export class VoiceUDPTransport extends EventEmitter {
   ): void {
     // 编码包头（自定义14字节header，用于Edge间通信）
     const headerBuffer = this.encodePacketHeader(packet);
+    
     // voiceData 是完整的 Mumble 语音包格式：[header][session][sequence][voice_data]
-    const fullPacket = Buffer.concat([headerBuffer, voiceData]);
+    // 性能优化：直接复制到新 buffer，避免 Buffer.concat
+    const fullPacketSize = headerBuffer.length + voiceData.length;
+    const fullPacket = Buffer.allocUnsafe(fullPacketSize);
+    headerBuffer.copy(fullPacket, 0);
+    voiceData.copy(fullPacket, headerBuffer.length);
 
     // 加密（如果启用）- 为本次broadcast加密一次，所有edge复用同一个加密结果
     // 不缓存加密结果，因为语音包是实时流数据，不会重复发送
@@ -718,16 +737,19 @@ export class VoiceUDPTransport extends EventEmitter {
           this.stats.errors++;
           return;
         }
-        decryptedData = Buffer.concat([
-          this.encodePacketHeader({
-            version: decrypted.version,
-            senderId: decrypted.senderId,
-            targetId: decrypted.targetId,
-            sequence: decrypted.sequence,
-            codec: decrypted.codec,
-          }),
-          decrypted.data,
-        ]);
+        
+        // 性能优化：直接复制到新 buffer，避免 Buffer.concat
+        const headerBuffer = this.encodePacketHeader({
+          version: decrypted.version,
+          senderId: decrypted.senderId,
+          targetId: decrypted.targetId,
+          sequence: decrypted.sequence,
+          codec: decrypted.codec,
+        });
+        const totalSize = headerBuffer.length + decrypted.data.length;
+        decryptedData = Buffer.allocUnsafe(totalSize);
+        headerBuffer.copy(decryptedData, 0);
+        decrypted.data.copy(decryptedData, headerBuffer.length);
       } else {
         decryptedData = data;
       }
