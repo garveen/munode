@@ -44,6 +44,8 @@ export class EdgeControlClient extends EventEmitter {
         host: config.hubServer?.host || 'localhost',
         port: config.hubServer?.controlPort || 8443,
         tls: config.hubServer?.tls ? true : false,
+        poolSize: config.hubServer?.poolSize ?? 2, // Default to 2 connections
+        reconnectInterval: config.hubServer?.reconnectInterval || 5000,
       };
 
       this.client = new ControlChannelClient(clientConfig);

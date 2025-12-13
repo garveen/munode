@@ -74,6 +74,10 @@ export interface HubServerConfig {
   
   // HMAC 挑战-响应认证
   hmacSecret?: string; // HMAC 共享密钥（需与 Hub 配置一致）
+  
+  // 连接池配置
+  poolSize?: number; // 连接池大小，默认2；设为1则使用单连接（向后兼容）
+  reconnectionTimeout?: number; // Edge全部连接断开后，等待重连的超时时间（毫秒），默认30000
 }
 
 // SMUX 连接选项
