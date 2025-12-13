@@ -653,6 +653,27 @@ export class EdgeControlClient extends EventEmitter {
       this.logger.error(`Failed to notify Hub about connection failure with Edge ${targetEdgeId}:`, error);
     }
   }
+  
+  /**
+   * 通知Hub重连失败（双向都失败时需要Hub仲裁）
+   */
+  async notifyReconnectFailure(targetEdgeId: number): Promise<void> {
+    if (!this.isConnected() || (!this.useExternalClient && !this.registered)) {
+      this.logger.warn('Cannot notify reconnect failure: not connected to Hub');
+      return;
+    }
+
+    try {
+      this.notify('edge.reconnectFailure', {
+        edge_id: this.config.server_id,
+        target_edge_id: targetEdgeId,
+        timestamp: Date.now(),
+      });
+      this.logger.info(`Notified Hub about reconnect failure with Edge ${targetEdgeId}, awaiting arbitration`);
+    } catch (error) {
+      this.logger.error(`Failed to notify Hub about reconnect failure with Edge ${targetEdgeId}:`, error);
+    }
+  }
 
   /**
    * 获取服务器统计信息

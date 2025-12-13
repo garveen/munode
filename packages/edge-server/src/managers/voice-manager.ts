@@ -327,6 +327,23 @@ export class VoiceManager {
         this.logger.error(`Failed to notify Hub about connection failure:`, error);
       }
     });
+    
+    // 监听Edge断开连接事件
+    this.voiceTransport.on('edge-disconnected', (edgeId: number) => {
+      this.logger.warn(`Edge ${edgeId} disconnected (heartbeat timeout)`);
+    });
+    
+    // 监听重连失败事件（双向都失败时需要Hub决定）
+    this.voiceTransport.on('reconnect-failed', async (edgeId: number) => {
+      this.logger.error(`Reconnect failed with Edge ${edgeId}, notifying Hub for arbitration`);
+      
+      try {
+        await this.handlerFactory.hubClient.notifyReconnectFailure(edgeId);
+        this.logger.debug(`Notified Hub about reconnect failure with Edge ${edgeId}`);
+      } catch (error) {
+        this.logger.error(`Failed to notify Hub about reconnect failure:`, error);
+      }
+    });
 
         this.logger.debug('Voice transport handlers setup complete');
   }

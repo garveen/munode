@@ -20,6 +20,9 @@ import { type Logger } from '@munode/common';
 const HANDSHAKE_RETRY_INTERVAL_MS = 2000;
 const HANDSHAKE_MAX_ATTEMPTS = 5;
 const ENCRYPTED_PACKET_CACHE_TTL_MS = 5000;
+const HEARTBEAT_INTERVAL_MS = 10000; // 10秒心跳间隔
+const HEARTBEAT_TIMEOUT_MS = 30000; // 30秒无响应视为断开
+const RECONNECT_DELAY_MS = 3000; // 重连延迟
 
 export interface VoiceUDPConfig {
   port: number;
@@ -61,6 +64,10 @@ export interface EdgeConnectionStatus {
   lastSeen: number;
   handshakeAttempts: number;
   handshakeComplete: boolean;
+  lastHeartbeatSent: number;
+  lastHeartbeatReceived: number;
+  reconnecting: boolean;
+  reconnectAttempts: number;
 }
 
 export class VoiceUDPTransport extends EventEmitter {
@@ -79,9 +86,13 @@ export class VoiceUDPTransport extends EventEmitter {
     errors: 0,
     handshakeSent: 0,
     handshakeReceived: 0,
+    heartbeatsSent: 0,
+    heartbeatsReceived: 0,
   };
   private bufferPool: Buffer[] = [];
   private maxPoolSize = 10;
+  private heartbeatTimer?: NodeJS.Timeout;
+  private connectionCheckTimer?: NodeJS.Timeout;
 
   constructor(config: VoiceUDPConfig, logger: Logger) {
     super();
@@ -134,6 +145,18 @@ export class VoiceUDPTransport extends EventEmitter {
    * 停止UDP监听
    */
   stop(): void {
+    // 停止心跳定时器
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
+    
+    // 停止连接检查定时器
+    if (this.connectionCheckTimer) {
+      clearInterval(this.connectionCheckTimer);
+      this.connectionCheckTimer = undefined;
+    }
+    
     if (this.socket) {
       this.socket.close();
       this.socket = null;
@@ -146,6 +169,7 @@ export class VoiceUDPTransport extends EventEmitter {
   registerEndpoint(edgeId: number, host: string, port: number): void {
     this.remoteEndpoints.set(edgeId, { host, port });
     
+    const now = Date.now();
     // 初始化连接状态
     this.connectionStatus.set(edgeId, {
       edgeId,
@@ -153,12 +177,19 @@ export class VoiceUDPTransport extends EventEmitter {
       lastSeen: 0,
       handshakeAttempts: 0,
       handshakeComplete: false,
+      lastHeartbeatSent: now,
+      lastHeartbeatReceived: now,
+      reconnecting: false,
+      reconnectAttempts: 0,
     });
     
     this.logger.info(`Registered voice endpoint for edge ${edgeId}: ${host}:${port}`);
     
     // 发起握手
     this.initiateHandshake(edgeId);
+    
+    // 启动心跳和连接检查（如果还没启动）
+    this.startHeartbeatIfNeeded();
   }
 
   /**
@@ -229,6 +260,18 @@ export class VoiceUDPTransport extends EventEmitter {
   }
   
   /**
+   * 创建心跳包
+   */
+  private createHeartbeatPacket(type: 'PING' | 'PONG'): Buffer {
+    const packet = Buffer.alloc(8);
+    packet.write('MUHB', 0); // MUNode HeartBeat magic
+    packet.writeUInt8(type === 'PING' ? 1 : 2, 4);
+    const TIMESTAMP_MASK = 0xFFFFFFFF;
+    packet.writeUInt32BE(Date.now() & TIMESTAMP_MASK, 5); // Timestamp (lower 32 bits)
+    return packet;
+  }
+  
+  /**
    * 处理握手包
    */
   private handleHandshakePacket(data: Buffer, rinfo: dgram.RemoteInfo): void {
@@ -255,7 +298,9 @@ export class VoiceUDPTransport extends EventEmitter {
     const status = this.connectionStatus.get(edgeId);
     if (!status) return;
     
-    status.lastSeen = Date.now();
+    const now = Date.now();
+    status.lastSeen = now;
+    status.lastHeartbeatReceived = now;
     this.stats.handshakeReceived++;
     
     if (type === 1) { // SYN
@@ -266,6 +311,8 @@ export class VoiceUDPTransport extends EventEmitter {
       this.stats.handshakeSent++;
       status.handshakeComplete = true;
       status.connected = true;
+      status.reconnecting = false;
+      status.reconnectAttempts = 0;
       this.logger.info(`UDP handshake complete with edge ${edgeId} (received SYN)`);
       this.emit('edge-connected', edgeId);
     } else if (type === 2) { // SYN-ACK
@@ -276,15 +323,184 @@ export class VoiceUDPTransport extends EventEmitter {
       this.stats.handshakeSent++;
       status.handshakeComplete = true;
       status.connected = true;
+      status.reconnecting = false;
+      status.reconnectAttempts = 0;
       this.logger.info(`UDP handshake complete with edge ${edgeId} (received SYN-ACK)`);
       this.emit('edge-connected', edgeId);
     } else if (type === 3) { // ACK
       this.logger.debug(`Received handshake ACK from edge ${edgeId}`);
       status.handshakeComplete = true;
       status.connected = true;
+      status.reconnecting = false;
+      status.reconnectAttempts = 0;
       this.logger.info(`UDP handshake complete with edge ${edgeId} (received ACK)`);
       this.emit('edge-connected', edgeId);
     }
+  }
+  
+  /**
+   * 处理心跳包
+   */
+  private handleHeartbeatPacket(data: Buffer, rinfo: dgram.RemoteInfo): void {
+    if (data.length < 8 || data.toString('utf8', 0, 4) !== 'MUHB') {
+      return; // Not a heartbeat packet
+    }
+    
+    const type = data.readUInt8(4);
+    
+    // 找到对应的edge
+    let edgeId: number | undefined;
+    for (const [id, endpoint] of this.remoteEndpoints) {
+      if (endpoint.host === rinfo.address && endpoint.port === rinfo.port) {
+        edgeId = id;
+        break;
+      }
+    }
+    
+    if (!edgeId) {
+      this.logger.debug(`Received heartbeat from unknown endpoint: ${rinfo.address}:${rinfo.port}`);
+      return;
+    }
+    
+    const status = this.connectionStatus.get(edgeId);
+    if (!status) return;
+    
+    const now = Date.now();
+    status.lastSeen = now;
+    status.lastHeartbeatReceived = now;
+    
+    if (type === 1) { // PING
+      this.logger.debug(`Received heartbeat PING from edge ${edgeId}`);
+      // 回复 PONG
+      const pong = this.createHeartbeatPacket('PONG');
+      this.sendPacket(pong, rinfo.address, rinfo.port);
+      this.stats.heartbeatsReceived++;
+    } else if (type === 2) { // PONG
+      this.logger.debug(`Received heartbeat PONG from edge ${edgeId}`);
+      this.stats.heartbeatsReceived++;
+    }
+  }
+  
+  /**
+   * 启动心跳定时器（如果需要）
+   */
+  private startHeartbeatIfNeeded(): void {
+    if (this.heartbeatTimer || this.connectionCheckTimer) {
+      return; // 已经启动
+    }
+    
+    // 心跳发送定时器
+    this.heartbeatTimer = setInterval(() => {
+      this.sendHeartbeats();
+    }, HEARTBEAT_INTERVAL_MS);
+    
+    // 连接检查定时器
+    this.connectionCheckTimer = setInterval(() => {
+      this.checkConnections();
+    }, HEARTBEAT_INTERVAL_MS);
+    
+    this.logger.debug('Heartbeat and connection check timers started');
+  }
+  
+  /**
+   * 发送心跳包到所有已连接的Edge
+   */
+  private sendHeartbeats(): void {
+    const now = Date.now();
+    for (const [edgeId, status] of this.connectionStatus) {
+      if (status.handshakeComplete && !status.reconnecting) {
+        const endpoint = this.remoteEndpoints.get(edgeId);
+        if (endpoint) {
+          const ping = this.createHeartbeatPacket('PING');
+          this.sendPacket(ping, endpoint.host, endpoint.port);
+          status.lastHeartbeatSent = now;
+          this.stats.heartbeatsSent++;
+          this.logger.debug(`Sent heartbeat PING to edge ${edgeId}`);
+        }
+      }
+    }
+  }
+  
+  /**
+   * 检查连接状态，处理超时和重连
+   */
+  private checkConnections(): void {
+    const now = Date.now();
+    for (const [edgeId, status] of this.connectionStatus) {
+      if (!status.handshakeComplete) {
+        continue; // 跳过未完成握手的连接
+      }
+      
+      const timeSinceLastHeartbeat = now - status.lastHeartbeatReceived;
+      
+      if (timeSinceLastHeartbeat > HEARTBEAT_TIMEOUT_MS && status.connected) {
+        // 连接超时
+        this.logger.warn(`Edge ${edgeId} connection timeout (no heartbeat for ${timeSinceLastHeartbeat}ms)`);
+        status.connected = false;
+        status.handshakeComplete = false;
+        this.emit('edge-disconnected', edgeId);
+        
+        // 发起重连
+        this.initiateReconnect(edgeId);
+      }
+    }
+  }
+  
+  /**
+   * 发起重连
+   */
+  private initiateReconnect(edgeId: number): void {
+    const status = this.connectionStatus.get(edgeId);
+    if (!status || status.reconnecting) {
+      return;
+    }
+    
+    status.reconnecting = true;
+    status.reconnectAttempts = 0;
+    
+    this.logger.info(`Initiating reconnect to edge ${edgeId}`);
+    
+    // 延迟后开始重连
+    setTimeout(() => {
+      this.performReconnect(edgeId);
+    }, RECONNECT_DELAY_MS);
+  }
+  
+  /**
+   * 执行重连
+   */
+  private performReconnect(edgeId: number): void {
+    const status = this.connectionStatus.get(edgeId);
+    const endpoint = this.remoteEndpoints.get(edgeId);
+    
+    if (!status || !endpoint) {
+      return;
+    }
+    
+    if (!status.reconnecting) {
+      return; // 已经重连成功或被取消
+    }
+    
+    status.reconnectAttempts++;
+    this.logger.debug(`Reconnecting to edge ${edgeId}, attempt ${status.reconnectAttempts}`);
+    
+    // 重新发起握手
+    const handshakePacket = this.createHandshakePacket('SYN');
+    this.sendPacket(handshakePacket, endpoint.host, endpoint.port);
+    this.stats.handshakeSent++;
+    
+    // 如果重连次数达到上限，通知Hub
+    if (status.reconnectAttempts >= HANDSHAKE_MAX_ATTEMPTS) {
+      this.logger.error(`Failed to reconnect to edge ${edgeId} after ${HANDSHAKE_MAX_ATTEMPTS} attempts`);
+      status.reconnecting = false;
+      this.emit('reconnect-failed', edgeId);
+      return;
+    }
+    
+    // 继续尝试重连
+    setTimeout(() => {
+      this.performReconnect(edgeId);
+    }, HANDSHAKE_RETRY_INTERVAL_MS);
   }
 
   /**
@@ -421,7 +637,8 @@ export class VoiceUDPTransport extends EventEmitter {
 
   /**
    * 广播语音包到所有Edge（除了excludeEdge）
-   * 优化：如果发送给多个Edge，复用加密后的数据
+   * 注意：Edge间broadcast不需要缓存，因为每次都是实时数据
+   * 优化：如果发送给多个Edge，复用加密后的数据（但不持久化缓存）
    */
   broadcast(
     packet: VoicePacketHeader,
@@ -433,26 +650,14 @@ export class VoiceUDPTransport extends EventEmitter {
     // voiceData 是完整的 Mumble 语音包格式：[header][session][sequence][voice_data]
     const fullPacket = Buffer.concat([headerBuffer, voiceData]);
 
-    // 加密（如果启用）- 只加密一次，多个edge复用
+    // 加密（如果启用）- 为本次broadcast加密一次，所有edge复用同一个加密结果
+    // 不缓存加密结果，因为语音包是实时流数据，不会重复发送
     let finalPacket: Buffer;
     if (this.encryptionConfig) {
-      // 创建缓存键：使用packet信息的哈希
-      const cacheKey = `${packet.senderId}-${packet.sequence}`;
-      
-      // 检查缓存
-      let cached = this.encryptedPacketCache.get(cacheKey);
-      if (!cached) {
-        cached = this.encodePacket({
-          ...packet,
-          data: fullPacket,
-        });
-        // 缓存加密后的包
-        this.encryptedPacketCache.set(cacheKey, cached);
-        setTimeout(() => {
-          this.encryptedPacketCache.delete(cacheKey);
-        }, ENCRYPTED_PACKET_CACHE_TTL_MS);
-      }
-      finalPacket = cached;
+      finalPacket = this.encodePacket({
+        ...packet,
+        data: fullPacket,
+      });
     } else {
       finalPacket = fullPacket;
     }
@@ -496,6 +701,12 @@ export class VoiceUDPTransport extends EventEmitter {
       // 检查是否是握手包
       if (data.length >= 8 && data.toString('utf8', 0, 4) === 'MUHS') {
         this.handleHandshakePacket(data, rinfo);
+        return;
+      }
+      
+      // 检查是否是心跳包
+      if (data.length >= 8 && data.toString('utf8', 0, 4) === 'MUHB') {
+        this.handleHeartbeatPacket(data, rinfo);
         return;
       }
       
@@ -607,6 +818,8 @@ export class VoiceUDPTransport extends EventEmitter {
     errors: number;
     handshakeSent: number;
     handshakeReceived: number;
+    heartbeatsSent: number;
+    heartbeatsReceived: number;
     registeredEndpoints: number;
     connectedEndpoints: number;
   } {
@@ -654,6 +867,8 @@ export class VoiceUDPTransport extends EventEmitter {
       errors: 0,
       handshakeSent: 0,
       handshakeReceived: 0,
+      heartbeatsSent: 0,
+      heartbeatsReceived: 0,
     };
   }
 
