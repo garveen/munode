@@ -206,12 +206,159 @@ const HANDSHAKE_MAX_ATTEMPTS = 5;      // 最大重连次数
 - [ ] 高丢包率环境
 - [ ] 网络抖动场景
 
+## Hub侧仲裁机制实现 ✅
+
+### 设计原则
+
+1. **直连失败不退出**: Edge间直连失败不意味着需要退出，因为可能通过其他Edge路由连接
+2. **仅网络分区时退出**: 只有当两个Edge间无任何路由路径时，才检测分区并要求较小集群退出
+3. **基于用户数决策**: 选择用户数最少的集群关闭，最小化影响
+4. **时间窗口数据**: 路由计算使用最近30秒的质量数据，确保路由决策反映当前网络状况
+
+### 通知处理
+
+#### 1. 连接失败通知 (`edge.connectionFailure`)
+```typescript
+handleConnectionFailureNotification(params: {
+  edge_id: number;
+  target_edge_id: number;
+  timestamp: number;
+})
+```
+- Edge间直连失败时上报
+- Hub仅记录，不立即采取行动
+- 因为可能通过其他Edge路由连接
+
+#### 2. 重连失败通知 (`edge.reconnectFailure`)
+```typescript
+handleReconnectFailureNotification(params: {
+  edge_id: number;
+  target_edge_id: number;
+  timestamp: number;
+})
+```
+- 双向重连都失败时上报（Edge侧最多尝试5次）
+- Hub检查60秒内双方是否都报告
+- 如果是，触发仲裁流程
+
+### 仲裁流程
+
+```typescript
+async performArbitration(edgeA: number, edgeB: number) {
+  // 1. 检查是否可以通过路由连接
+  const path = topologyManager.findBestPath(edgeA, edgeB);
+  if (path) {
+    // 可以路由连接，无需退出
+    return;
+  }
+  
+  // 2. 检测所有断连的集群
+  const clusters = detectDisconnectedClusters();
+  
+  if (clusters.length <= 1) {
+    // 只有一个集群，无需处理
+    return;
+  }
+  
+  // 3. 计算每个集群的用户数
+  const clusterStats = clusters.map(cluster => ({
+    edges: cluster,
+    userCount: cluster.reduce((sum, edgeId) => 
+      sum + sessionManager.getEdgeSessions(edgeId).length, 0
+    ),
+  }));
+  
+  // 4. 按用户数排序，选择最小集群
+  clusterStats.sort((a, b) => a.userCount - b.userCount);
+  const smallestCluster = clusterStats[0];
+  
+  // 5. 关闭最小集群
+  await shutdownEdgeCluster(smallestCluster.edges);
+}
+```
+
+### 网络分区检测
+
+使用并查集(Union-Find)算法检测断连的Edge集群:
+
+```typescript
+detectDisconnectedClusters(): number[][] {
+  // 1. 初始化并查集
+  const parent = new Map<number, number>();
+  const rank = new Map<number, number>();
+  
+  // 2. 遍历所有Edge对
+  for (edgeA of allEdges) {
+    for (edgeB of allEdges) {
+      // 如果可以路由连接，合并到同一集合
+      const path = topologyManager.findBestPath(edgeA, edgeB);
+      if (path) {
+        union(edgeA, edgeB);
+      }
+    }
+  }
+  
+  // 3. 收集所有集群
+  return groupByRoot(parent);
+}
+```
+
+### 集群关闭
+
+向集群中的所有Edge发送关闭请求:
+
+```typescript
+async shutdownEdgeCluster(edges: number[]) {
+  for (const edgeId of edges) {
+    controlService.notify(edgeId, 'hub.shutdownRequest', {
+      reason: 'Network partition detected, this edge is in the smaller disconnected cluster',
+      graceful: true,
+      disconnect_clients: true,
+    });
+  }
+}
+```
+
+Edge收到后应该:
+1. 断开所有客户端连接
+2. 清理资源
+3. 优雅退出进程
+
+### 路由计算优化
+
+使用最近30秒的质量数据计算路由:
+
+```typescript
+calculateDirectCost(quality: EdgeConnectionQuality): number {
+  const baseCost = quality.rtt + quality.packetLoss * 1000;
+  
+  const now = Date.now();
+  const age = now - quality.lastUpdate;
+  
+  if (age > 30000) {
+    // 过期数据，大幅增加成本
+    return baseCost + 10000;
+  }
+  
+  // 在时间窗口内，数据越新权重越高
+  const ageFactor = age / 30000;
+  const agePenalty = baseCost * ageFactor * 0.05; // 0-5%惩罚
+  
+  return baseCost + agePenalty;
+}
+```
+
+优势:
+- 优先使用新鲜数据
+- 过期数据自动降权
+- 路由决策反映当前网络状况
+
 ## 未来改进
 
-### Hub侧实现
-- [ ] 接收并处理 `edge.reconnectFailure` 通知
-- [ ] 实现仲裁决策逻辑
-- [ ] 支持动态路由调整
+### Hub侧实现 ✅
+- [x] 接收并处理 `edge.connectionFailure` 和 `edge.reconnectFailure` 通知
+- [x] 实现仲裁决策逻辑（网络分区检测+用户数决策）
+- [x] 支持动态路由调整（基于时间窗口的质量数据）
 
 ### TCP降级完善
 - [ ] 实现完整的TCP语音传输
@@ -222,6 +369,10 @@ const HANDSHAKE_MAX_ATTEMPTS = 5;      // 最大重连次数
 - [ ] 导出心跳和重连指标
 - [ ] 连接质量仪表盘
 - [ ] 告警机制
+
+### Edge侧增强
+- [ ] 处理 `hub.shutdownRequest` 通知
+- [ ] 实现优雅关闭流程（断开客户端+清理资源）
 
 ### 性能优化
 - [ ] 自适应心跳间隔
