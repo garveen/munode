@@ -229,15 +229,23 @@ export class EdgeServer extends EventEmitter {
     this.logger.error('=== Session expired on Hub, performing cold restart ===');
     
     try {
-      // 1. 断开所有客户端连接
+      // 1. 断开所有客户端连接（并行处理以提高效率）
       this.logger.info('Disconnecting all clients...');
       const clients = this.clientManager.getAllClients();
-      for (const client of clients) {
-        const socket = this.clientManager.getSocket(client.session);
-        if (socket) {
-          socket.destroy();
-        }
-      }
+      const disconnectPromises = clients.map(client => {
+        return new Promise<void>((resolve) => {
+          const socket = this.clientManager.getSocket(client.session);
+          if (socket) {
+            socket.once('close', () => resolve());
+            socket.destroy();
+            // Fallback timeout in case close event doesn't fire
+            setTimeout(resolve, 1000);
+          } else {
+            resolve();
+          }
+        });
+      });
+      await Promise.all(disconnectPromises);
       
       // 2. 清理本地状态
       this.logger.info('Clearing local state...');

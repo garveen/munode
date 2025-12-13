@@ -32,6 +32,7 @@ interface PooledConnection {
   isReconnecting: boolean;
   reconnectTimer: NodeJS.Timeout | null;
   reconnectAttempts: number;
+  lastReconnectTime: number; // For exponential backoff calculation
 }
 
 /**
@@ -90,6 +91,7 @@ export class ConnectionPool extends EventEmitter implements RPCChannelLike {
         isReconnecting: false,
         reconnectTimer: null,
         reconnectAttempts: 0,
+        lastReconnectTime: 0,
       };
       this.connections.push(conn);
     }
@@ -206,7 +208,7 @@ export class ConnectionPool extends EventEmitter implements RPCChannelLike {
   }
 
   /**
-   * Schedule reconnection for a single connection
+   * Schedule reconnection for a single connection with exponential backoff
    */
   private scheduleReconnect(conn: PooledConnection): void {
     if (conn.reconnectTimer || conn.isReconnecting || this.isStopping) {
@@ -214,7 +216,19 @@ export class ConnectionPool extends EventEmitter implements RPCChannelLike {
     }
 
     conn.reconnectAttempts++;
-    this.logger?.debug(`Scheduling reconnect for connection ${conn.id} (attempt ${conn.reconnectAttempts})`);
+    conn.lastReconnectTime = Date.now();
+    
+    // Exponential backoff: baseInterval * (2 ^ attempts), capped at maxInterval
+    const baseInterval = this.config.reconnectInterval || 5000;
+    const maxInterval = 60000; // Maximum 60 seconds between retries
+    const backoffInterval = Math.min(
+      baseInterval * Math.pow(2, Math.min(conn.reconnectAttempts - 1, 5)),
+      maxInterval
+    );
+    
+    this.logger?.debug(
+      `Scheduling reconnect for connection ${conn.id} (attempt ${conn.reconnectAttempts}) in ${backoffInterval}ms`
+    );
 
     conn.reconnectTimer = setTimeout(() => {
       conn.reconnectTimer = null;
@@ -224,7 +238,7 @@ export class ConnectionPool extends EventEmitter implements RPCChannelLike {
         this.logger?.error(`Reconnection failed for connection ${conn.id}:`, error);
         // Will schedule another reconnect via handleConnectionClose
       });
-    }, this.config.reconnectInterval);
+    }, backoffInterval);
   }
 
   /**
@@ -281,7 +295,8 @@ export class ConnectionPool extends EventEmitter implements RPCChannelLike {
   private getNextAvailableChannel(): RPCChannel | null {
     const connectedChannels = this.connections
       .filter(conn => conn.isConnected && conn.channel)
-      .map(conn => conn.channel!);
+      .map(conn => conn.channel)
+      .filter((channel): channel is RPCChannel => channel !== null);
 
     if (connectedChannels.length === 0) {
       return null;

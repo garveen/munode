@@ -257,6 +257,12 @@ export class ServiceRegistry {
       return;
     }
 
+    // 清理可能存在的旧定时器（防止竞态条件）
+    if (edge.cleanupTimer) {
+      clearTimeout(edge.cleanupTimer);
+      edge.cleanupTimer = undefined;
+    }
+
     // 标记为等待重连状态
     edge.connectionState = EdgeConnectionState.DISCONNECTED_WAITING;
     edge.disconnectedAt = Date.now();
