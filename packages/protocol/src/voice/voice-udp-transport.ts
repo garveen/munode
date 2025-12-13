@@ -55,114 +55,6 @@ export interface VoiceEncryptionConfig {
   key: Buffer;       // 加密密钥
 }
 
-/**
- * 语音加密通道
- * 负责语音包的加密和解密
- */
-class VoiceChannel {
-  private config: VoiceEncryptionConfig;
-
-  constructor(config: VoiceEncryptionConfig) {
-    this.config = config;
-  }
-
-  /**
-   * 编码语音包（包含加密）
-   */
-  encodePacket(packet: VoicePacket): Buffer {
-    // 编码明文包头 + 数据
-    const plainBuffer = Buffer.allocUnsafe(14 + packet.data.length);
-    plainBuffer.writeUInt8(packet.version, 0);
-    plainBuffer.writeUInt32BE(packet.senderId, 1);
-    plainBuffer.writeUInt32BE(packet.targetId, 5);
-    plainBuffer.writeUInt32BE(packet.sequence, 9);
-    plainBuffer.writeUInt8(packet.codec, 13);
-    packet.data.copy(plainBuffer, 14);
-
-    // 生成随机IV (16字节 for CBC)
-    const iv = crypto.randomBytes(16);
-
-    // 创建cipher
-    const cipher = crypto.createCipheriv(this.config.algorithm, this.config.key, iv);
-
-    // 加密整个包
-    const encryptedData = Buffer.concat([
-      cipher.update(plainBuffer),
-      cipher.final()
-    ]);
-
-    // 返回格式: IV(16) + 加密数据
-    return Buffer.concat([iv, encryptedData]);
-  }
-
-  /**
-   * 解码语音包（包含解密）
-   */
-  decodePacket(buffer: Buffer): VoicePacket | null {
-    if (buffer.length < 16 + 14) return null; // IV + 最小包头
-
-    try {
-      const iv = buffer.slice(0, 16);
-      const encryptedData = buffer.slice(16);
-
-      // 创建decipher
-      const decipher = crypto.createDecipheriv(this.config.algorithm, this.config.key, iv);
-
-      // 解密数据
-      const decryptedData = Buffer.concat([
-        decipher.update(encryptedData),
-        decipher.final()
-      ]);
-
-      // 验证解密后的数据长度
-      if (decryptedData.length < 14) return null;
-
-      // 解析包头
-      return {
-        version: decryptedData.readUInt8(0),
-        senderId: decryptedData.readUInt32BE(1),
-        targetId: decryptedData.readUInt32BE(5),
-        sequence: decryptedData.readUInt32BE(9),
-        codec: decryptedData.readUInt8(13),
-        data: decryptedData.slice(14),
-      };
-    } catch (_error) {
-      // 解密失败，返回null
-      return null;
-    }
-  }
-
-  /**
-   * 生成新的加密配置（用于密钥分发）
-   */
-  static generateEncryptionConfig(algorithm: 'aes-128-cbc' | 'aes-256-cbc' = 'aes-128-cbc'): VoiceEncryptionConfig {
-    const keyLength = algorithm === 'aes-128-cbc' ? 16 : 32;
-    const key = crypto.randomBytes(keyLength);
-
-    return {
-      algorithm,
-      key,
-    };
-  }
-
-  /**
-   * 从密钥数据创建配置
-   */
-  static createEncryptionConfig(algorithm: string, keyData: Buffer): VoiceEncryptionConfig {
-    return {
-      algorithm,
-      key: keyData,
-    };
-  }
-
-  /**
-   * 更新加密密钥
-   */
-  updateKey(key: Buffer): void {
-    this.config.key = key;
-  }
-}
-
 export interface EdgeConnectionStatus {
   edgeId: number;
   connected: boolean;
@@ -174,7 +66,7 @@ export interface EdgeConnectionStatus {
 export class VoiceUDPTransport extends EventEmitter {
   private socket: dgram.Socket | null = null;
   private config: VoiceUDPConfig;
-  private voiceChannel: VoiceChannel | null = null;
+  private encryptionConfig: VoiceEncryptionConfig | null = null;
   private remoteEndpoints = new Map<number, RemoteEndpoint>(); // edgeId -> endpoint
   private connectionStatus = new Map<number, EdgeConnectionStatus>(); // edgeId -> connection status
   private encryptedPacketCache = new Map<string, Buffer>(); // cacheKey -> encrypted packet
@@ -188,19 +80,21 @@ export class VoiceUDPTransport extends EventEmitter {
     handshakeSent: 0,
     handshakeReceived: 0,
   };
+  private bufferPool: Buffer[] = [];
+  private maxPoolSize = 10;
 
   constructor(config: VoiceUDPConfig, logger: Logger) {
     super();
     this.config = config;
     this.logger = logger;
 
-    // 如果提供了加密密钥，创建VoiceChannel
+    // 如果提供了加密密钥，设置加密配置
     if (config.encryptionKey) {
       const algorithm = config.encryptionAlgorithm || 'aes-128-cbc';
-      this.voiceChannel = new VoiceChannel({
+      this.encryptionConfig = {
         algorithm,
         key: config.encryptionKey,
-      });
+      };
     }
   }
 
@@ -401,6 +295,101 @@ export class VoiceUDPTransport extends EventEmitter {
   }
 
   /**
+   * Get buffer from pool or allocate new
+   */
+  private getBuffer(size: number): Buffer {
+    for (let i = 0; i < this.bufferPool.length; i++) {
+      if (this.bufferPool[i].length >= size) {
+        return this.bufferPool.splice(i, 1)[0].slice(0, size);
+      }
+    }
+    return Buffer.allocUnsafe(size);
+  }
+
+  /**
+   * Return buffer to pool
+   */
+  private returnBuffer(buffer: Buffer): void {
+    if (this.bufferPool.length < this.maxPoolSize) {
+      this.bufferPool.push(buffer);
+    }
+  }
+
+  /**
+   * 编码语音包（包含加密）
+   */
+  private encodePacket(packet: VoicePacket): Buffer {
+    if (!this.encryptionConfig) {
+      throw new Error('Encryption not configured');
+    }
+
+    // 编码明文包头 + 数据
+    const plainBuffer = this.getBuffer(14 + packet.data.length);
+    plainBuffer.writeUInt8(packet.version, 0);
+    plainBuffer.writeUInt32BE(packet.senderId, 1);
+    plainBuffer.writeUInt32BE(packet.targetId, 5);
+    plainBuffer.writeUInt32BE(packet.sequence, 9);
+    plainBuffer.writeUInt8(packet.codec, 13);
+    packet.data.copy(plainBuffer, 14);
+
+    // 生成随机IV (16字节 for CBC)
+    const iv = crypto.randomBytes(16);
+
+    // Note: Cipher instances cannot be persisted because each encryption requires a unique IV for security
+    const cipher = crypto.createCipheriv(this.encryptionConfig.algorithm, this.encryptionConfig.key, iv);
+
+    // 加密整个包
+    const encryptedData = Buffer.concat([
+      cipher.update(plainBuffer),
+      cipher.final()
+    ]);
+
+    // 返回格式: IV(16) + 加密数据
+    return Buffer.concat([iv, encryptedData]);
+  }
+
+  /**
+   * 解码加密语音包（包含解密）
+   */
+  private decodeEncryptedPacket(buffer: Buffer): VoicePacket | null {
+    if (!this.encryptionConfig) {
+      throw new Error('Encryption not configured');
+    }
+
+    if (buffer.length < 16 + 14) return null; // IV + 最小包头
+
+    try {
+      const iv = buffer.slice(0, 16);
+      const encryptedData = buffer.slice(16);
+
+      // Note: Decipher instances cannot be persisted because each decryption requires the specific IV from the packet
+      const decipher = crypto.createDecipheriv(this.encryptionConfig.algorithm, this.encryptionConfig.key, iv);
+
+      // 解密数据
+      const decryptedData = Buffer.concat([
+        decipher.update(encryptedData),
+        decipher.final()
+      ]);
+
+      // 验证解密后的数据长度
+      if (decryptedData.length < 14) return null;
+
+      // 解析包头
+      return {
+        version: decryptedData.readUInt8(0),
+        senderId: decryptedData.readUInt32BE(1),
+        targetId: decryptedData.readUInt32BE(5),
+        sequence: decryptedData.readUInt32BE(9),
+        codec: decryptedData.readUInt8(13),
+        data: decryptedData.slice(14),
+      };
+    } catch (_error) {
+      // 解密失败，返回null
+      return null;
+    }
+  }
+
+  /**
    * 发送语音包到指定Edge
    */
   sendToEdge(edgeId: number, packet: VoicePacketHeader, voiceData: Buffer): void {
@@ -416,8 +405,8 @@ export class VoiceUDPTransport extends EventEmitter {
 
     // 加密（如果启用）
     let finalPacket: Buffer;
-    if (this.voiceChannel) {
-      finalPacket = this.voiceChannel.encodePacket({
+    if (this.encryptionConfig) {
+      finalPacket = this.encodePacket({
         ...packet,
         data: fullPacket,
       });
@@ -446,14 +435,14 @@ export class VoiceUDPTransport extends EventEmitter {
 
     // 加密（如果启用）- 只加密一次，多个edge复用
     let finalPacket: Buffer;
-    if (this.voiceChannel) {
+    if (this.encryptionConfig) {
       // 创建缓存键：使用packet信息的哈希
       const cacheKey = `${packet.senderId}-${packet.sequence}`;
       
       // 检查缓存
       let cached = this.encryptedPacketCache.get(cacheKey);
       if (!cached) {
-        cached = this.voiceChannel.encodePacket({
+        cached = this.encodePacket({
           ...packet,
           data: fullPacket,
         });
@@ -512,8 +501,8 @@ export class VoiceUDPTransport extends EventEmitter {
       
       // 解密（如果启用）
       let decryptedData: Buffer;
-      if (this.voiceChannel) {
-        const decrypted = this.voiceChannel.decodePacket(data);
+      if (this.encryptionConfig) {
+        const decrypted = this.decodeEncryptedPacket(data);
         if (!decrypted) {
           this.logger.warn('Failed to decrypt voice packet');
           this.stats.errors++;
@@ -678,14 +667,11 @@ export class VoiceUDPTransport extends EventEmitter {
     this.config.encryptionKey = key;
     this.config.encryptionAlgorithm = algo;
     
-    if (this.voiceChannel) {
-      this.voiceChannel.updateKey(key);
-    } else {
-      this.voiceChannel = new VoiceChannel({
-        algorithm: algo,
-        key,
-      });
-    }
+    // 更新加密配置
+    this.encryptionConfig = {
+      algorithm: algo,
+      key,
+    };
     
     // 清空加密包缓存
     this.encryptedPacketCache.clear();
@@ -697,11 +683,7 @@ export class VoiceUDPTransport extends EventEmitter {
    * 获取加密配置
    */
   getEncryptionConfig(): VoiceEncryptionConfig | null {
-    if (!this.voiceChannel || !this.config.encryptionKey) return null;
-    return {
-      algorithm: this.config.encryptionAlgorithm || 'aes-128-cbc',
-      key: this.config.encryptionKey,
-    };
+    return this.encryptionConfig;
   }
 
   /**
@@ -709,5 +691,28 @@ export class VoiceUDPTransport extends EventEmitter {
    */
   isRunning(): boolean {
     return this.socket !== null;
+  }
+
+  /**
+   * 生成新的加密配置（用于密钥分发）
+   */
+  static generateEncryptionConfig(algorithm: 'aes-128-cbc' | 'aes-256-cbc' = 'aes-128-cbc'): VoiceEncryptionConfig {
+    const keyLength = algorithm === 'aes-128-cbc' ? 16 : 32;
+    const key = crypto.randomBytes(keyLength);
+
+    return {
+      algorithm,
+      key,
+    };
+  }
+
+  /**
+   * 从密钥数据创建配置
+   */
+  static createEncryptionConfig(algorithm: string, keyData: Buffer): VoiceEncryptionConfig {
+    return {
+      algorithm,
+      key: keyData,
+    };
   }
 }
