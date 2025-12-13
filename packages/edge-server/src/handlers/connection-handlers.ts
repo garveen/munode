@@ -27,6 +27,12 @@ export class ConnectionHandlers {
     const clientAddress = `${socket.remoteAddress}:${socket.remotePort}`;
     this.logger.debug(`New TLS connection from ${clientAddress}`);
 
+    // Set connection timeout (30 seconds for initial handshake)
+    const connectionTimeout = setTimeout(() => {
+      this.logger.warn(`Connection timeout for ${clientAddress}, destroying socket`);
+      socket.destroy();
+    }, 30000);
+
     try {
       // 获取证书哈希
       let cert_hash: string | undefined;
@@ -46,21 +52,25 @@ export class ConnectionHandlers {
         this.logger.warn(
           `Rejected TLS connection from banned client: ${socket.remoteAddress}, cert: ${cert_hash?.substring(0, 8)}..., reason: ${banCheck.reason}`
         );
+        clearTimeout(connectionTimeout);
         socket.destroy();
         return;
       }
 
       // 在集群模式下，从 Hub 分配 session ID
       let sessionId: number;
-    try {
+      try {
         sessionId = await this.hubClient.allocateSessionId();
         this.logger.debug(`Allocated session ID ${sessionId} from Hub for ${clientAddress}`);
-    } catch (error) {
+      } catch (error) {
         this.logger.error('Failed to allocate session ID from Hub:', error);
+        clearTimeout(connectionTimeout);
         socket.destroy();
         return;
-    }
+      }
 
+      // Clear timeout once session is allocated
+      clearTimeout(connectionTimeout);
 
       // 创建客户端（使用从 Hub 分配的 session ID，并传递证书哈希）
       this.clientManager.createClient(socket, sessionId, cert_hash);
@@ -70,7 +80,8 @@ export class ConnectionHandlers {
         this.logger.debug(`Client session ${sessionId} has certificate hash: ${cert_hash.substring(0, 16)}...`);
       }
     } catch (error) {
-        this.logger.error('Error handling TLS connection:', error);
+      this.logger.error('Error handling TLS connection:', error);
+      clearTimeout(connectionTimeout);
       socket.destroy();
     }
   }

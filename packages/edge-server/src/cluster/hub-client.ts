@@ -315,11 +315,7 @@ export class EdgeControlClient extends EventEmitter {
         respond({ success: true });
         break;
       }
-      case 'hub.routeVoice': {
-        this.emit('routeVoice', params);
-        respond({ success: true });
-        break;
-      }
+      // NOTE: hub.routeVoice removed - voice packets flow edge-to-edge directly via UDP
       case 'hub.syncVoiceTarget': {
         this.emit('syncVoiceTarget', params);
         respond({ success: true });
@@ -465,29 +461,8 @@ export class EdgeControlClient extends EventEmitter {
     }
   }
 
-  /**
-   * 路由语音数据
-   */
-  async routeVoice(voiceData: {
-    fromSessionId: number;
-    target_id: number;
-    voiceData: Buffer;
-    timestamp: number;
-  }): Promise<void> {
-    if (!this.isConnected() || (!this.useExternalClient && !this.registered)) {
-      return;
-    }
-
-    try {
-      const params: RPCParams<'edge.routeVoice'> = {
-        fromEdgeId: this.config.server_id,
-        ...voiceData,
-      };
-      await this.client.call('edge.routeVoice', params);
-    } catch (error) {
-      this.logger.error('Failed to route voice:', error);
-    }
-  }
+  // NOTE: routeVoice removed - voice packets should flow edge-to-edge directly via UDP
+  // Hub is not involved in voice packet forwarding
 
   /**
    * 请求完整同步
