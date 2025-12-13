@@ -632,6 +632,27 @@ export class EdgeControlClient extends EventEmitter {
       throw error;
     }
   }
+  
+  /**
+   * 通知Hub与目标Edge的UDP连接失败
+   */
+  async notifyConnectionFailure(targetEdgeId: number): Promise<void> {
+    if (!this.isConnected() || (!this.useExternalClient && !this.registered)) {
+      this.logger.warn('Cannot notify connection failure: not connected to Hub');
+      return;
+    }
+
+    try {
+      this.notify('edge.connectionFailure', {
+        edge_id: this.config.server_id,
+        target_edge_id: targetEdgeId,
+        timestamp: Date.now(),
+      });
+      this.logger.info(`Notified Hub about connection failure with Edge ${targetEdgeId}`);
+    } catch (error) {
+      this.logger.error(`Failed to notify Hub about connection failure with Edge ${targetEdgeId}:`, error);
+    }
+  }
 
   /**
    * 获取服务器统计信息

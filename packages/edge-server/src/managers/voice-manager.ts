@@ -185,6 +185,24 @@ export class VoiceManager {
   getVoiceTransport(): VoiceUDPTransport | undefined {
     return this.voiceTransport;
   }
+  
+  /**
+   * 更新语音UDP传输的加密密钥
+   */
+  updateEncryptionKey(algorithm: string, keyBase64: string, version: number): void {
+    if (!this.voiceTransport) {
+      this.logger.warn('Voice transport not available, cannot update encryption key');
+      return;
+    }
+    
+    try {
+      const key = Buffer.from(keyBase64, 'base64');
+      this.voiceTransport.updateEncryptionKey(key, algorithm);
+      this.logger.info(`Updated voice encryption key (version ${version}, algorithm: ${algorithm})`);
+    } catch (error) {
+      this.logger.error('Failed to update voice encryption key:', error);
+    }
+  }
 
   /**
    * 处理来自Hub的语音数据路由
@@ -290,6 +308,24 @@ export class VoiceManager {
 
     this.voiceTransport.on('error', (error: Error) => {
         this.logger.error('Voice UDP transport error:', error);
+    });
+    
+    // 监听Edge连接事件
+    this.voiceTransport.on('edge-connected', (edgeId: number) => {
+      this.logger.info(`UDP connection established with Edge ${edgeId}`);
+    });
+    
+    // 监听Edge连接失败事件
+    this.voiceTransport.on('handshake-failed', async (edgeId: number) => {
+      this.logger.warn(`UDP handshake failed with Edge ${edgeId}`);
+      
+      // 通知Hub连接失败
+      try {
+        await this.handlerFactory.hubClient.notifyConnectionFailure(edgeId);
+        this.logger.debug(`Notified Hub about connection failure with Edge ${edgeId}`);
+      } catch (error) {
+        this.logger.error(`Failed to notify Hub about connection failure:`, error);
+      }
     });
 
         this.logger.debug('Voice transport handlers setup complete');

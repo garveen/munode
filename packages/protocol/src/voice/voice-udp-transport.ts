@@ -5,17 +5,27 @@
  * - Hub和Edge之间的语音包转发
  * - Edge和Edge之间的语音包转发
  * - UDP丢包处理
+ * - 端到端加密传输
+ * 
+ * Note: VoiceChannel class (previously in voice-packet.ts) has been merged into this file
+ * for better code organization and maintainability.
  */
 
 import dgram from 'dgram';
+import crypto from 'crypto';
 import { EventEmitter } from 'events';
-import { VoiceChannel } from './voice-packet.js';
 import { type Logger } from '@munode/common';
+
+// Constants
+const HANDSHAKE_RETRY_INTERVAL_MS = 2000;
+const HANDSHAKE_MAX_ATTEMPTS = 5;
+const ENCRYPTED_PACKET_CACHE_TTL_MS = 5000;
 
 export interface VoiceUDPConfig {
   port: number;
   host?: string;
   encryptionKey?: Buffer;
+  encryptionAlgorithm?: string;
 }
 
 export interface VoicePacketHeader {
@@ -31,11 +41,143 @@ export interface RemoteEndpoint {
   port: number;
 }
 
+export interface VoicePacket {
+  version: number;
+  senderId: number;
+  targetId: number;
+  sequence: number;
+  codec: number;
+  data: Buffer;
+}
+
+export interface VoiceEncryptionConfig {
+  algorithm: string; // 'aes-128-cbc' 或 'aes-256-cbc'
+  key: Buffer;       // 加密密钥
+}
+
+/**
+ * 语音加密通道
+ * 负责语音包的加密和解密
+ */
+class VoiceChannel {
+  private config: VoiceEncryptionConfig;
+
+  constructor(config: VoiceEncryptionConfig) {
+    this.config = config;
+  }
+
+  /**
+   * 编码语音包（包含加密）
+   */
+  encodePacket(packet: VoicePacket): Buffer {
+    // 编码明文包头 + 数据
+    const plainBuffer = Buffer.allocUnsafe(14 + packet.data.length);
+    plainBuffer.writeUInt8(packet.version, 0);
+    plainBuffer.writeUInt32BE(packet.senderId, 1);
+    plainBuffer.writeUInt32BE(packet.targetId, 5);
+    plainBuffer.writeUInt32BE(packet.sequence, 9);
+    plainBuffer.writeUInt8(packet.codec, 13);
+    packet.data.copy(plainBuffer, 14);
+
+    // 生成随机IV (16字节 for CBC)
+    const iv = crypto.randomBytes(16);
+
+    // 创建cipher
+    const cipher = crypto.createCipheriv(this.config.algorithm, this.config.key, iv);
+
+    // 加密整个包
+    const encryptedData = Buffer.concat([
+      cipher.update(plainBuffer),
+      cipher.final()
+    ]);
+
+    // 返回格式: IV(16) + 加密数据
+    return Buffer.concat([iv, encryptedData]);
+  }
+
+  /**
+   * 解码语音包（包含解密）
+   */
+  decodePacket(buffer: Buffer): VoicePacket | null {
+    if (buffer.length < 16 + 14) return null; // IV + 最小包头
+
+    try {
+      const iv = buffer.slice(0, 16);
+      const encryptedData = buffer.slice(16);
+
+      // 创建decipher
+      const decipher = crypto.createDecipheriv(this.config.algorithm, this.config.key, iv);
+
+      // 解密数据
+      const decryptedData = Buffer.concat([
+        decipher.update(encryptedData),
+        decipher.final()
+      ]);
+
+      // 验证解密后的数据长度
+      if (decryptedData.length < 14) return null;
+
+      // 解析包头
+      return {
+        version: decryptedData.readUInt8(0),
+        senderId: decryptedData.readUInt32BE(1),
+        targetId: decryptedData.readUInt32BE(5),
+        sequence: decryptedData.readUInt32BE(9),
+        codec: decryptedData.readUInt8(13),
+        data: decryptedData.slice(14),
+      };
+    } catch (_error) {
+      // 解密失败，返回null
+      return null;
+    }
+  }
+
+  /**
+   * 生成新的加密配置（用于密钥分发）
+   */
+  static generateEncryptionConfig(algorithm: 'aes-128-cbc' | 'aes-256-cbc' = 'aes-128-cbc'): VoiceEncryptionConfig {
+    const keyLength = algorithm === 'aes-128-cbc' ? 16 : 32;
+    const key = crypto.randomBytes(keyLength);
+
+    return {
+      algorithm,
+      key,
+    };
+  }
+
+  /**
+   * 从密钥数据创建配置
+   */
+  static createEncryptionConfig(algorithm: string, keyData: Buffer): VoiceEncryptionConfig {
+    return {
+      algorithm,
+      key: keyData,
+    };
+  }
+
+  /**
+   * 更新加密密钥
+   */
+  updateKey(key: Buffer): void {
+    this.config.key = key;
+  }
+}
+
+export interface EdgeConnectionStatus {
+  edgeId: number;
+  connected: boolean;
+  lastSeen: number;
+  handshakeAttempts: number;
+  handshakeComplete: boolean;
+}
+
 export class VoiceUDPTransport extends EventEmitter {
   private socket: dgram.Socket | null = null;
   private config: VoiceUDPConfig;
   private voiceChannel: VoiceChannel | null = null;
   private remoteEndpoints = new Map<number, RemoteEndpoint>(); // edgeId -> endpoint
+  private connectionStatus = new Map<number, EdgeConnectionStatus>(); // edgeId -> connection status
+  private encryptedPacketCache = new Map<string, Buffer>(); // cacheKey -> encrypted packet
   private logger: Logger;
   private stats = {
     packetsSent: 0,
@@ -43,6 +185,8 @@ export class VoiceUDPTransport extends EventEmitter {
     bytesSent: 0,
     bytesReceived: 0,
     errors: 0,
+    handshakeSent: 0,
+    handshakeReceived: 0,
   };
 
   constructor(config: VoiceUDPConfig, logger: Logger) {
@@ -52,8 +196,9 @@ export class VoiceUDPTransport extends EventEmitter {
 
     // 如果提供了加密密钥，创建VoiceChannel
     if (config.encryptionKey) {
+      const algorithm = config.encryptionAlgorithm || 'aes-128-cbc';
       this.voiceChannel = new VoiceChannel({
-        algorithm: 'aes-128-cbc',
+        algorithm,
         key: config.encryptionKey,
       });
     }
@@ -102,11 +247,24 @@ export class VoiceUDPTransport extends EventEmitter {
   }
 
   /**
-   * 注册远程端点
+   * 注册远程端点并发起握手
    */
   registerEndpoint(edgeId: number, host: string, port: number): void {
     this.remoteEndpoints.set(edgeId, { host, port });
-    this.logger.debug(`Registered voice endpoint for edge ${edgeId}: ${host}:${port}`);
+    
+    // 初始化连接状态
+    this.connectionStatus.set(edgeId, {
+      edgeId,
+      connected: false,
+      lastSeen: 0,
+      handshakeAttempts: 0,
+      handshakeComplete: false,
+    });
+    
+    this.logger.info(`Registered voice endpoint for edge ${edgeId}: ${host}:${port}`);
+    
+    // 发起握手
+    this.initiateHandshake(edgeId);
   }
 
   /**
@@ -114,7 +272,125 @@ export class VoiceUDPTransport extends EventEmitter {
    */
   unregisterEndpoint(edgeId: number): void {
     this.remoteEndpoints.delete(edgeId);
+    this.connectionStatus.delete(edgeId);
     this.logger.debug(`Unregistered voice endpoint for edge ${edgeId}`);
+  }
+  
+  /**
+   * 发起UDP握手
+   */
+  private initiateHandshake(edgeId: number): void {
+    const endpoint = this.remoteEndpoints.get(edgeId);
+    const status = this.connectionStatus.get(edgeId);
+    
+    if (!endpoint || !status) {
+      this.logger.warn(`Cannot initiate handshake for edge ${edgeId}: endpoint or status not found`);
+      return;
+    }
+    
+    // 构造握手包
+    const handshakePacket = this.createHandshakePacket('SYN');
+    
+    // 发送握手包
+    this.sendPacket(handshakePacket, endpoint.host, endpoint.port);
+    status.handshakeAttempts++;
+    this.stats.handshakeSent++;
+    
+    this.logger.debug(`Sent handshake SYN to edge ${edgeId} (attempt ${status.handshakeAttempts})`);
+    
+    // 设置超时重试
+    setTimeout(() => {
+      const currentStatus = this.connectionStatus.get(edgeId);
+      if (currentStatus && !currentStatus.handshakeComplete && currentStatus.handshakeAttempts < HANDSHAKE_MAX_ATTEMPTS) {
+        this.initiateHandshake(edgeId);
+      } else if (currentStatus && !currentStatus.handshakeComplete) {
+        this.logger.warn(`Handshake with edge ${edgeId} failed after ${HANDSHAKE_MAX_ATTEMPTS} attempts`);
+        this.emit('handshake-failed', edgeId);
+      }
+    }, HANDSHAKE_RETRY_INTERVAL_MS);
+  }
+  
+  /**
+   * 创建握手包
+   */
+  private createHandshakePacket(type: 'SYN' | 'SYN-ACK' | 'ACK'): Buffer {
+    const packet = Buffer.alloc(8);
+    packet.write('MUHS', 0); // MUNode HandShake magic
+    
+    switch (type) {
+      case 'SYN':
+        packet.writeUInt8(1, 4);
+        break;
+      case 'SYN-ACK':
+        packet.writeUInt8(2, 4);
+        break;
+      case 'ACK':
+        packet.writeUInt8(3, 4);
+        break;
+    }
+    
+    const TIMESTAMP_MASK = 0xFFFFFFFF;
+    packet.writeUInt32BE(Date.now() & TIMESTAMP_MASK, 5); // Timestamp (lower 32 bits)
+    return packet;
+  }
+  
+  /**
+   * 处理握手包
+   */
+  private handleHandshakePacket(data: Buffer, rinfo: dgram.RemoteInfo): void {
+    if (data.length < 8 || data.toString('utf8', 0, 4) !== 'MUHS') {
+      return; // Not a handshake packet
+    }
+    
+    const type = data.readUInt8(4);
+    
+    // 找到对应的edge
+    let edgeId: number | undefined;
+    for (const [id, endpoint] of this.remoteEndpoints) {
+      if (endpoint.host === rinfo.address && endpoint.port === rinfo.port) {
+        edgeId = id;
+        break;
+      }
+    }
+    
+    if (!edgeId) {
+      this.logger.debug(`Received handshake from unknown endpoint: ${rinfo.address}:${rinfo.port}`);
+      return;
+    }
+    
+    const status = this.connectionStatus.get(edgeId);
+    if (!status) return;
+    
+    status.lastSeen = Date.now();
+    this.stats.handshakeReceived++;
+    
+    if (type === 1) { // SYN
+      this.logger.debug(`Received handshake SYN from edge ${edgeId}`);
+      // 发送 SYN-ACK
+      const synAck = this.createHandshakePacket('SYN-ACK');
+      this.sendPacket(synAck, rinfo.address, rinfo.port);
+      this.stats.handshakeSent++;
+      status.handshakeComplete = true;
+      status.connected = true;
+      this.logger.info(`UDP handshake complete with edge ${edgeId} (received SYN)`);
+      this.emit('edge-connected', edgeId);
+    } else if (type === 2) { // SYN-ACK
+      this.logger.debug(`Received handshake SYN-ACK from edge ${edgeId}`);
+      // 发送 ACK
+      const ack = this.createHandshakePacket('ACK');
+      this.sendPacket(ack, rinfo.address, rinfo.port);
+      this.stats.handshakeSent++;
+      status.handshakeComplete = true;
+      status.connected = true;
+      this.logger.info(`UDP handshake complete with edge ${edgeId} (received SYN-ACK)`);
+      this.emit('edge-connected', edgeId);
+    } else if (type === 3) { // ACK
+      this.logger.debug(`Received handshake ACK from edge ${edgeId}`);
+      status.handshakeComplete = true;
+      status.connected = true;
+      this.logger.info(`UDP handshake complete with edge ${edgeId} (received ACK)`);
+      this.emit('edge-connected', edgeId);
+    }
   }
 
   /**
@@ -156,6 +432,7 @@ export class VoiceUDPTransport extends EventEmitter {
 
   /**
    * 广播语音包到所有Edge（除了excludeEdge）
+   * 优化：如果发送给多个Edge，复用加密后的数据
    */
   broadcast(
     packet: VoicePacketHeader,
@@ -167,13 +444,26 @@ export class VoiceUDPTransport extends EventEmitter {
     // voiceData 是完整的 Mumble 语音包格式：[header][session][sequence][voice_data]
     const fullPacket = Buffer.concat([headerBuffer, voiceData]);
 
-    // 加密（如果启用）
+    // 加密（如果启用）- 只加密一次，多个edge复用
     let finalPacket: Buffer;
     if (this.voiceChannel) {
-      finalPacket = this.voiceChannel.encodePacket({
-        ...packet,
-        data: fullPacket,
-      });
+      // 创建缓存键：使用packet信息的哈希
+      const cacheKey = `${packet.senderId}-${packet.sequence}`;
+      
+      // 检查缓存
+      let cached = this.encryptedPacketCache.get(cacheKey);
+      if (!cached) {
+        cached = this.voiceChannel.encodePacket({
+          ...packet,
+          data: fullPacket,
+        });
+        // 缓存加密后的包
+        this.encryptedPacketCache.set(cacheKey, cached);
+        setTimeout(() => {
+          this.encryptedPacketCache.delete(cacheKey);
+        }, ENCRYPTED_PACKET_CACHE_TTL_MS);
+      }
+      finalPacket = cached;
     } else {
       finalPacket = fullPacket;
     }
@@ -185,6 +475,14 @@ export class VoiceUDPTransport extends EventEmitter {
         this.logger.debug(`Skipping broadcast to self edge ${edgeId}`);
         continue;
       }
+      
+      // 只发送给已完成握手的Edge
+      const status = this.connectionStatus.get(edgeId);
+      if (status && !status.handshakeComplete) {
+        this.logger.debug(`Skipping broadcast to edge ${edgeId} - handshake not complete`);
+        continue;
+      }
+      
       this.sendPacket(finalPacket, endpoint.host, endpoint.port);
       sentCount++;
     }
@@ -206,6 +504,12 @@ export class VoiceUDPTransport extends EventEmitter {
     this.stats.bytesReceived += data.length;
 
     try {
+      // 检查是否是握手包
+      if (data.length >= 8 && data.toString('utf8', 0, 4) === 'MUHS') {
+        this.handleHandshakePacket(data, rinfo);
+        return;
+      }
+      
       // 解密（如果启用）
       let decryptedData: Buffer;
       if (this.voiceChannel) {
@@ -312,12 +616,41 @@ export class VoiceUDPTransport extends EventEmitter {
     bytesSent: number;
     bytesReceived: number;
     errors: number;
+    handshakeSent: number;
+    handshakeReceived: number;
     registeredEndpoints: number;
+    connectedEndpoints: number;
   } {
+    const connectedCount = Array.from(this.connectionStatus.values())
+      .filter(s => s.handshakeComplete).length;
+    
     return {
       ...this.stats,
       registeredEndpoints: this.remoteEndpoints.size,
+      connectedEndpoints: connectedCount,
     };
+  }
+  
+  /**
+   * 获取Edge连接状态
+   */
+  getConnectionStatus(edgeId: number): EdgeConnectionStatus | undefined {
+    return this.connectionStatus.get(edgeId);
+  }
+  
+  /**
+   * 获取所有Edge连接状态
+   */
+  getAllConnectionStatus(): EdgeConnectionStatus[] {
+    return Array.from(this.connectionStatus.values());
+  }
+  
+  /**
+   * 检查Edge是否已连接
+   */
+  isEdgeConnected(edgeId: number): boolean {
+    const status = this.connectionStatus.get(edgeId);
+    return status?.handshakeComplete ?? false;
   }
 
   /**
@@ -330,22 +663,45 @@ export class VoiceUDPTransport extends EventEmitter {
       bytesSent: 0,
       bytesReceived: 0,
       errors: 0,
+      handshakeSent: 0,
+      handshakeReceived: 0,
     };
   }
 
   /**
    * 更新加密密钥
    */
-  updateEncryptionKey(key: Buffer): void {
+  updateEncryptionKey(key: Buffer, algorithm?: string): void {
+    const algo = algorithm || this.config.encryptionAlgorithm || 'aes-128-cbc';
+    
+    // 更新配置
+    this.config.encryptionKey = key;
+    this.config.encryptionAlgorithm = algo;
+    
     if (this.voiceChannel) {
       this.voiceChannel.updateKey(key);
     } else {
       this.voiceChannel = new VoiceChannel({
-        algorithm: 'aes-128-cbc',
+        algorithm: algo,
         key,
       });
     }
-    this.logger.info('Voice UDP encryption key updated');
+    
+    // 清空加密包缓存
+    this.encryptedPacketCache.clear();
+    
+    this.logger.info(`Voice UDP encryption key updated (algorithm: ${algo})`);
+  }
+  
+  /**
+   * 获取加密配置
+   */
+  getEncryptionConfig(): VoiceEncryptionConfig | null {
+    if (!this.voiceChannel || !this.config.encryptionKey) return null;
+    return {
+      algorithm: this.config.encryptionAlgorithm || 'aes-128-cbc',
+      key: this.config.encryptionKey,
+    };
   }
 
   /**

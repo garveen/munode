@@ -18,6 +18,7 @@ import {
 import type { HubConfig } from './types.js';
 import type { ServiceRegistry } from './registry.js';
 import { NetworkTopologyManager, type RouteEntry } from './network-topology-manager.js';
+import { VoiceEncryptionManager } from './voice-encryption-manager.js';
 import { HubHandlerFactory as HubFactory } from './factory.js';
 import { type IUserStateHandler } from './handlers/user-state-handler.js';
 import { type IChannelStateHandler } from './handlers/channel-state-handler.js';
@@ -48,6 +49,7 @@ export class HubControlService {
   private edgeChannels = new Map<number, RPCChannel>(); // edge_id -> channel
   private _ninjaChannels: Set<number>; // Set of channel IDs that are ninja channels
   private _networkTopologyManager: NetworkTopologyManager; // 网络拓扑管理器
+  private _voiceEncryptionManager: VoiceEncryptionManager; // 语音加密管理器
   private isStopping = false; // 标记服务是否正在停止
   private logger: Logger;
 
@@ -90,6 +92,9 @@ export class HubControlService {
     // 初始化网络拓扑管理器
     this._networkTopologyManager = new NetworkTopologyManager(config.voiceRouting, factory.getLogger());
     this.setupNetworkTopologyEvents();
+    
+    // 初始化语音加密管理器
+    this._voiceEncryptionManager = new VoiceEncryptionManager(config.voiceRouting?.encryption, factory.getLogger());
 
     const controlConfig: ControlChannelConfig = {
       port: config.controlPort || 8443,
@@ -352,15 +357,25 @@ export class HubControlService {
       return;
     }
     
+    // 获取加密密钥
+    const encryptionKey = this._voiceEncryptionManager.assignKeyToEdge(edgeId);
+    
     const configToPush = {
       enabled: voiceRoutingConfig.enabled,
       policy: voiceRoutingConfig.policy || DEFAULT_ROUTING_POLICY,
       preferredRelayEdges: voiceRoutingConfig.preferredRelayEdges || [],
       hubRelay: voiceRoutingConfig.hubRelay || DEFAULT_HUB_RELAY_CONFIG,
+      encryption: encryptionKey ? {
+        algorithm: encryptionKey.algorithm,
+        key: encryptionKey.key.toString('base64'), // 转换为base64字符串传输
+        version: encryptionKey.version,
+      } : undefined,
     };
     
     this.logger.info(`Pushing voice routing config to Edge ${edgeId}:`, {
       enabled: configToPush.enabled,
+      encryptionEnabled: !!configToPush.encryption,
+      encryptionVersion: encryptionKey?.version,
       policyThresholds: {
         directRttThreshold: configToPush.policy.directRttThreshold,
         directLossThreshold: configToPush.policy.directLossThreshold,
@@ -405,6 +420,9 @@ export class HubControlService {
     
     // 停止网络拓扑管理器
     this._networkTopologyManager.stop();
+    
+    // 停止语音加密管理器
+    this._voiceEncryptionManager.destroy();
     
     // 主动关闭所有 Edge 连接
     this.logger.info(`Closing ${this.edgeChannels.size} edge connections`);

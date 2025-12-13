@@ -578,6 +578,31 @@ export class EventSetupManager {
         // 处理来自Hub的语音数据路由
         this.voiceManager.handleVoiceDataFromHub(data, respond);
       });
+      
+      // 监听语音路由配置推送（包含加密密钥）
+      this.hubClient.on('voiceRoutingConfig', (config: {
+        enabled: boolean;
+        encryption?: {
+          algorithm: string;
+          key: string;
+          version: number;
+        };
+      }) => {
+        this.logger.info('Received voice routing config from Hub:', {
+          enabled: config.enabled,
+          hasEncryption: !!config.encryption,
+          encryptionVersion: config.encryption?.version,
+        });
+        
+        // 更新加密密钥
+        if (config.encryption && this.voiceManager) {
+          this.voiceManager.updateEncryptionKey(
+            config.encryption.algorithm,
+            config.encryption.key,
+            config.encryption.version
+          );
+        }
+      });
 
       // 监听来自Hub的所有通知消息（合并多个监听器）
       this.hubClient.on('notification', (message) => {
