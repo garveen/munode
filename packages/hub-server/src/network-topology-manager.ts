@@ -223,16 +223,28 @@ export class NetworkTopologyManager extends EventEmitter {
     return Array.from(this.edges);
   }
 
+  // Quality data time window (default 30 seconds)
+  private readonly QUALITY_DATA_WINDOW_MS = 30000;
+
   /**
-   * 更新 Edge 间链接质量
+   * Update Edge link quality
    */
   updateLink(link: EdgeLink): void {
     const key = this.getLinkKey(link.sourceEdgeId, link.targetEdgeId);
+    
+    // Only use data within recent time window
+    const now = Date.now();
+    if (now - link.quality.lastUpdate > this.QUALITY_DATA_WINDOW_MS) {
+      this.logger.debug(`Link quality data too old: ${link.sourceEdgeId} -> ${link.targetEdgeId}, age: ${now - link.quality.lastUpdate}ms`);
+      // Still update but mark as expired
+    }
+    
     this.links.set(key, link);
     
     this.logger.debug(`Link updated: ${link.sourceEdgeId} -> ${link.targetEdgeId}`, {
       rtt: link.quality.rtt,
       packetLoss: link.quality.packetLoss,
+      age: now - link.quality.lastUpdate,
     });
     
     // 触发路由表重新计算
@@ -256,18 +268,43 @@ export class NetworkTopologyManager extends EventEmitter {
   }
 
   /**
-   * 计算直连成本
-   * 成本 = RTT + 丢包惩罚 (每1%丢包相当于10ms RTT)
+   * Calculate direct connection cost
+   * Cost = RTT + packet loss penalty (1% loss = 10ms RTT) + data aging penalty
+   * Uses data within recent time window, newer data has higher weight
+   * Note: packetLoss is a ratio (0-1), so multiply by 1000 to convert to cost (0.01 = 1% = 10ms)
    */
   private calculateDirectCost(quality: EdgeConnectionQuality): number {
-    return quality.rtt + quality.packetLoss * 1000;
+    const baseCost = quality.rtt + quality.packetLoss * 1000;
+    
+    // Data aging penalty: increase cost for old data
+    const now = Date.now();
+    const age = now - quality.lastUpdate;
+    if (age > this.QUALITY_DATA_WINDOW_MS) {
+      // Expired data, significantly increase cost
+      return baseCost + 10000;
+    }
+    
+    // Within time window, newer data has higher weight
+    // 0-30 seconds: 0-5% cost increase
+    const ageFactor = age / this.QUALITY_DATA_WINDOW_MS;
+    const agePenalty = baseCost * ageFactor * 0.05;
+    
+    return baseCost + agePenalty;
   }
 
   /**
-   * 检查直连是否可行
+   * Check if direct connection is feasible
+   * Only use quality data within recent time window
    */
   private isDirectRouteFeasible(quality?: EdgeConnectionQuality): boolean {
     if (!quality) return false;
+    
+    // Check if data is within time window
+    const now = Date.now();
+    if (now - quality.lastUpdate > this.QUALITY_DATA_WINDOW_MS) {
+      this.logger.debug('Quality data expired, considering route infeasible');
+      return false;
+    }
     
     return (
       quality.rtt <= this.policy.directRttThreshold &&

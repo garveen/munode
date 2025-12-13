@@ -11,6 +11,8 @@ export interface INotificationHandler {
   handleUserRemoveNotification(params: EdgeNotificationParams<'edge.userRemoveNotification'>): Promise<void>;
   handlePluginDataTransmissionNotification(params: EdgeNotificationParams<'edge.pluginDataTransmissionNotification'>): Promise<void>;
   handleUserStatsNotification(params: EdgeNotificationParams<'edge.userStatsNotification'>): Promise<void>;
+  handleConnectionFailureNotification(params: { edge_id: number; target_edge_id: number; timestamp: number }): Promise<void>;
+  handleReconnectFailureNotification(params: { edge_id: number; target_edge_id: number; timestamp: number }): Promise<void>;
 }
 
 /**
@@ -453,5 +455,276 @@ export class NotificationHandler implements INotificationHandler {
     const hash = createHash('sha1');
     hash.update('this is a random hash salt for nothing' + userId);
     return hash.digest('hex');
+  }
+
+  /**
+   * Track connection failure reports from edges
+   * Key: "edgeA-edgeB", Value: { edgeA_reported: timestamp, edgeB_reported: timestamp }
+   */
+  private connectionFailureReports = new Map<string, { 
+    edgeA: number; 
+    edgeB: number; 
+    edgeA_reported?: number; 
+    edgeB_reported?: number; 
+  }>();
+
+  /**
+   * Handle Edge connection failure notification
+   * Reported when direct connection between Edges fails, but exit may not be necessary
+   */
+  async handleConnectionFailureNotification(params: { edge_id: number; target_edge_id: number; timestamp: number }): Promise<void> {
+    try {
+      const { edge_id, target_edge_id, timestamp } = params;
+      this.logger.warn(`Edge ${edge_id} reported connection failure to Edge ${target_edge_id} at ${timestamp}`);
+      
+      // Record failure but don't take immediate action
+      // Connection failure doesn't mean exit is needed, as routing through other Edges may be possible
+      const failureKey = this.getFailureKey(edge_id, target_edge_id);
+      let report = this.connectionFailureReports.get(failureKey);
+      
+      if (!report) {
+        report = { edgeA: Math.min(edge_id, target_edge_id), edgeB: Math.max(edge_id, target_edge_id) };
+        this.connectionFailureReports.set(failureKey, report);
+      }
+      
+      if (edge_id === report.edgeA) {
+        report.edgeA_reported = timestamp;
+      } else {
+        report.edgeB_reported = timestamp;
+      }
+      
+      this.logger.debug(`Connection failure tracked: ${failureKey}`, report);
+    } catch (error) {
+      this.logger.error('Error handling connection failure notification:', error);
+    }
+  }
+
+  /**
+   * Handle Edge reconnection failure notification (when both directions fail)
+   * This is a more serious situation requiring check for disconnected clusters
+   */
+  async handleReconnectFailureNotification(params: { edge_id: number; target_edge_id: number; timestamp: number }): Promise<void> {
+    try {
+      const { edge_id, target_edge_id, timestamp } = params;
+      this.logger.error(`Edge ${edge_id} reported reconnect failure to Edge ${target_edge_id} at ${timestamp}`);
+      
+      const failureKey = this.getFailureKey(edge_id, target_edge_id);
+      let report = this.connectionFailureReports.get(failureKey);
+      
+      if (!report) {
+        report = { edgeA: Math.min(edge_id, target_edge_id), edgeB: Math.max(edge_id, target_edge_id) };
+        this.connectionFailureReports.set(failureKey, report);
+      }
+      
+      if (edge_id === report.edgeA) {
+        report.edgeA_reported = timestamp;
+      } else {
+        report.edgeB_reported = timestamp;
+      }
+      
+      // 检查是否双方都报告了重连失败
+      const REPORT_TIMEOUT = 60000; // 60秒内的报告认为是同一事件
+      if (report.edgeA_reported && report.edgeB_reported) {
+        const timeDiff = Math.abs(report.edgeA_reported - report.edgeB_reported);
+        if (timeDiff < REPORT_TIMEOUT) {
+          this.logger.warn(`Both Edge ${report.edgeA} and Edge ${report.edgeB} reported reconnect failure, initiating arbitration`);
+          await this.performArbitration(report.edgeA, report.edgeB);
+          // Clear report record
+          this.connectionFailureReports.delete(failureKey);
+        }
+      }
+    } catch (error) {
+      this.logger.error('Error handling reconnect failure notification:', error);
+    }
+  }
+
+  /**
+   * Perform arbitration: check network topology to determine if some Edges need to exit
+   * 
+   * Arbitration logic:
+   * 1. Check if the two Edges can connect through routing via other Edges
+   * 2. If routing connection is not possible, disconnected clusters have formed
+   * 3. Detect all disconnected clusters
+   * 4. Select cluster with fewest users and request those Edges to exit
+   */
+  private async performArbitration(edgeA: number, edgeB: number): Promise<void> {
+    try {
+      this.logger.info(`Performing arbitration between Edge ${edgeA} and Edge ${edgeB}`);
+      
+      const topologyManager = this.factory.getNetworkTopologyManager();
+      if (!topologyManager.isEnabled()) {
+        this.logger.warn('Network topology manager is disabled, cannot perform arbitration');
+        return;
+      }
+      
+      // Check if connection is possible through routing
+      const path = topologyManager.findBestPath(edgeA, edgeB);
+      if (path && path.path.length > 0) {
+        this.logger.info(`Edge ${edgeA} and ${edgeB} can still connect via routing: ${path.path.join(' -> ')}`);
+        // Routing connection possible, no exit needed
+        return;
+      }
+      
+      this.logger.warn(`Edge ${edgeA} and ${edgeB} cannot connect via any routing path, detecting disconnected clusters`);
+      
+      // Detect disconnected clusters
+      const clusters = this.detectDisconnectedClusters();
+      
+      if (clusters.length <= 1) {
+        this.logger.info('Only one connected cluster found, no action needed');
+        return;
+      }
+      
+      this.logger.warn(`Detected ${clusters.length} disconnected edge clusters`);
+      
+      // Calculate user count for each cluster
+      const sessionManager = this.factory.getSessionManager();
+      const clusterStats = clusters.map((cluster, index) => {
+        const userCount = cluster.reduce((sum, edgeId) => {
+          const sessions = sessionManager.getEdgeSessions(edgeId);
+          return sum + sessions.length;
+        }, 0);
+        
+        return {
+          index,
+          edges: cluster,
+          userCount,
+        };
+      });
+      
+      // Sort by user count to find smallest cluster
+      clusterStats.sort((a, b) => a.userCount - b.userCount);
+      
+      this.logger.info('Cluster statistics:', clusterStats.map(c => ({
+        edges: c.edges,
+        users: c.userCount,
+      })));
+      
+      // Select cluster with fewest users to exit
+      const smallestCluster = clusterStats[0];
+      
+      if (smallestCluster.userCount === 0 && clusterStats.length > 1) {
+        // If smallest cluster has no users, directly request shutdown
+        this.logger.warn(`Cluster ${smallestCluster.edges.join(', ')} has no users, requesting shutdown`);
+        await this.shutdownEdgeCluster(smallestCluster.edges);
+      } else if (smallestCluster.userCount > 0) {
+        // If smallest cluster has users, request graceful shutdown with client disconnection
+        this.logger.warn(`Cluster ${smallestCluster.edges.join(', ')} has ${smallestCluster.userCount} users, requesting graceful shutdown`);
+        await this.shutdownEdgeCluster(smallestCluster.edges);
+      }
+      
+    } catch (error) {
+      this.logger.error('Error performing arbitration:', error);
+    }
+  }
+
+  /**
+   * Detect disconnected Edge clusters
+   * Uses Union-Find algorithm
+   * 
+   * Performance: O(n² * Dijkstra) where n is number of edges
+   * For large clusters, consider caching connectivity or using BFS
+   */
+  private detectDisconnectedClusters(): number[][] {
+    const topologyManager = this.factory.getNetworkTopologyManager();
+    const allEdges = topologyManager.getAllEdges();
+    
+    if (allEdges.length === 0) {
+      return [];
+    }
+    
+    // Union-Find data structure
+    const parent = new Map<number, number>();
+    const rank = new Map<number, number>();
+    
+    // Initialize
+    for (const edge of allEdges) {
+      parent.set(edge, edge);
+      rank.set(edge, 0);
+    }
+    
+    // Find root with path compression
+    const find = (x: number): number => {
+      if (parent.get(x) !== x) {
+        parent.set(x, find(parent.get(x)!));
+      }
+      return parent.get(x)!;
+    };
+    
+    // Union by rank
+    const union = (x: number, y: number): void => {
+      const rootX = find(x);
+      const rootY = find(y);
+      
+      if (rootX === rootY) return;
+      
+      const rankX = rank.get(rootX) ?? 0;
+      const rankY = rank.get(rootY) ?? 0;
+      
+      if (rankX < rankY) {
+        parent.set(rootX, rootY);
+      } else if (rankX > rankY) {
+        parent.set(rootY, rootX);
+      } else {
+        parent.set(rootY, rootX);
+        rank.set(rootX, rankX + 1);
+      }
+    };
+    
+    // Check connectivity for all edge pairs
+    // Note: This is O(n²) but typically n is small (< 10 edges in most deployments)
+    for (let i = 0; i < allEdges.length; i++) {
+      for (let j = i + 1; j < allEdges.length; j++) {
+        const edgeA = allEdges[i];
+        const edgeB = allEdges[j];
+        
+        // Check if connection is possible through routing
+        const path = topologyManager.findBestPath(edgeA, edgeB);
+        if (path && path.path.length > 0) {
+          union(edgeA, edgeB);
+        }
+      }
+    }
+    
+    // Collect all clusters
+    const clusters = new Map<number, number[]>();
+    for (const edge of allEdges) {
+      const root = find(edge);
+      if (!clusters.has(root)) {
+        clusters.set(root, []);
+      }
+      clusters.get(root)!.push(edge);
+    }
+    
+    return Array.from(clusters.values());
+  }
+
+  /**
+   * Request Edge cluster shutdown
+   * Send shutdown notifications to all Edges in the cluster, requiring them to disconnect clients and exit
+   */
+  private async shutdownEdgeCluster(edges: number[]): Promise<void> {
+    for (const edgeId of edges) {
+      try {
+        this.logger.warn(`Requesting Edge ${edgeId} to shutdown and disconnect all clients`);
+        this.factory.getControlService().notify(edgeId, 'hub.shutdownRequest', {
+          reason: 'Network partition detected, this edge is in the smaller disconnected cluster',
+          graceful: true,
+          disconnect_clients: true,
+        });
+      } catch (error) {
+        this.logger.error(`Failed to send shutdown request to Edge ${edgeId}:`, error);
+      }
+    }
+  }
+
+  /**
+   * Generate unique key for failure records
+   * Ensure edgeA-edgeB and edgeB-edgeA use the same key
+   */
+  private getFailureKey(edgeA: number, edgeB: number): string {
+    const min = Math.min(edgeA, edgeB);
+    const max = Math.max(edgeA, edgeB);
+    return `${min}-${max}`;
   }
 }
