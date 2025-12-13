@@ -264,6 +264,14 @@ export class HubControlService {
         void this.notificationHandler.handleUserStatsNotification(typedParams as EdgeNotificationParams<'edge.userStatsNotification'>);
         break;
 
+      case 'edge.connectionFailure':
+        void this.notificationHandler.handleConnectionFailureNotification(typedParams as { edge_id: number; target_edge_id: number; timestamp: number });
+        break;
+
+      case 'edge.reconnectFailure':
+        void this.notificationHandler.handleReconnectFailureNotification(typedParams as { edge_id: number; target_edge_id: number; timestamp: number });
+        break;
+
       default:
         this.logger.debug(`Unknown notification method: ${method}`);
     }

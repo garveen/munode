@@ -223,16 +223,28 @@ export class NetworkTopologyManager extends EventEmitter {
     return Array.from(this.edges);
   }
 
+  // 质量数据时间窗口（默认30秒）
+  private readonly QUALITY_DATA_WINDOW_MS = 30000;
+
   /**
    * 更新 Edge 间链接质量
    */
   updateLink(link: EdgeLink): void {
     const key = this.getLinkKey(link.sourceEdgeId, link.targetEdgeId);
+    
+    // 只使用最近时间窗口内的数据
+    const now = Date.now();
+    if (now - link.quality.lastUpdate > this.QUALITY_DATA_WINDOW_MS) {
+      this.logger.debug(`Link quality data too old: ${link.sourceEdgeId} -> ${link.targetEdgeId}, age: ${now - link.quality.lastUpdate}ms`);
+      // 仍然更新但标记为过期
+    }
+    
     this.links.set(key, link);
     
     this.logger.debug(`Link updated: ${link.sourceEdgeId} -> ${link.targetEdgeId}`, {
       rtt: link.quality.rtt,
       packetLoss: link.quality.packetLoss,
+      age: now - link.quality.lastUpdate,
     });
     
     // 触发路由表重新计算
@@ -257,17 +269,41 @@ export class NetworkTopologyManager extends EventEmitter {
 
   /**
    * 计算直连成本
-   * 成本 = RTT + 丢包惩罚 (每1%丢包相当于10ms RTT)
+   * 成本 = RTT + 丢包惩罚 (每1%丢包相当于10ms RTT) + 数据老化惩罚
+   * 使用最近时间窗口内的数据，越新的数据权重越高
    */
   private calculateDirectCost(quality: EdgeConnectionQuality): number {
-    return quality.rtt + quality.packetLoss * 1000;
+    const baseCost = quality.rtt + quality.packetLoss * 1000;
+    
+    // 数据老化惩罚：超过时间窗口的数据成本增加
+    const now = Date.now();
+    const age = now - quality.lastUpdate;
+    if (age > this.QUALITY_DATA_WINDOW_MS) {
+      // 过期数据，大幅增加成本
+      return baseCost + 10000;
+    }
+    
+    // 在时间窗口内，越新的数据权重越高
+    // 0-30秒：成本增加0-5%
+    const ageFactor = age / this.QUALITY_DATA_WINDOW_MS;
+    const agePenalty = baseCost * ageFactor * 0.05;
+    
+    return baseCost + agePenalty;
   }
 
   /**
    * 检查直连是否可行
+   * 只使用最近时间窗口内的质量数据
    */
   private isDirectRouteFeasible(quality?: EdgeConnectionQuality): boolean {
     if (!quality) return false;
+    
+    // 检查数据是否在时间窗口内
+    const now = Date.now();
+    if (now - quality.lastUpdate > this.QUALITY_DATA_WINDOW_MS) {
+      this.logger.debug('Quality data expired, considering route infeasible');
+      return false;
+    }
     
     return (
       quality.rtt <= this.policy.directRttThreshold &&
