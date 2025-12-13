@@ -212,6 +212,53 @@ export class EdgeServer extends EventEmitter {
    */
   private setupEventHandlers(): void {
     this.eventSetupManager.setupEventHandlers();
+    
+    // 监听 Hub 拒绝重连事件（会话过期）
+    if (this.hubClient) {
+      this.hubClient.on('session-expired', () => {
+        this.handleSessionExpired();
+      });
+    }
+  }
+
+  /**
+   * 处理会话过期（Hub拒绝重连）
+   * 执行冷启动流程：断开所有客户端，清理状态，重新加入集群
+   */
+  private async handleSessionExpired(): Promise<void> {
+    this.logger.error('=== Session expired on Hub, performing cold restart ===');
+    
+    try {
+      // 1. 断开所有客户端连接
+      this.logger.info('Disconnecting all clients...');
+      const clients = this.clientManager.getAllClients();
+      for (const client of clients) {
+        const socket = this.clientManager.getSocket(client.session);
+        if (socket) {
+          socket.destroy();
+        }
+      }
+      
+      // 2. 清理本地状态
+      this.logger.info('Clearing local state...');
+      this.clientManager.clear();
+      // channelManager 保留，因为频道结构需要从 Hub 重新同步
+      
+      // 3. 等待一下让连接完全关闭
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // 4. 重新加入集群
+      this.logger.info('Rejoining cluster with cold start...');
+      if (this.clusterManager) {
+        await this.clusterManager.joinCluster();
+      }
+      
+      this.logger.info('=== Cold restart completed successfully ===');
+    } catch (error) {
+      this.logger.error('Failed to perform cold restart:', error);
+      // 可能需要完全重启服务器
+      throw error;
+    }
   }
 
   /**

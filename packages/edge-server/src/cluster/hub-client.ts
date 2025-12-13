@@ -161,18 +161,44 @@ export class EdgeControlClient extends EventEmitter {
         const finalResponse = await this.client.call('edge.register', authParams);
         
         if (!finalResponse.success) {
+          // 检查是否是会话过期错误
+          if ((finalResponse as { session_expired?: boolean }).session_expired) {
+            this.logger.error('Hub rejected reconnection: session expired. Cold restart required.');
+            this.emit('session-expired');
+            throw new Error('Session expired - Hub requires cold restart');
+          }
           throw new Error(finalResponse.error || 'Registration failed after authentication');
         }
         
         this.registered = true;
-        this.logger.debug(`Registered with Hub: ${JSON.stringify(finalResponse)}`);
-        this.emit('registered', finalResponse);
+        
+        // 检查是否是重连
+        if ((finalResponse as { reconnected?: boolean }).reconnected) {
+          this.logger.info('Successfully reconnected to Hub, session restored');
+          this.emit('reconnected', finalResponse);
+        } else {
+          this.logger.debug(`Registered with Hub: ${JSON.stringify(finalResponse)}`);
+          this.emit('registered', finalResponse);
+        }
       } else if (challengeResponse.success) {
         // Hub 未启用认证，直接注册成功
         this.registered = true;
-        this.logger.info(`Registered with Hub (no auth): ${JSON.stringify(challengeResponse)}`);
-        this.emit('registered', challengeResponse);
+        
+        // 检查是否是重连
+        if ((challengeResponse as { reconnected?: boolean }).reconnected) {
+          this.logger.info('Successfully reconnected to Hub (no auth), session restored');
+          this.emit('reconnected', challengeResponse);
+        } else {
+          this.logger.info(`Registered with Hub (no auth): ${JSON.stringify(challengeResponse)}`);
+          this.emit('registered', challengeResponse);
+        }
       } else {
+        // 检查是否是会话过期错误
+        if ((challengeResponse as { session_expired?: boolean }).session_expired) {
+          this.logger.error('Hub rejected reconnection: session expired. Cold restart required.');
+          this.emit('session-expired');
+          throw new Error('Session expired - Hub requires cold restart');
+        }
         throw new Error(challengeResponse.error || 'Registration failed');
       }
     } catch (error) {
