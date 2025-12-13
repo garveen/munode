@@ -20,9 +20,10 @@ import { type Logger } from '@munode/common';
 const HANDSHAKE_RETRY_INTERVAL_MS = 2000;
 const HANDSHAKE_MAX_ATTEMPTS = 5;
 const ENCRYPTED_PACKET_CACHE_TTL_MS = 5000;
-const HEARTBEAT_INTERVAL_MS = 10000; // 10秒心跳间隔
-const HEARTBEAT_TIMEOUT_MS = 30000; // 30秒无响应视为断开
-const RECONNECT_DELAY_MS = 3000; // 重连延迟
+const HEARTBEAT_INTERVAL_MS = 10000; // Heartbeat interval: 10 seconds
+const HEARTBEAT_TIMEOUT_MS = 30000; // Connection timeout: 30 seconds without response
+const RECONNECT_DELAY_MS = 3000; // Delay before reconnect attempt
+const TIMESTAMP_MASK = 0xFFFFFFFF; // Mask for 32-bit timestamp
 
 export interface VoiceUDPConfig {
   port: number;
@@ -236,10 +237,10 @@ export class VoiceUDPTransport extends EventEmitter {
   }
   
   /**
-   * 创建握手包
+   * Create handshake packet
    */
   private createHandshakePacket(type: 'SYN' | 'SYN-ACK' | 'ACK'): Buffer {
-    const packet = Buffer.alloc(8);
+    const packet = Buffer.alloc(9); // Magic(4) + Type(1) + Timestamp(4) = 9 bytes
     packet.write('MUHS', 0); // MUNode HandShake magic
     
     switch (type) {
@@ -254,28 +255,26 @@ export class VoiceUDPTransport extends EventEmitter {
         break;
     }
     
-    const TIMESTAMP_MASK = 0xFFFFFFFF;
     packet.writeUInt32BE(Date.now() & TIMESTAMP_MASK, 5); // Timestamp (lower 32 bits)
     return packet;
   }
   
   /**
-   * 创建心跳包
+   * Create heartbeat packet
    */
   private createHeartbeatPacket(type: 'PING' | 'PONG'): Buffer {
-    const packet = Buffer.alloc(8);
+    const packet = Buffer.alloc(9); // Magic(4) + Type(1) + Timestamp(4) = 9 bytes
     packet.write('MUHB', 0); // MUNode HeartBeat magic
     packet.writeUInt8(type === 'PING' ? 1 : 2, 4);
-    const TIMESTAMP_MASK = 0xFFFFFFFF;
     packet.writeUInt32BE(Date.now() & TIMESTAMP_MASK, 5); // Timestamp (lower 32 bits)
     return packet;
   }
   
   /**
-   * 处理握手包
+   * Handle handshake packet
    */
   private handleHandshakePacket(data: Buffer, rinfo: dgram.RemoteInfo): void {
-    if (data.length < 8 || data.toString('utf8', 0, 4) !== 'MUHS') {
+    if (data.length < 9 || data.toString('utf8', 0, 4) !== 'MUHS') {
       return; // Not a handshake packet
     }
     
@@ -339,10 +338,10 @@ export class VoiceUDPTransport extends EventEmitter {
   }
   
   /**
-   * 处理心跳包
+   * Handle heartbeat packet
    */
   private handleHeartbeatPacket(data: Buffer, rinfo: dgram.RemoteInfo): void {
-    if (data.length < 8 || data.toString('utf8', 0, 4) !== 'MUHB') {
+    if (data.length < 9 || data.toString('utf8', 0, 4) !== 'MUHB') {
       return; // Not a heartbeat packet
     }
     
@@ -698,14 +697,14 @@ export class VoiceUDPTransport extends EventEmitter {
     this.stats.bytesReceived += data.length;
 
     try {
-      // 检查是否是握手包
-      if (data.length >= 8 && data.toString('utf8', 0, 4) === 'MUHS') {
+      // Check if it's a handshake packet
+      if (data.length >= 9 && data.toString('utf8', 0, 4) === 'MUHS') {
         this.handleHandshakePacket(data, rinfo);
         return;
       }
       
-      // 检查是否是心跳包
-      if (data.length >= 8 && data.toString('utf8', 0, 4) === 'MUHB') {
+      // Check if it's a heartbeat packet
+      if (data.length >= 9 && data.toString('utf8', 0, 4) === 'MUHB') {
         this.handleHeartbeatPacket(data, rinfo);
         return;
       }
