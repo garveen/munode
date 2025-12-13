@@ -17,8 +17,15 @@ export interface IVoiceRoutingHandler {
    */
   handleGetVoiceTargets(params: RPCParams<'edge.getVoiceTargets'>): Promise<RPCResult<'edge.getVoiceTargets'>>;
 
-  // NOTE: Voice routing removed - voice packets should flow edge-to-edge directly via UDP
-  // handleRouteVoice is no longer supported
+  /**
+   * NOTE: Voice packet routing through hub has been removed.
+   * 
+   * Architecture: Voice packets now flow edge-to-edge directly via UDP (VoiceUDPTransport).
+   * Hub only handles VoiceTarget configuration synchronization, not voice data packets.
+   * 
+   * This method (handleRouteVoice) has been removed as it's no longer needed.
+   * @deprecated Since voice routing architecture change - will be removed in future version
+   */
 }
 
 /**
@@ -65,7 +72,5 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
     return { voiceTargets: configs };
   }
 
-  // NOTE: Voice routing removed - voice packets should flow edge-to-edge directly via UDP
-  // Hub should not be involved in voice packet forwarding
-  // This method is deprecated and will be removed in a future version
+  // Implementation removed - see interface documentation above
 }
