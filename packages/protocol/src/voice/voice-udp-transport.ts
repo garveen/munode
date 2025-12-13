@@ -557,8 +557,8 @@ export class VoiceUDPTransport extends EventEmitter {
     const encrypted1 = cipher.update(plainBuffer);
     const encrypted2 = cipher.final();
     
-    // 性能优化：直接组装 buffer，避免多次 Buffer.concat
-    // 返回格式: IV(16) + 加密数据
+    // Performance optimization: direct buffer assembly to avoid multiple Buffer.concat
+    // Return format: IV(16) + encrypted data
     const totalSize = 16 + encrypted1.length + encrypted2.length;
     const result = Buffer.allocUnsafe(totalSize);
     iv.copy(result, 0);
@@ -585,8 +585,8 @@ export class VoiceUDPTransport extends EventEmitter {
       // Note: Decipher instances cannot be persisted because each decryption requires the specific IV from the packet
       const decipher = crypto.createDecipheriv(this.encryptionConfig.algorithm, this.encryptionConfig.key, iv);
 
-      // 解密数据
-      // 性能优化：直接组装 buffer，避免 Buffer.concat
+      // Decrypt data
+      // Performance optimization: direct buffer assembly to avoid Buffer.concat
       const decrypted1 = decipher.update(encryptedData);
       const decrypted2 = decipher.final();
       const decryptedData = Buffer.allocUnsafe(decrypted1.length + decrypted2.length);
@@ -622,10 +622,10 @@ export class VoiceUDPTransport extends EventEmitter {
       return;
     }
 
-    // 编码包头
+    // Encode packet header
     const headerBuffer = this.encodePacketHeader(packet);
     
-    // 性能优化：直接复制到新 buffer，避免 Buffer.concat
+    // Performance optimization: direct copy to new buffer to avoid Buffer.concat
     const fullPacketSize = headerBuffer.length + voiceData.length;
     const fullPacket = Buffer.allocUnsafe(fullPacketSize);
     headerBuffer.copy(fullPacket, 0);
@@ -661,8 +661,8 @@ export class VoiceUDPTransport extends EventEmitter {
     // 编码包头（自定义14字节header，用于Edge间通信）
     const headerBuffer = this.encodePacketHeader(packet);
     
-    // voiceData 是完整的 Mumble 语音包格式：[header][session][sequence][voice_data]
-    // 性能优化：直接复制到新 buffer，避免 Buffer.concat
+    // voiceData is complete Mumble voice packet format: [header][session][sequence][voice_data]
+    // Performance optimization: direct copy to new buffer to avoid Buffer.concat
     const fullPacketSize = headerBuffer.length + voiceData.length;
     const fullPacket = Buffer.allocUnsafe(fullPacketSize);
     headerBuffer.copy(fullPacket, 0);
@@ -738,7 +738,7 @@ export class VoiceUDPTransport extends EventEmitter {
           return;
         }
         
-        // 性能优化：直接复制到新 buffer，避免 Buffer.concat
+        // Performance optimization: direct copy to new buffer to avoid Buffer.concat
         const headerBuffer = this.encodePacketHeader({
           version: decrypted.version,
           senderId: decrypted.senderId,

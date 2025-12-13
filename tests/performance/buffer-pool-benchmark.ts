@@ -1,14 +1,14 @@
 /**
  * Buffer Pool Performance Benchmark
  * 
- * 比较使用 buffer 池和直接分配 buffer 的性能差异
+ * Compares performance difference between using buffer pool and direct buffer allocation
  */
 
 import { BufferPool } from '@munode/common';
 import { performance } from 'perf_hooks';
 
 /**
- * 模拟语音包处理场景
+ * Simulate voice packet processing scenario
  */
 function simulateVoicePacketProcessing(
   usePool: boolean,
@@ -27,26 +27,26 @@ function simulateVoicePacketProcessing(
     let buffer: Buffer;
     
     if (pool) {
-      // 使用 buffer 池
+      // Use buffer pool
       buffer = pool.acquire(packetSize);
       
-      // 模拟使用 buffer（写入数据）
+      // Simulate buffer usage (write data)
       for (let j = 0; j < Math.min(packetSize, 10); j++) {
         buffer[j] = (i + j) & 0xff;
       }
       
-      // 释放回池
+      // Release back to pool
       pool.release(buffer);
     } else {
-      // 直接分配
+      // Direct allocation
       buffer = Buffer.allocUnsafe(packetSize);
       
-      // 模拟使用 buffer（写入数据）
+      // Simulate buffer usage (write data)
       for (let j = 0; j < Math.min(packetSize, 10); j++) {
         buffer[j] = (i + j) & 0xff;
       }
       
-      // 不需要显式释放，等待 GC
+      // No explicit release needed, wait for GC
     }
   }
   
@@ -57,7 +57,7 @@ function simulateVoicePacketProcessing(
 }
 
 /**
- * 运行基准测试
+ * Run benchmark tests
  */
 function runBenchmark(): void {
   console.log('Buffer Pool Performance Benchmark');
@@ -75,18 +75,18 @@ function runBenchmark(): void {
     console.log(`Iterations: ${testCase.iterations.toLocaleString()}`);
     console.log();
     
-    // 预热 V8
+    // Warm up V8
     simulateVoicePacketProcessing(false, 1000, testCase.size);
     simulateVoicePacketProcessing(true, 1000, testCase.size);
     
-    // 不使用池
+    // Without pool
     const withoutPool = simulateVoicePacketProcessing(
       false,
       testCase.iterations,
       testCase.size
     );
     
-    // 使用池
+    // With pool
     const withPool = simulateVoicePacketProcessing(
       true,
       testCase.iterations,
@@ -101,7 +101,7 @@ function runBenchmark(): void {
     console.log();
   }
   
-  // Buffer 池统计测试
+  // Buffer pool statistics test
   console.log('Buffer Pool Statistics Test');
   console.log('='.repeat(80));
   console.log();
@@ -109,18 +109,18 @@ function runBenchmark(): void {
   const pool = new BufferPool(100);
   pool.warmup(50);
   
-  // 模拟实际使用场景
+  // Simulate real-world usage
   const buffers: Buffer[] = [];
   for (let i = 0; i < 20; i++) {
     buffers.push(pool.acquire(128 + Math.floor(Math.random() * 200)));
   }
   
-  // 释放一半
+  // Release half
   for (let i = 0; i < 10; i++) {
     pool.release(buffers[i]);
   }
   
-  // 获取统计信息
+  // Get statistics
   const stats = pool.getStats();
   console.log('Pool Statistics:');
   for (const stat of stats) {
@@ -134,5 +134,5 @@ function runBenchmark(): void {
   }
 }
 
-// 运行基准测试
+// Run benchmark
 runBenchmark();

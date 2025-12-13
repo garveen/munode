@@ -22,8 +22,8 @@ export class VoiceChannel {
   }
 
   /**
-   * 编码语音包（包含加密）
-   * 性能优化：避免多次 Buffer.concat
+   * Encode voice packet (with encryption)
+   * Performance optimization: avoid multiple Buffer.concat
    */
   encodePacket(packet: VoicePacket): Buffer {
     // 编码明文包头 + 数据
@@ -45,8 +45,8 @@ export class VoiceChannel {
     const encrypted1 = cipher.update(plainBuffer);
     const encrypted2 = cipher.final();
 
-    // 性能优化：直接组装 buffer，避免多次 Buffer.concat
-    // 返回格式: IV(16) + 加密数据
+    // Performance optimization: direct buffer assembly to avoid multiple Buffer.concat
+    // Return format: IV(16) + encrypted data
     const totalSize = 16 + encrypted1.length + encrypted2.length;
     const result = Buffer.allocUnsafe(totalSize);
     iv.copy(result, 0);
@@ -57,8 +57,8 @@ export class VoiceChannel {
   }
 
   /**
-   * 解码语音包（包含解密）
-   * 性能优化：避免 Buffer.concat
+   * Decode voice packet (with decryption)
+   * Performance optimization: avoid Buffer.concat
    */
   decodePacket(buffer: Buffer): VoicePacket | null {
     if (buffer.length < 16 + 14) return null; // IV + 最小包头
@@ -70,8 +70,8 @@ export class VoiceChannel {
       // 创建decipher
       const decipher = crypto.createDecipheriv(this.config.algorithm, this.config.key, iv);
 
-      // 解密数据
-      // 性能优化：直接组装 buffer，避免 Buffer.concat
+      // Decrypt data
+      // Performance optimization: direct buffer assembly to avoid Buffer.concat
       const decrypted1 = decipher.update(encryptedData);
       const decrypted2 = decipher.final();
       const decryptedData = Buffer.allocUnsafe(decrypted1.length + decrypted2.length);

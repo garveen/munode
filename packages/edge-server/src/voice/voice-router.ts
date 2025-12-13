@@ -988,7 +988,7 @@ export class VoiceRouter extends EventEmitter {
    * 因此转发格式为: [header][varint(session)][原始buf[1:]]
    * 最终包结构: [header][session][sequence][voice_data]
    * 
-   * 性能优化：使用 buffer 池避免频繁的 GC
+   * Performance optimization: use buffer pool to avoid frequent GC
    */
   private serializeVoicePacket(packet: VoicePacket): Buffer {
     // 创建新的header，保留codec和target
@@ -996,7 +996,7 @@ export class VoiceRouter extends EventEmitter {
     // Go中对于本地转发会清零target，但跨Edge转发需要保留
     const header = (packet.codec << 5) | (packet.target & 0x1f);
     
-    // 计算 session varint 所需的字节数
+    // Calculate required bytes for session varint
     const sessionValue = packet.sender_session >>> 0;
     let varintLength: number;
     if (sessionValue < 0x80) {
@@ -1012,19 +1012,19 @@ export class VoiceRouter extends EventEmitter {
     // packet.data 是原始接收包中byte 1之后的所有数据
     // 包含了：[varint(sequence)] + [voice_data]
     // Go: outgoing.PutBytes(buf[1:])
-    // 所以转发包是: [header] + [session varint] + [sequence varint] + [voice_data]
+    // So forwarding packet is: [header] + [session varint] + [sequence varint] + [voice_data]
     const totalLength = 1 + varintLength + packet.data.length;
     
-    // 使用 buffer 池获取 buffer（性能优化）
+    // Use buffer pool to get buffer (performance optimization)
     const buffer = globalBufferPool.acquire(totalLength);
     
-    // 写入header
+    // Write header
     buffer[0] = header;
     
-    // 直接将 session varint 编码到 buffer 中，避免创建临时 buffer
+    // Directly encode session varint to buffer to avoid creating temporary buffer
     this.encodeVarintTo(packet.sender_session, buffer, 1);
     
-    // 写入整个原始payload（sequence + voice_data）
+    // Write entire original payload (sequence + voice_data)
     packet.data.copy(buffer, 1 + varintLength);
     
     return buffer;
@@ -1038,38 +1038,38 @@ export class VoiceRouter extends EventEmitter {
    * - 0x00-0x7F: 单字节（最高位为0）
    * - 0x80-0x3FFF: 双字节（最高2位为10）
    * - 0xC0-0x1FFFFFFF: 3字节（最高3位为110）
-   * - 0xF0: 4字节完整32位整数前缀
-   * - 0xF4: 8字节完整64位整数前缀
+   * - 0xF0: 4-byte complete 32-bit integer prefix
+   * - 0xF4: 8-byte complete 64-bit integer prefix
    * 
-   * 性能优化：将结果直接写入提供的 buffer，避免创建临时 Buffer
+   * Performance optimization: write result directly to provided buffer to avoid creating temporary Buffer
    * 
-   * @param value 要编码的值
-   * @param targetBuffer 目标 buffer
-   * @param offset 写入偏移量
-   * @returns 写入的字节数
+   * @param value Value to encode
+   * @param targetBuffer Target buffer
+   * @param offset Write offset
+   * @returns Number of bytes written
    */
   private encodeVarintTo(value: number, targetBuffer: Buffer, offset: number): number {
-    const i = value >>> 0; // 确保是无符号32位整数
+    const i = value >>> 0; // Ensure unsigned 32-bit integer
     
     if (i < 0x80) {
-      // 单字节: 0x00-0x7F
+      // Single byte: 0x00-0x7F
       targetBuffer[offset] = i;
       return 1;
     } else if (i < 0x4000) {
-      // 双字节: 0x80-0x3FFF
-      // 最高2位为10，后14位存储值
+      // Two bytes: 0x80-0x3FFF
+      // Top 2 bits are 10, next 14 bits store value
       targetBuffer[offset] = (i >> 8) | 0x80;
       targetBuffer[offset + 1] = i & 0xff;
       return 2;
     } else if (i < 0x200000) {
-      // 3字节: 0xC0-0x1FFFFFFF
-      // 最高3位为110，后21位存储值
+      // Three bytes: 0xC0-0x1FFFFFFF
+      // Top 3 bits are 110, next 21 bits store value
       targetBuffer[offset] = (i >> 16) | 0xc0;
       targetBuffer[offset + 1] = (i >> 8) & 0xff;
       targetBuffer[offset + 2] = i & 0xff;
       return 3;
     } else if (i < 0x100000000) {
-      // 完整32位整数: 前缀0xF0 + 4字节数据
+      // Complete 32-bit integer: prefix 0xF0 + 4 bytes data
       targetBuffer[offset] = 0xf0;
       targetBuffer[offset + 1] = (i >> 24) & 0xff;
       targetBuffer[offset + 2] = (i >> 16) & 0xff;
@@ -1077,7 +1077,7 @@ export class VoiceRouter extends EventEmitter {
       targetBuffer[offset + 4] = i & 0xff;
       return 5;
     } else {
-      // 理论上不应该到这里（32位session ID）
+      // Should not reach here (32-bit session ID)
       this.logger.warn(`Session ID ${value} too large for varint encoding`);
       targetBuffer[offset] = 0xf0;
       targetBuffer[offset + 1] = (i >> 24) & 0xff;
