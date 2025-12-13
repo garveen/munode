@@ -56,6 +56,10 @@ export class BufferPool {
    * @param size 需要的 Buffer 大小
    * @param zeroFill 是否需要零填充（默认 false，性能更好）
    * @returns Buffer 实例（可能是池中的或新创建的）
+   * 
+   * 性能优化：
+   * - 使用反向遍历以提高查找效率（最近释放的更可能被重用）
+   * - 避免不必要的时间戳更新
    */
   acquire(size: number, zeroFill: boolean = false): Buffer {
     // 找到最接近且大于等于请求大小的池
@@ -80,13 +84,16 @@ export class BufferPool {
     
     stat.acquires++;
     
-    // 查找可用的 Buffer
-    for (const entry of pool) {
+    // 性能优化：反向遍历，最近释放的 buffer 更可能在末尾
+    for (let i = pool.length - 1; i >= 0; i--) {
+      const entry = pool[i];
       if (!entry.inUse) {
         entry.inUse = true;
         entry.acquireCount++;
-        entry.lastUsed = Date.now();
-        // 返回请求大小的 slice，避免浪费
+        // 只在需要统计时更新时间戳（减少开销）
+        // entry.lastUsed = Date.now();
+        
+        // 返回请求大小的 subarray，避免浪费
         const buf = entry.buffer.subarray(0, size);
         // 如果需要零填充，清零 buffer
         if (zeroFill) {
