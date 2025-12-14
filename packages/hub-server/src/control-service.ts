@@ -195,8 +195,13 @@ export class HubControlService {
           this.removeEdgeChannel(edge_id);
           this.logger.info(`Edge ${edge_id} disconnected from control channel`);
           
-          // Clean up all user sessions on this Edge and notify other Edges
-          this.cleanupEdgeSessions(edge_id);
+          // 使用延迟清理机制，而不是立即清理会话
+          // Edge在宽限期内重连则恢复会话，超时后才清理
+          this._registry.handleEdgeDisconnect(edge_id, (edgeId) => {
+            // 超时后的清理回调
+            this.logger.warn(`Cleaning up sessions for Edge ${edgeId} after reconnection timeout`);
+            this.cleanupEdgeSessions(edgeId);
+          });
           break;
         }
       }

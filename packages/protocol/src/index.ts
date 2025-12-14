@@ -225,6 +225,8 @@ export { ControlChannelServer } from './control/control-server.js';
 export type { ControlChannelConfig } from './control/control-server.js';
 export { ControlChannelClient } from './control/control-client.js';
 export type { ControlChannelClientConfig } from './control/control-client.js';
+export { ConnectionPool } from './control/connection-pool.js';
+export type { ConnectionPoolConfig } from './control/connection-pool.js';
 
 // Permission system (shared between client and server)
 export { Permission, PermissionManager } from './permission.js';

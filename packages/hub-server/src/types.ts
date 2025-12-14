@@ -3,6 +3,13 @@
 import type { ServerStats, EdgeInfo, RegisterRequest, RegisterResponse, HeartbeatRequest, HeartbeatResponse } from '@munode/protocol';
 export type { ServerStats, EdgeInfo, RegisterRequest, RegisterResponse, HeartbeatRequest, HeartbeatResponse };
 
+// Edge连接状态
+export enum EdgeConnectionState {
+  CONNECTED = 'connected',          // 正常连接
+  DISCONNECTED_WAITING = 'disconnected_waiting',  // 断开但等待重连
+  DISCONNECTED_TIMEOUT = 'disconnected_timeout',  // 超时，会话已清理
+}
+
 export interface HubConfig {
    server_id: number;
   name: string;
@@ -238,6 +245,9 @@ export interface RegistryConfig {
   hmacSecret?: string; // HMAC 共享密钥
   challengeTimeout?: number; // 挑战码超时时间 (ms)，默认: 60000 (60秒)
   enableAuth?: boolean; // 是否启用认证，默认: true
+  
+  // Edge断开后的会话清理配置
+  edgeReconnectGracePeriod?: number; // Edge断开后等待重连的宽限期（毫秒），默认30000（30秒）
 }
 
 // 数据库配置
@@ -274,6 +284,9 @@ export interface RegisteredEdge {
   certificate: string;
    last_seen: number;
   stats: ServerStats;
+  connectionState?: EdgeConnectionState;  // 连接状态
+  disconnectedAt?: number;  // 断开时间戳（仅在DISCONNECTED_WAITING状态时有效）
+  cleanupTimer?: NodeJS.Timeout;  // 清理定时器
 }
 
 // VoiceTarget 配置

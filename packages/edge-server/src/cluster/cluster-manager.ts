@@ -54,6 +54,8 @@ export class EdgeClusterManager {
       host: hubConfig.host,
       port: hubConfig.controlPort,
       tls: hubConfig.tls?.rejectUnauthorized !== false,
+      poolSize: hubConfig.poolSize ?? 2, // Default to 2 connections
+      reconnectInterval: hubConfig.reconnectInterval || 5000,
     });
 
     // 设置 Hub 客户端事件

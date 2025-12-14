@@ -81,6 +81,10 @@ export interface RegisterResponse extends RPCResponse {
   // HMAC 挑战-响应认证
   challenge?: string; // 服务器生成的挑战码（仅在第一阶段返回）
   challenge_timeout?: number; // 挑战码超时时间（毫秒）
+  
+  // 重连和会话管理
+  reconnected?: boolean; // 标识这是重连（会话恢复），而非新注册
+  session_expired?: boolean; // 标识会话已过期，需要冷启动
 }
 
 // Edge server information

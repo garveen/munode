@@ -9,6 +9,7 @@ import type {
   HeartbeatResponse,
   EdgeInfo,
 } from './types.js';
+import { EdgeConnectionState } from './types.js';
 import type { HubDatabase } from './database.js';
 
 
@@ -112,12 +113,55 @@ export class ServiceRegistry {
     }
 
     // 检查是否已存在
-    if (this.edges.has(server_id)) {
-    this.logger.warn(`Edge Server ${server_id} already registered, updating...`);
+    const existingEdge = this.edges.get(server_id);
+    if (existingEdge) {
+      // 如果Edge在等待重连状态中重连，恢复会话
+      if (existingEdge.connectionState === EdgeConnectionState.DISCONNECTED_WAITING) {
+        this.logger.info(`Edge Server ${server_id} reconnected within grace period`);
+        
+        // 清理cleanup timer
+        if (existingEdge.cleanupTimer) {
+          clearTimeout(existingEdge.cleanupTimer);
+          existingEdge.cleanupTimer = undefined;
+        }
+        
+        // 更新状态为已连接
+        existingEdge.connectionState = EdgeConnectionState.CONNECTED;
+        existingEdge.disconnectedAt = undefined;
+        existingEdge.last_seen = Date.now();
+        existingEdge.name = name;
+        existingEdge.host = host;
+        existingEdge.port = port;
+        existingEdge.region = region;
+        existingEdge.capacity = capacity;
+        existingEdge.certificate = certificate;
+        
+        // 重启心跳监控
+        this.startHeartbeatMonitor(server_id);
+        
+        return {
+          success: true,
+          hub_server_id: 0,
+          edge_list: this.getEdgeList(),
+          reconnected: true, // 标识这是重连
+        };
+      } else if (existingEdge.connectionState === EdgeConnectionState.DISCONNECTED_TIMEOUT) {
+        // Edge已经超时被清理，拒绝重连
+        this.logger.warn(`Edge Server ${server_id} reconnection rejected: session already cleaned up`);
+        return {
+          success: false,
+          error: 'Session timeout - cold restart required',
+          session_expired: true, // 标识会话已过期，需要冷启动
+          hub_server_id: 0,
+          edge_list: [],
+        };
+      } else {
+        this.logger.warn(`Edge Server ${server_id} already registered in CONNECTED state, updating...`);
+      }
     }
 
-    // 创建 Edge 信息
-    const edge: RegisteredEdge = {
+    // 创建或更新 Edge 信息
+    const edge: RegisteredEdge = existingEdge || {
       server_id,
       name,
       host,
@@ -134,7 +178,18 @@ export class ServiceRegistry {
         memory_usage: 0,
         bandwidth: { in: 0, out: 0 },
       },
+      connectionState: EdgeConnectionState.CONNECTED,
     };
+    
+    // 更新基本信息（如果是新Edge或更新现有Edge）
+    edge.name = name;
+    edge.host = host;
+    edge.port = port;
+    edge.region = region;
+    edge.capacity = capacity;
+    edge.certificate = certificate;
+    edge.last_seen = Date.now();
+    edge.connectionState = EdgeConnectionState.CONNECTED;
 
     this.edges.set(server_id, edge);
     this.startHeartbeatMonitor(server_id);
@@ -187,11 +242,72 @@ export class ServiceRegistry {
   }
 
   /**
+   * 处理 Edge 断开连接（带宽限期重连）
+   */
+  handleEdgeDisconnect(server_id: number, onCleanup?: (edgeId: number) => void): void {
+    const edge = this.edges.get(server_id);
+    if (!edge) {
+      this.logger.warn(`Cannot handle disconnect for unknown Edge ${server_id}`);
+      return;
+    }
+
+    // 如果已经在等待状态，不重复处理
+    if (edge.connectionState === EdgeConnectionState.DISCONNECTED_WAITING) {
+      this.logger.debug(`Edge ${server_id} already in waiting state`);
+      return;
+    }
+
+    // 清理可能存在的旧定时器（防止竞态条件）
+    if (edge.cleanupTimer) {
+      clearTimeout(edge.cleanupTimer);
+      edge.cleanupTimer = undefined;
+    }
+
+    // 标记为等待重连状态
+    edge.connectionState = EdgeConnectionState.DISCONNECTED_WAITING;
+    edge.disconnectedAt = Date.now();
+
+    const gracePeriod = this.config.edgeReconnectGracePeriod ?? 30000; // 默认30秒
+    
+    this.logger.info(`Edge Server ${server_id} disconnected, waiting ${gracePeriod}ms for reconnection...`);
+
+    // 停止心跳监控
+    const timer = this.heartbeatTimers.get(server_id);
+    if (timer) {
+      clearTimeout(timer);
+      this.heartbeatTimers.delete(server_id);
+    }
+
+    // 设置清理定时器
+    edge.cleanupTimer = setTimeout(() => {
+      this.logger.warn(`Edge Server ${server_id} reconnection timeout, cleaning up sessions...`);
+      
+      // 标记为超时状态
+      edge.connectionState = EdgeConnectionState.DISCONNECTED_TIMEOUT;
+      edge.cleanupTimer = undefined;
+      
+      // 调用清理回调
+      if (onCleanup) {
+        onCleanup(server_id);
+      }
+      
+      // 注销Edge
+      void this.unregister(server_id);
+    }, gracePeriod);
+  }
+
+  /**
    * 注销 Edge Server
    */
   async unregister( server_id: number): Promise<void> {
     const edge = this.edges.get(server_id);
     if (!edge) return;
+
+    // 清理cleanup timer
+    if (edge.cleanupTimer) {
+      clearTimeout(edge.cleanupTimer);
+      edge.cleanupTimer = undefined;
+    }
 
     this.edges.delete(server_id);
 
