@@ -1,8 +1,11 @@
 import type { Logger } from '@munode/common';
 import type { HubDatabase } from './database.js';
 
-
-export interface ChannelData {
+/**
+ * Internal channel data representation for Hub database operations
+ * Note: This is different from @munode/protocol's ChannelData which uses channel_id
+ */
+export interface HubChannelData {
   id: number;
   name: string;
   position: number;
@@ -27,7 +30,7 @@ export interface CreateChannelRequest {
  */
 export class ChannelManager {
   private database: HubDatabase;
-  private channelCache: Map<number, ChannelData> = new Map();
+  private channelCache: Map<number, HubChannelData> = new Map();
   private logger: Logger;
 
   constructor(database: HubDatabase, logger: Logger) {
@@ -48,7 +51,7 @@ export class ChannelManager {
   private async loadChannels(): Promise<void> {
     const dbChannels = await this.database.getAllChannels();
     for (const ch of dbChannels) {
-      const channelData: ChannelData = {
+      const channelData: HubChannelData = {
         id: ch.id,
         name: ch.name,
         parent_id: ch.parent_id,
@@ -70,7 +73,7 @@ export class ChannelManager {
     const dbCreated = await this.database.getChannel(id);
 
     if (dbCreated) {
-      const created: ChannelData = {
+      const created: HubChannelData = {
         id: dbCreated.id,
         name: dbCreated.name,
         parent_id: dbCreated.parent_id,
@@ -89,12 +92,12 @@ export class ChannelManager {
   /**
    * 更新频道
    */
-  async updateChannel(id: number, updates: Partial<ChannelData>): Promise<void> {
+  async updateChannel(id: number, updates: Partial<HubChannelData>): Promise<void> {
     await this.database.updateChannel(id, updates);
     const dbUpdated = await this.database.getChannel(id);
 
     if (dbUpdated) {
-      const updated: ChannelData = {
+      const updated: HubChannelData = {
         id: dbUpdated.id,
         name: dbUpdated.name,
         parent_id: dbUpdated.parent_id,
@@ -120,21 +123,21 @@ export class ChannelManager {
   /**
    * 获取频道（从缓存）
    */
-  getChannel(id: number): ChannelData | undefined {
+  getChannel(id: number): HubChannelData | undefined {
     return this.channelCache.get(id);
   }
 
   /**
    * 获取所有频道
    */
-  getAllChannels(): ChannelData[] {
+  getAllChannels(): HubChannelData[] {
     return Array.from(this.channelCache.values());
   }
 
   /**
    * 获取子频道
    */
-  async getChildChannels( parent_id: number): Promise<ChannelData[]> {
+  async getChildChannels( parent_id: number): Promise<HubChannelData[]> {
     const dbChannels = await this.database.getChildChannels(parent_id);
     return dbChannels.map(ch => ({
       id: ch.id,

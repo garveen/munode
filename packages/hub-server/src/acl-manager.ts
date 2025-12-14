@@ -1,8 +1,11 @@
 import type { Logger } from '@munode/common';
 import type { HubDatabase } from './database.js';
 
-
-export interface ACLData {
+/**
+ * Internal ACL data representation for Hub database operations
+ * Note: This matches @munode/protocol's HubACLData structure
+ */
+export interface HubACLData {
   id: number;
   channel_id: number;
   user_id?: number;
@@ -29,7 +32,7 @@ export interface CreateACLRequest {
  */
 export class ACLManager {
   private database: HubDatabase;
-  private aclCache: Map<number, ACLData[]> = new Map(); // key: channel_id
+  private aclCache: Map<number, HubACLData[]> = new Map(); // key: channel_id
 
     private logger: Logger;
 
@@ -48,7 +51,7 @@ export class ACLManager {
   /**
    * 获取频道的 ACL（带缓存）
    */
-  async getChannelACLs( channel_id: number): Promise<ACLData[]> {
+  async getChannelACLs( channel_id: number): Promise<HubACLData[]> {
     if (!this.aclCache.has(channel_id)) {
       const acls = await this.database.getChannelACLs(channel_id);
       this.aclCache.set(channel_id, acls);
@@ -60,7 +63,7 @@ export class ACLManager {
    * 添加 ACL
    */
   async addACL(request: CreateACLRequest): Promise<number> {
-    const acl: Omit<ACLData, 'id'> = {
+    const acl: Omit<HubACLData, 'id'> = {
       channel_id: request.channel_id,
       user_id: request.user_id,
       group: request.group,
@@ -82,7 +85,7 @@ export class ACLManager {
   /**
    * 更新 ACL
    */
-  async updateACL(id: number, updates: Partial<Omit<ACLData, 'id' | 'channel_id'>>): Promise<void> {
+  async updateACL(id: number, updates: Partial<Omit<HubACLData, 'id' | 'channel_id'>>): Promise<void> {
     // 先获取 ACL 以确定其所属频道
     const channel_id = this.findChannelByACL(id);
 
@@ -114,7 +117,7 @@ export class ACLManager {
    * 批量保存ACL（清除现有ACL后保存新的）
    * 返回保存的ACL ID数组
    */
-  async saveACLs(channel_id: number, acls: Omit<ACLData, 'id' | 'channel_id'>[]): Promise<number[]> {
+  async saveACLs(channel_id: number, acls: Omit<HubACLData, 'id' | 'channel_id'>[]): Promise<number[]> {
     const aclIds: number[] = [];
 
     // Clear existing ACLs for this channel

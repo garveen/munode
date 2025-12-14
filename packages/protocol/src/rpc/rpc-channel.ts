@@ -73,21 +73,11 @@ export interface UserMovedParams {
   actor_session?: number;
 }
 
-export interface ChannelDataInput {
-  channel_id: number;
-  parent_id: number;
-  name: string;
-  description?: string;
-  position?: number;
-  max_users?: number;
-  is_temporary?: boolean;
-  temporary?: boolean;
-  inherit_acl?: boolean;
-  links?: number[];
-}
+// Import ChannelData from hub-edge-types to avoid duplication
+import type { ChannelData } from '../hub-edge-types.js';
 
 export interface ChannelCreatedParams {
-  channel: ChannelDataInput;
+  channel: ChannelData;
 }
 
 export interface ChannelRemovedParams {
@@ -95,7 +85,7 @@ export interface ChannelRemovedParams {
 }
 
 export interface ChannelUpdatedParams {
-  channel: ChannelDataInput;
+  channel: ChannelData;
 }
 
 export interface SyncVoiceTargetParams {
@@ -350,7 +340,14 @@ export class RPCChannel extends EventEmitter {
         const p = params as ChannelCreatedParams;
         notificationData.channel_created = new HubChannelCreatedParams({
           channel: new ChannelDataProto({
-            ...p.channel,
+            channel_id: p.channel.channel_id,
+            name: p.channel.name ?? '', // Required field in protobuf
+            parent_id: p.channel.parent_id,
+            description: p.channel.description,
+            position: p.channel.position,
+            max_users: p.channel.max_users,
+            temporary: p.channel.temporary,
+            inherit_acl: p.channel.inherit_acl,
             links: p.channel.links ?? [],
           }),
         });
@@ -367,7 +364,14 @@ export class RPCChannel extends EventEmitter {
         const p = params as ChannelUpdatedParams;
         notificationData.channel_updated = new HubChannelUpdatedParams({
           channel: new ChannelDataProto({
-            ...p.channel,
+            channel_id: p.channel.channel_id,
+            name: p.channel.name ?? '', // Required field in protobuf
+            parent_id: p.channel.parent_id,
+            description: p.channel.description,
+            position: p.channel.position,
+            max_users: p.channel.max_users,
+            temporary: p.channel.temporary,
+            inherit_acl: p.channel.inherit_acl,
             links: p.channel.links ?? [],
           }),
         });

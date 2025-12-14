@@ -1,8 +1,11 @@
 import type { Logger } from '@munode/common';
 import type { HubDatabase } from './database.js';
 
-
-export interface BanData {
+/**
+ * Internal ban data representation for Hub database operations
+ * Note: This uses Buffer for address, while protocol version uses string
+ */
+export interface HubBanData {
   id: number;
   address?: Buffer;
   mask: number;
@@ -36,9 +39,9 @@ export interface BanCheckResult {
  */
 export class BanManager {
   private database: HubDatabase;
-  private banCache: Map<number, BanData> = new Map();
+  private banCache: Map<number, HubBanData> = new Map();
   private certBanIndex: Map<string, number> = new Map(); // hash -> ban.id
-  private ipBans: BanData[] = []; // 需要遍历检查的 IP 封禁
+  private ipBans: HubBanData[] = []; // 需要遍历检查的 IP 封禁
 
     private logger: Logger;
 
@@ -188,7 +191,7 @@ export class BanManager {
   /**
    * 检查封禁是否仍然有效
    */
-  private isBanActive(ban: BanData): boolean {
+  private isBanActive(ban: HubBanData): boolean {
     if (!ban.start || ban.duration === undefined) return true;
     if (ban.duration === 0) return true; // 永久封禁
 
@@ -199,7 +202,7 @@ export class BanManager {
   /**
    * 获取封禁过期时间
    */
-  private getBanExpiry(ban: BanData): number | undefined {
+  private getBanExpiry(ban: HubBanData): number | undefined {
     if (!ban.start || ban.duration === undefined || ban.duration === 0) {
       return undefined; // 永久封禁
     }
@@ -209,7 +212,7 @@ export class BanManager {
   /**
    * 获取所有封禁
    */
-  getAllBans(): BanData[] {
+  getAllBans(): HubBanData[] {
     return Array.from(this.banCache.values());
   }
 
