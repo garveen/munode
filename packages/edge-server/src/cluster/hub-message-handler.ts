@@ -943,4 +943,76 @@ export class HubMessageHandlers {
         this.logger.error('Error handling route table update from Hub:', error);
     }
   }
+
+  /**
+   * Handle shutdown request from Hub
+   * This occurs when the Hub detects this Edge is in a smaller disconnected cluster (island)
+   * and needs to shut down to maintain system integrity
+   */
+  async handleShutdownRequestFromHub(params: {
+    reason: string;
+    graceful: boolean;
+    disconnect_clients: boolean;
+  }): Promise<void> {
+    this.logger.warn('=== Received shutdown request from Hub ===');
+    this.logger.warn(`Reason: ${params.reason}`);
+    this.logger.warn(`Graceful: ${params.graceful}`);
+    this.logger.warn(`Disconnect clients: ${params.disconnect_clients}`);
+    
+    try {
+      // Step 1: Disconnect all clients if requested
+      if (params.disconnect_clients) {
+        this.logger.info('Disconnecting all clients...');
+        const clientManager = this.factory.clientManager;
+        const clients = Array.from(clientManager.getAllClients());
+        
+        for (const client of clients) {
+          try {
+            // Send a user-friendly message before disconnecting
+            // Don't expose internal system details to clients
+            const textMsg = new mumbleproto.TextMessage({
+              actor: 0, // Server message
+              session: [client.session],
+              channel_id: [],
+              tree_id: [],
+              message: 'Server is restarting. Please reconnect in a moment.',
+            });
+            
+            this.messageHandler.sendMessage(
+              client.session,
+              MessageType.TextMessage,
+              Buffer.from(textMsg.serialize())
+            );
+            
+            // Disconnect the client
+            await clientManager.removeClient(client.session);
+          } catch (error) {
+            this.logger.error(`Failed to disconnect client ${client.session}:`, error);
+          }
+        }
+        
+        this.logger.info(`Disconnected ${clients.length} clients`);
+      }
+      
+      // Step 2: Perform cold restart
+      // Cold restart means: disconnect from cluster, clear all state, and rejoin
+      // This is handled by accessing the EdgeServer instance through the global event system
+      this.logger.warn('Starting cold restart procedure...');
+      
+      // Emit a shutdown request event that the EdgeServer will handle
+      // The factory doesn't have direct access to EdgeClusterManager,
+      // so we use the messageHandler's EventEmitter to propagate the event
+      this.messageHandler.emit('shutdownRequest', {
+        reason: params.reason,
+        graceful: params.graceful,
+        clientsDisconnected: params.disconnect_clients, // Pass through client disconnect status
+      });
+      
+      this.logger.info('Shutdown request initiated, waiting for EdgeServer to handle cold restart');
+      
+    } catch (error) {
+      this.logger.error('Error handling shutdown request:', error);
+      throw error;
+    }
+  }
 }

@@ -355,6 +355,26 @@ export class EdgeClusterManager {
   }
 
   /**
+   * 执行冷重启（Cold Restart）
+   * 
+   * 完整流程：
+   * 1. 断开所有客户端
+   * 2. 断开所有 Peer
+   * 3. 断开 Hub
+   * 4. 清理本地状态
+   * 5. 重新加入集群
+   * 
+   * 用于处理以下场景：
+   * - Hub 检测到网络分区，要求边缘节点重启
+   * - 会话过期需要完全重置
+   */
+  async performColdRestart(): Promise<void> {
+    this.logger.warn('=== Performing cold restart ===');
+    await this.reconnectManager.performFullDisconnect();
+    this.logger.info('=== Cold restart completed ===');
+  }
+
+  /**
    * 获取 Hub 客户端（用于发送RPC调用）
    */
   getHubClient(): ControlChannelClient {

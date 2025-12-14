@@ -30,6 +30,7 @@ export interface VoiceUDPConfig {
   host?: string;
   encryptionKey?: Buffer;
   encryptionAlgorithm?: string;
+  localEdgeId?: number; // Local edge ID for determining active/passive side
 }
 
 export interface VoicePacketHeader {
@@ -69,6 +70,7 @@ export interface EdgeConnectionStatus {
   lastHeartbeatReceived: number;
   reconnecting: boolean;
   reconnectAttempts: number;
+  isActiveSide: boolean; // true if this edge is the active side (initiator) for heartbeat
 }
 
 export class VoiceUDPTransport extends EventEmitter {
@@ -79,6 +81,7 @@ export class VoiceUDPTransport extends EventEmitter {
   private connectionStatus = new Map<number, EdgeConnectionStatus>(); // edgeId -> connection status
   private encryptedPacketCache = new Map<string, Buffer>(); // cacheKey -> encrypted packet
   private logger: Logger;
+  private localEdgeId: number;
   private stats = {
     packetsSent: 0,
     packetsReceived: 0,
@@ -99,8 +102,10 @@ export class VoiceUDPTransport extends EventEmitter {
     super();
     this.config = config;
     this.logger = logger;
+    // Default to 0 if not provided (used by Hub, though Hub doesn't participate in edge-to-edge connections)
+    this.localEdgeId = config.localEdgeId ?? 0;
 
-    // 如果提供了加密密钥，设置加密配置
+    // Setup encryption config if encryption key is provided
     if (config.encryptionKey) {
       const algorithm = config.encryptionAlgorithm || 'aes-128-cbc';
       this.encryptionConfig = {
@@ -171,7 +176,11 @@ export class VoiceUDPTransport extends EventEmitter {
     this.remoteEndpoints.set(edgeId, { host, port });
     
     const now = Date.now();
-    // 初始化连接状态
+    // Determine if this is the active side
+    // Rule: The edge with the smaller ID acts as the active side for heartbeats
+    const isActiveSide = this.localEdgeId < edgeId;
+    
+    // Initialize connection status
     this.connectionStatus.set(edgeId, {
       edgeId,
       connected: false,
@@ -182,11 +191,15 @@ export class VoiceUDPTransport extends EventEmitter {
       lastHeartbeatReceived: now,
       reconnecting: false,
       reconnectAttempts: 0,
+      isActiveSide,
     });
     
-    this.logger.info(`Registered voice endpoint for edge ${edgeId}: ${host}:${port}`);
+    this.logger.info(
+      `Registered voice endpoint for edge ${edgeId}: ${host}:${port} ` +
+      `(role: ${isActiveSide ? 'active/initiator' : 'passive/responder'})`
+    );
     
-    // 发起握手
+    // Initiate handshake (both active and passive sides need handshake)
     this.initiateHandshake(edgeId);
     
     // 启动心跳和连接检查（如果还没启动）
@@ -403,50 +416,74 @@ export class VoiceUDPTransport extends EventEmitter {
   
   /**
    * 发送心跳包到所有已连接的Edge
+   * 
+   * 心跳策略：
+   * - 主动方（active side，ID较小的一方）发送PING
+   * - 被动方（passive side）回复PONG
+   * - 双方都检测心跳超时
    */
   private sendHeartbeats(): void {
     const now = Date.now();
     for (const [edgeId, status] of this.connectionStatus) {
-      if (status.handshakeComplete && !status.reconnecting) {
+      // Only active side sends heartbeat when connection is established
+      if (status.handshakeComplete && !status.reconnecting && status.isActiveSide) {
         const endpoint = this.remoteEndpoints.get(edgeId);
         if (endpoint) {
           const ping = this.createHeartbeatPacket('PING');
           this.sendPacket(ping, endpoint.host, endpoint.port);
           status.lastHeartbeatSent = now;
           this.stats.heartbeatsSent++;
-          this.logger.debug(`Sent heartbeat PING to edge ${edgeId}`);
+          this.logger.debug(`Sent heartbeat PING to edge ${edgeId} (active side)`);
         }
       }
     }
   }
   
   /**
-   * 检查连接状态，处理超时和重连
+   * Check connection status, handle timeouts and reconnection
+   * 
+   * Disconnection detection strategy:
+   * - Active side: If no PONG received for HEARTBEAT_TIMEOUT_MS, consider disconnected
+   * - Passive side: If no PING received for HEARTBEAT_TIMEOUT_MS, consider disconnected
+   * - Both sides detect timeout independently
+   * 
+   * Reconnection strategy:
+   * - Both active and passive sides attempt reconnection when timeout detected
+   * - This ensures reconnection even if active side fails
+   * - Connection is considered restored if EITHER direction succeeds
+   * - Only report to Hub if BOTH directions fail after retries
    */
   private checkConnections(): void {
     const now = Date.now();
     for (const [edgeId, status] of this.connectionStatus) {
       if (!status.handshakeComplete) {
-        continue; // 跳过未完成握手的连接
+        continue; // Skip connections that haven't completed handshake
       }
       
       const timeSinceLastHeartbeat = now - status.lastHeartbeatReceived;
       
       if (timeSinceLastHeartbeat > HEARTBEAT_TIMEOUT_MS && status.connected) {
-        // 连接超时
-        this.logger.warn(`Edge ${edgeId} connection timeout (no heartbeat for ${timeSinceLastHeartbeat}ms)`);
+        // Connection timeout
+        const role = status.isActiveSide ? 'active/initiator' : 'passive/responder';
+        this.logger.warn(
+          `Edge ${edgeId} connection timeout (no heartbeat for ${timeSinceLastHeartbeat}ms, ` +
+          `role: ${role})`
+        );
         status.connected = false;
         status.handshakeComplete = false;
         this.emit('edge-disconnected', edgeId);
         
-        // 发起重连
+        // Initiate reconnection (both sides attempt reconnection)
         this.initiateReconnect(edgeId);
       }
     }
   }
   
   /**
-   * 发起重连
+   * Initiate reconnection attempt
+   * 
+   * Note: Each side independently attempts reconnection when it detects timeout.
+   * If the other direction succeeds first, this reconnection will be cancelled.
    */
   private initiateReconnect(edgeId: number): void {
     const status = this.connectionStatus.get(edgeId);
@@ -459,7 +496,7 @@ export class VoiceUDPTransport extends EventEmitter {
     
     this.logger.info(`Initiating reconnect to edge ${edgeId}`);
     
-    // 延迟后开始重连
+    // Delay before starting reconnection
     setTimeout(() => {
       this.performReconnect(edgeId);
     }, RECONNECT_DELAY_MS);
@@ -488,11 +525,25 @@ export class VoiceUDPTransport extends EventEmitter {
     this.sendPacket(handshakePacket, endpoint.host, endpoint.port);
     this.stats.handshakeSent++;
     
-    // 如果重连次数达到上限，通知Hub
+    // 如果重连次数达到上限，检查连接状态再决定是否报告失败
     if (status.reconnectAttempts >= HANDSHAKE_MAX_ATTEMPTS) {
-      this.logger.error(`Failed to reconnect to edge ${edgeId} after ${HANDSHAKE_MAX_ATTEMPTS} attempts`);
-      status.reconnecting = false;
-      this.emit('reconnect-failed', edgeId);
+      // 重要：只有在连接仍然断开的情况下才报告失败
+      // 如果另一个方向已经成功重连（收到对方的握手包），则不报告失败
+      if (!status.connected || !status.handshakeComplete) {
+        this.logger.error(
+          `Failed to reconnect to edge ${edgeId} after ${HANDSHAKE_MAX_ATTEMPTS} attempts, ` +
+          `connection still broken, notifying Hub`
+        );
+        status.reconnecting = false;
+        this.emit('reconnect-failed', edgeId);
+      } else {
+        this.logger.info(
+          `Reconnect attempts to edge ${edgeId} exhausted, but connection was restored ` +
+          `from the other direction, no need to notify Hub`
+        );
+        status.reconnecting = false;
+        status.reconnectAttempts = 0;
+      }
       return;
     }
     
