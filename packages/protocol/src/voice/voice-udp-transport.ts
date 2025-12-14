@@ -102,9 +102,10 @@ export class VoiceUDPTransport extends EventEmitter {
     super();
     this.config = config;
     this.logger = logger;
-    this.localEdgeId = config.localEdgeId ?? 0; // Default to 0 if not provided (Hub)
+    // Default to 0 if not provided (used by Hub, though Hub doesn't participate in edge-to-edge connections)
+    this.localEdgeId = config.localEdgeId ?? 0;
 
-    // 如果提供了加密密钥，设置加密配置
+    // Setup encryption config if encryption key is provided
     if (config.encryptionKey) {
       const algorithm = config.encryptionAlgorithm || 'aes-128-cbc';
       this.encryptionConfig = {

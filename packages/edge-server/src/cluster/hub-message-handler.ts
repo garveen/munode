@@ -968,13 +968,14 @@ export class HubMessageHandlers {
         
         for (const client of clients) {
           try {
-            // Send a text message to inform the user before disconnecting
+            // Send a user-friendly message before disconnecting
+            // Don't expose internal system details to clients
             const textMsg = new mumbleproto.TextMessage({
               actor: 0, // Server message
               session: [client.session],
               channel_id: [],
               tree_id: [],
-              message: `Server is shutting down: ${params.reason}`,
+              message: 'Server is restarting. Please reconnect in a moment.',
             });
             
             this.messageHandler.sendMessage(
@@ -1004,6 +1005,7 @@ export class HubMessageHandlers {
       this.messageHandler.emit('shutdownRequest', {
         reason: params.reason,
         graceful: params.graceful,
+        clientsDisconnected: params.disconnect_clients, // Pass through client disconnect status
       });
       
       this.logger.info('Shutdown request initiated, waiting for EdgeServer to handle cold restart');
