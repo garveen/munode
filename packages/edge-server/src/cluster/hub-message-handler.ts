@@ -943,4 +943,79 @@ export class HubMessageHandlers {
         this.logger.error('Error handling route table update from Hub:', error);
     }
   }
+
+  /**
+   * Handle shutdown request from Hub
+   * This occurs when the Hub detects this Edge is in a smaller disconnected cluster (island)
+   * and needs to shut down to maintain system integrity
+   */
+  async handleShutdownRequestFromHub(params: {
+    reason: string;
+    graceful: boolean;
+    disconnect_clients: boolean;
+  }): Promise<void> {
+    this.logger.warn('=== Received shutdown request from Hub ===');
+    this.logger.warn(`Reason: ${params.reason}`);
+    this.logger.warn(`Graceful: ${params.graceful}`);
+    this.logger.warn(`Disconnect clients: ${params.disconnect_clients}`);
+    
+    try {
+      // Step 1: Disconnect all clients if requested
+      if (params.disconnect_clients) {
+        this.logger.info('Disconnecting all clients...');
+        const clientManager = this.factory.clientManager;
+        const clients = Array.from(clientManager.getAllClients().values());
+        
+        for (const client of clients) {
+          try {
+            // Send a text message to inform the user before disconnecting
+            this.messageHandler.sendTextMessage(
+              client.session,
+              0, // channel_id, 0 for server message
+              `Server is shutting down: ${params.reason}`
+            );
+            
+            // Disconnect the client
+            await clientManager.removeClient(client.session, 'Server shutdown');
+          } catch (error) {
+            this.logger.error(`Failed to disconnect client ${client.session}:`, error);
+          }
+        }
+        
+        this.logger.info(`Disconnected ${clients.length} clients`);
+      }
+      
+      // Step 2: Perform cold restart
+      // Cold restart means: disconnect from cluster, clear all state, and rejoin
+      this.logger.warn('Starting cold restart procedure...');
+      
+      // Get the cluster manager from the factory
+      const edgeClusterManager = this.factory.edgeClusterManager;
+      if (!edgeClusterManager) {
+        this.logger.error('EdgeClusterManager not available, cannot perform cold restart');
+        return;
+      }
+      
+      // Access the reconnect manager to perform full disconnect and rejoin
+      // We need to cast to access the private property
+      const reconnectManager = (edgeClusterManager as any).reconnectManager;
+      if (reconnectManager) {
+        await reconnectManager.performFullDisconnect();
+        this.logger.info('Cold restart completed successfully');
+      } else {
+        this.logger.error('ReconnectManager not available, cannot perform cold restart');
+        
+        // Fallback: manually disconnect and exit
+        await edgeClusterManager.disconnect();
+        this.logger.error('Manual disconnect completed. Process should be restarted externally.');
+        
+        // In production, this would trigger a process restart via the container orchestrator
+        // For now, we just log the error
+      }
+      
+    } catch (error) {
+      this.logger.error('Error handling shutdown request:', error);
+      throw error;
+    }
+  }
 }

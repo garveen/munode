@@ -672,6 +672,9 @@ export class EventSetupManager {
         } else if (message.method === 'hub.channelRemoveBroadcast') {
           // ChannelRemove广播处理
           this.handlerFactory.hubMessageHandlers.handleChannelRemoveBroadcastFromHub(message.params);
+        } else if (message.method === 'hub.shutdownRequest') {
+          // Shutdown request from Hub - handle async but don't block
+          void this.handlerFactory.hubMessageHandlers.handleShutdownRequestFromHub(message.params);
         }
       });
     }

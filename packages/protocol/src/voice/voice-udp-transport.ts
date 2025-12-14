@@ -30,6 +30,7 @@ export interface VoiceUDPConfig {
   host?: string;
   encryptionKey?: Buffer;
   encryptionAlgorithm?: string;
+  localEdgeId?: number; // Local edge ID for determining active/passive side
 }
 
 export interface VoicePacketHeader {
@@ -69,6 +70,7 @@ export interface EdgeConnectionStatus {
   lastHeartbeatReceived: number;
   reconnecting: boolean;
   reconnectAttempts: number;
+  isActiveSide: boolean; // true if this edge is the active side (initiator) for heartbeat
 }
 
 export class VoiceUDPTransport extends EventEmitter {
@@ -79,6 +81,7 @@ export class VoiceUDPTransport extends EventEmitter {
   private connectionStatus = new Map<number, EdgeConnectionStatus>(); // edgeId -> connection status
   private encryptedPacketCache = new Map<string, Buffer>(); // cacheKey -> encrypted packet
   private logger: Logger;
+  private localEdgeId: number;
   private stats = {
     packetsSent: 0,
     packetsReceived: 0,
@@ -99,6 +102,7 @@ export class VoiceUDPTransport extends EventEmitter {
     super();
     this.config = config;
     this.logger = logger;
+    this.localEdgeId = config.localEdgeId ?? 0; // Default to 0 if not provided (Hub)
 
     // 如果提供了加密密钥，设置加密配置
     if (config.encryptionKey) {
@@ -171,6 +175,10 @@ export class VoiceUDPTransport extends EventEmitter {
     this.remoteEndpoints.set(edgeId, { host, port });
     
     const now = Date.now();
+    // 确定是否为主动方（active side）
+    // 规则：ID较小的一方作为主动方发送心跳
+    const isActiveSide = this.localEdgeId < edgeId;
+    
     // 初始化连接状态
     this.connectionStatus.set(edgeId, {
       edgeId,
@@ -182,11 +190,15 @@ export class VoiceUDPTransport extends EventEmitter {
       lastHeartbeatReceived: now,
       reconnecting: false,
       reconnectAttempts: 0,
+      isActiveSide,
     });
     
-    this.logger.info(`Registered voice endpoint for edge ${edgeId}: ${host}:${port}`);
+    this.logger.info(
+      `Registered voice endpoint for edge ${edgeId}: ${host}:${port} ` +
+      `(role: ${isActiveSide ? 'active/initiator' : 'passive/responder'})`
+    );
     
-    // 发起握手
+    // 发起握手（无论主动还是被动方都需要握手）
     this.initiateHandshake(edgeId);
     
     // 启动心跳和连接检查（如果还没启动）
@@ -403,18 +415,24 @@ export class VoiceUDPTransport extends EventEmitter {
   
   /**
    * 发送心跳包到所有已连接的Edge
+   * 
+   * 心跳策略：
+   * - 主动方（active side，ID较小的一方）发送PING
+   * - 被动方（passive side）回复PONG
+   * - 双方都检测心跳超时
    */
   private sendHeartbeats(): void {
     const now = Date.now();
     for (const [edgeId, status] of this.connectionStatus) {
-      if (status.handshakeComplete && !status.reconnecting) {
+      // 只有主动方且连接已建立时发送心跳
+      if (status.handshakeComplete && !status.reconnecting && status.isActiveSide) {
         const endpoint = this.remoteEndpoints.get(edgeId);
         if (endpoint) {
           const ping = this.createHeartbeatPacket('PING');
           this.sendPacket(ping, endpoint.host, endpoint.port);
           status.lastHeartbeatSent = now;
           this.stats.heartbeatsSent++;
-          this.logger.debug(`Sent heartbeat PING to edge ${edgeId}`);
+          this.logger.debug(`Sent heartbeat PING to edge ${edgeId} (active side)`);
         }
       }
     }
@@ -422,6 +440,15 @@ export class VoiceUDPTransport extends EventEmitter {
   
   /**
    * 检查连接状态，处理超时和重连
+   * 
+   * 断开检测策略：
+   * - 主动方：如果超过HEARTBEAT_TIMEOUT_MS未收到PONG，判定断开
+   * - 被动方：如果超过HEARTBEAT_TIMEOUT_MS未收到PING，判定断开
+   * - 双方都需要检测超时
+   * 
+   * 重连策略：
+   * - 无论主动方还是被动方，检测到断开都要尝试重连
+   * - 这样即使主动方故障，被动方也能发起重连
    */
   private checkConnections(): void {
     const now = Date.now();
@@ -434,12 +461,16 @@ export class VoiceUDPTransport extends EventEmitter {
       
       if (timeSinceLastHeartbeat > HEARTBEAT_TIMEOUT_MS && status.connected) {
         // 连接超时
-        this.logger.warn(`Edge ${edgeId} connection timeout (no heartbeat for ${timeSinceLastHeartbeat}ms)`);
+        const role = status.isActiveSide ? 'active/initiator' : 'passive/responder';
+        this.logger.warn(
+          `Edge ${edgeId} connection timeout (no heartbeat for ${timeSinceLastHeartbeat}ms, ` +
+          `role: ${role})`
+        );
         status.connected = false;
         status.handshakeComplete = false;
         this.emit('edge-disconnected', edgeId);
         
-        // 发起重连
+        // 发起重连（双方都尝试重连）
         this.initiateReconnect(edgeId);
       }
     }

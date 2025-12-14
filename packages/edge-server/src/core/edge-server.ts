@@ -100,6 +100,7 @@ export class EdgeServer extends EventEmitter {
       {
         port: voicePort,
         host: this.config.network.host,
+        localEdgeId: this.config.server_id, // Pass local edge ID for heartbeat role determination
       }, 
       this.logger,
     );
