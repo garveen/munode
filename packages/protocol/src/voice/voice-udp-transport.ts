@@ -19,7 +19,6 @@ import { type Logger } from '@munode/common';
 // Constants
 const HANDSHAKE_RETRY_INTERVAL_MS = 2000;
 const HANDSHAKE_MAX_ATTEMPTS = 5;
-const ENCRYPTED_PACKET_CACHE_TTL_MS = 5000;
 const HEARTBEAT_INTERVAL_MS = 10000; // Heartbeat interval: 10 seconds
 const HEARTBEAT_TIMEOUT_MS = 30000; // Connection timeout: 30 seconds without response
 const RECONNECT_DELAY_MS = 3000; // Delay before reconnect attempt
@@ -681,7 +680,6 @@ export class VoiceUDPTransport extends EventEmitter {
     }
 
     // 发送
-    this.logger.info(`sending to edge: ${edgeId}`, endpoint);
     this.sendPacket(finalPacket, endpoint.host, endpoint.port);
   }
 
