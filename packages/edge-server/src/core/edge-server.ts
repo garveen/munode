@@ -220,6 +220,46 @@ export class EdgeServer extends EventEmitter {
         this.handleSessionExpired();
       });
     }
+    
+    // Listen for shutdown requests from Hub (via hub-message-handler)
+    this.handlerFactory.messageHandler.on('shutdownRequest', (params: { reason: string; graceful: boolean }) => {
+      void this.handleShutdownRequest(params);
+    });
+  }
+
+  /**
+   * Handle shutdown request from Hub
+   * Performs cold restart after disconnecting all clients
+   */
+  private async handleShutdownRequest(params: { reason: string; graceful: boolean }): Promise<void> {
+    this.logger.error('=== Shutdown request received from Hub ===');
+    this.logger.error(`Reason: ${params.reason}`);
+    this.logger.error(`Graceful: ${params.graceful}`);
+    
+    try {
+      // Use the reconnect manager to perform full disconnect which includes:
+      // 1. Disconnect all clients
+      // 2. Disconnect from peers
+      // 3. Disconnect from Hub
+      // 4. Clear state
+      // 5. Rejoin cluster
+      if (this.clusterManager) {
+        // Access the reconnect manager (it's private but we need it)
+        const reconnectManager = (this.clusterManager as any).reconnectManager;
+        if (reconnectManager) {
+          await reconnectManager.performFullDisconnect();
+          this.logger.info('=== Cold restart completed successfully ===');
+        } else {
+          this.logger.error('ReconnectManager not available, falling back to manual disconnect');
+          await this.handleSessionExpired(); // Use the existing cold restart logic
+        }
+      } else {
+        this.logger.error('ClusterManager not available, cannot perform cold restart');
+      }
+    } catch (error) {
+      this.logger.error('Failed to handle shutdown request:', error);
+      throw error;
+    }
   }
 
   /**
