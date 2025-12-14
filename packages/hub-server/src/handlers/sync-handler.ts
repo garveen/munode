@@ -190,27 +190,23 @@ export class SyncHandler implements ISyncHandler {
   }
 
   /**
-   * Helper method to convert database channel to protocol ChannelData with links
+   * Helper method to convert database/manager channel to protocol ChannelData with links
    * @private
    */
-  private async mapChannelToProtocol(ch: {
-    id: number;
-    name: string;
-    position: number;
-    max_users: number;
-    parent_id: number;
-    inherit_acl: number;
-    description_blob?: string;
-  }): Promise<ChannelData> {
-    const links = await this.loadChannelLinks(ch.id);
+  private async mapChannelToProtocol(ch: 
+    | { id: number; name: string; position: number; max_users: number; parent_id: number; inherit_acl: number; description_blob?: string }
+    | { channel_id: number; name: string; position: number; max_users: number; parent_id: number; inherit_acl: boolean; description_blob?: string }
+  ): Promise<ChannelData> {
+    const channelId = 'channel_id' in ch ? ch.channel_id : ch.id;
+    const links = await this.loadChannelLinks(channelId);
 
     return {
-      channel_id: ch.id,
-      name: ch.id === 0 ? (this.factory.getConfig().registerName || 'Root') : ch.name,
+      channel_id: channelId,
+      name: channelId === 0 ? (this.factory.getConfig().registerName || 'Root') : ch.name,
       parent_id: ch.parent_id >= 0 ? ch.parent_id : undefined, // Skip negative parent_ids (root channel)
       position: ch.position,
       max_users: ch.max_users,
-      inherit_acl: ch.inherit_acl === 1, // 转换数字到布尔值
+      inherit_acl: typeof ch.inherit_acl === 'boolean' ? ch.inherit_acl : (ch.inherit_acl === 1),
       description: ch.description_blob,
       temporary: false, // 从数据库加载的频道都不是临时频道
       links,

@@ -1,17 +1,9 @@
 import type { Logger } from '@munode/common';
 import type { HubDatabase } from './database.js';
+import type { ACLData } from '@munode/protocol';
 
-
-export interface ACLData {
-  id: number;
-  channel_id: number;
-  user_id?: number;
-  group?: string;
-  apply_here: boolean;
-  apply_subs: boolean;
-  allow: number;
-  deny: number;
-}
+// Use ACLData from protocol directly - it has all fields we need
+// (id, channel_id, user_id, group, apply_here, apply_subs, allow, deny)
 
 export interface CreateACLRequest {
   channel_id: number;

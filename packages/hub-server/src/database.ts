@@ -9,7 +9,7 @@ import type { DatabaseConfig, RegisteredEdge, VoiceTargetConfig } from './types.
 import { GlobalSession } from '@munode/protocol';
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import { ACLData } from './acl-manager.js';
+import type { ACLData } from '@munode/protocol';
 import type { ChannelGroupData, ChannelGroupMemberData } from './channel-group-manager.js';
 
 /**

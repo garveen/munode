@@ -2,6 +2,7 @@ import type { Logger } from '@munode/common';
 import { HubPermissionChecker, Permission } from '../permission-checker.js';
 import { HubHandlerFactory } from '../factory.js';
 import type { EdgeNotificationParams } from '@munode/protocol';
+import { getChannelId } from '../utils/channel-utils.js';
 
 
 /**
@@ -141,7 +142,7 @@ export class TextMessageHandler implements ITextMessageHandler {
                 ? await channelManager.getChildChannels(channelId)
                 : await databaseOperations.getChildChannels(channelId);
               for (const child of children) {
-                await collectChannels(child.id);
+                await collectChannels(getChannelId(child));
               }
             }
           };

@@ -40,8 +40,9 @@ export enum Permission {
 
 /**
  * 频道信息（简化版本，仅用于权限计算）
+ * Note: This is a minimal version for permission checking, different from PermissionChannelInfo in @munode/protocol
  */
-export interface ChannelInfo {
+export interface PermissionChannelInfo {
   id: number;
   parent_id: number;
   inherit_acl: boolean;
@@ -78,7 +79,7 @@ export class HubPermissionChecker {
   private database: HubDatabase;
   private channelGroupManager: ChannelGroupManager;
   private aclCache: Map<string, Permission> = new Map();
-  private channelTreeCache: Map<number, ChannelInfo> | null = null;
+  private channelTreeCache: Map<number, PermissionChannelInfo> | null = null;
   private channelACLCache: Map<number, ACLEntry[]> = new Map();
   private logger: Logger;
 
@@ -213,8 +214,8 @@ export class HubPermissionChecker {
    * 检查用户是否是组成员
    */
   private async groupMemberCheck(
-    origChannel: ChannelInfo,
-    ctx: ChannelInfo,
+    origChannel: PermissionChannelInfo,
+    ctx: PermissionChannelInfo,
     group: string,
     user: UserInfo
   ): Promise<boolean> {
@@ -281,9 +282,9 @@ export class HubPermissionChecker {
   /**
    * 构建频道链（从当前频道到根频道）
    */
-  private async buildChannelChain(channel: ChannelInfo): Promise<ChannelInfo[]> {
-    const chain: ChannelInfo[] = [];
-    let current: ChannelInfo | null = channel;
+  private async buildChannelChain(channel: PermissionChannelInfo): Promise<PermissionChannelInfo[]> {
+    const chain: PermissionChannelInfo[] = [];
+    let current: PermissionChannelInfo | null = channel;
 
     while (current) {
       chain.unshift(current);
@@ -299,7 +300,7 @@ export class HubPermissionChecker {
   /**
    * 获取频道信息（带缓存）
    */
-  private async getChannelInfo(channelId: number): Promise<ChannelInfo | null> {
+  private async getChannelInfo(channelId: number): Promise<PermissionChannelInfo | null> {
     // 尝试从缓存获取
     if (this.channelTreeCache) {
       const cached = this.channelTreeCache.get(channelId);
@@ -314,7 +315,7 @@ export class HubPermissionChecker {
       return null;
     }
 
-    const channelInfo: ChannelInfo = {
+    const channelInfo: PermissionChannelInfo = {
       id: channel.id,
       parent_id: channel.parent_id,
       inherit_acl: channel.inherit_acl === 1, // 转换数字到布尔值

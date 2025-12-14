@@ -1,9 +1,8 @@
 import type { Logger } from 'winston';
-import type { BanData } from '@munode/protocol';
+import type { BanData, ChannelData, ACLData } from '@munode/protocol';
 import * as crypto from 'crypto';
 import * as ipaddr from 'ipaddr.js';
 import type { ChannelManager } from '../models/channel.js';
-import type {ChannelData} from '@munode/protocol';
 import type { ChannelInfo } from '@munode/protocol';
 
 // ==================
@@ -56,17 +55,7 @@ export interface ChannelNode extends ChannelData {
   links: number[]; // 链接的频道 ID
 }
 
-// ACL 数据类型
-export interface ACLData {
-  id?: number;
-  channel_id: number;
-  user_id?: number;
-  group?: string;
-  apply_here: boolean;
-  apply_subs: boolean;
-  allow: number;
-  deny: number;
-}
+// Note: ACLData is now imported from @munode/protocol to avoid duplication
 
 // 同步更新类型
 export interface SyncUpdate {

@@ -156,7 +156,7 @@ export type {
   ChannelRemovedParams,
   ChannelUpdatedParams,
   SyncVoiceTargetParams,
-  ChannelDataInput,
+  // Note: ChannelDataInput removed - use ChannelData from hub-edge-types.ts
 } from './rpc/rpc-channel.js';
 
 // Typed RPC (Legacy - will be deprecated)
