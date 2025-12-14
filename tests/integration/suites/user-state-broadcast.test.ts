@@ -26,15 +26,15 @@ describe('User State Broadcast Tests', () => {
 
   describe('User Join Broadcast', () => {
     it('should not send duplicate UserState when a user joins', async () => {
-      // 场景：
-      // 1. 用户 A 连接到 Edge-1
-      // 2. 用户 B 连接到 Edge-1
-      // 预期：用户 A 应该只收到一次用户 B 的 UserState 消息，不应有重复
+      // Scenario:
+      // 1. User A connects to Edge-1
+      // 2. User B connects to Edge-1
+      // Expected: User A should only receive User B's UserState message once, no duplicates
 
       const clientA = new MumbleClient();
       const clientB = new MumbleClient();
 
-      // 用户 A 连接
+      // User A connects
       console.log('[TEST] Step 1: Connecting User A to Edge-1');
       await clientA.connect({
         host: 'localhost',
@@ -50,14 +50,14 @@ describe('User State Broadcast Tests', () => {
       expect(sessionA).toBeDefined();
       console.log(`[TEST] User A connected with session ${sessionA?.session}`);
 
-      // 等待认证完成
+      // Wait for authentication to complete
       await sleep(500);
 
-      // 记录用户 A 初始看到的用户数量（应该只有自己）
+      // Record initial user count seen by User A (should only see themselves)
       const initialUsers = clientA.getUsers();
       console.log(`[TEST] Initial users seen by A: ${initialUsers.length}`);
 
-      // 用户 B 连接
+      // User B connects
       console.log('[TEST] Step 2: Connecting User B to Edge-1');
       await clientB.connect({
         host: 'localhost',
@@ -73,42 +73,42 @@ describe('User State Broadcast Tests', () => {
       expect(sessionB).toBeDefined();
       console.log(`[TEST] User B connected with session ${sessionB?.session}`);
 
-      // 等待用户状态同步
+      // Wait for user state sync
       await sleep(500);
 
-      // 验证：用户 A 应该看到用户 B
+      // Verify: User A should see User B
       const usersSeenByA = clientA.getUsers();
       console.log(`[TEST] Users seen by A after B joined: ${usersSeenByA.map(u => `${u.name}(${u.session})`).join(', ')}`);
       
       const userBVisibleToA = usersSeenByA.some(u => u.name === 'user2' && u.session === sessionB?.session);
       expect(userBVisibleToA).toBe(true);
       
-      // 验证：用户 B 应该看到用户 A
+      // Verify: User B should see User A
       const usersSeenByB = clientB.getUsers();
       console.log(`[TEST] Users seen by B: ${usersSeenByB.map(u => `${u.name}(${u.session})`).join(', ')}`);
       
       const userAVisibleToB = usersSeenByB.some(u => u.name === 'user1' && u.session === sessionA?.session);
       expect(userAVisibleToB).toBe(true);
 
-      // 注意：我们无法直接检测是否有重复的 UserState 消息，因为客户端只保留最终状态
-      // 但是如果有重复，客户端应该仍然正常工作，所以这个测试主要验证基本功能
-      // 重复消息的检测需要在 Edge 服务器日志中手动验证
+      // Note: We cannot directly detect duplicate UserState messages since clients only keep final state
+      // But if duplicates exist, clients should still work correctly, so this test mainly verifies basic functionality
+      // Duplicate detection requires manual verification in Edge server logs
 
-      // 清理
+      // Cleanup
       await clientA.disconnect();
       await clientB.disconnect();
     });
 
     it('should correctly broadcast UserState when user joins from different Edge', async () => {
-      // 场景：
-      // 1. 用户 A 连接到 Edge-1
-      // 2. 用户 B 连接到 Edge-2
-      // 预期：两个用户应该能互相看到，且没有重复广播
+      // Scenario:
+      // 1. User A connects to Edge-1
+      // 2. User B connects to Edge-2
+      // Expected: Both users should see each other, without duplicate broadcasts
 
       const clientA = new MumbleClient();
       const clientB = new MumbleClient();
 
-      // 用户 A 连接到 Edge-1
+      // User A connects to Edge-1
       console.log('[TEST] Step 1: Connecting User A to Edge-1');
       await clientA.connect({
         host: 'localhost',
@@ -124,10 +124,10 @@ describe('User State Broadcast Tests', () => {
       expect(sessionA).toBeDefined();
       console.log(`[TEST] User A connected with session ${sessionA?.session}`);
 
-      // 等待用户 A 被报告到 Hub
+      // Wait for User A to be reported to Hub
       await sleep(500);
 
-      // 用户 B 连接到 Edge-2
+      // User B connects to Edge-2
       console.log('[TEST] Step 2: Connecting User B to Edge-2');
       await clientB.connect({
         host: 'localhost',
@@ -143,24 +143,24 @@ describe('User State Broadcast Tests', () => {
       expect(sessionB).toBeDefined();
       console.log(`[TEST] User B connected with session ${sessionB?.session}`);
 
-      // 等待用户状态同步
+      // Wait for user state sync
       await sleep(500);
 
-      // 验证：用户 A 应该看到用户 B
+      // Verify: User A should see User B
       const usersSeenByA = clientA.getUsers();
       console.log(`[TEST] Users seen by A: ${usersSeenByA.map(u => `${u.name}(${u.session})`).join(', ')}`);
       
       const userBVisibleToA = usersSeenByA.some(u => u.name === 'guest' && u.session === sessionB?.session);
       expect(userBVisibleToA).toBe(true);
 
-      // 验证：用户 B 应该看到用户 A
+      // Verify: User B should see User A
       const usersSeenByB = clientB.getUsers();
       console.log(`[TEST] Users seen by B: ${usersSeenByB.map(u => `${u.name}(${u.session})`).join(', ')}`);
       
       const userAVisibleToB = usersSeenByB.some(u => u.name === 'admin' && u.session === sessionA?.session);
       expect(userAVisibleToB).toBe(true);
 
-      // 清理
+      // Cleanup
       await clientA.disconnect();
       await clientB.disconnect();
     });
