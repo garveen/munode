@@ -3,6 +3,7 @@ import { mumbleproto } from '@munode/protocol';
 import type { HubHandlerFactory } from '../factory.js';
 import type { RPCParams, RPCResult } from '@munode/protocol';
 import { HubPermissionChecker, Permission } from '../permission-checker.js';
+import { getChannelId } from '../utils/channel-utils.js';
 
 
 /**
@@ -120,8 +121,8 @@ export class ACLHandler implements IACLHandler {
             : await this.factory.getDatabase().getChannel(currentChannelId);
           if (!ch) break;
 
-          const channelId = 'channel_id' in ch ? ch.channel_id : ch.id;
-          const inheritAcl = 'channel_id' in ch ? Boolean(ch.inherit_acl) : Boolean(ch.inherit_acl);
+          const channelId = getChannelId(ch);
+          const inheritAcl = Boolean(ch.inherit_acl);
           const parentId = ch.parent_id;
           
           channelsInChain.unshift({ id: channelId, inherit_acl: inheritAcl, parent_id: parentId });

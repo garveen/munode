@@ -193,17 +193,11 @@ export class SyncHandler implements ISyncHandler {
    * Helper method to convert database/manager channel to protocol ChannelData with links
    * @private
    */
-  private async mapChannelToProtocol(ch: {
-    id?: number;
-    channel_id?: number;
-    name: string;
-    position: number;
-    max_users: number;
-    parent_id: number;
-    inherit_acl: number | boolean;
-    description_blob?: string;
-  }): Promise<ChannelData> {
-    const channelId = ch.channel_id ?? ch.id ?? 0;
+  private async mapChannelToProtocol(ch: 
+    | { id: number; name: string; position: number; max_users: number; parent_id: number; inherit_acl: number; description_blob?: string }
+    | { channel_id: number; name: string; position: number; max_users: number; parent_id: number; inherit_acl: boolean; description_blob?: string }
+  ): Promise<ChannelData> {
+    const channelId = 'channel_id' in ch ? ch.channel_id : ch.id;
     const links = await this.loadChannelLinks(channelId);
 
     return {
