@@ -175,11 +175,11 @@ export class VoiceUDPTransport extends EventEmitter {
     this.remoteEndpoints.set(edgeId, { host, port });
     
     const now = Date.now();
-    // 确定是否为主动方（active side）
-    // 规则：ID较小的一方作为主动方发送心跳
+    // Determine if this is the active side
+    // Rule: The edge with the smaller ID acts as the active side for heartbeats
     const isActiveSide = this.localEdgeId < edgeId;
     
-    // 初始化连接状态
+    // Initialize connection status
     this.connectionStatus.set(edgeId, {
       edgeId,
       connected: false,
@@ -198,7 +198,7 @@ export class VoiceUDPTransport extends EventEmitter {
       `(role: ${isActiveSide ? 'active/initiator' : 'passive/responder'})`
     );
     
-    // 发起握手（无论主动还是被动方都需要握手）
+    // Initiate handshake (both active and passive sides need handshake)
     this.initiateHandshake(edgeId);
     
     // 启动心跳和连接检查（如果还没启动）
@@ -424,7 +424,7 @@ export class VoiceUDPTransport extends EventEmitter {
   private sendHeartbeats(): void {
     const now = Date.now();
     for (const [edgeId, status] of this.connectionStatus) {
-      // 只有主动方且连接已建立时发送心跳
+      // Only active side sends heartbeat when connection is established
       if (status.handshakeComplete && !status.reconnecting && status.isActiveSide) {
         const endpoint = this.remoteEndpoints.get(edgeId);
         if (endpoint) {
@@ -470,7 +470,7 @@ export class VoiceUDPTransport extends EventEmitter {
         status.handshakeComplete = false;
         this.emit('edge-disconnected', edgeId);
         
-        // 发起重连（双方都尝试重连）
+        // Initiate reconnection (both sides attempt reconnection)
         this.initiateReconnect(edgeId);
       }
     }

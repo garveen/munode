@@ -237,22 +237,10 @@ export class EdgeServer extends EventEmitter {
     this.logger.error(`Graceful: ${params.graceful}`);
     
     try {
-      // Use the reconnect manager to perform full disconnect which includes:
-      // 1. Disconnect all clients
-      // 2. Disconnect from peers
-      // 3. Disconnect from Hub
-      // 4. Clear state
-      // 5. Rejoin cluster
+      // Use the cluster manager's public method to perform cold restart
       if (this.clusterManager) {
-        // Access the reconnect manager (it's private but we need it)
-        const reconnectManager = (this.clusterManager as any).reconnectManager;
-        if (reconnectManager) {
-          await reconnectManager.performFullDisconnect();
-          this.logger.info('=== Cold restart completed successfully ===');
-        } else {
-          this.logger.error('ReconnectManager not available, falling back to manual disconnect');
-          await this.handleSessionExpired(); // Use the existing cold restart logic
-        }
+        await this.clusterManager.performColdRestart();
+        this.logger.info('=== Cold restart completed successfully ===');
       } else {
         this.logger.error('ClusterManager not available, cannot perform cold restart');
       }

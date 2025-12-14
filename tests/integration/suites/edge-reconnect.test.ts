@@ -17,8 +17,8 @@ describe('Edge Reconnection Tests', () => {
   let testEnv: TestEnvironment;
   
   beforeAll(async () => {
-    testEnv = await setupTestEnvironment({
-      edges: 2, // We need at least 2 edges for this test
+    testEnv = await setupTestEnvironment(8080, {
+      startEdge2: true, // We need at least 2 edges for this test
     });
     console.log('Test environment setup complete');
   }, 60000);
