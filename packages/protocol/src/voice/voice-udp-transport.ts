@@ -440,28 +440,30 @@ export class VoiceUDPTransport extends EventEmitter {
   }
   
   /**
-   * 检查连接状态，处理超时和重连
+   * Check connection status, handle timeouts and reconnection
    * 
-   * 断开检测策略：
-   * - 主动方：如果超过HEARTBEAT_TIMEOUT_MS未收到PONG，判定断开
-   * - 被动方：如果超过HEARTBEAT_TIMEOUT_MS未收到PING，判定断开
-   * - 双方都需要检测超时
+   * Disconnection detection strategy:
+   * - Active side: If no PONG received for HEARTBEAT_TIMEOUT_MS, consider disconnected
+   * - Passive side: If no PING received for HEARTBEAT_TIMEOUT_MS, consider disconnected
+   * - Both sides detect timeout independently
    * 
-   * 重连策略：
-   * - 无论主动方还是被动方，检测到断开都要尝试重连
-   * - 这样即使主动方故障，被动方也能发起重连
+   * Reconnection strategy:
+   * - Both active and passive sides attempt reconnection when timeout detected
+   * - This ensures reconnection even if active side fails
+   * - Connection is considered restored if EITHER direction succeeds
+   * - Only report to Hub if BOTH directions fail after retries
    */
   private checkConnections(): void {
     const now = Date.now();
     for (const [edgeId, status] of this.connectionStatus) {
       if (!status.handshakeComplete) {
-        continue; // 跳过未完成握手的连接
+        continue; // Skip connections that haven't completed handshake
       }
       
       const timeSinceLastHeartbeat = now - status.lastHeartbeatReceived;
       
       if (timeSinceLastHeartbeat > HEARTBEAT_TIMEOUT_MS && status.connected) {
-        // 连接超时
+        // Connection timeout
         const role = status.isActiveSide ? 'active/initiator' : 'passive/responder';
         this.logger.warn(
           `Edge ${edgeId} connection timeout (no heartbeat for ${timeSinceLastHeartbeat}ms, ` +
@@ -478,7 +480,10 @@ export class VoiceUDPTransport extends EventEmitter {
   }
   
   /**
-   * 发起重连
+   * Initiate reconnection attempt
+   * 
+   * Note: Each side independently attempts reconnection when it detects timeout.
+   * If the other direction succeeds first, this reconnection will be cancelled.
    */
   private initiateReconnect(edgeId: number): void {
     const status = this.connectionStatus.get(edgeId);
@@ -491,7 +496,7 @@ export class VoiceUDPTransport extends EventEmitter {
     
     this.logger.info(`Initiating reconnect to edge ${edgeId}`);
     
-    // 延迟后开始重连
+    // Delay before starting reconnection
     setTimeout(() => {
       this.performReconnect(edgeId);
     }, RECONNECT_DELAY_MS);
@@ -520,11 +525,25 @@ export class VoiceUDPTransport extends EventEmitter {
     this.sendPacket(handshakePacket, endpoint.host, endpoint.port);
     this.stats.handshakeSent++;
     
-    // 如果重连次数达到上限，通知Hub
+    // 如果重连次数达到上限，检查连接状态再决定是否报告失败
     if (status.reconnectAttempts >= HANDSHAKE_MAX_ATTEMPTS) {
-      this.logger.error(`Failed to reconnect to edge ${edgeId} after ${HANDSHAKE_MAX_ATTEMPTS} attempts`);
-      status.reconnecting = false;
-      this.emit('reconnect-failed', edgeId);
+      // 重要：只有在连接仍然断开的情况下才报告失败
+      // 如果另一个方向已经成功重连（收到对方的握手包），则不报告失败
+      if (!status.connected || !status.handshakeComplete) {
+        this.logger.error(
+          `Failed to reconnect to edge ${edgeId} after ${HANDSHAKE_MAX_ATTEMPTS} attempts, ` +
+          `connection still broken, notifying Hub`
+        );
+        status.reconnecting = false;
+        this.emit('reconnect-failed', edgeId);
+      } else {
+        this.logger.info(
+          `Reconnect attempts to edge ${edgeId} exhausted, but connection was restored ` +
+          `from the other direction, no need to notify Hub`
+        );
+        status.reconnecting = false;
+        status.reconnectAttempts = 0;
+      }
       return;
     }
     
