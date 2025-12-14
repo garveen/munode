@@ -16,7 +16,7 @@ describe('User State Broadcast Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {
-    // 使用独立的端口范围避免冲突
+    // Use independent port range to avoid conflicts
     testEnv = await setupTestEnvironment(8300);
   }, 60000);
 

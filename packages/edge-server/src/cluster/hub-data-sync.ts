@@ -122,7 +122,7 @@ export class HubDataManager {
         this.handlerFactory.stateManager.addRemoteUser(params.session_id, params.edge_id, params.channel_id);
       }
 
-      // 广播给所有本地已认证的客户端
+      // Broadcast to all local authenticated clients
       const allClients = this.handlerFactory.clientManager.getAllClients();
       let broadcastCount = 0;
       
