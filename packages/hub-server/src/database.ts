@@ -62,7 +62,7 @@ export class HubDatabase {
     try {
       await this.manager.init(this.config.path);
     } catch (error) {
-      console.error('cannot open database file:', this.config.path);
+      this.logger.error('cannot open database file:', this.config.path);
       throw error;
     }
 
@@ -145,10 +145,10 @@ export class HubDatabase {
       -- 频道链接表 (多对多关系)
       CREATE TABLE IF NOT EXISTS channel_links (
         channel_id INTEGER NOT NULL,
-        target_id INTEGER NOT NULL,
-        PRIMARY KEY (channel_id, target_id),
+        link_id INTEGER NOT NULL,
+        PRIMARY KEY (channel_id, link_id),
         FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
-        FOREIGN KEY (target_id) REFERENCES channels(id) ON DELETE CASCADE
+        FOREIGN KEY (link_id) REFERENCES channels(id) ON DELETE CASCADE
       );
 
       -- ACL 表 (与 Go acl.go 的 ACL struct 兼容)
@@ -907,7 +907,7 @@ export class HubDatabase {
    */
   async getChannelLinks(channel_id: number): Promise<number[]> {
     const stmt = await this.prepare(`
-      SELECT target_id FROM channel_links WHERE channel_id = ?
+      SELECT link_id as target_id FROM channel_links WHERE channel_id = ?
     `);
     const rows = await stmt.all(channel_id) as Array<{ target_id: number }>;
     return rows.map((row) => row.target_id);
@@ -918,7 +918,7 @@ export class HubDatabase {
    */
   async linkChannels(channel_id: number, target_id: number): Promise<void> {
     const stmt = await this.prepare(`
-      INSERT OR IGNORE INTO channel_links (channel_id, target_id)
+      INSERT OR IGNORE INTO channel_links (channel_id, link_id)
       VALUES (?, ?), (?, ?)
     `);
     await stmt.run(channel_id, target_id, target_id, channel_id);
@@ -930,8 +930,8 @@ export class HubDatabase {
   async unlinkChannels(channel_id: number, target_id: number): Promise<void> {
     const stmt = await this.prepare(`
       DELETE FROM channel_links 
-      WHERE (channel_id = ? AND target_id = ?)
-         OR (channel_id = ? AND target_id = ?)
+      WHERE (channel_id = ? AND link_id = ?)
+         OR (channel_id = ? AND link_id = ?)
     `);
     await stmt.run(channel_id, target_id, target_id, channel_id);
   }
