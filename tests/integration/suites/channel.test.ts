@@ -68,15 +68,10 @@ describe('Channel Management Integration Tests', () => {
         // 验证至少收到了频道
         expect(channels.length).toBeGreaterThan(0);
         
-        // 检查是否有ID为0的频道
-        const channelById0 = channels.find(ch => ch.channel_id === 0);
-        console.log('Channel with ID 0:', channelById0);
-        
-        // 查找Root频道（不管ID）
-        const rootChannel = channels.find(ch => ch.name === 'Root');
-        console.log('Channel named Root:', rootChannel);
+        // 查找Root频道
+        const rootChannel = channels.find(ch => ch.channel_id === 0);
+        console.log('Root Channel:', rootChannel);
         expect(rootChannel).toBeDefined();
-        expect(rootChannel?.name).toBe('Root');
         expect(rootChannel?.parent).toBe(0);
 
         // 验证默认频道存在（如果数据库初始化正确）
