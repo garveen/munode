@@ -9,7 +9,7 @@ import type { DatabaseConfig, RegisteredEdge, VoiceTargetConfig } from './types.
 import { GlobalSession } from '@munode/protocol';
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import { HubACLData } from './acl-manager.js';
+import type { ACLData } from '@munode/protocol';
 import type { ChannelGroupData, ChannelGroupMemberData } from './channel-group-manager.js';
 
 /**
@@ -939,15 +939,15 @@ export class HubDatabase {
   /**
    * 获取所有频道的 ACL（用于同步）
    */
-  async getAllChannelACLs(): Promise<HubACLData[]> {
+  async getAllChannelACLs(): Promise<ACLData[]> {
     const query = `
       SELECT * FROM acls
       WHERE deleted_at IS NULL
       ORDER BY channel_id ASC, id ASC
     `;
     const stmt = await this.prepare(query);
-    const result = await stmt.all() as HubACLData[];
-    result.forEach((acl: HubACLData) => {
+    const result = await stmt.all() as ACLData[];
+    result.forEach((acl: ACLData) => {
       if (acl.user_id === 0) {
         delete acl.user_id;
       }
@@ -958,7 +958,7 @@ export class HubDatabase {
   /**
    * 获取指定频道的 ACL
    */
-  async getChannelACLs(channel_id: number): Promise<HubACLData[]> {
+  async getChannelACLs(channel_id: number): Promise<ACLData[]> {
     const query = `
       SELECT * FROM acls
       WHERE channel_id = ? AND deleted_at IS NULL
@@ -967,8 +967,8 @@ export class HubDatabase {
     const params = [channel_id];
 
     const stmt = await this.prepare(query);
-    const result = await stmt.all(...params) as HubACLData[];
-    result.forEach((acl: HubACLData) => {
+    const result = await stmt.all(...params) as ACLData[];
+    result.forEach((acl: ACLData) => {
       if (acl.user_id === 0) {
         delete acl.user_id;
       }
@@ -1011,7 +1011,7 @@ export class HubDatabase {
   /**
    * 更新 ACL
    */
-  async updateACL(id: number, updates: Partial<HubACLData>): Promise<void> {
+  async updateACL(id: number, updates: Partial<ACLData>): Promise<void> {
     const fields = Object.keys(updates)
       .map((key) => (key === 'group' ? `"group" = ?` : `${key} = ?`))
       .join(', ');

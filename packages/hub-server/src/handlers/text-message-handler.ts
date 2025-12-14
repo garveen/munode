@@ -141,7 +141,8 @@ export class TextMessageHandler implements ITextMessageHandler {
                 ? await channelManager.getChildChannels(channelId)
                 : await databaseOperations.getChildChannels(channelId);
               for (const child of children) {
-                await collectChannels(child.id);
+                const childId = 'channel_id' in child ? child.channel_id : child.id;
+                await collectChannels(childId);
               }
             }
           };

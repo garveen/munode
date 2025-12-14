@@ -71,7 +71,7 @@ export class ChannelStateHandler implements IChannelStateHandler {
         if (channelStateObj.name) {
           // 生成新的频道ID
           const allChannels = channelManager?.getAllChannels() || [];
-          const maxId = allChannels.reduce((max, ch) => Math.max(max, ch.id), 0);
+          const maxId = allChannels.reduce((max, ch) => Math.max(max, ch.channel_id), 0);
           channelId = maxId + 1;
           isNewChannel = true;
         } else {

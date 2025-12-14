@@ -1,17 +1,12 @@
 import type { Logger } from '@munode/common';
 import type { HubDatabase } from './database.js';
+import type { ChannelData } from '@munode/protocol';
 
 /**
- * Internal channel data representation for Hub database operations
- * Note: This is different from @munode/protocol's ChannelData which uses channel_id
+ * Internal channel data with description_blob for database operations
+ * Extends ChannelData from protocol and adds database-specific fields
  */
-export interface HubChannelData {
-  id: number;
-  name: string;
-  position: number;
-  max_users: number;
-  parent_id: number;
-  inherit_acl: boolean;
+export interface HubChannelData extends Omit<ChannelData, 'description' | 'temporary' | 'links'> {
   description_blob?: string;
 }
 
@@ -52,7 +47,7 @@ export class ChannelManager {
     const dbChannels = await this.database.getAllChannels();
     for (const ch of dbChannels) {
       const channelData: HubChannelData = {
-        id: ch.id,
+        channel_id: ch.id, // Map database id to channel_id
         name: ch.name,
         parent_id: ch.parent_id,
         position: ch.position,
@@ -74,7 +69,7 @@ export class ChannelManager {
 
     if (dbCreated) {
       const created: HubChannelData = {
-        id: dbCreated.id,
+        channel_id: dbCreated.id,
         name: dbCreated.name,
         parent_id: dbCreated.parent_id,
         position: dbCreated.position,
@@ -98,7 +93,7 @@ export class ChannelManager {
 
     if (dbUpdated) {
       const updated: HubChannelData = {
-        id: dbUpdated.id,
+        channel_id: dbUpdated.id,
         name: dbUpdated.name,
         parent_id: dbUpdated.parent_id,
         position: dbUpdated.position,
@@ -140,7 +135,7 @@ export class ChannelManager {
   async getChildChannels( parent_id: number): Promise<HubChannelData[]> {
     const dbChannels = await this.database.getChildChannels(parent_id);
     return dbChannels.map(ch => ({
-      id: ch.id,
+      channel_id: ch.id,
       name: ch.name,
       parent_id: ch.parent_id,
       position: ch.position,
