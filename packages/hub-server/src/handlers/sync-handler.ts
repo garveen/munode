@@ -133,21 +133,10 @@ export class SyncHandler implements ISyncHandler {
       dbChannels = await this.factory.getDatabase().getAllChannels();
     }
 
-    // DEBUG: 打印从数据库/ChannelManager获取的原始数据
-    this.logger.info(`[handleGetChannels] Got ${dbChannels.length} channels from ${this.factory.getChannelManager() ? 'ChannelManager' : 'Database'}`);
-    for (const ch of dbChannels) {
-      this.logger.info(`[handleGetChannels] Raw channel: id=${ch.id}, name=${ch.name}, parent_id=${ch.parent_id}, keys=${Object.keys(ch).join(',')}`);
-    }
-
     // 映射数据库字段到protocol字段，并加载每个频道的链接
     const channels: ChannelData[] = await Promise.all(
       dbChannels.map(ch => this.mapChannelToProtocol(ch))
     );
-
-    // DEBUG: 打印映射后的数据
-    for (const ch of channels) {
-      this.logger.info(`[handleGetChannels] Mapped channel: channel_id=${ch.channel_id}, name=${ch.name}, parent_id=${ch.parent_id}`);
-    }
 
     return { success: true, channels };
   }
