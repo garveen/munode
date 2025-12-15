@@ -111,14 +111,18 @@ export class HubDataManager {
     try {
       this.logger.info(`Remote user joined: ${params.username} (session ${params.session_id}) from Edge ${params.edge_id}`);
 
-      // 不要处理来自本Edge的用户
-      if (params.edge_id !== this.handlerFactory.config.server_id && this.handlerFactory.stateManager) {
+      // Skip broadcasting for local users - they were already broadcasted during authentication
+      if (params.edge_id === this.handlerFactory.config.server_id) {
+        this.logger.debug(`Skipping broadcast for local user ${params.username} - already broadcasted during authentication`);
+        return;
+      }
+
+      // Track remote user state
+      if (this.handlerFactory.stateManager) {
         this.handlerFactory.stateManager.addRemoteUser(params.session_id, params.edge_id, params.channel_id);
       }
 
-      // 追踪远程用户状态
-
-      // 广播给所有本地已认证的客户端
+      // Broadcast to all local authenticated clients
       const allClients = this.handlerFactory.clientManager.getAllClients();
       let broadcastCount = 0;
       
