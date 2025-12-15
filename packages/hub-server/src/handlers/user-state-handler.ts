@@ -210,6 +210,14 @@ export class UserStateHandler implements IUserStateHandler {
         broadcast = true;
 
         this.logger.info(`User ${targetGlobalSession.username} moved from channel ${oldChannelId} to ${userStateObj.channel_id}`);
+        
+        // 如果用户已注册，保存最后所在频道（参考 Go 实现）
+        if (targetGlobalSession.user_id && targetGlobalSession.user_id > 0) {
+          const db = this.factory.getDatabase();
+          db.setUserLastChannel(targetGlobalSession.user_id, userStateObj.channel_id).catch((error: Error) => {
+            this.logger.error(`Failed to save last channel for user ${targetGlobalSession.user_id}:`, error);
+          });
+        }
       }
 
       // 防止actor != target时应用自我操作字段

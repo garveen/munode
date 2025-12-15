@@ -1,5 +1,5 @@
 import type { Logger } from '@munode/common';
-import { HubPermissionChecker } from '../permission-checker.js';
+import { HubPermissionChecker, Permission } from '../permission-checker.js';
 import { HubHandlerFactory } from '../factory.js';
 import type { RPCParams, RPCResult } from '@munode/protocol';
 
@@ -85,6 +85,44 @@ export class AuthenticationHandler implements IAuthenticationHandler {
 
     // Determine the actual channel for this user
     let actualChannelId = params.channel_id;
+    
+    // 如果用户已注册，尝试获取上次登录的频道（参考 Go 实现）
+    if (params.user_id && params.user_id > 0) {
+      try {
+        const db = this.factory.getDatabase();
+        const lastChannelId = await db.getUserLastChannel(params.user_id);
+        if (lastChannelId > 0) {
+          // 检查频道是否存在
+          const lastChannel = await db.getChannel(lastChannelId);
+          if (lastChannel) {
+            // 检查用户是否有 Enter 权限（参考 Go: CheckLastChannelPermission）
+            const userInfo = {
+              session_id: params.session_id,
+              user_id: params.user_id,
+              cert_hash: params.cert_hash,
+              channel_id: lastChannelId,
+              groups: params.groups || [],
+            };
+            
+            const hasEnterPermission = await permissionChecker.hasPermission(
+              lastChannelId,
+              userInfo,
+              Permission.Enter
+            );
+            
+            if (hasEnterPermission) {
+              actualChannelId = lastChannelId;
+              this.logger.debug(`User ${params.username} (${params.user_id}) restored to last channel ${lastChannelId}`);
+            } else {
+              this.logger.info(`User ${params.username} (${params.user_id}) has no Enter permission for last channel ${lastChannelId}, using default channel`);
+            }
+          }
+        }
+      } catch (error) {
+        this.logger.error(`Failed to get last channel for user ${params.user_id}:`, error);
+        // 继续使用默认频道
+      }
+    }
 
     // Check if Channel Ninja is enabled and the requested channel is in a ninja group
     if (config.channelNinja && config.ninjaChannels?.length > 0 && permissionChecker) {
