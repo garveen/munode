@@ -14,6 +14,7 @@ import type { Logger } from '@munode/common';
 import { RPCChannel } from '../rpc/rpc-channel.js';
 import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
 import type { NotificationParams } from '../rpc/rpc-channel.js';
+import { HeartbeatManager, type HeartbeatConfig, type HeartbeatCallbacks } from '@munode/common';
 
 export interface ConnectionPoolConfig {
   host: string;
@@ -22,6 +23,10 @@ export interface ConnectionPoolConfig {
   poolSize?: number; // Default: 2
   reconnectInterval?: number; // Default: 5000ms
   logger?: Logger;
+  heartbeat?: {
+    interval: number; // Heartbeat interval in ms
+    sendHeartbeat: (connectionId: number, channel: RPCChannel) => Promise<void>;
+  };
 }
 
 interface PooledConnection {
@@ -33,6 +38,7 @@ interface PooledConnection {
   reconnectTimer: NodeJS.Timeout | null;
   reconnectAttempts: number;
   lastReconnectTime: number; // For exponential backoff calculation
+  heartbeatManager?: HeartbeatManager;
 }
 
 /**
@@ -135,6 +141,11 @@ export class ConnectionPool extends EventEmitter implements RPCChannelLike {
         conn.channel = new RPCChannel(ws, this.logger);
         this.setupChannelHandlers(conn);
         
+        // Start heartbeat if configured
+        if (this.config.heartbeat) {
+          this.startHeartbeatForConnection(conn);
+        }
+        
         this.logger?.info(`Connection ${conn.id} established`);
         this.emit('connection-established', conn.id);
         
@@ -185,12 +196,55 @@ export class ConnectionPool extends EventEmitter implements RPCChannelLike {
   }
 
   /**
+   * Start heartbeat for a specific connection
+   */
+  private startHeartbeatForConnection(conn: PooledConnection): void {
+    if (!conn.channel || !this.config.heartbeat) return;
+
+    const heartbeatConfig: HeartbeatConfig = {
+      interval: this.config.heartbeat.interval,
+      timeout: this.config.heartbeat.interval * 3, // Timeout is 3x interval
+      maxRetries: 3,
+    };
+
+    const callbacks: HeartbeatCallbacks = {
+      onTimeout: (connectionId: string) => {
+        this.logger?.warn(`Heartbeat timeout for connection ${connectionId}`);
+        // Close the connection to trigger reconnection
+        if (conn.ws) {
+          conn.ws.close();
+        }
+      },
+      onHeartbeat: (connectionId: string, latency: number) => {
+        this.logger?.debug(`Heartbeat received for connection ${connectionId}, latency: ${latency}ms`);
+      },
+    };
+
+    conn.heartbeatManager = new HeartbeatManager(callbacks, heartbeatConfig);
+
+    conn.heartbeatManager.startSending(conn.id.toString(), async () => {
+      try {
+        await this.config.heartbeat!.sendHeartbeat(conn.id, conn.channel!);
+      } catch (error) {
+        this.logger?.error(`Failed to send heartbeat for connection ${conn.id}:`, error);
+        throw error;
+      }
+    });
+  }
+
+  /**
    * Handle connection close
    */
   private handleConnectionClose(conn: PooledConnection): void {
     conn.isConnected = false;
     conn.channel = null;
     conn.ws = null;
+
+    // Stop heartbeat for this connection
+    if (conn.heartbeatManager) {
+      conn.heartbeatManager.stop(conn.id.toString());
+      conn.heartbeatManager = undefined;
+    }
 
     this.logger?.info(`Connection ${conn.id} closed`);
     this.emit('connection-closed', conn.id);
@@ -350,6 +404,12 @@ export class ConnectionPool extends EventEmitter implements RPCChannelLike {
       if (conn.reconnectTimer) {
         clearTimeout(conn.reconnectTimer);
         conn.reconnectTimer = null;
+      }
+
+      // Stop heartbeat
+      if (conn.heartbeatManager) {
+        conn.heartbeatManager.stop(conn.id.toString());
+        conn.heartbeatManager = undefined;
       }
 
       if (conn.channel) {

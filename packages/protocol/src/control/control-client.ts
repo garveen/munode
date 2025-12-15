@@ -13,6 +13,10 @@ export interface ControlChannelClientConfig {
   logger?: Logger;
   poolSize?: number; // If > 1, use connection pool; if 1 or undefined, use single connection (backward compatible)
   reconnectInterval?: number; // For connection pool reconnection
+  heartbeat?: {
+    interval: number; // Heartbeat interval in ms
+    sendHeartbeat: (connectionId: number, channel: RPCChannel) => Promise<void>;
+  };
 }
 
 export class ControlChannelClient extends EventEmitter {
@@ -60,6 +64,7 @@ export class ControlChannelClient extends EventEmitter {
         poolSize: this.config.poolSize,
         reconnectInterval: this.config.reconnectInterval,
         logger: this.logger,
+        heartbeat: this.config.heartbeat,
       };
 
       this.pool = new ConnectionPool(poolConfig);

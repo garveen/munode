@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import { createHmac } from 'crypto';
 import type { Logger } from 'winston';
-import { ControlChannelClient, ControlChannelClientConfig, type ChannelNotificationParams } from '@munode/protocol';
+import { ControlChannelClient, ControlChannelClientConfig, type ChannelNotificationParams, RPCChannel, hubedgeRpc } from '@munode/protocol';
 import type {
   RPCParams,
   RPCResult,
@@ -25,7 +25,6 @@ export class EdgeControlClient extends EventEmitter {
   private logger: Logger;
   private connected = false;
   private reconnectTimer?: NodeJS.Timeout;
-  private heartbeatTimer?: NodeJS.Timeout;
   private registered = false;
   private isStopping = false; // 标记是否正在停止，避免重连
 
@@ -46,6 +45,12 @@ export class EdgeControlClient extends EventEmitter {
         tls: config.hubServer?.tls ? true : false,
         poolSize: config.hubServer?.poolSize ?? 2, // Default to 2 connections
         reconnectInterval: config.hubServer?.reconnectInterval || 5000,
+        heartbeat: {
+          interval: config.hubServer?.heartbeatInterval || 30000,
+          sendHeartbeat: async (connectionId: number, channel: RPCChannel) => {
+            await this.sendHeartbeatForConnection(connectionId, channel);
+          },
+        },
       };
 
       this.client = new ControlChannelClient(clientConfig);
@@ -70,9 +75,6 @@ export class EdgeControlClient extends EventEmitter {
       // 注册到 Hub
       await this.register();
 
-      // 启动心跳
-      this.startHeartbeat();
-
       this.emit('connected');
     } catch (error) {
       // 只在非停止状态下重连
@@ -91,11 +93,6 @@ export class EdgeControlClient extends EventEmitter {
     this.isStopping = true; // 设置停止标志，阻止重连
     this.connected = false;
     this.registered = false;
-
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = undefined;
-    }
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
@@ -218,9 +215,9 @@ export class EdgeControlClient extends EventEmitter {
   }
 
   /**
-   * 发送心跳
+   * 发送心跳（用于连接池中的特定连接）
    */
-  private async sendHeartbeat(): Promise<void> {
+  private async sendHeartbeatForConnection(connectionId: number, channel: RPCChannel): Promise<void> {
     if (!this.connected || !this.registered) {
       return;
     }
@@ -228,35 +225,31 @@ export class EdgeControlClient extends EventEmitter {
     try {
       const stats = await this.getServerStats();
 
-      const params: RPCParams<'edge.heartbeat'> = {
-        server_id: this.config.server_id,
-        stats,
-      };
+      const request = new hubedgeRpc.TypedRPCRequest({
+        request_id: '',
+        method: 'edge.heartbeat',
+      });
 
-      const response = await this.client.call('edge.heartbeat', params);
+      request.edge_heartbeat = hubedgeRpc.EdgeHeartbeatParams.fromObject({
+        server_id: this.config.server_id,
+        stats: stats ? {
+          user_count: stats.user_count,
+          channel_count: stats.channel_count,
+          cpu_usage: stats.cpu_usage,
+          memory_usage_mb: stats.memory_usage,
+          bandwidth_in: stats.bandwidth?.in,
+          bandwidth_out: stats.bandwidth?.out,
+        } : undefined,
+      });
+
+      const response = await channel.call('edge.heartbeat', request);
 
       this.emit('heartbeat', response);
+      this.logger?.debug(`Heartbeat sent successfully on connection ${connectionId}`);
     } catch (error) {
-      this.logger.error('Heartbeat failed:', error);
+      this.logger.error(`Heartbeat failed on connection ${connectionId}:`, error);
       this.emit('heartbeatFailed', error);
     }
-  }
-
-  /**
-   * 启动心跳定时器
-   */
-  private startHeartbeat(): void {
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-    }
-
-    if (!this.config.hubServer) {
-      return;
-    }
-
-    this.heartbeatTimer = setInterval(() => {
-      void this.sendHeartbeat();
-    }, this.config.hubServer.heartbeatInterval || 30000);
   }
 
   /**
