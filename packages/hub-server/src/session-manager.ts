@@ -213,6 +213,7 @@ export class GlobalSessionManager {
    * 清理离线会话
    */
   cleanup(): void {
+    /*
     // 清理超过1小时未活跃的会话
     const oneHourAgo = Date.now() - 3600000;
     const toRemove: number[] = [];
@@ -230,5 +231,6 @@ export class GlobalSessionManager {
     if (toRemove.length > 0) {
     this.logger.info(`Cleaned up ${toRemove.length} stale sessions`);
     }
+    */
   }
 }
