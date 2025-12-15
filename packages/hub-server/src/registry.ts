@@ -280,11 +280,14 @@ export class ServiceRegistry {
 
     // 设置清理定时器
     edge.cleanupTimer = setTimeout(() => {
-      this.logger.warn(`Edge Server ${server_id} reconnection timeout, cleaning up sessions...`);
+      this.logger.warn(`Edge Server ${server_id} reconnection timeout, marking as timed out...`);
       
-      // 标记为超时状态
+      // ⚠️ 线程安全：先标记为超时状态，再执行清理
+      // 这样在清理过程中如果 Edge 尝试重连，会被拒绝
       edge.connectionState = EdgeConnectionState.DISCONNECTED_TIMEOUT;
       edge.cleanupTimer = undefined;
+      
+      this.logger.info(`Edge Server ${server_id} marked as timed out, starting cleanup...`);
       
       // 调用清理回调
       if (onCleanup) {

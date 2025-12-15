@@ -68,6 +68,10 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         client_info: params.client_info,
       });
 
+      // 注意：Hub 在这里只负责认证
+      // Session 由 Edge 在认证成功后通过 reportSession 完整上报
+      // 这样可以确保 Hub 收到的 session 信息是完整的（包括频道、PreConnect 状态等）
+
       return authResult;
     } catch (error) {
       this.logger.error(`Authentication error for user ${params.username}:`, error);
@@ -244,6 +248,9 @@ export class AuthenticationHandler implements IAuthenticationHandler {
     }
     
     this.logger.info(`Session reported: ${params.username} (user_id: ${params.user_id})${reportedStateFields.length > 0 ? `, state: [${reportedStateFields.join(', ')}]` : ''}, groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);
+
+    // 注意：系统允许同一用户在同一 Edge 多次登录
+    // 不要清理旧 session，每个 session 都是独立的连接
 
     // 上报会话
     sessionManager.reportSession(session);

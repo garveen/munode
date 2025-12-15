@@ -182,10 +182,9 @@ export class AuthHandlers {
         this.stateHandlers.clearPreConnectUserState(session_id);
       }
 
-      // 4. 上报会话到 Hub（必须在发送用户列表之前！）
-      // 这样其他用户在调用 fullSync 时就能看到这个新用户
-      // 移到这里可以避免竞态条件：用户B登录时可能看不到刚登录的用户A
-      // PreConnect 状态已在步骤 3 应用，所以这里会包含正确的 self_mute/self_deaf
+      // 4. 上报会话到 Hub（包含完整的用户状态）
+      // Hub 在 authenticateUser 时已经预创建了 session
+      // 现在需要更新完整的频道和状态信息
       const clientBeforeSync = this.clientManager.getClient(session_id);
       if (!clientBeforeSync) {
         throw new Error(`Client ${session_id} not found before sync`);
@@ -197,7 +196,7 @@ export class AuthHandlers {
         this.logger.warn(`hubClient is not connected, cannot report session ${session_id} to Hub`);
       } else {
         try {
-          // 只上报已显式设置的状态字段
+          // 上报完整的会话信息到 Hub
           const reportData: {
             session_id: number;
             user_id: number;
@@ -228,14 +227,14 @@ export class AuthHandlers {
             groups: clientBeforeSync.groups,
           };
           
-          // 只添加已显式设置的字段
+          // 添加可选字段
           if (clientBeforeSync.cert_hash) reportData.cert_hash = clientBeforeSync.cert_hash;
           if (clientBeforeSync.version) reportData.version = clientBeforeSync.version;
           if (clientBeforeSync.client_name) reportData.release = clientBeforeSync.client_name;
           if (clientBeforeSync.os_name) reportData.os = clientBeforeSync.os_name;
           if (clientBeforeSync.os_version) reportData.os_version = clientBeforeSync.os_version;
           
-          // 只上报值为 true 的状态字段（参考 Murmur 实现）
+          // 只上报值为 true 的状态字段
           const reportedFields: string[] = [];
           if (clientBeforeSync.mute === true) {
             reportData.mute = true;

@@ -66,16 +66,29 @@ export class EdgeControlClient extends EventEmitter {
       throw new Error('Hub server configuration is required');
     }
 
+    // 防止重复连接或注册
+    if (this.connected || this.registered) {
+      this.logger.debug('Already connected or registered, skipping connect()');
+      return;
+    }
+
     try {
       this.logger.info(`Connecting to Hub control service at ${this.clientConfig.host}:${this.clientConfig.port}`);
 
       await this.client.connect();
-      this.connected = true;
+      
+      // 注意：不要在这里设置 this.connected = true，让 'connect' 事件处理器来设置
+      // 这样可以避免在连接池模式下多次触发
 
       // 注册到 Hub
       await this.register();
 
-      this.emit('connected');
+      // 注册成功后才发出 connected 事件
+      // 这确保 connected 事件只在完整的连接+注册流程完成后触发一次
+      if (!this.connected) {
+        this.connected = true;
+        this.emit('connected');
+      }
     } catch (error) {
       // 只在非停止状态下重连
       if (!this.isStopping) {
@@ -274,15 +287,17 @@ export class EdgeControlClient extends EventEmitter {
    */
   private setupEventHandlers(): void {
     this.client.on('connect', () => {
-      this.logger.info('Connected to Hub control service');
-      this.connected = true;
-      this.emit('connected');
+      // 注意：在使用连接池时，这个事件会被多次触发（每个连接一次）
+      // 不要在这里触发 'connected' 事件或调用 register()
+      // 实际的注册和 connected 事件触发在 connect() 方法中进行
+      this.logger.debug('Underlying connection established');
     });
 
     this.client.on('disconnect', () => {
       this.logger.info('Disconnected from Hub control service');
       this.connected = false;
       this.registered = false;
+      this.emit('disconnected');
       // 只在非停止状态下重连
       if (!this.isStopping) {
         this.scheduleReconnect();
