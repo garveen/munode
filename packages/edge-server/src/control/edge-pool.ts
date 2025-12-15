@@ -8,15 +8,14 @@
  * - Pool is considered "connected" if at least one connection is alive
  */
 
+// @ts-ignore - ws types may not be available in all environments
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import type { Logger } from '@munode/common';
-import { RPCChannel } from '../rpc/rpc-channel.js';
-import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
-import type { NotificationParams } from '../rpc/rpc-channel.js';
 import { HeartbeatManager, type HeartbeatConfig, type HeartbeatCallbacks } from '@munode/common';
+import { RPCChannel, type NotificationParams, type TypedRPCRequest, type TypedRPCResponse, type TypedRPCNotification } from '@munode/protocol';
 
-export interface ConnectionPoolConfig {
+export interface ClientConnectionPoolConfig {
   host: string;
   port: number;
   tls?: boolean;
@@ -42,27 +41,28 @@ interface PooledConnection {
 }
 
 /**
- * RPCChannel-like interface for ConnectionPool
- * This allows ConnectionPool to be used with TypedRPCClient
+ * RPCChannel-like interface for ClientConnectionPool
+ * This allows ClientConnectionPool to be used with TypedRPCClient
  */
 interface RPCChannelLike {
-  call(method: string, request: hubedgeRpc.TypedRPCRequest, timeout?: number): Promise<hubedgeRpc.TypedRPCResponse>;
-  notify(method: string, params: hubedgeRpc.TypedRPCNotification | NotificationParams): void;
+  call(method: string, request: TypedRPCRequest, timeout?: number): Promise<TypedRPCResponse>;
+  notify(method: string, params: TypedRPCNotification | NotificationParams): void;
   isConnected(): boolean;
 }
 
 /**
- * Connection Pool for resilient WebSocket communication
+ * Client-side Connection Pool for resilient WebSocket communication from Edge to Hub
+ * Manages multiple connections to the same server for load balancing and fault tolerance
  */
-export class ConnectionPool extends EventEmitter implements RPCChannelLike {
-  private config: ConnectionPoolConfig;
+export class ClientConnectionPool extends EventEmitter implements RPCChannelLike {
+  private config: ClientConnectionPoolConfig;
   private connections: PooledConnection[] = [];
   private nextConnectionIndex = 0; // For round-robin load balancing
   private logger?: Logger;
   private isStopping = false;
   private connectionIdCounter = 0;
 
-  constructor(config: ConnectionPoolConfig) {
+  constructor(config: ClientConnectionPoolConfig) {
     super();
     this.config = {
       poolSize: 2,
@@ -298,7 +298,7 @@ export class ConnectionPool extends EventEmitter implements RPCChannelLike {
   /**
    * Send RPC call using an available connection
    */
-  async call(method: string, request: hubedgeRpc.TypedRPCRequest, timeout?: number): Promise<hubedgeRpc.TypedRPCResponse> {
+  async call(method: string, request: TypedRPCRequest, timeout?: number): Promise<TypedRPCResponse> {
     const channel = this.getNextAvailableChannel();
     if (!channel) {
       throw new Error('No available connections in pool');
@@ -320,7 +320,7 @@ export class ConnectionPool extends EventEmitter implements RPCChannelLike {
   /**
    * Send notification using an available connection
    */
-  notify(method: string, params: hubedgeRpc.TypedRPCNotification | NotificationParams): void {
+  notify(method: string, params: TypedRPCNotification | NotificationParams): void {
     const channel = this.getNextAvailableChannel();
     if (!channel) {
       this.logger?.warn(`Cannot send notification ${method}: no available connections`);

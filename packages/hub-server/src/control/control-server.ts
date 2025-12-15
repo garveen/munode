@@ -1,8 +1,8 @@
 import WebSocket, { WebSocketServer } from 'ws';
-import { RPCChannel, Message, NotificationParams } from '../rpc/rpc-channel.js';
+import { RPCChannel, Message, NotificationParams, type TypedRPCNotification } from '@munode/protocol';
 import type { Logger } from '@munode/common';
 import { EventEmitter } from 'events';
-import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
+import { ServerConnectionManager, VirtualEdgeChannel } from './hub-pool.js';
 
 export interface ControlChannelConfig {
   port: number;
@@ -13,12 +13,22 @@ export interface ControlChannelConfig {
 export class ControlChannelServer extends EventEmitter {
   private wss: WebSocketServer;
   private channels = new Map<WebSocket, RPCChannel>();
+  private edgePool: ServerConnectionManager; // Edge 连接管理器
   private ready: Promise<void>;
   private logger?: Logger;
 
   constructor(config: ControlChannelConfig) {
     super();
     this.logger = config.logger;
+    this.edgePool = new ServerConnectionManager(config.logger);
+    
+    // 转发 Edge 连接池事件
+    this.edgePool.on('edgeConnected', (edgeId: number, virtualChannel: VirtualEdgeChannel) => {
+      this.emit('edgeConnected', edgeId, virtualChannel);
+    });
+    this.edgePool.on('edgeDisconnected', (edgeId: number) => {
+      this.emit('edgeDisconnected', edgeId);
+    });
     
     // 创建 Promise 来跟踪服务器就绪状态
     this.ready = new Promise((resolve, reject) => {
@@ -82,30 +92,49 @@ export class ControlChannelServer extends EventEmitter {
   }
 
   /**
-   * 广播通知给所有连接的客户端
-   * 使用 Promise.allSettled 确保单个 Edge 失败不影响其他 Edge
+   * 注册 Edge 连接到连接池
+   * 在 Edge 完成注册后调用
    */
-  async broadcast(method: string, params?: hubedgeRpc.TypedRPCNotification | NotificationParams): Promise<void> {
-    console.error(`[BROADCAST-DEBUG] Broadcasting method=${method} to ${this.channels.size} channels`);
-    const promises = Array.from(this.channels.values()).map(channel => 
-      Promise.resolve().then(() => {
-        try {
-          channel.notify(method, params);
-        } catch (error) {
-          // 记录错误但不中断其他广播
-          console.error(`Broadcast to channel failed:`, error);
-          throw error;
-        }
-      })
-    );
-    
-    await Promise.allSettled(promises);
+  registerEdge(edgeId: number, channel: RPCChannel): void {
+    this.edgePool.registerConnection(edgeId, channel);
+  }
+
+  /**
+   * 获取 Edge 的虚拟通道
+   */
+  getEdgeChannel(edgeId: number): VirtualEdgeChannel | undefined {
+    return this.edgePool.getEdgeChannel(edgeId);
+  }
+
+  /**
+   * 获取 Edge 连接管理器（用于高级操作）
+   */
+  getEdgePool(): ServerConnectionManager {
+    return this.edgePool;
+  }
+
+  /**
+   * 广播通知给所有 Edge（每个 Edge 只发送一次，由连接池管理去重）
+   */
+  async broadcast(method: string, params?: TypedRPCNotification | NotificationParams): Promise<void> {
+    this.edgePool.broadcast(method, params);
+  }
+
+  /**
+   * 广播给除指定 Edge 外的所有 Edge
+   */
+  broadcastExcept(excludeEdgeId: number, method: string, params?: TypedRPCNotification | NotificationParams): void {
+    this.edgePool.broadcastExcept(excludeEdgeId, method, params);
   }
 
   /**
    * 关闭服务器
    */
   close(): void {
+    // 关闭所有 Edge 连接
+    this.edgePool.closeAll();
+    
+    // 关闭所有未注册的连接
     for (const channel of this.channels.values()) {
       channel.close();
     }

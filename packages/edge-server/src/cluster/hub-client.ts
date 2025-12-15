@@ -1,7 +1,8 @@
 import { EventEmitter } from 'events';
 import { createHmac } from 'crypto';
 import type { Logger } from 'winston';
-import { ControlChannelClient, ControlChannelClientConfig, type ChannelNotificationParams, RPCChannel, hubedgeRpc } from '@munode/protocol';
+import { type ChannelNotificationParams, RPCChannel, hubedgeRpc } from '@munode/protocol';
+import { ControlChannelClient, type ControlChannelClientConfig } from '../control/control-client.js';
 import type {
   RPCParams,
   RPCResult,

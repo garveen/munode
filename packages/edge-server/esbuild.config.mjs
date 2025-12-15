@@ -8,5 +8,5 @@ await build({
   platform: 'node',
   sourcemap: true,
   bundle: true,
-  external: ['@grpc/grpc-js', '@grpc/proto-loader', '@maxmind/geoip2-node', '@munode/common', '@munode/protocol', 'axios', 'commander', 'ipaddr.js', 'long', 'lru-cache', 'protobufjs', 'winston'], // 外部依赖
+  external: ['@grpc/grpc-js', '@grpc/proto-loader', '@maxmind/geoip2-node', '@munode/common', '@munode/protocol', 'axios', 'commander', 'ipaddr.js', 'long', 'lru-cache', 'protobufjs', 'winston', 'ws'], // 外部依赖
 });

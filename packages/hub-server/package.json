@@ -17,10 +17,12 @@
   "dependencies": {
     "@munode/common": "workspace:*",
     "@munode/protocol": "workspace:*",
-    "lru-cache": "^10.2.0"
+    "lru-cache": "^10.2.0",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
     "typescript": "^5.4.5"
   }
 }

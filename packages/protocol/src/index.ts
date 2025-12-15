@@ -7,6 +7,12 @@ export { hubedge } from './generated/proto/HubEdge.js';
 // Hub-Edge RPC types (typed protobuf messages)
 export { hubedge as hubedgeRpc } from './generated/proto/HubEdgeRPC.js';
 
+// Re-export commonly used RPC types for convenience
+import { hubedge as _hubedgeRpc } from './generated/proto/HubEdgeRPC.js';
+export type TypedRPCRequest = _hubedgeRpc.TypedRPCRequest;
+export type TypedRPCResponse = _hubedgeRpc.TypedRPCResponse;
+export type TypedRPCNotification = _hubedgeRpc.TypedRPCNotification;
+
 export {
   type EdgeToHubMethods as ProtobufEdgeToHubMethods,
   type HubToEdgeMethods,
@@ -143,7 +149,8 @@ export type {
   Message, 
   PendingRequest,
   // Union type for all notification parameters - use when method name is dynamic
-  NotificationParams as ChannelNotificationParams,
+  NotificationParams,
+  NotificationParams as ChannelNotificationParams, // Keep backward compatibility
   // Individual notification parameter types
   VoiceDataParams,
   ForceDisconnectParams,
@@ -220,13 +227,8 @@ export type {
   RemoteEndpoint,
 } from './voice/voice-udp-transport.js';
 
-// Control Channel
-export { ControlChannelServer } from './control/control-server.js';
-export type { ControlChannelConfig } from './control/control-server.js';
-export { ControlChannelClient } from './control/control-client.js';
-export type { ControlChannelClientConfig } from './control/control-client.js';
-export { ConnectionPool } from './control/connection-pool.js';
-export type { ConnectionPoolConfig } from './control/connection-pool.js';
+// Control Channel (基础 RPC 通道 - ControlChannelServer/Client 已移至各自的服务器包)
+// Protocol 包只导出基础的 RPC 通道和消息类型
 
 // Permission system (shared between client and server)
 export { Permission, PermissionManager } from './permission.js';

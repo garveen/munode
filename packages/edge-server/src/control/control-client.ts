@@ -1,10 +1,16 @@
 import WebSocket from 'ws';
-import { RPCChannel, type NotificationParams } from '../rpc/rpc-channel.js';
-import { TypedRPCClient, createTypedRPCClient } from '../rpc/typed-rpc-client.js';
-import type { RPCParams, RPCResult, EdgeToHubMethods } from '../rpc/rpc-types.js';
+import { 
+  RPCChannel, 
+  type NotificationParams,
+  TypedRPCClient,
+  createTypedRPCClient,
+  type RPCParams,
+  type RPCResult,
+  type EdgeToHubMethods
+} from '@munode/protocol';
 import type { Logger } from '@munode/common';
 import { EventEmitter } from 'events';
-import { ConnectionPool, type ConnectionPoolConfig } from './connection-pool.js';
+import { ClientConnectionPool, type ClientConnectionPoolConfig } from './edge-pool.js';
 
 export interface ControlChannelClientConfig {
   host: string;
@@ -22,7 +28,7 @@ export interface ControlChannelClientConfig {
 export class ControlChannelClient extends EventEmitter {
   private ws: WebSocket | null = null;
   private channel: RPCChannel | null = null;
-  private pool: ConnectionPool | null = null;
+  private pool: ClientConnectionPool | null = null;
   private typedClient: TypedRPCClient | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private isConnecting = false;
@@ -57,7 +63,7 @@ export class ControlChannelClient extends EventEmitter {
    */
   private async connectWithPool(): Promise<void> {
     try {
-      const poolConfig: ConnectionPoolConfig = {
+      const poolConfig: ClientConnectionPoolConfig = {
         host: this.config.host,
         port: this.config.port,
         tls: this.config.tls,
@@ -67,7 +73,7 @@ export class ControlChannelClient extends EventEmitter {
         heartbeat: this.config.heartbeat,
       };
 
-      this.pool = new ConnectionPool(poolConfig);
+      this.pool = new ClientConnectionPool(poolConfig);
       
       // Forward pool events
       this.pool.on('connect', () => {
@@ -158,7 +164,7 @@ export class ControlChannelClient extends EventEmitter {
   async call<M extends EdgeToHubMethods['method']>(
     method: M,
     params?: RPCParams<M>,
-    timeout?: number
+    _timeout?: number
   ): Promise<RPCResult<M>> {
     if (this.usePool) {
       if (!this.pool) {

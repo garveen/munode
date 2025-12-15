@@ -159,10 +159,16 @@ importers:
       winston:
         specifier: ^3.11.0
         version: 3.18.3
+      ws:
+        specifier: ^8.18.3
+        version: 8.18.3
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.1
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       tsx:
         specifier: ^4.0.0
         version: 4.20.6
@@ -181,10 +187,16 @@ importers:
       lru-cache:
         specifier: ^10.2.0
         version: 10.4.3
+      ws:
+        specifier: ^8.18.3
+        version: 8.18.3
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.1
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       typescript:
         specifier: ^5.4.5
         version: 5.9.3
@@ -1428,7 +1440,7 @@ packages:
   /@types/ws@8.18.1:
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
     dependencies:
-      '@types/node': 20.19.25
+      '@types/node': 22.19.1
     dev: true
 
   /@typescript-eslint/eslint-plugin@8.47.0(@typescript-eslint/parser@8.47.0)(eslint@9.39.1)(typescript@5.9.3):

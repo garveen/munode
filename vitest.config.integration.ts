@@ -49,6 +49,7 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: ['@munode/protocol', '@munode/common', '@munode/hub-server', '@munode/edge-server'],
+    exclude: ['ws'],
   },
   ssr: {
     noExternal: ['@munode/protocol', '@munode/common', '@munode/hub-server', '@munode/edge-server'],

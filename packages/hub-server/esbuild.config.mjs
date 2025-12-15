@@ -8,5 +8,5 @@ await build({
   platform: 'node',
   sourcemap: true,
   bundle: true,
-  external: ['@munode/common', '@munode/protocol', 'lru-cache'], // 外部依赖
+  external: ['@munode/common', '@munode/protocol', 'lru-cache', 'ws'], // 外部依赖
 });

@@ -9,8 +9,8 @@
  */
 
 import { createHmac } from 'crypto';
-import { ControlChannelClient } from '@munode/protocol';
 import type { HubNotificationParams, RegisterResponse } from '@munode/protocol';
+import { ControlChannelClient } from '../control/control-client.js';
 import { ReconnectManager } from './reconnect-manager.js';
 import type { EdgeConfig } from '../types.js';
 import type { Logger } from 'winston';

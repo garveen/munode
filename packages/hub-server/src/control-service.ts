@@ -1,7 +1,5 @@
 import type { Logger } from '@munode/common';
 import {
-  ControlChannelServer,
-  ControlChannelConfig,
   RPCChannel,
   Message,
   TypedRPCServer,
@@ -15,6 +13,8 @@ import {
   EdgeToHubMethods,
   ChannelNotificationParams,
 } from '@munode/protocol';
+import { ControlChannelServer, type ControlChannelConfig } from './control/control-server.js';
+import { type VirtualEdgeChannel } from './control/hub-pool.js';
 import type { HubConfig } from './types.js';
 import type { ServiceRegistry } from './registry.js';
 import { NetworkTopologyManager, type RouteEntry } from './network-topology-manager.js';
@@ -46,7 +46,6 @@ export class HubControlService {
   private typedServer: TypedRPCServer;
   private config: HubConfig;
   private _registry: ServiceRegistry;
-  private edgeChannels = new Map<number, RPCChannel>(); // edge_id -> channel
   private _ninjaChannels: Set<number>; // Set of channel IDs that are ninja channels
   private _networkTopologyManager: NetworkTopologyManager; // 网络拓扑管理器
   private _voiceEncryptionManager: VoiceEncryptionManager; // 语音加密管理器
@@ -181,30 +180,27 @@ export class HubControlService {
   }
 
   private setupEventHandlers(): void {
-    // 监听连接
-    this.server.on('connect', (_channel: RPCChannel) => {
-      this.logger.info('Edge connected to control channel');
+    // 监听 Edge 连接（使用连接池事件）
+    this.server.on('edgeConnected', (edgeId: number, _virtualChannel: VirtualEdgeChannel) => {
+      this.logger.info(`Edge ${edgeId} connected to control channel`);
     });
 
-    // Handle disconnect
-    this.server.on('disconnect', (channel: RPCChannel) => {
-      // Find the corresponding edge_id and remove it
-      for (const [edge_id, ch] of this.edgeChannels) {
-        if (ch === channel) {
-          this.edgeChannels.delete(edge_id);
-          this.removeEdgeChannel(edge_id);
-          this.logger.info(`Edge ${edge_id} disconnected from control channel`);
-          
-          // 使用延迟清理机制，而不是立即清理会话
-          // Edge在宽限期内重连则恢复会话，超时后才清理
-          this._registry.handleEdgeDisconnect(edge_id, (edgeId) => {
-            // 超时后的清理回调
-            this.logger.warn(`Cleaning up sessions for Edge ${edgeId} after reconnection timeout`);
-            this.cleanupEdgeSessions(edgeId);
-          });
-          break;
-        }
-      }
+    // 监听 Edge 断开（使用连接池事件）
+    this.server.on('edgeDisconnected', (edgeId: number) => {
+      this.logger.info(`Edge ${edgeId} disconnected from control channel`);
+      
+      // 使用延迟清理机制，而不是立即清理会话
+      // Edge在宽限期内重连则恢复会话，超时后才清理
+      this._registry.handleEdgeDisconnect(edgeId, (cleanupEdgeId) => {
+        // 超时后的清理回调
+        this.logger.warn(`Cleaning up sessions for Edge ${cleanupEdgeId} after reconnection timeout`);
+        this.cleanupEdgeSessions(edgeId);
+      });
+    });
+
+    // 保留旧的 connect 事件用于未注册的连接
+    this.server.on('connect', (_channel: RPCChannel) => {
+      this.logger.debug('New connection to control channel (not yet registered)');
     });
 
     // Handle requests
@@ -343,9 +339,9 @@ export class HubControlService {
     const result = await this._registry.register(params);
 
     if (result.success) {
-      // 将Edge与RPCChannel关联
-      this.edgeChannels.set(params.server_id, _channel);
-      this.setEdgeChannel(params.server_id, _channel);
+      // 将 Edge 注册到连接池（连接池会自动管理虚拟通道）
+      this.server.registerEdge(params.server_id, _channel);
+      
       this.logger.info(`Edge ${params.server_id} registered successfully`);
       
       // 添加 Edge 到网络拓扑
@@ -409,7 +405,9 @@ export class HubControlService {
       return;
     }
     
-    for (const edgeId of this.edgeChannels.keys()) {
+    // 从连接池获取所有已连接的 Edge ID
+    const connectedEdges = this.server.getEdgePool().getConnectedEdges();
+    for (const edgeId of connectedEdges) {
       this.pushVoiceRoutingConfig(edgeId);
     }
   }
@@ -437,16 +435,8 @@ export class HubControlService {
     // 停止语音加密管理器
     this._voiceEncryptionManager.destroy();
     
-    // 主动关闭所有 Edge 连接
-    this.logger.info(`Closing ${this.edgeChannels.size} edge connections`);
-    for (const [edgeId, channel] of this.edgeChannels.entries()) {
-      try {
-        channel.close();
-      } catch (error) {
-        this.logger.warn(`Error closing edge ${edgeId} channel:`, error);
-      }
-    }
-    this.edgeChannels.clear();
+    // ControlChannelServer 会自动关闭所有连接
+    this.logger.info('Closing all edge connections');
     
     // 关闭服务器
     this.server.close();
@@ -457,9 +447,8 @@ export class HubControlService {
   
   broadcast(method: string, params?: ChannelNotificationParams): void {
     this.logger.debug(`Broadcasting ${method} to all edges`);
-    // Fire and forget - 不等待广播完成
+    // 使用 ControlChannelServer 的连接池广播，自动去重
     void this.server.broadcast(method, params);
-    
   }
 
   /**
@@ -467,24 +456,15 @@ export class HubControlService {
    */
   broadcastExcept(excludeEdgeId: number, method: string, params?: ChannelNotificationParams): void {
     this.logger.debug(`Broadcasting ${method} to all edges except ${excludeEdgeId}`);
-    for (const [edgeId, channel] of this.edgeChannels.entries()) {
-      if (edgeId === excludeEdgeId) {
-        continue;
-      }
-      try {
-        channel.notify(method, params);
-      } catch (error) {
-        this.logger.error(`Failed to notify Edge ${edgeId}:`, error);
-      }
-    }
+    // 使用 ControlChannelServer 的 broadcastExcept 方法，它会自动通过连接池去重
+    this.server.broadcastExcept(excludeEdgeId, method, params);
   }
 
   notify(edgeId: number, method: string, params?: ChannelNotificationParams): void {
-    const channel = this.edgeChannels.get(edgeId);
+    const channel = this.server.getEdgeChannel(edgeId);
     if (channel) {
       try {
         channel.notify(method, params);
-
       } catch (error) {
         this.logger.error(`Failed to notify Edge ${edgeId}:`, error);
       }
@@ -493,15 +473,8 @@ export class HubControlService {
     }
   }
 
-  setEdgeChannel(edgeId: number, channel: RPCChannel): void {
-    this.edgeChannels.set(edgeId, channel);
-    this.logger.debug(`Set channel for Edge ${edgeId}`);
-  }
-
-  removeEdgeChannel(edgeId: number): void {
-    this.edgeChannels.delete(edgeId);
-    this.logger.debug(`Removed channel for Edge ${edgeId}`);
-  }
+  // Edge channel 管理已由 ControlChannelServer 内部的连接池处理
+  // 不再需要 setEdgeChannel 和 removeEdgeChannel 方法
 
   /**
    * 清理指定Edge上的所有会话

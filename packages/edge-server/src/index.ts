@@ -1,6 +1,10 @@
 // 主要导出
 export { EdgeServer } from './core/edge-server.js';
 
+// 控制通道组件
+export { ControlChannelClient, type ControlChannelClientConfig } from './control/control-client.js';
+export { ClientConnectionPool, type ClientConnectionPoolConfig } from './control/edge-pool.js';
+
 // 枚举类型
 export { MessageType, UDPMessageType } from '@munode/protocol';
 
