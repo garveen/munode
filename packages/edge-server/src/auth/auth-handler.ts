@@ -285,9 +285,12 @@ export class AuthHandlers {
       // 注意：不广播状态字段（mute, deaf, self_mute, self_deaf, priority_speaker, recording）
       // 这些字段只在用户显式改变时才通过 UserState 消息单独广播
       
+      // 广播给所有已认证客户端（包括用户自己）
+      // 参考 Go 实现：server.broadcastProtoMessageWithPredicate(userstate, func(c *Client) bool { return c == client || c.hasFullUserList })
+      // 用户自己也需要收到这个 UserState，以确认自己所在的频道
       const broadcastState = new mumbleproto.UserState(broadcastStateData);
-      this.broadcastUserState(broadcastState, session_id);
-        this.logger.debug(`Broadcasted UserState for new user ${updatedClient.username} (session ${session_id})`);
+      this.broadcastUserState(broadcastState);  // 不排除用户自己
+      this.logger.debug(`Broadcasted UserState for new user ${updatedClient.username} (session ${session_id}) to all authenticated clients including self`);
 
     } catch (error) {
         this.logger.error(`Error in handleAuthSuccess for session ${session_id}:`, error);
