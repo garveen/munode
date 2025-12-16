@@ -120,7 +120,8 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
       const clientConfig: ControlChannelClientConfig = {
         host: config.hubServer?.host || 'localhost',
         port: config.hubServer?.controlPort || 8443,
-        tls: config.hubServer?.tls ? true : false,
+        // 默认启用 TLS，除非明确设置 rejectUnauthorized: false
+        tls: config.hubServer?.tls?.rejectUnauthorized ?? true,
         poolSize: config.hubServer?.poolSize ?? 2, // Default to 2 connections
         reconnectInterval: config.hubServer?.reconnectInterval || 5000,
         heartbeat: {
