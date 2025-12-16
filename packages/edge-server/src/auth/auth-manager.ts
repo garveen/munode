@@ -4,22 +4,6 @@ import { EdgeConfig, AuthResult } from '../types.js';
 import type { EdgeControlClient } from '../cluster/hub-client.js';
 
 /**
- * 认证缓存项
- */
-interface AuthCacheItem {
-  result: AuthResult;
-  timestamp: number;
-}
-
-/**
- * 认证统计
- */
-interface AuthStats {
-  cacheSize: number;
-  cacheHitRate: number;
-}
-
-/**
  * AuthManager 事件类型定义
  */
 export interface AuthManagerEvents extends EventMap {
@@ -33,7 +17,6 @@ export interface AuthManagerEvents extends EventMap {
 export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
   private config: EdgeConfig;
   private logger: Logger;
-  private authCache: Map<string, AuthCacheItem> = new Map();
   private hubClient?: EdgeControlClient; // Hub 客户端
 
   constructor(config: EdgeConfig, logger: Logger, hubClient?: EdgeControlClient) {
@@ -47,12 +30,9 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
    * 初始化认证管理器
    */
   initialize(): void {
-    this.logger.info('Initializing AuthManager...');
-
-    // 清理过期缓存
-    setInterval(() => {
-      this.cleanupExpiredCache();
-    }, 60000); // 每分钟清理一次
+    this.logger.info('AuthManager initialized');
+    // Edge does not cache authentication results
+    // All authentication goes through Hub
   }
 
   /**
@@ -88,25 +68,21 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
     try {
       this.logger.info(`Authenticating user: session=${session_id}, username=${username}`);
 
-      // 检查缓存 - 使用密码的哈希值而不是明文
-      const crypto = await import('crypto');
-      const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
-      const cacheKey = `${username}:${passwordHash}`;
-      const cached = this.authCache.get(cacheKey);
-      if (cached && Date.now() - cached.timestamp < this.config.auth.cacheTTL) {
-        return cached.result;
-      }
+      // Edge does NOT cache authentication results.
+      // Hub is the single source of truth for authentication and session management.
+      // 
+      // Unlike C++ Murmur which inserts session into qhUsers immediately in msgAuthenticate,
+      // we MUST call Hub's authenticateUser RPC for every new connection to ensure:
+      // 1. Session is registered in Hub's SessionManager
+      // 2. User authentication is validated (password, external auth API, etc.)
+      // 3. User permissions and groups are loaded
+      // 4. Initial channel is determined (last channel, default channel, etc.)
+      //
+      // Hub may use its own auth cache internally to optimize external API calls,
+      // but Edge always calls Hub for each new session.
 
       // 通过 Hub 认证
       const authResult = await this.authenticateViaHub(session_id, username, password, tokens, clientInfo, preConnectState);
-
-      // 缓存结果
-      if (authResult.success) {
-        this.authCache.set(cacheKey, {
-          result: authResult,
-          timestamp: Date.now(),
-        });
-      }
 
       if (authResult.success) {
         this.logger.info(
@@ -230,35 +206,4 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
     return [];
   }
 
-  /**
-   * 清理过期缓存
-   */
-  private cleanupExpiredCache(): void {
-    const now = Date.now();
-    const toDelete: string[] = [];
-
-    for (const [key, value] of this.authCache) {
-      if (now - value.timestamp > this.config.auth.cacheTTL) {
-        toDelete.push(key);
-      }
-    }
-
-    for (const key of toDelete) {
-      this.authCache.delete(key);
-    }
-
-    if (toDelete.length > 0) {
-      this.logger.debug(`Cleaned up ${toDelete.length} expired auth cache entries`);
-    }
-  }
-
-  /**
-   * 获取认证统计
-   */
-  getAuthStats(): AuthStats {
-    return {
-      cacheSize: this.authCache.size,
-      cacheHitRate: 0, // 可以实现更详细的统计
-    };
-  }
 }

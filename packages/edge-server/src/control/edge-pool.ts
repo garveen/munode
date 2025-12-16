@@ -222,7 +222,6 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
 
     conn.heartbeatManager = new HeartbeatManager(callbacks, heartbeatConfig);
 
-    // eslint-disable-next-line @typescript-eslint/no-misused-promises
     conn.heartbeatManager.startSending(conn.id.toString(), async () => {
       try {
         await this.config.heartbeat!.sendHeartbeat(conn.id, conn.channel!);

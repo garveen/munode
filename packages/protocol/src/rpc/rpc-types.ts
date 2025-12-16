@@ -728,6 +728,16 @@ export interface HubPeerJoinedNotification {
 }
 
 /**
+ * Hub 通知 Edge 有成员离开
+ */
+export interface HubPeerLeftNotification {
+  method: 'edge.peerLeft';
+  params: {
+    id: number;
+  };
+}
+
+/**
  * Hub 向 Edge 返回 ACL 查询结果
  */
 export interface HubACLResponseNotification {
@@ -1068,6 +1078,27 @@ export interface HubUserLeftNotification {
   };
 }
 
+/**
+ * Hub 通知 Edge 同步 VoiceTarget
+ */
+export interface HubSyncVoiceTargetNotification {
+  method: 'hub.syncVoiceTarget';
+  params: {
+    edge_id: number;
+    client_session: number;
+    target_id: number;
+    config: {
+      sessions?: Array<{ session: number }>;
+      channels?: Array<{
+        channel_id: number;
+        include_subchannels?: boolean;
+        include_links?: boolean;
+        group?: string;
+      }>;
+    } | null;
+  };
+}
+
 // ============================================================================
 // Type Union & Mapping
 // ============================================================================
@@ -1124,6 +1155,7 @@ export type HubToEdgeNotifications =
   | HubVoiceDataNotification
   | HubForceDisconnectNotification
   | HubPeerJoinedNotification
+  | HubPeerLeftNotification
   | HubACLResponseNotification
   | HubUserStateBroadcastNotification
   | HubUserStateResponseNotification
@@ -1143,7 +1175,8 @@ export type HubToEdgeNotifications =
   | HubUserJoinedNotification
   | HubVisibleUsersNotification
   | HubUserStateChangedNotification
-  | HubUserLeftNotification;
+  | HubUserLeftNotification
+  | HubSyncVoiceTargetNotification;
 
 /**
  * 方法名到类型的映射

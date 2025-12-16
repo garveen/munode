@@ -206,6 +206,7 @@ export type {
   HubVoiceDataNotification,
   HubForceDisconnectNotification,
   HubPeerJoinedNotification,
+  HubSyncVoiceTargetNotification,
   // Edge to Hub notification types
   EdgeUserStateNotification,
   EdgeUserLeftNotification,

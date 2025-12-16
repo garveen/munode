@@ -128,7 +128,7 @@ export class EventSetupManager {
     // PermissionQuery 事件
     this.handlerFactory.messageHandler.on('permissionQuery', (session_id: number, data: Buffer) => {
       if (this.handlerFactory.permissionHandlers) {
-        this.handlerFactory.permissionHandlers.handlePermissionQuery(session_id, data);
+        void this.handlerFactory.permissionHandlers.handlePermissionQuery(session_id, data);
       }
     });
 
@@ -596,6 +596,35 @@ export class EventSetupManager {
       this.hubClient.on('notification', (message) => {
         // 使用 discriminated union 的类型守卫来处理不同消息类型
         switch (message.method) {
+          case 'edge.peerJoined': {
+            const data = message.params;
+            this.logger.info('Edge joined cluster:', data);
+
+            // 尝试注册新Edge的语音端口（非强制，允许失败）
+            if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.voicePort && data.id !== this.config.server_id) {
+              try {
+                this.voiceManager.getVoiceTransport().registerEndpoint(data.id, data.host, data.voicePort);
+                this.logger.info(`Registered voice endpoint for new Edge ${data.id}: ${data.host}:${data.voicePort}`);
+              } catch (error) {
+                // 端点注册失败不影响其他功能
+                this.logger.warn(`Failed to register voice endpoint for Edge ${data.id}:`, error);
+              }
+            }
+            break;
+          }
+
+          case 'edge.peerLeft': {
+            const data = message.params;
+            this.logger.info('Edge left cluster:', data);
+
+            // 移除该Edge的语音端点注册
+            if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.id) {
+              this.voiceManager.getVoiceTransport().unregisterEndpoint(data.id);
+              this.logger.info(`Unregistered voice endpoint for Edge ${data.id}`);
+            }
+            break;
+          }
+
           case 'hub.userJoined':
             this.logger.debug(`[EDGE-DEBUG] Received hub.userJoined notification: ${JSON.stringify(message.params)}`);
             this.hubDataManager.handleRemoteUserJoined(message.params);
@@ -655,6 +684,16 @@ export class EventSetupManager {
 
           case 'hub.shutdownRequest':
             void this.handlerFactory.hubMessageHandlers.handleShutdownRequestFromHub(message.params);
+            break;
+
+          case 'hub.syncVoiceTarget':
+            // 转发到已有的事件处理器
+            this.hubClient.emit('syncVoiceTarget', message.params);
+            break;
+
+          case 'edge.forceDisconnect':
+            // ClusterManager 会处理此消息
+            this.logger.debug('Received edge.forceDisconnect notification (handled by ClusterManager)');
             break;
 
           default:
