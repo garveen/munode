@@ -2,6 +2,8 @@ import type { Logger } from '@munode/common';
 import { HubPermissionChecker, Permission } from '../permission-checker.js';
 import { HubHandlerFactory } from '../factory.js';
 import type { RPCParams, RPCResult } from '@munode/protocol';
+import type { GlobalSessionManager } from '../session-manager.js';
+import type { HubConfig } from '../types.js';
 
 
 /**
@@ -18,10 +20,6 @@ export interface IAuthenticationHandler {
    */
   handleAuthenticateUser(params: RPCParams<'edge.authenticateUser'>): Promise<RPCResult<'edge.authenticateUser'>>;
 
-  /**
-   * 处理会话报告
-   */
-  handleReportSession(params: RPCParams<'edge.reportSession'>): Promise<RPCResult<'edge.reportSession'>>;
 }
 
 /**
@@ -68,11 +66,180 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         client_info: params.client_info,
       });
 
-      // 注意：Hub 在这里只负责认证
-      // Session 由 Edge 在认证成功后通过 reportSession 完整上报
-      // 这样可以确保 Hub 收到的 session 信息是完整的（包括频道、PreConnect 状态等）
+      // 如果认证失败，直接返回
+      if (!authResult.success) {
+        return authResult;
+      }
 
-      return authResult;
+      // 认证成功，处理 session 创建和频道分配
+      const sessionManager = this.factory.getSessionManager();
+      const permissionChecker = this.factory.getPermissionChecker();
+      const config = this.factory.getConfig();
+      const db = this.factory.getDatabase();
+
+      // 确定目标频道：优先使用 last channel，否则使用默认频道
+      let actualChannelId = config.defaultChannel ?? 0;
+      
+      // 如果用户已注册，尝试获取上次登录的频道
+      if (authResult.user_id && authResult.user_id > 0) {
+        try {
+          const lastChannelId = await db.getUserLastChannel(authResult.user_id);
+          if (lastChannelId > 0) {
+            const lastChannel = await db.getChannel(lastChannelId);
+            if (lastChannel) {
+              // 检查用户是否有 Enter 权限
+              const userInfo = {
+                session_id: params.session_id,
+                user_id: authResult.user_id,
+                cert_hash: params.client_info.certificate_hash || '',
+                channel_id: lastChannelId,
+                groups: authResult.groups || [],
+              };
+              
+              const hasEnterPermission = await permissionChecker.hasPermission(
+                lastChannelId,
+                userInfo,
+                Permission.Enter
+              );
+              
+              if (hasEnterPermission) {
+                actualChannelId = lastChannelId;
+                this.logger.debug(`User ${params.username} (${authResult.user_id}) restored to last channel ${lastChannelId}`);
+              } else {
+                this.logger.info(`User ${params.username} (${authResult.user_id}) has no Enter permission for last channel ${lastChannelId}, using default channel`);
+              }
+            }
+          }
+        } catch (error) {
+          this.logger.error(`Failed to get last channel for user ${authResult.user_id}:`, error);
+        }
+      }
+
+      // 检查 Channel Ninja
+      if (config.channelNinja && config.ninjaChannels?.length > 0 && permissionChecker) {
+        const transitiveLinks = await permissionChecker.getTransitivelyLinkedChannels(actualChannelId);
+        let isNinjaRelated = false;
+        for (const chId of transitiveLinks) {
+          if (config.ninjaChannels.includes(chId)) {
+            isNinjaRelated = true;
+            break;
+          }
+        }
+
+        if (isNinjaRelated) {
+          const tempUserInfo = {
+            session_id: params.session_id,
+            user_id: authResult.user_id || 0,
+            cert_hash: params.client_info.certificate_hash || '',
+            channel_id: actualChannelId,
+            groups: authResult.groups || [],
+          };
+
+          let hasPermission = false;
+          for (const chId of transitiveLinks) {
+            if (await permissionChecker.canUserAccessChannel(chId, tempUserInfo)) {
+              hasPermission = true;
+              break;
+            }
+          }
+
+          if (!hasPermission) {
+            const defaultChannel = config.defaultChannel ?? 0;
+            this.logger.info(`Channel Ninja: User ${params.username} was in ninja channel ${actualChannelId} but has no permission, moving to default channel ${defaultChannel}`);
+            actualChannelId = defaultChannel;
+          }
+        }
+      }
+
+      // 创建 session
+      interface SessionData {
+        session_id: number;
+        edge_id: number;
+        user_id: number;
+        username: string;
+        ip_address: string;
+        cert_hash: string;
+        is_authenticated: boolean;
+        channel_id: number;
+        connected_at: number;
+        last_active: number;
+        groups: string[];
+        version?: string;
+        release?: string;
+        os?: string;
+        os_version?: string;
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
+        self_mute?: boolean;
+        self_deaf?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
+      }
+
+      const session: SessionData = {
+        session_id: params.session_id,
+        edge_id: params.server_id,
+        user_id: authResult.user_id || 0,
+        username: authResult.displayName || authResult.username || params.username,
+        ip_address: params.client_info.ip_address,
+        cert_hash: params.client_info.certificate_hash || '',
+        is_authenticated: true,
+        channel_id: actualChannelId,
+        connected_at: Math.floor(Date.now() / 1000),
+        last_active: Math.floor(Date.now() / 1000),
+        groups: authResult.groups || [],
+        version: params.client_info.version?.toString(),
+        release: params.client_info.release,
+        os: params.client_info.os,
+        os_version: params.client_info.os_version,
+      };
+
+      // 保存 PreConnect 状态
+      const reportedStateFields: string[] = [];
+      if (params.mute === true) {
+        session.mute = true;
+        reportedStateFields.push('mute');
+      }
+      if (params.deaf === true) {
+        session.deaf = true;
+        reportedStateFields.push('deaf');
+      }
+      if (params.suppress === true) {
+        session.suppress = true;
+        reportedStateFields.push('suppress');
+      }
+      if (params.self_mute === true) {
+        session.self_mute = true;
+        reportedStateFields.push('self_mute');
+      }
+      if (params.self_deaf === true) {
+        session.self_deaf = true;
+        reportedStateFields.push('self_deaf');
+      }
+      if (params.priority_speaker === true) {
+        session.priority_speaker = true;
+        reportedStateFields.push('priority_speaker');
+      }
+      if (params.recording === true) {
+        session.recording = true;
+        reportedStateFields.push('recording');
+      }
+
+      this.logger.info(`Session created: ${params.username} (user_id: ${authResult.user_id})${reportedStateFields.length > 0 ? `, state: [${reportedStateFields.join(', ')}]` : ''}, groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);
+
+      // 注册 session
+      sessionManager.reportSession(session);
+
+      // 广播 userJoined（处理 Channel Ninja 可见性）
+      await this.broadcastUserJoined(session, config, permissionChecker, sessionManager);
+
+      // 返回认证结果，包含目标频道
+      return {
+        ...authResult,
+        channel_id: actualChannelId,
+        cert_hash: params.client_info.certificate_hash,
+      };
     } catch (error) {
       this.logger.error(`Authentication error for user ${params.username}:`, error);
       return {
@@ -82,114 +249,24 @@ export class AuthenticationHandler implements IAuthenticationHandler {
     }
   }
 
-  async handleReportSession(params: RPCParams<'edge.reportSession'>): Promise<RPCResult<'edge.reportSession'>> {
-    const sessionManager = this.factory.getSessionManager();
-    const permissionChecker = this.factory.getPermissionChecker();
-    const config = this.factory.getConfig();
 
-    // Determine the actual channel for this user
-    let actualChannelId = params.channel_id;
-    
-    // 如果用户已注册，尝试获取上次登录的频道（参考 Go 实现）
-    if (params.user_id && params.user_id > 0) {
-      try {
-        const db = this.factory.getDatabase();
-        const lastChannelId = await db.getUserLastChannel(params.user_id);
-        if (lastChannelId > 0) {
-          // 检查频道是否存在
-          const lastChannel = await db.getChannel(lastChannelId);
-          if (lastChannel) {
-            // 检查用户是否有 Enter 权限（参考 Go: CheckLastChannelPermission）
-            const userInfo = {
-              session_id: params.session_id,
-              user_id: params.user_id,
-              cert_hash: params.cert_hash,
-              channel_id: lastChannelId,
-              groups: params.groups || [],
-            };
-            
-            const hasEnterPermission = await permissionChecker.hasPermission(
-              lastChannelId,
-              userInfo,
-              Permission.Enter
-            );
-            
-            if (hasEnterPermission) {
-              actualChannelId = lastChannelId;
-              this.logger.debug(`User ${params.username} (${params.user_id}) restored to last channel ${lastChannelId}`);
-            } else {
-              this.logger.info(`User ${params.username} (${params.user_id}) has no Enter permission for last channel ${lastChannelId}, using default channel`);
-            }
-          }
-        }
-      } catch (error) {
-        this.logger.error(`Failed to get last channel for user ${params.user_id}:`, error);
-        // 继续使用默认频道
-      }
-    }
 
-    // Check if Channel Ninja is enabled and the requested channel is in a ninja group
-    if (config.channelNinja && config.ninjaChannels?.length > 0 && permissionChecker) {
-      // Check if the channel is related to a ninja channel
-      const transitiveLinks = await permissionChecker.getTransitivelyLinkedChannels(actualChannelId);
-      let isNinjaRelated = false;
-      for (const chId of transitiveLinks) {
-        if (config.ninjaChannels.includes(chId)) {
-          isNinjaRelated = true;
-          break;
-        }
-      }
-
-      if (isNinjaRelated) {
-        // Create a temporary user info to check permissions
-        const tempUserInfo = {
-          session_id: params.session_id,
-          user_id: params.user_id,
-          cert_hash: params.cert_hash,
-          channel_id: actualChannelId,
-          groups: params.groups || [],
-        };
-
-        // Check if user has permission to access any channel in the ninja group
-        let hasPermission = false;
-        for (const chId of transitiveLinks) {
-          if (await permissionChecker.canUserAccessChannel(chId, tempUserInfo)) {
-            hasPermission = true;
-            break;
-          }
-        }
-
-        if (!hasPermission) {
-          // User was in a hidden channel but no longer has permission
-          // Move them to the default channel
-          const defaultChannel = config.defaultChannel ?? 0;
-          this.logger.info(`Channel Ninja: User ${params.username} was in ninja channel ${actualChannelId} but has no permission, moving to default channel ${defaultChannel}`);
-          actualChannelId = defaultChannel;
-        }
-      }
-    }
-
-    // 将RPC参数转换为GlobalSession对象
-    // Note: params.startTime may be a Date object or ISO string (from JSON serialization)
-    const startTime = params.startTime instanceof Date ? params.startTime : new Date(params.startTime);
-    // Use proper typing instead of any
-    interface SessionData {
+  /**
+   * 广播用户加入通知（处理 Channel Ninja 可见性）
+   */
+  private async broadcastUserJoined(
+    session: {
       session_id: number;
       edge_id: number;
       user_id: number;
       username: string;
-      ip_address: string;
-      cert_hash: string;
-      is_authenticated: boolean;
       channel_id: number;
+      groups: string[];
+      cert_hash: string;
+      ip_address: string;
+      is_authenticated: boolean;
       connected_at: number;
       last_active: number;
-      groups: string[];
-      version?: string;
-      release?: string;
-      os?: string;
-      os_version?: string;
-      // User state fields
       mute?: boolean;
       deaf?: boolean;
       suppress?: boolean;
@@ -197,85 +274,27 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       self_deaf?: boolean;
       priority_speaker?: boolean;
       recording?: boolean;
-    }
-    const session: SessionData = {
-      session_id: params.session_id,
-      edge_id: params.edge_server_id,
-      user_id: params.user_id,
-      username: params.username,
-      ip_address: params.ip_address,
-      cert_hash: params.cert_hash || '',
-      is_authenticated: true,
-      channel_id: actualChannelId, // Use the adjusted channel
-      connected_at: Math.floor(startTime.getTime() / 1000),
-      last_active: Math.floor(Date.now() / 1000),
-      groups: params.groups || [], // 传递用户组信息
-      version: params.version,
-      release: params.release,
-      os: params.os,
-      os_version: params.os_version,
-    };
-    
-    // 只保存值为 true 的状态字段（参考 Murmur 实现）
-    const reportedStateFields: string[] = [];
-    if (params.mute === true) {
-      session.mute = true;
-      reportedStateFields.push('mute');
-    }
-    if (params.deaf === true) {
-      session.deaf = true;
-      reportedStateFields.push('deaf');
-    }
-    if (params.suppress === true) {
-      session.suppress = true;
-      reportedStateFields.push('suppress');
-    }
-    if (params.self_mute === true) {
-      session.self_mute = true;
-      reportedStateFields.push('self_mute');
-    }
-    if (params.self_deaf === true) {
-      session.self_deaf = true;
-      reportedStateFields.push('self_deaf');
-    }
-    if (params.priority_speaker === true) {
-      session.priority_speaker = true;
-      reportedStateFields.push('priority_speaker');
-    }
-    if (params.recording === true) {
-      session.recording = true;
-      reportedStateFields.push('recording');
-    }
-    
-    this.logger.info(`Session reported: ${params.username} (user_id: ${params.user_id})${reportedStateFields.length > 0 ? `, state: [${reportedStateFields.join(', ')}]` : ''}, groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);
-
-    // 注意：系统允许同一用户在同一 Edge 多次登录
-    // 不要清理旧 session，每个 session 都是独立的连接
-
-    // 上报会话
-    sessionManager.reportSession(session);
-
-    this.logger.info(`Session reported: ${params.username} (session=${params.session_id}, edge=${params.edge_server_id}, user_id=${params.user_id}, channel=${actualChannelId})`);
-
-    // Handle ninja channel visibility for the userJoined broadcast
-    if (config.channelNinja && config.ninjaChannels?.length > 0 && permissionChecker) {
-      this.logger.debug(`Channel Ninja: Filtering userJoined broadcast for ${params.username}`);
+    },
+    config: HubConfig,
+    permissionChecker: HubPermissionChecker,
+    sessionManager: GlobalSessionManager
+  ): Promise<void> {
+    if (config.channelNinja && config.ninjaChannels?.length > 0) {
+      this.logger.debug(`Channel Ninja: Filtering userJoined broadcast for ${session.username}`);
       
-      // Filter which existing users should see this new user
       const allSessions = sessionManager.getAllSessions();
-      const visibleToSessions = new Map<number, number[]>(); // edge_id -> session_ids
-      const newUserInfo = this.permissionChecker.sessionToUserInfo(session, actualChannelId);
+      const visibleToSessions = new Map<number, number[]>();
+      // newUserInfo 用于权限检查，不需要再赋值
+      this.permissionChecker.sessionToUserInfo(session, session.channel_id);
 
       for (const otherSession of allSessions) {
         if (otherSession.session_id === session.session_id) continue;
 
         const otherUserInfo = this.permissionChecker.sessionToUserInfo(otherSession, otherSession.channel_id ?? 0);
-
-        // Check if other user can see this new user
         const canSee = await permissionChecker.canUserSeeOtherUser(
           otherUserInfo,
           otherSession.channel_id ?? 0,
-          actualChannelId,
+          session.channel_id,
           new Set(config.ninjaChannels)
         );
 
@@ -283,11 +302,11 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           if (!visibleToSessions.has(otherSession.edge_id)) {
             visibleToSessions.set(otherSession.edge_id, []);
           }
-          visibleToSessions.get(otherSession.edge_id).push(otherSession.session_id);
+          visibleToSessions.get(otherSession.edge_id)!.push(otherSession.session_id);
         }
       }
 
-      // Send userJoined to visible sessions only
+      // 发送 userJoined 给可见的 sessions
       for (const [edgeId, sessionIds] of visibleToSessions.entries()) {
         const userJoinedData: {
           session_id: number;
@@ -306,17 +325,16 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           priority_speaker?: boolean;
           recording?: boolean;
         } = {
-          session_id: params.session_id,
-          edge_id: params.edge_server_id,
-          user_id: params.user_id,
-          username: params.username,
-          channel_id: actualChannelId,
-          groups: session.groups || [],
+          session_id: session.session_id,
+          edge_id: session.edge_id,
+          user_id: session.user_id,
+          username: session.username,
+          channel_id: session.channel_id,
+          groups: session.groups,
           cert_hash: session.cert_hash,
           target_sessions: sessionIds,
         };
         
-        // 只添加值为 true 的状态字段（参考 Murmur 实现）
         if (session.deaf === true) {
           userJoinedData.deaf = true;
         } else if (session.mute === true) {
@@ -334,30 +352,9 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         this.factory.getControlService().notify(edgeId, 'hub.userJoined', userJoinedData);
       }
 
-      // Also check which users the new user can see (they need to send their state to the new user)
-      const usersNewUserCanSee: number[] = [];
-      for (const otherSession of allSessions) {
-        if (otherSession.session_id === session.session_id) continue;
-
-        const canSee = await permissionChecker.canUserSeeOtherUser(
-          newUserInfo,
-          actualChannelId,
-          otherSession.channel_id ?? 0,
-          new Set(config.ninjaChannels)
-        );
-
-        if (canSee) {
-          usersNewUserCanSee.push(otherSession.session_id);
-        }
-      }
-
-      // Note: visibleUsers notification is no longer needed - Edge relies on fullSync
-
-      this.logger.info(`Session ${params.session_id} reported with ninja filtering: visible to ${Array.from(visibleToSessions.values()).flat().length} users, can see ${usersNewUserCanSee.length} users`);
+      this.logger.info(`Session ${session.session_id} created with ninja filtering: visible to ${Array.from(visibleToSessions.values()).flat().length} users`);
     } else {
-      // Broadcast new user joined notification to all edges (no ninja filtering)
-      this.logger.debug(`Broadcasting userJoined (no ninja) to all edges: ${params.username}`);
-
+      // 无 ninja filtering，广播给所有 edges
       const userJoinedData: {
         session_id: number;
         edge_id: number;
@@ -374,16 +371,15 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         priority_speaker?: boolean;
         recording?: boolean;
       } = {
-        session_id: params.session_id,
-        edge_id: params.edge_server_id,
-        user_id: params.user_id,
-        username: params.username,
-        channel_id: actualChannelId,
-        groups: session.groups || [],
+        session_id: session.session_id,
+        edge_id: session.edge_id,
+        user_id: session.user_id,
+        username: session.username,
+        channel_id: session.channel_id,
+        groups: session.groups,
         cert_hash: session.cert_hash,
       };
       
-      // 只添加值为 true 的状态字段（参考 Murmur 实现）
       if (session.deaf === true) {
         userJoinedData.deaf = true;
       } else if (session.mute === true) {
@@ -399,10 +395,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       }
       
       this.factory.getControlService().broadcast('hub.userJoined', userJoinedData);
-
-      this.logger.info(`Session ${params.session_id} reported from Edge ${params.edge_server_id}, broadcasted to all edges`);
+      this.logger.info(`Session ${session.session_id} created, broadcasted to all edges`);
     }
-
-    return { success: true }; // Success response
   }
 }

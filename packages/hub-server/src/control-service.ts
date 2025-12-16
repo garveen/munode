@@ -194,7 +194,7 @@ export class HubControlService {
       this._registry.handleEdgeDisconnect(edgeId, (cleanupEdgeId) => {
         // 超时后的清理回调
         this.logger.warn(`Cleaning up sessions for Edge ${cleanupEdgeId} after reconnection timeout`);
-        this.cleanupEdgeSessions(edgeId);
+        this.cleanupEdgeSessions(cleanupEdgeId);
       });
     });
 
@@ -286,7 +286,6 @@ export class HubControlService {
       { method: 'edge.heartbeat', handler: async (_channel, params) => await this._registry.heartbeat(params as RPCParams<'edge.heartbeat'>) },
       { method: 'edge.allocateSessionId', handler: async (_channel, params) => await this.factory.getAuthenticationHandler().handleAllocateSessionId(params as RPCParams<'edge.allocateSessionId'>) },
       { method: 'edge.authenticateUser', handler: async (_channel, params) => await this.factory.getAuthenticationHandler().handleAuthenticateUser(params as RPCParams<'edge.authenticateUser'>) },
-      { method: 'edge.reportSession', handler: async (_channel, params) => await this.factory.getAuthenticationHandler().handleReportSession(params as RPCParams<'edge.reportSession'>) },
       
       // VoiceTarget 同步
       { method: 'edge.syncVoiceTarget', handler: async (_channel, params) => await this.factory.getVoiceRoutingHandler().handleSyncVoiceTarget(params as RPCParams<'edge.syncVoiceTarget'>) },
@@ -343,6 +342,12 @@ export class HubControlService {
       this.server.registerEdge(params.server_id, _channel);
       
       this.logger.info(`Edge ${params.server_id} registered successfully`);
+      
+      // 如果是冷重启，清理旧的 client sessions
+      if ((result as { cold_restart?: boolean }).cold_restart) {
+        this.logger.warn(`Edge ${params.server_id} reconnected after cold restart, cleaning up old client sessions`);
+        this.cleanupEdgeSessions(params.server_id);
+      }
       
       // 添加 Edge 到网络拓扑
       this._networkTopologyManager.addEdge(params.server_id);

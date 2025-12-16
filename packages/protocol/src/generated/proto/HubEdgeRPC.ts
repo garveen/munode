@@ -1835,539 +1835,6 @@ export namespace hubedge {
             return EdgeAuthenticateUserResult.deserialize(bytes);
         }
     }
-    export class EdgeReportSessionParams extends pb_1.Message {
-        #one_of_decls: number[][] = [];
-        constructor(data?: any[] | {
-            session_id: number;
-            user_id: number;
-            username: string;
-            edge_server_id: number;
-            channel_id?: number;
-            start_time: number;
-            ip_address: string;
-            groups: string[];
-            cert_hash?: string;
-            version?: string;
-            release?: string;
-            os?: string;
-            os_version?: string;
-            mute?: boolean;
-            deaf?: boolean;
-            suppress?: boolean;
-            self_mute?: boolean;
-            self_deaf?: boolean;
-            priority_speaker?: boolean;
-            recording?: boolean;
-        }) {
-            super();
-            pb_1.Message.initialize(this, Array.isArray(data) ? data : [], 0, -1, [8], this.#one_of_decls);
-            if (!Array.isArray(data) && typeof data == "object") {
-                this.session_id = data.session_id;
-                this.user_id = data.user_id;
-                this.username = data.username;
-                this.edge_server_id = data.edge_server_id;
-                if ("channel_id" in data && data.channel_id != undefined) {
-                    this.channel_id = data.channel_id;
-                }
-                this.start_time = data.start_time;
-                this.ip_address = data.ip_address;
-                this.groups = data.groups;
-                if ("cert_hash" in data && data.cert_hash != undefined) {
-                    this.cert_hash = data.cert_hash;
-                }
-                if ("version" in data && data.version != undefined) {
-                    this.version = data.version;
-                }
-                if ("release" in data && data.release != undefined) {
-                    this.release = data.release;
-                }
-                if ("os" in data && data.os != undefined) {
-                    this.os = data.os;
-                }
-                if ("os_version" in data && data.os_version != undefined) {
-                    this.os_version = data.os_version;
-                }
-                if ("mute" in data && data.mute != undefined) {
-                    this.mute = data.mute;
-                }
-                if ("deaf" in data && data.deaf != undefined) {
-                    this.deaf = data.deaf;
-                }
-                if ("suppress" in data && data.suppress != undefined) {
-                    this.suppress = data.suppress;
-                }
-                if ("self_mute" in data && data.self_mute != undefined) {
-                    this.self_mute = data.self_mute;
-                }
-                if ("self_deaf" in data && data.self_deaf != undefined) {
-                    this.self_deaf = data.self_deaf;
-                }
-                if ("priority_speaker" in data && data.priority_speaker != undefined) {
-                    this.priority_speaker = data.priority_speaker;
-                }
-                if ("recording" in data && data.recording != undefined) {
-                    this.recording = data.recording;
-                }
-            }
-        }
-        get session_id() {
-            return pb_1.Message.getField(this, 1) as number;
-        }
-        set session_id(value: number) {
-            pb_1.Message.setField(this, 1, value);
-        }
-        get has_session_id() {
-            return pb_1.Message.getField(this, 1) != null;
-        }
-        get user_id() {
-            return pb_1.Message.getField(this, 2) as number;
-        }
-        set user_id(value: number) {
-            pb_1.Message.setField(this, 2, value);
-        }
-        get has_user_id() {
-            return pb_1.Message.getField(this, 2) != null;
-        }
-        get username() {
-            return pb_1.Message.getField(this, 3) as string;
-        }
-        set username(value: string) {
-            pb_1.Message.setField(this, 3, value);
-        }
-        get has_username() {
-            return pb_1.Message.getField(this, 3) != null;
-        }
-        get edge_server_id() {
-            return pb_1.Message.getField(this, 4) as number;
-        }
-        set edge_server_id(value: number) {
-            pb_1.Message.setField(this, 4, value);
-        }
-        get has_edge_server_id() {
-            return pb_1.Message.getField(this, 4) != null;
-        }
-        get channel_id() {
-            return pb_1.Message.getFieldWithDefault(this, 5, 0) as number;
-        }
-        set channel_id(value: number) {
-            pb_1.Message.setField(this, 5, value);
-        }
-        get has_channel_id() {
-            return pb_1.Message.getField(this, 5) != null;
-        }
-        get start_time() {
-            return pb_1.Message.getField(this, 6) as number;
-        }
-        set start_time(value: number) {
-            pb_1.Message.setField(this, 6, value);
-        }
-        get has_start_time() {
-            return pb_1.Message.getField(this, 6) != null;
-        }
-        get ip_address() {
-            return pb_1.Message.getField(this, 7) as string;
-        }
-        set ip_address(value: string) {
-            pb_1.Message.setField(this, 7, value);
-        }
-        get has_ip_address() {
-            return pb_1.Message.getField(this, 7) != null;
-        }
-        get groups() {
-            return pb_1.Message.getFieldWithDefault(this, 8, []) as string[];
-        }
-        set groups(value: string[]) {
-            pb_1.Message.setField(this, 8, value);
-        }
-        get cert_hash() {
-            return pb_1.Message.getFieldWithDefault(this, 9, "") as string;
-        }
-        set cert_hash(value: string) {
-            pb_1.Message.setField(this, 9, value);
-        }
-        get has_cert_hash() {
-            return pb_1.Message.getField(this, 9) != null;
-        }
-        get version() {
-            return pb_1.Message.getFieldWithDefault(this, 10, "") as string;
-        }
-        set version(value: string) {
-            pb_1.Message.setField(this, 10, value);
-        }
-        get has_version() {
-            return pb_1.Message.getField(this, 10) != null;
-        }
-        get release() {
-            return pb_1.Message.getFieldWithDefault(this, 11, "") as string;
-        }
-        set release(value: string) {
-            pb_1.Message.setField(this, 11, value);
-        }
-        get has_release() {
-            return pb_1.Message.getField(this, 11) != null;
-        }
-        get os() {
-            return pb_1.Message.getFieldWithDefault(this, 12, "") as string;
-        }
-        set os(value: string) {
-            pb_1.Message.setField(this, 12, value);
-        }
-        get has_os() {
-            return pb_1.Message.getField(this, 12) != null;
-        }
-        get os_version() {
-            return pb_1.Message.getFieldWithDefault(this, 13, "") as string;
-        }
-        set os_version(value: string) {
-            pb_1.Message.setField(this, 13, value);
-        }
-        get has_os_version() {
-            return pb_1.Message.getField(this, 13) != null;
-        }
-        get mute() {
-            return pb_1.Message.getFieldWithDefault(this, 14, false) as boolean;
-        }
-        set mute(value: boolean) {
-            pb_1.Message.setField(this, 14, value);
-        }
-        get has_mute() {
-            return pb_1.Message.getField(this, 14) != null;
-        }
-        get deaf() {
-            return pb_1.Message.getFieldWithDefault(this, 15, false) as boolean;
-        }
-        set deaf(value: boolean) {
-            pb_1.Message.setField(this, 15, value);
-        }
-        get has_deaf() {
-            return pb_1.Message.getField(this, 15) != null;
-        }
-        get suppress() {
-            return pb_1.Message.getFieldWithDefault(this, 16, false) as boolean;
-        }
-        set suppress(value: boolean) {
-            pb_1.Message.setField(this, 16, value);
-        }
-        get has_suppress() {
-            return pb_1.Message.getField(this, 16) != null;
-        }
-        get self_mute() {
-            return pb_1.Message.getFieldWithDefault(this, 17, false) as boolean;
-        }
-        set self_mute(value: boolean) {
-            pb_1.Message.setField(this, 17, value);
-        }
-        get has_self_mute() {
-            return pb_1.Message.getField(this, 17) != null;
-        }
-        get self_deaf() {
-            return pb_1.Message.getFieldWithDefault(this, 18, false) as boolean;
-        }
-        set self_deaf(value: boolean) {
-            pb_1.Message.setField(this, 18, value);
-        }
-        get has_self_deaf() {
-            return pb_1.Message.getField(this, 18) != null;
-        }
-        get priority_speaker() {
-            return pb_1.Message.getFieldWithDefault(this, 19, false) as boolean;
-        }
-        set priority_speaker(value: boolean) {
-            pb_1.Message.setField(this, 19, value);
-        }
-        get has_priority_speaker() {
-            return pb_1.Message.getField(this, 19) != null;
-        }
-        get recording() {
-            return pb_1.Message.getFieldWithDefault(this, 20, false) as boolean;
-        }
-        set recording(value: boolean) {
-            pb_1.Message.setField(this, 20, value);
-        }
-        get has_recording() {
-            return pb_1.Message.getField(this, 20) != null;
-        }
-        static fromObject(data: {
-            session_id?: number;
-            user_id?: number;
-            username?: string;
-            edge_server_id?: number;
-            channel_id?: number;
-            start_time?: number;
-            ip_address?: string;
-            groups: string[];
-            cert_hash?: string;
-            version?: string;
-            release?: string;
-            os?: string;
-            os_version?: string;
-            mute?: boolean;
-            deaf?: boolean;
-            suppress?: boolean;
-            self_mute?: boolean;
-            self_deaf?: boolean;
-            priority_speaker?: boolean;
-            recording?: boolean;
-        }): EdgeReportSessionParams {
-            const message = new EdgeReportSessionParams({
-                session_id: data.session_id,
-                user_id: data.user_id,
-                username: data.username,
-                edge_server_id: data.edge_server_id,
-                start_time: data.start_time,
-                ip_address: data.ip_address,
-                groups: data.groups
-            });
-            if (data.channel_id != null) {
-                message.channel_id = data.channel_id;
-            }
-            if (data.cert_hash != null) {
-                message.cert_hash = data.cert_hash;
-            }
-            if (data.version != null) {
-                message.version = data.version;
-            }
-            if (data.release != null) {
-                message.release = data.release;
-            }
-            if (data.os != null) {
-                message.os = data.os;
-            }
-            if (data.os_version != null) {
-                message.os_version = data.os_version;
-            }
-            if (data.mute != null) {
-                message.mute = data.mute;
-            }
-            if (data.deaf != null) {
-                message.deaf = data.deaf;
-            }
-            if (data.suppress != null) {
-                message.suppress = data.suppress;
-            }
-            if (data.self_mute != null) {
-                message.self_mute = data.self_mute;
-            }
-            if (data.self_deaf != null) {
-                message.self_deaf = data.self_deaf;
-            }
-            if (data.priority_speaker != null) {
-                message.priority_speaker = data.priority_speaker;
-            }
-            if (data.recording != null) {
-                message.recording = data.recording;
-            }
-            return message;
-        }
-        toObject() {
-            const data: {
-                session_id?: number;
-                user_id?: number;
-                username?: string;
-                edge_server_id?: number;
-                channel_id?: number;
-                start_time?: number;
-                ip_address?: string;
-                groups: string[];
-                cert_hash?: string;
-                version?: string;
-                release?: string;
-                os?: string;
-                os_version?: string;
-                mute?: boolean;
-                deaf?: boolean;
-                suppress?: boolean;
-                self_mute?: boolean;
-                self_deaf?: boolean;
-                priority_speaker?: boolean;
-                recording?: boolean;
-            } = {
-                groups: this.groups
-            };
-            if (this.session_id != null) {
-                data.session_id = this.session_id;
-            }
-            if (this.user_id != null) {
-                data.user_id = this.user_id;
-            }
-            if (this.username != null) {
-                data.username = this.username;
-            }
-            if (this.edge_server_id != null) {
-                data.edge_server_id = this.edge_server_id;
-            }
-            if (this.channel_id != null) {
-                data.channel_id = this.channel_id;
-            }
-            if (this.start_time != null) {
-                data.start_time = this.start_time;
-            }
-            if (this.ip_address != null) {
-                data.ip_address = this.ip_address;
-            }
-            if (this.cert_hash != null) {
-                data.cert_hash = this.cert_hash;
-            }
-            if (this.version != null) {
-                data.version = this.version;
-            }
-            if (this.release != null) {
-                data.release = this.release;
-            }
-            if (this.os != null) {
-                data.os = this.os;
-            }
-            if (this.os_version != null) {
-                data.os_version = this.os_version;
-            }
-            if (this.mute != null) {
-                data.mute = this.mute;
-            }
-            if (this.deaf != null) {
-                data.deaf = this.deaf;
-            }
-            if (this.suppress != null) {
-                data.suppress = this.suppress;
-            }
-            if (this.self_mute != null) {
-                data.self_mute = this.self_mute;
-            }
-            if (this.self_deaf != null) {
-                data.self_deaf = this.self_deaf;
-            }
-            if (this.priority_speaker != null) {
-                data.priority_speaker = this.priority_speaker;
-            }
-            if (this.recording != null) {
-                data.recording = this.recording;
-            }
-            return data;
-        }
-        serialize(): Uint8Array;
-        serialize(w: pb_1.BinaryWriter): void;
-        serialize(w?: pb_1.BinaryWriter): Uint8Array | void {
-            const writer = w || new pb_1.BinaryWriter();
-            if (this.has_session_id)
-                writer.writeUint32(1, this.session_id);
-            if (this.has_user_id)
-                writer.writeUint32(2, this.user_id);
-            if (this.has_username && this.username.length)
-                writer.writeString(3, this.username);
-            if (this.has_edge_server_id)
-                writer.writeUint32(4, this.edge_server_id);
-            if (this.has_channel_id)
-                writer.writeUint32(5, this.channel_id);
-            if (this.has_start_time)
-                writer.writeInt64(6, this.start_time);
-            if (this.has_ip_address && this.ip_address.length)
-                writer.writeString(7, this.ip_address);
-            if (this.groups.length)
-                writer.writeRepeatedString(8, this.groups);
-            if (this.has_cert_hash && this.cert_hash.length)
-                writer.writeString(9, this.cert_hash);
-            if (this.has_version && this.version.length)
-                writer.writeString(10, this.version);
-            if (this.has_release && this.release.length)
-                writer.writeString(11, this.release);
-            if (this.has_os && this.os.length)
-                writer.writeString(12, this.os);
-            if (this.has_os_version && this.os_version.length)
-                writer.writeString(13, this.os_version);
-            if (this.has_mute)
-                writer.writeBool(14, this.mute);
-            if (this.has_deaf)
-                writer.writeBool(15, this.deaf);
-            if (this.has_suppress)
-                writer.writeBool(16, this.suppress);
-            if (this.has_self_mute)
-                writer.writeBool(17, this.self_mute);
-            if (this.has_self_deaf)
-                writer.writeBool(18, this.self_deaf);
-            if (this.has_priority_speaker)
-                writer.writeBool(19, this.priority_speaker);
-            if (this.has_recording)
-                writer.writeBool(20, this.recording);
-            if (!w)
-                return writer.getResultBuffer();
-        }
-        static deserialize(bytes: Uint8Array | pb_1.BinaryReader): EdgeReportSessionParams {
-            const reader = bytes instanceof pb_1.BinaryReader ? bytes : new pb_1.BinaryReader(bytes), message = new EdgeReportSessionParams();
-            while (reader.nextField()) {
-                if (reader.isEndGroup())
-                    break;
-                switch (reader.getFieldNumber()) {
-                    case 1:
-                        message.session_id = reader.readUint32();
-                        break;
-                    case 2:
-                        message.user_id = reader.readUint32();
-                        break;
-                    case 3:
-                        message.username = reader.readString();
-                        break;
-                    case 4:
-                        message.edge_server_id = reader.readUint32();
-                        break;
-                    case 5:
-                        message.channel_id = reader.readUint32();
-                        break;
-                    case 6:
-                        message.start_time = reader.readInt64();
-                        break;
-                    case 7:
-                        message.ip_address = reader.readString();
-                        break;
-                    case 8:
-                        pb_1.Message.addToRepeatedField(message, 8, reader.readString());
-                        break;
-                    case 9:
-                        message.cert_hash = reader.readString();
-                        break;
-                    case 10:
-                        message.version = reader.readString();
-                        break;
-                    case 11:
-                        message.release = reader.readString();
-                        break;
-                    case 12:
-                        message.os = reader.readString();
-                        break;
-                    case 13:
-                        message.os_version = reader.readString();
-                        break;
-                    case 14:
-                        message.mute = reader.readBool();
-                        break;
-                    case 15:
-                        message.deaf = reader.readBool();
-                        break;
-                    case 16:
-                        message.suppress = reader.readBool();
-                        break;
-                    case 17:
-                        message.self_mute = reader.readBool();
-                        break;
-                    case 18:
-                        message.self_deaf = reader.readBool();
-                        break;
-                    case 19:
-                        message.priority_speaker = reader.readBool();
-                        break;
-                    case 20:
-                        message.recording = reader.readBool();
-                        break;
-                    default: reader.skipField();
-                }
-            }
-            return message;
-        }
-        serializeBinary(): Uint8Array {
-            return this.serialize();
-        }
-        static deserializeBinary(bytes: Uint8Array): EdgeReportSessionParams {
-            return EdgeReportSessionParams.deserialize(bytes);
-        }
-    }
     export class EdgeReportSessionResult extends pb_1.Message {
         #one_of_decls: number[][] = [];
         constructor(data?: any[] | {
@@ -11914,7 +11381,6 @@ export namespace hubedge {
             edge_heartbeat?: EdgeHeartbeatParams;
             edge_allocate_session_id?: EdgeAllocateSessionIdParams;
             edge_authenticate_user?: EdgeAuthenticateUserParams;
-            edge_report_session?: EdgeReportSessionParams;
             edge_sync_voice_target?: EdgeSyncVoiceTargetParams;
             edge_get_voice_targets?: EdgeGetVoiceTargetsParams;
             edge_route_voice?: EdgeRouteVoiceParams;
@@ -11958,9 +11424,6 @@ export namespace hubedge {
                 }
                 if ("edge_authenticate_user" in data && data.edge_authenticate_user != undefined) {
                     this.edge_authenticate_user = data.edge_authenticate_user;
-                }
-                if ("edge_report_session" in data && data.edge_report_session != undefined) {
-                    this.edge_report_session = data.edge_report_session;
                 }
                 if ("edge_sync_voice_target" in data && data.edge_sync_voice_target != undefined) {
                     this.edge_sync_voice_target = data.edge_sync_voice_target;
@@ -12095,15 +11558,6 @@ export namespace hubedge {
         }
         get has_edge_authenticate_user() {
             return pb_1.Message.getField(this, 13) != null;
-        }
-        get edge_report_session() {
-            return pb_1.Message.getWrapperField(this, EdgeReportSessionParams, 14) as EdgeReportSessionParams;
-        }
-        set edge_report_session(value: EdgeReportSessionParams) {
-            pb_1.Message.setWrapperField(this, 14, value);
-        }
-        get has_edge_report_session() {
-            return pb_1.Message.getField(this, 14) != null;
         }
         get edge_sync_voice_target() {
             return pb_1.Message.getWrapperField(this, EdgeSyncVoiceTargetParams, 15) as EdgeSyncVoiceTargetParams;
@@ -12320,7 +11774,6 @@ export namespace hubedge {
             edge_heartbeat?: ReturnType<typeof EdgeHeartbeatParams.prototype.toObject>;
             edge_allocate_session_id?: ReturnType<typeof EdgeAllocateSessionIdParams.prototype.toObject>;
             edge_authenticate_user?: ReturnType<typeof EdgeAuthenticateUserParams.prototype.toObject>;
-            edge_report_session?: ReturnType<typeof EdgeReportSessionParams.prototype.toObject>;
             edge_sync_voice_target?: ReturnType<typeof EdgeSyncVoiceTargetParams.prototype.toObject>;
             edge_get_voice_targets?: ReturnType<typeof EdgeGetVoiceTargetsParams.prototype.toObject>;
             edge_route_voice?: ReturnType<typeof EdgeRouteVoiceParams.prototype.toObject>;
@@ -12363,9 +11816,6 @@ export namespace hubedge {
             }
             if (data.edge_authenticate_user != null) {
                 message.edge_authenticate_user = EdgeAuthenticateUserParams.fromObject(data.edge_authenticate_user);
-            }
-            if (data.edge_report_session != null) {
-                message.edge_report_session = EdgeReportSessionParams.fromObject(data.edge_report_session);
             }
             if (data.edge_sync_voice_target != null) {
                 message.edge_sync_voice_target = EdgeSyncVoiceTargetParams.fromObject(data.edge_sync_voice_target);
@@ -12447,7 +11897,6 @@ export namespace hubedge {
                 edge_heartbeat?: ReturnType<typeof EdgeHeartbeatParams.prototype.toObject>;
                 edge_allocate_session_id?: ReturnType<typeof EdgeAllocateSessionIdParams.prototype.toObject>;
                 edge_authenticate_user?: ReturnType<typeof EdgeAuthenticateUserParams.prototype.toObject>;
-                edge_report_session?: ReturnType<typeof EdgeReportSessionParams.prototype.toObject>;
                 edge_sync_voice_target?: ReturnType<typeof EdgeSyncVoiceTargetParams.prototype.toObject>;
                 edge_get_voice_targets?: ReturnType<typeof EdgeGetVoiceTargetsParams.prototype.toObject>;
                 edge_route_voice?: ReturnType<typeof EdgeRouteVoiceParams.prototype.toObject>;
@@ -12492,9 +11941,6 @@ export namespace hubedge {
             }
             if (this.edge_authenticate_user != null) {
                 data.edge_authenticate_user = this.edge_authenticate_user.toObject();
-            }
-            if (this.edge_report_session != null) {
-                data.edge_report_session = this.edge_report_session.toObject();
             }
             if (this.edge_sync_voice_target != null) {
                 data.edge_sync_voice_target = this.edge_sync_voice_target.toObject();
@@ -12585,8 +12031,6 @@ export namespace hubedge {
                 writer.writeMessage(12, this.edge_allocate_session_id, () => this.edge_allocate_session_id.serialize(writer));
             if (this.has_edge_authenticate_user)
                 writer.writeMessage(13, this.edge_authenticate_user, () => this.edge_authenticate_user.serialize(writer));
-            if (this.has_edge_report_session)
-                writer.writeMessage(14, this.edge_report_session, () => this.edge_report_session.serialize(writer));
             if (this.has_edge_sync_voice_target)
                 writer.writeMessage(15, this.edge_sync_voice_target, () => this.edge_sync_voice_target.serialize(writer));
             if (this.has_edge_get_voice_targets)
@@ -12662,9 +12106,6 @@ export namespace hubedge {
                         break;
                     case 13:
                         reader.readMessage(message.edge_authenticate_user, () => message.edge_authenticate_user = EdgeAuthenticateUserParams.deserialize(reader));
-                        break;
-                    case 14:
-                        reader.readMessage(message.edge_report_session, () => message.edge_report_session = EdgeReportSessionParams.deserialize(reader));
                         break;
                     case 15:
                         reader.readMessage(message.edge_sync_voice_target, () => message.edge_sync_voice_target = EdgeSyncVoiceTargetParams.deserialize(reader));

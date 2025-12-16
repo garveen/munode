@@ -26,7 +26,6 @@ export class AuthHandlers {
   private get voiceRouter() { return this.factory.voiceRouter; }
   private get authManager() { return this.factory.authManager; }
   private get config() { return this.factory.config; }
-  private get hubClient() { return this.factory.hubClient; }
   private get stateHandlers() { return this.factory.stateHandlers; }
 
   /**
@@ -79,12 +78,16 @@ export class AuthHandlers {
       };
 
       // 调用认证管理器
+      // 获取 PreConnect 状态（如果有）
+      const preState = this.stateHandlers.getPreConnectUserState(session_id);
+
       const authResult = await this.authManager.authenticate(
         session_id,
         authMessage.username || '',
         authMessage.password || '',
         authMessage.tokens || [],
-        clientInfo
+        clientInfo,
+        preState
       );
 
       if (authResult.success) {
@@ -154,129 +157,22 @@ export class AuthHandlers {
 
       this.messageHandler.sendMessage(session_id, MessageType.CodecVersion, Buffer.from(codecVersionMessage));
 
-      // 3. 应用 PreConnectUserState（必须在上报到 Hub 之前！）
-      // 从 StateHandlers 获取 PreConnect 状态并应用到客户端
-      const preState = this.stateHandlers.getPreConnectUserState(session_id);
-      if (preState) {
-        const updateFields: Partial<ClientInfo> = {};
-
-        if (preState.self_mute !== undefined) {
-          updateFields.self_mute = preState.self_mute;
-        }
-        if (preState.self_deaf !== undefined) {
-          updateFields.self_deaf = preState.self_deaf;
-        }
-        if (preState.comment !== undefined) {
-          updateFields.comment = preState.comment;
-        }
-
-        if (Object.keys(updateFields).length > 0) {
-          this.clientManager.updateClient(session_id, updateFields);
-          this.logger.debug(`Applied PreConnectUserState for session ${session_id}`, {
-            self_mute: preState.self_mute,
-            self_deaf: preState.self_deaf,
-          });
-        }
-
-        // 清理已应用的 PreConnect 状态
-        this.stateHandlers.clearPreConnectUserState(session_id);
+      // 3. 使用 Hub 返回的频道 ID 更新客户端
+      // Hub 已经处理了 last channel、权限检查等逻辑
+      if (authResult.channel_id !== undefined) {
+        this.clientManager.updateClient(session_id, {
+          channel_id: authResult.channel_id,
+        });
+        this.logger.debug(`Set user channel to ${authResult.channel_id} (from Hub)`);
       }
 
-      // 4. 上报会话到 Hub（包含完整的用户状态）
-      // Hub 在 authenticateUser 时已经预创建了 session
-      // 现在需要更新完整的频道和状态信息
-      const clientBeforeSync = this.clientManager.getClient(session_id);
-      if (!clientBeforeSync) {
-        throw new Error(`Client ${session_id} not found before sync`);
-      }
-      
-      if (!this.hubClient) {
-        this.logger.warn(`hubClient is undefined, cannot report session ${session_id} to Hub`);
-      } else if (!this.hubClient.isConnected()) {
-        this.logger.warn(`hubClient is not connected, cannot report session ${session_id} to Hub`);
-      } else {
-        try {
-          // 上报完整的会话信息到 Hub
-          const reportData: {
-            session_id: number;
-            user_id: number;
-            username: string;
-            channel_id: number;
-            startTime: Date;
-            ip_address: string;
-            groups: string[];
-            cert_hash?: string;
-            version?: string;
-            release?: string;
-            os?: string;
-            os_version?: string;
-            mute?: boolean;
-            deaf?: boolean;
-            suppress?: boolean;
-            self_mute?: boolean;
-            self_deaf?: boolean;
-            priority_speaker?: boolean;
-            recording?: boolean;
-          } = {
-            session_id: session_id,
-            user_id: clientBeforeSync.user_id,
-            username: clientBeforeSync.username,
-            channel_id: clientBeforeSync.channel_id,
-            startTime: clientBeforeSync.connected_at || new Date(),
-            ip_address: clientBeforeSync.ip_address,
-            groups: clientBeforeSync.groups,
-          };
-          
-          // 添加可选字段
-          if (clientBeforeSync.cert_hash) reportData.cert_hash = clientBeforeSync.cert_hash;
-          if (clientBeforeSync.version) reportData.version = clientBeforeSync.version;
-          if (clientBeforeSync.client_name) reportData.release = clientBeforeSync.client_name;
-          if (clientBeforeSync.os_name) reportData.os = clientBeforeSync.os_name;
-          if (clientBeforeSync.os_version) reportData.os_version = clientBeforeSync.os_version;
-          
-          // 只上报值为 true 的状态字段
-          const reportedFields: string[] = [];
-          if (clientBeforeSync.mute === true) {
-            reportData.mute = true;
-            reportedFields.push('mute');
-          }
-          if (clientBeforeSync.deaf === true) {
-            reportData.deaf = true;
-            reportedFields.push('deaf');
-          }
-          if (clientBeforeSync.suppress === true) {
-            reportData.suppress = true;
-            reportedFields.push('suppress');
-          }
-          if (clientBeforeSync.self_mute === true) {
-            reportData.self_mute = true;
-            reportedFields.push('self_mute');
-          }
-          if (clientBeforeSync.self_deaf === true) {
-            reportData.self_deaf = true;
-            reportedFields.push('self_deaf');
-          }
-          if (clientBeforeSync.priority_speaker === true) {
-            reportData.priority_speaker = true;
-            reportedFields.push('priority_speaker');
-          }
-          if (clientBeforeSync.recording === true) {
-            reportData.recording = true;
-            reportedFields.push('recording');
-          }
-          
-          await this.hubClient.reportSession(reportData);
-          this.logger.info(`Reported session ${session_id} (${clientBeforeSync.username}) to Hub${reportedFields.length > 0 ? ` with state: [${reportedFields.join(', ')}]` : ' (no state fields)'}`);
-        } catch (error) {
-        this.logger.error(`Failed to report session ${session_id} to Hub:`, error);
-          // Continue even if Hub report fails - local operations should still work
-        }
-      }
+      // 清理 PreConnect 状态（已经由 Hub 处理）
+      this.stateHandlers.clearPreConnectUserState(session_id);
 
-      // 5. 发送频道树
+      // 4. 发送频道树
       this.sendChannelTree(session_id);
 
-      // 6. 标记客户端即将接收用户列表
+      // 5. 标记客户端即将接收用户列表
       // 重要：必须在 sendUserListToClient 之前设置此标志
       // 这样在用户列表传输过程中，如果其他用户改变状态，Hub 广播的状态更新会被正确处理
       // 参考 Murmur 实现：https://github.com/mumble-voip/mumble/blob/master/src/murmur/Server.cpp
@@ -284,16 +180,16 @@ export class AuthHandlers {
         has_full_user_list: true,
       });
 
-      // 7. 发送所有其他用户的状态
+      // 6. 发送所有其他用户的状态
       await this.sendUserListToClient(session_id);
 
-      // 8. 获取更新后的客户端信息
+      // 7. 获取更新后的客户端信息
       const updatedClient = this.clientManager.getClient(session_id);
       if (!updatedClient) {
         throw new Error(`Client ${session_id} not found after update`);
       }
 
-      // 9. 发送当前用户的完整状态（必须在 ServerSync 之前）
+      // 8. 发送当前用户的完整状态（必须在 ServerSync 之前）
       // 这是协议握手的关键步骤，客户端期望先收到自己的状态再收到 ServerSync
       // 只发送已显式设置的状态字段
       const currentUserStateData: {
@@ -341,7 +237,7 @@ export class AuthHandlers {
       this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(currentUserState));
         this.logger.debug(`Sent UserState for session ${session_id}: username=${updatedClient.username}, channel_id=${updatedClient.channel_id}`);
 
-      // 10. 发送 ServerSync 消息（放在 UserState 之后）
+      // 9. 发送 ServerSync 消息（放在 UserState 之后）
       const serverSyncMessage = new mumbleproto.ServerSync({
         session: session_id,
         max_bandwidth: this.config.max_bandwidth || 128000,
@@ -361,7 +257,7 @@ export class AuthHandlers {
         `username=${updatedClient.username}, user_id=${updatedClient.user_id}, state=Ready`
       );
 
-      // 11. 广播新用户加入给其他已认证客户端
+      // 10. 广播新用户加入给其他已认证客户端（注意：Hub 已经广播了 userJoined）
       // 参考 Mumble/Murmur 实现：新用户加入时只广播基本信息，不包含状态字段
       // 状态字段只在用户显式改变时才广播
       const broadcastStateData: {

@@ -222,6 +222,8 @@ export interface AuthResult {
   username?: string;
   displayName?: string;
   groups?: string[];
+  channel_id?: number; // Hub 决定的目标频道（包括 last channel 逻辑）
+  cert_hash?: string; // 返回证书哈希（如果有）
   metadata?: Record<string, string | number | boolean>;
   reason?: string;
   rejectType?: mumbleproto.Reject.RejectType;

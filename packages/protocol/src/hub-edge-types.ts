@@ -85,6 +85,7 @@ export interface RegisterResponse extends RPCResponse {
   // 重连和会话管理
   reconnected?: boolean; // 标识这是重连（会话恢复），而非新注册
   session_expired?: boolean; // 标识会话已过期，需要冷启动
+  cold_restart?: boolean; // 标识这是冷重启（Edge 进程重启，所有旧客户端已断开）
 }
 
 // Edge server information

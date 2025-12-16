@@ -127,6 +127,10 @@ export class EdgeControlClient extends EventEmitter {
    * 实现 HMAC 挑战-响应认证
    */
   private async register(): Promise<void> {
+    // 检查是否为冷重启：Edge 进程刚启动，没有任何客户端连接
+    // 注意：第一次启动时也会标记为冷重启，这是正确的行为
+    const isColdRestart = true; // Edge 进程启动/重启时，所有旧连接都已断开
+    
     const registerParams: RPCParams<'edge.register'> = {
       server_id: this.config.server_id || 1,
       name: this.config.name,
@@ -135,6 +139,7 @@ export class EdgeControlClient extends EventEmitter {
       region: this.config.network.region || '',
       capacity: this.config.capacity,
       certificate: '', // TODO: 获取证书
+      cold_restart: isColdRestart, // 报告冷重启状态
       metadata: {
         version: '1.0.0',
         features: Object.keys(this.config.features)
@@ -431,46 +436,6 @@ export class EdgeControlClient extends EventEmitter {
     } catch (error) {
       this.logger.error('Failed to allocate session ID:', error);
       throw error;
-    }
-  }
-
-  /**
-   * 上报会话信息到 Hub
-   */
-  async reportSession(session: {
-    session_id: number;
-    user_id: number;
-    username: string;
-    channel_id?: number;
-    startTime: Date;
-    ip_address: string;
-    groups?: string[];
-    cert_hash?: string;
-    version?: string;
-    release?: string;
-    os?: string;
-    os_version?: string;
-    // User state fields
-    mute?: boolean;
-    deaf?: boolean;
-    suppress?: boolean;
-    self_mute?: boolean;
-    self_deaf?: boolean;
-    priority_speaker?: boolean;
-    recording?: boolean;
-  }): Promise<void> {
-    if (!this.isConnected() || (!this.useExternalClient && !this.registered)) {
-      return;
-    }
-
-    try {
-      const params: RPCParams<'edge.reportSession'> = {
-        ...session,
-        edge_server_id: this.config.server_id,
-      };
-      await this.client.call('edge.reportSession', params);
-    } catch (error) {
-      this.logger.error('Failed to report session:', error);
     }
   }
 

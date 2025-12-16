@@ -174,34 +174,7 @@ export class TypedRPCServer {
         return request.edge_allocate_session_id?.toObject() as RPCParams<'edge.allocateSessionId'>;
       case 'edge.authenticateUser':
         return request.edge_authenticate_user?.toObject() as RPCParams<'edge.authenticateUser'>;
-      case 'edge.reportSession': {
-        const reportSession = request.edge_report_session?.toObject();
-        if (reportSession) {
-          return {
-            session_id: reportSession.session_id,
-            user_id: reportSession.user_id,
-            username: reportSession.username,
-            edge_server_id: reportSession.edge_server_id,
-            channel_id: reportSession.channel_id,
-            startTime: new Date(reportSession.start_time),
-            ip_address: reportSession.ip_address,
-            groups: reportSession.groups,
-            cert_hash: reportSession.cert_hash,
-            version: reportSession.version,
-            release: reportSession.release,
-            os: reportSession.os,
-            os_version: reportSession.os_version,
-            mute: reportSession.mute,
-            deaf: reportSession.deaf,
-            suppress: reportSession.suppress,
-            self_mute: reportSession.self_mute,
-            self_deaf: reportSession.self_deaf,
-            priority_speaker: reportSession.priority_speaker,
-            recording: reportSession.recording,
-          } as RPCParams<'edge.reportSession'>;
-        }
-        throw new Error('Missing edge.reportSession params');
-      }
+
       case 'edge.syncVoiceTarget':
         return request.edge_sync_voice_target?.toObject() as RPCParams<'edge.syncVoiceTarget'>;
       case 'edge.getVoiceTargets':
@@ -362,14 +335,6 @@ export class TypedRPCServer {
           groups: r.groups,
           reason: r.reason,
           reject_type: r.rejectType,
-        });
-        break;
-      }
-      case 'edge.reportSession': {
-        const r = result as RPCResult<'edge.reportSession'>;
-        response.edge_report_session = hubedgeRpc.EdgeReportSessionResult.fromObject({
-          success: r.success,
-          error: r.error,
         });
         break;
       }

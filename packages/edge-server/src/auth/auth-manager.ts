@@ -71,6 +71,11 @@ export class AuthManager extends EventEmitter {
       os: string;
       os_version: string;
       certificate_hash?: string;
+    },
+    preConnectState?: {
+      self_mute?: boolean;
+      self_deaf?: boolean;
+      comment?: string;
     }
   ): Promise<AuthResult> {
     try {
@@ -86,7 +91,7 @@ export class AuthManager extends EventEmitter {
       }
 
       // 通过 Hub 认证
-      const authResult = await this.authenticateViaHub(session_id, username, password, tokens, clientInfo);
+      const authResult = await this.authenticateViaHub(session_id, username, password, tokens, clientInfo, preConnectState);
 
       // 缓存结果
       if (authResult.success) {
@@ -98,7 +103,7 @@ export class AuthManager extends EventEmitter {
 
       if (authResult.success) {
         this.logger.info(
-          `Authentication successful: session=${session_id}, userId=${authResult.user_id}`
+          `Authentication successful: session=${session_id}, userId=${authResult.user_id}${authResult.channel_id !== undefined ? `, channel=${authResult.channel_id}` : ''}`
         );
       } else {
         this.logger.warn(
@@ -132,6 +137,11 @@ export class AuthManager extends EventEmitter {
       os: string;
       os_version: string;
       certificate_hash?: string;
+    },
+    preConnectState?: {
+      self_mute?: boolean;
+      self_deaf?: boolean;
+      comment?: string;
     }
   ): Promise<AuthResult> {
     if (!this.hubClient || !this.hubClient.isConnected()) {
@@ -143,9 +153,26 @@ export class AuthManager extends EventEmitter {
     }
 
     try {
-      // 调用 Hub 的认证 RPC
-      const response = await this.hubClient.call('edge.authenticateUser', {
-        session_id: session_id, // 使用真实的客户端 session_id
+      // 调用 Hub 的认证 RPC，包含 PreConnect 状态
+      const authParams: {
+        session_id: number;
+        server_id: number;
+        username: string;
+        password: string;
+        tokens: string[];
+        client_info: {
+          ip_address: string;
+          ip_version: string;
+          release: string;
+          version?: number;
+          os: string;
+          os_version: string;
+          certificate_hash?: string;
+        };
+        self_mute?: boolean;
+        self_deaf?: boolean;
+      } = {
+        session_id: session_id,
         server_id: this.config.server_id,
         username,
         password,
@@ -157,7 +184,17 @@ export class AuthManager extends EventEmitter {
           os: 'unknown',
           os_version: 'unknown',
         },
-      });
+      };
+
+      // 添加 PreConnect 状态
+      if (preConnectState?.self_mute) {
+        authParams.self_mute = true;
+      }
+      if (preConnectState?.self_deaf) {
+        authParams.self_deaf = true;
+      }
+
+      const response = await this.hubClient.call('edge.authenticateUser', authParams);
 
       this.logger.debug(`Hub auth response:`, response);
       return response as AuthResult;

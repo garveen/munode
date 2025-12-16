@@ -188,7 +188,6 @@ export type {
   // Individual method types
   EdgeRegisterMethod,
   EdgeHeartbeatMethod,
-  EdgeReportSessionMethod,
   EdgeSyncVoiceTargetMethod,
   EdgeGetVoiceTargetsMethod,
   EdgeRouteVoiceMethod,

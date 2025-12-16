@@ -114,10 +114,13 @@ export class ServiceRegistry {
 
     // 检查是否已存在
     const existingEdge = this.edges.get(server_id);
+    // 检查是否为冷重启（Edge 进程重启，所有客户端已断开）
+    const isColdRestart = !!(request as { cold_restart?: boolean }).cold_restart;
+    
     if (existingEdge) {
       // 如果Edge在等待重连状态中重连，恢复会话
       if (existingEdge.connectionState === EdgeConnectionState.DISCONNECTED_WAITING) {
-        this.logger.info(`Edge Server ${server_id} reconnected within grace period`);
+        this.logger.info(`Edge Server ${server_id} reconnected within grace period${isColdRestart ? ' (cold restart)' : ''}`);
         
         // 清理cleanup timer
         if (existingEdge.cleanupTimer) {
@@ -144,6 +147,7 @@ export class ServiceRegistry {
           hub_server_id: 0,
           edge_list: this.getEdgeList(),
           reconnected: true, // 标识这是重连
+          cold_restart: isColdRestart, // 标识是否为冷重启
         };
       } else if (existingEdge.connectionState === EdgeConnectionState.DISCONNECTED_TIMEOUT) {
         // Edge已经超时被清理，拒绝重连

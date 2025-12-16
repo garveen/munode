@@ -112,33 +112,6 @@ message EdgeAuthenticateUserResult {
   optional uint32 reject_type = 7;
 }
 
-// ---------------------------------------------------------------------------
-// edge.reportSession - Edge 上报用户会话
-// ---------------------------------------------------------------------------
-message EdgeReportSessionParams {
-  required uint32 session_id = 1;
-  required uint32 user_id = 2;
-  required string username = 3;
-  required uint32 edge_server_id = 4;
-  optional uint32 channel_id = 5;
-  required int64 start_time = 6;
-  required string ip_address = 7;
-  repeated string groups = 8;
-  optional string cert_hash = 9;
-  optional string version = 10;
-  optional string release = 11;
-  optional string os = 12;
-  optional string os_version = 13;
-  // User state fields
-  optional bool mute = 14;
-  optional bool deaf = 15;
-  optional bool suppress = 16;
-  optional bool self_mute = 17;
-  optional bool self_deaf = 18;
-  optional bool priority_speaker = 19;
-  optional bool recording = 20;
-}
-
 message EdgeReportSessionResult {
   required bool success = 1;
   optional string error = 2;
@@ -757,7 +730,6 @@ message TypedRPCRequest {
   optional EdgeHeartbeatParams edge_heartbeat = 11;
   optional EdgeAllocateSessionIdParams edge_allocate_session_id = 12;
   optional EdgeAuthenticateUserParams edge_authenticate_user = 13;
-  optional EdgeReportSessionParams edge_report_session = 14;
   optional EdgeSyncVoiceTargetParams edge_sync_voice_target = 15;
   optional EdgeGetVoiceTargetsParams edge_get_voice_targets = 16;
   optional EdgeRouteVoiceParams edge_route_voice = 17;

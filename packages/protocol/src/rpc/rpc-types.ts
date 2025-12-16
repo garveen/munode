@@ -43,6 +43,9 @@ export interface EdgeRegisterMethod {
     // HMAC 挑战-响应认证
     challenge?: string; // Hub 返回的挑战码
     challenge_response?: string; // Edge 计算的 HMAC 签名
+    
+    // 冷重启标志：Edge 进程重启，所有旧客户端已断开
+    cold_restart?: boolean;
   };
   result: RegisterResponse;
 }
@@ -92,38 +95,7 @@ export interface EdgeAuthenticateUserMethod {
       os_version: string; // 操作系统版本
       certificate_hash?: string; // 证书哈希
     };
-  };
-  result: {
-    success: boolean;
-    user_id?: number;
-    username?: string;
-    displayName?: string;
-    groups?: string[];
-    reason?: string;
-    rejectType?: number; // mumbleproto.Reject.RejectType
-  };
-}
-
-/**
- * Edge 上报用户会话
- */
-export interface EdgeReportSessionMethod {
-  method: 'edge.reportSession';
-  params: {
-    session_id: number;
-    user_id: number;
-    username: string;
-    edge_server_id: number;
-    channel_id?: number;
-    startTime: Date;
-    ip_address: string;
-    groups?: string[]; // 用户所属的组
-    cert_hash?: string; // 证书哈希
-    version?: string; // 客户端版本
-    release?: string; // 客户端名称
-    os?: string; // 操作系统
-    os_version?: string; // 操作系统版本
-    // 用户状态字段
+    // 用户状态字段（PreConnect状态）
     mute?: boolean;
     deaf?: boolean;
     suppress?: boolean;
@@ -132,7 +104,17 @@ export interface EdgeReportSessionMethod {
     priority_speaker?: boolean;
     recording?: boolean;
   };
-  result: RPCResponse;
+  result: {
+    success: boolean;
+    user_id?: number;
+    username?: string;
+    displayName?: string;
+    groups?: string[];
+    channel_id?: number; // Hub 决定的目标频道（包括 last channel 逻辑）
+    cert_hash?: string; // 返回证书哈希（如果有）
+    reason?: string;
+    rejectType?: number; // mumbleproto.Reject.RejectType
+  };
 }
 
 /**
@@ -1075,7 +1057,6 @@ export type EdgeToHubMethods =
   | EdgeHeartbeatMethod
   | EdgeAllocateSessionIdMethod
   | EdgeAuthenticateUserMethod
-  | EdgeReportSessionMethod
   | EdgeSyncVoiceTargetMethod
   | EdgeGetVoiceTargetsMethod
   | EdgeRouteVoiceMethod

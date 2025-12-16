@@ -114,32 +114,6 @@ export class TypedRPCClient {
         });
         break;
       }
-      case 'edge.reportSession': {
-        const p = params as RPCParams<'edge.reportSession'>;
-        request.edge_report_session = hubedgeRpc.EdgeReportSessionParams.fromObject({
-          session_id: p.session_id,
-          user_id: p.user_id,
-          username: p.username,
-          edge_server_id: p.edge_server_id,
-          channel_id: p.channel_id,
-          start_time: p.startTime instanceof Date ? p.startTime.getTime() : p.startTime,
-          ip_address: p.ip_address,
-          groups: p.groups,
-          cert_hash: p.cert_hash,
-          version: p.version,
-          release: p.release,
-          os: p.os,
-          os_version: p.os_version,
-          mute: p.mute,
-          deaf: p.deaf,
-          suppress: p.suppress,
-          self_mute: p.self_mute,
-          self_deaf: p.self_deaf,
-          priority_speaker: p.priority_speaker,
-          recording: p.recording,
-        });
-        break;
-      }
       case 'edge.syncVoiceTarget': {
         const p = params as RPCParams<'edge.syncVoiceTarget'>;
         request.edge_sync_voice_target = hubedgeRpc.EdgeSyncVoiceTargetParams.fromObject({
@@ -382,8 +356,6 @@ export class TypedRPCClient {
         return response.edge_allocate_session_id?.toObject() as RPCResult<M>;
       case 'edge.authenticateUser':
         return response.edge_authenticate_user?.toObject() as RPCResult<M>;
-      case 'edge.reportSession':
-        return response.edge_report_session?.toObject() as RPCResult<M>;
       case 'edge.syncVoiceTarget':
         return response.edge_sync_voice_target?.toObject() as RPCResult<M>;
       case 'edge.getVoiceTargets':
