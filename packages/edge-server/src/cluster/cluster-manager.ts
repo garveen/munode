@@ -8,8 +8,7 @@
  * - 所有控制信令通过Hub中转
  */
 
-import { createHmac } from 'crypto';
-import type { HubNotificationParams, RegisterResponse } from '@munode/protocol';
+import type { HubNotificationParams } from '@munode/protocol';
 import { ControlChannelClient } from '../control/control-client.js';
 import { ReconnectManager } from './reconnect-manager.js';
 import type { EdgeConfig } from '../types.js';
@@ -118,94 +117,18 @@ export class EdgeClusterManager {
   }
 
   /**
-   * 计算 HMAC 签名
-   */
-  private computeHmac(challenge: string, serverId: number, secret: string): string {
-    const message = `${challenge}:${serverId}`;
-    const hmac = createHmac('sha256', secret);
-    hmac.update(message);
-    return hmac.digest('hex');
-  }
-
-  /**
-   * 注册到 Hub，支持 HMAC 挑战-响应认证
-   */
-  private async registerToHub(): Promise<RegisterResponse> {
-    const registerParams = {
-      server_id: this.config.server_id,
-      name: this.config.name,
-      host: this.config.network.externalHost || this.config.network.host,
-      port: this.config.network.externalPort ?? this.config.network.port,
-      region: this.config.network.region || '',
-      capacity: this.config.capacity,
-      certificate: '', // TODO: 获取证书
-      metadata: {
-        version: '1.0.0',
-        features: Object.keys(this.config.features)
-          .filter((key) => this.config.features[key as keyof typeof this.config.features])
-          .join(','),
-      },
-    };
-
-    // 第一阶段：请求挑战码
-    this.logger.info('Requesting challenge from Hub...');
-    const challengeResponse = await this.hubClient.call('edge.register', registerParams);
-    
-    // 如果 Hub 返回了 challenge，进行第二阶段认证
-    if (!challengeResponse.success && challengeResponse.challenge) {
-      const challenge = challengeResponse.challenge;
-      this.logger.info('Received challenge, computing response...');
-      
-      // 计算 HMAC 签名
-      const hmacSecret = this.config.hubServer?.hmacSecret;
-      if (!hmacSecret) {
-        throw new Error('HMAC secret not configured in Edge config');
-      }
-      
-      const challengeResponseValue = this.computeHmac(challenge, this.config.server_id, hmacSecret);
-      
-      // 第二阶段：提交签名
-      const authParams = {
-        ...registerParams,
-        challenge,
-        challenge_response: challengeResponseValue,
-      };
-      
-      this.logger.info('Submitting challenge response...');
-      const finalResponse = await this.hubClient.call('edge.register', authParams);
-      
-      if (!finalResponse.success) {
-        throw new Error(finalResponse.error || 'Registration failed after authentication');
-      }
-      
-      this.logger.info(`Registered with Hub: ${JSON.stringify(finalResponse)}`);
-      return finalResponse;
-    } else if (challengeResponse.success) {
-      // Hub 未启用认证，直接注册成功
-      this.logger.info(`Registered with Hub (no auth): ${JSON.stringify(challengeResponse)}`);
-      return challengeResponse;
-    } else {
-      throw new Error(challengeResponse.error || 'Registration failed');
-    }
-  }
-
-  /**
    * 加入集群
    * 
-   * 注意：连接由底层 ControlChannelClient 处理
-   * 注册包含 HMAC 认证逻辑
+   * 注意：连接和注册由 HubClient 处理（会触发 registered/reconnected 事件）
    */
   async joinCluster(): Promise<void> {
     try {
-      // 1. 连接 Hub
+      // 1. 连接并注册到 Hub（HubClient.connect() 会自动处理注册）
       await this.hubClient.connect();
-      this.logger.info('Connected to Hub server');
+      // 注意：不需要在这里记录 "Connected" 日志，HubClient 的事件处理器会记录
+      // 也不需要再次调用 registerToHub()，因为 hubClient.connect() 已经完成了注册
 
-      // 2. 向 Hub 注册自身（包含 HMAC 认证）
-      const registerResponse = await this.registerToHub();
-      this.logger.info(`Successfully registered with Hub: ${JSON.stringify(registerResponse)}`);
-
-      // 3. 发起 join 请求
+      // 2. 发起 join 请求
       const joinRequest = {
          server_id: this.config.server_id,
         name: this.config.name,
