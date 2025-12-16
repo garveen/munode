@@ -6,7 +6,7 @@
  * The RPC channel now uses TypedRPCRequest/TypedRPCResponse protobuf messages.
  */
 
-import type { RPCChannel, NotificationParams as UnionNotificationParams } from './rpc-channel.js';
+import type { RPCChannel } from './rpc-channel.js';
 import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
 import type {
   EdgeToHubMethods,
@@ -335,6 +335,7 @@ export class TypedRPCServer {
           groups: r.groups,
           reason: r.reason,
           reject_type: r.rejectType,
+          channel_id: r.channel_id,
         });
         break;
       }

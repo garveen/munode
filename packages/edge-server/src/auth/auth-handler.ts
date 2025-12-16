@@ -189,21 +189,10 @@ export class AuthHandlers {
         throw new Error(`Client ${session_id} not found after update`);
       }
 
-      // 8. 广播新用户加入（包括给用户自己）
-      // 参考 Go 实现：在 ServerSync 之前广播 UserState
-      // server.broadcastProtoMessageWithPredicate(userstate, func(c *Client) bool { return c == client || c.hasFullUserList })
-      // 用户自己也需要收到这个 UserState，这是用户了解自己所在频道的唯一途径
-      const userStateData: {
-        session: number;
-        actor: number;
-        user_id: number;
-        name: string;
-        channel_id: number;
-        temporary_access_tokens: string[];
-        listening_channel_add: number[];
-        listening_channel_remove: number[];
-        hash?: string;
-      } = {
+      // 8. 向用户自己发送 UserState（必须在 ServerSync 之前）
+      // 参考 Mumble 客户端实现：msgServerSync 期望在收到 ServerSync 前已有 user profile
+      // 参考 Go 实现：在 goroutine 中广播 UserState（包括用户自己），然后主线程发送 ServerSync
+      const selfUserState = new mumbleproto.UserState({
         session: session_id,
         actor: session_id,
         name: updatedClient.username,
@@ -212,19 +201,12 @@ export class AuthHandlers {
         temporary_access_tokens: [],
         listening_channel_add: [],
         listening_channel_remove: [],
-      };
-      
-      // 只添加证书哈希（如果有）
-      if (updatedClient.cert_hash) userStateData.hash = updatedClient.cert_hash;
-      
-      // 注意：不在这里添加状态字段（mute, deaf, self_mute, self_deaf, priority_speaker, recording）
-      // 这些字段会在后续单独广播
-      
-      const userState = new mumbleproto.UserState(userStateData);
-      this.broadcastUserState(userState);  // 广播给所有人（包括用户自己）
-      this.logger.debug(`Broadcasted UserState for new user ${updatedClient.username} (session ${session_id}, channel ${updatedClient.channel_id}) to all authenticated clients including self`);
+      });
 
-      // 9. 发送 ServerSync 消息（在 UserState 广播之后）
+      this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(selfUserState.serialize()));
+
+      // 9. 发送 ServerSync 消息
+      // Hub 会通过 hub.userJoined 通知所有 Edge（包括本 Edge），广播给其他客户端
       const serverSyncMessage = new mumbleproto.ServerSync({
         session: session_id,
         max_bandwidth: this.config.max_bandwidth || 128000,
@@ -234,45 +216,15 @@ export class AuthHandlers {
 
       this.messageHandler.sendMessage(session_id, MessageType.ServerSync, Buffer.from(serverSyncMessage));
 
-      // 10. 如果用户有 SelfMute/SelfDeaf 状态，单独广播这些状态
-      // 参考 Go 实现：在 ServerSync 之后，如果有 SelfMute/SelfDeaf，才广播状态更新
-      if (updatedClient.self_mute === true || updatedClient.self_deaf === true) {
-        const stateUpdateData: {
-          session: number;
-          actor: number;
-          temporary_access_tokens: string[];
-          listening_channel_add: number[];
-          listening_channel_remove: number[];
-          self_mute?: boolean;
-          self_deaf?: boolean;
-        } = {
-          session: session_id,
-          actor: session_id,
-          temporary_access_tokens: [],
-          listening_channel_add: [],
-          listening_channel_remove: [],
-        };
-        
-        if (updatedClient.self_deaf === true) {
-          stateUpdateData.self_deaf = true;
-        } else if (updatedClient.self_mute === true) {
-          stateUpdateData.self_mute = true;
-        }
-        
-        const stateUpdate = new mumbleproto.UserState(stateUpdateData);
-        // 只广播给其他客户端，不包括自己（自己已经知道自己的状态）
-        this.broadcastUserState(stateUpdate, session_id);
-        this.logger.debug(`Broadcasted self_mute/self_deaf state for session ${session_id}`);
-      }
-
-      // 发送 ServerSync 后，更新客户端状态为 Ready
+      // 10. 更新客户端状态为 Ready
       this.clientManager.updateClient(session_id, {
         state: ClientState.Ready,
       });
 
       this.logger.info(
-        `User authenticated and ready: session=${session_id}, ` +
-        `username=${updatedClient.username}, user_id=${updatedClient.user_id}, channel=${updatedClient.channel_id}, state=Ready`
+        `[AUTH-FLOW] User authenticated and ready: session=${session_id}, ` +
+        `username=${updatedClient.username}, user_id=${updatedClient.user_id}, channel=${updatedClient.channel_id}, state=Ready. ` +
+        `Hub will broadcast userJoined to other clients.`
       );
 
     } catch (error) {
@@ -324,14 +276,4 @@ export class AuthHandlers {
     messageHandlers.sendReject(session_id, reason, rejectType);
   }
 
-  /**
-   * 广播用户状态（委托给 MessageHandlers）
-   */
-  private broadcastUserState(
-    userState: mumbleproto.UserState,
-    excludeSession?: number
-  ): void {
-    const messageHandlers = this.factory.messageHandlers;
-    messageHandlers.broadcastUserStateToAuthenticatedClients(userState, excludeSession);
-  }
 }

@@ -1630,6 +1630,7 @@ export namespace hubedge {
             groups: string[];
             reason?: string;
             reject_type?: number;
+            channel_id?: number;
         }) {
             super();
             pb_1.Message.initialize(this, Array.isArray(data) ? data : [], 0, -1, [5], this.#one_of_decls);
@@ -1650,6 +1651,9 @@ export namespace hubedge {
                 }
                 if ("reject_type" in data && data.reject_type != undefined) {
                     this.reject_type = data.reject_type;
+                }
+                if ("channel_id" in data && data.channel_id != undefined) {
+                    this.channel_id = data.channel_id;
                 }
             }
         }
@@ -1713,6 +1717,15 @@ export namespace hubedge {
         get has_reject_type() {
             return pb_1.Message.getField(this, 7) != null;
         }
+        get channel_id() {
+            return pb_1.Message.getFieldWithDefault(this, 8, 0) as number;
+        }
+        set channel_id(value: number) {
+            pb_1.Message.setField(this, 8, value);
+        }
+        get has_channel_id() {
+            return pb_1.Message.getField(this, 8) != null;
+        }
         static fromObject(data: {
             success?: boolean;
             user_id?: number;
@@ -1721,6 +1734,7 @@ export namespace hubedge {
             groups: string[];
             reason?: string;
             reject_type?: number;
+            channel_id?: number;
         }): EdgeAuthenticateUserResult {
             const message = new EdgeAuthenticateUserResult({
                 success: data.success,
@@ -1741,6 +1755,9 @@ export namespace hubedge {
             if (data.reject_type != null) {
                 message.reject_type = data.reject_type;
             }
+            if (data.channel_id != null) {
+                message.channel_id = data.channel_id;
+            }
             return message;
         }
         toObject() {
@@ -1752,6 +1769,7 @@ export namespace hubedge {
                 groups: string[];
                 reason?: string;
                 reject_type?: number;
+                channel_id?: number;
             } = {
                 groups: this.groups
             };
@@ -1773,6 +1791,9 @@ export namespace hubedge {
             if (this.reject_type != null) {
                 data.reject_type = this.reject_type;
             }
+            if (this.channel_id != null) {
+                data.channel_id = this.channel_id;
+            }
             return data;
         }
         serialize(): Uint8Array;
@@ -1793,6 +1814,8 @@ export namespace hubedge {
                 writer.writeString(6, this.reason);
             if (this.has_reject_type)
                 writer.writeUint32(7, this.reject_type);
+            if (this.has_channel_id)
+                writer.writeUint32(8, this.channel_id);
             if (!w)
                 return writer.getResultBuffer();
         }
@@ -1822,6 +1845,9 @@ export namespace hubedge {
                         break;
                     case 7:
                         message.reject_type = reader.readUint32();
+                        break;
+                    case 8:
+                        message.channel_id = reader.readUint32();
                         break;
                     default: reader.skipField();
                 }

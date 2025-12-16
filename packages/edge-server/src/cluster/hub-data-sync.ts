@@ -109,31 +109,38 @@ export class HubDataManager {
    */
   handleRemoteUserJoined(params: HubNotificationParams<'hub.userJoined'>): void {
     try {
-      this.logger.info(`Remote user joined: ${params.username} (session ${params.session_id}) from Edge ${params.edge_id}`);
+      const isLocalUser = params.edge_id === this.handlerFactory.config.server_id;
+      this.logger.info(`[HUB-EVENT] User joined: ${params.username} (session ${params.session_id}) from Edge ${params.edge_id}${isLocalUser ? ' (LOCAL)' : ' (REMOTE)'}, channel=${params.channel_id}`);
 
-      // Skip broadcasting for local users - they were already broadcasted during authentication
-      if (params.edge_id === this.handlerFactory.config.server_id) {
-        this.logger.debug(`Skipping broadcast for local user ${params.username} - already broadcasted during authentication`);
-        return;
-      }
-
-      // Track remote user state
-      if (this.handlerFactory.stateManager) {
+      // Track remote user state (不跟踪本地用户)
+      if (!isLocalUser && this.handlerFactory.stateManager) {
         this.handlerFactory.stateManager.addRemoteUser(params.session_id, params.edge_id, params.channel_id);
       }
 
       // Broadcast to all local authenticated clients
+      // 对于本地用户：广播给其他有完整用户列表的客户端（不包括用户自己，因为已在认证时发送）
+      // 对于远程用户：广播给所有已注册的本地用户
       const allClients = this.handlerFactory.clientManager.getAllClients();
       let broadcastCount = 0;
       
       for (const client of allClients) {
-        if (client.user_id > 0 && client.has_full_user_list) {
+        // 本地用户不需要再次接收自己的 UserState（已在认证流程中发送）
+        if (isLocalUser && client.session === params.session_id) {
+          continue;
+        }
+        
+        const shouldBroadcast = isLocalUser 
+          ? client.has_full_user_list 
+          : (client.user_id > 0 && client.has_full_user_list);
+        
+        if (shouldBroadcast) {
           // 🔒 根据接收方是否为已注册用户，决定是否发送证书哈希
           const receiverIsRegistered = client.user_id > 0;
           
           // 构建UserState消息（每个客户端都单独构建，因为cert_hash字段可能不同）
           interface UserStateData {
             session: number;
+            actor: number;
             user_id: number;
             name: string;
             channel_id: number;
@@ -151,6 +158,7 @@ export class HubDataManager {
           }
           const userStateData: UserStateData = {
             session: params.session_id,
+            actor: params.session_id,
             user_id: params.user_id,
             name: params.username,
             channel_id: params.channel_id,
@@ -189,11 +197,12 @@ export class HubDataManager {
           const userStateMessage = userState.serialize();
           
           this.handlerFactory.messageHandler.sendMessage(client.session, MessageType.UserState, Buffer.from(userStateMessage));
+          this.logger.debug(`[HUB-BROADCAST] Sent UserState to client ${client.session} (user session=${params.session_id}, channel=${params.channel_id})`);
           broadcastCount++;
         }
       }
 
-        this.logger.debug(`Broadcasted remote user ${params.username} to ${broadcastCount} local clients`);
+      this.logger.info(`[HUB-BROADCAST] Broadcasted user ${params.username} (${isLocalUser ? 'LOCAL' : 'REMOTE'}) to ${broadcastCount} local clients`);
     } catch (error) {
         this.logger.error('Error handling remote user joined:', error);
     }
