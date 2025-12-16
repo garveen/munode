@@ -100,7 +100,7 @@ export class HubControlService {
       host: config.host,
     };
 
-    this.server = new ControlChannelServer(controlConfig);
+    this.server = new ControlChannelServer(controlConfig, this.logger);
 
     this._registry = this.factory.getRegistry();
 

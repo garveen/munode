@@ -17,9 +17,9 @@ export class ControlChannelServer extends EventEmitter {
   private ready: Promise<void>;
   private logger?: Logger;
 
-  constructor(config: ControlChannelConfig) {
+  constructor(config: ControlChannelConfig, logger: Logger) {
     super();
-    this.logger = config.logger;
+    this.logger = logger;
     this.edgePool = new ServerConnectionManager(config.logger);
     
     // 转发 Edge 连接池事件
