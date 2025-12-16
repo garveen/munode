@@ -1,6 +1,9 @@
 /**
  * RPC Method Type System
  * 定义所有 Hub-Edge RPC 方法的强类型映射
+ * 
+ * Note: Result types now use protobuf-generated types directly
+ * to avoid manual type duplication and field mapping.
  */
 
 import type {
@@ -17,6 +20,38 @@ import type {
   RegisterResponse,
   HeartbeatResponse,
 } from '../hub-edge-types.js';
+
+// Import protobuf generated types for result types
+import { hubedge } from '../generated/proto/HubEdgeRPC.js';
+
+// Extract protobuf result types using ReturnType
+type EdgeRegisterResultPb = ReturnType<typeof hubedge.EdgeRegisterResult.prototype.toObject>;
+type EdgeHeartbeatResultPb = ReturnType<typeof hubedge.EdgeHeartbeatResult.prototype.toObject>;
+type EdgeAllocateSessionIdResultPb = ReturnType<typeof hubedge.EdgeAllocateSessionIdResult.prototype.toObject>;
+type EdgeAuthenticateUserResultPb = ReturnType<typeof hubedge.EdgeAuthenticateUserResult.prototype.toObject>;
+type EdgeSyncVoiceTargetResultPb = ReturnType<typeof hubedge.EdgeSyncVoiceTargetResult.prototype.toObject>;
+type EdgeGetVoiceTargetsResultPb = ReturnType<typeof hubedge.EdgeGetVoiceTargetsResult.prototype.toObject>;
+type EdgeRouteVoiceResultPb = ReturnType<typeof hubedge.EdgeRouteVoiceResult.prototype.toObject>;
+type EdgeAdminOperationResultPb = ReturnType<typeof hubedge.EdgeAdminOperationResult.prototype.toObject>;
+type EdgeExchangeCertificatesResultPb = ReturnType<typeof hubedge.EdgeExchangeCertificatesResult.prototype.toObject>;
+type EdgeFullSyncResultPb = ReturnType<typeof hubedge.EdgeFullSyncResult.prototype.toObject>;
+type EdgeGetChannelsResultPb = ReturnType<typeof hubedge.EdgeGetChannelsResult.prototype.toObject>;
+type EdgeGetACLsResultPb = ReturnType<typeof hubedge.EdgeGetACLsResult.prototype.toObject>;
+type EdgeSaveChannelResultPb = ReturnType<typeof hubedge.EdgeSaveChannelResult.prototype.toObject>;
+type EdgeSaveACLResultPb = ReturnType<typeof hubedge.EdgeSaveACLResult.prototype.toObject>;
+type EdgeJoinResultPb = ReturnType<typeof hubedge.EdgeJoinResult.prototype.toObject>;
+type EdgeJoinCompleteResultPb = ReturnType<typeof hubedge.EdgeJoinCompleteResult.prototype.toObject>;
+type EdgeHandleACLResultPb = ReturnType<typeof hubedge.EdgeHandleACLResult.prototype.toObject>;
+type EdgeHandlePermissionQueryResultPb = ReturnType<typeof hubedge.EdgeHandlePermissionQueryResult.prototype.toObject>;
+type EdgeReportPeerDisconnectResultPb = ReturnType<typeof hubedge.EdgeReportPeerDisconnectResult.prototype.toObject>;
+type EdgeReportQualityResultPb = ReturnType<typeof hubedge.EdgeReportQualityResult.prototype.toObject>;
+type ClusterGetStatusResultPb = ReturnType<typeof hubedge.ClusterGetStatusResult.prototype.toObject>;
+type BlobPutResultPb = ReturnType<typeof hubedge.BlobPutResult.prototype.toObject>;
+type BlobGetResultPb = ReturnType<typeof hubedge.BlobGetResult.prototype.toObject>;
+type BlobGetUserTextureResultPb = ReturnType<typeof hubedge.BlobGetUserTextureResult.prototype.toObject>;
+type BlobGetUserCommentResultPb = ReturnType<typeof hubedge.BlobGetUserCommentResult.prototype.toObject>;
+type BlobSetUserTextureResultPb = ReturnType<typeof hubedge.BlobSetUserTextureResult.prototype.toObject>;
+type BlobSetUserCommentResultPb = ReturnType<typeof hubedge.BlobSetUserCommentResult.prototype.toObject>;
 
 // ============================================================================
 // Edge -> Hub RPC Methods
@@ -47,7 +82,7 @@ export interface EdgeRegisterMethod {
     // 冷重启标志：Edge 进程重启，所有旧客户端已断开
     cold_restart?: boolean;
   };
-  result: RegisterResponse;
+  result: EdgeRegisterResultPb;
 }
 
 /**
@@ -59,7 +94,7 @@ export interface EdgeHeartbeatMethod {
     server_id: number;
     stats: ServerStats;
   };
-  result: HeartbeatResponse;
+  result: EdgeHeartbeatResultPb;
 }
 
 /**
@@ -70,9 +105,7 @@ export interface EdgeAllocateSessionIdMethod {
   params: {
     edge_id: number;
   };
-  result: {
-    session_id: number;
-  };
+  result: EdgeAllocateSessionIdResultPb;
 }
 
 /**
@@ -104,17 +137,7 @@ export interface EdgeAuthenticateUserMethod {
     priority_speaker?: boolean;
     recording?: boolean;
   };
-  result: {
-    success: boolean;
-    user_id?: number;
-    username?: string;
-    displayName?: string;
-    groups?: string[];
-    channel_id?: number; // Hub 决定的目标频道（包括 last channel 逻辑）
-    cert_hash?: string; // 返回证书哈希（如果有）
-    reason?: string;
-    rejectType?: number; // mumbleproto.Reject.RejectType
-  };
+  result: EdgeAuthenticateUserResultPb;
 }
 
 /**
@@ -129,7 +152,7 @@ export interface EdgeSyncVoiceTargetMethod {
     config: VoiceTargetConfig['config'];
     timestamp: number;
   };
-  result: RPCResponse;
+  result: EdgeSyncVoiceTargetResultPb;
 }
 
 /**
@@ -140,9 +163,7 @@ export interface EdgeGetVoiceTargetsMethod {
   params: {
     edge_id?: number;
   };
-  result: {
-    voiceTargets: VoiceTargetConfig[];
-  };
+  result: EdgeGetVoiceTargetsResultPb;
 }
 
 /**
@@ -157,13 +178,7 @@ export interface EdgeRouteVoiceMethod {
     voiceData: Buffer;
     timestamp: number;
   };
-  result: {
-    success: boolean;
-    routedTo: Array<{
-      session_id: number;
-      edge_id: number;
-    }>;
-  };
+  result: EdgeRouteVoiceResultPb;
 }
 
 /**
@@ -175,15 +190,7 @@ export interface EdgeAdminOperationMethod {
     operation: string;
     data?: unknown;
   };
-  result: RPCResponse & {
-    message?: string;
-    stats?: {
-      edges: number;
-      sessions: number;
-      voiceTargets: number;
-      channels: number;
-    };
-  };
+  result: EdgeAdminOperationResultPb;
 }
 
 /**
@@ -195,7 +202,7 @@ export interface EdgeExchangeCertificatesMethod {
     server_id: number;
     certificate: string;
   };
-  result: RPCResponse;
+  result: EdgeExchangeCertificatesResultPb;
 }
 
 /**
@@ -210,25 +217,7 @@ export interface EdgeFullSyncMethod {
     for_user_channel_id?: number;
     for_user_cert_hash?: string;
   };
-  result: {
-    channels: ChannelData[];
-    channelLinks?: Array<{ channel_id: number; target_id: number }>;
-    acls: ACLData[];
-    bans: BanData[];
-    sessions: GlobalSession[];
-    configs?: Record<string, string>;
-    timestamp: number;
-    sequence: number;
-    edges: Array<{
-      server_id: number;
-      name: string;
-      host: string;
-      port: number;
-      region?: string;
-      current_load: number;
-      capacity: number;
-    }>;
-  };
+  result: EdgeFullSyncResultPb;
 }
 
 /**
@@ -237,7 +226,7 @@ export interface EdgeFullSyncMethod {
 export interface EdgeGetChannelsMethod {
   method: 'edge.getChannels';
   params: Record<string, never>; // 空参数
-  result: ChannelsResponse;
+  result: EdgeGetChannelsResultPb;
 }
 
 /**
@@ -248,7 +237,7 @@ export interface EdgeGetACLsMethod {
   params: {
     channel_id: number;
   };
-  result: ACLsResponse;
+  result: EdgeGetACLsResultPb;
 }
 
 /**
@@ -268,7 +257,7 @@ export interface EdgeSaveChannelMethod {
       description_blob?: string;
     };
   };
-  result: SaveChannelResponse;
+  result: EdgeSaveChannelResultPb;
 }
 
 /**
@@ -289,10 +278,7 @@ export interface EdgeSaveACLMethod {
       deny: number;
     }>;
   };
-  result: {
-    success: boolean;
-    aclIds: number[]; // 返回保存的ACL ID数组
-  };
+  result: EdgeSaveACLResultPb;
 }
 
 /**
@@ -308,18 +294,7 @@ export interface EdgeJoinMethod {
     voicePort: number;
     capacity: number;
   };
-  result: {
-    success: boolean;
-    token: string;
-    peers: Array<{
-      id: number;
-      name: string;
-      host: string;
-      port: number;
-      voicePort: number;
-    }>;
-    timeout: number;
-  };
+  result: EdgeJoinResultPb;
 }
 
 /**
@@ -332,7 +307,7 @@ export interface EdgeJoinCompleteMethod {
     token: string;
     connectedPeers: number[];
   };
-  result: RPCResponse;
+  result: EdgeJoinCompleteResultPb;
 }
 
 /**
@@ -349,13 +324,7 @@ export interface EdgeHandleACLMethod {
     query: boolean;
     raw_data: string; // base64 encoded ACL message
   };
-  result: {
-    success: boolean;
-    error?: string;
-    permission_denied?: boolean; // 是否是权限拒绝
-    channel_id?: number; // 返回的频道 ID
-    raw_data?: string; // base64 encoded ACL response (for query)
-  };
+  result: EdgeHandleACLResultPb;
 }
 
 /**
@@ -370,11 +339,7 @@ export interface EdgeHandlePermissionQueryMethod {
     actor_username: string;
     channel_id: number;
   };
-  result: {
-    success: boolean;
-    permissions?: number; // 计算出的权限值
-    error?: string;
-  };
+  result: EdgeHandlePermissionQueryResultPb;
 }
 
 /**
@@ -387,9 +352,7 @@ export interface EdgeReportPeerDisconnectMethod {
     remoteEdgeId: number;
     localClientCount: number;
   };
-  result: {
-    action: 'disconnect' | 'wait';
-  };
+  result: EdgeReportPeerDisconnectResultPb;
 }
 
 /**
@@ -407,9 +370,7 @@ export interface EdgeReportQualityMethod {
       samples: number;
     };
   };
-  result: {
-    success: boolean;
-  };
+  result: EdgeReportQualityResultPb;
 }
 
 /**
@@ -418,17 +379,7 @@ export interface EdgeReportQualityMethod {
 export interface ClusterGetStatusMethod {
   method: 'cluster.getStatus';
   params: Record<string, never>; // 空参数
-  result: {
-    edges: Array<{
-      id: number;
-      name: string;
-      host: string;
-      port: number;
-      clientCount: number;
-      status: 'online' | 'offline';
-      lastSeen?: number;
-    }>;
-  };
+  result: ClusterGetStatusResultPb;
 }
 
 // ============================================================================
@@ -600,11 +551,7 @@ export interface BlobPutMethod {
   params: {
     data: Buffer;
   };
-  result: {
-    success: boolean;
-    hash?: string; // SHA1 hash
-    error?: string;
-  };
+  result: BlobPutResultPb;
 }
 
 /**
@@ -615,11 +562,7 @@ export interface BlobGetMethod {
   params: {
     hash: string; // SHA1 hash
   };
-  result: {
-    success: boolean;
-    data?: Buffer;
-    error?: string;
-  };
+  result: BlobGetResultPb;
 }
 
 /**
@@ -630,12 +573,7 @@ export interface BlobGetUserTextureMethod {
   params: {
     user_id: number;
   };
-  result: {
-    success: boolean;
-    data?: Buffer;
-    hash?: string;
-    error?: string;
-  };
+  result: BlobGetUserTextureResultPb;
 }
 
 /**
@@ -646,12 +584,7 @@ export interface BlobGetUserCommentMethod {
   params: {
     user_id: number;
   };
-  result: {
-    success: boolean;
-    data?: Buffer;
-    hash?: string;
-    error?: string;
-  };
+  result: BlobGetUserCommentResultPb;
 }
 
 /**
@@ -663,11 +596,7 @@ export interface BlobSetUserTextureMethod {
     user_id: number;
     data: Buffer;
   };
-  result: {
-    success: boolean;
-    hash?: string;
-    error?: string;
-  };
+  result: BlobSetUserTextureResultPb;
 }
 
 /**
@@ -679,11 +608,7 @@ export interface BlobSetUserCommentMethod {
     user_id: number;
     data: Buffer;
   };
-  result: {
-    success: boolean;
-    hash?: string;
-    error?: string;
-  };
+  result: BlobSetUserCommentResultPb;
 }
 
 // ============================================================================

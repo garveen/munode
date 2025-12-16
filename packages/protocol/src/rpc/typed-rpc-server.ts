@@ -282,7 +282,8 @@ export class TypedRPCServer {
 
   /**
    * Create TypedRPCResponse from method and result
-   * Uses type narrowing with method-specific result types for type safety
+   * Directly passes result to protobuf fromObject() without field mapping.
+   * Business logic should return objects with protobuf-compatible field names.
    */
   private createTypedResponse(
     method: string,
@@ -294,361 +295,90 @@ export class TypedRPCServer {
       method,
     });
 
-    // Convert result to protobuf format based on method
-    // Each case narrows the result type appropriately
+    // Directly convert result to protobuf format based on method
+    // The result object should already have protobuf-compatible field names
     switch (method) {
-      case 'edge.register': {
-        const r = result as RPCResult<'edge.register'>;
-        response.edge_register = hubedgeRpc.EdgeRegisterResult.fromObject({
-          success: r.success,
-          hub_server_id: r.hub_server_id,
-          edge_list: r.edge_list,
-          challenge: r.challenge,
-          challenge_timeout: r.challenge_timeout,
-          error: r.error,
-        });
+      case 'edge.register':
+        response.edge_register = hubedgeRpc.EdgeRegisterResult.fromObject(result as any);
         break;
-      }
-      case 'edge.heartbeat': {
-        const r = result as RPCResult<'edge.heartbeat'>;
-        response.edge_heartbeat = hubedgeRpc.EdgeHeartbeatResult.fromObject({
-          success: r.success,
-          updated_edges: r.updated_edges,
-          error: r.error,
-        });
+      case 'edge.heartbeat':
+        response.edge_heartbeat = hubedgeRpc.EdgeHeartbeatResult.fromObject(result as any);
         break;
-      }
-      case 'edge.allocateSessionId': {
-        const r = result as RPCResult<'edge.allocateSessionId'>;
-        response.edge_allocate_session_id = hubedgeRpc.EdgeAllocateSessionIdResult.fromObject({
-          session_id: r.session_id,
-        });
+      case 'edge.allocateSessionId':
+        response.edge_allocate_session_id = hubedgeRpc.EdgeAllocateSessionIdResult.fromObject(result as any);
         break;
-      }
-      case 'edge.authenticateUser': {
-        const r = result as RPCResult<'edge.authenticateUser'>;
-        response.edge_authenticate_user = hubedgeRpc.EdgeAuthenticateUserResult.fromObject({
-          success: r.success,
-          user_id: r.user_id,
-          username: r.username,
-          display_name: r.displayName,
-          groups: r.groups,
-          reason: r.reason,
-          reject_type: r.rejectType,
-          channel_id: r.channel_id,
-        });
+      case 'edge.authenticateUser':
+        response.edge_authenticate_user = hubedgeRpc.EdgeAuthenticateUserResult.fromObject(result as any);
         break;
-      }
-      case 'edge.syncVoiceTarget': {
-        const r = result as RPCResult<'edge.syncVoiceTarget'>;
-        response.edge_sync_voice_target = hubedgeRpc.EdgeSyncVoiceTargetResult.fromObject({
-          success: r.success,
-          error: r.error,
-        });
+      case 'edge.syncVoiceTarget':
+        response.edge_sync_voice_target = hubedgeRpc.EdgeSyncVoiceTargetResult.fromObject(result as any);
         break;
-      }
-      case 'edge.getVoiceTargets': {
-        const r = result as RPCResult<'edge.getVoiceTargets'>;
-        response.edge_get_voice_targets = hubedgeRpc.EdgeGetVoiceTargetsResult.fromObject({
-          voice_targets: r.voiceTargets?.map(vt => ({
-            edge_id: vt.edge_id,
-            client_session: vt.client_session,
-            target_id: vt.target_id,
-            config: vt.config ? {
-              sessions: vt.config.sessions?.map((s: number) => ({ session: s })),
-              channels: vt.config.channels?.map((c: { channel_id: number; include_subchannels?: boolean; include_links?: boolean; group?: string }) => ({
-                channel_id: c.channel_id,
-                children: c.include_subchannels,
-                links: c.include_links,
-                group: c.group,
-              })),
-            } : undefined,
-            timestamp: vt.timestamp,
-          })),
-        });
+      case 'edge.getVoiceTargets':
+        response.edge_get_voice_targets = hubedgeRpc.EdgeGetVoiceTargetsResult.fromObject(result as any);
         break;
-      }
-      case 'edge.routeVoice': {
-        const r = result as RPCResult<'edge.routeVoice'>;
-        response.edge_route_voice = hubedgeRpc.EdgeRouteVoiceResult.fromObject({
-          success: r.success,
-          routed_to: r.routedTo?.map(rt => ({
-            session_id: rt.session_id,
-            edge_id: rt.edge_id,
-          })),
-        });
+      case 'edge.routeVoice':
+        response.edge_route_voice = hubedgeRpc.EdgeRouteVoiceResult.fromObject(result as any);
         break;
-      }
-      case 'edge.adminOperation': {
-        const r = result as RPCResult<'edge.adminOperation'>;
-        response.edge_admin_operation = hubedgeRpc.EdgeAdminOperationResult.fromObject({
-          success: r.success,
-          message: r.message,
-          stats: r.stats ? {
-            edges: r.stats.edges,
-            sessions: r.stats.sessions,
-            voice_targets: r.stats.voiceTargets,
-            channels: r.stats.channels,
-          } : undefined,
-        });
+      case 'edge.adminOperation':
+        response.edge_admin_operation = hubedgeRpc.EdgeAdminOperationResult.fromObject(result as any);
         break;
-      }
-      case 'edge.exchangeCertificates': {
-        const r = result as RPCResult<'edge.exchangeCertificates'>;
-        response.edge_exchange_certificates = hubedgeRpc.EdgeExchangeCertificatesResult.fromObject({
-          success: r.success,
-          error: r.error,
-        });
+      case 'edge.exchangeCertificates':
+        response.edge_exchange_certificates = hubedgeRpc.EdgeExchangeCertificatesResult.fromObject(result as any);
         break;
-      }
-      case 'edge.fullSync': {
-        const r = result as RPCResult<'edge.fullSync'>;
-        response.edge_full_sync = hubedgeRpc.EdgeFullSyncResult.fromObject({
-          channels: r.channels?.map(c => ({
-            channel_id: c.channel_id,
-            name: c.name,
-            parent_id: c.parent_id,
-            description: c.description,
-            position: c.position,
-            max_users: c.max_users,
-            temporary: c.temporary,
-            inherit_acl: c.inherit_acl,
-            links: c.links || [],
-          })),
-          channel_links: r.channelLinks?.map(l => ({
-            channel_id: l.channel_id,
-            target_id: l.target_id,
-          })),
-          acls: r.acls?.map(a => ({
-            id: a.id,
-            channel_id: a.channel_id,
-            user_id: a.user_id,
-            group: a.group,
-            apply_here: a.apply_here,
-            apply_subs: a.apply_subs,
-            allow: a.allow,
-            deny: a.deny,
-          })),
-          bans: r.bans?.map(b => ({
-            address: b.address,
-            mask: b.mask,
-            username: b.name,
-            cert_hash: b.hash,
-            reason: b.reason,
-            start: b.start,
-            duration: b.duration,
-          })),
-          sessions: r.sessions?.map(s => ({
-            session_id: s.session_id,
-            edge_id: s.edge_id,
-            user_id: s.user_id,
-            username: s.username,
-            channel_id: s.channel_id || 0,
-            ip_address: s.ip_address,
-            cert_hash: s.cert_hash,
-            connected_at: s.connected_at,
-            groups: s.groups || [],
-            mute: s.mute,
-            deaf: s.deaf,
-            suppress: s.suppress,
-            self_mute: s.self_mute,
-            self_deaf: s.self_deaf,
-            priority_speaker: s.priority_speaker,
-            recording: s.recording,
-          })),
-          timestamp: r.timestamp,
-          sequence: r.sequence,
-          edges: r.edges?.map(e => ({
-            server_id: e.server_id,
-            name: e.name,
-            host: e.host,
-            port: e.port,
-            region: e.region,
-            current_load: e.current_load,
-            capacity: e.capacity,
-          })),
-        });
+      case 'edge.fullSync':
+        response.edge_full_sync = hubedgeRpc.EdgeFullSyncResult.fromObject(result as any);
         break;
-      }
-      case 'edge.getChannels': {
-        const r = result as RPCResult<'edge.getChannels'>;
-        response.edge_get_channels = hubedgeRpc.EdgeGetChannelsResult.fromObject({
-          channels: r.channels?.map(c => ({
-            channel_id: c.channel_id,
-            name: c.name,
-            parent_id: c.parent_id,
-            description: c.description,
-            position: c.position,
-            max_users: c.max_users,
-            temporary: c.temporary,
-            inherit_acl: c.inherit_acl,
-            links: c.links || [],
-          })),
-        });
+      case 'edge.getChannels':
+        response.edge_get_channels = hubedgeRpc.EdgeGetChannelsResult.fromObject(result as any);
         break;
-      }
-      case 'edge.getACLs': {
-        const r = result as RPCResult<'edge.getACLs'>;
-        response.edge_get_acls = hubedgeRpc.EdgeGetACLsResult.fromObject({
-          acls: r.acls?.map(a => ({
-            id: a.id,
-            channel_id: a.channel_id,
-            user_id: a.user_id,
-            group: a.group,
-            apply_here: a.apply_here,
-            apply_subs: a.apply_subs,
-            allow: a.allow,
-            deny: a.deny,
-          })),
-        });
+      case 'edge.getACLs':
+        response.edge_get_acls = hubedgeRpc.EdgeGetACLsResult.fromObject(result as any);
         break;
-      }
-      case 'edge.saveChannel': {
-        const r = result as RPCResult<'edge.saveChannel'>;
-        response.edge_save_channel = hubedgeRpc.EdgeSaveChannelResult.fromObject({
-          success: r.success,
-          channel_id: r.channel_id,
-          error: r.error,
-        });
+      case 'edge.saveChannel':
+        response.edge_save_channel = hubedgeRpc.EdgeSaveChannelResult.fromObject(result as any);
         break;
-      }
-      case 'edge.saveACL': {
-        const r = result as RPCResult<'edge.saveACL'>;
-        response.edge_save_acl = hubedgeRpc.EdgeSaveACLResult.fromObject({
-          success: r.success,
-          acl_ids: r.aclIds,
-        });
+      case 'edge.saveACL':
+        response.edge_save_acl = hubedgeRpc.EdgeSaveACLResult.fromObject(result as any);
         break;
-      }
-      case 'edge.join': {
-        const r = result as RPCResult<'edge.join'>;
-        response.edge_join = hubedgeRpc.EdgeJoinResult.fromObject({
-          success: r.success,
-          token: r.token,
-          peers: r.peers?.map(p => ({
-            id: p.id,
-            name: p.name,
-            host: p.host,
-            port: p.port,
-            voice_port: p.voicePort,
-          })),
-          timeout: r.timeout,
-        });
+      case 'edge.join':
+        response.edge_join = hubedgeRpc.EdgeJoinResult.fromObject(result as any);
         break;
-      }
-      case 'edge.joinComplete': {
-        const r = result as RPCResult<'edge.joinComplete'>;
-        response.edge_join_complete = hubedgeRpc.EdgeJoinCompleteResult.fromObject({
-          success: r.success,
-          error: r.error,
-        });
+      case 'edge.joinComplete':
+        response.edge_join_complete = hubedgeRpc.EdgeJoinCompleteResult.fromObject(result as any);
         break;
-      }
-      case 'edge.handleACL': {
-        const r = result as RPCResult<'edge.handleACL'>;
-        response.edge_handle_acl = hubedgeRpc.EdgeHandleACLResult.fromObject({
-          success: r.success,
-          error: r.error,
-          permission_denied: r.permission_denied,
-          channel_id: r.channel_id,
-          raw_data: r.raw_data ? Buffer.from(r.raw_data, 'base64') : undefined,
-        });
+      case 'edge.handleACL':
+        response.edge_handle_acl = hubedgeRpc.EdgeHandleACLResult.fromObject(result as any);
         break;
-      }
-      case 'edge.handlePermissionQuery': {
-        const r = result as RPCResult<'edge.handlePermissionQuery'>;
-        response.edge_handle_permission_query = hubedgeRpc.EdgeHandlePermissionQueryResult.fromObject({
-          success: r.success,
-          permissions: r.permissions,
-          error: r.error,
-        });
+      case 'edge.handlePermissionQuery':
+        response.edge_handle_permission_query = hubedgeRpc.EdgeHandlePermissionQueryResult.fromObject(result as any);
         break;
-      }
-      case 'edge.reportPeerDisconnect': {
-        const r = result as RPCResult<'edge.reportPeerDisconnect'>;
-        response.edge_report_peer_disconnect = hubedgeRpc.EdgeReportPeerDisconnectResult.fromObject({
-          action: r.action,
-        });
+      case 'edge.reportPeerDisconnect':
+        response.edge_report_peer_disconnect = hubedgeRpc.EdgeReportPeerDisconnectResult.fromObject(result as any);
         break;
-      }
-      case 'edge.reportQuality': {
-        const r = result as RPCResult<'edge.reportQuality'>;
-        response.edge_report_quality = hubedgeRpc.EdgeReportQualityResult.fromObject({
-          success: r.success,
-        });
+      case 'edge.reportQuality':
+        response.edge_report_quality = hubedgeRpc.EdgeReportQualityResult.fromObject(result as any);
         break;
-      }
-      case 'cluster.getStatus': {
-        const r = result as RPCResult<'cluster.getStatus'>;
-        response.cluster_get_status = hubedgeRpc.ClusterGetStatusResult.fromObject({
-          edges: r.edges?.map(e => ({
-            id: e.id,
-            name: e.name,
-            host: e.host,
-            port: e.port,
-            client_count: e.clientCount,
-            status: e.status,
-            last_seen: e.lastSeen,
-          })),
-        });
+      case 'cluster.getStatus':
+        response.cluster_get_status = hubedgeRpc.ClusterGetStatusResult.fromObject(result as any);
         break;
-      }
-      case 'blob.put': {
-        const r = result as RPCResult<'blob.put'>;
-        response.blob_put = hubedgeRpc.BlobPutResult.fromObject({
-          success: r.success,
-          hash: r.hash,
-          error: r.error,
-        });
+      case 'blob.put':
+        response.blob_put = hubedgeRpc.BlobPutResult.fromObject(result as any);
         break;
-      }
-      case 'blob.get': {
-        const r = result as RPCResult<'blob.get'>;
-        response.blob_get = hubedgeRpc.BlobGetResult.fromObject({
-          success: r.success,
-          data: r.data,
-          error: r.error,
-        });
+      case 'blob.get':
+        response.blob_get = hubedgeRpc.BlobGetResult.fromObject(result as any);
         break;
-      }
-      case 'blob.getUserTexture': {
-        const r = result as RPCResult<'blob.getUserTexture'>;
-        response.blob_get_user_texture = hubedgeRpc.BlobGetUserTextureResult.fromObject({
-          success: r.success,
-          data: r.data,
-          hash: r.hash,
-          error: r.error,
-        });
+      case 'blob.getUserTexture':
+        response.blob_get_user_texture = hubedgeRpc.BlobGetUserTextureResult.fromObject(result as any);
         break;
-      }
-      case 'blob.getUserComment': {
-        const r = result as RPCResult<'blob.getUserComment'>;
-        response.blob_get_user_comment = hubedgeRpc.BlobGetUserCommentResult.fromObject({
-          success: r.success,
-          data: r.data,
-          hash: r.hash,
-          error: r.error,
-        });
+      case 'blob.getUserComment':
+        response.blob_get_user_comment = hubedgeRpc.BlobGetUserCommentResult.fromObject(result as any);
         break;
-      }
-      case 'blob.setUserTexture': {
-        const r = result as RPCResult<'blob.setUserTexture'>;
-        response.blob_set_user_texture = hubedgeRpc.BlobSetUserTextureResult.fromObject({
-          success: r.success,
-          hash: r.hash,
-          error: r.error,
-        });
+      case 'blob.setUserTexture':
+        response.blob_set_user_texture = hubedgeRpc.BlobSetUserTextureResult.fromObject(result as any);
         break;
-      }
-      case 'blob.setUserComment': {
-        const r = result as RPCResult<'blob.setUserComment'>;
-        response.blob_set_user_comment = hubedgeRpc.BlobSetUserCommentResult.fromObject({
-          success: r.success,
-          hash: r.hash,
-          error: r.error,
-        });
+      case 'blob.setUserComment':
+        response.blob_set_user_comment = hubedgeRpc.BlobSetUserCommentResult.fromObject(result as any);
         break;
-      }
     }
 
     return response;
