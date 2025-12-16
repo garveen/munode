@@ -189,79 +189,13 @@ export class AuthHandlers {
         throw new Error(`Client ${session_id} not found after update`);
       }
 
-      // 8. 发送当前用户的完整状态（必须在 ServerSync 之前）
-      // 这是协议握手的关键步骤，客户端期望先收到自己的状态再收到 ServerSync
-      // 只发送已显式设置的状态字段
-      const currentUserStateData: {
+      // 8. 广播新用户加入（包括给用户自己）
+      // 参考 Go 实现：在 ServerSync 之前广播 UserState
+      // server.broadcastProtoMessageWithPredicate(userstate, func(c *Client) bool { return c == client || c.hasFullUserList })
+      // 用户自己也需要收到这个 UserState，这是用户了解自己所在频道的唯一途径
+      const userStateData: {
         session: number;
-        name: string;
-        user_id: number;
-        channel_id: number;
-        temporary_access_tokens: string[];
-        listening_channel_add: number[];
-        listening_channel_remove: number[];
-        mute?: boolean;
-        deaf?: boolean;
-        suppress?: boolean;
-        self_mute?: boolean;
-        self_deaf?: boolean;
-        priority_speaker?: boolean;
-        recording?: boolean;
-      } = {
-        session: session_id,
-        name: updatedClient.username,
-        user_id: updatedClient.user_id,
-        channel_id: updatedClient.channel_id,
-        temporary_access_tokens: [],
-        listening_channel_add: [],
-        listening_channel_remove: [],
-      };
-      
-      // 只添加值为 true 的状态字段（参考 Murmur 实现）
-      if (updatedClient.deaf === true) {
-        currentUserStateData.deaf = true;
-      } else if (updatedClient.mute === true) {
-        currentUserStateData.mute = true;
-      }
-      if (updatedClient.suppress === true) currentUserStateData.suppress = true;
-      if (updatedClient.priority_speaker === true) currentUserStateData.priority_speaker = true;
-      if (updatedClient.recording === true) currentUserStateData.recording = true;
-      if (updatedClient.self_deaf === true) {
-        currentUserStateData.self_deaf = true;
-      } else if (updatedClient.self_mute === true) {
-        currentUserStateData.self_mute = true;
-      }
-      
-      const currentUserState = new mumbleproto.UserState(currentUserStateData).serialize();
-
-      this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(currentUserState));
-        this.logger.debug(`Sent UserState for session ${session_id}: username=${updatedClient.username}, channel_id=${updatedClient.channel_id}`);
-
-      // 9. 发送 ServerSync 消息（放在 UserState 之后）
-      const serverSyncMessage = new mumbleproto.ServerSync({
-        session: session_id,
-        max_bandwidth: this.config.max_bandwidth || 128000,
-        welcome_text: this.config.welcomeText || 'Welcome to Shitspeak Server',
-        permissions: 0, // TODO: 计算权限
-      }).serialize();
-
-      this.messageHandler.sendMessage(session_id, MessageType.ServerSync, Buffer.from(serverSyncMessage));
-
-      // 发送 ServerSync 后，更新客户端状态为 Ready
-      this.clientManager.updateClient(session_id, {
-        state: ClientState.Ready,
-      });
-
-        this.logger.info(
-        `User authenticated and ready: session=${session_id}, ` +
-        `username=${updatedClient.username}, user_id=${updatedClient.user_id}, state=Ready`
-      );
-
-      // 10. 广播新用户加入给其他已认证客户端（注意：Hub 已经广播了 userJoined）
-      // 参考 Mumble/Murmur 实现：新用户加入时只广播基本信息，不包含状态字段
-      // 状态字段只在用户显式改变时才广播
-      const broadcastStateData: {
-        session: number;
+        actor: number;
         user_id: number;
         name: string;
         channel_id: number;
@@ -271,6 +205,7 @@ export class AuthHandlers {
         hash?: string;
       } = {
         session: session_id,
+        actor: session_id,
         name: updatedClient.username,
         user_id: updatedClient.user_id,
         channel_id: updatedClient.channel_id,
@@ -280,17 +215,65 @@ export class AuthHandlers {
       };
       
       // 只添加证书哈希（如果有）
-      if (updatedClient.cert_hash) broadcastStateData.hash = updatedClient.cert_hash;
+      if (updatedClient.cert_hash) userStateData.hash = updatedClient.cert_hash;
       
-      // 注意：不广播状态字段（mute, deaf, self_mute, self_deaf, priority_speaker, recording）
-      // 这些字段只在用户显式改变时才通过 UserState 消息单独广播
+      // 注意：不在这里添加状态字段（mute, deaf, self_mute, self_deaf, priority_speaker, recording）
+      // 这些字段会在后续单独广播
       
-      // 广播给所有已认证客户端（包括用户自己）
-      // 参考 Go 实现：server.broadcastProtoMessageWithPredicate(userstate, func(c *Client) bool { return c == client || c.hasFullUserList })
-      // 用户自己也需要收到这个 UserState，以确认自己所在的频道
-      const broadcastState = new mumbleproto.UserState(broadcastStateData);
-      this.broadcastUserState(broadcastState);  // 不排除用户自己
-      this.logger.debug(`Broadcasted UserState for new user ${updatedClient.username} (session ${session_id}) to all authenticated clients including self`);
+      const userState = new mumbleproto.UserState(userStateData);
+      this.broadcastUserState(userState);  // 广播给所有人（包括用户自己）
+      this.logger.debug(`Broadcasted UserState for new user ${updatedClient.username} (session ${session_id}, channel ${updatedClient.channel_id}) to all authenticated clients including self`);
+
+      // 9. 发送 ServerSync 消息（在 UserState 广播之后）
+      const serverSyncMessage = new mumbleproto.ServerSync({
+        session: session_id,
+        max_bandwidth: this.config.max_bandwidth || 128000,
+        welcome_text: this.config.welcomeText || 'Welcome to Shitspeak Server',
+        permissions: 0, // TODO: 计算权限
+      }).serialize();
+
+      this.messageHandler.sendMessage(session_id, MessageType.ServerSync, Buffer.from(serverSyncMessage));
+
+      // 10. 如果用户有 SelfMute/SelfDeaf 状态，单独广播这些状态
+      // 参考 Go 实现：在 ServerSync 之后，如果有 SelfMute/SelfDeaf，才广播状态更新
+      if (updatedClient.self_mute === true || updatedClient.self_deaf === true) {
+        const stateUpdateData: {
+          session: number;
+          actor: number;
+          temporary_access_tokens: string[];
+          listening_channel_add: number[];
+          listening_channel_remove: number[];
+          self_mute?: boolean;
+          self_deaf?: boolean;
+        } = {
+          session: session_id,
+          actor: session_id,
+          temporary_access_tokens: [],
+          listening_channel_add: [],
+          listening_channel_remove: [],
+        };
+        
+        if (updatedClient.self_deaf === true) {
+          stateUpdateData.self_deaf = true;
+        } else if (updatedClient.self_mute === true) {
+          stateUpdateData.self_mute = true;
+        }
+        
+        const stateUpdate = new mumbleproto.UserState(stateUpdateData);
+        // 只广播给其他客户端，不包括自己（自己已经知道自己的状态）
+        this.broadcastUserState(stateUpdate, session_id);
+        this.logger.debug(`Broadcasted self_mute/self_deaf state for session ${session_id}`);
+      }
+
+      // 发送 ServerSync 后，更新客户端状态为 Ready
+      this.clientManager.updateClient(session_id, {
+        state: ClientState.Ready,
+      });
+
+      this.logger.info(
+        `User authenticated and ready: session=${session_id}, ` +
+        `username=${updatedClient.username}, user_id=${updatedClient.user_id}, channel=${updatedClient.channel_id}, state=Ready`
+      );
 
     } catch (error) {
         this.logger.error(`Error in handleAuthSuccess for session ${session_id}:`, error);
