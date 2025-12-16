@@ -616,4 +616,37 @@ export class ChannelManager extends TypedEventEmitter<ChannelManagerEvents> {
     this.rebuildCache();
     return this.descendantsCache.get(channel_id) || new Set<number>();
   }
+
+  /**
+   * 清空所有频道数据（除根频道外）
+   * 用于 Edge 重启时清理状态
+   */
+  clearChannels(): void {
+    this.logger.info('Clearing all channel data...');
+    
+    // 清空所有非根频道
+    this.channels.clear();
+    this.channelLinks.clear();
+    this.transitiveLinksCache.clear();
+    this.descendantsCache.clear();
+    
+    // 重建根频道
+    const rootChannel: ChannelInfo = {
+      id: 0,
+      name: 'Root',
+      parent_id: undefined,
+      description: 'Root channel',
+      position: 0,
+      max_users: 0,
+      temporary: false,
+      inherit_acl: true,
+      children: [],
+      links: [],
+    };
+    this.channels.set(0, rootChannel);
+    this.channelCounter = 1;
+    this.cacheValid = false;
+    
+    this.logger.info('All channels cleared, root channel recreated');
+  }
 }

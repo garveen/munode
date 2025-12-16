@@ -23,14 +23,16 @@ export interface ControlChannelServerEvents extends EventMap {
 }
 
 export class ControlChannelServer extends TypedEventEmitter<ControlChannelServerEvents> {
-  private wss: WebSocketServer;
+  private wss?: WebSocketServer;
   private channels = new Map<WebSocket, RPCChannel>();
   private edgePool: ServerConnectionManager; // Edge 连接管理器
-  private ready: Promise<void>;
+  private config: ControlChannelConfig;
   private logger?: Logger;
+  private started = false;
 
   constructor(config: ControlChannelConfig, logger: Logger) {
     super();
+    this.config = config;
     this.logger = logger;
     this.edgePool = new ServerConnectionManager(config.logger);
     
@@ -41,33 +43,37 @@ export class ControlChannelServer extends TypedEventEmitter<ControlChannelServer
     this.edgePool.on('edgeDisconnected', (edgeId: number) => {
       this.emit('edgeDisconnected', edgeId);
     });
-    
-    // 创建 Promise 来跟踪服务器就绪状态
-    this.ready = new Promise((resolve, reject) => {
+  }
+
+  /**
+   * 启动 WebSocket 服务器
+   * 必须在所有资源加载完成后调用
+   */
+  async start(): Promise<void> {
+    if (this.started) {
+      this.logger?.warn('Control channel server already started');
+      return;
+    }
+
+    return new Promise((resolve, reject) => {
       this.wss = new WebSocketServer({
-        port: config.port,
-        host: config.host,
+        port: this.config.port,
+        host: this.config.host,
       });
 
       this.wss.on('listening', () => {
-        this.logger.info(`Control channel server listening on ${config.host || '0.0.0.0'}:${config.port}`);
+        this.logger?.info(`Control channel server listening on ${this.config.host || '0.0.0.0'}:${this.config.port}`);
+        this.started = true;
         resolve();
       });
 
       this.wss.on('connection', this.handleConnection.bind(this));
       
       this.wss.on('error', (error) => {
-        this.logger.error('Control channel server error:', error);
+        this.logger?.error('Control channel server error:', error);
         reject(error);
       });
     });
-  }
-
-  /**
-   * 等待服务器完全就绪
-   */
-  async waitForReady(): Promise<void> {
-    await this.ready;
   }
 
   private handleConnection(ws: WebSocket): void {
@@ -143,6 +149,10 @@ export class ControlChannelServer extends TypedEventEmitter<ControlChannelServer
    * 关闭服务器
    */
   close(): void {
+    if (!this.started || !this.wss) {
+      return;
+    }
+
     // 关闭所有 Edge 连接
     this.edgePool.closeAll();
     
@@ -152,6 +162,7 @@ export class ControlChannelServer extends TypedEventEmitter<ControlChannelServer
     }
     this.channels.clear();
     this.wss.close();
+    this.started = false;
   }
 
   /**

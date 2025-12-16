@@ -114,13 +114,11 @@ export class ServiceRegistry {
 
     // 检查是否已存在
     const existingEdge = this.edges.get(server_id);
-    // 检查是否为冷重启（Edge 进程重启，所有客户端已断开）
-    const isColdRestart = !!(request as { cold_restart?: boolean }).cold_restart;
     
     if (existingEdge) {
-      // 如果Edge在等待重连状态中重连，恢复会话
+      // 如果Edge在等待重连状态中重连
       if (existingEdge.connectionState === EdgeConnectionState.DISCONNECTED_WAITING) {
-        this.logger.info(`Edge Server ${server_id} reconnected within grace period${isColdRestart ? ' (cold restart)' : ''}`);
+        this.logger.info(`Edge Server ${server_id} reconnected within grace period - will clean up old sessions`);
         
         // 清理cleanup timer
         if (existingEdge.cleanupTimer) {
@@ -147,17 +145,32 @@ export class ServiceRegistry {
           hub_server_id: 0,
           edge_list: this.getEdgeList(),
           reconnected: true, // 标识这是重连
-          cold_restart: isColdRestart, // 标识是否为冷重启
+          need_cleanup: true, // 标识需要清理旧会话
         };
       } else if (existingEdge.connectionState === EdgeConnectionState.DISCONNECTED_TIMEOUT) {
-        // Edge已经超时被清理，拒绝重连
-        this.logger.warn(`Edge Server ${server_id} reconnection rejected: session already cleaned up`);
+        // Edge已经超时被清理，允许重新注册，但需要清理
+        this.logger.warn(`Edge Server ${server_id} reconnected after timeout - will clean up old sessions`);
+        
+        // 重置为连接状态
+        existingEdge.connectionState = EdgeConnectionState.CONNECTED;
+        existingEdge.disconnectedAt = undefined;
+        existingEdge.last_seen = Date.now();
+        existingEdge.name = name;
+        existingEdge.host = host;
+        existingEdge.port = port;
+        existingEdge.region = region;
+        existingEdge.capacity = capacity;
+        existingEdge.certificate = certificate;
+        
+        // 重启心跳监控
+        this.startHeartbeatMonitor(server_id);
+        
         return {
-          success: false,
-          error: 'Session timeout - cold restart required',
-          session_expired: true, // 标识会话已过期，需要冷启动
+          success: true,
           hub_server_id: 0,
-          edge_list: [],
+          edge_list: this.getEdgeList(),
+          reconnected: true,
+          need_cleanup: true, // 标识需要清理旧会话
         };
       } else {
         this.logger.warn(`Edge Server ${server_id} already registered in CONNECTED state, updating...`);

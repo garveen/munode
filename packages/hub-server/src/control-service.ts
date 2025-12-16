@@ -343,9 +343,9 @@ export class HubControlService {
       
       this.logger.info(`Edge ${params.server_id} registered successfully`);
       
-      // 如果是冷重启，清理旧的 client sessions
-      if ((result as { cold_restart?: boolean }).cold_restart) {
-        this.logger.warn(`Edge ${params.server_id} reconnected after cold restart, cleaning up old client sessions`);
+      // 如果需要清理（Edge 重连），立即清理旧会话
+      if ((result as { need_cleanup?: boolean }).need_cleanup) {
+        this.logger.warn(`Edge ${params.server_id} reconnected, cleaning up old sessions immediately`);
         this.cleanupEdgeSessions(params.server_id);
       }
       
@@ -419,12 +419,15 @@ export class HubControlService {
 
   /**
    * 启动控制信道服务
+   * 必须在所有资源（数据库、频道树等）加载完成后调用
    */
   async start(): Promise<void> {
     this.logger.info(`Starting Hub control channel server on port ${this.config.controlPort || 8443}`);
     // 启动网络拓扑管理器
     this._networkTopologyManager.start();
-    // 服务器在构造函数中已经启动
+    // 启动 WebSocket 服务器，开始接受 Edge 连接
+    await this.server.start();
+    this.logger.info('Hub control channel server started and ready to accept Edge connections');
   }
 
   /**
