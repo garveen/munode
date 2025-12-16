@@ -7,8 +7,8 @@
  * - 重新加入集群
  */
 
-import { EventEmitter } from 'events';
 import type { Logger } from 'winston';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 
 export interface ReconnectConfig {
   hubReconnectTimeout: number; // Hub重连超时（毫秒）
@@ -25,7 +25,22 @@ export interface ReconnectCallbacks {
   joinCluster: () => Promise<void>;
 }
 
-export class ReconnectManager extends EventEmitter {
+/**
+ * ReconnectManager 事件类型定义
+ */
+export interface ReconnectManagerEvents extends EventMap {
+  'reconnect-started': [];
+  'reconnect-success': [info: { attempts: number }];
+  'reconnect-attempt-failed': [info: { attempt: number; error: Error }];
+  'reconnect-failed': [info: { attempts: number; lastError: Error }];
+  'full-disconnect-started': [];
+  'full-disconnect-complete': [];
+  'rejoin-started': [];
+  'rejoin-complete': [];
+  'rejoin-failed': [errorMessage: string];
+}
+
+export class ReconnectManager extends TypedEventEmitter<ReconnectManagerEvents> {
   private config: ReconnectConfig;
   private callbacks: ReconnectCallbacks;
   private logger: Logger;
@@ -91,7 +106,6 @@ export class ReconnectManager extends EventEmitter {
 
               this.emit('reconnect-success', {
                 attempts: this.reconnectAttempts,
-                duration: totalTime,
               });
 
               resolve(true);
@@ -100,7 +114,7 @@ export class ReconnectManager extends EventEmitter {
               this.logger.debug('Hub reconnect attempt failed:', error);
               this.emit('reconnect-attempt-failed', {
                 attempt: this.reconnectAttempts,
-                error: error instanceof Error ? error.message : String(error),
+                error: error instanceof Error ? error : new Error(String(error)),
               });
             });
         }, this.config.hubReconnectInterval);
@@ -113,7 +127,7 @@ export class ReconnectManager extends EventEmitter {
 
       this.emit('reconnect-failed', {
         attempts: this.reconnectAttempts,
-        duration: Date.now() - startTime,
+        lastError: new Error('Reconnect timeout'),
       });
 
       await this.performFullDisconnect();

@@ -8,13 +8,6 @@ import type { RemoteInfo } from 'dgram';
 // 使用 protocol 包中的 VoicePacketHeader 类型
 type VoicePacketHeader = ProtocolVoicePacketHeader;
 
-interface VoicePacketData {
-  header: VoicePacketHeader;
-  voiceData: Buffer;
-  data: Buffer;
-  session: number;
-}
-
 /**
  * TCP 降级状态跟踪
  */
@@ -276,34 +269,34 @@ export class VoiceManager {
     });
 
     // 监听接收到的UDP语音包（来自其他Edge）
-    this.voiceTransport.on('voice-packet', (packet: VoicePacketData, _rinfo: RemoteInfo) => {
-      const { header, voiceData } = packet;
+    this.voiceTransport.on('voice-packet', (packet, _rinfo: RemoteInfo) => {
+      // packet 是 VoicePacket 类型
         this.logger.debug(
         `[VOICE-REMOTE] Received voice packet: ` +
-        `sender_edge=${header.senderId}, target=${header.targetId}, ` +
-        `codec=${header.codec}, data_size=${voiceData.length}`
+        `sender_edge=${packet.senderId}, target=${packet.targetId}, ` +
+        `codec=${packet.codec}, data_size=${packet.data.length}`
       );
 
       // 记录收到的包用于网络质量统计（被动探测）
       if (this.voiceRoutingManager.isEnabled()) {
         this.voiceRoutingManager.recordReceivedPacket(
-          header.senderId,
-          header.sequence || 0,
+          packet.senderId,
+          packet.sequence || 0,
           Date.now() // 使用当前时间戳
         );
       }
 
-      // voiceData是完整的Mumble语音包（header+session+sequence+voice_data）
+      // packet.data 是完整的Mumble语音包（header+session+sequence+voice_data）
       // targetId 是 Mumble 原始 target 值：0=PTT, 1-30=whisper, 31=loopback
       
       // 忽略loopback包（远程用户的loopback不应该到达这里）
-      if (header.targetId === 31) {
+      if (packet.targetId === 31) {
         this.logger.debug(`[VOICE-REMOTE] Ignoring remote loopback packet`);
         return;
       }
 
       // 统一处理所有远程语音包
-      this.handleRemoteVoicePacket(voiceData, header.targetId);
+      this.handleRemoteVoicePacket(packet.data, packet.targetId);
     });
 
     this.voiceTransport.on('error', (error: Error) => {

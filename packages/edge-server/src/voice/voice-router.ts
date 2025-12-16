@@ -1,9 +1,7 @@
-import { EventEmitter } from 'events';
-// import { logger } from '@munode/common';
 import type { Logger } from 'winston';
 import type { RemoteInfo } from 'dgram';
+import { TypedEventEmitter, type EventMap, OCB2AES128 } from '@munode/common';
 import { EdgeConfig, VoicePacket, VoiceBroadcast, ClientInfo } from '../types.js';
-import { OCB2AES128 } from '@munode/common';
 import type { Socket as UDPSocket } from 'dgram';
 import { LRUCache } from 'lru-cache';
 import type { ClientManager } from '../client/client-manager.js';
@@ -47,10 +45,20 @@ interface VoiceStats {
 }
 
 /**
+ * VoiceRouter 事件类型定义
+ */
+export interface VoiceRouterEvents extends EventMap {
+  'voicePacket': [packet: VoicePacket];
+  'broadcastVoicePacket': [broadcast: VoiceBroadcast];
+  'forwardBroadcast': [broadcast: VoiceBroadcast];
+  'sendTCPVoicePacket': [session: number, data: Buffer];
+}
+
+/**
  * 语音路由器 - 处理语音包的路由和转发
  * 性能优化：使用索引和缓存实现 O(1) 查找
  */
-export class VoiceRouter extends EventEmitter {
+export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
   private config: EdgeConfig;
   private logger: Logger;
   private clientCryptos: Map<number, OCB2AES128> = new Map(); // session_id -> OCB2AES128

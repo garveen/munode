@@ -1,13 +1,24 @@
-import { EventEmitter } from 'events';
 import type { Logger } from 'winston';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import { ClientInfo } from '../types.js';
 import { mumbleproto } from '@munode/protocol';
+
+/**
+ * ContextActions 事件类型定义
+ */
+export interface ContextActionsEvents extends EventMap {
+  'permissionDenied': [sessionId: number, message: string];
+  'clearUserCache': [sessionId: number];
+  'moveChannelMembers': [sessionId: number, fromChannelId: number, toChannelId: number];
+  'setPromiscuousMode': [sessionId: number, enabled: boolean];
+  'sendContextActionModify': [sessionId: number, message: Partial<mumbleproto.ContextActionModify>];
+}
 
 /**
  * 上下文动作管理器 - 实现右键菜单系统 (Context Actions)
  * 支持 Group Shout、批量移动、Promiscuous Mode 等功能
  */
-export class ContextActions extends EventEmitter {
+export class ContextActions extends TypedEventEmitter<ContextActionsEvents> {
   private clients: Map<number, ClientInfo> = new Map(); // sessionId -> ClientInfo
   private logger?: Logger;
 

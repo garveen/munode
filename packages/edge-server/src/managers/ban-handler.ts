@@ -83,16 +83,8 @@ export class BanHandler {
    * 空列表表示清除所有封禁。
    */
   async handleBanListUpdate(
-     session_id: number,
-    banEntries: Array<{
-      address?: Buffer;
-      mask?: number;
-      hash?: string;
-      name?: string;
-      reason?: string;
-      start?: number;
-      duration?: number;
-    }>
+    session_id: number,
+    banEntries: mumbleproto.BanList.BanEntry[]
   ): Promise<void> {
     try {
       // 检查权限

@@ -1,14 +1,26 @@
 import { Socket } from 'net';
 import { TLSSocket } from 'tls';
-import { EventEmitter } from 'events';
-// import { logger } from '@munode/common';
 import type { Logger } from 'winston';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import { EdgeConfig, ClientInfo, ClientState } from '../types.js';
+
+/**
+ * ClientManager 事件类型定义
+ */
+export interface ClientManagerEvents extends EventMap {
+  'clientConnected': [client: ClientInfo];
+  'clientDisconnected': [client: ClientInfo];
+  'clientUpdated': [client: ClientInfo];
+  'clientMoved': [client: ClientInfo, oldChannelId: number, newChannelId: number];
+  'clientForceDisconnected': [client: ClientInfo, reason: string];
+  'sendMessage': [sessionId: number, message: Buffer];
+  'clientData': [sessionId: number, data: Buffer];
+}
 
 /**
  * 客户端管理器 - 管理所有连接的客户端
  */
-export class ClientManager extends EventEmitter {
+export class ClientManager extends TypedEventEmitter<ClientManagerEvents> {
   private config: EdgeConfig;
   private logger: Logger;
   private clients: Map<number, ClientInfo> = new Map();

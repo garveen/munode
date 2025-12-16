@@ -4,11 +4,11 @@
  * 用于 Hub 接受来自 Edge 的 WebSocket 连接
  */
 
-import { EventEmitter } from 'events';
 import { Server as HTTPServer } from 'http';
 import { Server as HTTPSServer } from 'https';
 import WebSocket, { WebSocketServer } from 'ws';
 import type { ServerOptions } from 'ws';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import { hubedge } from '../generated/proto/HubEdge';
 import { PacketCodec } from './packet-codec';
 
@@ -26,28 +26,17 @@ export interface WebSocketServerConfig {
   logger?: Logger;
 }
 
-export interface WebSocketServerEvents {
-  connection: (client: EdgeClient) => void;
-  message: (client: EdgeClient, packet: hubedge.EdgeHubPacket) => void;
-  disconnection: (client: EdgeClient, code: number, reason: string) => void;
-  error: (error: Error) => void;
-}
-
-export declare interface EdgeHubWebSocketServer {
-  on<K extends keyof WebSocketServerEvents>(
-    event: K,
-    listener: WebSocketServerEvents[K]
-  ): this;
-  emit<K extends keyof WebSocketServerEvents>(
-    event: K,
-    ...args: Parameters<WebSocketServerEvents[K]>
-  ): boolean;
+/**
+ * EdgeClient 事件类型定义
+ */
+export interface EdgeClientEvents extends EventMap {
+  // EdgeClient 当前没有自定义事件，保留用于未来扩展
 }
 
 /**
  * Edge 客户端连接
  */
-export class EdgeClient extends EventEmitter {
+export class EdgeClient extends TypedEventEmitter<EdgeClientEvents> {
   private static nextId = 1;
   
   public readonly id: number;
@@ -107,7 +96,17 @@ export class EdgeClient extends EventEmitter {
   }
 }
 
-export class EdgeHubWebSocketServer extends EventEmitter {
+/**
+ * EdgeHubWebSocketServer 事件类型定义
+ */
+export interface EdgeHubWebSocketServerEvents extends EventMap {
+  'connection': [client: EdgeClient];
+  'message': [client: EdgeClient, packet: hubedge.EdgeHubPacket];
+  'disconnection': [client: EdgeClient, code: number, reason: string];
+  'error': [error: Error];
+}
+
+export class EdgeHubWebSocketServer extends TypedEventEmitter<EdgeHubWebSocketServerEvents> {
   private wss?: WebSocketServer;
   private clients = new Map<number, EdgeClient>();
   private edgeClients = new Map<number, EdgeClient>(); // edgeId -> client

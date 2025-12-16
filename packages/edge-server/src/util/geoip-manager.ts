@@ -1,6 +1,5 @@
-import { EventEmitter } from 'events';
-// import { logger } from '@munode/common';
 import type { Logger } from 'winston';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import { EdgeConfig, GeoIPResult } from '../types.js';
 import { Reader, ReaderModel } from '@maxmind/geoip2-node';
 
@@ -34,9 +33,16 @@ interface CacheStats {
 }
 
 /**
+ * GeoIPManager 事件类型定义
+ */
+export interface GeoIPManagerEvents extends EventMap {
+  // GeoIPManager 当前没有发出事件，保留用于未来扩展
+}
+
+/**
  * GeoIP 管理器 - 处理IP地理位置查询
  */
-export class GeoIPManager extends EventEmitter {
+export class GeoIPManager extends TypedEventEmitter<GeoIPManagerEvents> {
   // private config: EdgeConfig;
   private logger: Logger;
   private reader?: ReaderModel;

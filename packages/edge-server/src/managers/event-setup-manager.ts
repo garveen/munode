@@ -71,18 +71,7 @@ export class EventSetupManager {
 
     this.handlerFactory.messageHandler.on(
       'banListUpdate',
-      (
-         session_id: number,
-        bans: Array<{
-          address?: Buffer;
-          mask?: number;
-          hash?: string;
-          name?: string;
-          reason?: string;
-          start?: number;
-          duration?: number;
-        }>
-      ) => {
+      (session_id: number, bans: mumbleproto.BanList.BanEntry[]) => {
         void this.banHandler.handleBanListUpdate(session_id, bans);
       }
     );
@@ -605,75 +594,71 @@ export class EventSetupManager {
 
       // 监听来自Hub的所有通知消息（合并多个监听器）
       this.hubClient.on('notification', (message) => {
-        // 处理集群事件
-        if (message.method === 'edge.peerJoined') {
-          const data = message.params;
-        this.logger.info('Edge joined cluster:', data);
+        // 使用 discriminated union 的类型守卫来处理不同消息类型
+        switch (message.method) {
+          case 'hub.userJoined':
+            this.logger.debug(`[EDGE-DEBUG] Received hub.userJoined notification: ${JSON.stringify(message.params)}`);
+            this.hubDataManager.handleRemoteUserJoined(message.params);
+            break;
 
-          // 尝试注册新Edge的语音端口（非强制，允许失败）
-          if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.voicePort && data.id !== this.config.server_id) {
-            try {
-              this.voiceManager.getVoiceTransport().registerEndpoint(data.id, data.host, data.voicePort);
-        this.logger.info(`Registered voice endpoint for new Edge ${data.id}: ${data.host}:${data.voicePort}`);
-            } catch (error) {
-              // 端点注册失败不影响其他功能
-        this.logger.warn(`Failed to register voice endpoint for Edge ${data.id}:`, error);
-            }
-          }
-        } else if (message.method === 'edge.peerLeft') {
-          const data = message.params;
-        this.logger.info('Edge left cluster:', data);
+          case 'hub.userLeft':
+            this.hubDataManager.handleRemoteUserLeft(message.params);
+            break;
 
-          // 移除该Edge的语音端口注册
-          if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.id) {
-            this.voiceManager.getVoiceTransport().unregisterEndpoint(data.id);
-        this.logger.info(`Unregistered voice endpoint for Edge ${data.id}`);
-          }
-        }
-        // 处理用户事件
-        else if (message.method === 'hub.userJoined') {
-        this.logger.debug(`[EDGE-DEBUG] Received hub.userJoined notification: ${JSON.stringify(message.params)}`);
-          this.hubDataManager.handleRemoteUserJoined(message.params);
-        } else if (message.method === 'hub.userLeft') {
-          this.hubDataManager.handleRemoteUserLeft(message.params);
-        } else if (message.method === 'hub.userStateChanged') {
-          this.hubDataManager.handleRemoteUserStateChanged(message.params);
-        } else if (message.method === 'hub.userStateBroadcast') {
-          // 新的UserState广播处理
-          this.handlerFactory.hubMessageHandlers.handleUserStateBroadcastFromHub(message.params);
-        } else if (message.method === 'hub.userStateResponse') {
-          // Hub对UserState请求的响应
-          this.handlerFactory.hubMessageHandlers.handleUserStateResponseFromHub(message.params);
-        } else if (message.method === 'hub.channelStateBroadcast') {
-          // ChannelState广播处理
-          this.handlerFactory.hubMessageHandlers.handleChannelStateBroadcastFromHub(message.params);
-        } else if (message.method === 'hub.channelStateResponse') {
-          // Hub对ChannelState请求的响应
-          this.handlerFactory.hubMessageHandlers.handleChannelStateResponseFromHub(message.params);
-        } else if (message.method === 'hub.userRemoveBroadcast') {
-          // UserRemove广播处理
-          this.handlerFactory.hubMessageHandlers.handleUserRemoveBroadcastFromHub(message.params);
-        } else if (message.method === 'hub.userRemoveResponse') {
-          // Hub对UserRemove请求的响应
-          this.handlerFactory.hubMessageHandlers.handleUserRemoveResponseFromHub(message.params);
-        } else if (message.method === 'hub.textMessageBroadcast') {
-          // TextMessage广播处理
-          this.handlerFactory.hubMessageHandlers.handleTextMessageBroadcastFromHub(message.params);
-        } else if (message.method === 'hub.pluginDataBroadcast') {
-          // PluginData广播处理
-          this.handlerFactory.hubMessageHandlers.handlePluginDataBroadcastFromHub(message.params);
-        } else if (message.method === 'edge.aclUpdated') {
-          // ACL更新通知 - 触发权限刷新
-          this.handlerFactory.hubMessageHandlers.handleACLUpdatedNotification(message.params);
-        } else if (message.method === 'hub.userStatsResponse') {
-          // UserStats 响应
-          this.handlerFactory.hubMessageHandlers.handleUserStatsResponseFromHub(message.params);
-        } else if (message.method === 'hub.channelRemoveBroadcast') {
-          // ChannelRemove广播处理
-          this.handlerFactory.hubMessageHandlers.handleChannelRemoveBroadcastFromHub(message.params);
-        } else if (message.method === 'hub.shutdownRequest') {
-          // Shutdown request from Hub - handle async but don't block
-          void this.handlerFactory.hubMessageHandlers.handleShutdownRequestFromHub(message.params);
+          case 'hub.userStateChanged':
+            this.hubDataManager.handleRemoteUserStateChanged(message.params);
+            break;
+
+          case 'hub.userStateBroadcast':
+            this.handlerFactory.hubMessageHandlers.handleUserStateBroadcastFromHub(message.params);
+            break;
+
+          case 'hub.userStateResponse':
+            this.handlerFactory.hubMessageHandlers.handleUserStateResponseFromHub(message.params);
+            break;
+
+          case 'hub.channelStateBroadcast':
+            this.handlerFactory.hubMessageHandlers.handleChannelStateBroadcastFromHub(message.params);
+            break;
+
+          case 'hub.channelStateResponse':
+            this.handlerFactory.hubMessageHandlers.handleChannelStateResponseFromHub(message.params);
+            break;
+
+          case 'hub.userRemoveBroadcast':
+            this.handlerFactory.hubMessageHandlers.handleUserRemoveBroadcastFromHub(message.params);
+            break;
+
+          case 'hub.userRemoveResponse':
+            this.handlerFactory.hubMessageHandlers.handleUserRemoveResponseFromHub(message.params);
+            break;
+
+          case 'hub.textMessageBroadcast':
+            this.handlerFactory.hubMessageHandlers.handleTextMessageBroadcastFromHub(message.params);
+            break;
+
+          case 'hub.pluginDataBroadcast':
+            this.handlerFactory.hubMessageHandlers.handlePluginDataBroadcastFromHub(message.params);
+            break;
+
+          case 'edge.aclUpdated':
+            this.handlerFactory.hubMessageHandlers.handleACLUpdatedNotification(message.params);
+            break;
+
+          case 'hub.userStatsResponse':
+            this.handlerFactory.hubMessageHandlers.handleUserStatsResponseFromHub(message.params);
+            break;
+
+          case 'hub.channelRemoveBroadcast':
+            this.handlerFactory.hubMessageHandlers.handleChannelRemoveBroadcastFromHub(message.params);
+            break;
+
+          case 'hub.shutdownRequest':
+            void this.handlerFactory.hubMessageHandlers.handleShutdownRequestFromHub(message.params);
+            break;
+
+          default:
+            this.logger.warn(`Unhandled notification method: ${message.method}`);
         }
       });
     }

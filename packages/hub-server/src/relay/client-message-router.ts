@@ -1,5 +1,5 @@
-import { EventEmitter } from 'events';
 import type { Logger } from '@munode/common';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import {
   hubedge,
   mumbleproto,
@@ -9,6 +9,18 @@ import {
 import type { GlobalSessionManager } from '../session-manager.js';
 
 /**
+ * ClientMessageRouter 事件类型定义
+ */
+export interface ClientMessageRouterEvents extends EventMap {
+  'clientMessage': [data: {
+    sessionId: number;
+    edgeId: number;
+    messageType: number;
+    relay: hubedge.ClientMessageRelay;
+  }];
+}
+
+/**
  * 客户端消息路由器 (Hub 端)
  * 
  * 功能：
@@ -16,7 +28,7 @@ import type { GlobalSessionManager } from '../session-manager.js';
  * 2. 处理消息路由（单播、多播、频道广播、全局广播）
  * 3. 将消息转发到目标 Edge
  */
-export class ClientMessageRouter extends EventEmitter {
+export class ClientMessageRouter extends TypedEventEmitter<ClientMessageRouterEvents> {
   private sessionManager: GlobalSessionManager;
   private controlService: {
     notify: (edgeId: number, method: string, params?: ChannelNotificationParams) => void;

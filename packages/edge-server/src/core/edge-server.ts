@@ -1,5 +1,4 @@
-import { EventEmitter } from 'events';
-import { createLogger } from '@munode/common';
+import { createLogger, TypedEventEmitter, type EventMap } from '@munode/common';
 import type { Logger } from 'winston';
 import { EdgeConfig, ClientInfo, ChannelInfo, ServerStats } from '../types.js';
 import { GeoIPManager } from '../util/geoip-manager.js';
@@ -14,12 +13,18 @@ import { VoiceManager } from '../managers/voice-manager.js';
 import { HubDataManager } from '../cluster/hub-data-sync.js';
 import { EventSetupManager } from '../managers/event-setup-manager.js';
 
+/**
+ * EdgeServer 事件类型定义
+ */
+export interface EdgeServerEvents extends EventMap {
+  'stopped': [];
+}
 
 /**
  * Edge Server - Mumble 分布式服务器的边缘节点
  * 负责处理客户端连接、语音路由、频道管理等核心功能
  */
-export class EdgeServer extends EventEmitter {
+export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
   private config: EdgeConfig;
   private logger: Logger;
 

@@ -13,8 +13,7 @@
 
 import dgram from 'dgram';
 import crypto from 'crypto';
-import { EventEmitter } from 'events';
-import { type Logger } from '@munode/common';
+import { type Logger, TypedEventEmitter, type EventMap } from '@munode/common';
 
 // Constants
 const HANDSHAKE_RETRY_INTERVAL_MS = 2000;
@@ -72,7 +71,20 @@ export interface EdgeConnectionStatus {
   isActiveSide: boolean; // true if this edge is the active side (initiator) for heartbeat
 }
 
-export class VoiceUDPTransport extends EventEmitter {
+/**
+ * VoiceUDPTransport 事件类型定义
+ */
+export interface VoiceUDPTransportEvents extends EventMap {
+  'error': [error: Error];
+  'listening': [address: ReturnType<dgram.Socket['address']>];
+  'handshake-failed': [edgeId: number];
+  'edge-connected': [edgeId: number];
+  'edge-disconnected': [edgeId: number];
+  'reconnect-failed': [edgeId: number];
+  'voice-packet': [packet: VoicePacket, rinfo: dgram.RemoteInfo];
+}
+
+export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents> {
   private socket: dgram.Socket | null = null;
   private config: VoiceUDPConfig;
   private encryptionConfig: VoiceEncryptionConfig | null = null;
@@ -782,12 +794,22 @@ export class VoiceUDPTransport extends EventEmitter {
       }
 
       // 解析包头（自定义14字节header）
-      const packet = this.decodePacket(decryptedData);
-      if (!packet) {
+      const decoded = this.decodePacket(decryptedData);
+      if (!decoded) {
         this.logger.warn('Failed to parse voice packet');
         this.stats.errors++;
         return;
       }
+
+      // 构建完整的 VoicePacket
+      const packet: VoicePacket = {
+        version: decoded.header.version,
+        senderId: decoded.header.senderId,
+        targetId: decoded.header.targetId,
+        sequence: decoded.header.sequence,
+        codec: decoded.header.codec,
+        data: decoded.voiceData,
+      };
 
       // 发出事件
       // voiceData 是去除了自定义header后的完整 Mumble 语音包

@@ -9,8 +9,8 @@
  * - 管理中转转发功能
  */
 
-import { EventEmitter } from 'events';
 import type { Logger } from 'winston';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import {
   DEFAULT_ROUTING_POLICY,
   DEFAULT_LOCAL_DECISION_CONFIG,
@@ -83,7 +83,18 @@ const DEFAULT_VOICE_ROUTING_CONFIG: Required<EdgeVoiceRoutingConfig> = {
   fallback: { ...DEFAULT_FALLBACK_CONFIG },
 };
 
-export class VoiceRoutingManager extends EventEmitter {
+/**
+ * VoiceRoutingManager 事件类型定义
+ */
+export interface VoiceRoutingManagerEvents extends EventMap {
+  'policy-updated': [policy: EdgeRoutingPolicy];
+  'routes-updated': [routes: RouteEntry[]];
+  'route-changed': [targetEdgeId: number, newRoute: RouteEntry, oldRoute: RouteEntry | undefined];
+  'quality-updated': [sourceEdgeId: number, quality: EdgeConnectionQuality];
+  'quality-degraded': [edgeId: number, quality: EdgeConnectionQuality];
+}
+
+export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEvents> {
   private config: EdgeConfig;
   private voiceRoutingConfig: Required<EdgeVoiceRoutingConfig>;
   private serverId: number;

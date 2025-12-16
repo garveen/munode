@@ -9,7 +9,7 @@ import {
   type EdgeToHubMethods
 } from '@munode/protocol';
 import type { Logger } from '@munode/common';
-import { EventEmitter } from 'events';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import { ClientConnectionPool, type ClientConnectionPoolConfig } from './edge-pool.js';
 
 export interface ControlChannelClientConfig {
@@ -25,7 +25,18 @@ export interface ControlChannelClientConfig {
   };
 }
 
-export class ControlChannelClient extends EventEmitter {
+/**
+ * ControlChannelClient 事件类型定义
+ */
+export interface ControlChannelClientEvents extends EventMap {
+  'connect': [];
+  'disconnect': [];
+  'request': [message: { method: string; params: Record<string, unknown> }, respond: (response: Record<string, unknown>) => void];
+  'notification': [message: { method: string; params: Record<string, unknown> }];
+  'error': [error: Error];
+}
+
+export class ControlChannelClient extends TypedEventEmitter<ControlChannelClientEvents> {
   private ws: WebSocket | null = null;
   private channel: RPCChannel | null = null;
   private pool: ClientConnectionPool | null = null;

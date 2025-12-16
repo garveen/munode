@@ -9,9 +9,8 @@
  */
 
 import WebSocket from 'ws';
-import { EventEmitter } from 'events';
 import type { Logger } from '@munode/common';
-import { HeartbeatManager, type HeartbeatConfig, type HeartbeatCallbacks } from '@munode/common';
+import { TypedEventEmitter, type EventMap, HeartbeatManager, type HeartbeatConfig, type HeartbeatCallbacks } from '@munode/common';
 import { RPCChannel, type NotificationParams, type TypedRPCRequest, type TypedRPCResponse, type TypedRPCNotification, IRPCChannel } from '@munode/protocol';
 
 export interface ClientConnectionPoolConfig {
@@ -40,10 +39,22 @@ interface PooledConnection {
 }
 
 /**
+ * ClientConnectionPool 事件类型定义
+ */
+export interface ClientConnectionPoolEvents extends EventMap {
+  'connection-established': [connectionId: number];
+  'connect': [];
+  'request': [message: { method: string; params: Record<string, unknown> }, respond: (response: Record<string, unknown>) => void];
+  'notification': [message: { method: string; params: Record<string, unknown> }];
+  'connection-closed': [connectionId: number];
+  'disconnect': [];
+}
+
+/**
  * Client-side Connection Pool for resilient WebSocket communication from Edge to Hub
  * Manages multiple connections to the same server for load balancing and fault tolerance
  */
-export class ClientConnectionPool extends EventEmitter implements IRPCChannel {
+export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPoolEvents> implements IRPCChannel {
   private config: ClientConnectionPoolConfig;
   private connections: PooledConnection[] = [];
   private nextConnectionIndex = 0; // For round-robin load balancing

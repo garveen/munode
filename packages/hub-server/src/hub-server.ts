@@ -6,7 +6,7 @@ import { GlobalSessionManager } from './session-manager.js';
 import { VoiceTargetSyncService } from './voice-target-sync.js';
 import { HubControlService } from './control-service.js';
 import { HubDatabase } from './database.js';
-import { VoiceUDPTransport, VoicePacketHeader } from '@munode/protocol';
+import { VoiceUDPTransport, type VoicePacket, type VoicePacketHeader } from '@munode/protocol';
 import { validateHubConfig } from './config-validator.js';
 import { applyConfigDefaults } from './config-defaults.js';
 import { WebApiService } from './web-api-service.js';
@@ -99,7 +99,7 @@ export class HubServer {
       );
 
       // 监听语音包事件
-      this.voiceTransport.on('packet', (packet) => {
+      this.voiceTransport.on('voice-packet', (packet) => {
         // 根据 target_id 转发到对应的 Edge
         this.handleVoicePacket(packet);
       });
@@ -302,36 +302,30 @@ export class HubServer {
    * 处理接收到的语音包
    * 根据 target_id 转发到对应的 Edge
    */
-  private handleVoicePacket(packet: {
-    source_session: number;
-    target_type: number;
-    target_id: number;
-    data: Uint8Array;
-  }): void {
+  private handleVoicePacket(packet: VoicePacket): void {
     if (!this.voiceTransport) {
       return;
     }
 
     try {
-      // 转换为 VoicePacketHeader 格式
-      const header: VoicePacketHeader = {
-        version: 1,
-        senderId: packet.source_session,
-        targetId: packet.target_id,
-        sequence: 0, // TODO: 从 packet 中获取序列号
-        codec: 0, // TODO: 从 packet 中获取编解码器
-      };
+      // packet 包含 senderId, targetId 等信息
+      // 在 Hub 中转模式下，根据 targetId 转发到目标 Edge
+      const targetEdgeId = packet.targetId;
       
-      // packet 包含 senderId, target_id 等信息
-      // 在 Hub 中转模式下，根据 target_id 转发到目标 Edge
-      const targetEdgeId = packet.target_id;
+      const header: VoicePacketHeader = {
+        version: packet.version,
+        senderId: packet.senderId,
+        targetId: packet.targetId,
+        sequence: packet.sequence,
+        codec: packet.codec,
+      };
       
       if (targetEdgeId) {
         // 单播到特定 Edge
         this.voiceTransport.sendToEdge(targetEdgeId, header, Buffer.from(packet.data));
       } else {
         // 广播到所有 Edge（除了发送者）
-        this.voiceTransport.broadcast(header, Buffer.from(packet.data), packet.source_session);
+        this.voiceTransport.broadcast(header, Buffer.from(packet.data), packet.senderId);
       }
     } catch (error) {
     this.logger.error('Error handling voice packet:', error);

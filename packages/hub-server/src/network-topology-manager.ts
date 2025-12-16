@@ -8,8 +8,8 @@
  * - 管理 Edge 网络质量上报
  */
 
-import { EventEmitter } from 'events';
 import type { Logger } from '@munode/common';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import { DEFAULT_ROUTING_POLICY, RouteValidator, type ValidationResult } from '@munode/protocol';
 import type { RoutingPolicy, VoiceRoutingConfig } from './types.js';
 
@@ -79,9 +79,16 @@ interface PathResult {
 }
 
 /**
+ * NetworkTopologyManager 事件类型定义
+ */
+export interface NetworkTopologyManagerEvents extends EventMap {
+  'routeTableUpdated': [edgeId: number, routes: RouteEntry[]];
+}
+
+/**
  * 网络拓扑管理器
  */
-export class NetworkTopologyManager extends EventEmitter {
+export class NetworkTopologyManager extends TypedEventEmitter<NetworkTopologyManagerEvents> {
   // 所有已知的 Edge
   private edges: Set<number> = new Set();
   

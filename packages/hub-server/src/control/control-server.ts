@@ -1,7 +1,7 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import { RPCChannel, Message, NotificationParams, type TypedRPCNotification } from '@munode/protocol';
 import type { Logger } from '@munode/common';
-import { EventEmitter } from 'events';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import { ServerConnectionManager, VirtualEdgeChannel } from './hub-pool.js';
 
 export interface ControlChannelConfig {
@@ -10,7 +10,19 @@ export interface ControlChannelConfig {
   logger?: Logger;
 }
 
-export class ControlChannelServer extends EventEmitter {
+/**
+ * ControlChannelServer 事件类型定义
+ */
+export interface ControlChannelServerEvents extends EventMap {
+  'edgeConnected': [edgeId: number, virtualChannel: VirtualEdgeChannel];
+  'edgeDisconnected': [edgeId: number];
+  'disconnect': [channel: RPCChannel];
+  'connect': [channel: RPCChannel];
+  'request': [channel: RPCChannel, message: Message, respond: (response: unknown) => void];
+  'notification': [channel: RPCChannel, message: Message];
+}
+
+export class ControlChannelServer extends TypedEventEmitter<ControlChannelServerEvents> {
   private wss: WebSocketServer;
   private channels = new Map<WebSocket, RPCChannel>();
   private edgePool: ServerConnectionManager; // Edge 连接管理器

@@ -1,5 +1,5 @@
-import { EventEmitter } from 'events';
 import type { Logger } from 'winston';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import { EdgeConfig, AuthResult } from '../types.js';
 import type { EdgeControlClient } from '../cluster/hub-client.js';
 
@@ -20,10 +20,17 @@ interface AuthStats {
 }
 
 /**
+ * AuthManager 事件类型定义
+ */
+export interface AuthManagerEvents extends EventMap {
+  // AuthManager 当前没有发出事件，保留用于未来扩展
+}
+
+/**
  * 认证管理器 - 处理用户认证和授权
  * 所有认证请求必须通过 Hub 进行，Edge 不保留本地用户数据
  */
-export class AuthManager extends EventEmitter {
+export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
   private config: EdgeConfig;
   private logger: Logger;
   private authCache: Map<string, AuthCacheItem> = new Map();

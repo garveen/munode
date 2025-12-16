@@ -1,12 +1,20 @@
-import { EventEmitter } from 'events';
-// import { logger } from '@munode/common';
 import type { Logger } from 'winston';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import { EdgeConfig, UDPStats } from '../types.js';
+
+/**
+ * UDPMonitor 事件类型定义
+ */
+export interface UDPMonitorEvents extends EventMap {
+  'connectionUnstable': [sessionId: number, stats: UDPStats];
+  'connectionStabilized': [sessionId: number, stats: UDPStats];
+  'statsUpdated': [sessionId: number, stats: UDPStats];
+}
 
 /**
  * UDP 监控器 - 监控UDP连接质量和不稳定性
  */
-export class UDPMonitor extends EventEmitter {
+export class UDPMonitor extends TypedEventEmitter<UDPMonitorEvents> {
   // private _config: EdgeConfig;
   private logger: Logger;
   private pingHistory: Map<number, number[]> = new Map(); // sessionId -> ping times

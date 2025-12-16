@@ -4,8 +4,8 @@
  * 用于 Edge 连接到 Hub 的 WebSocket 客户端
  */
 
-import { EventEmitter } from 'events';
 import WebSocket from 'ws';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import { hubedge } from '../generated/proto/HubEdge';
 import { PacketCodec } from './packet-codec';
 
@@ -25,27 +25,19 @@ export interface WebSocketClientConfig {
   logger?: Logger;
 }
 
-export interface WebSocketClientEvents {
-  connected: () => void;
-  disconnected: (code: number, reason: string) => void;
-  message: (packet: hubedge.EdgeHubPacket) => void;
-  error: (error: Error) => void;
-  reconnecting: (attempt: number) => void;
-  reconnected: () => void;
+/**
+ * EdgeHubWebSocketClient 事件类型定义
+ */
+export interface EdgeHubWebSocketClientEvents extends EventMap {
+  'connected': [];
+  'disconnected': [code: number, reason: string];
+  'message': [packet: hubedge.EdgeHubPacket];
+  'error': [error: Error];
+  'reconnecting': [attempt: number];
+  'reconnected': [];
 }
 
-export declare interface EdgeHubWebSocketClient {
-  on<K extends keyof WebSocketClientEvents>(
-    event: K,
-    listener: WebSocketClientEvents[K]
-  ): this;
-  emit<K extends keyof WebSocketClientEvents>(
-    event: K,
-    ...args: Parameters<WebSocketClientEvents[K]>
-  ): boolean;
-}
-
-export class EdgeHubWebSocketClient extends EventEmitter {
+export class EdgeHubWebSocketClient extends TypedEventEmitter<EdgeHubWebSocketClientEvents> {
   private ws?: WebSocket;
   private config: Required<WebSocketClientConfig>;
   private reconnectAttempts = 0;

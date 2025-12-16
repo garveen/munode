@@ -1,13 +1,20 @@
-import { EventEmitter } from 'events';
 import { createHmac } from 'crypto';
 import type { Logger } from 'winston';
-import { type ChannelNotificationParams, RPCChannel, hubedgeRpc } from '@munode/protocol';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
+import { 
+  type ChannelNotificationParams, 
+  RPCChannel,
+  hubedgeRpc,
+} from '@munode/protocol';
 import { ControlChannelClient, type ControlChannelClientConfig } from '../control/control-client.js';
 import type {
   RPCParams,
   RPCResult,
   EdgeToHubMethods,
   VoiceTarget,
+  HubToEdgeNotifications,
+  RegisterResponse,
+  HeartbeatResponse,
 } from '@munode/protocol';
 import type {
   ServerStats,
@@ -17,10 +24,80 @@ import type {
 import type { EdgeConfig } from '../types.js';
 
 /**
+ * VoiceTarget 同步参数
+ */
+export interface SyncVoiceTargetParams {
+  edge_id: number;
+  client_session: number;
+  target_id: number;
+  config: {
+    sessions?: Array<{ session: number }>;
+    channels?: Array<{
+      channel_id: number;
+      include_subchannels?: boolean;
+      include_links?: boolean;
+      group?: string;
+    }>;
+  } | null;
+}
+
+/**
+ * VoiceData 参数
+ */
+export interface VoiceDataParams {
+  packetData: Buffer;
+  targetEdgeId: number;
+}
+
+/**
+ * VoiceRoutingConfig 参数
+ */
+export interface VoiceRoutingConfigParams {
+  enabled: boolean;
+  encryption?: {
+    algorithm: string;
+    key: string;
+    version: number;
+  };
+}
+
+/**
+ * Hub 通知消息类型
+ * 直接使用 protocol 包定义的类型，确保类型安全
+ */
+export type HubNotificationMessage = HubToEdgeNotifications;
+
+/**
+ * EdgeControlClient 事件类型定义
+ */
+export interface EdgeControlClientEvents extends EventMap {
+  'connected': [];
+  'disconnected': [];
+  'session-expired': [];
+  'reconnected': [response: RegisterResponse];
+  'registered': [response: RegisterResponse];
+  'heartbeat': [response: HeartbeatResponse];
+  'heartbeatFailed': [error: Error];
+  'error': [error: Error];
+  'broadcast': [params: ChannelNotificationParams];
+  'syncChannel': [params: { channelData: ChannelData }];
+  'syncACL': [params: { channelId: number; acl: ACLData }];
+  'deleteChannel': [params: { channelId: number }];
+  'syncVoiceTarget': [params: SyncVoiceTargetParams];
+  'notification': [message: HubNotificationMessage];
+  'edgeJoined': [params: { edgeId: number; host: string; port: number; voicePort: number }];
+  'edgeLeft': [params: { edgeId: number }];
+  'sessionUpdate': [params: { session: number; updates: ServerStats }];
+  'voiceTargetUpdate': [params: SyncVoiceTargetParams];
+  'voiceData': [data: VoiceDataParams, respond: (response: { success: boolean }) => void];
+  'voiceRoutingConfig': [config: VoiceRoutingConfigParams];
+}
+
+/**
  * Edge 控制通道客户端
  * 连接到 Hub 的控制服务，处理集群协调
  */
-export class EdgeControlClient extends EventEmitter {
+export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents> {
   private client: ControlChannelClient;
   private config: EdgeConfig;
   private logger: Logger;
@@ -263,7 +340,14 @@ export class EdgeControlClient extends EventEmitter {
 
       const response = await channel.call('edge.heartbeat', request);
 
-      this.emit('heartbeat', response);
+      // 提取心跳响应数据
+      if (response.edge_heartbeat) {
+        const heartbeatResponse: HeartbeatResponse = {
+          success: response.edge_heartbeat.success || false,
+          updated_edges: response.edge_heartbeat.updated_edges || [],
+        };
+        this.emit('heartbeat', heartbeatResponse);
+      }
       this.logger?.debug(`Heartbeat sent successfully on connection ${connectionId}`);
     } catch (error) {
       this.logger.error(`Heartbeat failed on connection ${connectionId}:`, error);
@@ -338,28 +422,28 @@ export class EdgeControlClient extends EventEmitter {
 
     switch (method) {
       case 'hub.broadcast': {
-        this.emit('broadcast', params);
+        this.emit('broadcast', params as ChannelNotificationParams);
         respond({ success: true });
         break;
       }
       case 'hub.syncChannel': {
-        this.emit('syncChannel', params);
+        this.emit('syncChannel', params as { channelData: ChannelData });
         respond({ success: true });
         break;
       }
       case 'hub.syncACL': {
-        this.emit('syncACL', params);
+        this.emit('syncACL', params as { channelId: number; acl: ACLData });
         respond({ success: true });
         break;
       }
       case 'hub.deleteChannel': {
-        this.emit('deleteChannel', params);
+        this.emit('deleteChannel', params as { channelId: number });
         respond({ success: true });
         break;
       }
       // NOTE: hub.routeVoice removed - voice packets flow edge-to-edge directly via UDP
       case 'hub.syncVoiceTarget': {
-        this.emit('syncVoiceTarget', params);
+        this.emit('syncVoiceTarget', params as SyncVoiceTargetParams);
         respond({ success: true });
         break;
       }
@@ -373,35 +457,47 @@ export class EdgeControlClient extends EventEmitter {
   private handleIncomingNotification(message: { method: string; params: unknown }): void {
     try {
       // 首先触发通用的notification事件，供上层直接处理
-      this.emit('notification', message);
+      // 使用类型断言来确保类型安全，因为通知消息结构是固定的
+      this.emit('notification', message as HubNotificationMessage);
 
       // 然后根据特定方法触发特定事件（向后兼容）
+      // 这些特定事件保留是为了兼容旧代码，新代码应使用 notification 事件
       switch (message.method) {
-        case 'hub.edgeJoined':
-          this.emit('edgeJoined', message.params);
+        case 'hub.edgeJoined': {
+          const params = message.params as { edgeId: number; host: string; port: number; voicePort: number };
+          this.emit('edgeJoined', params);
           break;
+        }
 
-        case 'hub.edgeLeft':
-          this.emit('edgeLeft', message.params);
+        case 'hub.edgeLeft': {
+          const params = message.params as { edgeId: number };
+          this.emit('edgeLeft', params);
           break;
+        }
 
-        case 'hub.sessionUpdate':
-          this.emit('sessionUpdate', message.params);
+        case 'hub.sessionUpdate': {
+          const params = message.params as { session: number; updates: ServerStats };
+          this.emit('sessionUpdate', params);
           break;
+        }
 
-        case 'hub.voiceTargetUpdate':
-          this.emit('voiceTargetUpdate', message.params);
+        case 'hub.voiceTargetUpdate': {
+          const params = message.params as SyncVoiceTargetParams;
+          this.emit('voiceTargetUpdate', params);
           break;
+        }
 
-        case 'hub.syncVoiceTarget':
-          // VoiceTarget 同步通知
-          this.emit('syncVoiceTarget', message.params);
+        case 'hub.syncVoiceTarget': {
+          const params = message.params as SyncVoiceTargetParams;
+          this.emit('syncVoiceTarget', params);
           break;
+        }
 
-        case 'hub.voiceRoutingConfig':
-          // 语音路由配置通知
-          this.emit('voiceRoutingConfig', message.params);
+        case 'hub.voiceRoutingConfig': {
+          const params = message.params as VoiceRoutingConfigParams;
+          this.emit('voiceRoutingConfig', params);
           break;
+        }
 
         case 'hub.routeTableUpdate':
           // 路由表更新通知

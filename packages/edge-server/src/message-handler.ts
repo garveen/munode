@@ -1,22 +1,129 @@
-import { EventEmitter } from 'events';
-// import { logger } from '@munode/common';
 import type { Logger } from 'winston';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import { EdgeConfig, ClientState } from './types.js';
 import { mumbleproto } from '@munode/protocol';
 import { MessageType } from '@munode/protocol';
 
 /**
+ * MessageHandler 事件类型定义
+ */
+export interface MessageHandlerEvents extends EventMap {
+  'version': [session: number, data: Buffer];
+  'udpTunnel': [session: number, data: Buffer];
+  'authenticate': [session: number, data: Buffer];
+  'ping': [session: number, data: Buffer];
+  'reject': [session: number, data: Buffer];
+  'serverSync': [session: number, data: Buffer];
+  'channelRemove': [session: number, data: Buffer];
+  'channelState': [session: number, data: Buffer];
+  'userRemove': [session: number, data: Buffer];
+  'userState': [session: number, data: Buffer];
+  'banListQuery': [session: number];
+  'banListUpdate': [session: number, bans: mumbleproto.BanList.BanEntry[]];
+  'textMessage': [session: number, data: Buffer];
+  'pluginDataTransmission': [session: number, data: Buffer];
+  'permissionDenied': [session: number, data: Buffer];
+  'acl': [session: number, data: Buffer];
+  'queryUsers': [session: number, data: Buffer];
+  'cryptSetup': [session: number, data: Buffer];
+  'contextActionModify': [session: number, data: Buffer];
+  'contextAction': [session: number, data: Buffer];
+  'userList': [session: number, data: Buffer];
+  'voiceTarget': [session: number, data: Buffer];
+  'permissionQuery': [session: number, data: Buffer];
+  'codecVersion': [session: number, data: Buffer];
+  'userStats': [session: number, data: Buffer];
+  'requestBlob': [session: number, data: Buffer];
+  'serverConfig': [session: number, data: Buffer];
+  'suggestConfig': [session: number, data: Buffer];
+  'sendMessage': [session: number, messageType: number, messageData: Buffer];
+  'broadcastMessage': [messageType: number, messageData: Buffer, excludeSession?: number];
+}
+
+/**
+ * 消息处理函数类型
+ */
+type MessageHandlerFunction = (session: number, data: Buffer) => void;
+
+/**
  * 消息处理器 - 处理 Mumble 协议消息
  */
-export class MessageHandler extends EventEmitter {
+export class MessageHandler extends TypedEventEmitter<MessageHandlerEvents> {
   private logger: Logger;
   private clientManager: {
     getClient: (session: number) => { state: ClientState } | undefined;
   } | null = null;
 
+  /**
+   * 消息处理函数查找表
+   */
+  private readonly messageHandlers: Map<number, MessageHandlerFunction>;
+
+  /**
+   * 状态允许的消息类型查找表
+   */
+  private readonly stateAllowedMessages: Map<ClientState, Set<number>>;
+
   constructor(_config: EdgeConfig, logger: Logger) {
     super();
     this.logger = logger;
+    
+    // 初始化消息处理函数查找表
+    this.messageHandlers = new Map<number, MessageHandlerFunction>([
+      [MessageType.Version, this.handleVersion.bind(this)],
+      [MessageType.Authenticate, this.handleAuthenticate.bind(this)],
+      [MessageType.Ping, this.handlePing.bind(this)],
+      [MessageType.Reject, this.handleReject.bind(this)],
+      [MessageType.ServerSync, this.handleServerSync.bind(this)],
+      [MessageType.ChannelRemove, this.handleChannelRemove.bind(this)],
+      [MessageType.ChannelState, this.handleChannelState.bind(this)],
+      [MessageType.UserRemove, this.handleUserRemove.bind(this)],
+      [MessageType.UserState, this.handleUserState.bind(this)],
+      [MessageType.BanList, this.handleBanList.bind(this)],
+      [MessageType.TextMessage, this.handleTextMessage.bind(this)],
+      [MessageType.PermissionDenied, this.handlePermissionDenied.bind(this)],
+      [MessageType.ACL, this.handleACL.bind(this)],
+      [MessageType.QueryUsers, this.handleQueryUsers.bind(this)],
+      [MessageType.CryptSetup, this.handleCryptSetup.bind(this)],
+      [MessageType.ContextActionModify, this.handleContextActionModify.bind(this)],
+      [MessageType.ContextAction, this.handleContextAction.bind(this)],
+      [MessageType.UserList, this.handleUserList.bind(this)],
+      [MessageType.VoiceTarget, this.handleVoiceTarget.bind(this)],
+      [MessageType.PermissionQuery, this.handlePermissionQuery.bind(this)],
+      [MessageType.CodecVersion, this.handleCodecVersion.bind(this)],
+      [MessageType.UserStats, this.handleUserStats.bind(this)],
+      [MessageType.RequestBlob, this.handleRequestBlob.bind(this)],
+      [MessageType.ServerConfig, this.handleServerConfig.bind(this)],
+      [MessageType.SuggestConfig, this.handleSuggestConfig.bind(this)],
+      [MessageType.PluginDataTransmission, this.handlePluginDataTransmission.bind(this)],
+    ]);
+
+    // 初始化状态允许的消息类型查找表
+    this.stateAllowedMessages = new Map<ClientState, Set<number>>([
+      // Connected 状态：刚连接时允许接收 Version、Authenticate 和 Ping
+      [ClientState.Connected, new Set([
+        MessageType.Version,
+        MessageType.Authenticate,
+        MessageType.Ping,
+      ])],
+      
+      // ServerSentVersion 状态：服务器已发送 Version
+      [ClientState.ServerSentVersion, new Set([
+        MessageType.Version,
+        MessageType.Authenticate,
+        MessageType.Ping,
+      ])],
+      
+      // ClientSentVersion 状态：客户端已发送 Version
+      [ClientState.ClientSentVersion, new Set([
+        MessageType.Authenticate,
+        MessageType.UserState,
+        MessageType.Ping,
+      ])],
+      
+      // Dead 状态：不接受任何消息
+      [ClientState.Dead, new Set()],
+    ]);
   }
 
   /**
@@ -57,88 +164,12 @@ export class MessageHandler extends EventEmitter {
         return;
       }
 
-      switch (messageType) {
-        case MessageType.Version:
-          this.handleVersion(session_id, messageData);
-          break;
-        case MessageType.Authenticate:
-          this.handleAuthenticate(session_id, messageData);
-          break;
-        case MessageType.Ping:
-          this.handlePing(session_id, messageData);
-          break;
-        case MessageType.Reject:
-          this.handleReject(session_id, messageData);
-          break;
-        case MessageType.ServerSync:
-          this.handleServerSync(session_id, messageData);
-          break;
-        case MessageType.ChannelRemove:
-          this.handleChannelRemove(session_id, messageData);
-          break;
-        case MessageType.ChannelState:
-          this.handleChannelState(session_id, messageData);
-          break;
-        case MessageType.UserRemove:
-          this.handleUserRemove(session_id, messageData);
-          break;
-        case MessageType.UserState:
-          this.handleUserState(session_id, messageData);
-          break;
-        case MessageType.BanList:
-          this.handleBanList(session_id, messageData);
-          break;
-        case MessageType.TextMessage:
-          this.handleTextMessage(session_id, messageData);
-          break;
-        case MessageType.PermissionDenied:
-          this.handlePermissionDenied(session_id, messageData);
-          break;
-        case MessageType.ACL:
-          this.handleACL(session_id, messageData);
-          break;
-        case MessageType.QueryUsers:
-          this.handleQueryUsers(session_id, messageData);
-          break;
-        case MessageType.CryptSetup:
-          this.handleCryptSetup(session_id, messageData);
-          break;
-        case MessageType.ContextActionModify:
-          this.handleContextActionModify(session_id, messageData);
-          break;
-        case MessageType.ContextAction:
-          this.handleContextAction(session_id, messageData);
-          break;
-        case MessageType.UserList:
-          this.handleUserList(session_id, messageData);
-          break;
-        case MessageType.VoiceTarget:
-          this.handleVoiceTarget(session_id, messageData);
-          break;
-        case MessageType.PermissionQuery:
-          this.handlePermissionQuery(session_id, messageData);
-          break;
-        case MessageType.CodecVersion:
-          this.handleCodecVersion(session_id, messageData);
-          break;
-        case MessageType.UserStats:
-          this.handleUserStats(session_id, messageData);
-          break;
-        case MessageType.RequestBlob:
-          this.handleRequestBlob(session_id, messageData);
-          break;
-        case MessageType.ServerConfig:
-          this.handleServerConfig(session_id, messageData);
-          break;
-        case MessageType.SuggestConfig:
-          this.handleSuggestConfig(session_id, messageData);
-          break;
-        case MessageType.PluginDataTransmission:
-          this.handlePluginDataTransmission(session_id, messageData);
-          break;
-        default:
-          this.logger.warn(`Unknown message type: ${messageType}`);
-          break;
+      // 使用查找表获取处理函数
+      const handler = this.messageHandlers.get(messageType);
+      if (handler) {
+        handler(session_id, messageData);
+      } else {
+        this.logger.warn(`Unknown message type: ${messageType}`);
       }
     } catch (error) {
       this.logger.error(`Error handling message type ${messageType}:`, error);
@@ -149,44 +180,23 @@ export class MessageHandler extends EventEmitter {
    * 检查消息类型在当前状态下是否允许
    */
   private isMessageAllowedInState(messageType: number, clientState?: ClientState): boolean {
-    // 如果客户端状态未定义，拒绝所有消息（除了连接初期）
+    // 如果客户端状态未定义，拒绝所有消息
     if (clientState === undefined) {
       return false;
     }
 
-    switch (clientState) {
-      case ClientState.Connected:
-        // 刚连接时允许接收 Version、Authenticate 和 Ping（与 C 实现保持一致）
-        return messageType === MessageType.Version || 
-               messageType === MessageType.Authenticate || 
-               messageType === MessageType.Ping;
-
-      case ClientState.ServerSentVersion:
-        // 服务器已发送 Version，接受客户端的 Version、Authenticate 和 Ping
-        return messageType === MessageType.Version || 
-               messageType === MessageType.Authenticate || 
-               messageType === MessageType.Ping;
-
-      case ClientState.ClientSentVersion:
-        // 客户端已发送 Version，只接受 Authenticate、UserState（PreConnect）和 Ping
-        return (
-          messageType === MessageType.Authenticate ||
-          messageType === MessageType.UserState ||
-          messageType === MessageType.Ping
-        );
-
-      case ClientState.Authenticated:
-      case ClientState.Ready:
-        // 认证完成后，接受大部分消息
-        return true;
-
-      case ClientState.Dead:
-        // 客户端已断开，不接受任何消息
-        return false;
-
-      default:
-        return false;
+    // Authenticated 和 Ready 状态接受所有消息
+    if (clientState === ClientState.Authenticated || clientState === ClientState.Ready) {
+      return true;
     }
+
+    // 使用查找表检查其他状态
+    const allowedMessages = this.stateAllowedMessages.get(clientState);
+    if (!allowedMessages) {
+      return false;
+    }
+
+    return allowedMessages.has(messageType);
   }
 
   /**

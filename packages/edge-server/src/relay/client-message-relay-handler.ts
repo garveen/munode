@@ -1,5 +1,5 @@
-import { EventEmitter } from 'events';
 import type { Logger } from 'winston';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import {
   hubedge,
   mumbleproto,
@@ -10,6 +10,13 @@ import type { ClientManager } from '../client/client-manager.js';
 import type { MessageHandler } from '../message-handler.js';
 
 /**
+ * ClientMessageRelayHandler 事件类型定义
+ */
+export interface ClientMessageRelayHandlerEvents extends EventMap {
+  // ClientMessageRelayHandler 当前没有发出事件，保留用于未来扩展
+}
+
+/**
  * 客户端消息中转处理器 (Edge 端)
  * 
  * 功能：
@@ -17,7 +24,7 @@ import type { MessageHandler } from '../message-handler.js';
  * 2. 将 Hub 的消息转发到客户端
  * 3. 直接引用 Mumble.proto 消息，避免二次序列化
  */
-export class ClientMessageRelayHandler extends EventEmitter {
+export class ClientMessageRelayHandler extends TypedEventEmitter<ClientMessageRelayHandlerEvents> {
   private hubClient: EdgeControlClient;
   private clientManager: ClientManager;
   private messageHandler: MessageHandler;

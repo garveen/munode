@@ -989,6 +989,29 @@ export interface HubUserStatsResponseNotification {
 }
 
 /**
+ * Hub 通知 Edge ACL 已更新
+ */
+export interface HubACLUpdatedNotification {
+  method: 'edge.aclUpdated';
+  params: {
+    channel_id: number;
+    timestamp: number;
+  };
+}
+
+/**
+ * Hub 通知 Edge 关闭请求
+ */
+export interface HubShutdownRequestNotification {
+  method: 'hub.shutdownRequest';
+  params: {
+    reason: string;
+    graceful: boolean;
+    disconnect_clients: boolean;
+  };
+}
+
+/**
  * Hub 通知 Edge 用户加入
  */
 export interface HubUserJoinedNotification {
@@ -1115,6 +1138,8 @@ export type HubToEdgeNotifications =
   | HubPermissionDeniedNotification
   | HubPluginDataBroadcastNotification
   | HubUserStatsResponseNotification
+  | HubACLUpdatedNotification
+  | HubShutdownRequestNotification
   | HubUserJoinedNotification
   | HubVisibleUsersNotification
   | HubUserStateChangedNotification

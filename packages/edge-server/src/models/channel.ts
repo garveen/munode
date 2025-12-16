@@ -1,13 +1,28 @@
-import { EventEmitter } from 'events';
 import type { Logger } from 'winston';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import { EdgeConfig, ChannelInfo } from '../types.js';
 
 export type ChannelTreeNode = Omit<ChannelInfo, 'children'> & { children: ChannelTreeNode[] };
 
 /**
+ * ChannelManager 事件类型定义
+ */
+export interface ChannelManagerEvents extends EventMap {
+  'channelCreated': [channel: ChannelInfo];
+  'channelRemoved': [channel: ChannelInfo];
+  'channelUpdated': [channel: ChannelInfo];
+  'channel_idUpdated': [oldId: number, newId: number];
+  'getChannelUserCount': [channelId: number];
+  'channelsLinked': [channelId1: number, channelId2: number];
+  'channelsUnlinked': [channelId1: number, channelId2: number];
+  'channelMoved': [channel: ChannelInfo];
+  'channelRenamed': [channel: ChannelInfo];
+}
+
+/**
  * 频道管理器 - 管理服务器频道结构
  */
-export class ChannelManager extends EventEmitter {
+export class ChannelManager extends TypedEventEmitter<ChannelManagerEvents> {
   private logger: Logger;
   private channels: Map<number, ChannelInfo> = new Map();
   private channelCounter = 1;

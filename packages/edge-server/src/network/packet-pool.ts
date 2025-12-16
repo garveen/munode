@@ -1,14 +1,20 @@
-import { EventEmitter } from 'events';
-// import { logger } from '@munode/common';
 import type { Logger } from 'winston';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import { EdgeConfig, UDPConnection } from '../types.js';
 import { createSocket } from 'dgram';
-// import { Socket as UDPSocket } from 'dgram';
+
+/**
+ * PacketConnPool 事件类型定义
+ */
+export interface PacketConnPoolEvents extends EventMap {
+  'connectionCreated': [connection: UDPConnection];
+  'connectionRemoved': [connection: UDPConnection];
+}
 
 /**
  * 包连接池管理器 - 优化UDP连接管理
  */
-export class PacketConnPool extends EventEmitter {
+export class PacketConnPool extends TypedEventEmitter<PacketConnPoolEvents> {
   // private config: EdgeConfig;
   private logger: Logger;
   private connections: Map<string, UDPConnection> = new Map();

@@ -8,8 +8,8 @@
  * - 封装连接细节，上层只需要知道 Edge ID
  */
 
-import { EventEmitter } from 'events';
 import type { Logger } from '@munode/common';
+import { TypedEventEmitter, type EventMap } from '@munode/common';
 import { RPCChannel, type NotificationParams, type TypedRPCRequest, type TypedRPCResponse, type TypedRPCNotification } from '@munode/protocol';
 
 interface EdgeConnectionInfo {
@@ -20,10 +20,17 @@ interface EdgeConnectionInfo {
 }
 
 /**
+ * VirtualEdgeChannel 事件类型定义
+ */
+export interface VirtualEdgeChannelEvents extends EventMap {
+  // VirtualEdgeChannel 当前没有发出事件，保留用于未来扩展
+}
+
+/**
  * 虚拟的 Edge Channel
  * 代表一个 Edge 的抽象通信通道，内部可能有多个实际连接
  */
-export class VirtualEdgeChannel extends EventEmitter {
+export class VirtualEdgeChannel extends TypedEventEmitter<VirtualEdgeChannelEvents> {
   private edgeId: number;
   private pool: ServerConnectionManager;
 
@@ -67,10 +74,21 @@ export class VirtualEdgeChannel extends EventEmitter {
 }
 
 /**
+ * ServerConnectionManager 事件类型定义
+ */
+export interface ServerConnectionManagerEvents extends EventMap {
+  'edgeConnected': [edgeId: number, virtualChannel: VirtualEdgeChannel];
+  'poolExpanded': [edgeId: number, connectionCount: number];
+  'edgeDisconnected': [edgeId: number];
+  'poolShrunk': [edgeId: number, connectionCount: number];
+  'broadcastComplete': [info: { method: string; totalEdges: number; successful: number; failed: number; results: Array<{ edgeId: number; success: boolean; error?: Error }> }];
+}
+
+/**
  * Server 端连接管理器
  * 管理多个 Edge 的连接，每个 Edge 可能有多个连接
  */
-export class ServerConnectionManager extends EventEmitter {
+export class ServerConnectionManager extends TypedEventEmitter<ServerConnectionManagerEvents> {
   private edges = new Map<number, EdgeConnectionInfo>(); // edgeId -> 连接信息
   private channelToEdge = new Map<RPCChannel, number>(); // channel -> edgeId 反向映射
   private logger?: Logger;
