@@ -96,7 +96,7 @@ export class EdgeClusterManager {
   }
 
   private setupHubClientEvents(): void {
-    this.hubClient.on('connect', () => {
+    this.hubClient.on('connected', () => {
       this.logger.info('Connected to Hub');
     });
 
