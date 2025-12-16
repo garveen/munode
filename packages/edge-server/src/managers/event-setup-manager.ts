@@ -359,106 +359,130 @@ export class EventSetupManager {
 
     // Hub 事件
     if (this.hubClient) {
-      this.hubClient.on('connected', () => {
-        void (async () => {
-        this.logger.info('Connected to Hub Server');
+      // 提取 fullSync 逻辑为共享函数
+      const performFullSync = async (): Promise<void> => {
+        this.logger.info('Performing full sync with Hub...');
 
-          // 加载频道和ACL数据
-          await this.hubDataManager.loadDataFromHub();
+        // 加载频道和ACL数据
+        await this.hubDataManager.loadDataFromHub();
 
-          // 连接成功后立即请求完整同步
-          try {
-        this.logger.info('Requesting full sync from Hub...');
-            const syncData = await this.hubClient.requestFullSync();
-            // Process sync data
-            this.handlerFactory.stateManager.loadSnapshot(syncData);
-        this.logger.info('Full sync completed successfully');
+        // 连接成功后立即请求完整同步
+        try {
+          this.logger.info('Requesting full sync from Hub...');
+          const syncData = await this.hubClient.requestFullSync();
+          // Process sync data
+          this.handlerFactory.stateManager.loadSnapshot(syncData);
+          this.logger.info('Full sync completed successfully');
+          
+          // Process sessions from fullSync - broadcast remote users to local clients
+          // This is critical after edge reconnection to ensure all clients see users on other edges
+          if (syncData.sessions && Array.isArray(syncData.sessions)) {
+            const localEdgeId = this.handlerFactory.config.server_id;
+            const remoteSessionCount = syncData.sessions.filter(s => s.edge_id !== localEdgeId).length;
+            this.logger.info(`Processing ${remoteSessionCount} remote user sessions from fullSync`);
             
-            // Process sessions from fullSync - broadcast remote users to local clients
-            // This is critical after edge reconnection to ensure all clients see users on other edges
-            if (syncData.sessions && Array.isArray(syncData.sessions)) {
-              const localEdgeId = this.handlerFactory.config.server_id;
-              const remoteSessionCount = syncData.sessions.filter(s => s.edge_id !== localEdgeId).length;
-              this.logger.info(`Processing ${remoteSessionCount} remote user sessions from fullSync`);
-              
-              // Import protocol dependencies once before the loop
-              const mumbleproto = await import('@munode/protocol').then(m => m.mumbleproto);
-              const MessageType = await import('@munode/protocol').then(m => m.MessageType);
-              
-              // Get local clients once before the loop
-              const allClients = this.handlerFactory.clientManager.getAllClients();
-              const authenticatedClients = allClients.filter(c => c.user_id > 0 && c.has_full_user_list);
-              
-              for (const session of syncData.sessions) {
-                // Only process sessions from other edges
-                if (session.edge_id !== localEdgeId) {
-                  // Add to remote users map
-                  this.handlerFactory.stateManager.addRemoteUser(
-                    session.session_id,
-                    session.edge_id,
-                    session.channel_id ?? 0
+            // Import protocol dependencies once before the loop
+            const mumbleproto = await import('@munode/protocol').then(m => m.mumbleproto);
+            const MessageType = await import('@munode/protocol').then(m => m.MessageType);
+            
+            // Get local clients once before the loop
+            const allClients = this.handlerFactory.clientManager.getAllClients();
+            const authenticatedClients = allClients.filter(c => c.user_id > 0 && c.has_full_user_list);
+            
+            for (const session of syncData.sessions) {
+              // Only process sessions from other edges
+              if (session.edge_id !== localEdgeId) {
+                // Add to remote users map
+                this.handlerFactory.stateManager.addRemoteUser(
+                  session.session_id,
+                  session.edge_id,
+                  session.channel_id ?? 0
+                );
+                
+                // Build UserState message for this remote user (once per session)
+                const userStateData: {
+                  session: number;
+                  user_id: number;
+                  name: string;
+                  channel_id: number;
+                  temporary_access_tokens: string[];
+                  listening_channel_add: number[];
+                  listening_channel_remove: number[];
+                  hash?: string;
+                } = {
+                  session: session.session_id,
+                  user_id: session.user_id,
+                  name: session.username,
+                  channel_id: session.channel_id ?? 0,
+                  temporary_access_tokens: [],
+                  listening_channel_add: [],
+                  listening_channel_remove: [],
+                };
+                
+                // Only registered users can see cert hash
+                const includeHash = session.cert_hash !== undefined;
+                if (includeHash) {
+                  userStateData.hash = session.cert_hash;
+                }
+                
+                const userState = new mumbleproto.UserState(userStateData);
+                const userStateMessage = userState.serialize();
+                const userStateBuffer = Buffer.from(userStateMessage);
+                
+                // Broadcast to all local authenticated clients
+                for (const client of authenticatedClients) {
+                  this.handlerFactory.messageHandler.sendMessage(
+                    client.session,
+                    MessageType.UserState,
+                    userStateBuffer
                   );
-                  
-                  // Build UserState message for this remote user (once per session)
-                  const userStateData: {
-                    session: number;
-                    user_id: number;
-                    name: string;
-                    channel_id: number;
-                    temporary_access_tokens: string[];
-                    listening_channel_add: number[];
-                    listening_channel_remove: number[];
-                    hash?: string;
-                  } = {
-                    session: session.session_id,
-                    user_id: session.user_id,
-                    name: session.username,
-                    channel_id: session.channel_id ?? 0,
-                    temporary_access_tokens: [],
-                    listening_channel_add: [],
-                    listening_channel_remove: [],
-                  };
-                  
-                  // Only registered users can see cert hash
-                  const includeHash = session.cert_hash !== undefined;
-                  if (includeHash) {
-                    userStateData.hash = session.cert_hash;
-                  }
-                  
-                  const userState = new mumbleproto.UserState(userStateData);
-                  const userStateMessage = userState.serialize();
-                  const userStateBuffer = Buffer.from(userStateMessage);
-                  
-                  // Broadcast to all local authenticated clients
-                  for (const client of authenticatedClients) {
-                    this.handlerFactory.messageHandler.sendMessage(
-                      client.session,
-                      MessageType.UserState,
-                      userStateBuffer
-                    );
-                  }
                 }
               }
-              
-              if (remoteSessionCount > 0) {
-                this.logger.info(`Broadcasted ${remoteSessionCount} remote users to ${authenticatedClients.length} local clients after reconnect`);
-              }
             }
-          } catch (error) {
-        this.logger.error('Failed to sync with Hub:', error);
+            
+            if (remoteSessionCount > 0) {
+              this.logger.info(`Broadcasted ${remoteSessionCount} remote users to ${authenticatedClients.length} local clients after reconnect`);
+            }
           }
+        } catch (error) {
+          this.logger.error('Failed to sync with Hub:', error);
+        }
 
-          // 注意：不要在这里重新报告用户
-          // Hub 在宽限期内保留了会话信息，Edge 通过 fullSync 获取
-          // 如果 Hub 完全重启（冷启动），会话会丢失，用户需要重新认证
-          // 这是正确的行为：会话是临时的，不应该在 Hub 重启后自动恢复
-          
-          // 如果需要支持 Hub 热重启保留会话，应该由 Hub 持久化会话信息
-          // 而不是让 Edge 重新报告，那样会导致 session_id 混乱
+        // 注意：不要在这里重新报告用户
+        // Hub 在宽限期内保留了会话信息，Edge 通过 fullSync 获取
+        // 如果 Hub 完全重启（冷启动），会话会丢失，用户需要重新认证
+        // 这是正确的行为：会话是临时的，不应该在 Hub 重启后自动恢复
+        
+        // 如果需要支持 Hub 热重启保留会话，应该由 Hub 持久化会话信息
+        // 而不是让 Edge 重新报告，那样会导致 session_id 混乱
 
-          // Edge voice port registration is handled via Hub notification (edgeJoined event)
-          // No need to manually register here
+        // Edge voice port registration is handled via Hub notification (edgeJoined event)
+        // No need to manually register here
+      };
+
+      // 注意：register() 方法会根据情况发出 'registered' 或 'reconnected' 事件，
+      // 然后 connect() 方法会发出 'connected' 事件。
+      // 为了避免重复调用 fullSync，我们只在 'registered' 和 'reconnected' 事件中处理，
+      // 不在 'connected' 事件中处理（因为 connected 总是在 registered/reconnected 之后触发）
+
+      this.hubClient.on('registered', () => {
+        void (async () => {
+          this.logger.info('Successfully registered with Hub (first time or after cold restart)');
+          await performFullSync();
         })();
+      });
+
+      this.hubClient.on('reconnected', () => {
+        void (async () => {
+          this.logger.info('Successfully reconnected to Hub (session restored)');
+          await performFullSync();
+        })();
+      });
+
+      this.hubClient.on('connected', () => {
+        // connected 事件总是在 registered/reconnected 之后触发
+        // fullSync 已经在那些事件中处理，这里只记录日志
+        this.logger.info('Connected to Hub Server (connection established)');
       });
 
       this.hubClient.on('disconnected', () => {
@@ -467,11 +491,6 @@ export class EventSetupManager {
 
       this.hubClient.on('error', (error) => {
         this.logger.error('Hub client error:', error);
-      });
-
-      this.hubClient.on('registered', (response) => {
-        this.logger.info('Successfully registered with Hub:', response);
-        // 注册成功，无需额外操作
       });
 
       this.hubClient.on('heartbeat', (response) => {
