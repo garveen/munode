@@ -157,11 +157,20 @@ export interface Message {
 }
 
 /**
+ * IRPCChannel - Interface for RPC communication channel
+ */
+export interface IRPCChannel {
+  call(method: string, request: hubedgeRpc.TypedRPCRequest, timeout?: number): Promise<hubedgeRpc.TypedRPCResponse>;
+  notify(method: string, params: hubedgeRpc.TypedRPCNotification | NotificationParams): void;
+  isConnected(): boolean;
+}
+
+/**
  * RPCChannel - Protobuf-based RPC communication channel
  * 
  * Uses typed protobuf messages for all communication - NO JSON serialization.
  */
-export class RPCChannel extends EventEmitter {
+export class RPCChannel extends EventEmitter implements IRPCChannel {
   private ws: WebSocket;
   private pendingRequests = new Map<string, PendingRequest>();
   private requestTimeout = 30000;

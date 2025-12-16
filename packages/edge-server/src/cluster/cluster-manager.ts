@@ -288,7 +288,7 @@ export class EdgeClusterManager {
   /**
    * 处理新 Peer 加入
    */
-  private async handlePeerJoined(params: HubNotificationParams<'edge.peerJoined'>): Promise<void> {
+  private handlePeerJoined(params: HubNotificationParams<'edge.peerJoined'>): void {
     this.logger.info(`New peer joined: ${JSON.stringify(params)}`);
     
     // 添加到 peers 列表
@@ -344,7 +344,7 @@ export class EdgeClusterManager {
   /**
    * 断开集群
    */
-  async disconnect(): Promise<void> {
+  disconnect(): void {
     this.logger.info('Disconnecting from cluster...');
 
     this.isJoined = false;

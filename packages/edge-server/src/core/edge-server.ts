@@ -217,7 +217,7 @@ export class EdgeServer extends EventEmitter {
     // 监听 Hub 拒绝重连事件（会话过期）
     if (this.hubClient) {
       this.hubClient.on('session-expired', () => {
-        this.handleSessionExpired();
+        void this.handleSessionExpired();
       });
     }
     

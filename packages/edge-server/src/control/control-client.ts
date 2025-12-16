@@ -171,7 +171,7 @@ export class ControlChannelClient extends EventEmitter {
         throw new Error('Not connected');
       }
       // Pool implements RPCChannel-like interface, so we can use it with TypedRPCClient
-      const typedClient = createTypedRPCClient(this.pool as any);
+      const typedClient = createTypedRPCClient(this.pool);
       return typedClient.call(method, params);
     } else {
       if (!this.typedClient) {
@@ -190,7 +190,7 @@ export class ControlChannelClient extends EventEmitter {
         throw new Error('Not connected');
       }
       if (params) {
-        this.pool.notify(method, params as any);
+        this.pool.notify(method, params);
       }
     } else {
       if (!this.channel) {

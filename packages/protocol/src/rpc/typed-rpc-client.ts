@@ -6,7 +6,6 @@
  * The RPC channel now uses TypedRPCRequest/TypedRPCResponse protobuf messages.
  */
 
-import type { RPCChannel, NotificationParams as UnionNotificationParams } from './rpc-channel.js';
 import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
 import type {
   EdgeToHubMethods,
@@ -24,11 +23,13 @@ type TypedRPCRequest = hubedgeRpc.TypedRPCRequest;
 type TypedRPCResponse = hubedgeRpc.TypedRPCResponse;
 type TypedRPCNotification = hubedgeRpc.TypedRPCNotification;
 
+import type { IRPCChannel } from './rpc-channel.js';
+
 /**
  * 类型安全的 RPC 客户端
  */
 export class TypedRPCClient {
-  constructor(private channel: RPCChannel) {}
+  constructor(private channel: IRPCChannel) {}
 
   /**
    * 类型安全的 RPC 调用
@@ -482,7 +483,7 @@ export class TypedRPCClient {
   /**
    * 获取底层 RPCChannel
    */
-  getChannel(): RPCChannel {
+  getChannel(): IRPCChannel {
     return this.channel;
   }
 }
@@ -490,6 +491,6 @@ export class TypedRPCClient {
 /**
  * 创建类型安全的 RPC 客户端
  */
-export function createTypedRPCClient(channel: RPCChannel): TypedRPCClient {
+export function createTypedRPCClient(channel: IRPCChannel): TypedRPCClient {
   return new TypedRPCClient(channel);
 }

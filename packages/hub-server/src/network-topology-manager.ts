@@ -13,6 +13,18 @@ import type { Logger } from '@munode/common';
 import { DEFAULT_ROUTING_POLICY, RouteValidator, type ValidationResult } from '@munode/protocol';
 import type { RoutingPolicy, VoiceRoutingConfig } from './types.js';
 
+/**
+ * 路由统计信息
+ */
+interface RouteStats {
+  totalRoutes: number;
+  directRoutes: number;
+  relayRoutes: number;
+  fallbackRoutes: number;
+  hubRoutes: number;
+  localRoutes: number;
+  avgCost: number;
+}
 
 /**
  * Edge 间连接质量
@@ -93,7 +105,7 @@ export class NetworkTopologyManager extends EventEmitter {
   private readonly VALIDATION_CACHE_TTL = 10000; // 10秒缓存
   
   // 性能优化：统计信息缓存
-  private statsCache: Map<number, { stats: any; timestamp: number }> = new Map();
+  private statsCache: Map<number, { stats: RouteStats; timestamp: number }> = new Map();
   private readonly STATS_CACHE_TTL = 3000; // 3秒缓存
   
   // Logger实例

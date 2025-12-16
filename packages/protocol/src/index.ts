@@ -145,6 +145,7 @@ export { ClientState, RouteType } from './shared-types.js';
 
 // RPC Channel
 export { RPCChannel } from './rpc/rpc-channel.js';
+export type { IRPCChannel } from './rpc/rpc-channel.js';
 export type { 
   Message, 
   PendingRequest,

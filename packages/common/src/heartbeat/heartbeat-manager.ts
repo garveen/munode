@@ -35,18 +35,16 @@ export class HeartbeatManager {
   /**
    * 启动心跳发送
    */
-  startSending(connectionId: string, sendHeartbeat: () => void): void {
+  startSending(connectionId: string, sendHeartbeat: () => Promise<void>): void {
     // 清除现有的定时器
     this.stop(connectionId);
 
     // 启动心跳发送定时器
     const timer = setInterval(() => {
-      try {
-        sendHeartbeat();
+      void (async () => {
+        await sendHeartbeat();
         this.recordSentHeartbeat(connectionId);
-      } catch (error) {
-        console.warn(`Failed to send heartbeat for ${connectionId}:`, error);
-      }
+      })();
     }, this.config.interval);
 
     this.heartbeatTimers.set(connectionId, timer);

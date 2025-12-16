@@ -128,7 +128,7 @@ export class EdgeHubWebSocketServer extends EventEmitter {
   /**
    * 启动服务器
    */
-  async start(): Promise<void> {
+  start(): void {
     if (this.wss) {
       throw new Error('Server already started');
     }

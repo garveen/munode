@@ -38,14 +38,14 @@ export class ControlChannelServer extends EventEmitter {
       });
 
       this.wss.on('listening', () => {
-        console.log(`Control channel server listening on ${config.host || '0.0.0.0'}:${config.port}`);
+        this.logger.info(`Control channel server listening on ${config.host || '0.0.0.0'}:${config.port}`);
         resolve();
       });
 
       this.wss.on('connection', this.handleConnection.bind(this));
       
       this.wss.on('error', (error) => {
-        console.error('Control channel server error:', error);
+        this.logger.error('Control channel server error:', error);
         reject(error);
       });
     });
@@ -116,7 +116,7 @@ export class ControlChannelServer extends EventEmitter {
   /**
    * 广播通知给所有 Edge（每个 Edge 只发送一次，由连接池管理去重）
    */
-  async broadcast(method: string, params?: TypedRPCNotification | NotificationParams): Promise<void> {
+  broadcast(method: string, params?: TypedRPCNotification | NotificationParams): void {
     this.edgePool.broadcast(method, params);
   }
 

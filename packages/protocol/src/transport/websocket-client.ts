@@ -126,7 +126,7 @@ export class EdgeHubWebSocketClient extends EventEmitter {
   /**
    * 断开连接
    */
-  async disconnect(): Promise<void> {
+  disconnect(): void {
     this.intentionallyClosed = true;
     this.stopHeartbeat();
     this.stopReconnect();

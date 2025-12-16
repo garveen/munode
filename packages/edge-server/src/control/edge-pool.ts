@@ -8,12 +8,11 @@
  * - Pool is considered "connected" if at least one connection is alive
  */
 
-// @ts-ignore - ws types may not be available in all environments
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import type { Logger } from '@munode/common';
 import { HeartbeatManager, type HeartbeatConfig, type HeartbeatCallbacks } from '@munode/common';
-import { RPCChannel, type NotificationParams, type TypedRPCRequest, type TypedRPCResponse, type TypedRPCNotification } from '@munode/protocol';
+import { RPCChannel, type NotificationParams, type TypedRPCRequest, type TypedRPCResponse, type TypedRPCNotification, IRPCChannel } from '@munode/protocol';
 
 export interface ClientConnectionPoolConfig {
   host: string;
@@ -41,20 +40,10 @@ interface PooledConnection {
 }
 
 /**
- * RPCChannel-like interface for ClientConnectionPool
- * This allows ClientConnectionPool to be used with TypedRPCClient
- */
-interface RPCChannelLike {
-  call(method: string, request: TypedRPCRequest, timeout?: number): Promise<TypedRPCResponse>;
-  notify(method: string, params: TypedRPCNotification | NotificationParams): void;
-  isConnected(): boolean;
-}
-
-/**
  * Client-side Connection Pool for resilient WebSocket communication from Edge to Hub
  * Manages multiple connections to the same server for load balancing and fault tolerance
  */
-export class ClientConnectionPool extends EventEmitter implements RPCChannelLike {
+export class ClientConnectionPool extends EventEmitter implements IRPCChannel {
   private config: ClientConnectionPoolConfig;
   private connections: PooledConnection[] = [];
   private nextConnectionIndex = 0; // For round-robin load balancing
@@ -222,6 +211,7 @@ export class ClientConnectionPool extends EventEmitter implements RPCChannelLike
 
     conn.heartbeatManager = new HeartbeatManager(callbacks, heartbeatConfig);
 
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises
     conn.heartbeatManager.startSending(conn.id.toString(), async () => {
       try {
         await this.config.heartbeat!.sendHeartbeat(conn.id, conn.channel!);

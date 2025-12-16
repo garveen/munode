@@ -30,6 +30,18 @@ import type {
 import { RouteType } from '../types.js';
 
 /**
+ * 路由统计信息
+ */
+interface RouteStats {
+  totalRoutes: number;
+  directRoutes: number;
+  relayRoutes: number;
+  fallbackRoutes: number;
+  hubRoutes: number;
+  localRoutes: number;
+}
+
+/**
  * 中转统计信息
  */
 interface RelayStats {
@@ -117,7 +129,7 @@ export class VoiceRoutingManager extends EventEmitter {
   private readonly VALIDATION_CACHE_TTL = 10000; // 10秒缓存
   
   // 性能优化：统计信息缓存
-  private statsCache: { stats: any; timestamp: number } | null = null;
+  private statsCache: { stats: RouteStats; timestamp: number } | null = null;
   private readonly STATS_CACHE_TTL = 3000; // 3秒缓存
 
   constructor(config: EdgeConfig, logger: Logger) {
@@ -180,7 +192,7 @@ export class VoiceRoutingManager extends EventEmitter {
   /**
    * 启动路由管理器
    */
-  async start(): Promise<void> {
+  start(): void {
     this.logger.debug(`Starting VoiceRoutingManager, enabled: ${this._isEnabled}`);
     
     if (!this._isEnabled) {
@@ -207,7 +219,7 @@ export class VoiceRoutingManager extends EventEmitter {
   /**
    * 停止路由管理器
    */
-  async stop(): Promise<void> {
+  stop(): void {
     this.logger.debug('Stopping VoiceRoutingManager');
     
     if (this.localRouteUpdateTimer) {

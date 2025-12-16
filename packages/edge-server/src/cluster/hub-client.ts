@@ -613,7 +613,7 @@ export class EdgeControlClient extends EventEmitter {
   /**
    * 通知Hub与目标Edge的UDP连接失败
    */
-  async notifyConnectionFailure(targetEdgeId: number): Promise<void> {
+  notifyConnectionFailure(targetEdgeId: number): void {
     if (!this.isConnected() || (!this.useExternalClient && !this.registered)) {
       this.logger.warn('Cannot notify connection failure: not connected to Hub');
       return;
@@ -634,7 +634,7 @@ export class EdgeControlClient extends EventEmitter {
   /**
    * 通知Hub重连失败（双向都失败时需要Hub仲裁）
    */
-  async notifyReconnectFailure(targetEdgeId: number): Promise<void> {
+  notifyReconnectFailure(targetEdgeId: number): void {
     if (!this.isConnected() || (!this.useExternalClient && !this.registered)) {
       this.logger.warn('Cannot notify reconnect failure: not connected to Hub');
       return;
@@ -779,7 +779,7 @@ export class EdgeControlClient extends EventEmitter {
   /**
    * 发送客户端消息中转到 Hub
    */
-  async sendRelay(relay: unknown): Promise<void> {
+  sendRelay(relay: unknown): void {
     // TODO: 实现通过 WebSocket 发送 ClientMessageRelay
     // 当前暂时通过 RPC 模拟
     this.logger.debug(`Sending relay to Hub: session=${typeof relay === 'object' && relay !== null && 'session_id' in relay ? (relay as { session_id: unknown }).session_id : 'unknown'}`);
@@ -789,10 +789,10 @@ export class EdgeControlClient extends EventEmitter {
   /**
    * 批量发送客户端消息中转到 Hub
    */
-  async sendRelayBatch(relays: unknown[]): Promise<void> {
+  sendRelayBatch(relays: unknown[]): void {
     // TODO: 实现批量发送优化
     for (const relay of relays) {
-      await this.sendRelay(relay);
+      this.sendRelay(relay);
     }
   }
 }
