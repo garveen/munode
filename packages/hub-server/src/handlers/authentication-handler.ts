@@ -27,14 +27,11 @@ export interface IAuthenticationHandler {
  */
 export class AuthenticationHandler implements IAuthenticationHandler {
   private factory: HubHandlerFactory;
-  private permissionChecker: HubPermissionChecker;
-
-    private logger: Logger;
+  private logger: Logger;
 
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
     this.logger = factory.getLogger();
-    this.permissionChecker = factory.getPermissionChecker();
   }
 
   async handleAllocateSessionId(params: RPCParams<'edge.allocateSessionId'>): Promise<RPCResult<'edge.allocateSessionId'>> {
@@ -284,13 +281,11 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       
       const allSessions = sessionManager.getAllSessions();
       const visibleToSessions = new Map<number, number[]>();
-      // newUserInfo 用于权限检查，不需要再赋值
-      this.permissionChecker.sessionToUserInfo(session, session.channel_id);
 
       for (const otherSession of allSessions) {
         if (otherSession.session_id === session.session_id) continue;
 
-        const otherUserInfo = this.permissionChecker.sessionToUserInfo(otherSession, otherSession.channel_id ?? 0);
+        const otherUserInfo = permissionChecker.sessionToUserInfo(otherSession, otherSession.channel_id ?? 0);
         const canSee = await permissionChecker.canUserSeeOtherUser(
           otherUserInfo,
           otherSession.channel_id ?? 0,

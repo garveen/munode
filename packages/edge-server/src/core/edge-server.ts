@@ -345,4 +345,14 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
     return this.voiceManager;
   }
 
+  /**
+   * 获取集群状态（用于测试）
+   */
+  getClusterStatus() {
+    if (!this.clusterManager) {
+      throw new Error('ClusterManager not initialized');
+    }
+    return this.clusterManager.getStatus();
+  }
+
 }
