@@ -9,19 +9,19 @@
  */
 
 import type { HubNotificationParams } from '@munode/protocol';
-import { ControlChannelClient } from '../control/control-client.js';
+import { EdgeControlClient } from './hub-client.js';
 import { ReconnectManager } from './reconnect-manager.js';
 import type { EdgeConfig } from '../types.js';
 import type { Logger } from 'winston';
 
 export interface ClusterIntegration {
-  hubClient: ControlChannelClient;
+  hubClient: EdgeControlClient;
   reconnectManager: ReconnectManager;
   isJoined: boolean;
 }
 
 export class EdgeClusterManager {
-  private hubClient: ControlChannelClient;
+  private hubClient: EdgeControlClient;
   private reconnectManager: ReconnectManager;
   private isJoined = false;
   private config: EdgeConfig;
@@ -43,19 +43,8 @@ export class EdgeClusterManager {
     this.onDisconnectAllClients = callbacks?.onDisconnectAllClients;
     this.onClearState = callbacks?.onClearState;
 
-    // 初始化 Hub 客户端（稍后在 joinCluster 中连接）
-    const hubConfig = this.config.hubServer;
-    if (!hubConfig) {
-      throw new Error('Hub server configuration not found');
-    }
-    
-    this.hubClient = new ControlChannelClient({
-      host: hubConfig.host,
-      port: hubConfig.controlPort,
-      tls: hubConfig.tls?.rejectUnauthorized !== false,
-      poolSize: hubConfig.poolSize ?? 2, // Default to 2 connections
-      reconnectInterval: hubConfig.reconnectInterval || 5000,
-    });
+    // 初始化 Hub 客户端（EdgeControlClient 封装了连接、注册、认证等完整功能）
+    this.hubClient = new EdgeControlClient(this.config, this.logger);
 
     // 设置 Hub 客户端事件
     this.setupHubClientEvents();
@@ -300,7 +289,7 @@ export class EdgeClusterManager {
   /**
    * 获取 Hub 客户端（用于发送RPC调用）
    */
-  getHubClient(): ControlChannelClient {
+  getHubClient(): EdgeControlClient {
     return this.hubClient;
   }
 
