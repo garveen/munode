@@ -370,8 +370,8 @@ export class EventSetupManager {
         try {
           this.logger.info('Requesting full sync from Hub...');
           const syncData = await this.hubClient.requestFullSync();
-          // Process sync data
-          this.handlerFactory.stateManager.loadSnapshot(syncData);
+          // Process sync data - cast to avoid type issues between protobuf and FullSnapshot types
+          this.handlerFactory.stateManager.loadSnapshot(syncData as any);
           this.logger.info('Full sync completed successfully');
           
           // Process sessions from fullSync - broadcast remote users to local clients

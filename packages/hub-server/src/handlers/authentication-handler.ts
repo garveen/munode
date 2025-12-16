@@ -48,6 +48,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       return {
         success: false,
         reason: 'Authentication service not available',
+        groups: [],
       };
     }
 
@@ -63,9 +64,17 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         client_info: params.client_info,
       });
 
-      // 如果认证失败，直接返回
+      // 如果认证失败，直接返回，确保包含必需的groups字段
       if (!authResult.success) {
-        return authResult;
+        return {
+          success: authResult.success,
+          user_id: authResult.user_id,
+          username: authResult.username,
+          display_name: authResult.displayName,
+          groups: authResult.groups || [],
+          reason: authResult.reason,
+          reject_type: authResult.rejectType,
+        };
       }
 
       // 认证成功，处理 session 创建和频道分配
@@ -231,17 +240,23 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       // 广播 userJoined（处理 Channel Ninja 可见性）
       await this.broadcastUserJoined(session, config, permissionChecker, sessionManager);
 
-      // 返回认证结果，包含目标频道
+      // 返回认证结果，包含目标频道，使用protobuf字段名（snake_case）
       return {
-        ...authResult,
+        success: authResult.success,
+        user_id: authResult.user_id,
+        username: authResult.username,
+        display_name: authResult.displayName,
+        groups: authResult.groups || [],
+        reason: authResult.reason,
+        reject_type: authResult.rejectType,
         channel_id: actualChannelId,
-        cert_hash: params.client_info.certificate_hash,
       };
     } catch (error) {
       this.logger.error(`Authentication error for user ${params.username}:`, error);
       return {
         success: false,
         reason: 'Internal authentication error',
+        groups: [],
       };
     }
   }

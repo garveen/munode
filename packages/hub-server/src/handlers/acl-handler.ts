@@ -221,7 +221,7 @@ export class ACLHandler implements IACLHandler {
         return {
           success: true,
           channel_id,
-          raw_data: Buffer.from(responseData).toString('base64')
+          raw_data: responseData
         };
       } else {
         // === 更新 ACL ===
@@ -372,6 +372,6 @@ export class ACLHandler implements IACLHandler {
     // Use ACLManager to save ACLs
     const aclIds = await this.factory.getAclManager().saveACLs(channel_id, aclData);
 
-    return { success: true, aclIds };
+    return { success: true, acl_ids: aclIds };
   }
 }

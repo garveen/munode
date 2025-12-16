@@ -69,7 +69,7 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
       configs = voiceTargetSync.getAllConfigs();
     }
 
-    return { voiceTargets: configs };
+    return { voice_targets: configs };
   }
 
   // Implementation removed - see interface documentation above

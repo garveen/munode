@@ -269,10 +269,10 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
         // 检查是否是重连
         if ((finalResponse as { reconnected?: boolean }).reconnected) {
           this.logger.info('Successfully reconnected to Hub, session restored');
-          this.emit('reconnected', finalResponse);
+          this.emit('reconnected', finalResponse as any);
         } else {
           this.logger.debug(`Registered with Hub: ${JSON.stringify(finalResponse)}`);
-          this.emit('registered', finalResponse);
+          this.emit('registered', finalResponse as any);
         }
       } else if (challengeResponse.success) {
         // Hub 未启用认证，直接注册成功
@@ -281,10 +281,10 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
         // 检查是否是重连
         if ((challengeResponse as { reconnected?: boolean }).reconnected) {
           this.logger.info('Successfully reconnected to Hub (no auth), session restored');
-          this.emit('reconnected', challengeResponse);
+          this.emit('reconnected', challengeResponse as any);
         } else {
           this.logger.info(`Registered with Hub (no auth): ${JSON.stringify(challengeResponse)}`);
-          this.emit('registered', challengeResponse);
+          this.emit('registered', challengeResponse as any);
         }
       } else {
         // 检查是否是会话过期错误
@@ -589,7 +589,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
 
     try {
       const response = await this.client.call('edge.getChannels', {});
-      return response.channels || [];
+      return (response.channels || []) as any;
     } catch (error) {
       this.logger.error('Failed to get channels:', error);
       throw error;
@@ -607,7 +607,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
     try {
       const params: RPCParams<'edge.getACLs'> = { channel_id };
       const response = await this.client.call('edge.getACLs', params);
-      return response.acls || [];
+      return (response.acls || []) as any;
     } catch (error) {
       this.logger.error('Failed to get ACLs:', error);
       throw error;
@@ -654,7 +654,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
         })),
       };
       const response = await this.client.call('edge.saveACL', params);
-      return response.aclIds;
+      return response.acl_ids;
     } catch (error) {
       this.logger.error('Failed to save ACL:', error);
       throw error;
