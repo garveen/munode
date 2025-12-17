@@ -95,6 +95,13 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
   }
 
   /**
+   * 获取 UDP 服务器引用
+   */
+  getUDPServer(): UDPSocket | undefined {
+    return this.udpServer;
+  }
+
+  /**
    * 设置 ClientManager 引用（用于获取客户端信息）
    */
   setClientManager(clientManager: ClientManager): void {

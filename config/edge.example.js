@@ -97,6 +97,7 @@ export default {
     packetPool: true,
     udpMonitor: true,
     allowHtml: true,
+    allowPing: true, // 允许响应 UDP ping 请求（用于客户端服务器发现）
   },
 
   // Logging configuration

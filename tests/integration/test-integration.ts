@@ -363,6 +363,7 @@ function createEdgeConfig(server_id: number, port: number): EdgeConfig {
       contextActions: false,
       packetPool: false,
       udpMonitor: false,
+      allowPing: true,
     },
     max_bandwidth: 1000000,
     defaultChannel: 0,

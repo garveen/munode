@@ -63,6 +63,7 @@ export async function loadEdgeConfig(configPath?: string, logger?: Logger): Prom
       contextActions: true,
       packetPool: true,
       udpMonitor: true,
+      allowPing: true,
     },
   };
 

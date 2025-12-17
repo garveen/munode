@@ -10,6 +10,10 @@ import type { HandlerFactory } from '../core/handler-factory.js';
 export class ConnectionHandlers {
   private udpAddressToSession: Map<string, number> = new Map(); // "ip:port" -> session_id
   private logger: Logger;
+  
+  // UDP Ping 频率限制
+  private lastPingCycleTime: number = 0; // 上次 ping 周期的开始时间
+  private currentCycleIPs: Set<string> = new Set(); // 当前周期已响应的 IP 地址
 
   constructor(private factory: HandlerFactory) {
     this.logger = factory.logger;
@@ -19,6 +23,8 @@ export class ConnectionHandlers {
   private get voiceRouter() { return this.factory.voiceRouter; }
   private get banManager() { return this.factory.banManager; }
   private get hubClient() { return this.factory.hubClient; }
+  private get config() { return this.factory.config; }
+  private get udpServer() { return this.voiceRouter.getUDPServer(); }
 
   /**
    * 处理 TLS 连接
@@ -95,7 +101,14 @@ export class ConnectionHandlers {
    */
   handleUDPMessage(msg: Buffer, rinfo: RemoteInfo): void {
     const addressKey = `${rinfo.address}:${rinfo.port}`;
-        this.logger.debug(`[UDP] Received ${msg.length} bytes from ${addressKey}`);
+    this.logger.debug(`[UDP] Received ${msg.length} bytes from ${addressKey}`);
+    
+    // 检查是否是 UDP ping 包（长度为 12 字节）
+    if (msg.length === 12) {
+      this.handleUDPPing(msg, rinfo);
+      return;
+    }
+    
     let session_id: number | undefined;
     let needsUpdate = false;
     let decryptedData: Buffer | null = null; // 存储解密后的数据
@@ -189,6 +202,98 @@ export class ConnectionHandlers {
   }
 
   /**
+   * 处理 UDP Ping 请求
+   * 参考 Go 实现的 handleUDPMOTD 函数
+   * 
+   * 频率限制：
+   * - 每秒最多触发一次
+   * - 在同一个触发周期内对每个源IP只响应一次
+   */
+  private handleUDPPing(msg: Buffer, rinfo: RemoteInfo): void {
+    // 检查是否启用 UDP ping 功能
+    if (!this.config.features.allowPing) {
+      this.logger.debug(`UDP ping from ${rinfo.address} ignored (allowPing disabled)`);
+      return;
+    }
+
+    const now = Date.now();
+    const sourceIP = rinfo.address;
+
+    // 检查是否进入新的周期（每秒一个周期）
+    if (now - this.lastPingCycleTime >= 1000) {
+      // 进入新周期，重置
+      this.lastPingCycleTime = now;
+      this.currentCycleIPs.clear();
+      this.logger.debug(`New UDP ping cycle started at ${now}`);
+    }
+
+    // 检查当前周期内是否已响应过该 IP
+    if (this.currentCycleIPs.has(sourceIP)) {
+      this.logger.debug(`UDP ping from ${sourceIP} ignored (already responded in current cycle)`);
+      return;
+    }
+
+    // 解析 ping 请求
+    try {
+      const requestVersion = msg.readUInt32BE(0);
+      const requestRand = msg.readBigUInt64BE(4);
+
+      this.logger.debug(
+        `Received UDP ping from ${rinfo.address}:${rinfo.port}, version: ${requestVersion}, rand: ${requestRand}`
+      );
+
+      // 构造响应包
+      const response = Buffer.allocUnsafe(24);
+      let offset = 0;
+
+      // Protocol version (from mumbleproto, typically 0x010204 for 1.2.4)
+      // 使用协议版本号，参考 Go 实现的 verProtover
+      const protocolVersion = 0x010204; // Version 1.2.4
+      response.writeUInt32BE(protocolVersion, offset);
+      offset += 4;
+
+      // Echo back the random number
+      response.writeBigUInt64BE(requestRand, offset);
+      offset += 8;
+
+      // Current user count
+      const currentUsers = this.clientManager.getClientCount();
+      response.writeUInt32BE(currentUsers, offset);
+      offset += 4;
+
+      // Maximum users (0xFFFFFFFF for unlimited)
+      const maxUsers = this.config.capacity || 0xFFFFFFFF;
+      response.writeUInt32BE(maxUsers, offset);
+      offset += 4;
+
+      // Bandwidth (in bits per second)
+      const bandwidth = this.config.max_bandwidth || 0;
+      response.writeUInt32BE(bandwidth, offset);
+
+      // 发送响应
+      const udpSocket = this.udpServer;
+      if (udpSocket) {
+        udpSocket.send(response, rinfo.port, rinfo.address, (err) => {
+          if (err) {
+            this.logger.error(`Failed to send UDP ping response to ${rinfo.address}:${rinfo.port}:`, err);
+          } else {
+            this.logger.debug(
+              `Sent UDP ping response to ${rinfo.address}:${rinfo.port} (users: ${currentUsers}/${maxUsers})`
+            );
+          }
+        });
+
+        // 记录本周期已响应该 IP
+        this.currentCycleIPs.add(sourceIP);
+      } else {
+        this.logger.warn('UDP server not available for ping response');
+      }
+    } catch (error) {
+      this.logger.error(`Error handling UDP ping from ${rinfo.address}:`, error);
+    }
+  }
+
+  /**
    * 清理客户端的UDP映射
    */
   clearUDPMapping(session_id: number): void {
@@ -196,7 +301,7 @@ export class ConnectionHandlers {
     if (client && client.udp_ip && client.udp_port) {
       const addressKey = `${client.udp_ip}:${client.udp_port}`;
       this.udpAddressToSession.delete(addressKey);
-        this.logger.debug(`Cleared UDP mapping for session ${session_id}: ${addressKey}`);
+      this.logger.debug(`Cleared UDP mapping for session ${session_id}: ${addressKey}`);
     }
   }
 

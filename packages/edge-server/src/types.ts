@@ -237,6 +237,7 @@ export interface FeatureConfig {
   packetPool: boolean;
   udpMonitor: boolean;
   allowHtml?: boolean;
+  allowPing?: boolean; // 允许响应 UDP ping，默认 true
 }
 
 // 注意：ClientState, ClientInfo, ChannelGroup, ChannelInfo, VoicePacket, VoiceBroadcast 等共享类型
