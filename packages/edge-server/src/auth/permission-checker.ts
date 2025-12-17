@@ -84,7 +84,8 @@ export class PermissionHandlers {
 
       // 如果是查询且有数据，直接发送给客户端
       if (isQuery && result.raw_data) {
-        const aclData = Buffer.from(result.raw_data, 'base64');
+        // raw_data is now Uint8Array (bytes) from protobuf, convert to Buffer
+        const aclData = Buffer.from(result.raw_data);
         this.messageHandler.sendMessage(session_id, MessageType.ACL, aclData);
         this.logger.info(`Forwarded ACL query response to session ${session_id} for channel ${acl.channel_id}`);
       }

@@ -418,9 +418,11 @@ export class AdminHandlers {
 
             if (result.success && result.data) {
               // 发送 UserState 消息，包含评论
+              // result.data is Uint8Array from protobuf, convert to string
+              const comment = Buffer.from(result.data).toString('utf-8');
               const userState = new mumbleproto.UserState({
                 session: targetSession,
-                comment: result.data.toString('utf-8'),
+                comment: comment,
                 temporary_access_tokens: [],
                 listening_channel_add: [],
                 listening_channel_remove: [],

@@ -13,8 +13,6 @@ import type {
   EdgeToHubMethods,
   VoiceTarget,
   HubToEdgeNotifications,
-  RegisterResponse,
-  HeartbeatResponse,
 } from '@munode/protocol';
 import type {
   ServerStats,
@@ -68,15 +66,31 @@ export interface VoiceRoutingConfigParams {
 export type HubNotificationMessage = HubToEdgeNotifications;
 
 /**
+ * Extended registration response with additional runtime fields
+ * Extends the protobuf type with edge-specific session management fields
+ */
+export type ExtendedRegisterResponse = RPCResult<'edge.register'> & {
+  reconnected?: boolean;
+  session_expired?: boolean;
+  cold_restart?: boolean;
+  need_cleanup?: boolean;
+};
+
+/**
+ * Extended heartbeat response
+ */
+export type ExtendedHeartbeatResponse = RPCResult<'edge.heartbeat'>;
+
+/**
  * EdgeControlClient 事件类型定义
  */
 export interface EdgeControlClientEvents extends EventMap {
   'connected': [];
   'disconnected': [];
   'session-expired': [];
-  'reconnected': [response: RegisterResponse];
-  'registered': [response: RegisterResponse];
-  'heartbeat': [response: HeartbeatResponse];
+  'reconnected': [response: ExtendedRegisterResponse];
+  'registered': [response: ExtendedRegisterResponse];
+  'heartbeat': [response: ExtendedHeartbeatResponse];
   'heartbeatFailed': [error: Error];
   'error': [error: Error];
   'broadcast': [params: ChannelNotificationParams];
@@ -266,29 +280,32 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
         
         this.registered = true;
         
-        // 检查是否是重连
-        if ((finalResponse as { reconnected?: boolean }).reconnected) {
+        // Check if this is a reconnection
+        const extendedFinalResponse = finalResponse as ExtendedRegisterResponse;
+        if (extendedFinalResponse.reconnected) {
           this.logger.info('Successfully reconnected to Hub, session restored');
-          this.emit('reconnected', finalResponse);
+          this.emit('reconnected', extendedFinalResponse);
         } else {
           this.logger.debug(`Registered with Hub: ${JSON.stringify(finalResponse)}`);
-          this.emit('registered', finalResponse);
+          this.emit('registered', extendedFinalResponse);
         }
       } else if (challengeResponse.success) {
         // Hub 未启用认证，直接注册成功
         this.registered = true;
         
-        // 检查是否是重连
-        if ((challengeResponse as { reconnected?: boolean }).reconnected) {
+        // Check if this is a reconnection
+        const extendedChallengeResponse = challengeResponse as ExtendedRegisterResponse;
+        if (extendedChallengeResponse.reconnected) {
           this.logger.info('Successfully reconnected to Hub (no auth), session restored');
-          this.emit('reconnected', challengeResponse);
+          this.emit('reconnected', extendedChallengeResponse);
         } else {
           this.logger.info(`Registered with Hub (no auth): ${JSON.stringify(challengeResponse)}`);
-          this.emit('registered', challengeResponse);
+          this.emit('registered', extendedChallengeResponse);
         }
       } else {
-        // 检查是否是会话过期错误
-        if ((challengeResponse as { session_expired?: boolean }).session_expired) {
+        // Check if session has expired
+        const extendedChallengeResponse = challengeResponse as ExtendedRegisterResponse;
+        if (extendedChallengeResponse.session_expired) {
           this.logger.error('Hub rejected reconnection: session expired. Cold restart required.');
           this.emit('session-expired');
           throw new Error('Session expired - Hub requires cold restart');
@@ -341,9 +358,9 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
 
       const response = await channel.call('edge.heartbeat', request);
 
-      // 提取心跳响应数据
+      // Extract heartbeat response data
       if (response.edge_heartbeat) {
-        const heartbeatResponse: HeartbeatResponse = {
+        const heartbeatResponse: ExtendedHeartbeatResponse = {
           success: response.edge_heartbeat.success || false,
           updated_edges: response.edge_heartbeat.updated_edges || [],
         };
@@ -589,7 +606,9 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
 
     try {
       const response = await this.client.call('edge.getChannels', {});
-      return response.channels || [];
+      // Protobuf toObject() types have optional fields, but business logic ensures required fields are present
+      // Cast to ChannelData[] as the response is guaranteed to have all required fields from the server
+      return (response.channels || []) as ChannelData[];
     } catch (error) {
       this.logger.error('Failed to get channels:', error);
       throw error;
@@ -607,7 +626,9 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
     try {
       const params: RPCParams<'edge.getACLs'> = { channel_id };
       const response = await this.client.call('edge.getACLs', params);
-      return response.acls || [];
+      // Protobuf toObject() types have optional fields, but business logic ensures required fields are present
+      // Cast to ACLData[] as the response is guaranteed to have all required fields from the server
+      return (response.acls || []) as ACLData[];
     } catch (error) {
       this.logger.error('Failed to get ACLs:', error);
       throw error;
@@ -654,7 +675,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
         })),
       };
       const response = await this.client.call('edge.saveACL', params);
-      return response.aclIds;
+      return response.acl_ids;
     } catch (error) {
       this.logger.error('Failed to save ACL:', error);
       throw error;

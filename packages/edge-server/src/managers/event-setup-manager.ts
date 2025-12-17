@@ -7,6 +7,7 @@ import { BanHandler } from './ban-handler.js';
 import { MessageManager } from './message-manager.js';
 import { mumbleproto, MessageType, ClientState } from '@munode/protocol';
 import type { EdgeConfig, ClientInfo, ChannelInfo } from '../types.js';
+import type { FullSnapshot } from '../state/state-manager.js';
 
 /**
  * 事件设置管理器
@@ -371,7 +372,9 @@ export class EventSetupManager {
           this.logger.info('Requesting full sync from Hub...');
           const syncData = await this.hubClient.requestFullSync();
           // Process sync data
-          this.handlerFactory.stateManager.loadSnapshot(syncData);
+          // Note: Protobuf toObject() types mark all fields as optional, but the server guarantees
+          // required fields are present. Cast to FullSnapshot which has stricter type requirements.
+          this.handlerFactory.stateManager.loadSnapshot(syncData as FullSnapshot);
           this.logger.info('Full sync completed successfully');
           
           // Process sessions from fullSync - broadcast remote users to local clients

@@ -108,13 +108,45 @@ export class SyncHandler implements ISyncHandler {
       deny: acl.deny,
     }));
 
+    // Ensure channels have all required fields for protobuf
+    const protobufChannels = channels.map(ch => ({
+      channel_id: ch.channel_id,
+      name: ch.name,
+      parent_id: ch.parent_id,
+      description: ch.description,
+      position: ch.position,
+      max_users: ch.max_users,
+      temporary: ch.temporary,
+      inherit_acl: ch.inherit_acl,
+      links: ch.links || [],
+    }));
+
+    // Ensure sessions have all required fields for protobuf
+    const protobufSessions = sessions.map(s => ({
+      session_id: s.session_id,
+      edge_id: s.edge_id,
+      user_id: s.user_id,
+      username: s.username,
+      channel_id: s.channel_id,
+      ip_address: s.ip_address,
+      cert_hash: s.cert_hash,
+      connected_at: s.connected_at,
+      groups: s.groups || [],
+      mute: s.mute,
+      deaf: s.deaf,
+      suppress: s.suppress,
+      self_mute: s.self_mute,
+      self_deaf: s.self_deaf,
+      priority_speaker: s.priority_speaker,
+      recording: s.recording,
+    }));
+
     return {
-      channels,
-      channelLinks: [], // TODO: 实现频道链接
+      channels: protobufChannels,
+      channel_links: [], // TODO: 实现频道链接
       acls,
       bans: [], // TODO: 实现封禁数据
-      sessions,
-      configs: {}, // TODO: 实现配置数据
+      sessions: protobufSessions,
       timestamp: Date.now(),
       sequence: 0,
       edges,
@@ -138,7 +170,20 @@ export class SyncHandler implements ISyncHandler {
       dbChannels.map(ch => this.mapChannelToProtocol(ch))
     );
 
-    return { success: true, channels };
+    // Ensure channels have all required fields for protobuf
+    const protobufChannels = channels.map(ch => ({
+      channel_id: ch.channel_id,
+      name: ch.name,
+      parent_id: ch.parent_id,
+      description: ch.description,
+      position: ch.position,
+      max_users: ch.max_users,
+      temporary: ch.temporary,
+      inherit_acl: ch.inherit_acl,
+      links: ch.links || [],
+    }));
+
+    return { channels: protobufChannels };
   }
 
   /**
@@ -158,7 +203,7 @@ export class SyncHandler implements ISyncHandler {
       allow: acl.allow,
       deny: acl.deny,
     }));
-    return { success: true, acls };
+    return { acls };
   }
 
   /**
