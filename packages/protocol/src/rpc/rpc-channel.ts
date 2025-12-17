@@ -246,7 +246,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
   private createNotification(method: string, params: NotificationParams): hubedgeRpc.TypedRPCNotification {
     const { TypedRPCNotification, HubVoiceDataParams, HubForceDisconnectParams, 
             HubPeerJoinedParams, HubACLResponseParams, HubUserJoinedParams,
-            HubUserLeftParams, HubUserMovedParams, HubChannelCreatedParams,
+            HubUserMovedParams, HubChannelCreatedParams,
             HubChannelRemovedParams, HubChannelUpdatedParams, HubSyncVoiceTargetParams,
             ChannelDataProto } = hubedgeRpc;
 
@@ -299,7 +299,6 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
       }
       case 'hub.userJoined': {
         const p = params as UserJoinedParams;
-        console.error(`[NOTIFY-DEBUG] Creating hub.userJoined notification for user=${p.username}, session=${p.session_id}, edge=${p.edge_id}`);
         notificationData.user_joined = new HubUserJoinedParams({
           session_id: p.session_id,
           edge_id: p.edge_id,
@@ -478,7 +477,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
           break;
 
         default:
-          console.warn(`Unknown packet type: ${packet.type}`);
+          this.logger.error(`Unknown packet type: ${packet.type}`);
       }
     } catch (error) {
       this.emit('error', error);
@@ -487,7 +486,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
 
   private handleRPCRequest(packet: hubedge.EdgeHubPacket): void {
     if (!packet.has_rpc_request || !packet.rpc_request) {
-      console.warn('Received RPC_REQUEST packet without rpc_request field');
+      this.logger.warn('Received RPC_REQUEST packet without rpc_request field');
       return;
     }
 
@@ -512,7 +511,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
 
   private handleRPCResponse(packet: hubedge.EdgeHubPacket): void {
     if (!packet.has_rpc_response || !packet.rpc_response) {
-      console.warn('Received RPC_RESPONSE packet without rpc_response field');
+      this.logger.warn('Received RPC_RESPONSE packet without rpc_response field');
       return;
     }
 
@@ -529,7 +528,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
 
   private handleRPCError(packet: hubedge.EdgeHubPacket): void {
     if (!packet.has_rpc_error || !packet.rpc_error) {
-      console.warn('Received RPC_ERROR packet without rpc_error field');
+      this.logger.warn('Received RPC_ERROR packet without rpc_error field');
       return;
     }
 
@@ -545,7 +544,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
 
   private handleRPCNotification(packet: hubedge.EdgeHubPacket): void {
     if (!packet.has_rpc_notification || !packet.rpc_notification) {
-      console.warn('Received RPC_NOTIFICATION packet without rpc_notification field');
+      this.logger.warn('Received RPC_NOTIFICATION packet without rpc_notification field');
       return;
     }
 
@@ -627,15 +626,6 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
           };
         }
         break;
-      case 'hub.userLeft':
-        if (typedNotification.user_left) {
-          result.params = {
-            session_id: typedNotification.user_left.session_id,
-            edge_id: typedNotification.user_left.edge_id,
-            reason: typedNotification.user_left.reason,
-          };
-        }
-        break;
       case 'hub.userMoved':
         if (typedNotification.user_moved) {
           result.params = {
@@ -675,7 +665,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
             try {
               config = JSON.parse(config);
             } catch (error) {
-              console.warn('Failed to parse config_json:', error);
+              this.logger.error('Failed to parse config_json:', error);
               config = null;
             }
           }
@@ -695,7 +685,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
           try {
             result.params = JSON.parse(typedNotification.unknown_params_json);
           } catch (error) {
-            console.warn(`Failed to parse unknown_params_json for method ${typedNotification.method}:`, error);
+            this.logger.warn(`Failed to parse unknown_params_json for method ${typedNotification.method}:`, error);
           }
         }
         break;

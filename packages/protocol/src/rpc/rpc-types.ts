@@ -7,18 +7,8 @@
  */
 
 import type {
-  RPCResponse,
-  ChannelsResponse,
-  ACLsResponse,
-  SaveChannelResponse,
-  ChannelData,
-  ACLData,
-  BanData,
   VoiceTargetConfig,
-  GlobalSession,
   ServerStats,
-  RegisterResponse,
-  HeartbeatResponse,
 } from '../hub-edge-types.js';
 
 // Import protobuf generated types for result types
