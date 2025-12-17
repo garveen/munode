@@ -532,9 +532,9 @@ export class UserStateHandler implements IUserStateHandler {
     // 从会话管理器中移除会话
     sessionManager.removeSession(session_id);
 
-    // 广播用户离开消息给所有Edge
-    controlService.broadcast('hub.userLeft', {
-      session_id: session_id,
+    // 广播用户离开消息给所有Edge（使用userRemoveBroadcast，不指定actor表示普通离开）
+    controlService.broadcast('hub.userRemoveBroadcast', {
+      session: session_id,
       reason: params.reason,
     });
   }

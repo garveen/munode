@@ -459,12 +459,18 @@ export class HubMessageHandlers {
 
   /**
    * 处理来自Hub的UserRemove广播
+   * 统一处理用户移除(kick/ban)和普通离开两种场景：
+   * - 如果有actor，表示是kick/ban操作
+   * - 如果没有actor，表示是普通的用户离开
+   * 两种情况都需要断开本地连接（如果用户在本Edge）和广播UserRemove消息
    */
   handleUserRemoveBroadcastFromHub(params: HubNotificationParams<'hub.userRemoveBroadcast'>): void {
     try {
       const { session, actor, reason, ban, target_sessions } = params;
+      const isKickOrBan = actor !== undefined;
+      const isNinjaMode = !!target_sessions;
 
-        this.logger.debug(`Received UserRemove broadcast from Hub: target ${session}, ninja mode: ${!!target_sessions}`);
+      this.logger.debug(`Received UserRemove broadcast from Hub: session ${session}, ${isKickOrBan ? `${ban ? 'ban' : 'kick'} by ${actor}` : 'normal leave'}, ninja: ${isNinjaMode}`);
 
       // 构建UserRemove消息
       const userRemove = new mumbleproto.UserRemove({
@@ -476,12 +482,22 @@ export class HubMessageHandlers {
 
       const userRemoveMessage = userRemove.serialize();
 
+      // 从状态管理器中移除远程用户
+      if (this.stateManager) {
+        this.stateManager.removeRemoteUser(session);
+      }
+
       // Broadcast to local authenticated clients
       // If target_sessions is provided (ninja mode), only send to specified sessions
       const allClients = this.clientManager.getAllClients();
       const targetSessionsSet = target_sessions ? new Set(target_sessions) : null;
       
       for (const client of allClients) {
+        // 跳过用户自己（如果是本Edge的用户断开）
+        if (client.session === session) {
+          continue;
+        }
+
         if (client.user_id > 0) {
           // If target_sessions provided, only broadcast to specified sessions
           if (!targetSessionsSet || targetSessionsSet.has(client.session)) {
@@ -490,23 +506,24 @@ export class HubMessageHandlers {
         }
       }
 
-      // If target_sessions is NOT provided, this is a real kick/ban - force disconnect
-      // If target_sessions IS provided, this is ninja mode - don't disconnect
-      if (!target_sessions) {
+      // 如果不是ninja模式，需要断开本地客户端连接
+      // ninja模式下不断开连接（Channel Ninja场景）
+      if (!isNinjaMode) {
         const targetClient = this.clientManager.getClient(session);
         if (targetClient) {
-          this.clientManager.forceDisconnect(
-            session,
-            ban ? `Banned: ${reason || ''}` : `Kicked: ${reason || ''}`
-          );
-        this.logger.info(`Disconnected local client ${session} due to ${ban ? 'ban' : 'kick'}`);
+          const disconnectReason = isKickOrBan 
+            ? (ban ? `Banned: ${reason || ''}` : `Kicked: ${reason || ''}`)
+            : `Disconnected: ${reason || 'User left'}`;
+          
+          this.clientManager.forceDisconnect(session, disconnectReason);
+          this.logger.info(`Disconnected local client ${session}: ${disconnectReason}`);
         }
       }
 
       const broadcasted = targetSessionsSet 
-        ? allClients.filter(c => c.user_id > 0 && targetSessionsSet.has(c.session)).length
-        : allClients.filter(c => c.user_id > 0).length;
-        this.logger.debug(`Broadcasted UserRemove to ${broadcasted} local clients${targetSessionsSet ? ' (filtered)' : ''}`);
+        ? allClients.filter(c => c.user_id > 0 && c.session !== session && targetSessionsSet.has(c.session)).length
+        : allClients.filter(c => c.user_id > 0 && c.session !== session).length;
+      this.logger.debug(`Broadcasted UserRemove to ${broadcasted} local clients${isNinjaMode ? ' (ninja filtered)' : ''}`);
     } catch (error) {
         this.logger.error('Error handling UserRemove broadcast from Hub:', error);
     }

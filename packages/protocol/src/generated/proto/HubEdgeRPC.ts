@@ -10789,39 +10789,47 @@ export namespace hubedge {
             return HubUserJoinedParams.deserialize(bytes);
         }
     }
-    export class HubUserLeftParams extends pb_1.Message {
+    export class HubUserRemoveBroadcastParams extends pb_1.Message {
         #one_of_decls: number[][] = [];
         constructor(data?: any[] | {
-            session_id: number;
-            edge_id: number;
+            session: number;
+            actor?: number;
             reason?: string;
+            ban?: boolean;
+            target_sessions: number[];
         }) {
             super();
-            pb_1.Message.initialize(this, Array.isArray(data) ? data : [], 0, -1, [], this.#one_of_decls);
+            pb_1.Message.initialize(this, Array.isArray(data) ? data : [], 0, -1, [5], this.#one_of_decls);
             if (!Array.isArray(data) && typeof data == "object") {
-                this.session_id = data.session_id;
-                this.edge_id = data.edge_id;
+                this.session = data.session;
+                if ("actor" in data && data.actor != undefined) {
+                    this.actor = data.actor;
+                }
                 if ("reason" in data && data.reason != undefined) {
                     this.reason = data.reason;
                 }
+                if ("ban" in data && data.ban != undefined) {
+                    this.ban = data.ban;
+                }
+                this.target_sessions = data.target_sessions;
             }
         }
-        get session_id() {
+        get session() {
             return pb_1.Message.getField(this, 1) as number;
         }
-        set session_id(value: number) {
+        set session(value: number) {
             pb_1.Message.setField(this, 1, value);
         }
-        get has_session_id() {
+        get has_session() {
             return pb_1.Message.getField(this, 1) != null;
         }
-        get edge_id() {
-            return pb_1.Message.getField(this, 2) as number;
+        get actor() {
+            return pb_1.Message.getFieldWithDefault(this, 2, 0) as number;
         }
-        set edge_id(value: number) {
+        set actor(value: number) {
             pb_1.Message.setField(this, 2, value);
         }
-        get has_edge_id() {
+        get has_actor() {
             return pb_1.Message.getField(this, 2) != null;
         }
         get reason() {
@@ -10833,34 +10841,64 @@ export namespace hubedge {
         get has_reason() {
             return pb_1.Message.getField(this, 3) != null;
         }
+        get ban() {
+            return pb_1.Message.getFieldWithDefault(this, 4, false) as boolean;
+        }
+        set ban(value: boolean) {
+            pb_1.Message.setField(this, 4, value);
+        }
+        get has_ban() {
+            return pb_1.Message.getField(this, 4) != null;
+        }
+        get target_sessions() {
+            return pb_1.Message.getFieldWithDefault(this, 5, []) as number[];
+        }
+        set target_sessions(value: number[]) {
+            pb_1.Message.setField(this, 5, value);
+        }
         static fromObject(data: {
-            session_id?: number;
-            edge_id?: number;
+            session?: number;
+            actor?: number;
             reason?: string;
-        }): HubUserLeftParams {
-            const message = new HubUserLeftParams({
-                session_id: data.session_id,
-                edge_id: data.edge_id
+            ban?: boolean;
+            target_sessions: number[];
+        }): HubUserRemoveBroadcastParams {
+            const message = new HubUserRemoveBroadcastParams({
+                session: data.session,
+                target_sessions: data.target_sessions
             });
+            if (data.actor != null) {
+                message.actor = data.actor;
+            }
             if (data.reason != null) {
                 message.reason = data.reason;
+            }
+            if (data.ban != null) {
+                message.ban = data.ban;
             }
             return message;
         }
         toObject() {
             const data: {
-                session_id?: number;
-                edge_id?: number;
+                session?: number;
+                actor?: number;
                 reason?: string;
-            } = {};
-            if (this.session_id != null) {
-                data.session_id = this.session_id;
+                ban?: boolean;
+                target_sessions: number[];
+            } = {
+                target_sessions: this.target_sessions
+            };
+            if (this.session != null) {
+                data.session = this.session;
             }
-            if (this.edge_id != null) {
-                data.edge_id = this.edge_id;
+            if (this.actor != null) {
+                data.actor = this.actor;
             }
             if (this.reason != null) {
                 data.reason = this.reason;
+            }
+            if (this.ban != null) {
+                data.ban = this.ban;
             }
             return data;
         }
@@ -10868,29 +10906,39 @@ export namespace hubedge {
         serialize(w: pb_1.BinaryWriter): void;
         serialize(w?: pb_1.BinaryWriter): Uint8Array | void {
             const writer = w || new pb_1.BinaryWriter();
-            if (this.has_session_id)
-                writer.writeUint32(1, this.session_id);
-            if (this.has_edge_id)
-                writer.writeUint32(2, this.edge_id);
+            if (this.has_session)
+                writer.writeUint32(1, this.session);
+            if (this.has_actor)
+                writer.writeUint32(2, this.actor);
             if (this.has_reason && this.reason.length)
                 writer.writeString(3, this.reason);
+            if (this.has_ban)
+                writer.writeBool(4, this.ban);
+            if (this.target_sessions.length)
+                writer.writeRepeatedUint32(5, this.target_sessions);
             if (!w)
                 return writer.getResultBuffer();
         }
-        static deserialize(bytes: Uint8Array | pb_1.BinaryReader): HubUserLeftParams {
-            const reader = bytes instanceof pb_1.BinaryReader ? bytes : new pb_1.BinaryReader(bytes), message = new HubUserLeftParams();
+        static deserialize(bytes: Uint8Array | pb_1.BinaryReader): HubUserRemoveBroadcastParams {
+            const reader = bytes instanceof pb_1.BinaryReader ? bytes : new pb_1.BinaryReader(bytes), message = new HubUserRemoveBroadcastParams();
             while (reader.nextField()) {
                 if (reader.isEndGroup())
                     break;
                 switch (reader.getFieldNumber()) {
                     case 1:
-                        message.session_id = reader.readUint32();
+                        message.session = reader.readUint32();
                         break;
                     case 2:
-                        message.edge_id = reader.readUint32();
+                        message.actor = reader.readUint32();
                         break;
                     case 3:
                         message.reason = reader.readString();
+                        break;
+                    case 4:
+                        message.ban = reader.readBool();
+                        break;
+                    case 5:
+                        pb_1.Message.addToRepeatedField(message, 5, reader.readUint32());
                         break;
                     default: reader.skipField();
                 }
@@ -10900,8 +10948,8 @@ export namespace hubedge {
         serializeBinary(): Uint8Array {
             return this.serialize();
         }
-        static deserializeBinary(bytes: Uint8Array): HubUserLeftParams {
-            return HubUserLeftParams.deserialize(bytes);
+        static deserializeBinary(bytes: Uint8Array): HubUserRemoveBroadcastParams {
+            return HubUserRemoveBroadcastParams.deserialize(bytes);
         }
     }
     export class HubUserMovedParams extends pb_1.Message {
@@ -13071,7 +13119,7 @@ export namespace hubedge {
             peer_joined?: HubPeerJoinedParams;
             acl_response?: HubACLResponseParams;
             user_joined?: HubUserJoinedParams;
-            user_left?: HubUserLeftParams;
+            user_remove_broadcast?: HubUserRemoveBroadcastParams;
             user_moved?: HubUserMovedParams;
             channel_created?: HubChannelCreatedParams;
             channel_removed?: HubChannelRemovedParams;
@@ -13101,8 +13149,8 @@ export namespace hubedge {
                 if ("user_joined" in data && data.user_joined != undefined) {
                     this.user_joined = data.user_joined;
                 }
-                if ("user_left" in data && data.user_left != undefined) {
-                    this.user_left = data.user_left;
+                if ("user_remove_broadcast" in data && data.user_remove_broadcast != undefined) {
+                    this.user_remove_broadcast = data.user_remove_broadcast;
                 }
                 if ("user_moved" in data && data.user_moved != undefined) {
                     this.user_moved = data.user_moved;
@@ -13187,13 +13235,13 @@ export namespace hubedge {
         get has_user_joined() {
             return pb_1.Message.getField(this, 14) != null;
         }
-        get user_left() {
-            return pb_1.Message.getWrapperField(this, HubUserLeftParams, 15) as HubUserLeftParams;
+        get user_remove_broadcast() {
+            return pb_1.Message.getWrapperField(this, HubUserRemoveBroadcastParams, 15) as HubUserRemoveBroadcastParams;
         }
-        set user_left(value: HubUserLeftParams) {
+        set user_remove_broadcast(value: HubUserRemoveBroadcastParams) {
             pb_1.Message.setWrapperField(this, 15, value);
         }
-        get has_user_left() {
+        get has_user_remove_broadcast() {
             return pb_1.Message.getField(this, 15) != null;
         }
         get user_moved() {
@@ -13258,7 +13306,7 @@ export namespace hubedge {
             peer_joined?: ReturnType<typeof HubPeerJoinedParams.prototype.toObject>;
             acl_response?: ReturnType<typeof HubACLResponseParams.prototype.toObject>;
             user_joined?: ReturnType<typeof HubUserJoinedParams.prototype.toObject>;
-            user_left?: ReturnType<typeof HubUserLeftParams.prototype.toObject>;
+            user_remove_broadcast?: ReturnType<typeof HubUserRemoveBroadcastParams.prototype.toObject>;
             user_moved?: ReturnType<typeof HubUserMovedParams.prototype.toObject>;
             channel_created?: ReturnType<typeof HubChannelCreatedParams.prototype.toObject>;
             channel_removed?: ReturnType<typeof HubChannelRemovedParams.prototype.toObject>;
@@ -13287,8 +13335,8 @@ export namespace hubedge {
             if (data.user_joined != null) {
                 message.user_joined = HubUserJoinedParams.fromObject(data.user_joined);
             }
-            if (data.user_left != null) {
-                message.user_left = HubUserLeftParams.fromObject(data.user_left);
+            if (data.user_remove_broadcast != null) {
+                message.user_remove_broadcast = HubUserRemoveBroadcastParams.fromObject(data.user_remove_broadcast);
             }
             if (data.user_moved != null) {
                 message.user_moved = HubUserMovedParams.fromObject(data.user_moved);
@@ -13319,7 +13367,7 @@ export namespace hubedge {
                 peer_joined?: ReturnType<typeof HubPeerJoinedParams.prototype.toObject>;
                 acl_response?: ReturnType<typeof HubACLResponseParams.prototype.toObject>;
                 user_joined?: ReturnType<typeof HubUserJoinedParams.prototype.toObject>;
-                user_left?: ReturnType<typeof HubUserLeftParams.prototype.toObject>;
+                user_remove_broadcast?: ReturnType<typeof HubUserRemoveBroadcastParams.prototype.toObject>;
                 user_moved?: ReturnType<typeof HubUserMovedParams.prototype.toObject>;
                 channel_created?: ReturnType<typeof HubChannelCreatedParams.prototype.toObject>;
                 channel_removed?: ReturnType<typeof HubChannelRemovedParams.prototype.toObject>;
@@ -13348,8 +13396,8 @@ export namespace hubedge {
             if (this.user_joined != null) {
                 data.user_joined = this.user_joined.toObject();
             }
-            if (this.user_left != null) {
-                data.user_left = this.user_left.toObject();
+            if (this.user_remove_broadcast != null) {
+                data.user_remove_broadcast = this.user_remove_broadcast.toObject();
             }
             if (this.user_moved != null) {
                 data.user_moved = this.user_moved.toObject();
@@ -13389,8 +13437,8 @@ export namespace hubedge {
                 writer.writeMessage(13, this.acl_response, () => this.acl_response.serialize(writer));
             if (this.has_user_joined)
                 writer.writeMessage(14, this.user_joined, () => this.user_joined.serialize(writer));
-            if (this.has_user_left)
-                writer.writeMessage(15, this.user_left, () => this.user_left.serialize(writer));
+            if (this.has_user_remove_broadcast)
+                writer.writeMessage(15, this.user_remove_broadcast, () => this.user_remove_broadcast.serialize(writer));
             if (this.has_user_moved)
                 writer.writeMessage(16, this.user_moved, () => this.user_moved.serialize(writer));
             if (this.has_channel_created)
@@ -13434,7 +13482,7 @@ export namespace hubedge {
                         reader.readMessage(message.user_joined, () => message.user_joined = HubUserJoinedParams.deserialize(reader));
                         break;
                     case 15:
-                        reader.readMessage(message.user_left, () => message.user_left = HubUserLeftParams.deserialize(reader));
+                        reader.readMessage(message.user_remove_broadcast, () => message.user_remove_broadcast = HubUserRemoveBroadcastParams.deserialize(reader));
                         break;
                     case 16:
                         reader.readMessage(message.user_moved, () => message.user_moved = HubUserMovedParams.deserialize(reader));

@@ -209,48 +209,6 @@ export class HubDataManager {
   }
 
   /**
-   * 处理来自Hub的用户离开广播
-   * Hub收到userLeft通知后会广播给所有Edge（包括发起的Edge）
-   */
-  handleRemoteUserLeft(params: HubNotificationParams<'hub.userLeft'>): void {
-    try {
-      const { session_id, reason } = params;
-
-        this.logger.info(`User left notification from Hub: session ${session_id}${reason ? `, reason: ${reason}` : ''}`);
-
-      // 从状态管理器中移除远程用户（即使是本Edge的用户，也需要从远程用户列表中移除）
-      if (this.handlerFactory.stateManager) {
-        this.handlerFactory.stateManager.removeRemoteUser(session_id);
-      }
-
-      // 构建UserRemove消息
-      const userRemove = new mumbleproto.UserRemove({
-        session: session_id,
-        reason: reason || '',
-      });
-
-      const userRemoveMessage = userRemove.serialize();
-
-      // 广播给所有本地已认证的客户端
-      const allClients = this.handlerFactory.clientManager.getAllClients();
-      for (const client of allClients) {
-        // 跳过用户自己（如果是本Edge的用户断开）
-        if (client.session === session_id) {
-          continue;
-        }
-
-        if (client.user_id > 0) {
-          this.handlerFactory.messageHandler.sendMessage(client.session, MessageType.UserRemove, Buffer.from(userRemoveMessage));
-        }
-      }
-
-        this.logger.debug(`Broadcasted user removal (session ${session_id}) to ${allClients.filter(c => c.user_id > 0 && c.session !== session_id).length} local clients`);
-    } catch (error) {
-        this.logger.error('Error handling user left from Hub:', error);
-    }
-  }
-
-  /**
    * 处理来自其他Edge的用户状态变更通知
    */
   handleRemoteUserStateChanged(params: HubNotificationParams<'hub.userStateChanged'>): void {

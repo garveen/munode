@@ -249,7 +249,7 @@ export class HubControlService {
         void this.channelStateHandler.handleChannelRemoveNotification(typedParams as EdgeNotificationParams<'edge.channelRemoveNotification'>);
         break;
       
-      case 'hub.userLeft':
+      case 'hub.handleUserLeft':
         void this.userStateHandler.handleUserLeftNotification(typedParams as EdgeNotificationParams<'edge.userLeftNotification'>);
         break;
 
@@ -499,10 +499,10 @@ export class HubControlService {
         // 从会话管理器中移除会话
         sessionManager.removeSession(session.session_id);
 
-        // 广播用户离开消息给其他Edge
-        this.broadcast('hub.userLeft', {
-          session_id: session.session_id,
-          username: session.username,
+        // 广播用户离开消息给其他Edge（使用userRemoveBroadcast，不指定actor表示普通离开）
+        this.broadcast('hub.userRemoveBroadcast', {
+          session: session.session_id,
+          reason: 'Edge disconnected',
         });
       }
     } catch (error) {

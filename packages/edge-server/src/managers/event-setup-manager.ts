@@ -281,7 +281,7 @@ export class EventSetupManager {
 
       // 在集群模式下，通知Hub用户已离开
       // 通知Hub用户离开（Hub会广播给所有Edge，包括本Edge）
-      this.hubClient.notify('hub.userLeft', {
+      this.hubClient.notify('hub.handleUserLeft', {
         session_id: client.session,
         edge_id: this.config.server_id,
         reason: undefined,
@@ -650,10 +650,6 @@ export class EventSetupManager {
           case 'hub.userJoined':
             this.logger.debug(`[EDGE-DEBUG] Received hub.userJoined notification: ${JSON.stringify(message.params)}`);
             this.hubDataManager.handleRemoteUserJoined(message.params);
-            break;
-
-          case 'hub.userLeft':
-            this.hubDataManager.handleRemoteUserLeft(message.params);
             break;
 
           case 'hub.userStateChanged':

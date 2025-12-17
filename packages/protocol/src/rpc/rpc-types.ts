@@ -993,17 +993,6 @@ export interface HubUserStateChangedNotification {
 }
 
 /**
- * Hub 通知 Edge 用户离开
- */
-export interface HubUserLeftNotification {
-  method: 'hub.userLeft';
-  params: {
-    session_id: number;
-    reason?: string;
-  };
-}
-
-/**
  * Hub 通知 Edge 同步 VoiceTarget
  */
 export interface HubSyncVoiceTargetNotification {
@@ -1100,7 +1089,6 @@ export type HubToEdgeNotifications =
   | HubUserJoinedNotification
   | HubVisibleUsersNotification
   | HubUserStateChangedNotification
-  | HubUserLeftNotification
   | HubSyncVoiceTargetNotification;
 
 /**

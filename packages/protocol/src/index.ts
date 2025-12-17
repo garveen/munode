@@ -158,7 +158,6 @@ export type {
   PeerJoinedParams,
   ACLResponseParams,
   UserJoinedParams,
-  UserLeftParams,
   UserMovedParams,
   ChannelCreatedParams,
   ChannelRemovedParams,

@@ -663,12 +663,17 @@ message HubUserJoinedParams {
 }
 
 // ---------------------------------------------------------------------------
-// hub.userLeft - Hub 通知 Edge 有用户离开
+// hub.userRemoveBroadcast - Hub 通知 Edge 用户移除/离开
+// 统一处理用户移除(kick/ban)和普通离开两种场景：
+// - 如果有actor，表示是kick/ban操作
+// - 如果没有actor，表示是普通的用户离开
 // ---------------------------------------------------------------------------
-message HubUserLeftParams {
-  required uint32 session_id = 1;
-  required uint32 edge_id = 2;
+message HubUserRemoveBroadcastParams {
+  required uint32 session = 1;
+  optional uint32 actor = 2;        // 如果是kick/ban，这是操作者的session
   optional string reason = 3;
+  optional bool ban = 4;
+  repeated uint32 target_sessions = 5; // Channel Ninja模式：只发送给这些session
 }
 
 // ---------------------------------------------------------------------------
@@ -809,7 +814,7 @@ message TypedRPCNotification {
   optional HubPeerJoinedParams peer_joined = 12;
   optional HubACLResponseParams acl_response = 13;
   optional HubUserJoinedParams user_joined = 14;
-  optional HubUserLeftParams user_left = 15;
+  optional HubUserRemoveBroadcastParams user_remove_broadcast = 15;
   optional HubUserMovedParams user_moved = 16;
   optional HubChannelCreatedParams channel_created = 17;
   optional HubChannelRemovedParams channel_removed = 18;

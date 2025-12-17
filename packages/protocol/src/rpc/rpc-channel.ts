@@ -60,12 +60,6 @@ export interface UserJoinedParams {
   recording?: boolean;
 }
 
-export interface UserLeftParams {
-  session_id: number;
-  edge_id: number;
-  reason?: string;
-}
-
 export interface UserMovedParams {
   session_id: number;
   edge_id: number;
@@ -105,7 +99,6 @@ export type NotificationParams =
   | PeerJoinedParams
   | ACLResponseParams
   | UserJoinedParams
-  | UserLeftParams
   | UserMovedParams
   | ChannelCreatedParams
   | ChannelRemovedParams
@@ -122,7 +115,6 @@ interface NotificationDataType {
   peer_joined?: hubedgeRpc.HubPeerJoinedParams;
   acl_response?: hubedgeRpc.HubACLResponseParams;
   user_joined?: hubedgeRpc.HubUserJoinedParams;
-  user_left?: hubedgeRpc.HubUserLeftParams;
   user_moved?: hubedgeRpc.HubUserMovedParams;
   channel_created?: hubedgeRpc.HubChannelCreatedParams;
   channel_removed?: hubedgeRpc.HubChannelRemovedParams;
@@ -323,15 +315,6 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
           self_deaf: p.self_deaf,
           priority_speaker: p.priority_speaker,
           recording: p.recording,
-        });
-        break;
-      }
-      case 'hub.userLeft': {
-        const p = params as UserLeftParams;
-        notificationData.user_left = new HubUserLeftParams({
-          session_id: p.session_id,
-          edge_id: p.edge_id,
-          reason: p.reason,
         });
         break;
       }
