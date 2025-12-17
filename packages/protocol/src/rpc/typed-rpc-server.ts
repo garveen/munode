@@ -296,88 +296,88 @@ export class TypedRPCServer {
     });
 
     // Directly convert result to protobuf format based on method
-    // The result object should already have protobuf-compatible field names
+    // Type narrowing through switch cases ensures type safety
     switch (method) {
       case 'edge.register':
-        response.edge_register = hubedgeRpc.EdgeRegisterResult.fromObject(result as any);
+        response.edge_register = hubedgeRpc.EdgeRegisterResult.fromObject(result as RPCResult<'edge.register'>);
         break;
       case 'edge.heartbeat':
-        response.edge_heartbeat = hubedgeRpc.EdgeHeartbeatResult.fromObject(result as any);
+        response.edge_heartbeat = hubedgeRpc.EdgeHeartbeatResult.fromObject(result as RPCResult<'edge.heartbeat'>);
         break;
       case 'edge.allocateSessionId':
-        response.edge_allocate_session_id = hubedgeRpc.EdgeAllocateSessionIdResult.fromObject(result as any);
+        response.edge_allocate_session_id = hubedgeRpc.EdgeAllocateSessionIdResult.fromObject(result as RPCResult<'edge.allocateSessionId'>);
         break;
       case 'edge.authenticateUser':
-        response.edge_authenticate_user = hubedgeRpc.EdgeAuthenticateUserResult.fromObject(result as any);
+        response.edge_authenticate_user = hubedgeRpc.EdgeAuthenticateUserResult.fromObject(result as RPCResult<'edge.authenticateUser'>);
         break;
       case 'edge.syncVoiceTarget':
-        response.edge_sync_voice_target = hubedgeRpc.EdgeSyncVoiceTargetResult.fromObject(result as any);
+        response.edge_sync_voice_target = hubedgeRpc.EdgeSyncVoiceTargetResult.fromObject(result as RPCResult<'edge.syncVoiceTarget'>);
         break;
       case 'edge.getVoiceTargets':
-        response.edge_get_voice_targets = hubedgeRpc.EdgeGetVoiceTargetsResult.fromObject(result as any);
+        response.edge_get_voice_targets = hubedgeRpc.EdgeGetVoiceTargetsResult.fromObject(result as RPCResult<'edge.getVoiceTargets'>);
         break;
       case 'edge.routeVoice':
-        response.edge_route_voice = hubedgeRpc.EdgeRouteVoiceResult.fromObject(result as any);
+        response.edge_route_voice = hubedgeRpc.EdgeRouteVoiceResult.fromObject(result as RPCResult<'edge.routeVoice'>);
         break;
       case 'edge.adminOperation':
-        response.edge_admin_operation = hubedgeRpc.EdgeAdminOperationResult.fromObject(result as any);
+        response.edge_admin_operation = hubedgeRpc.EdgeAdminOperationResult.fromObject(result as RPCResult<'edge.adminOperation'>);
         break;
       case 'edge.exchangeCertificates':
-        response.edge_exchange_certificates = hubedgeRpc.EdgeExchangeCertificatesResult.fromObject(result as any);
+        response.edge_exchange_certificates = hubedgeRpc.EdgeExchangeCertificatesResult.fromObject(result as RPCResult<'edge.exchangeCertificates'>);
         break;
       case 'edge.fullSync':
-        response.edge_full_sync = hubedgeRpc.EdgeFullSyncResult.fromObject(result as any);
+        response.edge_full_sync = hubedgeRpc.EdgeFullSyncResult.fromObject(result as RPCResult<'edge.fullSync'>);
         break;
       case 'edge.getChannels':
-        response.edge_get_channels = hubedgeRpc.EdgeGetChannelsResult.fromObject(result as any);
+        response.edge_get_channels = hubedgeRpc.EdgeGetChannelsResult.fromObject(result as RPCResult<'edge.getChannels'>);
         break;
       case 'edge.getACLs':
-        response.edge_get_acls = hubedgeRpc.EdgeGetACLsResult.fromObject(result as any);
+        response.edge_get_acls = hubedgeRpc.EdgeGetACLsResult.fromObject(result as RPCResult<'edge.getACLs'>);
         break;
       case 'edge.saveChannel':
-        response.edge_save_channel = hubedgeRpc.EdgeSaveChannelResult.fromObject(result as any);
+        response.edge_save_channel = hubedgeRpc.EdgeSaveChannelResult.fromObject(result as RPCResult<'edge.saveChannel'>);
         break;
       case 'edge.saveACL':
-        response.edge_save_acl = hubedgeRpc.EdgeSaveACLResult.fromObject(result as any);
+        response.edge_save_acl = hubedgeRpc.EdgeSaveACLResult.fromObject(result as RPCResult<'edge.saveACL'>);
         break;
       case 'edge.join':
-        response.edge_join = hubedgeRpc.EdgeJoinResult.fromObject(result as any);
+        response.edge_join = hubedgeRpc.EdgeJoinResult.fromObject(result as RPCResult<'edge.join'>);
         break;
       case 'edge.joinComplete':
-        response.edge_join_complete = hubedgeRpc.EdgeJoinCompleteResult.fromObject(result as any);
+        response.edge_join_complete = hubedgeRpc.EdgeJoinCompleteResult.fromObject(result as RPCResult<'edge.joinComplete'>);
         break;
       case 'edge.handleACL':
-        response.edge_handle_acl = hubedgeRpc.EdgeHandleACLResult.fromObject(result as any);
+        response.edge_handle_acl = hubedgeRpc.EdgeHandleACLResult.fromObject(result as RPCResult<'edge.handleACL'>);
         break;
       case 'edge.handlePermissionQuery':
-        response.edge_handle_permission_query = hubedgeRpc.EdgeHandlePermissionQueryResult.fromObject(result as any);
+        response.edge_handle_permission_query = hubedgeRpc.EdgeHandlePermissionQueryResult.fromObject(result as RPCResult<'edge.handlePermissionQuery'>);
         break;
       case 'edge.reportPeerDisconnect':
-        response.edge_report_peer_disconnect = hubedgeRpc.EdgeReportPeerDisconnectResult.fromObject(result as any);
+        response.edge_report_peer_disconnect = hubedgeRpc.EdgeReportPeerDisconnectResult.fromObject(result as RPCResult<'edge.reportPeerDisconnect'>);
         break;
       case 'edge.reportQuality':
-        response.edge_report_quality = hubedgeRpc.EdgeReportQualityResult.fromObject(result as any);
+        response.edge_report_quality = hubedgeRpc.EdgeReportQualityResult.fromObject(result as RPCResult<'edge.reportQuality'>);
         break;
       case 'cluster.getStatus':
-        response.cluster_get_status = hubedgeRpc.ClusterGetStatusResult.fromObject(result as any);
+        response.cluster_get_status = hubedgeRpc.ClusterGetStatusResult.fromObject(result as RPCResult<'cluster.getStatus'>);
         break;
       case 'blob.put':
-        response.blob_put = hubedgeRpc.BlobPutResult.fromObject(result as any);
+        response.blob_put = hubedgeRpc.BlobPutResult.fromObject(result as RPCResult<'blob.put'>);
         break;
       case 'blob.get':
-        response.blob_get = hubedgeRpc.BlobGetResult.fromObject(result as any);
+        response.blob_get = hubedgeRpc.BlobGetResult.fromObject(result as RPCResult<'blob.get'>);
         break;
       case 'blob.getUserTexture':
-        response.blob_get_user_texture = hubedgeRpc.BlobGetUserTextureResult.fromObject(result as any);
+        response.blob_get_user_texture = hubedgeRpc.BlobGetUserTextureResult.fromObject(result as RPCResult<'blob.getUserTexture'>);
         break;
       case 'blob.getUserComment':
-        response.blob_get_user_comment = hubedgeRpc.BlobGetUserCommentResult.fromObject(result as any);
+        response.blob_get_user_comment = hubedgeRpc.BlobGetUserCommentResult.fromObject(result as RPCResult<'blob.getUserComment'>);
         break;
       case 'blob.setUserTexture':
-        response.blob_set_user_texture = hubedgeRpc.BlobSetUserTextureResult.fromObject(result as any);
+        response.blob_set_user_texture = hubedgeRpc.BlobSetUserTextureResult.fromObject(result as RPCResult<'blob.setUserTexture'>);
         break;
       case 'blob.setUserComment':
-        response.blob_set_user_comment = hubedgeRpc.BlobSetUserCommentResult.fromObject(result as any);
+        response.blob_set_user_comment = hubedgeRpc.BlobSetUserCommentResult.fromObject(result as RPCResult<'blob.setUserComment'>);
         break;
     }
 
