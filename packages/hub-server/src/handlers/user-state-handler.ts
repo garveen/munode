@@ -487,10 +487,15 @@ export class UserStateHandler implements IUserStateHandler {
         
         // Send UserState to sessions that can see the target
         for (const [edgeId, sessionIds] of visibleToSessions.entries()) {
-          controlService.notify(edgeId, 'hub.userStateBroadcast', {
-            ...broadcastUserState,
-            target_sessions: sessionIds,
-          });
+          // 确保 session 和 actor 存在
+          if (broadcastUserState.session !== undefined && broadcastUserState.actor !== undefined) {
+            controlService.notify(edgeId, 'hub.userStateBroadcast', {
+              ...broadcastUserState,
+              session: broadcastUserState.session,
+              actor: broadcastUserState.actor,
+              target_sessions: sessionIds,
+            });
+          }
         }
         
         // Send UserRemove to sessions that could see before but not now
@@ -498,6 +503,7 @@ export class UserStateHandler implements IUserStateHandler {
           for (const [edgeId, sessionIds] of invisibleToSessions.entries()) {
             controlService.notify(edgeId, 'hub.userRemoveBroadcast', {
               session: targetSession,
+              actor: 0, // System action for ninja mode visibility change
               target_sessions: sessionIds,
             });
           }
@@ -507,7 +513,14 @@ export class UserStateHandler implements IUserStateHandler {
         this.logger.info(`Channel Ninja: Broadcasted UserState for session ${targetSession} to ${Array.from(visibleToSessions.values()).flat().length} users (ninja filtering applied)`);
       } else {
         // No ninja functionality or not configured - broadcast to all edges normally
-        controlService.broadcast('hub.userStateBroadcast', broadcastUserState);
+        // 确保 session 和 actor 存在
+        if (broadcastUserState.session !== undefined && broadcastUserState.actor !== undefined) {
+          controlService.broadcast('hub.userStateBroadcast', {
+            ...broadcastUserState,
+            session: broadcastUserState.session,
+            actor: broadcastUserState.actor,
+          });
+        }
       }
 
     } catch (error) {

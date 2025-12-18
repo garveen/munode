@@ -278,7 +278,34 @@ export class ChannelStateHandler implements IChannelStateHandler {
         broadcastData.links_remove = channelStateObj.links_remove;
       }
 
-      this.factory.getControlService().broadcast('hub.channelStateBroadcast', broadcastData);
+      // 确保 channel_id 存在
+      if (!broadcastData.channel_id) {
+        this.logger.error('Cannot broadcast ChannelState without channel_id');
+        return;
+      }
+
+      // 构建符合类型定义的广播数据
+      const typedBroadcastData: {
+        channel_id: number;
+        parent?: number;
+        name?: string;
+        description?: string;
+        description_hash?: Buffer;
+        temporary?: boolean;
+        position?: number;
+        max_users?: number;
+        is_enter_restricted?: boolean;
+        can_enter?: boolean;
+        links?: number[];
+        links_add?: number[];
+        links_remove?: number[];
+        inherit_acl?: boolean;
+      } = {
+        channel_id: broadcastData.channel_id,
+        ...broadcastData,
+      };
+
+      this.factory.getControlService().broadcast('hub.channelStateBroadcast', typedBroadcastData);
 
       this.logger.info(`Hub: Broadcasting ChannelState for channel ${channelId} to all edges`);
 

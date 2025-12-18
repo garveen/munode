@@ -13,18 +13,29 @@ export { hubedgeRpc };
 // Notification Parameter Types
 // ============================================================================
 
-export interface VoiceDataParams {
+// Import notification types from rpc-types
+import type {
+  HubToEdgeNotifications,
+  EdgeToHubNotifications,
+} from './rpc-types.js';
+
+// Import ChannelData from hub-edge-types
+import type { ChannelData } from '../hub-edge-types.js';
+
+// Internal parameter types for notification creation (used by createNotification)
+// These match the camelCase style used in protobuf definitions
+interface VoiceDataParams {
   fromSessionId: number;
   targetSessionId: number;
   voiceData: Uint8Array;
   timestamp: number;
 }
 
-export interface ForceDisconnectParams {
+interface ForceDisconnectParams {
   reason: string;
 }
 
-export interface PeerJoinedParams {
+interface PeerJoinedParams {
   id: number;
   name: string;
   host: string;
@@ -32,7 +43,7 @@ export interface PeerJoinedParams {
   voicePort: number;
 }
 
-export interface ACLResponseParams {
+interface ACLResponseParams {
   edge_id: number;
   actor_session: number;
   success: boolean;
@@ -42,7 +53,7 @@ export interface ACLResponseParams {
   permission_denied?: boolean;
 }
 
-export interface UserJoinedParams {
+interface UserJoinedParams {
   session_id: number;
   edge_id: number;
   user_id?: number;
@@ -50,7 +61,6 @@ export interface UserJoinedParams {
   channel_id: number;
   groups?: string[];
   cert_hash?: string;
-  // User state fields
   mute?: boolean;
   deaf?: boolean;
   suppress?: boolean;
@@ -60,29 +70,26 @@ export interface UserJoinedParams {
   recording?: boolean;
 }
 
-export interface UserMovedParams {
+interface UserMovedParams {
   session_id: number;
   edge_id: number;
   channel_id: number;
   actor_session?: number;
 }
 
-// Import ChannelData from hub-edge-types to avoid duplication
-import type { ChannelData } from '../hub-edge-types.js';
-
-export interface ChannelCreatedParams {
+interface ChannelCreatedParams {
   channel: ChannelData;
 }
 
-export interface ChannelRemovedParams {
+interface ChannelRemovedParams {
   channel_id: number;
 }
 
-export interface ChannelUpdatedParams {
+interface ChannelUpdatedParams {
   channel: ChannelData;
 }
 
-export interface SyncVoiceTargetParams {
+interface SyncVoiceTargetParams {
   edge_id: number;
   client_session: number;
   target_id: number;
@@ -90,10 +97,8 @@ export interface SyncVoiceTargetParams {
   timestamp: number;
 }
 
-// Union type for all notification parameters (for backward compatibility)
-// This is a convenience type that combines all specific notification parameter types
-// Includes a catch-all for custom notification params
-export type NotificationParams =
+// Union type of internal params used by createNotification
+type InternalNotificationParams =
   | VoiceDataParams
   | ForceDisconnectParams
   | PeerJoinedParams
@@ -103,8 +108,14 @@ export type NotificationParams =
   | ChannelCreatedParams
   | ChannelRemovedParams
   | ChannelUpdatedParams
-  | SyncVoiceTargetParams
-  | Record<string, unknown>; // Catch-all for custom notifications
+  | SyncVoiceTargetParams;
+
+// Union type for all notification parameters
+// This is the public type combining all Hub->Edge and Edge->Hub notification params
+export type NotificationParams =
+  | HubToEdgeNotifications['params']
+  | EdgeToHubNotifications['params']
+  | InternalNotificationParams;
 
 // Internal type for notification data construction
 interface NotificationDataType {
@@ -242,6 +253,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
 
   /**
    * Create TypedRPCNotification from method and params
+   * Handles known internal param types directly, falls back to JSON serialization for others
    */
   private createNotification(method: string, params: NotificationParams): hubedgeRpc.TypedRPCNotification {
     const { TypedRPCNotification, HubVoiceDataParams, HubForceDisconnectParams, 

@@ -150,20 +150,12 @@ export type {
   Message, 
   PendingRequest,
   // Union type for all notification parameters - use when method name is dynamic
+  // This type is now derived from rpc-types.ts and includes all Hub->Edge and Edge->Hub notifications
   NotificationParams,
   NotificationParams as ChannelNotificationParams, // Keep backward compatibility
-  // Individual notification parameter types
-  VoiceDataParams,
-  ForceDisconnectParams,
-  PeerJoinedParams,
-  ACLResponseParams,
-  UserJoinedParams,
-  UserMovedParams,
-  ChannelCreatedParams,
-  ChannelRemovedParams,
-  ChannelUpdatedParams,
-  SyncVoiceTargetParams,
-  // Note: ChannelDataInput removed - use ChannelData from hub-edge-types.ts
+  // Note: Individual notification parameter types are no longer exported from rpc-channel.ts
+  // Use HubNotificationParams<'method.name'> or EdgeNotificationParams<'method.name'> instead
+  // for compile-time type safety with specific notification methods
 } from './rpc/rpc-channel.js';
 
 // Typed RPC (Legacy - will be deprecated)

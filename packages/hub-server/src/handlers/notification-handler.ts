@@ -130,9 +130,8 @@ export class NotificationHandler implements INotificationHandler {
 
       // 广播UserRemove给所有Edge
       this.factory.getControlService().broadcast('hub.userRemoveBroadcast', {
-        actor_session,
-        target_session,
-        target_edge_id: targetSession.edge_id,
+        session: target_session,
+        actor: actor_session,
         reason,
         ban,
       });
@@ -270,6 +269,7 @@ export class NotificationHandler implements INotificationHandler {
       if (!actorSession) {
         this.logger.warn(`Actor session ${actor_session} not found in Hub`);
         this.factory.getControlService().notify(edge_id, 'hub.userStatsResponse', {
+          success: false,
           actor_session,
           error: 'Actor session not found',
         });
@@ -279,6 +279,7 @@ export class NotificationHandler implements INotificationHandler {
       if (!targetSession) {
         this.logger.warn(`Target session ${target_session} not found in Hub`);
         this.factory.getControlService().notify(edge_id, 'hub.userStatsResponse', {
+          success: false,
           actor_session,
           error: 'Target session not found',
         });
@@ -309,6 +310,7 @@ export class NotificationHandler implements INotificationHandler {
         if (!hasEnter) {
           this.logger.warn(`Permission denied for UserStats: actor ${actor_session} cannot enter target ${target_session} channel`);
           this.factory.getControlService().notify(edge_id, 'hub.userStatsResponse', {
+            success: false,
             actor_session,
             error: 'Permission denied: Cannot view user stats',
           });
@@ -321,8 +323,7 @@ export class NotificationHandler implements INotificationHandler {
       const userStats: {
         session: number;
         stats_only?: boolean;
-        certificates?: Uint8Array[];
-        cert_hash?: Uint8Array;
+        certificates?: Buffer[];
         strong_certificate?: boolean;
         from_client?: {
           good?: number;
@@ -343,15 +344,11 @@ export class NotificationHandler implements INotificationHandler {
         tcp_ping_avg?: number;
         tcp_ping_var?: number;
         version?: {
-          version?: number;
-          version_v1?: number;
-          release?: string;
-          os?: string;
-          os_version?: string;
+          major?: number;
+          minor?: number;
+          patch?: number;
         };
-        celt_versions?: number[];
-        address?: Uint8Array;
-        bandwidth?: number;
+        address?: string;
         onlinesecs?: number;
         idlesecs?: number;
       } = {
@@ -370,30 +367,32 @@ export class NotificationHandler implements INotificationHandler {
           userStats.strong_certificate = true;
 
           // 根据配置决定返回真实证书哈希还是用户ID哈希
+          let certHash: Buffer;
           if (this.factory.getConfig().hideCertHashes) {
             // 返回用户ID的哈希（如果有用户ID）
             if (targetSession.user_id !== undefined && targetSession.user_id !== null) {
               const hashStr = await this.hashUserId(targetSession.user_id);
-              userStats.cert_hash = Buffer.from(hashStr, 'utf-8');
+              certHash = Buffer.from(hashStr, 'utf-8');
             }
           } else {
-            // 返回真实的证书哈希 - 转换为 Uint8Array
-            userStats.cert_hash = typeof targetSession.cert_hash === 'string'
+            // 返回真实的证书哈希 - 转换为 Buffer
+            certHash = typeof targetSession.cert_hash === 'string'
               ? Buffer.from(targetSession.cert_hash, 'utf-8')
               : targetSession.cert_hash;
+          }
+
+          // 将证书哈希添加到 certificates 数组
+          if (certHash) {
+            userStats.certificates = [certHash];
           }
 
           // stats_only 模式下不添加证书链
           // TODO: 从证书缓存获取完整证书链（仅在非 stats_only 模式）
         }
 
-        // 添加IP地址
+        // 添加IP地址（保持为字符串格式）
         if (targetSession.ip_address) {
-          // 将IP字符串转换为字节数组
-          const ipParts = targetSession.ip_address.split('.');
-          if (ipParts.length === 4) {
-            userStats.address = Buffer.from(ipParts.map(p => parseInt(p, 10)));
-          }
+          userStats.address = targetSession.ip_address;
         }
       }
 
@@ -402,11 +401,12 @@ export class NotificationHandler implements INotificationHandler {
       if (details) {
         // 添加客户端版本信息
         if (targetSession.version || targetSession.release || targetSession.os) {
+          // 解析版本号为 major.minor.patch 格式
+          const versionParts = targetSession.version?.split('.') || [];
           userStats.version = {
-            version_v1: targetSession.version ? parseInt(targetSession.version.split('.')[0]) || 0 : 0,
-            release: targetSession.release || '',
-            os: targetSession.os || '',
-            os_version: targetSession.os_version || '',
+            major: versionParts[0] ? parseInt(versionParts[0]) || 0 : 0,
+            minor: versionParts[1] ? parseInt(versionParts[1]) || 0 : 0,
+            patch: versionParts[2] ? parseInt(versionParts[2]) || 0 : 0,
           };
         }
 
@@ -434,6 +434,7 @@ export class NotificationHandler implements INotificationHandler {
 
       // 返回响应给发起请求的Edge
       this.factory.getControlService().notify(edge_id, 'hub.userStatsResponse', {
+        success: true,
         actor_session,
         userStats,
       });

@@ -1003,6 +1003,60 @@ export interface HubSyncVoiceTargetNotification {
   };
 }
 
+/**
+ * Hub 通知 Edge 路由表更新
+ */
+export interface HubRouteTableUpdateNotification {
+  method: 'hub.routeTableUpdate';
+  params: {
+    routes: Array<{
+      targetEdgeId: number;
+      type: 'direct' | 'relay' | 'fallback';
+      nextHop?: number;
+      cost: number;
+      timestamp: number;
+      source: 'hub' | 'local';
+      ttl?: number;
+    }>;
+  };
+}
+
+/**
+ * Hub 通知 Edge 语音路由配置
+ */
+export interface HubVoiceRoutingConfigNotification {
+  method: 'hub.voiceRoutingConfig';
+  params: {
+    enabled: boolean;
+    policy: {
+      directRttThreshold?: number;
+      directLossThreshold?: number;
+      enableRelay?: boolean;
+      maxRelayHops?: number;
+      relayCostFactor?: number;
+      routeSwitchHysteresis?: number;
+      routeSwitchCostDelta?: number;
+      maxRelayLoadPerEdge?: number;
+      probeInterval?: number;
+      probeTimeout?: number;
+      routeTableUpdateInterval?: number;
+    };
+    preferredRelayEdges: number[];
+    hubRelay: {
+      enableTcpFallback?: boolean;
+      enabled?: boolean;
+      maxConcurrentRelays?: number;
+      relayTimeout?: number;
+      relayBufferSize?: number;
+    };
+    encryption?: {
+      algorithm: string;
+      key: string;
+      version: number;
+    };
+  };
+}
+
 // ============================================================================
 // Type Union & Mapping
 // ============================================================================
@@ -1079,7 +1133,9 @@ export type HubToEdgeNotifications =
   | HubUserJoinedNotification
   | HubVisibleUsersNotification
   | HubUserStateChangedNotification
-  | HubSyncVoiceTargetNotification;
+  | HubSyncVoiceTargetNotification
+  | HubRouteTableUpdateNotification
+  | HubVoiceRoutingConfigNotification;
 
 /**
  * 方法名到类型的映射

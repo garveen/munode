@@ -169,7 +169,17 @@ export class HubControlService {
       })),
     });
     
-    this.notify(edgeId, 'hub.routeTableUpdate', { routes });
+    this.notify(edgeId, 'hub.routeTableUpdate', { 
+      routes: routes.map(r => ({
+        targetEdgeId: r.targetEdgeId,
+        type: r.type,
+        nextHop: r.nextHop,
+        cost: r.cost,
+        timestamp: r.timestamp,
+        source: r.source,
+        ttl: r.ttl,
+      }))
+    });
   }
   
   /**

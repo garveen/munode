@@ -506,11 +506,13 @@ export class HubMessageHandlers {
         }
       }
 
-      // 如果不是ninja模式，需要断开本地客户端连接
+      // 如果不是ninja模式，检查该session是否是本地连接的客户端
+      // 如果是，需要断开连接
       // ninja模式下不断开连接（Channel Ninja场景）
       if (!isNinjaMode) {
         const targetClient = this.clientManager.getClient(session);
         if (targetClient) {
+          // 根据不同情况构建断开原因
           const disconnectReason = isKickOrBan 
             ? (ban ? `Banned: ${reason || ''}` : `Kicked: ${reason || ''}`)
             : `Disconnected: ${reason || 'User left'}`;
