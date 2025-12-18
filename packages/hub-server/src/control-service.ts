@@ -346,7 +346,8 @@ export class HubControlService {
       // 如果需要清理（Edge 重连），立即清理旧会话
       if ((result as { need_cleanup?: boolean }).need_cleanup) {
         this.logger.warn(`Edge ${params.server_id} reconnected, cleaning up old sessions immediately`);
-        this.cleanupEdgeSessions(params.server_id);
+        // 清理时排除当前重连的 Edge（它会自己处理本地客户端清理）
+        this.cleanupEdgeSessionsForReconnect(params.server_id);
       }
       
       // 添加 Edge 到网络拓扑
@@ -485,7 +486,7 @@ export class HubControlService {
   // 不再需要 setEdgeChannel 和 removeEdgeChannel 方法
 
   /**
-   * 清理指定Edge上的所有会话
+   * 清理指定Edge上的所有会话及相关资源（用于Edge断开超时后）
    */
   private cleanupEdgeSessions(edgeId: number): void {
     try {
@@ -494,19 +495,65 @@ export class HubControlService {
 
       this.logger.info(`Cleaning up ${sessions.length} sessions from Edge ${edgeId}`);
 
-      // 通知其他Edge这些用户离开了
+      // 1. 清理所有会话并广播用户离开消息
       for (const session of sessions) {
         // 从会话管理器中移除会话
         sessionManager.removeSession(session.session_id);
 
-        // 广播用户离开消息给其他Edge（使用userRemoveBroadcast，不指定actor表示普通离开）
+        // 广播用户离开消息给所有Edge（包括已断开的Edge，因为它可能还有连接）
         this.broadcast('hub.userRemoveBroadcast', {
           session: session.session_id,
           reason: 'Edge disconnected',
         });
       }
+
+      // 2. 清理网络拓扑管理器中的 Edge 信息
+      this._networkTopologyManager.removeEdge(edgeId);
+      this.logger.debug(`Removed Edge ${edgeId} from network topology manager`);
+
+      // 3. 清理语音加密管理器中的 Edge 密钥信息
+      this._voiceEncryptionManager.removeEdge(edgeId);
+      this.logger.debug(`Removed Edge ${edgeId} from voice encryption manager`);
+
+      // 4. 从注册表中注销 Edge（会清理心跳定时器等）
+      void this._registry.unregister(edgeId);
+      this.logger.debug(`Unregistered Edge ${edgeId} from registry`);
+
+      this.logger.info(`Successfully cleaned up all resources for Edge ${edgeId}`);
     } catch (error) {
       this.logger.error(`Error cleaning up Edge ${edgeId} sessions:`, error);
+    }
+  }
+
+  /**
+   * 清理指定Edge上的所有会话（用于Edge重连时）
+   * 与 cleanupEdgeSessions 的区别：不广播给正在重连的Edge本身，避免竞态条件
+   */
+  private cleanupEdgeSessionsForReconnect(edgeId: number): void {
+    try {
+      const sessionManager = this.factory.getSessionManager();
+      const sessions = sessionManager.getEdgeSessions(edgeId);
+
+      this.logger.info(`Cleaning up ${sessions.length} sessions from reconnecting Edge ${edgeId}`);
+
+      // 1. 清理所有会话并广播用户离开消息（排除当前Edge）
+      for (const session of sessions) {
+        // 从会话管理器中移除会话
+        sessionManager.removeSession(session.session_id);
+
+        // 广播用户离开消息给其他Edge（排除正在重连的Edge，它会自己处理）
+        this.broadcastExcept(edgeId, 'hub.userRemoveBroadcast', {
+          session: session.session_id,
+          reason: 'Edge reconnected - session cleanup',
+        });
+      }
+
+      // 注意：不清理网络拓扑和加密管理器，因为Edge正在重连
+      // 这些资源会在正常注册流程中更新
+
+      this.logger.info(`Successfully cleaned up sessions for reconnecting Edge ${edgeId}`);
+    } catch (error) {
+      this.logger.error(`Error cleaning up Edge ${edgeId} sessions for reconnect:`, error);
     }
   }
 }

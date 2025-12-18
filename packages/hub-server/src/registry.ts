@@ -323,21 +323,25 @@ export class ServiceRegistry {
     const edge = this.edges.get(server_id);
     if (!edge) return;
 
+    this.logger.info(`Unregistering Edge Server ${server_id} (${edge.name})...`);
+
     // 清理cleanup timer
     if (edge.cleanupTimer) {
       clearTimeout(edge.cleanupTimer);
       edge.cleanupTimer = undefined;
     }
 
-    this.edges.delete(server_id);
-
+    // 清理心跳定时器
     const timer = this.heartbeatTimers.get(server_id);
     if (timer) {
       clearTimeout(timer);
       this.heartbeatTimers.delete(server_id);
     }
 
-    this.logger.info(`Edge Server ${server_id} (${edge.name}) unregistered`);
+    // 从 Edge 注册表中移除
+    this.edges.delete(server_id);
+
+    this.logger.info(`Edge Server ${server_id} (${edge.name}) unregistered from registry`);
   }
 
   /**

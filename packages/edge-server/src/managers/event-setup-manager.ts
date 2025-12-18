@@ -1,6 +1,6 @@
 import type { Logger } from 'winston';
 import { HandlerFactory } from '../core/handler-factory.js';
-import { EdgeControlClient } from '../cluster/hub-client.js';
+import { EdgeControlClient, type ExtendedRegisterResponse } from '../cluster/hub-client.js';
 import { VoiceManager } from './voice-manager.js';
 import { HubDataManager } from '../cluster/hub-data-sync.js';
 import { BanHandler } from './ban-handler.js';
@@ -22,6 +22,7 @@ export class EventSetupManager {
   private messageManager?: MessageManager;
   private config: EdgeConfig;
   private logger: Logger;
+  private suppressClientDisconnectNotifications = false; // 用于批量清理时抑制通知
 
   constructor(
     handlerFactory: HandlerFactory,
@@ -280,14 +281,19 @@ export class EventSetupManager {
       this.messageManager.clearClientBuffer(client.session);
 
       // 在集群模式下，通知Hub用户已离开
-      // 通知Hub用户离开（Hub会广播给所有Edge，包括本Edge）
-      this.hubClient.notify('hub.handleUserLeft', {
-        session_id: client.session,
-        edge_id: this.config.server_id,
-        reason: undefined,
-      });
+      // 但如果正在批量清理（如Edge重连时），则不发送通知（Hub已经清理了会话）
+      if (!this.suppressClientDisconnectNotifications) {
+        // 通知Hub用户离开（Hub会广播给所有Edge，包括本Edge）
+        this.hubClient.notify('hub.handleUserLeft', {
+          session_id: client.session,
+          edge_id: this.config.server_id,
+          reason: undefined,
+        });
 
         this.logger.info(`User ${client.username} (session ${client.session}) left, notified Hub for broadcast`);
+      } else {
+        this.logger.debug(`User ${client.username} (session ${client.session}) left during batch cleanup, notification suppressed`);
+      }
     });
 
     this.handlerFactory.clientManager.on(
@@ -475,9 +481,38 @@ export class EventSetupManager {
         })();
       });
 
-      this.hubClient.on('reconnected', () => {
+      this.hubClient.on('reconnected', (response: ExtendedRegisterResponse) => {
         void (async () => {
           this.logger.info('Successfully reconnected to Hub (session restored)');
+          
+          // 如果 Hub 要求清理会话，断开所有本地客户端
+          if (response.need_cleanup) {
+            this.logger.warn('Hub requested session cleanup - disconnecting all local clients');
+            const allClients = this.handlerFactory.clientManager.getAllClients();
+            this.logger.info(`Disconnecting ${allClients.length} local clients due to session cleanup`);
+            
+            // 设置标志以抑制客户端断开通知（Hub已经清理了这些会话）
+            this.suppressClientDisconnectNotifications = true;
+            
+            try {
+              for (const client of allClients) {
+                try {
+                  await this.handlerFactory.clientManager.forceDisconnect(
+                    client.session,
+                    'Hub requested session cleanup - please reconnect'
+                  );
+                } catch (error) {
+                  this.logger.error(`Failed to disconnect client ${client.session}:`, error);
+                }
+              }
+            } finally {
+              // 恢复通知
+              this.suppressClientDisconnectNotifications = false;
+            }
+            
+            this.logger.info('All local clients disconnected, performing full sync...');
+          }
+          
           await performFullSync();
         })();
       });
