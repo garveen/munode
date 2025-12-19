@@ -95,6 +95,10 @@ export class MumbleClient extends EventEmitter {
       // 发送 Version 消息
       await this.sendVersion();
       
+      // 短暂延迟以确保服务器处理了 Version 消息
+      // PreConnect UserState 可以在收到 ServerSync 之前发送，但应该在 Version 之后
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
       // 执行认证
       await this.auth.authenticate();
       
