@@ -62,6 +62,13 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
     preConnectState?: {
       self_mute?: boolean;
       self_deaf?: boolean;
+      mute?: boolean;
+      deaf?: boolean;
+      suppress?: boolean;
+      priority_speaker?: boolean;
+      recording?: boolean;
+      plugin_context?: Buffer;
+      plugin_identity?: string;
       comment?: string;
     }
   ): Promise<AuthResult> {
@@ -124,6 +131,13 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
     preConnectState?: {
       self_mute?: boolean;
       self_deaf?: boolean;
+      mute?: boolean;
+      deaf?: boolean;
+      suppress?: boolean;
+      priority_speaker?: boolean;
+      recording?: boolean;
+      plugin_context?: Buffer;
+      plugin_identity?: string;
       comment?: string;
     }
   ): Promise<AuthResult> {
@@ -152,8 +166,13 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
           os_version: string;
           certificate_hash?: string;
         };
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
         self_mute?: boolean;
         self_deaf?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
       } = {
         session_id: session_id,
         server_id: this.config.server_id,
@@ -169,12 +188,28 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
         },
       };
 
-      // 添加 PreConnect 状态
-      if (preConnectState?.self_mute) {
+      // 添加 PreConnect 状态 - 只添加真正设置的字段
+      // 注意：只传递 boolean 状态字段，plugin_context/plugin_identity/comment 由 UserState 处理
+      if (preConnectState?.self_mute === true) {
         authParams.self_mute = true;
       }
-      if (preConnectState?.self_deaf) {
+      if (preConnectState?.self_deaf === true) {
         authParams.self_deaf = true;
+      }
+      if (preConnectState?.mute === true) {
+        authParams.mute = true;
+      }
+      if (preConnectState?.deaf === true) {
+        authParams.deaf = true;
+      }
+      if (preConnectState?.suppress === true) {
+        authParams.suppress = true;
+      }
+      if (preConnectState?.priority_speaker === true) {
+        authParams.priority_speaker = true;
+      }
+      if (preConnectState?.recording === true) {
+        authParams.recording = true;
       }
 
       const response = await this.hubClient.call('edge.authenticateUser', authParams);
