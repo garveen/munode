@@ -1,5 +1,5 @@
 import type { Logger } from 'winston';
-import { mumbleproto } from '@munode/protocol';
+import { mumbleproto, ClientState } from '@munode/protocol';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
 /**
@@ -15,7 +15,9 @@ export class StateHandlers {
     comment?: string;
   }> = new Map();
   
-  // Pending UserState - 存储认证期间收到的 UserState (用于延迟处理)
+  // Pending UserState - 存储认证期间收到的 UserState
+  // 注意：每个session只存储最新的一条UserState，后续消息会覆盖之前的
+  // 这确保状态始终是最新的，匹配Murmur行为
   private pendingUserState: Map<number, Buffer> = new Map();
   
   private logger: Logger;
@@ -37,13 +39,14 @@ export class StateHandlers {
   
   /**
    * 处理待处理的UserState（在认证完成且Ready后调用）
+   * 注意：只处理一次，避免无限递归
    */
   processPendingUserState(session_id: number): void {
     const pendingData = this.pendingUserState.get(session_id);
     if (pendingData) {
       this.logger.info(`[PENDING-USERSTATE] Processing pending UserState for session ${session_id}`);
-      this.pendingUserState.delete(session_id);
-      // 递归调用自己来处理这个UserState
+      this.pendingUserState.delete(session_id); // 先删除，避免递归
+      // 调用handleUserState处理这个消息（此时client state应该是Ready）
       this.handleUserState(session_id, pendingData);
     }
   }
@@ -76,7 +79,7 @@ export class StateHandlers {
 
       // 如果客户端状态是 Authenticated（认证中），延迟处理
       // 这匹配 Murmur 行为：只接受已完全认证的用户的 UserState
-      if (actor.state === 3) { // ClientState.Authenticated
+      if (actor.state === ClientState.Authenticated) {
         this.logger.info(`[PENDING-USERSTATE] Storing UserState for session ${session_id} (auth in progress)`);
         this.pendingUserState.set(session_id, data);
         return;
