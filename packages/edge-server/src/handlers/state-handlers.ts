@@ -44,10 +44,13 @@ export class StateHandlers {
   processPendingUserState(session_id: number): void {
     const pendingData = this.pendingUserState.get(session_id);
     if (pendingData) {
+      console.log(`[PENDING-USERSTATE] Processing pending UserState for session ${session_id}`);
       this.logger.info(`[PENDING-USERSTATE] Processing pending UserState for session ${session_id}`);
       this.pendingUserState.delete(session_id); // 先删除，避免递归
       // 调用handleUserState处理这个消息（此时client state应该是Ready）
       this.handleUserState(session_id, pendingData);
+    } else {
+      console.log(`[PENDING-USERSTATE] No pending UserState for session ${session_id}`);
     }
   }
 
@@ -75,14 +78,20 @@ export class StateHandlers {
         return;
       }
       
-      console.log(`[PRECONNECT-DEBUG] Actor found for session ${session_id}, user_id=${actor.user_id}, state=${actor.state}`);
+      console.log(`[PRECONNECT-DEBUG] Actor found for session ${session_id}, user_id=${actor.user_id}, state=${actor.state}, ClientState.Authenticated=${ClientState.Authenticated}, ClientState.Ready=${ClientState.Ready}`);
 
       // 如果客户端状态是 Authenticated（认证中），延迟处理
       // 这匹配 Murmur 行为：只接受已完全认证的用户的 UserState
       if (actor.state === ClientState.Authenticated) {
+        console.log(`[PENDING-USERSTATE] Storing UserState for session ${session_id} (auth in progress, state=${actor.state})`);
         this.logger.info(`[PENDING-USERSTATE] Storing UserState for session ${session_id} (auth in progress)`);
         this.pendingUserState.set(session_id, data);
         return;
+      }
+      
+      // Log if UserState arrives after Ready state
+      if (actor.state === ClientState.Ready && (userState.has_self_deaf || userState.has_self_mute)) {
+        console.log(`[USERSTATE-AFTER-READY] Processing UserState for session ${session_id} after Ready state, self_deaf=${userState.self_deaf}, self_mute=${userState.self_mute}`);
       }
 
       // PreConnectUserState: 处理认证前的状态设置
