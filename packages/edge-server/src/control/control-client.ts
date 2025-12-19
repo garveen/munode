@@ -16,7 +16,6 @@ export interface ControlChannelClientConfig {
   host: string;
   port: number;
   tls?: boolean;
-  logger?: Logger;
   poolSize?: number; // If > 1, use connection pool; if 1 or undefined, use single connection (backward compatible)
   reconnectInterval?: number; // For connection pool reconnection
   heartbeat?: {
@@ -43,12 +42,12 @@ export class ControlChannelClient extends TypedEventEmitter<ControlChannelClient
   private typedClient: TypedRPCClient | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private isConnecting = false;
-  private logger?: Logger;
+  private logger: Logger;
   private usePool: boolean;
 
-  constructor(private config: ControlChannelClientConfig) {
+  constructor(private config: ControlChannelClientConfig, logger: Logger) {
     super();
-    this.logger = config.logger;
+    this.logger = logger;
     this.usePool = (config.poolSize ?? 1) > 1;
   }
 

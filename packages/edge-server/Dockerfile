@@ -68,4 +68,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
 
 WORKDIR /app/packages/edge-server
 
-CMD ["node", "dist/cli.js", "start", "--config", "/app/config/edge.js"]
+CMD ["node", "--enable-source-maps", "dist/cli.js", "start", "--config", "/app/config/edge.js"]

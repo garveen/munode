@@ -146,7 +146,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
         },
       };
 
-      this.client = new ControlChannelClient(clientConfig);
+      this.client = new ControlChannelClient(clientConfig, this.logger);
     }
     this.setupEventHandlers();
   }
