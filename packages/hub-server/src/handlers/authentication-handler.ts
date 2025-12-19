@@ -210,6 +210,11 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       if (params.deaf === true) {
         session.deaf = true;
         reportedStateFields.push('deaf');
+        // Deaf 会自动 Mute
+        session.mute = true;
+        if (!reportedStateFields.includes('mute')) {
+          reportedStateFields.push('mute');
+        }
       }
       if (params.suppress === true) {
         session.suppress = true;
@@ -222,6 +227,11 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       if (params.self_deaf === true) {
         session.self_deaf = true;
         reportedStateFields.push('self_deaf');
+        // SelfDeaf 会自动 SelfMute
+        session.self_mute = true;
+        if (!reportedStateFields.includes('self_mute')) {
+          reportedStateFields.push('self_mute');
+        }
       }
       if (params.priority_speaker === true) {
         session.priority_speaker = true;
