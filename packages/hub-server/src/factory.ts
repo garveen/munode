@@ -124,7 +124,8 @@ export class HubHandlerFactory {
    * Clear the singleton instance (for testing)
    */
   static clearInstance(): void {
-    HubHandlerFactory.instance = null as any;
+    // only used in tests
+    HubHandlerFactory.instance = null as unknown as HubHandlerFactory;
   }
 
   getControlService(): HubControlService {

@@ -27,9 +27,9 @@ export default {
 
   // TLS/SSL configuration
   tls: {
-    cert: './certs/edge-cert.pem',
-    key: './certs/edge-key.pem',
-    ca: './certs/ca.pem',
+    cert: './data/certs/edge-cert.pem',
+    key: './data/certs/edge-key.pem',
+    ca: './data/certs/ca.pem',
     requireClientCert: false,
     rejectUnauthorized: false,
   },
@@ -40,7 +40,7 @@ export default {
     port: 64739,
     controlPort: 8443,
     tls: {
-      ca: './certs/ca.pem',
+      ca: './data/certs/ca.pem',
       rejectUnauthorized: false,
     },
     connectionType: 'websocket', // 'websocket', 'grpc', 'smux', or 'kcp'

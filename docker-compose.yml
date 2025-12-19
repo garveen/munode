@@ -12,7 +12,7 @@ services:
       - "8443:8443"  # gRPC for Edge servers
     volumes:
       - ./config/hub.js:/app/config/hub.js:ro
-      - ./data/hub.sqlite:/app/data/hub.sqlite
+      - ./data/:/app/data/
       - ./logs/hub:/app/logs
     environment:
       - NODE_ENV=production
@@ -36,10 +36,12 @@ services:
     ports:
       - "64738:64738/tcp"  # Mumble TCP
       - "64738:64738/udp"  # Mumble UDP
+      - "64739:64739/udp"  # Edge UDP Relay
     volumes:
-      - ./config/edge.jso:/app/config/edge.js:ro
+      - ./config/edge.js:/app/config/edge.js:ro
       - ./data/GeoLite2-City.mmdb:/app/data/GeoLite2-City.mmdb:ro
       - ./logs/edge-1:/app/logs
+      - ./certs/:/app/certs:ro
     environment:
       - NODE_ENV=production
       - LOG_LEVEL=info
@@ -66,12 +68,13 @@ services:
     container_name: munode-edge-2
     restart: unless-stopped
     ports:
-      - "64739:64738/tcp"  # Mumble TCP (不同主机端口)
-      - "64739:64738/udp"  # Mumble UDP (不同主机端口)
+      - "64740:64738/tcp"  # Mumble TCP (不同主机端口)
+      - "64740:64738/udp"  # Mumble UDP (不同主机端口)
     volumes:
       - ./config/edge-2.js:/app/config/edge.js:ro
       - ./data/GeoLite2-City.mmdb:/app/data/GeoLite2-City.mmdb:ro
       - ./logs/edge-2:/app/logs
+      - ./certs/:/app/certs:ro
     environment:
       - NODE_ENV=production
       - LOG_LEVEL=info
