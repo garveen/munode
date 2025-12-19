@@ -62,14 +62,14 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
   private isStopping = false;
   private connectionIdCounter = 0;
 
-  constructor(config: ClientConnectionPoolConfig) {
+  constructor(config: ClientConnectionPoolConfig, logger: Logger) {
     super();
     this.config = {
       poolSize: 2,
       reconnectInterval: 5000,
       ...config,
     };
-    this.logger = config.logger;
+    this.logger = logger;
   }
 
   /**
@@ -77,14 +77,14 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
    */
   async connect(): Promise<void> {
     if (this.connections.length > 0) {
-      this.logger?.warn('Connection pool already initialized');
+      this.logger.warn('Connection pool already initialized');
       return;
     }
 
     this.isStopping = false;
     const poolSize = this.config.poolSize!;
 
-    this.logger?.info(`Initializing connection pool with ${poolSize} connections`);
+    this.logger.info(`Initializing connection pool with ${poolSize} connections`);
 
     // Create all connections
     for (let i = 0; i < poolSize; i++) {
@@ -105,7 +105,7 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
     // Connect all in parallel
     const connectPromises = this.connections.map((conn) => 
       this.connectSingle(conn).catch((error) => {
-        this.logger?.error(`Failed to connect connection ${conn.id}:`, error);
+        this.logger.error(`Failed to connect connection ${conn.id}:`, error);
       })
     );
 
@@ -116,7 +116,7 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
       throw new Error('Failed to establish any connections in pool');
     }
 
-    this.logger?.info(`Connection pool initialized with ${this.getConnectedCount()}/${poolSize} connections`);
+    this.logger.info(`Connection pool initialized with ${this.getConnectedCount()}/${poolSize} connections`);
   }
 
   /**
@@ -146,7 +146,7 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
           this.startHeartbeatForConnection(conn);
         }
         
-        this.logger?.info(`Connection ${conn.id} established`);
+        this.logger.info(`Connection ${conn.id} established`);
         this.emit('connection-established', conn.id);
         
         // Emit 'connect' only if this is the first connection
@@ -160,7 +160,7 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
       };
 
       const onError = (error: Error) => {
-        this.logger?.error(`Connection ${conn.id} error:`, error);
+        this.logger.error(`Connection ${conn.id} error:`, error);
         ws.removeListener('open', onOpen);
         ws.removeListener('error', onError);
         reject(error);
@@ -209,14 +209,14 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
 
     const callbacks: HeartbeatCallbacks = {
       onTimeout: (connectionId: string) => {
-        this.logger?.warn(`Heartbeat timeout for connection ${connectionId}`);
+        this.logger.warn(`Heartbeat timeout for connection ${connectionId}`);
         // Close the connection to trigger reconnection
         if (conn.ws) {
           conn.ws.close();
         }
       },
       onHeartbeat: (connectionId: string, latency: number) => {
-        this.logger?.debug(`Heartbeat received for connection ${connectionId}, latency: ${latency}ms`);
+        this.logger.debug(`Heartbeat received for connection ${connectionId}, latency: ${latency}ms`);
       },
     };
 
@@ -226,7 +226,7 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
       try {
         await this.config.heartbeat!.sendHeartbeat(conn.id, conn.channel!);
       } catch (error) {
-        this.logger?.error(`Failed to send heartbeat for connection ${conn.id}:`, error);
+        this.logger.error(`Failed to send heartbeat for connection ${conn.id}:`, error);
         throw error;
       }
     });
@@ -246,12 +246,12 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
       conn.heartbeatManager = undefined;
     }
 
-    this.logger?.info(`Connection ${conn.id} closed`);
+    this.logger.info(`Connection ${conn.id} closed`);
     this.emit('connection-closed', conn.id);
 
     // Check if all connections are closed
     if (!this.isConnected()) {
-      this.logger?.warn('All connections in pool are closed');
+      this.logger.warn('All connections in pool are closed');
       this.emit('disconnect');
     }
 
@@ -280,7 +280,7 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
       maxInterval
     );
     
-    this.logger?.debug(
+    this.logger.debug(
       `Scheduling reconnect for connection ${conn.id} (attempt ${conn.reconnectAttempts}) in ${backoffInterval}ms`
     );
 
@@ -289,7 +289,7 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
       conn.isReconnecting = true;
       
       this.connectSingle(conn).catch((error) => {
-        this.logger?.error(`Reconnection failed for connection ${conn.id}:`, error);
+        this.logger.error(`Reconnection failed for connection ${conn.id}:`, error);
         // Will schedule another reconnect via handleConnectionClose
       });
     }, backoffInterval);
@@ -310,7 +310,7 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
       // If the call fails due to connection issue, try another connection
       const retryChannel = this.getNextAvailableChannel();
       if (retryChannel && retryChannel !== channel) {
-        this.logger?.debug('Retrying RPC call on another connection');
+        this.logger.debug('Retrying RPC call on another connection');
         return await retryChannel.call(method, request, timeout);
       }
       throw error;
@@ -323,21 +323,21 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
   notify(method: string, params: TypedRPCNotification | NotificationParams): void {
     const channel = this.getNextAvailableChannel();
     if (!channel) {
-      this.logger?.warn(`Cannot send notification ${method}: no available connections`);
+      this.logger.warn(`Cannot send notification ${method}: no available connections`);
       return;
     }
 
     try {
       channel.notify(method, params);
     } catch (error) {
-      this.logger?.error(`Failed to send notification ${method}:`, error);
+      this.logger.error(`Failed to send notification ${method}:`, error);
       // Try another connection
       const retryChannel = this.getNextAvailableChannel();
       if (retryChannel && retryChannel !== channel) {
         try {
           retryChannel.notify(method, params);
         } catch (retryError) {
-          this.logger?.error(`Retry notification also failed:`, retryError);
+          this.logger.error(`Retry notification also failed:`, retryError);
         }
       }
     }
@@ -430,14 +430,14 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
     this.connections = [];
     this.removeAllListeners();
     
-    this.logger?.info('Connection pool disconnected');
+    this.logger.info('Connection pool disconnected');
   }
 
   /**
    * Force reconnect all connections
    */
   async reconnectAll(): Promise<void> {
-    this.logger?.info('Forcing reconnect of all connections');
+    this.logger.info('Forcing reconnect of all connections');
     
     // Disconnect all
     for (const conn of this.connections) {
@@ -452,7 +452,7 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
     // Reconnect all
     const reconnectPromises = this.connections.map(conn => 
       this.connectSingle(conn).catch(error => {
-        this.logger?.error(`Reconnection failed for connection ${conn.id}:`, error);
+        this.logger.error(`Reconnection failed for connection ${conn.id}:`, error);
       })
     );
 

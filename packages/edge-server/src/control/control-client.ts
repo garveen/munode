@@ -84,7 +84,7 @@ export class ControlChannelClient extends TypedEventEmitter<ControlChannelClient
         heartbeat: this.config.heartbeat,
       };
 
-      this.pool = new ClientConnectionPool(poolConfig);
+      this.pool = new ClientConnectionPool(poolConfig, this.logger);
       
       // Forward pool events
       this.pool.on('connect', () => {
