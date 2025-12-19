@@ -367,7 +367,7 @@ function createEdgeConfig(server_id: number, port: number): EdgeConfig {
     },
     max_bandwidth: 1000000,
     defaultChannel: 0,
-    logLevel: 'info',
+    logLevel: 'debug',
   };
 }
 

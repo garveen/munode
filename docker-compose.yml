@@ -11,10 +11,8 @@ services:
     ports:
       - "8443:8443"  # gRPC for Edge servers
     volumes:
-      - ./config/hub.json:/app/config/hub.json:ro
+      - ./config/hub.js:/app/config/hub.js:ro
       - ./data/hub.sqlite:/app/data/hub.sqlite
-      - ./data/users.json:/app/data/users.json
-      - ./session:/app/session
       - ./logs/hub:/app/logs
     environment:
       - NODE_ENV=production
@@ -39,7 +37,7 @@ services:
       - "64738:64738/tcp"  # Mumble TCP
       - "64738:64738/udp"  # Mumble UDP
     volumes:
-      - ./config/edge.json:/app/config/edge.json:ro
+      - ./config/edge.jso:/app/config/edge.js:ro
       - ./data/GeoLite2-City.mmdb:/app/data/GeoLite2-City.mmdb:ro
       - ./logs/edge-1:/app/logs
     environment:
@@ -71,7 +69,7 @@ services:
       - "64739:64738/tcp"  # Mumble TCP (不同主机端口)
       - "64739:64738/udp"  # Mumble UDP (不同主机端口)
     volumes:
-      - ./config/edge-2.json:/app/config/edge.json:ro
+      - ./config/edge-2.js:/app/config/edge.js:ro
       - ./data/GeoLite2-City.mmdb:/app/data/GeoLite2-City.mmdb:ro
       - ./logs/edge-2:/app/logs
     environment:
@@ -105,7 +103,7 @@ services:
       - "3000:3000"  # HTTP API
       - "3001:3001"  # WebSocket
     volumes:
-      - ./config/client.json:/app/config/client.json:ro
+      - ./config/client.js:/app/config/client.js:ro
       - ./logs/client:/app/logs
     environment:
       - NODE_ENV=production
@@ -129,9 +127,6 @@ services:
 networks:
   munode-network:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
 
 volumes:
   hub-data:
