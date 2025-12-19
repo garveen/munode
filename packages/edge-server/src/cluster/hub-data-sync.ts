@@ -118,17 +118,12 @@ export class HubDataManager {
       }
 
       // Broadcast to all local authenticated clients
-      // 对于本地用户：广播给其他有完整用户列表的客户端（不包括用户自己，因为已在认证时发送）
+      // 对于本地用户：广播给所有有完整用户列表的客户端（包括用户自己，确保获取完整的PreConnect状态）
       // 对于远程用户：广播给所有已注册的本地用户
       const allClients = this.handlerFactory.clientManager.getAllClients();
       let broadcastCount = 0;
       
       for (const client of allClients) {
-        // 本地用户不需要再次接收自己的 UserState（已在认证流程中发送）
-        if (isLocalUser && client.session === params.session_id) {
-          continue;
-        }
-        
         const shouldBroadcast = isLocalUser 
           ? client.has_full_user_list 
           : (client.user_id > 0 && client.has_full_user_list);
@@ -173,24 +168,26 @@ export class HubDataManager {
           }
 
           // 只包含值为 true 的状态字段（参考 Murmur 实现）
+          if (params.mute === true) {
+            userStateData.mute = true;
+          }
           if (params.deaf === true) {
             userStateData.deaf = true;
-          } else if (params.mute === true) {
-            userStateData.mute = true;
           }
           if (params.suppress === true) {
             userStateData.suppress = true;
+          }
+          if (params.self_mute === true) {
+            userStateData.self_mute = true;
+          }
+          if (params.self_deaf === true) {
+            userStateData.self_deaf = true;
           }
           if (params.priority_speaker === true) {
             userStateData.priority_speaker = true;
           }
           if (params.recording === true) {
             userStateData.recording = true;
-          }
-          if (params.self_deaf === true) {
-            userStateData.self_deaf = true;
-          } else if (params.self_mute === true) {
-            userStateData.self_mute = true;
           }
 
           const userState = new mumbleproto.UserState(userStateData);
