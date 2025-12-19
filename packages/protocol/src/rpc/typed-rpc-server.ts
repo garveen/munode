@@ -173,7 +173,8 @@ export class TypedRPCServer {
       case 'edge.allocateSessionId':
         return request.edge_allocate_session_id?.toObject() as RPCParams<'edge.allocateSessionId'>;
       case 'edge.authenticateUser':
-        return request.edge_authenticate_user?.toObject() as RPCParams<'edge.authenticateUser'>;
+        // 直接返回protobuf对象，保留has_字段信息
+        return request.edge_authenticate_user as any as RPCParams<'edge.authenticateUser'>;
 
       case 'edge.syncVoiceTarget':
         return request.edge_sync_voice_target?.toObject() as RPCParams<'edge.syncVoiceTarget'>;

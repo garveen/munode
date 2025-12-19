@@ -190,6 +190,7 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
 
       // 添加 PreConnect 状态 - 只添加真正设置的字段
       // 注意：只传递 boolean 状态字段，plugin_context/plugin_identity/comment 由 UserState 处理
+      console.log(`[EDGE-AUTH-MGR] PreConnect state received:`, preConnectState);
       if (preConnectState?.self_mute === true) {
         authParams.self_mute = true;
       }
@@ -212,6 +213,7 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
         authParams.recording = true;
       }
 
+      console.log(`[EDGE-AUTH-MGR] Sending to Hub - self_deaf=${authParams.self_deaf}, self_mute=${authParams.self_mute}`);
       const response = await this.hubClient.call('edge.authenticateUser', authParams);
 
       this.logger.debug(`Hub auth response:`, response);

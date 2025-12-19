@@ -42,6 +42,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
   }
 
   async handleAuthenticateUser(params: RPCParams<'edge.authenticateUser'>): Promise<RPCResult<'edge.authenticateUser'>> {
+    console.log('[HUB-AUTH-ENTRY] Received params:', JSON.stringify(params, null, 2));
     const authManager = this.factory.getAuthManager();
     if (!authManager) {
       this.logger.error('Auth manager not initialized');
@@ -202,12 +203,14 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       };
 
       // 保存 PreConnect 状态
+      // 注意：params 现在是 protobuf 对象，使用 has_ 方法检查字段是否设置
+      console.log(`[HUB-AUTH] PreConnect params for session ${params.session_id}: has_self_deaf=${(params as any).has_self_deaf}, self_deaf=${params.self_deaf}, has_self_mute=${(params as any).has_self_mute}, self_mute=${params.self_mute}`);
       const reportedStateFields: string[] = [];
-      if (params.mute === true) {
+      if ((params as any).has_mute && params.mute === true) {
         session.mute = true;
         reportedStateFields.push('mute');
       }
-      if (params.deaf === true) {
+      if ((params as any).has_deaf && params.deaf === true) {
         session.deaf = true;
         reportedStateFields.push('deaf');
         // Deaf 会自动 Mute
@@ -216,15 +219,15 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           reportedStateFields.push('mute');
         }
       }
-      if (params.suppress === true) {
+      if ((params as any).has_suppress && params.suppress === true) {
         session.suppress = true;
         reportedStateFields.push('suppress');
       }
-      if (params.self_mute === true) {
+      if ((params as any).has_self_mute && params.self_mute === true) {
         session.self_mute = true;
         reportedStateFields.push('self_mute');
       }
-      if (params.self_deaf === true) {
+      if ((params as any).has_self_deaf && params.self_deaf === true) {
         session.self_deaf = true;
         reportedStateFields.push('self_deaf');
         // SelfDeaf 会自动 SelfMute
@@ -233,11 +236,11 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           reportedStateFields.push('self_mute');
         }
       }
-      if (params.priority_speaker === true) {
+      if ((params as any).has_priority_speaker && params.priority_speaker === true) {
         session.priority_speaker = true;
         reportedStateFields.push('priority_speaker');
       }
-      if (params.recording === true) {
+      if ((params as any).has_recording && params.recording === true) {
         session.recording = true;
         reportedStateFields.push('recording');
       }

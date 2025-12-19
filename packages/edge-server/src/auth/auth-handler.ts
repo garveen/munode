@@ -80,6 +80,7 @@ export class AuthHandlers {
       // 调用认证管理器
       // 获取 PreConnect 状态（如果有）
       const preState = this.stateHandlers.getPreConnectUserState(session_id);
+      console.log(`[EDGE-AUTH] Retrieved PreConnect state for session ${session_id}:`, preState);
 
       const authResult = await this.authManager.authenticate(
         session_id,
