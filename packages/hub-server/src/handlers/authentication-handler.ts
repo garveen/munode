@@ -359,20 +359,15 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           target_sessions: sessionIds,
         };
         
-        if (session.deaf === true) {
-          userJoinedData.deaf = true;
-        } else if (session.mute === true) {
-          userJoinedData.mute = true;
-        }
+        if (session.mute === true) userJoinedData.mute = true;
+        if (session.deaf === true) userJoinedData.deaf = true;
         if (session.suppress === true) userJoinedData.suppress = true;
+        if (session.self_mute === true) userJoinedData.self_mute = true;
+        if (session.self_deaf === true) userJoinedData.self_deaf = true;
         if (session.priority_speaker === true) userJoinedData.priority_speaker = true;
         if (session.recording === true) userJoinedData.recording = true;
-        if (session.self_deaf === true) {
-          userJoinedData.self_deaf = true;
-        } else if (session.self_mute === true) {
-          userJoinedData.self_mute = true;
-        }
         
+        console.log(`[HUB-BROADCAST] Sending userJoined to edge ${edgeId} for session ${session.session_id}: self_deaf=${userJoinedData.self_deaf}, self_mute=${userJoinedData.self_mute}`);
         this.factory.getControlService().notify(edgeId, 'hub.userJoined', userJoinedData);
       }
 
@@ -404,20 +399,15 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         cert_hash: session.cert_hash,
       };
       
-      if (session.deaf === true) {
-        userJoinedData.deaf = true;
-      } else if (session.mute === true) {
-        userJoinedData.mute = true;
-      }
+      if (session.mute === true) userJoinedData.mute = true;
+      if (session.deaf === true) userJoinedData.deaf = true;
       if (session.suppress === true) userJoinedData.suppress = true;
+      if (session.self_mute === true) userJoinedData.self_mute = true;
+      if (session.self_deaf === true) userJoinedData.self_deaf = true;
       if (session.priority_speaker === true) userJoinedData.priority_speaker = true;
       if (session.recording === true) userJoinedData.recording = true;
-      if (session.self_deaf === true) {
-        userJoinedData.self_deaf = true;
-      } else if (session.self_mute === true) {
-        userJoinedData.self_mute = true;
-      }
       
+      console.log(`[HUB-BROADCAST] Broadcasting userJoined for session ${session.session_id}: self_deaf=${userJoinedData.self_deaf}, self_mute=${userJoinedData.self_mute}`);
       this.factory.getControlService().broadcast('hub.userJoined', userJoinedData);
       this.logger.info(`Session ${session.session_id} created, broadcasted to all edges`);
     }
