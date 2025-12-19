@@ -28,18 +28,21 @@ export class StateManager {
   }
 
   /**
-   * 处理 ServerSync 消息
+   * Handle ServerSync message
    */
   handleServerSync(message: mumbleproto.ServerSync): void {
-    // 保存会话信息
+    // Get existing user state (if UserState was received before ServerSync)
+    const existingUser = this.users.get(message.session || 0);
+    
+    // Save session info, preferring values from already received UserState
     this.session = {
       session: message.session || 0,
-      channel_id: 0, // 将在 UserState 消息中更新
-      self_mute: false,
-      self_deaf: false,
-      suppress: false,
-      recording: false,
-      priority_speaker: false,
+      channel_id: existingUser?.channel_id || 0, // 将在 UserState 消息中更新
+      self_mute: existingUser?.self_mute !== undefined ? existingUser.self_mute : false,
+      self_deaf: existingUser?.self_deaf !== undefined ? existingUser.self_deaf : false,
+      suppress: existingUser?.suppress !== undefined ? existingUser.suppress : false,
+      recording: existingUser?.recording !== undefined ? existingUser.recording : false,
+      priority_speaker: existingUser?.priority_speaker !== undefined ? existingUser.priority_speaker : false,
       listeningChannels: []
     };
 
@@ -193,13 +196,13 @@ export class StateManager {
       user_id: message.user_id,
       name: message.name || existingUser?.name || '',
       channel_id: message.channel_id !== undefined ? message.channel_id : existingUser?.channel_id || 0,
-      mute: message.mute || false,
-      deaf: message.deaf || false,
-      suppress: message.suppress || false,
-      self_mute: message.self_mute || false,
-      self_deaf: message.self_deaf || false,
-      recording: message.recording || false,
-      priority_speaker: message.priority_speaker || false,
+      mute: message.mute !== undefined ? message.mute : existingUser?.mute || false,
+      deaf: message.deaf !== undefined ? message.deaf : existingUser?.deaf || false,
+      suppress: message.suppress !== undefined ? message.suppress : existingUser?.suppress || false,
+      self_mute: message.self_mute !== undefined ? message.self_mute : existingUser?.self_mute || false,
+      self_deaf: message.self_deaf !== undefined ? message.self_deaf : existingUser?.self_deaf || false,
+      recording: message.recording !== undefined ? message.recording : existingUser?.recording || false,
+      priority_speaker: message.priority_speaker !== undefined ? message.priority_speaker : existingUser?.priority_speaker || false,
       hash: message.hash,
       comment: message.comment,
       texture: message.texture ? Buffer.from(message.texture) : undefined

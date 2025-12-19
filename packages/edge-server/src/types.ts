@@ -227,6 +227,14 @@ export interface AuthResult {
   metadata?: Record<string, string | number | boolean>;
   reason?: string;
   rejectType?: mumbleproto.Reject.RejectType;
+  // PreConnect state fields - user's initial state returned by Hub
+  mute?: boolean;
+  deaf?: boolean;
+  suppress?: boolean;
+  self_mute?: boolean;
+  self_deaf?: boolean;
+  priority_speaker?: boolean;
+  recording?: boolean;
 }
 
 // 功能开关配置

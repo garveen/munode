@@ -78,16 +78,12 @@ export class AuthHandlers {
       };
 
       // 调用认证管理器
-      // 获取 PreConnect 状态（如果有）
-      const preState = this.stateHandlers.getPreConnectUserState(session_id);
-
       const authResult = await this.authManager.authenticate(
         session_id,
         authMessage.username || '',
         authMessage.password || '',
         authMessage.tokens || [],
-        clientInfo,
-        preState
+        clientInfo
       );
 
       if (authResult.success) {
@@ -166,9 +162,6 @@ export class AuthHandlers {
         this.logger.debug(`Set user channel to ${authResult.channel_id} (from Hub)`);
       }
 
-      // 清理 PreConnect 状态（已经由 Hub 处理）
-      this.stateHandlers.clearPreConnectUserState(session_id);
-
       // 4. 发送频道树
       this.sendChannelTree(session_id);
 
@@ -192,7 +185,17 @@ export class AuthHandlers {
       // 8. 向用户自己发送 UserState（必须在 ServerSync 之前）
       // 参考 Mumble 客户端实现：msgServerSync 期望在收到 ServerSync 前已有 user profile
       // 参考 Go 实现：在 goroutine 中广播 UserState（包括用户自己），然后主线程发送 ServerSync
-      const selfUserState = new mumbleproto.UserState({
+      // 注意：初始状态都是 false，客户端会在认证后发送 UserState 更新实际状态
+      const selfUserStateData: {
+        session: number;
+        actor: number;
+        name: string;
+        user_id?: number;
+        channel_id: number;
+        temporary_access_tokens: string[];
+        listening_channel_add: number[];
+        listening_channel_remove: number[];
+      } = {
         session: session_id,
         actor: session_id,
         name: updatedClient.username,
@@ -201,8 +204,9 @@ export class AuthHandlers {
         temporary_access_tokens: [],
         listening_channel_add: [],
         listening_channel_remove: [],
-      });
+      };
 
+      const selfUserState = new mumbleproto.UserState(selfUserStateData);
       this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(selfUserState.serialize()));
 
       // 9. 发送 ServerSync 消息
@@ -220,6 +224,10 @@ export class AuthHandlers {
       this.clientManager.updateClient(session_id, {
         state: ClientState.Ready,
       });
+      
+      // 11. 处理待处理的UserState（如果有）
+      // 在认证期间收到的UserState会被延迟到这里处理
+      this.stateHandlers.processPendingUserState(session_id);
 
       this.logger.info(
         `[AUTH-FLOW] User authenticated and ready: session=${session_id}, ` +

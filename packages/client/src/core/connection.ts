@@ -443,6 +443,7 @@ export class ConnectionManager {
 
         case MessageType.CryptSetup: {
           // 加密设置消息
+          console.log('[DEBUG] Received CryptSetup message type');
           const cryptSetupMessage = mumbleproto.CryptSetup.deserialize(payload);
           // 异步处理，但不阻塞消息处理循环
           console.log('Received CryptSetup message, initializing cryptography');
@@ -844,6 +845,7 @@ export class ConnectionManager {
         Buffer.from(message.server_nonce)
       );
       console.log('[ConnectionManager] Cryptographic setup completed');
+      this.client.emit('cryptoReady');
       console.log(`[ConnectionManager] useTcpVoice=${this.useTcpVoice}, udpSocket=${!!this.udpSocket}`);
       
       // 初始化 UDP 连接（如果未强制使用 TCP 语音）
@@ -864,12 +866,16 @@ export class ConnectionManager {
       } else {
         console.log(`[ConnectionManager] Skipping UDP initialization: useTcpVoice=${this.useTcpVoice}, udpSocket=${!!this.udpSocket}`);
       }
+      // Still emit cryptoReady even if crypto keys aren't set, so connection can proceed
+      this.client.emit('cryptoReady');
     } else {
       console.warn('[ConnectionManager] Incomplete cryptographic setup message', {
         has_key: message.has_key,
         has_client_nonce: message.has_client_nonce,
         has_server_nonce: message.has_server_nonce
       });
+      // Still emit cryptoReady so connection can proceed
+      this.client.emit('cryptoReady');
     }
   }
 

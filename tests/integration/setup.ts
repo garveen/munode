@@ -332,7 +332,7 @@ async function startEdgeServer(
   edgeConfig.name = name;
   edgeConfig.network = edgeConfig.network || { host: '127.0.0.1', port, externalHost: '127.0.0.1' };
   edgeConfig.network.port = port;
-  edgeConfig.logLevel = silent ? 'error' : 'info';
+  edgeConfig.logLevel = silent ? 'error' : 'debug';
 
   const certsDir = join(__dirname, 'certs');
   edgeConfig.tls = {
@@ -668,6 +668,9 @@ export async function setupTestEnvironment(
           timeout: 5000 
         };
         console.log(`[SETUP] Configured Hub auth URL: http://127.0.0.1:${authPort}/auth`);
+        
+        // Set log level based on TEST_VERBOSE
+        hubConfig.logLevel = silent ? 'error' : 'debug';
         
         if (finalOptions.hubConfig) {
           Object.assign(hubConfig, finalOptions.hubConfig);

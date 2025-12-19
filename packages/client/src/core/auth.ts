@@ -20,6 +20,10 @@ export class AuthManager {
   private tokens: string[] = [];
   private certificate: Buffer | null = null;
   private privateKey: Buffer | null = null;
+  private preConnectState?: {
+    self_mute?: boolean;
+    self_deaf?: boolean;
+  };
 
   constructor(client: MumbleClient) {
     this.client = client;
@@ -32,6 +36,7 @@ export class AuthManager {
     this.username = options.username;
     this.password = options.password || '';
     this.tokens = options.tokens || [];
+    this.preConnectState = options.preConnectState;
     
     // 加载证书和私钥
     if (options.clientCert) {
@@ -49,6 +54,11 @@ export class AuthManager {
    * 执行认证
    */
   async authenticate(): Promise<void> {
+    // 如果有 PreConnect 状态，先发送 UserState 消息
+    if (this.preConnectState) {
+      await this.sendPreConnectState();
+    }
+    
     // 发送 Authenticate 消息
     await this.sendAuthenticate();
 
@@ -91,6 +101,48 @@ export class AuthManager {
       this.client.on('reject', onReject);
       this.client.on('connectionStateChanged', onConnectionStateChanged);
     });
+  }
+
+  /**
+   * 发送 PreConnect 状态
+   * 在认证前发送用户状态（self_deaf, self_mute 等）
+   */
+  private async sendPreConnectState(): Promise<void> {
+    if (!this.preConnectState) {
+      return;
+    }
+
+    const userStateData: {
+      self_mute?: boolean;
+      self_deaf?: boolean;
+      temporary_access_tokens: string[];
+      listening_channel_add: number[];
+      listening_channel_remove: number[];
+    } = {
+      temporary_access_tokens: [],
+      listening_channel_add: [],
+      listening_channel_remove: [],
+    };
+
+    if (this.preConnectState.self_mute !== undefined) {
+      userStateData.self_mute = this.preConnectState.self_mute;
+    }
+    if (this.preConnectState.self_deaf !== undefined) {
+      userStateData.self_deaf = this.preConnectState.self_deaf;
+      // self_deaf automatically sets self_mute (Mumble protocol requirement)
+      if (this.preConnectState.self_deaf === true) {
+        userStateData.self_mute = true;
+      }
+    }
+
+    const userStateMessage = mumbleproto.UserState.fromObject(userStateData);
+    console.log('[Client] Sending PreConnect UserState:', {
+      self_mute: userStateData.self_mute,
+      self_deaf: userStateData.self_deaf,
+    });
+    const serialized = userStateMessage.serialize();
+    const wrappedMessage = this.client.getConnectionManager().wrapMessage(MessageType.UserState, serialized);
+    await this.client.getConnectionManager().sendTCP(wrappedMessage);
   }
 
   /**

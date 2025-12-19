@@ -58,11 +58,6 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
       os: string;
       os_version: string;
       certificate_hash?: string;
-    },
-    preConnectState?: {
-      self_mute?: boolean;
-      self_deaf?: boolean;
-      comment?: string;
     }
   ): Promise<AuthResult> {
     try {
@@ -82,7 +77,7 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
       // but Edge always calls Hub for each new session.
 
       // 通过 Hub 认证
-      const authResult = await this.authenticateViaHub(session_id, username, password, tokens, clientInfo, preConnectState);
+      const authResult = await this.authenticateViaHub(session_id, username, password, tokens, clientInfo);
 
       if (authResult.success) {
         this.logger.info(
@@ -120,11 +115,6 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
       os: string;
       os_version: string;
       certificate_hash?: string;
-    },
-    preConnectState?: {
-      self_mute?: boolean;
-      self_deaf?: boolean;
-      comment?: string;
     }
   ): Promise<AuthResult> {
     if (!this.hubClient || !this.hubClient.isConnected()) {
@@ -136,7 +126,7 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
     }
 
     try {
-      // 调用 Hub 的认证 RPC，包含 PreConnect 状态
+      // 调用 Hub 的认证 RPC
       const authParams: {
         session_id: number;
         server_id: number;
@@ -152,8 +142,6 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
           os_version: string;
           certificate_hash?: string;
         };
-        self_mute?: boolean;
-        self_deaf?: boolean;
       } = {
         session_id: session_id,
         server_id: this.config.server_id,
@@ -168,14 +156,6 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
           os_version: 'unknown',
         },
       };
-
-      // 添加 PreConnect 状态
-      if (preConnectState?.self_mute) {
-        authParams.self_mute = true;
-      }
-      if (preConnectState?.self_deaf) {
-        authParams.self_deaf = true;
-      }
 
       const response = await this.hubClient.call('edge.authenticateUser', authParams);
 

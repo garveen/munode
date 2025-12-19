@@ -1,5 +1,5 @@
 import type { Logger } from 'winston';
-import { mumbleproto } from '@munode/protocol';
+import { mumbleproto, ClientState } from '@munode/protocol';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
 /**
@@ -14,6 +14,12 @@ export class StateHandlers {
     plugin_identity?: string;
     comment?: string;
   }> = new Map();
+  
+  // Pending UserState - 存储认证期间收到的 UserState
+  // 注意：每个session只存储最新的一条UserState，后续消息会覆盖之前的
+  // 这确保状态始终是最新的，匹配Murmur行为
+  private pendingUserState: Map<number, Buffer> = new Map();
+  
   private logger: Logger;
 
   constructor(private factory: HandlerFactory) {
@@ -23,6 +29,27 @@ export class StateHandlers {
   private get clientManager() { return this.factory.clientManager; }
   private get config() { return this.factory.config; }
   private get hubClient() { return this.factory.hubClient; }
+
+  /**
+   * 清除PreConnect状态（认证完成后调用）
+   */
+  clearPreConnectUserState(session_id: number): void {
+    this.preConnectUserState.delete(session_id);
+  }
+  
+  /**
+   * 处理待处理的UserState（在认证完成且Ready后调用）
+   * 注意：只处理一次，避免无限递归
+   */
+  processPendingUserState(session_id: number): void {
+    const pendingData = this.pendingUserState.get(session_id);
+    if (pendingData) {
+      this.logger.debug(`Processing pending UserState for session ${session_id}`);
+      this.pendingUserState.delete(session_id); // 先删除，避免递归
+      // 调用handleUserState处理这个消息（此时client state应该是Ready）
+      this.handleUserState(session_id, pendingData);
+    }
+  }
 
   /**
    * 处理用户状态变更消息
@@ -46,40 +73,20 @@ export class StateHandlers {
         return;
       }
 
+      // 如果客户端状态是 Authenticated（认证中），延迟处理
+      // 这匹配 Murmur 行为：只接受已完全认证的用户的 UserState
+      if (actor.state === ClientState.Authenticated) {
+        this.logger.debug(`Storing UserState for session ${session_id} (auth in progress, state=${actor.state})`);
+        this.pendingUserState.set(session_id, data);
+        return;
+      }
+
       // PreConnectUserState: 处理认证前的状态设置
       if (!actor.user_id || actor.user_id <= 0) {
-        // 客户端未认证，保存 PreConnect 状态
-        const preState: {
-          self_mute?: boolean;
-          self_deaf?: boolean;
-          plugin_context?: Buffer;
-          plugin_identity?: string;
-          comment?: string;
-        } = {};
-
-        // 只保存允许在认证前设置的字段
-        if (userState.has_self_mute) {
-          preState.self_mute = userState.self_mute;
-        }
-        if (userState.has_self_deaf) {
-          preState.self_deaf = userState.self_deaf;
-        }
-        if (userState.has_plugin_context) {
-          preState.plugin_context = Buffer.from(userState.plugin_context);
-        }
-        if (userState.has_plugin_identity) {
-          preState.plugin_identity = userState.plugin_identity;
-        }
-        if (userState.has_comment) {
-          preState.comment = userState.comment;
-        }
-
-        // 保存 PreConnect 状态
-        if (Object.keys(preState).length > 0) {
-          this.preConnectUserState.set(session_id, preState);
-        this.logger.debug(`Saved PreConnectUserState for session ${session_id}: ${Object.keys(preState).join(', ')}`);
-        }
-        
+        // 客户端未认证，将UserState消息保存到pending queue
+        // 认证完成后会重新处理这些消息（参考C++ Murmur行为）
+        this.logger.debug(`UserState received before authentication for session ${session_id}, saving to pending queue`);
+        this.pendingUserState.set(session_id, data);
         return;
       }
 
@@ -343,13 +350,6 @@ export class StateHandlers {
    */
   getPreConnectUserState(session_id: number) {
     return this.preConnectUserState.get(session_id);
-  }
-
-  /**
-   * 清除 PreConnect 用户状态
-   */
-  clearPreConnectUserState(session_id: number): void {
-    this.preConnectUserState.delete(session_id);
   }
 
   /**

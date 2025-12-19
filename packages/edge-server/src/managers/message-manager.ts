@@ -2,12 +2,22 @@ import type { Logger } from 'winston';
 import { HandlerFactory } from '../core/handler-factory.js';
 
 /**
+ * 消息队列条目
+ */
+interface QueuedMessage {
+  messageType: number;
+  messageData: Buffer;
+}
+
+/**
  * 消息管理器
  * 负责解析和处理客户端消息，以及发送消息给客户端
  */
 export class MessageManager {
   private handlerFactory: HandlerFactory;
   private messageBuffers: Map<number, Buffer> = new Map(); // 缓存每个客户端的不完整消息
+  private messageQueues: Map<number, QueuedMessage[]> = new Map(); // 连接中客户端的消息队列
+  private processingQueues: Set<number> = new Set(); // 正在处理队列的会话ID
   private logger: Logger;
 
   constructor(handlerFactory: HandlerFactory) {
@@ -18,7 +28,7 @@ export class MessageManager {
   /**
    * 解析并处理 Mumble 协议消息
    */
-  parseAndHandleMessage(session_id: number, data: Buffer): void {
+  async parseAndHandleMessage(session_id: number, data: Buffer): Promise<void> {
     try {
       // 获取或创建该会话的缓冲区
       const existingBuffer = this.messageBuffers.get(session_id);
@@ -80,7 +90,19 @@ export class MessageManager {
         this.logger.debug(
           `Received message(tcp): session=${session_id}, type=${messageType}, length=${messageLength}`
         );
-        this.handlerFactory.messageHandler.handleMessage(session_id, messageType, messageData);
+        
+        // 对于正在连接的客户端，使用队列顺序处理消息
+        // 对于已认证的客户端，直接处理消息
+        const isConnecting = this.isClientConnecting(session_id);
+        
+        if (isConnecting) {
+          // 入队并等待队列处理
+          this.logger.debug(`Enqueueing message for session ${session_id}, type=${messageType}`);
+          await this.enqueueMessage(session_id, messageType, messageData);
+        } else {
+          // 已认证客户端，直接处理（等待完成）
+          await this.handlerFactory.messageHandler.handleMessage(session_id, messageType, messageData);
+        }
       }
       
       // 所有消息都处理完了，清理缓冲区
@@ -92,10 +114,105 @@ export class MessageManager {
   }
 
   /**
-   * 清理客户端的消息缓冲区（在客户端断开时调用）
+   * 判断客户端是否在连接阶段（需要顺序处理消息）
+   */
+  private isClientConnecting(session_id: number): boolean {
+    const client = this.handlerFactory.clientManager.getClient(session_id);
+    if (!client) {
+      return false;
+    }
+    // 如果客户端还没有认证完成（user_id <= 0），则认为处于连接阶段
+    return !client.user_id || client.user_id <= 0;
+  }
+
+  /**
+   * 将消息添加到队列并开始处理
+   */
+  private async enqueueMessage(session_id: number, messageType: number, messageData: Buffer): Promise<void> {
+    // 获取或创建队列
+    let queue = this.messageQueues.get(session_id);
+    if (!queue) {
+      queue = [];
+      this.messageQueues.set(session_id, queue);
+    }
+
+    // 添加消息到队列
+    queue.push({ messageType, messageData });
+
+    // 如果没有正在处理，开始处理队列
+    if (!this.processingQueues.has(session_id)) {
+      await this.processMessageQueue(session_id);
+    }
+  }
+
+  /**
+   * 按顺序处理消息队列
+   */
+  private async processMessageQueue(session_id: number): Promise<void> {
+    // 标记正在处理
+    this.processingQueues.add(session_id);
+
+    try {
+      const queue = this.messageQueues.get(session_id);
+      if (!queue) {
+        return;
+      }
+
+      // 逐个处理队列中的消息
+      while (queue.length > 0) {
+        const message = queue.shift();
+        if (!message) {
+          break;
+        }
+
+        // 检查客户端是否还在连接
+        const client = this.handlerFactory.clientManager.getClient(session_id);
+        if (!client) {
+          // 客户端已断开，清理队列
+          this.messageQueues.delete(session_id);
+          break;
+        }
+
+        this.logger.debug(
+          `Processing queued message: session=${session_id}, type=${message.messageType}, queue_length=${queue.length}`
+        );
+
+        // 等待消息处理完成（包括异步事件处理器）
+        try {
+          await this.handlerFactory.messageHandler.handleMessage(
+            session_id,
+            message.messageType,
+            message.messageData
+          );
+        } catch (error) {
+          this.logger.error(`Error processing queued message for session ${session_id}:`, error);
+        }
+
+        // 如果客户端已经完成认证，停止使用队列
+        if (!this.isClientConnecting(session_id)) {
+          this.logger.debug(`Client ${session_id} authenticated, clearing message queue`);
+          this.messageQueues.delete(session_id);
+          break;
+        }
+      }
+
+      // 如果队列空了，删除队列
+      if (queue && queue.length === 0) {
+        this.messageQueues.delete(session_id);
+      }
+    } finally {
+      // 移除处理标记
+      this.processingQueues.delete(session_id);
+    }
+  }
+
+  /**
+   * 清理客户端的消息缓冲区和队列（在客户端断开时调用）
    */
   clearClientBuffer(session_id: number): void {
     this.messageBuffers.delete(session_id);
+    this.messageQueues.delete(session_id);
+    this.processingQueues.delete(session_id);
   }
 
   /**

@@ -157,7 +157,9 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         }
       }
 
-      // 创建 session
+      // 创建 session with default state values (all false)
+      // Client will send UserState message after authentication to set actual states
+      // This matches C++ Murmur behavior where User is created with bSelfMute=false, bSelfDeaf=false
       interface SessionData {
         session_id: number;
         edge_id: number;
@@ -174,13 +176,13 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         release?: string;
         os?: string;
         os_version?: string;
-        mute?: boolean;
-        deaf?: boolean;
-        suppress?: boolean;
-        self_mute?: boolean;
-        self_deaf?: boolean;
-        priority_speaker?: boolean;
-        recording?: boolean;
+        mute: boolean;
+        deaf: boolean;
+        suppress: boolean;
+        self_mute: boolean;
+        self_deaf: boolean;
+        priority_speaker: boolean;
+        recording: boolean;
       }
 
       const session: SessionData = {
@@ -199,40 +201,17 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         release: params.client_info.release,
         os: params.client_info.os,
         os_version: params.client_info.os_version,
+        // Default states - client will send UserState to update these
+        mute: false,
+        deaf: false,
+        suppress: false,
+        self_mute: false,
+        self_deaf: false,
+        priority_speaker: false,
+        recording: false,
       };
 
-      // 保存 PreConnect 状态
-      const reportedStateFields: string[] = [];
-      if (params.mute === true) {
-        session.mute = true;
-        reportedStateFields.push('mute');
-      }
-      if (params.deaf === true) {
-        session.deaf = true;
-        reportedStateFields.push('deaf');
-      }
-      if (params.suppress === true) {
-        session.suppress = true;
-        reportedStateFields.push('suppress');
-      }
-      if (params.self_mute === true) {
-        session.self_mute = true;
-        reportedStateFields.push('self_mute');
-      }
-      if (params.self_deaf === true) {
-        session.self_deaf = true;
-        reportedStateFields.push('self_deaf');
-      }
-      if (params.priority_speaker === true) {
-        session.priority_speaker = true;
-        reportedStateFields.push('priority_speaker');
-      }
-      if (params.recording === true) {
-        session.recording = true;
-        reportedStateFields.push('recording');
-      }
-
-      this.logger.info(`Session created: ${params.username} (user_id: ${authResult.user_id})${reportedStateFields.length > 0 ? `, state: [${reportedStateFields.join(', ')}]` : ''}, groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);
+      this.logger.info(`Session created: ${params.username} (user_id: ${authResult.user_id}), groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);
 
       // 注册 session
       sessionManager.reportSession(session);
@@ -240,7 +219,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       // 广播 userJoined（处理 Channel Ninja 可见性）
       await this.broadcastUserJoined(session, config, permissionChecker, sessionManager);
 
-      // 返回认证结果，包含目标频道，使用protobuf字段名（snake_case）
+      // Return authentication result, including target channel, using protobuf field names (snake_case)
       return {
         success: authResult.success,
         user_id: authResult.user_id,
@@ -345,19 +324,13 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           target_sessions: sessionIds,
         };
         
-        if (session.deaf === true) {
-          userJoinedData.deaf = true;
-        } else if (session.mute === true) {
-          userJoinedData.mute = true;
-        }
+        if (session.mute === true) userJoinedData.mute = true;
+        if (session.deaf === true) userJoinedData.deaf = true;
         if (session.suppress === true) userJoinedData.suppress = true;
+        if (session.self_mute === true) userJoinedData.self_mute = true;
+        if (session.self_deaf === true) userJoinedData.self_deaf = true;
         if (session.priority_speaker === true) userJoinedData.priority_speaker = true;
         if (session.recording === true) userJoinedData.recording = true;
-        if (session.self_deaf === true) {
-          userJoinedData.self_deaf = true;
-        } else if (session.self_mute === true) {
-          userJoinedData.self_mute = true;
-        }
         
         this.factory.getControlService().notify(edgeId, 'hub.userJoined', userJoinedData);
       }
@@ -390,19 +363,13 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         cert_hash: session.cert_hash,
       };
       
-      if (session.deaf === true) {
-        userJoinedData.deaf = true;
-      } else if (session.mute === true) {
-        userJoinedData.mute = true;
-      }
+      if (session.mute === true) userJoinedData.mute = true;
+      if (session.deaf === true) userJoinedData.deaf = true;
       if (session.suppress === true) userJoinedData.suppress = true;
+      if (session.self_mute === true) userJoinedData.self_mute = true;
+      if (session.self_deaf === true) userJoinedData.self_deaf = true;
       if (session.priority_speaker === true) userJoinedData.priority_speaker = true;
       if (session.recording === true) userJoinedData.recording = true;
-      if (session.self_deaf === true) {
-        userJoinedData.self_deaf = true;
-      } else if (session.self_mute === true) {
-        userJoinedData.self_mute = true;
-      }
       
       this.factory.getControlService().broadcast('hub.userJoined', userJoinedData);
       this.logger.info(`Session ${session.session_id} created, broadcasted to all edges`);
