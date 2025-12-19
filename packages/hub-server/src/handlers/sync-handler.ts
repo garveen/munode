@@ -141,7 +141,13 @@ export class SyncHandler implements ISyncHandler {
       recording: s.recording,
     }));
 
-    this.logger.debug(`[HUB-FULLSYNC] Returning ${protobufSessions.length} sessions, sample states: ${protobufSessions.slice(0, 3).map(s => `${s.username}(deaf=${s.self_deaf},mute=${s.self_mute})`).join(', ')}`);
+    if (protobufSessions.length > 0) {
+      const sampleCount = Math.min(3, protobufSessions.length);
+      const samples = protobufSessions.slice(0, sampleCount).map(s => `${s.username}(deaf=${s.self_deaf},mute=${s.self_mute})`).join(', ');
+      this.logger.debug(`[HUB-FULLSYNC] Returning ${protobufSessions.length} sessions, first ${sampleCount} states: ${samples}`);
+    } else {
+      this.logger.debug(`[HUB-FULLSYNC] Returning 0 sessions`);
+    }
 
     return {
       channels: protobufChannels,

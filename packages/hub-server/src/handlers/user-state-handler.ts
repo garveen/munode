@@ -251,7 +251,11 @@ export class UserStateHandler implements IUserStateHandler {
         
         // Verify the state was saved
         const savedSession = sessionManager.getSession(targetSession);
-        this.logger.info(`[HUB-STATE] Verified session ${targetSession} state after update: self_deaf=${savedSession?.self_deaf}, self_mute=${savedSession?.self_mute}`);
+        if (savedSession) {
+          this.logger.info(`[HUB-STATE] Verified session ${targetSession} state after update: self_deaf=${savedSession.self_deaf}, self_mute=${savedSession.self_mute}`);
+        } else {
+          this.logger.error(`[HUB-STATE] Failed to verify session ${targetSession} - session not found after update!`);
+        }
         broadcast = true;
       }
 
@@ -271,7 +275,11 @@ export class UserStateHandler implements IUserStateHandler {
         
         // Verify the state was saved
         const savedSession = sessionManager.getSession(targetSession);
-        this.logger.info(`[HUB-STATE] Verified session ${targetSession} state after update: self_deaf=${savedSession?.self_deaf}, self_mute=${savedSession?.self_mute}`);
+        if (savedSession) {
+          this.logger.info(`[HUB-STATE] Verified session ${targetSession} state after update: self_deaf=${savedSession.self_deaf}, self_mute=${savedSession.self_mute}`);
+        } else {
+          this.logger.error(`[HUB-STATE] Failed to verify session ${targetSession} - session not found after update!`);
+        }
         broadcast = true;
       }
 
