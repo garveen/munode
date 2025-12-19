@@ -410,6 +410,8 @@ export class MessageHandlers {
               userStateData.self_mute = true;
             }
             
+            this.logger.debug(`[EDGE-USERLIST] Sending user ${session.username}(${session.session_id}) to client ${session_id}: self_deaf=${userStateData.self_deaf}, self_mute=${userStateData.self_mute}, raw_session_state={self_deaf=${session.self_deaf}, self_mute=${session.self_mute}}`);
+            
             const userState = new mumbleproto.UserState(userStateData);
             this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(userState.serialize())); 
             sentCount++;

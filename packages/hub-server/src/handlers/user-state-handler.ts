@@ -246,7 +246,12 @@ export class UserStateHandler implements IUserStateHandler {
           stateUpdates.self_mute = true;
         }
 
+        this.logger.info(`[HUB-STATE] User ${actor_username}(${targetSession}) setting self_deaf=${userStateObj.self_deaf}, self_mute=${stateUpdates.self_mute}`);
         sessionManager.updateSessionState(targetSession, stateUpdates);
+        
+        // Verify the state was saved
+        const savedSession = sessionManager.getSession(targetSession);
+        this.logger.info(`[HUB-STATE] Verified session ${targetSession} state after update: self_deaf=${savedSession?.self_deaf}, self_mute=${savedSession?.self_mute}`);
         broadcast = true;
       }
 
@@ -261,7 +266,12 @@ export class UserStateHandler implements IUserStateHandler {
           stateUpdates.self_deaf = false;
         }
 
+        this.logger.info(`[HUB-STATE] User ${actor_username}(${targetSession}) setting self_mute=${userStateObj.self_mute}, self_deaf=${stateUpdates.self_deaf}`);
         sessionManager.updateSessionState(targetSession, stateUpdates);
+        
+        // Verify the state was saved
+        const savedSession = sessionManager.getSession(targetSession);
+        this.logger.info(`[HUB-STATE] Verified session ${targetSession} state after update: self_deaf=${savedSession?.self_deaf}, self_mute=${savedSession?.self_mute}`);
         broadcast = true;
       }
 

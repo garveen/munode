@@ -141,6 +141,8 @@ export class SyncHandler implements ISyncHandler {
       recording: s.recording,
     }));
 
+    this.logger.debug(`[HUB-FULLSYNC] Returning ${protobufSessions.length} sessions, sample states: ${protobufSessions.slice(0, 3).map(s => `${s.username}(deaf=${s.self_deaf},mute=${s.self_mute})`).join(', ')}`);
+
     return {
       channels: protobufChannels,
       channel_links: [], // TODO: 实现频道链接
