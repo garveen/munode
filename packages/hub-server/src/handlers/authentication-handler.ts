@@ -245,6 +245,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         reportedStateFields.push('recording');
       }
 
+      console.log(`[HUB-AUTH] Session ${params.session_id} created with state: self_deaf=${session.self_deaf}, self_mute=${session.self_mute}, reported=[${reportedStateFields.join(', ')}]`);
       this.logger.info(`Session created: ${params.username} (user_id: ${authResult.user_id})${reportedStateFields.length > 0 ? `, state: [${reportedStateFields.join(', ')}]` : ''}, groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);
 
       // 注册 session
