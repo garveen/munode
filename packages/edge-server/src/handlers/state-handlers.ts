@@ -14,6 +14,10 @@ export class StateHandlers {
     plugin_identity?: string;
     comment?: string;
   }> = new Map();
+  
+  // Pending UserState - 存储认证期间收到的 UserState (用于延迟处理)
+  private pendingUserState: Map<number, Buffer> = new Map();
+  
   private logger: Logger;
 
   constructor(private factory: HandlerFactory) {
@@ -23,6 +27,26 @@ export class StateHandlers {
   private get clientManager() { return this.factory.clientManager; }
   private get config() { return this.factory.config; }
   private get hubClient() { return this.factory.hubClient; }
+
+  /**
+   * 清除PreConnect状态（认证完成后调用）
+   */
+  clearPreConnectUserState(session_id: number): void {
+    this.preConnectUserState.delete(session_id);
+  }
+  
+  /**
+   * 处理待处理的UserState（在认证完成且Ready后调用）
+   */
+  processPendingUserState(session_id: number): void {
+    const pendingData = this.pendingUserState.get(session_id);
+    if (pendingData) {
+      this.logger.info(`[PENDING-USERSTATE] Processing pending UserState for session ${session_id}`);
+      this.pendingUserState.delete(session_id);
+      // 递归调用自己来处理这个UserState
+      this.handleUserState(session_id, pendingData);
+    }
+  }
 
   /**
    * 处理用户状态变更消息
@@ -48,7 +72,15 @@ export class StateHandlers {
         return;
       }
       
-      console.log(`[PRECONNECT-DEBUG] Actor found for session ${session_id}, user_id=${actor.user_id}`);
+      console.log(`[PRECONNECT-DEBUG] Actor found for session ${session_id}, user_id=${actor.user_id}, state=${actor.state}`);
+
+      // 如果客户端状态是 Authenticated（认证中），延迟处理
+      // 这匹配 Murmur 行为：只接受已完全认证的用户的 UserState
+      if (actor.state === 3) { // ClientState.Authenticated
+        this.logger.info(`[PENDING-USERSTATE] Storing UserState for session ${session_id} (auth in progress)`);
+        this.pendingUserState.set(session_id, data);
+        return;
+      }
 
       // PreConnectUserState: 处理认证前的状态设置
       if (!actor.user_id || actor.user_id <= 0) {
@@ -347,13 +379,6 @@ export class StateHandlers {
    */
   getPreConnectUserState(session_id: number) {
     return this.preConnectUserState.get(session_id);
-  }
-
-  /**
-   * 清除 PreConnect 用户状态
-   */
-  clearPreConnectUserState(session_id: number): void {
-    this.preConnectUserState.delete(session_id);
   }
 
   /**

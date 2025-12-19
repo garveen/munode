@@ -148,8 +148,6 @@ export class MessageManager {
 
   /**
    * 按顺序处理消息队列
-   * 特殊处理：UserState (type 9) 消息在 Authenticate (type 2) 之前处理
-   * 这确保 PreConnect 状态在认证前被保存
    */
   private async processMessageQueue(session_id: number): Promise<void> {
     // 标记正在处理
@@ -163,24 +161,7 @@ export class MessageManager {
 
       // 逐个处理队列中的消息
       while (queue.length > 0) {
-        // 特殊处理：如果队列中有 UserState (type 9) 和 Authenticate (type 2)，
-        // 先处理 UserState 以保存 PreConnect 状态
-        let messageIndex = 0;
-        const hasAuthenticate = queue.some((msg) => msg.messageType === 2);
-        
-        if (hasAuthenticate) {
-          // 查找是否有 UserState 消息
-          const userStateIndex = queue.findIndex(msg => msg.messageType === 9);
-          if (userStateIndex !== -1 && userStateIndex !== 0) {
-            // 有 UserState 且不在队首，优先处理它
-            messageIndex = userStateIndex;
-            console.log(
-              `[MESSAGE-QUEUE] Prioritizing UserState (type 9) at index ${userStateIndex} before Authenticate`
-            );
-          }
-        }
-        
-        const message = queue.splice(messageIndex, 1)[0];
+        const message = queue.shift();
         if (!message) {
           break;
         }

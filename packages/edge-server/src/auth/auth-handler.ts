@@ -261,6 +261,10 @@ export class AuthHandlers {
       this.clientManager.updateClient(session_id, {
         state: ClientState.Ready,
       });
+      
+      // 11. 处理待处理的UserState（如果有）
+      // 在认证期间收到的UserState会被延迟到这里处理
+      this.stateHandlers.processPendingUserState(session_id);
 
       this.logger.info(
         `[AUTH-FLOW] User authenticated and ready: session=${session_id}, ` +
