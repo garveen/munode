@@ -119,7 +119,7 @@ message EdgeAuthenticateUserResult {
   optional string reason = 6;
   optional uint32 reject_type = 7;
   optional uint32 channel_id = 8;
-  // PreConnect 状态字段 - Hub 返回给 Edge，用于发送给客户端
+  // PreConnect state fields - returned by Hub to Edge for sending to client
   optional bool mute = 9;
   optional bool deaf = 10;
   optional bool suppress = 11;

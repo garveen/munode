@@ -220,7 +220,7 @@ export class AuthHandlers {
         listening_channel_remove: [],
       };
 
-      // 包含 Hub 返回的 PreConnect 状态
+      // Include PreConnect state returned by Hub
       if (authResult.mute !== undefined) {
         selfUserStateData.mute = authResult.mute;
       }

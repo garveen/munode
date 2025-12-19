@@ -254,7 +254,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       // 广播 userJoined（处理 Channel Ninja 可见性）
       await this.broadcastUserJoined(session, config, permissionChecker, sessionManager);
 
-      // 返回认证结果，包含目标频道和 PreConnect 状态，使用protobuf字段名（snake_case）
+      // Return authentication result, including target channel and PreConnect state, using protobuf field names (snake_case)
       return {
         success: authResult.success,
         user_id: authResult.user_id,
@@ -264,7 +264,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         reason: authResult.reason,
         reject_type: authResult.rejectType,
         channel_id: actualChannelId,
-        // PreConnect 状态 - 只返回真正设置的字段
+        // PreConnect state - only return fields that were actually set
         mute: session.mute,
         deaf: session.deaf,
         suppress: session.suppress,

@@ -227,7 +227,7 @@ export interface AuthResult {
   metadata?: Record<string, string | number | boolean>;
   reason?: string;
   rejectType?: mumbleproto.Reject.RejectType;
-  // PreConnect 状态字段 - Hub 返回的用户初始状态
+  // PreConnect state fields - user's initial state returned by Hub
   mute?: boolean;
   deaf?: boolean;
   suppress?: boolean;

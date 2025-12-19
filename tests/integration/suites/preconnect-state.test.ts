@@ -172,7 +172,7 @@ describe('PreConnect State Integration Tests', () => {
       const clientBSession = clientB.getStateManager().getSession();
       expect(clientBSession).toBeDefined();
       expect(clientBSession?.self_mute).toBe(true);
-      // self_mute 不会自动设置 self_deaf，默认为 false
+      // self_mute should not automatically set self_deaf, defaults to false
       expect(clientBSession?.self_deaf).toBe(false);
       
       // 验证用户 A 能看到用户 B 的正确状态
