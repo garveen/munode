@@ -28,7 +28,7 @@ export class MessageManager {
   /**
    * 解析并处理 Mumble 协议消息
    */
-  parseAndHandleMessage(session_id: number, data: Buffer): void {
+  async parseAndHandleMessage(session_id: number, data: Buffer): Promise<void> {
     try {
       // 获取或创建该会话的缓冲区
       const existingBuffer = this.messageBuffers.get(session_id);
@@ -94,15 +94,14 @@ export class MessageManager {
         // 对于正在连接的客户端，使用队列顺序处理消息
         // 对于已认证的客户端，直接处理消息
         const isConnecting = this.isClientConnecting(session_id);
-        console.log(`[MESSAGE-QUEUE] session=${session_id}, type=${messageType}, isConnecting=${isConnecting}`);
         
         if (isConnecting) {
-          // 异步入队，不等待处理完成
-          console.log(`[MESSAGE-QUEUE] Enqueueing message for session ${session_id}, type=${messageType}`);
-          void this.enqueueMessage(session_id, messageType, messageData);
+          // 入队并等待队列处理
+          this.logger.debug(`Enqueueing message for session ${session_id}, type=${messageType}`);
+          await this.enqueueMessage(session_id, messageType, messageData);
         } else {
-          // 已认证客户端，直接处理
-          this.handlerFactory.messageHandler.handleMessage(session_id, messageType, messageData);
+          // 已认证客户端，直接处理（等待完成）
+          await this.handlerFactory.messageHandler.handleMessage(session_id, messageType, messageData);
         }
       }
       
@@ -174,21 +173,17 @@ export class MessageManager {
           break;
         }
 
-        console.log(
-          `[MESSAGE-QUEUE] Processing queued message: session=${session_id}, type=${message.messageType}, queue_length=${queue.length}`
+        this.logger.debug(
+          `Processing queued message: session=${session_id}, type=${message.messageType}, queue_length=${queue.length}`
         );
 
-        // 同步处理消息
+        // 等待消息处理完成（包括异步事件处理器）
         try {
-          this.handlerFactory.messageHandler.handleMessage(
+          await this.handlerFactory.messageHandler.handleMessage(
             session_id,
             message.messageType,
             message.messageData
           );
-          
-          // 添加短暂延迟以确保状态更新已完成
-          // 特别是对于 UserState 消息，需要确保 PreConnect 状态已保存
-          await new Promise(resolve => setTimeout(resolve, 10));
         } catch (error) {
           this.logger.error(`Error processing queued message for session ${session_id}:`, error);
         }

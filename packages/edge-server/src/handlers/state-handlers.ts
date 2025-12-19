@@ -44,13 +44,10 @@ export class StateHandlers {
   processPendingUserState(session_id: number): void {
     const pendingData = this.pendingUserState.get(session_id);
     if (pendingData) {
-      console.log(`[PENDING-USERSTATE] Processing pending UserState for session ${session_id}`);
-      this.logger.info(`[PENDING-USERSTATE] Processing pending UserState for session ${session_id}`);
+      this.logger.debug(`Processing pending UserState for session ${session_id}`);
       this.pendingUserState.delete(session_id); // 先删除，避免递归
       // 调用handleUserState处理这个消息（此时client state应该是Ready）
       this.handleUserState(session_id, pendingData);
-    } else {
-      console.log(`[PENDING-USERSTATE] No pending UserState for session ${session_id}`);
     }
   }
 
@@ -68,8 +65,6 @@ export class StateHandlers {
   handleUserState(session_id: number, data: Buffer): void {
     try {
       const userState = mumbleproto.UserState.deserialize(data);
-      
-      console.log(`[PRECONNECT-DEBUG] Received UserState from session ${session_id}, has_self_deaf=${userState.has_self_deaf}, self_deaf=${userState.self_deaf}, has_self_mute=${userState.has_self_mute}, self_mute=${userState.self_mute}`);
 
       // 获取执行操作的客户端（actor）
       const actor = this.clientManager.getClient(session_id);
@@ -77,57 +72,21 @@ export class StateHandlers {
         this.logger.warn(`mumbleproto.UserState from unknown session: ${session_id}`);
         return;
       }
-      
-      console.log(`[PRECONNECT-DEBUG] Actor found for session ${session_id}, user_id=${actor.user_id}, state=${actor.state}, ClientState.Authenticated=${ClientState.Authenticated}, ClientState.Ready=${ClientState.Ready}`);
 
       // 如果客户端状态是 Authenticated（认证中），延迟处理
       // 这匹配 Murmur 行为：只接受已完全认证的用户的 UserState
       if (actor.state === ClientState.Authenticated) {
-        console.log(`[PENDING-USERSTATE] Storing UserState for session ${session_id} (auth in progress, state=${actor.state})`);
-        this.logger.info(`[PENDING-USERSTATE] Storing UserState for session ${session_id} (auth in progress)`);
+        this.logger.debug(`Storing UserState for session ${session_id} (auth in progress, state=${actor.state})`);
         this.pendingUserState.set(session_id, data);
         return;
-      }
-      
-      // Log if UserState arrives after Ready state
-      if (actor.state === ClientState.Ready && (userState.has_self_deaf || userState.has_self_mute)) {
-        console.log(`[USERSTATE-AFTER-READY] Processing UserState for session ${session_id} after Ready state, self_deaf=${userState.self_deaf}, self_mute=${userState.self_mute}`);
       }
 
       // PreConnectUserState: 处理认证前的状态设置
       if (!actor.user_id || actor.user_id <= 0) {
-        // 客户端未认证，保存 PreConnect 状态
-        const preState: {
-          self_mute?: boolean;
-          self_deaf?: boolean;
-          plugin_context?: Buffer;
-          plugin_identity?: string;
-          comment?: string;
-        } = {};
-
-        // 只保存允许在认证前设置的字段
-        if (userState.has_self_mute) {
-          preState.self_mute = userState.self_mute;
-        }
-        if (userState.has_self_deaf) {
-          preState.self_deaf = userState.self_deaf;
-        }
-        if (userState.has_plugin_context) {
-          preState.plugin_context = Buffer.from(userState.plugin_context);
-        }
-        if (userState.has_plugin_identity) {
-          preState.plugin_identity = userState.plugin_identity;
-        }
-        if (userState.has_comment) {
-          preState.comment = userState.comment;
-        }
-
-        // 保存 PreConnect 状态
-        if (Object.keys(preState).length > 0) {
-          this.preConnectUserState.set(session_id, preState);
-          console.log(`[PRECONNECT] Saved PreConnectUserState for session ${session_id}: ${Object.keys(preState).join(', ')}`);
-        }
-        
+        // 客户端未认证，将UserState消息保存到pending queue
+        // 认证完成后会重新处理这些消息（参考C++ Murmur行为）
+        this.logger.debug(`UserState received before authentication for session ${session_id}, saving to pending queue`);
+        this.pendingUserState.set(session_id, data);
         return;
       }
 

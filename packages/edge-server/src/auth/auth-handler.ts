@@ -78,17 +78,12 @@ export class AuthHandlers {
       };
 
       // 调用认证管理器
-      // 获取 PreConnect 状态（如果有）
-      const preState = this.stateHandlers.getPreConnectUserState(session_id);
-      console.log(`[EDGE-AUTH] Retrieved PreConnect state for session ${session_id}:`, preState);
-
       const authResult = await this.authManager.authenticate(
         session_id,
         authMessage.username || '',
         authMessage.password || '',
         authMessage.tokens || [],
-        clientInfo,
-        preState
+        clientInfo
       );
 
       if (authResult.success) {
@@ -167,9 +162,6 @@ export class AuthHandlers {
         this.logger.debug(`Set user channel to ${authResult.channel_id} (from Hub)`);
       }
 
-      // 清理 PreConnect 状态（已经由 Hub 处理）
-      this.stateHandlers.clearPreConnectUserState(session_id);
-
       // 4. 发送频道树
       this.sendChannelTree(session_id);
 
@@ -193,6 +185,7 @@ export class AuthHandlers {
       // 8. 向用户自己发送 UserState（必须在 ServerSync 之前）
       // 参考 Mumble 客户端实现：msgServerSync 期望在收到 ServerSync 前已有 user profile
       // 参考 Go 实现：在 goroutine 中广播 UserState（包括用户自己），然后主线程发送 ServerSync
+      // 注意：初始状态都是 false，客户端会在认证后发送 UserState 更新实际状态
       const selfUserStateData: {
         session: number;
         actor: number;
@@ -202,13 +195,6 @@ export class AuthHandlers {
         temporary_access_tokens: string[];
         listening_channel_add: number[];
         listening_channel_remove: number[];
-        mute?: boolean;
-        deaf?: boolean;
-        suppress?: boolean;
-        self_mute?: boolean;
-        self_deaf?: boolean;
-        priority_speaker?: boolean;
-        recording?: boolean;
       } = {
         session: session_id,
         actor: session_id,
@@ -219,29 +205,6 @@ export class AuthHandlers {
         listening_channel_add: [],
         listening_channel_remove: [],
       };
-
-      // Include PreConnect state returned by Hub
-      if (authResult.mute !== undefined) {
-        selfUserStateData.mute = authResult.mute;
-      }
-      if (authResult.deaf !== undefined) {
-        selfUserStateData.deaf = authResult.deaf;
-      }
-      if (authResult.suppress !== undefined) {
-        selfUserStateData.suppress = authResult.suppress;
-      }
-      if (authResult.self_mute !== undefined) {
-        selfUserStateData.self_mute = authResult.self_mute;
-      }
-      if (authResult.self_deaf !== undefined) {
-        selfUserStateData.self_deaf = authResult.self_deaf;
-      }
-      if (authResult.priority_speaker !== undefined) {
-        selfUserStateData.priority_speaker = authResult.priority_speaker;
-      }
-      if (authResult.recording !== undefined) {
-        selfUserStateData.recording = authResult.recording;
-      }
 
       const selfUserState = new mumbleproto.UserState(selfUserStateData);
       this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(selfUserState.serialize()));

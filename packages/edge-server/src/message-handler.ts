@@ -137,8 +137,9 @@ export class MessageHandler extends TypedEventEmitter<MessageHandlerEvents> {
 
   /**
    * 处理客户端消息
+   * 返回 Promise 以支持异步事件处理器
    */
-  handleMessage( session_id: number, messageType: number, messageData: Buffer): void {
+  async handleMessage(session_id: number, messageType: number, messageData: Buffer): Promise<void> {
     try {
       // 获取客户端状态
       const client = this.clientManager?.getClient(session_id);
@@ -167,7 +168,11 @@ export class MessageHandler extends TypedEventEmitter<MessageHandlerEvents> {
       // 使用查找表获取处理函数
       const handler = this.messageHandlers.get(messageType);
       if (handler) {
+        // 调用处理器（可能触发异步事件处理器）
         handler(session_id, messageData);
+        // 等待所有事件处理器完成
+        // 使用 setImmediate 让事件循环完成当前批次的事件处理
+        await new Promise(resolve => setImmediate(resolve));
       } else {
         this.logger.warn(`Unknown message type: ${messageType}`);
       }
@@ -211,11 +216,8 @@ export class MessageHandler extends TypedEventEmitter<MessageHandlerEvents> {
    * 处理 UDP 隧道消息
    */
   private handleUDPTunnel( session_id: number, data: Buffer): void {
-    // 添加日志便于调试
-    this.logger.info(`[MESSAGE-HANDLER] Received UDPTunnel from session ${session_id}, data length: ${data.length}`);
     // 转发给语音路由器
     this.emit('udpTunnel', session_id, data);
-    this.logger.info(`[MESSAGE-HANDLER] UDPTunnel event emitted for session ${session_id}`);
   }
 
   /**

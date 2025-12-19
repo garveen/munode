@@ -259,8 +259,8 @@ export class EventSetupManager {
     });
 
     this.handlerFactory.clientManager.on('clientData', (session_id: number, data: Buffer) => {
-      // 解析 Mumble 协议消息
-      this.messageManager.parseAndHandleMessage(session_id, data);
+      // 解析 Mumble 协议消息（异步处理）
+      void this.messageManager.parseAndHandleMessage(session_id, data);
     });
 
     this.handlerFactory.clientManager.on('clientDisconnected', (client) => {

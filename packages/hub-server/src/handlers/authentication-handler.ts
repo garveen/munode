@@ -42,7 +42,6 @@ export class AuthenticationHandler implements IAuthenticationHandler {
   }
 
   async handleAuthenticateUser(params: RPCParams<'edge.authenticateUser'>): Promise<RPCResult<'edge.authenticateUser'>> {
-    console.log('[HUB-AUTH-ENTRY] Received params:', JSON.stringify(params, null, 2));
     const authManager = this.factory.getAuthManager();
     if (!authManager) {
       this.logger.error('Auth manager not initialized');
@@ -158,7 +157,9 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         }
       }
 
-      // 创建 session
+      // 创建 session with default state values (all false)
+      // Client will send UserState message after authentication to set actual states
+      // This matches C++ Murmur behavior where User is created with bSelfMute=false, bSelfDeaf=false
       interface SessionData {
         session_id: number;
         edge_id: number;
@@ -175,13 +176,13 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         release?: string;
         os?: string;
         os_version?: string;
-        mute?: boolean;
-        deaf?: boolean;
-        suppress?: boolean;
-        self_mute?: boolean;
-        self_deaf?: boolean;
-        priority_speaker?: boolean;
-        recording?: boolean;
+        mute: boolean;
+        deaf: boolean;
+        suppress: boolean;
+        self_mute: boolean;
+        self_deaf: boolean;
+        priority_speaker: boolean;
+        recording: boolean;
       }
 
       const session: SessionData = {
@@ -200,53 +201,17 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         release: params.client_info.release,
         os: params.client_info.os,
         os_version: params.client_info.os_version,
+        // Default states - client will send UserState to update these
+        mute: false,
+        deaf: false,
+        suppress: false,
+        self_mute: false,
+        self_deaf: false,
+        priority_speaker: false,
+        recording: false,
       };
 
-      // 保存 PreConnect 状态
-      // 注意：params 现在是 protobuf 对象，使用 has_ 方法检查字段是否设置
-      console.log(`[HUB-AUTH] PreConnect params for session ${params.session_id}: has_self_deaf=${(params as any).has_self_deaf}, self_deaf=${params.self_deaf}, has_self_mute=${(params as any).has_self_mute}, self_mute=${params.self_mute}`);
-      const reportedStateFields: string[] = [];
-      if ((params as any).has_mute && params.mute === true) {
-        session.mute = true;
-        reportedStateFields.push('mute');
-      }
-      if ((params as any).has_deaf && params.deaf === true) {
-        session.deaf = true;
-        reportedStateFields.push('deaf');
-        // Deaf 会自动 Mute
-        session.mute = true;
-        if (!reportedStateFields.includes('mute')) {
-          reportedStateFields.push('mute');
-        }
-      }
-      if ((params as any).has_suppress && params.suppress === true) {
-        session.suppress = true;
-        reportedStateFields.push('suppress');
-      }
-      if ((params as any).has_self_mute && params.self_mute === true) {
-        session.self_mute = true;
-        reportedStateFields.push('self_mute');
-      }
-      if ((params as any).has_self_deaf && params.self_deaf === true) {
-        session.self_deaf = true;
-        reportedStateFields.push('self_deaf');
-        // SelfDeaf 会自动 SelfMute
-        session.self_mute = true;
-        if (!reportedStateFields.includes('self_mute')) {
-          reportedStateFields.push('self_mute');
-        }
-      }
-      if ((params as any).has_priority_speaker && params.priority_speaker === true) {
-        session.priority_speaker = true;
-        reportedStateFields.push('priority_speaker');
-      }
-      if ((params as any).has_recording && params.recording === true) {
-        session.recording = true;
-        reportedStateFields.push('recording');
-      }
-
-      console.log(`[HUB-AUTH] Session ${params.session_id} created with state: self_deaf=${session.self_deaf}, self_mute=${session.self_mute}, reported=[${reportedStateFields.join(', ')}]`);
-      this.logger.info(`Session created: ${params.username} (user_id: ${authResult.user_id})${reportedStateFields.length > 0 ? `, state: [${reportedStateFields.join(', ')}]` : ''}, groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);
+      this.logger.info(`Session created: ${params.username} (user_id: ${authResult.user_id}), groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);
 
       // 注册 session
       sessionManager.reportSession(session);
@@ -254,7 +219,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       // 广播 userJoined（处理 Channel Ninja 可见性）
       await this.broadcastUserJoined(session, config, permissionChecker, sessionManager);
 
-      // Return authentication result, including target channel and PreConnect state, using protobuf field names (snake_case)
+      // Return authentication result, including target channel, using protobuf field names (snake_case)
       return {
         success: authResult.success,
         user_id: authResult.user_id,
@@ -264,14 +229,6 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         reason: authResult.reason,
         reject_type: authResult.rejectType,
         channel_id: actualChannelId,
-        // PreConnect state - only return fields that were actually set
-        mute: session.mute,
-        deaf: session.deaf,
-        suppress: session.suppress,
-        self_mute: session.self_mute,
-        self_deaf: session.self_deaf,
-        priority_speaker: session.priority_speaker,
-        recording: session.recording,
       };
     } catch (error) {
       this.logger.error(`Authentication error for user ${params.username}:`, error);
@@ -375,7 +332,6 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         if (session.priority_speaker === true) userJoinedData.priority_speaker = true;
         if (session.recording === true) userJoinedData.recording = true;
         
-        console.log(`[HUB-BROADCAST] Sending userJoined to edge ${edgeId} for session ${session.session_id}: self_deaf=${userJoinedData.self_deaf}, self_mute=${userJoinedData.self_mute}`);
         this.factory.getControlService().notify(edgeId, 'hub.userJoined', userJoinedData);
       }
 
@@ -415,7 +371,6 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       if (session.priority_speaker === true) userJoinedData.priority_speaker = true;
       if (session.recording === true) userJoinedData.recording = true;
       
-      console.log(`[HUB-BROADCAST] Broadcasting userJoined for session ${session.session_id}: self_deaf=${userJoinedData.self_deaf}, self_mute=${userJoinedData.self_mute}`);
       this.factory.getControlService().broadcast('hub.userJoined', userJoinedData);
       this.logger.info(`Session ${session.session_id} created, broadcasted to all edges`);
     }

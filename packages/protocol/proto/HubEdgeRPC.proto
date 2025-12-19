@@ -90,14 +90,6 @@ message EdgeAuthenticateUserParams {
   required string password = 4;
   repeated string tokens = 5;
   optional ClientInfo client_info = 6;
-  // PreConnect 状态字段 - 客户端在认证前可以设置的初始状态
-  optional bool mute = 7;
-  optional bool deaf = 8;
-  optional bool suppress = 9;
-  optional bool self_mute = 10;
-  optional bool self_deaf = 11;
-  optional bool priority_speaker = 12;
-  optional bool recording = 13;
 }
 
 message ClientInfo {
@@ -119,14 +111,6 @@ message EdgeAuthenticateUserResult {
   optional string reason = 6;
   optional uint32 reject_type = 7;
   optional uint32 channel_id = 8;
-  // PreConnect state fields - returned by Hub to Edge for sending to client
-  optional bool mute = 9;
-  optional bool deaf = 10;
-  optional bool suppress = 11;
-  optional bool self_mute = 12;
-  optional bool self_deaf = 13;
-  optional bool priority_speaker = 14;
-  optional bool recording = 15;
 }
 
 message EdgeReportSessionResult {

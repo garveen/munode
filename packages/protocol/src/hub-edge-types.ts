@@ -204,23 +204,11 @@ export interface CertificateExchangeResponse extends RPCResponse {
   certificates?: Record<number, string>;
 }
 
-// Sync heartbeat types
-export interface SyncHeartbeatRequest {
-  edge_server_id: number;
-  last_received_sequence: number;
-  pending_updates: number;
-}
-
 export interface SyncHeartbeatResponse extends RPCResponse {
   need_resync?: boolean;
   sequence?: number;
 }
 
-// Missing updates request/response
-export interface MissingUpdatesRequest {
-  edge_server_id: number;
-  sequences: number[];
-}
 
 export interface MissingUpdatesResponse extends RPCResponse {
   updates: unknown[]; // TODO: Define specific update types
@@ -230,12 +218,6 @@ export interface MissingUpdatesResponse extends RPCResponse {
 export interface ChecksumResponse extends RPCResponse {
   checksum: string;
   timestamp: number;
-}
-
-// Full snapshot request/response
-export interface FullSnapshotRequest {
-  edge_server_id: number;
-  last_sync_timestamp: number;
 }
 
 export interface FullSnapshotResponse extends RPCResponse {
