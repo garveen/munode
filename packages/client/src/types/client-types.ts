@@ -38,6 +38,12 @@ export interface ConnectOptions {
   
   /** 强制使用TCP传输语音（而非UDP） */
   forceTcpVoice?: boolean;
+  
+  /** PreConnect 状态 - 在认证前设置的用户状态（如 self_deaf, self_mute） */
+  preConnectState?: {
+    self_mute?: boolean;
+    self_deaf?: boolean;
+  };
 }
 
 /**
