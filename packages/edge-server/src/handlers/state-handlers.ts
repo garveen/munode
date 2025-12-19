@@ -39,7 +39,7 @@ export class StateHandlers {
     try {
       const userState = mumbleproto.UserState.deserialize(data);
       
-      this.logger.debug(`[PRECONNECT-DEBUG] Received UserState from session ${session_id}, has_self_deaf=${userState.has_self_deaf}, self_deaf=${userState.self_deaf}, has_self_mute=${userState.has_self_mute}, self_mute=${userState.self_mute}`);
+      console.log(`[PRECONNECT-DEBUG] Received UserState from session ${session_id}, has_self_deaf=${userState.has_self_deaf}, self_deaf=${userState.self_deaf}, has_self_mute=${userState.has_self_mute}, self_mute=${userState.self_mute}`);
 
       // 获取执行操作的客户端（actor）
       const actor = this.clientManager.getClient(session_id);
@@ -48,7 +48,7 @@ export class StateHandlers {
         return;
       }
       
-      this.logger.debug(`[PRECONNECT-DEBUG] Actor found for session ${session_id}, user_id=${actor.user_id}`);
+      console.log(`[PRECONNECT-DEBUG] Actor found for session ${session_id}, user_id=${actor.user_id}`);
 
       // PreConnectUserState: 处理认证前的状态设置
       if (!actor.user_id || actor.user_id <= 0) {
@@ -81,7 +81,7 @@ export class StateHandlers {
         // 保存 PreConnect 状态
         if (Object.keys(preState).length > 0) {
           this.preConnectUserState.set(session_id, preState);
-        this.logger.debug(`Saved PreConnectUserState for session ${session_id}: ${Object.keys(preState).join(', ')}`);
+          console.log(`[PRECONNECT] Saved PreConnectUserState for session ${session_id}: ${Object.keys(preState).join(', ')}`);
         }
         
         return;

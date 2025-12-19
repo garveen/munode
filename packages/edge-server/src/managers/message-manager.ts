@@ -94,10 +94,11 @@ export class MessageManager {
         // 对于正在连接的客户端，使用队列顺序处理消息
         // 对于已认证的客户端，直接处理消息
         const isConnecting = this.isClientConnecting(session_id);
-        this.logger.debug(`[MESSAGE-QUEUE] session=${session_id}, type=${messageType}, isConnecting=${isConnecting}`);
+        console.log(`[MESSAGE-QUEUE] session=${session_id}, type=${messageType}, isConnecting=${isConnecting}`);
         
         if (isConnecting) {
           // 异步入队，不等待处理完成
+          console.log(`[MESSAGE-QUEUE] Enqueueing message for session ${session_id}, type=${messageType}`);
           void this.enqueueMessage(session_id, messageType, messageData);
         } else {
           // 已认证客户端，直接处理
@@ -173,8 +174,8 @@ export class MessageManager {
           break;
         }
 
-        this.logger.debug(
-          `Processing queued message: session=${session_id}, type=${message.messageType}, queue_length=${queue.length}`
+        console.log(
+          `[MESSAGE-QUEUE] Processing queued message: session=${session_id}, type=${message.messageType}, queue_length=${queue.length}`
         );
 
         // 同步处理消息

@@ -129,6 +129,10 @@ export class AuthManager {
     }
     if (this.preConnectState.self_deaf !== undefined) {
       userStateData.self_deaf = this.preConnectState.self_deaf;
+      // self_deaf automatically sets self_mute (Mumble protocol requirement)
+      if (this.preConnectState.self_deaf === true) {
+        userStateData.self_mute = true;
+      }
     }
 
     const userStateMessage = mumbleproto.UserState.fromObject(userStateData);
