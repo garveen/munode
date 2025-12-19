@@ -31,15 +31,18 @@ export class StateManager {
    * 处理 ServerSync 消息
    */
   handleServerSync(message: mumbleproto.ServerSync): void {
-    // 保存会话信息
+    // 获取已存在的用户状态（如果在 ServerSync 之前收到了 UserState）
+    const existingUser = this.users.get(message.session || 0);
+    
+    // 保存会话信息，优先使用已接收的 UserState 中的值
     this.session = {
       session: message.session || 0,
-      channel_id: 0, // 将在 UserState 消息中更新
-      self_mute: false,
-      self_deaf: false,
-      suppress: false,
-      recording: false,
-      priority_speaker: false,
+      channel_id: existingUser?.channel_id || 0, // 将在 UserState 消息中更新
+      self_mute: existingUser?.self_mute !== undefined ? existingUser.self_mute : false,
+      self_deaf: existingUser?.self_deaf !== undefined ? existingUser.self_deaf : false,
+      suppress: existingUser?.suppress !== undefined ? existingUser.suppress : false,
+      recording: existingUser?.recording !== undefined ? existingUser.recording : false,
+      priority_speaker: existingUser?.priority_speaker !== undefined ? existingUser.priority_speaker : false,
       listeningChannels: []
     };
 

@@ -193,7 +193,23 @@ export class AuthHandlers {
       // 8. 向用户自己发送 UserState（必须在 ServerSync 之前）
       // 参考 Mumble 客户端实现：msgServerSync 期望在收到 ServerSync 前已有 user profile
       // 参考 Go 实现：在 goroutine 中广播 UserState（包括用户自己），然后主线程发送 ServerSync
-      const selfUserState = new mumbleproto.UserState({
+      const selfUserStateData: {
+        session: number;
+        actor: number;
+        name: string;
+        user_id?: number;
+        channel_id: number;
+        temporary_access_tokens: string[];
+        listening_channel_add: number[];
+        listening_channel_remove: number[];
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
+        self_mute?: boolean;
+        self_deaf?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
+      } = {
         session: session_id,
         actor: session_id,
         name: updatedClient.username,
@@ -202,8 +218,32 @@ export class AuthHandlers {
         temporary_access_tokens: [],
         listening_channel_add: [],
         listening_channel_remove: [],
-      });
+      };
 
+      // 包含 Hub 返回的 PreConnect 状态
+      if (authResult.mute !== undefined) {
+        selfUserStateData.mute = authResult.mute;
+      }
+      if (authResult.deaf !== undefined) {
+        selfUserStateData.deaf = authResult.deaf;
+      }
+      if (authResult.suppress !== undefined) {
+        selfUserStateData.suppress = authResult.suppress;
+      }
+      if (authResult.self_mute !== undefined) {
+        selfUserStateData.self_mute = authResult.self_mute;
+      }
+      if (authResult.self_deaf !== undefined) {
+        selfUserStateData.self_deaf = authResult.self_deaf;
+      }
+      if (authResult.priority_speaker !== undefined) {
+        selfUserStateData.priority_speaker = authResult.priority_speaker;
+      }
+      if (authResult.recording !== undefined) {
+        selfUserStateData.recording = authResult.recording;
+      }
+
+      const selfUserState = new mumbleproto.UserState(selfUserStateData);
       this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(selfUserState.serialize()));
 
       // 9. 发送 ServerSync 消息
