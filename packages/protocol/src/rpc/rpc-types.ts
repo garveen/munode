@@ -470,7 +470,6 @@ export interface EdgeChannelStateNotification {
       links_add?: number[];
       links_remove?: number[];
     };
-    has_channel_id: boolean; // protobuf optional field indicator
     raw_data?: string; // base64 encoded raw protobuf data
   };
 }

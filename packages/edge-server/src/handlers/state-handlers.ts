@@ -289,14 +289,12 @@ export class StateHandlers {
       }
 
       // 转发到Hub处理
-      // 需要传递 has_channel_id 因为 toObject() 会将未设置的 channel_id 转换为 0
       this.hubClient.notify('hub.handleChannelState', {
         edge_id: this.config.server_id,
         actor_session: session_id,
         actor_user_id: actor.user_id,
         actor_username: actor.username,
         channelState: channelState,
-        has_channel_id: channelState.channel_id !== undefined,
         raw_data: data.toString('base64'),
       });
 
