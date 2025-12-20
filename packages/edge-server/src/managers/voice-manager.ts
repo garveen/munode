@@ -277,12 +277,6 @@ export class VoiceManager {
         `codec=${packet.codec}, data_size=${packet.data.length}`
       );
 
-      // 调试：输出 packet.data 的前几个字节
-      if (packet.data.length > 0) {
-        const hexDump = packet.data.slice(0, Math.min(20, packet.data.length)).toString('hex');
-        this.logger.debug(`[VOICE-REMOTE] packet.data hex dump (first ${Math.min(20, packet.data.length)} bytes): ${hexDump}`);
-      }
-
       // 记录收到的包用于网络质量统计（被动探测）
       if (this.voiceRoutingManager.isEnabled()) {
         this.voiceRoutingManager.recordReceivedPacket(
@@ -358,20 +352,12 @@ export class VoiceManager {
       const senderSession = this.parseSessionFromVoicePacket(voiceData);
       if (senderSession === null) {
         this.logger.warn('[VOICE-REMOTE] Failed to parse session from remote voice packet');
-        // 输出包的前几个字节用于调试
-        const hexDump = voiceData.slice(0, Math.min(20, voiceData.length)).toString('hex');
-        this.logger.warn(`[VOICE-REMOTE] Packet hex dump (first ${Math.min(20, voiceData.length)} bytes): ${hexDump}`);
         return;
       }
 
       // 检查 session 是否有效（必须 > 0）
       if (senderSession === 0) {
-        this.logger.warn(
-          `[VOICE-REMOTE] Invalid sender session 0 in remote voice packet`
-        );
-        // 输出包的前几个字节用于调试
-        const hexDump = voiceData.slice(0, Math.min(20, voiceData.length)).toString('hex');
-        this.logger.warn(`[VOICE-REMOTE] Packet hex dump (first ${Math.min(20, voiceData.length)} bytes): ${hexDump}`);
+        this.logger.warn(`[VOICE-REMOTE] Invalid sender session 0 in remote voice packet`);
         return;
       }
 
@@ -425,15 +411,7 @@ export class VoiceManager {
    * 从语音包中解析session ID
    */
   private parseSessionFromVoicePacket(data: Buffer): number | null {
-    // 输出完整的数据用于调试
-    this.logger.debug(`[VOICE-PARSE] Parsing session from voice packet, length=${data.length}`);
-    if (data.length > 0) {
-      const hexDump = data.slice(0, Math.min(10, data.length)).toString('hex');
-      this.logger.debug(`[VOICE-PARSE] First ${Math.min(10, data.length)} bytes: ${hexDump}`);
-    }
-
     if (data.length < 2) {
-      this.logger.warn(`[VOICE-PARSE] Data too short: ${data.length} bytes`);
       return null;
     }
 
@@ -442,49 +420,29 @@ export class VoiceManager {
 
     // 解析varint格式的session ID
     const v = data.readUInt8(offset);
-    this.logger.debug(`[VOICE-PARSE] varint first byte at offset ${offset}: 0x${v.toString(16)}`);
 
     if ((v & 0x80) === 0x00) {
       // 单字节
-      const result = v & 0x7f;
-      this.logger.debug(`[VOICE-PARSE] Single-byte varint: ${result}`);
-      return result;
+      return v & 0x7f;
     } else if ((v & 0xc0) === 0x80) {
       // 双字节
-      if (offset + 1 >= data.length) {
-        this.logger.warn(`[VOICE-PARSE] Not enough data for 2-byte varint`);
-        return null;
-      }
-      const byte2 = data.readUInt8(offset + 1);
-      const result = ((v & 0x3f) << 8) | byte2;
-      this.logger.debug(`[VOICE-PARSE] Two-byte varint: 0x${v.toString(16)} 0x${byte2.toString(16)} = ${result}`);
-      return result;
+      if (offset + 1 >= data.length) return null;
+      return ((v & 0x3f) << 8) | data.readUInt8(offset + 1);
     } else if ((v & 0xf0) === 0xf0) {
       // 完整32位整数
-      if (offset + 4 >= data.length) {
-        this.logger.warn(`[VOICE-PARSE] Not enough data for 4-byte varint`);
-        return null;
-      }
-      const result = (
+      if (offset + 4 >= data.length) return null;
+      return (
         (data.readUInt8(offset + 1) << 24) |
         (data.readUInt8(offset + 2) << 16) |
         (data.readUInt8(offset + 3) << 8) |
         data.readUInt8(offset + 4)
       ) >>> 0;
-      this.logger.debug(`[VOICE-PARSE] Four-byte varint: ${result}`);
-      return result;
     } else if ((v & 0xe0) === 0xc0) {
       // 3字节
-      if (offset + 2 >= data.length) {
-        this.logger.warn(`[VOICE-PARSE] Not enough data for 3-byte varint`);
-        return null;
-      }
-      const result = ((v & 0x1f) << 16) | (data.readUInt8(offset + 1) << 8) | data.readUInt8(offset + 2);
-      this.logger.debug(`[VOICE-PARSE] Three-byte varint: ${result}`);
-      return result;
+      if (offset + 2 >= data.length) return null;
+      return ((v & 0x1f) << 16) | (data.readUInt8(offset + 1) << 8) | data.readUInt8(offset + 2);
     }
 
-    this.logger.warn(`[VOICE-PARSE] Invalid varint format, first byte: 0x${v.toString(16)}`);
     return null;
   }
 

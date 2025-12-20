@@ -790,12 +790,6 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
           return;
         }
         
-        // 调试：验证 decrypted.data 不包含 header
-        this.logger.debug(
-          `[UDP-DECRYPT] Decrypted data length: ${decrypted.data.length}, ` +
-          `first 10 bytes: ${decrypted.data.slice(0, Math.min(10, decrypted.data.length)).toString('hex')}`
-        );
-        
         // 直接使用解密后的数据构建 VoicePacket
         // 不需要重新编码和解码
         const packet: VoicePacket = {
@@ -811,19 +805,12 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
         this.emit('voice-packet', packet, rinfo);
       } else {
         // 未加密的情况，需要解析
-        this.logger.debug(`[UDP-UNENCRYPTED] Processing unencrypted packet, length: ${data.length}`);
-        
         const decoded = this.decodePacket(data);
         if (!decoded) {
           this.logger.warn('Failed to parse voice packet');
           this.stats.errors++;
           return;
         }
-
-        this.logger.debug(
-          `[UDP-UNENCRYPTED] Decoded voiceData length: ${decoded.voiceData.length}, ` +
-          `first 10 bytes: ${decoded.voiceData.slice(0, Math.min(10, decoded.voiceData.length)).toString('hex')}`
-        );
 
         const packet: VoicePacket = {
           version: decoded.header.version,
@@ -863,17 +850,9 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     header: VoicePacketHeader;
     voiceData: Buffer;
   } | null {
-    this.logger.debug(`[UDP-DECODE] Decoding packet, input length: ${data.length}`);
-    
     if (data.length < 14) {
-      this.logger.warn(`[UDP-DECODE] Data too short: ${data.length} bytes`);
       return null;
     }
-
-    // 输出原始数据的前 20 字节
-    this.logger.debug(
-      `[UDP-DECODE] Input data first 20 bytes: ${data.slice(0, Math.min(20, data.length)).toString('hex')}`
-    );
 
     const header: VoicePacketHeader = {
       version: data.readUInt8(0),
@@ -883,20 +862,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       codec: data.readUInt8(13),
     };
 
-    this.logger.debug(
-      `[UDP-DECODE] Header parsed: version=${header.version}, ` +
-      `senderId=${header.senderId}, targetId=${header.targetId}, ` +
-      `sequence=${header.sequence}, codec=${header.codec}`
-    );
-
     const voiceData = data.slice(14);
-
-    // 调试：验证 voiceData 不包含 header
-    this.logger.debug(
-      `[UDP-DECODE] Input data length: ${data.length}, ` +
-      `voiceData length: ${voiceData.length}, ` +
-      `voiceData first 10 bytes: ${voiceData.slice(0, Math.min(10, voiceData.length)).toString('hex')}`
-    );
 
     return { header, voiceData };
   }
