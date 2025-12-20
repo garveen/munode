@@ -6,8 +6,8 @@
 
 import WebSocket from 'ws';
 import { TypedEventEmitter, type EventMap } from '@munode/common';
-import { hubedge } from '../generated/proto/HubEdge';
-import { PacketCodec } from './packet-codec';
+import type { EdgeHubPacket } from '../generated/proto/HubEdge.js';
+import { PacketCodec } from './packet-codec.js';
 
 export type Logger = {
   info(message: string, ...args: unknown[]): void;
@@ -31,7 +31,7 @@ export interface WebSocketClientConfig {
 export interface EdgeHubWebSocketClientEvents extends EventMap {
   'connected': [];
   'disconnected': [code: number, reason: string];
-  'message': [packet: hubedge.EdgeHubPacket];
+  'message': [packet: EdgeHubPacket];
   'error': [error: Error];
   'reconnecting': [attempt: number];
   'reconnected': [];
@@ -134,7 +134,7 @@ export class EdgeHubWebSocketClient extends TypedEventEmitter<EdgeHubWebSocketCl
   /**
    * 发送数据包
    */
-  async send(packet: hubedge.EdgeHubPacket): Promise<void> {
+  async send(packet: EdgeHubPacket): Promise<void> {
     if (!this.ws || !this.connected) {
       throw new Error('WebSocket not connected');
     }

@@ -7,7 +7,6 @@
  */
 
 import type { RPCChannel } from './rpc-channel.js';
-import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
 import type {
   EdgeToHubMethods,
   RPCParams,
@@ -20,9 +19,11 @@ import type {
 type NotificationParams<M extends HubToEdgeNotifications['method']> = HubNotificationParams<M>;
 
 // Import protobuf types for typed conversions
-type TypedRPCRequest = hubedgeRpc.TypedRPCRequest;
-type TypedRPCResponse = hubedgeRpc.TypedRPCResponse;
-type TypedRPCNotification = hubedgeRpc.TypedRPCNotification;
+import type {
+  TypedRPCRequest,
+  TypedRPCResponse,
+  TypedRPCNotification,
+} from '../generated/proto/HubEdgeRPC.js';
 
 /**
  * RPC 方法处理器类型
