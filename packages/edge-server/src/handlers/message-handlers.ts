@@ -27,7 +27,7 @@ export class MessageHandlers {
    */
   handleTextMessage(session_id: number, data: Buffer): void {
     try {
-      const textMessage = mumbleproto.TextMessage.deserialize(data);
+      const textMessage = mumbleproto.TextMessage.decode(data);
 
       // 获取执行操作的客户端
       const actor = this.clientManager.getClient(session_id);
@@ -81,7 +81,7 @@ export class MessageHandlers {
    */
   handlePluginDataTransmission(session_id: number, data: Buffer): void {
     try {
-      const pluginData = mumbleproto.PluginDataTransmission.deserialize(data);
+      const pluginData = mumbleproto.PluginDataTransmission.decode(data);
 
         this.logger.debug(`Received PluginDataTransmission from session ${session_id}, dataID=${pluginData.dataID}, data.length=${pluginData.data?.length}, receivers=${pluginData.receiverSessions?.length}`);
 
@@ -287,7 +287,7 @@ export class MessageHandlers {
         this.logger.debug(
         `[sendChannelTree] BFS: channel ${channel.id} (${channel.name}), ` +
         `parent=${parentId === undefined ? 'NONE' : parentId}, ` +
-        `has_parent=${channelState.has_parent}, ` +
+        `has_parent=${channelState !== undefined}, ` +
         `pos=${channel.position}`
       );
 
@@ -551,7 +551,7 @@ export class MessageHandlers {
       }
 
       // 编码并发送消息
-      const message = new mumbleproto.PermissionDenied(permissionDenied).serialize();
+      const message = mumbleproto.PermissionDenied.encode(permissionDenied).finish();
       this.messageHandler.sendMessage(session_id, MessageType.PermissionDenied, Buffer.from(message));
 
         this.logger.warn(
@@ -595,14 +595,14 @@ export class MessageHandlers {
     const clients = this.clientManager.getAllClients();
     
     // 检查 UserState 是否包含证书哈希
-    const hasCertHash = userState.has_hash && userState.hash;
+    const hasCertHash = userState !== undefined && userState.hash;
     
     if (hasCertHash) {
       // 如果包含证书哈希，需要根据接收方权限单独发送
       let broadcastCount = 0;
       for (const client of clients) {
         // 只广播给已收到完整用户列表的客户端，排除指定的会话
-        if (client.has_full_user_list && client.session !== excludeSession) {
+        if (client !== undefined && client.session !== excludeSession) {
           const receiverIsRegistered = client.user_id > 0;
           
           if (receiverIsRegistered) {
@@ -647,13 +647,13 @@ export class MessageHandlers {
       
       for (const client of clients) {
         // 只广播给已收到完整用户列表的客户端，排除指定的会话
-        if (client.has_full_user_list && client.session !== excludeSession) {
+        if (client !== undefined && client.session !== excludeSession) {
           this.messageHandler.sendMessage(client.session, MessageType.UserState, serializedState);
         }
       }
       
         this.logger.debug(
-        `Broadcasted UserState to ${clients.filter(c => c.has_full_user_list && c.session !== excludeSession).length} authenticated clients`
+        `Broadcasted UserState to ${clients.filter(c => c !== undefined && c.session !== excludeSession).length} authenticated clients`
       );
     }
   }

@@ -396,7 +396,7 @@ export class EventSetupManager {
             
             // Get local clients once before the loop
             const allClients = this.handlerFactory.clientManager.getAllClients();
-            const authenticatedClients = allClients.filter(c => c.user_id > 0 && c.has_full_user_list);
+            const authenticatedClients = allClients.filter(c => c.user_id > 0 && c !== undefined);
             
             for (const session of syncData.sessions) {
               // Only process sessions from other edges

@@ -66,7 +66,7 @@ export class BanHandler {
       }));
 
       // 发送封禁列表
-      const banListMessage = Buffer.from(new mumbleproto.BanList({ bans: banEntries }).serialize());
+      const banListMessage = Buffer.from(mumbleproto.BanList.encode({ bans: banEntries }).finish());
       this.handlerFactory.messageHandler.sendMessage(session_id, MessageType.BanList, banListMessage);
 
         this.logger.info(`Sent ban list to session ${session_id}: ${bans.length} bans`);

@@ -46,7 +46,7 @@ export class ACLHandler implements IACLHandler {
 
       // 解码 ACL 消息
       const aclData = Buffer.from(raw_data, 'base64');
-      const acl = mumbleproto.ACL.deserialize(aclData);
+      const acl = mumbleproto.ACL.decode(aclData);
 
       // 获取频道信息
       const channel = this.factory.getChannelManager()

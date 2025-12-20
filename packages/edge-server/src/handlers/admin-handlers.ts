@@ -87,7 +87,7 @@ export class AdminHandlers {
         return;
       }
 
-      const banList = mumbleproto.BanList.deserialize(data);
+      const banList = mumbleproto.BanList.decode(data);
 
       // 如果是查询请求（query=true），调用查询处理
       if (banList.query) {
@@ -138,7 +138,7 @@ export class AdminHandlers {
    */
   public async handleContextAction(session_id: number, data: Buffer): Promise<void> {
     try {
-      const action = mumbleproto.ContextAction.deserialize(data);
+      const action = mumbleproto.ContextAction.decode(data);
         this.logger.debug(
         `Received ContextAction from session ${session_id}: ${action.action} for session ${action.session} channel ${action.channel_id}`
       );
@@ -156,7 +156,7 @@ export class AdminHandlers {
    */
   public handleContextActionModify(session_id: number, data: Buffer): void {
     try {
-      const modify = mumbleproto.ContextActionModify.deserialize(data);
+      const modify = mumbleproto.ContextActionModify.decode(data);
         this.logger.debug(
         `Received ContextActionModify from session ${session_id}: ${modify.action} operation ${modify.operation}`
       );
@@ -362,7 +362,7 @@ export class AdminHandlers {
    */
   public async handleRequestBlob(session_id: number, data: Buffer): Promise<void> {
     try {
-      const request = mumbleproto.RequestBlob.deserialize(data);
+      const request = mumbleproto.RequestBlob.decode(data);
 
       // 检查 Hub 的 blob 存储是否启用
       if (!this.hubClient) {
@@ -469,7 +469,7 @@ export class AdminHandlers {
    */
   public handleUserList(session_id: number, data: Buffer): void {
     try {
-      const userList = mumbleproto.UserList.deserialize(data);
+      const userList = mumbleproto.UserList.decode(data);
 
       const actor = this.clientManager.getClient(session_id);
       if (!actor) {

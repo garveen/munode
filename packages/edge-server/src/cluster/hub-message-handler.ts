@@ -583,7 +583,7 @@ export class HubMessageHandlers {
         channel_id: channel_id,
       };
       const channelRemoveBuffer = Buffer.from(
-        new mumbleproto.ChannelRemove(channelRemoveMessage).serialize()
+        mumbleproto.ChannelRemove.encode(channelRemoveMessage).finish()
       );
       
       for (const client of allClients) {

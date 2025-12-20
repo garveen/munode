@@ -56,7 +56,7 @@ export class AuthHandlers {
       }
 
       // 解析认证消息
-      const authMessage = mumbleproto.Authenticate.deserialize(data);
+      const authMessage = mumbleproto.Authenticate.decode(data);
 
       // 检查是否已经认证
       if (client.username) {
@@ -132,11 +132,11 @@ export class AuthHandlers {
       randomFillSync(serverEncryptIV);
       randomFillSync(serverDecryptIV);
 
-      const cryptSetupMessage = new mumbleproto.CryptSetup({
+      const cryptSetupMessage = mumbleproto.CryptSetup.encode({
         key: cryptKey,
         client_nonce: serverDecryptIV,
         server_nonce: serverEncryptIV,
-      }).serialize();
+      }).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.CryptSetup, Buffer.from(cryptSetupMessage));
 
@@ -144,12 +144,12 @@ export class AuthHandlers {
       this.voiceRouter.setClientCrypto(session_id, cryptKey, serverEncryptIV, serverDecryptIV);
 
       // 2. 发送 CodecVersion
-      const codecVersionMessage = new mumbleproto.CodecVersion({
+      const codecVersionMessage = mumbleproto.CodecVersion.encode({
         alpha: -2147483637, // CELT 0.7.0
         beta: -2147483632, // CELT 0.11.0
         prefer_alpha: true,
         opus: authMessage.opus || false,
-      }).serialize();
+      }).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.CodecVersion, Buffer.from(codecVersionMessage));
 
@@ -221,17 +221,17 @@ export class AuthHandlers {
         listening_channel_remove: [],
       };
 
-      const selfUserState = new mumbleproto.UserState(selfUserStateData);
-      this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(selfUserState.serialize()));
+      const selfUserState = mumbleproto.UserState.encode(selfUserStateData).finish();
+      this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(selfUserState));
 
       // 9. 发送 ServerSync 消息
       // Hub 会通过 hub.userJoined 通知所有 Edge（包括本 Edge），广播给其他客户端
-      const serverSyncMessage = new mumbleproto.ServerSync({
+      const serverSyncMessage = mumbleproto.ServerSync.encode({
         session: session_id,
         max_bandwidth: this.config.max_bandwidth || 128000,
         welcome_text: this.config.welcomeText || 'Welcome to Shitspeak Server',
         permissions: 0, // TODO: 计算权限
-      }).serialize();
+      }).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.ServerSync, Buffer.from(serverSyncMessage));
 
@@ -257,7 +257,7 @@ export class AuthHandlers {
       }
 
       if (hasSuggestion) {
-        const suggestMessage = new mumbleproto.SuggestConfig(suggestConfig).serialize();
+        const suggestMessage = mumbleproto.SuggestConfig.encode(suggestConfig).finish();
         this.messageHandler.sendMessage(session_id, MessageType.SuggestConfig, Buffer.from(suggestMessage));
       }
 

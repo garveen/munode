@@ -34,13 +34,12 @@ export type {
 export {
   PermissionDenied_DenyType,
   Reject_RejectType,
-  TextMessage_TextMessage_Type,
 } from './generated/proto/Mumble.js';
 
 // Hub-Edge protocol types
 export type {
   EdgeHubPacket,
-  RPCError,
+  RPCError as ProtoRPCError,
   Heartbeat,
   HeartbeatAck,
   ClientMessageRelay,
@@ -219,7 +218,7 @@ export type {
   ServerStats,
   FullSyncData,
   VoiceTargetConfig,
-  VoiceTarget,
+  VoiceTarget as HubVoiceTarget,
   ChannelTarget,
   GlobalSession,
   ChannelUserMap,

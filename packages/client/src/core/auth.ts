@@ -135,12 +135,11 @@ export class AuthManager {
       }
     }
 
-    const userStateMessage = mumbleproto.UserState.fromObject(userStateData);
     console.log('[Client] Sending PreConnect UserState:', {
       self_mute: userStateData.self_mute,
       self_deaf: userStateData.self_deaf,
     });
-    const serialized = userStateMessage.serialize();
+    const serialized = mumbleproto.UserState.encode(userStateData).finish();
     const wrappedMessage = this.client.getConnectionManager().wrapMessage(MessageType.UserState, serialized);
     await this.client.getConnectionManager().sendTCP(wrappedMessage);
   }
@@ -149,15 +148,15 @@ export class AuthManager {
    * 发送 Authenticate 消息
    */
   private async sendAuthenticate(): Promise<void> {
-    const authMessage = mumbleproto.Authenticate.fromObject({
+    const authData = {
       username: this.username,
       password: this.password,
       tokens: this.tokens,
       celt_versions: [], // 不支持CELT
       opus: true, // 支持Opus
-    });
+    };
     
-    const serialized = authMessage.serialize();
+    const serialized = mumbleproto.Authenticate.encode(authData).finish();
     const wrappedMessage = this.client.getConnectionManager().wrapMessage(MessageType.Authenticate, serialized);
     await this.client.getConnectionManager().sendTCP(wrappedMessage);
   }

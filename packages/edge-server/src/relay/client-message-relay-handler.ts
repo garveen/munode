@@ -151,57 +151,57 @@ export class ClientMessageRelayHandler extends TypedEventEmitter<ClientMessageRe
     try {
       switch (messageType) {
         case MessageType.Version:
-          return mumbleproto.Version.deserialize(messageData);
+          return mumbleproto.Version.decode(messageData);
         case MessageType.UDPTunnel:
-          return mumbleproto.UDPTunnel.deserialize(messageData);
+          return mumbleproto.UDPTunnel.decode(messageData);
         case MessageType.Authenticate:
-          return mumbleproto.Authenticate.deserialize(messageData);
+          return mumbleproto.Authenticate.decode(messageData);
         case MessageType.Ping:
-          return mumbleproto.Ping.deserialize(messageData);
+          return mumbleproto.Ping.decode(messageData);
         case MessageType.Reject:
-          return mumbleproto.Reject.deserialize(messageData);
+          return mumbleproto.Reject.decode(messageData);
         case MessageType.ServerSync:
-          return mumbleproto.ServerSync.deserialize(messageData);
+          return mumbleproto.ServerSync.decode(messageData);
         case MessageType.ChannelRemove:
-          return mumbleproto.ChannelRemove.deserialize(messageData);
+          return mumbleproto.ChannelRemove.decode(messageData);
         case MessageType.ChannelState:
-          return mumbleproto.ChannelState.deserialize(messageData);
+          return mumbleproto.ChannelState.decode(messageData);
         case MessageType.UserRemove:
-          return mumbleproto.UserRemove.deserialize(messageData);
+          return mumbleproto.UserRemove.decode(messageData);
         case MessageType.UserState:
-          return mumbleproto.UserState.deserialize(messageData);
+          return mumbleproto.UserState.decode(messageData);
         case MessageType.BanList:
-          return mumbleproto.BanList.deserialize(messageData);
+          return mumbleproto.BanList.decode(messageData);
         case MessageType.TextMessage:
-          return mumbleproto.TextMessage.deserialize(messageData);
+          return mumbleproto.TextMessage.decode(messageData);
         case MessageType.PermissionDenied:
-          return mumbleproto.PermissionDenied.deserialize(messageData);
+          return mumbleproto.PermissionDenied.decode(messageData);
         case MessageType.ACL:
-          return mumbleproto.ACL.deserialize(messageData);
+          return mumbleproto.ACL.decode(messageData);
         case MessageType.QueryUsers:
-          return mumbleproto.QueryUsers.deserialize(messageData);
+          return mumbleproto.QueryUsers.decode(messageData);
         case MessageType.CryptSetup:
-          return mumbleproto.CryptSetup.deserialize(messageData);
+          return mumbleproto.CryptSetup.decode(messageData);
         case MessageType.ContextActionModify:
-          return mumbleproto.ContextActionModify.deserialize(messageData);
+          return mumbleproto.ContextActionModify.decode(messageData);
         case MessageType.ContextAction:
-          return mumbleproto.ContextAction.deserialize(messageData);
+          return mumbleproto.ContextAction.decode(messageData);
         case MessageType.UserList:
-          return mumbleproto.UserList.deserialize(messageData);
+          return mumbleproto.UserList.decode(messageData);
         case MessageType.VoiceTarget:
-          return mumbleproto.VoiceTarget.deserialize(messageData);
+          return mumbleproto.VoiceTarget.decode(messageData);
         case MessageType.PermissionQuery:
-          return mumbleproto.PermissionQuery.deserialize(messageData);
+          return mumbleproto.PermissionQuery.decode(messageData);
         case MessageType.CodecVersion:
-          return mumbleproto.CodecVersion.deserialize(messageData);
+          return mumbleproto.CodecVersion.decode(messageData);
         case MessageType.UserStats:
-          return mumbleproto.UserStats.deserialize(messageData);
+          return mumbleproto.UserStats.decode(messageData);
         case MessageType.RequestBlob:
-          return mumbleproto.RequestBlob.deserialize(messageData);
+          return mumbleproto.RequestBlob.decode(messageData);
         case MessageType.ServerConfig:
-          return mumbleproto.ServerConfig.deserialize(messageData);
+          return mumbleproto.ServerConfig.decode(messageData);
         case MessageType.SuggestConfig:
-          return mumbleproto.SuggestConfig.deserialize(messageData);
+          return mumbleproto.SuggestConfig.decode(messageData);
         default:
           this.logger.warn(`Unsupported message type: ${messageType}`);
           return null;
