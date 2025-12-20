@@ -444,13 +444,13 @@ export class MumbleClient extends EventEmitter {
    * 注册上下文操作
    */
   async registerContextAction(action: string, text: string, contexts?: number[]): Promise<void> {
-    const contextActionMessage = mumbleproto.ContextActionModify.fromJSON({
+    const serialized = mumbleproto.ContextActionModify.encode({
       action: action,
       text: text,
       context: contexts ? contexts.reduce((acc, ctx) => acc | ctx, 0) : 1 // 默认Server上下文
     }).finish();
     
-    const serialized = contextActionMessage;
+    const wrappedMessage = this.connection.wrapMessage(MessageType.ContextActionModify, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
 
@@ -633,17 +633,17 @@ export class MumbleClient extends EventEmitter {
    * 封禁用户
    */
   async banUser(_session: number, reason?: string, duration?: number): Promise<void> {
-    const banListMessage = mumbleproto.BanList.fromJSON({
+    const serialized = mumbleproto.BanList.encode({
       bans: [{
-        address: new Uint8Array(), // 需要从 session 获取用户的 IP
+        address: Buffer.from([]), // 需要从 session 获取用户的 IP
         mask: 32,
         reason: reason,
         duration: duration
       }]
     }).finish();
     
-    const serialized = banListMessage;
-    const wrappedMessage = this.connection.wrapMessage(MessageType.BanList, serialized).finish();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.BanList, serialized);
+    await this.connection.sendTCP(wrappedMessage);
   }
 
   /**
@@ -778,16 +778,16 @@ export class MumbleClient extends EventEmitter {
    * 发送版本信息
    */
   private async sendVersion(): Promise<void> {
-    const versionMessage = mumbleproto.Version.fromJSON({
+    const serialized = mumbleproto.Version.encode({
       version: 0x010203, // 版本号 (1.2.3)
       release: 'MuNode Client',
       os: process.platform,
       os_version: process.version
     }).finish();
 
-    const serialized = versionMessage;
-    const wrappedMessage = this.connection.wrapMessage(MessageType.Version, serialized).finish();
-    await this.connection.sendTCP(wrappedMessage).finish();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.Version, serialized);
+    await this.connection.sendTCP(wrappedMessage);
+  }
 
   /**
    * 加载配置
