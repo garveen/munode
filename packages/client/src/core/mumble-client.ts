@@ -180,13 +180,16 @@ export class MumbleClient extends EventEmitter {
       this.on('channelState', onChannelState);
 
       // 发送创建频道消息
-      const serialized = mumbleproto.ChannelState.encode({
+      // Note: Do NOT set channel_id to signal "create new channel" to the server
+      const channelStateData: any = {
         name: name,
         parent: parent || 0,
         links: [],
         links_add: [],
         links_remove: []
-      }).finish();
+      };
+      // Explicitly do not set channel_id to undefined - just omit it
+      const serialized = mumbleproto.ChannelState.encode(channelStateData).finish();
       const wrappedMessage = this.connection.wrapMessage(MessageType.ChannelState, serialized);
       this.connection.sendTCP(wrappedMessage).catch((error) => {
         clearTimeout(timeout);
