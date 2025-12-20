@@ -272,7 +272,7 @@ export class HubPermissionChecker {
   /**
    * 检查是否是超级用户
    */
-  private isSuperUser(user: UserInfo): boolean {
+  isSuperUser(user: UserInfo): boolean {
     // 基于用户组检查
     const isSuperUser = user.groups?.includes('admin') || user.groups?.includes('superuser') || false;
     this.logger.debug(`isSuperUser check for user ${user.user_id}: groups=${JSON.stringify(user.groups)}, result=${isSuperUser}`);

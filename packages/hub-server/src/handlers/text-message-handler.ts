@@ -56,10 +56,32 @@ export class TextMessageHandler implements ITextMessageHandler {
       const targetSessionsByEdge = new Map<number, number[]>(); // edge_id -> session_ids
 
       // 1. 处理直接指定的用户（私聊）
+      // 需要检查目标用户所在频道的TextMessage权限（与Murmur一致）
       if (session && session.length > 0) {
         for (const targetSession of session) {
           const sess = sessionManager.getSession(targetSession);
           if (sess) {
+            // 权限检查：需要在目标用户所在频道拥有TextMessage权限
+            if (permissionChecker) {
+              const actorUserInfo = this.permissionChecker.sessionToUserInfo(actorSession, actor_channel_id);
+              const targetChannelId = sess.channel_id ?? 0;
+              const hasPermission = await permissionChecker.hasPermission(
+                targetChannelId,
+                actorUserInfo,
+                Permission.TextMessage
+              );
+
+              if (!hasPermission) {
+                this.logger.warn(`Actor ${actor_username} denied TextMessage permission for user in channel ${targetChannelId}`);
+                // 发送权限拒绝通知给发起Edge
+                this.factory.getControlService().notify(edge_id, 'hub.textMessageDenied', {
+                  actor_session,
+                  reason: 'TextMessage permission denied',
+                });
+                continue;
+              }
+            }
+            
             targetSessions.push(targetSession);
             // 按Edge分组
             if (!targetSessionsByEdge.has(sess.edge_id)) {

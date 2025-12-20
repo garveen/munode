@@ -245,6 +245,60 @@ export class ACLHandler implements IACLHandler {
           this.logger.info(`ACL updated for channel ${channel_id}: ${aclData.length} entries`);
         }
 
+        // 如果用户不是SuperUser且修改后没有Write权限，自动添加Write+Traverse ACL（与Murmur一致）
+        if (this.factory.getPermissionChecker() && this.factory.getSessionManager() && this.factory.getAclManager()) {
+          const actorGlobalSession = this.factory.getSessionManager().getSession(actor_session);
+          if (actorGlobalSession) {
+            const actorUserInfo = this.hubPermissionChecker.sessionToUserInfo(actorGlobalSession, actorGlobalSession.channel_id);
+            
+            // 检查是否是SuperUser
+            if (!this.hubPermissionChecker.isSuperUser(actorUserInfo)) {
+              // 清除缓存以获取最新权限
+              this.hubPermissionChecker.clearCacheForUser(actorUserInfo.session_id);
+              
+              // 检查用户是否有Write权限
+              const hasWrite = await this.hubPermissionChecker.hasPermission(
+                channel_id,
+                actorUserInfo,
+                Permission.Write
+              );
+              
+              if (!hasWrite) {
+                // 自动添加Write+Traverse ACL
+                const autoGrantACL: {
+                  user_id?: number;
+                  group?: string;
+                  apply_here: boolean;
+                  apply_subs: boolean;
+                  allow: number;
+                  deny: number;
+                } = {
+                  apply_here: true,
+                  apply_subs: false,
+                  allow: Permission.Write | Permission.Traverse,
+                  deny: 0,
+                };
+                
+                // 如果是注册用户，使用user_id；否则使用证书哈希组
+                if (actorUserInfo.user_id > 0) {
+                  autoGrantACL.user_id = actorUserInfo.user_id;
+                } else if (actorUserInfo.cert_hash) {
+                  autoGrantACL.group = `$${actorUserInfo.cert_hash}`;
+                }
+                
+                // 只有在有user_id或cert_hash时才添加
+                if (autoGrantACL.user_id || autoGrantACL.group) {
+                  await this.factory.getAclManager().saveACLs(channel_id, [...aclData, autoGrantACL]);
+                  this.logger.info(`Auto-granted Write+Traverse permission to user ${actorUserInfo.user_id || actorUserInfo.cert_hash} on channel ${channel_id}`);
+                  
+                  // 再次清除缓存
+                  this.hubPermissionChecker.clearCacheForUser(actorUserInfo.session_id);
+                }
+              }
+            }
+          }
+        }
+
         // 更新频道的 inherit_acl 设置
         if (acl.inherit_acls !== undefined && acl.inherit_acls !== channel.inherit_acl) {
           if (this.factory.getChannelManager()) {

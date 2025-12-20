@@ -340,22 +340,22 @@ export class ChannelStateHandler implements IChannelStateHandler {
         return;
       }
 
-      // 权限检查
+      // 权限检查：删除频道需要Write权限（与Murmur一致）
       if (permissionChecker) {
         const actorUserInfo = this.permissionChecker.sessionToUserInfo(actorSession, actorSession.channel_id);
         const hasPermission = await permissionChecker.hasPermission(
           channel_id,
           actorUserInfo,
-          Permission.MakeChannel
+          Permission.Write
         );
 
         if (!hasPermission) {
           this.factory.getControlService().notify(edge_id, 'hub.channelRemoveResponse', {
             success: false,
             actor_session,
-            error: 'Permission denied: MakeChannel permission required',
+            error: 'Permission denied: Write permission required',
             permission_denied: true,
-            permission_type: 'MakeChannel',
+            permission_type: 'Write',
           });
           return;
         }
