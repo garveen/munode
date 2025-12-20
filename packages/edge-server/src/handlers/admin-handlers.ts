@@ -51,8 +51,8 @@ export class AdminHandlers {
 
       // 返回封禁列表
       const banList = await this.banManager.getAllActiveBans();
-      const response = new mumbleproto.BanList({
-        bans: banList.map((entry) => new mumbleproto.BanList_BanEntry({
+      const response = mumbleproto.BanList.encode({
+        bans: banList.map((entry) => ({
           address: entry.address ? Buffer.from(entry.address.split('.').map((x) => parseInt(x))) : undefined,
           mask: entry.mask || 32,
           name: entry.name || '',
@@ -62,7 +62,7 @@ export class AdminHandlers {
           duration: entry.duration || 0,
         })),
         query: false,
-      }).serialize();
+      }).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.BanList, Buffer.from(response));
         this.logger.debug(`Sent BanList to session ${session_id}: ${banList.length} entries`);
@@ -239,9 +239,12 @@ export class AdminHandlers {
         client.channel_id = toChannelId;
 
         // 广播 UserState 消息
-        const userState = UserState;
+        const userStateMessage = mumbleproto.UserState.encode({
+          session: session_id,
+          channel_id: toChannelId,
+        }).finish();
 
-        this.messageHandler.broadcastMessage(MessageType.UserState, Buffer.from(userState));
+        this.messageHandler.broadcastMessage(MessageType.UserState, Buffer.from(userStateMessage));
 
         movedCount++;
       }
@@ -287,7 +290,10 @@ export class AdminHandlers {
         this.logger.info(`Session ${session_id} set promiscuous mode to ${enabled}`);
 
       // 发送确认（通过 TextMessage）
-      const confirmMessage = TextMessage;
+      const confirmMessage = mumbleproto.TextMessage.encode({
+        actor: session_id,
+        message: `Promiscuous mode ${enabled ? 'enabled' : 'disabled'}`,
+      }).finish();
 
       this.messageHandler.sendMessage(
         session_id,
@@ -324,14 +330,14 @@ export class AdminHandlers {
       // 广播 UserState 消息，清除所有用户的纹理和评论
       const allClients = Array.from(this.clientManager.getAllClients().values());
       for (const targetClient of allClients) {
-        const clearState = new mumbleproto.UserState({
+        const clearState = mumbleproto.UserState.encode({
           session: targetClient.session,
           texture: Buffer.alloc(0), // 空纹理
           comment: '', // 空评论
           temporary_access_tokens: [],
           listening_channel_add: [],
           listening_channel_remove: [],
-        });
+        }).finish();
 
         this.messageHandler.broadcastMessage(
           MessageType.UserState,
@@ -372,11 +378,15 @@ export class AdminHandlers {
 
             if (result.success && result.data && result.hash) {
               // 发送 UserState 消息，包含纹理数据
-              const userState = UserState;
+              const userStateMessage = mumbleproto.UserState.encode({
+                session: targetSession,
+                texture: Buffer.from(result.data),
+                texture_hash: Buffer.from(result.hash, 'base64'),
+              }).finish();
               this.messageHandler.sendMessage(
                 session_id,
                 MessageType.UserState,
-                Buffer.from(userState)
+                Buffer.from(userStateMessage)
               );
         this.logger.debug(`Sent texture for session ${targetSession} to session ${session_id}`);
             }
@@ -402,11 +412,14 @@ export class AdminHandlers {
               // 发送 UserState 消息，包含评论
               // result.data is Uint8Array from protobuf, convert to string
               const comment = Buffer.from(result.data).toString('utf-8');
-              const userState = UserState;
+              const userStateMessage = mumbleproto.UserState.encode({
+                session: targetSession,
+                comment: comment,
+              }).finish();
               this.messageHandler.sendMessage(
                 session_id,
                 MessageType.UserState,
-                Buffer.from(userState)
+                Buffer.from(userStateMessage)
               );
         this.logger.debug(`Sent comment for session ${targetSession} to session ${session_id}`);
             }
