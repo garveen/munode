@@ -62,9 +62,21 @@ export interface EdgeAuthenticateUserMethod {
   };
   result: {
     success: boolean;
-    user_id: number;
-    username: string;
+    user_id?: number;
+    username?: string;
+    display_name?: string;
     groups: string[];
+    reason?: string;
+    reject_type?: number;
+    channel_id?: number;
+    // Initial user state flags
+    mute?: boolean;
+    deaf?: boolean;
+    suppress?: boolean;
+    self_mute?: boolean;
+    self_deaf?: boolean;
+    priority_speaker?: boolean;
+    recording?: boolean;
     error?: string;
   };
 }

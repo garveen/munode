@@ -185,6 +185,27 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         recording: boolean;
       }
 
+      // 检查用户在目标频道的 ACL 权限，自动设置 suppress 状态
+      const tempUserInfo = {
+        session_id: params.session_id,
+        user_id: authResult.user_id || 0,
+        cert_hash: params.client_info.certificate_hash || '',
+        channel_id: actualChannelId,
+        groups: authResult.groups || [],
+      };
+      
+      const hasSpeak = await permissionChecker.hasPermission(
+        actualChannelId,
+        tempUserInfo,
+        Permission.Speak
+      );
+      
+      // 如果用户没有 Speak 权限，自动设置 suppress = true
+      const initialSuppress = !hasSpeak;
+      if (initialSuppress) {
+        this.logger.info(`User ${params.username} lacks Speak permission in channel ${actualChannelId}, setting initial suppress=true`);
+      }
+
       const session: SessionData = {
         session_id: params.session_id,
         edge_id: params.server_id,
@@ -204,7 +225,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         // Default states - client will send UserState to update these
         mute: false,
         deaf: false,
-        suppress: false,
+        suppress: initialSuppress, // 基于 ACL 的自动 suppress
         self_mute: false,
         self_deaf: false,
         priority_speaker: false,
@@ -219,7 +240,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       // 广播 userJoined（处理 Channel Ninja 可见性）
       await this.broadcastUserJoined(session, config, permissionChecker, sessionManager);
 
-      // Return authentication result, including target channel, using protobuf field names (snake_case)
+      // Return authentication result, including target channel and initial state flags
       return {
         success: authResult.success,
         user_id: authResult.user_id,
@@ -229,7 +250,15 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         reason: authResult.reason,
         reject_type: authResult.rejectType,
         channel_id: actualChannelId,
-      };
+        // Initial state flags from session
+        mute: session.mute,
+        deaf: session.deaf,
+        suppress: session.suppress,
+        self_mute: session.self_mute,
+        self_deaf: session.self_deaf,
+        priority_speaker: session.priority_speaker,
+        recording: session.recording,
+      } satisfies RPCResult<'edge.authenticateUser'>;
     } catch (error) {
       this.logger.error(`Authentication error for user ${params.username}:`, error);
       return {

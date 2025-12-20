@@ -111,6 +111,14 @@ message EdgeAuthenticateUserResult {
   optional string reason = 6;
   optional uint32 reject_type = 7;
   optional uint32 channel_id = 8;
+  // Initial user state flags
+  optional bool mute = 9;
+  optional bool deaf = 10;
+  optional bool suppress = 11;
+  optional bool self_mute = 12;
+  optional bool self_deaf = 13;
+  optional bool priority_speaker = 14;
+  optional bool recording = 15;
 }
 
 message EdgeReportSessionResult {

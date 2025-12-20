@@ -301,6 +301,9 @@ function createHubConfig(): HubConfig {
       port: 8081,
       cors: false,
     },
+    voiceRouting: {
+      enabled: true,
+    },
     logLevel: 'info',
   };
 }

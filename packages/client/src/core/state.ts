@@ -38,6 +38,8 @@ export class StateManager {
     this.session = {
       session: message.session || 0,
       channel_id: existingUser?.channel_id || 0, // 将在 UserState 消息中更新
+      mute: existingUser?.mute !== undefined ? existingUser.mute : false,
+      deaf: existingUser?.deaf !== undefined ? existingUser.deaf : false,
       self_mute: existingUser?.self_mute !== undefined ? existingUser.self_mute : false,
       self_deaf: existingUser?.self_deaf !== undefined ? existingUser.self_deaf : false,
       suppress: existingUser?.suppress !== undefined ? existingUser.suppress : false,
@@ -211,6 +213,9 @@ export class StateManager {
     // 如果是当前用户，更新会话状态
     if (this.session && this.session.session === session) {
       this.session.channel_id = user.channel_id;
+      this.session.mute = user.mute;
+      this.session.deaf = user.deaf;
+      this.session.suppress = user.suppress;
       this.session.self_mute = user.self_mute;
       this.session.self_deaf = user.self_deaf;
       this.session.recording = user.recording;

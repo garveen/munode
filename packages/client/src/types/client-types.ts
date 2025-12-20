@@ -282,6 +282,8 @@ export interface ServerInfo {
 export interface SessionState {
   session: number;
   channel_id: number;
+  mute: boolean;
+  deaf: boolean;
   self_mute: boolean;
   self_deaf: boolean;
   suppress: boolean;

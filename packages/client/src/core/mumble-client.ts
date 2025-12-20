@@ -371,6 +371,60 @@ export class MumbleClient extends EventEmitter {
   }
 
   /**
+   * 设置用户状态（管理员功能）
+   * 用于管理员设置其他用户的 mute、deaf、suppress 等状态
+   */
+  async setUserState(targetSession: number, state: {
+    mute?: boolean;
+    deaf?: boolean;
+    suppress?: boolean;
+    priority_speaker?: boolean;
+  }): Promise<void> {
+    const userStateMessage = mumbleproto.UserState.fromObject({
+      session: targetSession,
+      mute: state.mute,
+      deaf: state.deaf,
+      suppress: state.suppress,
+      priority_speaker: state.priority_speaker,
+      temporary_access_tokens: [],
+      listening_channel_add: [],
+      listening_channel_remove: []
+    });
+    
+    const serialized = userStateMessage.serialize();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
+    await this.connection.sendTCP(wrappedMessage);
+  }
+
+  /**
+   * 静音用户（管理员功能）
+   */
+  async muteUser(targetSession: number, mute: boolean): Promise<void> {
+    return this.setUserState(targetSession, { mute });
+  }
+
+  /**
+   * 禁听用户（管理员功能）
+   */
+  async deafenUser(targetSession: number, deaf: boolean): Promise<void> {
+    return this.setUserState(targetSession, { deaf });
+  }
+
+  /**
+   * 清除用户 suppress（管理员功能）
+   */
+  async clearUserSuppress(targetSession: number): Promise<void> {
+    return this.setUserState(targetSession, { suppress: false });
+  }
+
+  /**
+   * 设置优先发言者（管理员功能）
+   */
+  async setPrioritySpeaker(targetSession: number, priority: boolean): Promise<void> {
+    return this.setUserState(targetSession, { priority_speaker: priority });
+  }
+
+  /**
    * 设置语音目标
    */
   async setVoiceTarget(id: number, targets: mumbleproto.VoiceTarget.Target[]): Promise<void> {

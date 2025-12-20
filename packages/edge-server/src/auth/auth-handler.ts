@@ -185,13 +185,20 @@ export class AuthHandlers {
       // 8. 向用户自己发送 UserState（必须在 ServerSync 之前）
       // 参考 Mumble 客户端实现：msgServerSync 期望在收到 ServerSync 前已有 user profile
       // 参考 Go 实现：在 goroutine 中广播 UserState（包括用户自己），然后主线程发送 ServerSync
-      // 注意：初始状态都是 false，客户端会在认证后发送 UserState 更新实际状态
+      // 从 Hub 返回的认证结果中获取初始状态（包括 suppress）
       const selfUserStateData: {
         session: number;
         actor: number;
         name: string;
         user_id?: number;
         channel_id: number;
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
+        self_mute?: boolean;
+        self_deaf?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
         temporary_access_tokens: string[];
         listening_channel_add: number[];
         listening_channel_remove: number[];
@@ -201,6 +208,14 @@ export class AuthHandlers {
         name: updatedClient.username,
         user_id: updatedClient.user_id,
         channel_id: updatedClient.channel_id,
+        // Include initial state from Hub authentication result
+        mute: authResult.mute,
+        deaf: authResult.deaf,
+        suppress: authResult.suppress,
+        self_mute: authResult.self_mute,
+        self_deaf: authResult.self_deaf,
+        priority_speaker: authResult.priority_speaker,
+        recording: authResult.recording,
         temporary_access_tokens: [],
         listening_channel_add: [],
         listening_channel_remove: [],

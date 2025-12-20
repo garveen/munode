@@ -205,11 +205,47 @@ export class UserStateHandler implements IUserStateHandler {
 
         // TODO: 检查目标频道是否存在
 
+        // 先检查用户在新频道的 ACL 权限，以便设置 suppress 状态
+        // 注意：必须在更新 session.channel_id 之前检查，否则 permission checker 会用新频道计算权限
+        const targetUserInfoForNewChannel = {
+          session_id: targetGlobalSession.session_id,
+          user_id: targetGlobalSession.user_id,
+          cert_hash: targetGlobalSession.cert_hash,
+          channel_id: newChannelId, // 使用新频道 ID
+          groups: targetGlobalSession.groups,
+        };
+        const hasSpeak = await this.permissionChecker.hasPermission(
+          newChannelId,
+          targetUserInfoForNewChannel,
+          Permission.Speak
+        );
+        
         // 更新会话的频道
         sessionManager.updateSessionChannel(targetSession, userStateObj.channel_id);
         broadcast = true;
 
         this.logger.info(`User ${targetGlobalSession.username} moved from channel ${oldChannelId} to ${userStateObj.channel_id}`);
+        
+        // 如果用户没有 Speak 权限，自动设置 suppress = true
+        // 注意：这是服务器端自动设置，不需要管理员权限
+        if (!hasSpeak) {
+          this.logger.info(`User ${targetGlobalSession.username} lacks Speak permission in channel ${newChannelId}, setting suppress=true`);
+          sessionManager.updateSessionState(targetSession, { suppress: true });
+          broadcastUserState.suppress = true;
+        } else {
+          // 用户有 Speak 权限，清除 ACL suppress（如果之前被设置）
+          // 但要保留管理员手动设置的 suppress 状态
+          // 检查当前 suppress 状态
+          const currentSuppress = targetGlobalSession.suppress ?? false;
+          if (currentSuppress) {
+            // 当前是 suppress 状态，需要判断是否应该清除
+            // 简单起见，我们假设频道切换后如果有 Speak 权限就清除 suppress
+            // 实际实现中可能需要更复杂的逻辑来区分 ACL suppress 和管理员 suppress
+            this.logger.info(`User ${targetGlobalSession.username} has Speak permission in channel ${newChannelId}, clearing suppress`);
+            sessionManager.updateSessionState(targetSession, { suppress: false });
+            broadcastUserState.suppress = false;
+          }
+        }
         
         // 如果用户已注册，保存最后所在频道（参考 Go 实现）
         if (targetGlobalSession.user_id && targetGlobalSession.user_id > 0) {
@@ -283,9 +319,10 @@ export class UserStateHandler implements IUserStateHandler {
         broadcast = true;
       }
 
-      // 处理Mute/Deaf/Suppress/PrioritySpeaker（管理员操作）
+      // 处理Mute/Deaf（管理员操作）
+      // 注意：suppress 不在这里处理，因为它是服务器根据 ACL 等规则自动设置的
       if (userStateObj.mute !== undefined || userStateObj.deaf !== undefined ||
-          userStateObj.suppress !== undefined || userStateObj.priority_speaker !== undefined) {
+          userStateObj.priority_speaker !== undefined) {
 
         // 权限检查：操作其他用户需要MuteDeafenPermission
         if (!isActorTarget && targetGlobalSession.channel_id !== undefined) {
@@ -308,22 +345,9 @@ export class UserStateHandler implements IUserStateHandler {
           this.logger.debug(`User ${actor_username} has MuteDeafenPermission for user ${targetGlobalSession.username}`);
         }
 
-        // Suppress只能由服务器设置（拒绝客户端设置为true）
-        if (userStateObj.suppress === true) {
-          controlService.notify(edge_id, 'hub.userStateResponse', {
-            success: false,
-            actor_session,
-            error: 'Permission denied: only server can suppress users',
-            permission_denied: true,
-            permission_type: 'suppress',
-          });
-          return;
-        }
-
         const stateUpdates: Partial<{
           deaf?: boolean;
           mute?: boolean;
-          suppress?: boolean;
           self_deaf?: boolean;
           self_mute?: boolean;
           priority_speaker?: boolean;
@@ -351,11 +375,6 @@ export class UserStateHandler implements IUserStateHandler {
           }
         }
 
-        if (userStateObj.suppress !== undefined) {
-          stateUpdates.suppress = userStateObj.suppress;
-          broadcastUserState.suppress = userStateObj.suppress;
-        }
-
         if (userStateObj.priority_speaker !== undefined) {
           stateUpdates.priority_speaker = userStateObj.priority_speaker;
           broadcastUserState.priority_speaker = userStateObj.priority_speaker;
@@ -363,6 +382,53 @@ export class UserStateHandler implements IUserStateHandler {
 
         sessionManager.updateSessionState(targetSession, stateUpdates);
         broadcast = true;
+      }
+
+      // 处理 Suppress（管理员操作或服务器自动设置）
+      // Suppress 用于表示用户因为某些原因（除了被管理员 mute）无法说话
+      // 参考 C++ Murmur：客户端不能设置 suppress=true，只能清除 suppress
+      if (userStateObj.suppress !== undefined) {
+        // 客户端请求设置 suppress=true 是不允许的
+        if (userStateObj.suppress) {
+          controlService.notify(edge_id, 'hub.userStateResponse', {
+            success: false,
+            actor_session,
+            error: 'Permission denied: clients cannot set suppress=true',
+            permission_denied: true,
+            permission_type: 'suppress',
+          });
+          return;
+        }
+        
+        // 请求清除 suppress（suppress=false）
+        // 需要检查权限：如果是自己操作且有 Speak 权限，或者是管理员操作且有 MuteDeafen 权限
+        if (!isActorTarget) {
+          // 管理员为其他人清除 suppress，需要 MuteDeafen 权限
+          const actorUserInfo = this.permissionChecker.sessionToUserInfo(actorSession, actorSession.channel_id);
+          const hasMuteDeafen = await this.permissionChecker.hasPermission(
+            targetGlobalSession.channel_id ?? 0,
+            actorUserInfo,
+            Permission.MuteDeafen
+          );
+          
+          if (!hasMuteDeafen) {
+            controlService.notify(edge_id, 'hub.userStateResponse', {
+              success: false,
+              actor_session,
+              error: 'Permission denied: MuteDeafenPermission required',
+              permission_denied: true,
+              permission_type: 'MuteDeafen',
+            });
+            return;
+          }
+        }
+        
+        // 清除 suppress（无论是自己还是管理员操作，都不检查 Speak 权限）
+        // 因为 suppress 状态会在用户下次发言或频道切换时自动重新评估
+        sessionManager.updateSessionState(targetSession, { suppress: false });
+        broadcastUserState.suppress = false;
+        broadcast = true;
+        this.logger.info(`User ${actor_username} cleared suppress for ${targetGlobalSession.username}`);
       }
 
       // 处理Recording状态变化
@@ -429,12 +495,11 @@ export class UserStateHandler implements IUserStateHandler {
         return;
       }
 
-      // 向发起Edge回复成功，并包含实际的userState数据用于发送给客户端
+      // 向发起Edge回复成功（不包含userState，因为会通过broadcast发送）
       controlService.notify(edge_id, 'hub.userStateResponse', {
         success: true,
         actor_session,
         target_session: targetSession,
-        userState: broadcastUserState,
       });
 
       this.logger.info(`Hub: Broadcasting UserState for session ${targetSession} to all edges, fields: ${Object.keys(broadcastUserState).join(', ')}`);
