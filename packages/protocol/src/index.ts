@@ -1,17 +1,15 @@
-// Mumble protocol types
-export { mumbleproto } from './generated/proto/Mumble.js';
+// Mumble protocol types - ts-proto exports individual types, not a namespace
+export * from './generated/proto/Mumble.js';
 
 // Hub-Edge protocol types
-export { hubedge } from './generated/proto/HubEdge.js';
+export * from './generated/proto/HubEdge.js';
 
 // Hub-Edge RPC types (typed protobuf messages)
-export { hubedge as hubedgeRpc } from './generated/proto/HubEdgeRPC.js';
+export * from './generated/proto/HubEdgeRPC.js';
 
 // Re-export commonly used RPC types for convenience
-import { hubedge as _hubedgeRpc } from './generated/proto/HubEdgeRPC.js';
-export type TypedRPCRequest = _hubedgeRpc.TypedRPCRequest;
-export type TypedRPCResponse = _hubedgeRpc.TypedRPCResponse;
-export type TypedRPCNotification = _hubedgeRpc.TypedRPCNotification;
+import type { TypedRPCRequest, TypedRPCResponse, TypedRPCNotification } from './generated/proto/HubEdgeRPC.js';
+export type { TypedRPCRequest, TypedRPCResponse, TypedRPCNotification };
 
 export {
   type EdgeToHubMethods as ProtobufEdgeToHubMethods,
@@ -98,35 +96,64 @@ export {
 // } from './generated/HubEdgeSync.js';
 
 // Re-export types for convenience
-import { mumbleproto } from './generated/proto/Mumble.js';
-export type Version = mumbleproto.Version;
-export type UDPTunnel = mumbleproto.UDPTunnel;
-export type Authenticate = mumbleproto.Authenticate;
-export type Ping = mumbleproto.Ping;
-export type Reject = mumbleproto.Reject;
-export type ServerSync = mumbleproto.ServerSync;
-export type ChannelRemove = mumbleproto.ChannelRemove;
-export type ChannelState = mumbleproto.ChannelState;
-export type UserRemove = mumbleproto.UserRemove;
-export type UserState = mumbleproto.UserState;
-export type BanList = mumbleproto.BanList;
-export type TextMessage = mumbleproto.TextMessage;
-export type PermissionDenied = mumbleproto.PermissionDenied;
-export type ACL = mumbleproto.ACL;
-export type QueryUsers = mumbleproto.QueryUsers;
-export type CryptSetup = mumbleproto.CryptSetup;
-export type ContextActionModify = mumbleproto.ContextActionModify;
-export type ContextAction = mumbleproto.ContextAction;
-export type UserList = mumbleproto.UserList;
-export type MumbleVoiceTarget = mumbleproto.VoiceTarget;
-export type PermissionQuery = mumbleproto.PermissionQuery;
-export type CodecVersion = mumbleproto.CodecVersion;
-export type UserStats = mumbleproto.UserStats;
-export type RequestBlob = mumbleproto.RequestBlob;
-export type ServerConfig = mumbleproto.ServerConfig;
-export type SuggestConfig = mumbleproto.SuggestConfig;
-export type PermissionDenied_DenyType = mumbleproto.PermissionDenied.DenyType;
-export type Reject_RejectType = mumbleproto.Reject.RejectType;
+import type { 
+  Version,
+  UDPTunnel,
+  Authenticate,
+  Ping,
+  Reject,
+  ServerSync,
+  ChannelRemove,
+  ChannelState,
+  UserRemove,
+  UserState,
+  BanList,
+  TextMessage,
+  PermissionDenied,
+  ACL,
+  QueryUsers,
+  CryptSetup,
+  ContextActionModify,
+  ContextAction,
+  UserList,
+  VoiceTarget as MumbleVoiceTarget,
+  PermissionQuery,
+  CodecVersion,
+  UserStats,
+  RequestBlob,
+  ServerConfig,
+  SuggestConfig,
+} from './generated/proto/Mumble.js';
+export type { 
+  Version,
+  UDPTunnel,
+  Authenticate,
+  Ping,
+  Reject,
+  ServerSync,
+  ChannelRemove,
+  ChannelState,
+  UserRemove,
+  UserState,
+  BanList,
+  TextMessage,
+  PermissionDenied,
+  ACL,
+  QueryUsers,
+  CryptSetup,
+  ContextActionModify,
+  ContextAction,
+  UserList,
+  MumbleVoiceTarget,
+  PermissionQuery,
+  CodecVersion,
+  UserStats,
+  RequestBlob,
+  ServerConfig,
+  SuggestConfig,
+};
+import { PermissionDenied_DenyType, Reject_RejectType } from './generated/proto/Mumble.js';
+export { PermissionDenied_DenyType, Reject_RejectType };
 
 // Shared types (Client and Server)
 export type {

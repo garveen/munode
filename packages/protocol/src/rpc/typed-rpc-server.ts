@@ -136,7 +136,7 @@ export class TypedRPCServer {
     const handler = this.handlers.get(method);
 
     if (!handler) {
-      respond(new hubedgeRpc.TypedRPCResponse({ request_id: request.request_id }), {
+      respond({ request_id: request.request_id, method }, {
         code: -32601,
         message: `Method not found: ${method}`,
       });
@@ -152,7 +152,7 @@ export class TypedRPCServer {
       const response = this.createTypedResponse(method, request.request_id, result);
       respond(response, undefined);
     } catch (error) {
-      respond(new hubedgeRpc.TypedRPCResponse({ request_id: request.request_id }), {
+      respond({ request_id: request.request_id, method }, {
         code: -32603,
         message: error instanceof Error ? error.message : 'Internal error',
       });
@@ -167,21 +167,21 @@ export class TypedRPCServer {
     
     switch (method) {
       case 'edge.register':
-        return request.edge_register?.toObject() as RPCParams<'edge.register'>;
+        return request.edge_register as RPCParams<'edge.register'>;
       case 'edge.heartbeat':
-        return request.edge_heartbeat?.toObject() as RPCParams<'edge.heartbeat'>;
+        return request.edge_heartbeat as RPCParams<'edge.heartbeat'>;
       case 'edge.allocateSessionId':
-        return request.edge_allocate_session_id?.toObject() as RPCParams<'edge.allocateSessionId'>;
+        return request.edge_allocate_session_id as RPCParams<'edge.allocateSessionId'>;
       case 'edge.authenticateUser':
         // 直接返回protobuf对象，保留has_字段信息
         return request.edge_authenticate_user as any as RPCParams<'edge.authenticateUser'>;
 
       case 'edge.syncVoiceTarget':
-        return request.edge_sync_voice_target?.toObject() as RPCParams<'edge.syncVoiceTarget'>;
+        return request.edge_sync_voice_target as RPCParams<'edge.syncVoiceTarget'>;
       case 'edge.getVoiceTargets':
-        return request.edge_get_voice_targets?.toObject() as RPCParams<'edge.getVoiceTargets'>;
+        return request.edge_get_voice_targets as RPCParams<'edge.getVoiceTargets'>;
       case 'edge.routeVoice': {
-        const routeVoice = request.edge_route_voice?.toObject();
+        const routeVoice = request.edge_route_voice;
         if (routeVoice) {
           return {
             fromEdgeId: routeVoice.from_edge_id,
@@ -194,21 +194,21 @@ export class TypedRPCServer {
         throw new Error('Missing edge.routeVoice params');
       }
       case 'edge.adminOperation':
-        return request.edge_admin_operation?.toObject() as RPCParams<'edge.adminOperation'>;
+        return request.edge_admin_operation as RPCParams<'edge.adminOperation'>;
       case 'edge.exchangeCertificates':
-        return request.edge_exchange_certificates?.toObject() as RPCParams<'edge.exchangeCertificates'>;
+        return request.edge_exchange_certificates as RPCParams<'edge.exchangeCertificates'>;
       case 'edge.fullSync':
-        return request.edge_full_sync?.toObject() as RPCParams<'edge.fullSync'>;
+        return request.edge_full_sync as RPCParams<'edge.fullSync'>;
       case 'edge.getChannels':
         return {} as RPCParams<'edge.getChannels'>;
       case 'edge.getACLs':
-        return request.edge_get_acls?.toObject() as RPCParams<'edge.getACLs'>;
+        return request.edge_get_acls as RPCParams<'edge.getACLs'>;
       case 'edge.saveChannel':
-        return { channel: request.edge_save_channel?.toObject() } as RPCParams<'edge.saveChannel'>;
+        return { channel: request.edge_save_channel } as RPCParams<'edge.saveChannel'>;
       case 'edge.saveACL':
-        return request.edge_save_acl?.toObject() as RPCParams<'edge.saveACL'>;
+        return request.edge_save_acl as RPCParams<'edge.saveACL'>;
       case 'edge.join': {
-        const join = request.edge_join?.toObject();
+        const join = request.edge_join;
         if (join) {
           return {
             server_id: join.server_id,
@@ -222,7 +222,7 @@ export class TypedRPCServer {
         throw new Error('Missing edge.join params');
       }
       case 'edge.joinComplete': {
-        const joinComplete = request.edge_join_complete?.toObject();
+        const joinComplete = request.edge_join_complete;
         if (joinComplete) {
           return {
             server_id: joinComplete.server_id,
@@ -233,7 +233,7 @@ export class TypedRPCServer {
         throw new Error('Missing edge.joinComplete params');
       }
       case 'edge.handleACL': {
-        const handleACL = request.edge_handle_acl?.toObject();
+        const handleACL = request.edge_handle_acl;
         if (handleACL) {
           return {
             edge_id: handleACL.edge_id,
@@ -248,9 +248,9 @@ export class TypedRPCServer {
         throw new Error('Missing edge.handleACL params');
       }
       case 'edge.handlePermissionQuery':
-        return request.edge_handle_permission_query?.toObject() as RPCParams<'edge.handlePermissionQuery'>;
+        return request.edge_handle_permission_query as RPCParams<'edge.handlePermissionQuery'>;
       case 'edge.reportPeerDisconnect': {
-        const peerDisconnect = request.edge_report_peer_disconnect?.toObject();
+        const peerDisconnect = request.edge_report_peer_disconnect;
         if (peerDisconnect) {
           return {
             localEdgeId: peerDisconnect.local_edge_id,
@@ -261,21 +261,21 @@ export class TypedRPCServer {
         throw new Error('Missing edge.reportPeerDisconnect params');
       }
       case 'edge.reportQuality':
-        return request.edge_report_quality?.toObject() as RPCParams<'edge.reportQuality'>;
+        return request.edge_report_quality as RPCParams<'edge.reportQuality'>;
       case 'cluster.getStatus':
         return {} as RPCParams<'cluster.getStatus'>;
       case 'blob.put':
-        return request.blob_put?.toObject() as RPCParams<'blob.put'>;
+        return request.blob_put as RPCParams<'blob.put'>;
       case 'blob.get':
-        return request.blob_get?.toObject() as RPCParams<'blob.get'>;
+        return request.blob_get as RPCParams<'blob.get'>;
       case 'blob.getUserTexture':
-        return request.blob_get_user_texture?.toObject() as RPCParams<'blob.getUserTexture'>;
+        return request.blob_get_user_texture as RPCParams<'blob.getUserTexture'>;
       case 'blob.getUserComment':
-        return request.blob_get_user_comment?.toObject() as RPCParams<'blob.getUserComment'>;
+        return request.blob_get_user_comment as RPCParams<'blob.getUserComment'>;
       case 'blob.setUserTexture':
-        return request.blob_set_user_texture?.toObject() as RPCParams<'blob.setUserTexture'>;
+        return request.blob_set_user_texture as RPCParams<'blob.setUserTexture'>;
       case 'blob.setUserComment':
-        return request.blob_set_user_comment?.toObject() as RPCParams<'blob.setUserComment'>;
+        return request.blob_set_user_comment as RPCParams<'blob.setUserComment'>;
       default:
         return {} as RPCParams<EdgeToHubMethods['method']>;
     }
@@ -291,94 +291,94 @@ export class TypedRPCServer {
     requestId: string,
     result: RPCResult<EdgeToHubMethods['method']>
   ): TypedRPCResponse {
-    const response = new hubedgeRpc.TypedRPCResponse({
+    const response: TypedRPCResponse = {
       request_id: requestId,
       method,
-    });
+    };
 
     // Directly convert result to protobuf format based on method
     // Type narrowing through switch cases ensures type safety
     switch (method) {
       case 'edge.register':
-        response.edge_register = hubedgeRpc.EdgeRegisterResult.fromObject(result as RPCResult<'edge.register'>);
+        response.edge_register = result as RPCResult<'edge.register'>;
         break;
       case 'edge.heartbeat':
-        response.edge_heartbeat = hubedgeRpc.EdgeHeartbeatResult.fromObject(result as RPCResult<'edge.heartbeat'>);
+        response.edge_heartbeat = result as RPCResult<'edge.heartbeat'>;
         break;
       case 'edge.allocateSessionId':
-        response.edge_allocate_session_id = hubedgeRpc.EdgeAllocateSessionIdResult.fromObject(result as RPCResult<'edge.allocateSessionId'>);
+        response.edge_allocate_session_id = result as RPCResult<'edge.allocateSessionId'>;
         break;
       case 'edge.authenticateUser':
-        response.edge_authenticate_user = hubedgeRpc.EdgeAuthenticateUserResult.fromObject(result as RPCResult<'edge.authenticateUser'>);
+        response.edge_authenticate_user = result as RPCResult<'edge.authenticateUser'>;
         break;
       case 'edge.syncVoiceTarget':
-        response.edge_sync_voice_target = hubedgeRpc.EdgeSyncVoiceTargetResult.fromObject(result as RPCResult<'edge.syncVoiceTarget'>);
+        response.edge_sync_voice_target = result as RPCResult<'edge.syncVoiceTarget'>;
         break;
       case 'edge.getVoiceTargets':
-        response.edge_get_voice_targets = hubedgeRpc.EdgeGetVoiceTargetsResult.fromObject(result as RPCResult<'edge.getVoiceTargets'>);
+        response.edge_get_voice_targets = result as RPCResult<'edge.getVoiceTargets'>;
         break;
       case 'edge.routeVoice':
-        response.edge_route_voice = hubedgeRpc.EdgeRouteVoiceResult.fromObject(result as RPCResult<'edge.routeVoice'>);
+        response.edge_route_voice = result as RPCResult<'edge.routeVoice'>;
         break;
       case 'edge.adminOperation':
-        response.edge_admin_operation = hubedgeRpc.EdgeAdminOperationResult.fromObject(result as RPCResult<'edge.adminOperation'>);
+        response.edge_admin_operation = result as RPCResult<'edge.adminOperation'>;
         break;
       case 'edge.exchangeCertificates':
-        response.edge_exchange_certificates = hubedgeRpc.EdgeExchangeCertificatesResult.fromObject(result as RPCResult<'edge.exchangeCertificates'>);
+        response.edge_exchange_certificates = result as RPCResult<'edge.exchangeCertificates'>;
         break;
       case 'edge.fullSync':
-        response.edge_full_sync = hubedgeRpc.EdgeFullSyncResult.fromObject(result as RPCResult<'edge.fullSync'>);
+        response.edge_full_sync = result as RPCResult<'edge.fullSync'>;
         break;
       case 'edge.getChannels':
-        response.edge_get_channels = hubedgeRpc.EdgeGetChannelsResult.fromObject(result as RPCResult<'edge.getChannels'>);
+        response.edge_get_channels = result as RPCResult<'edge.getChannels'>;
         break;
       case 'edge.getACLs':
-        response.edge_get_acls = hubedgeRpc.EdgeGetACLsResult.fromObject(result as RPCResult<'edge.getACLs'>);
+        response.edge_get_acls = result as RPCResult<'edge.getACLs'>;
         break;
       case 'edge.saveChannel':
-        response.edge_save_channel = hubedgeRpc.EdgeSaveChannelResult.fromObject(result as RPCResult<'edge.saveChannel'>);
+        response.edge_save_channel = result as RPCResult<'edge.saveChannel'>;
         break;
       case 'edge.saveACL':
-        response.edge_save_acl = hubedgeRpc.EdgeSaveACLResult.fromObject(result as RPCResult<'edge.saveACL'>);
+        response.edge_save_acl = result as RPCResult<'edge.saveACL'>;
         break;
       case 'edge.join':
-        response.edge_join = hubedgeRpc.EdgeJoinResult.fromObject(result as RPCResult<'edge.join'>);
+        response.edge_join = result as RPCResult<'edge.join'>;
         break;
       case 'edge.joinComplete':
-        response.edge_join_complete = hubedgeRpc.EdgeJoinCompleteResult.fromObject(result as RPCResult<'edge.joinComplete'>);
+        response.edge_join_complete = result as RPCResult<'edge.joinComplete'>;
         break;
       case 'edge.handleACL':
-        response.edge_handle_acl = hubedgeRpc.EdgeHandleACLResult.fromObject(result as RPCResult<'edge.handleACL'>);
+        response.edge_handle_acl = result as RPCResult<'edge.handleACL'>;
         break;
       case 'edge.handlePermissionQuery':
-        response.edge_handle_permission_query = hubedgeRpc.EdgeHandlePermissionQueryResult.fromObject(result as RPCResult<'edge.handlePermissionQuery'>);
+        response.edge_handle_permission_query = result as RPCResult<'edge.handlePermissionQuery'>;
         break;
       case 'edge.reportPeerDisconnect':
-        response.edge_report_peer_disconnect = hubedgeRpc.EdgeReportPeerDisconnectResult.fromObject(result as RPCResult<'edge.reportPeerDisconnect'>);
+        response.edge_report_peer_disconnect = result as RPCResult<'edge.reportPeerDisconnect'>;
         break;
       case 'edge.reportQuality':
-        response.edge_report_quality = hubedgeRpc.EdgeReportQualityResult.fromObject(result as RPCResult<'edge.reportQuality'>);
+        response.edge_report_quality = result as RPCResult<'edge.reportQuality'>;
         break;
       case 'cluster.getStatus':
-        response.cluster_get_status = hubedgeRpc.ClusterGetStatusResult.fromObject(result as RPCResult<'cluster.getStatus'>);
+        response.cluster_get_status = result as RPCResult<'cluster.getStatus'>;
         break;
       case 'blob.put':
-        response.blob_put = hubedgeRpc.BlobPutResult.fromObject(result as RPCResult<'blob.put'>);
+        response.blob_put = result as RPCResult<'blob.put'>;
         break;
       case 'blob.get':
-        response.blob_get = hubedgeRpc.BlobGetResult.fromObject(result as RPCResult<'blob.get'>);
+        response.blob_get = result as RPCResult<'blob.get'>;
         break;
       case 'blob.getUserTexture':
-        response.blob_get_user_texture = hubedgeRpc.BlobGetUserTextureResult.fromObject(result as RPCResult<'blob.getUserTexture'>);
+        response.blob_get_user_texture = result as RPCResult<'blob.getUserTexture'>;
         break;
       case 'blob.getUserComment':
-        response.blob_get_user_comment = hubedgeRpc.BlobGetUserCommentResult.fromObject(result as RPCResult<'blob.getUserComment'>);
+        response.blob_get_user_comment = result as RPCResult<'blob.getUserComment'>;
         break;
       case 'blob.setUserTexture':
-        response.blob_set_user_texture = hubedgeRpc.BlobSetUserTextureResult.fromObject(result as RPCResult<'blob.setUserTexture'>);
+        response.blob_set_user_texture = result as RPCResult<'blob.setUserTexture'>;
         break;
       case 'blob.setUserComment':
-        response.blob_set_user_comment = hubedgeRpc.BlobSetUserCommentResult.fromObject(result as RPCResult<'blob.setUserComment'>);
+        response.blob_set_user_comment = result as RPCResult<'blob.setUserComment'>;
         break;
     }
 
@@ -404,43 +404,43 @@ export class TypedRPCServer {
     method: M,
     params: NotificationParams<M>
   ): TypedRPCNotification {
-    const notification = new hubedgeRpc.TypedRPCNotification({
+    const notification: TypedRPCNotification = {
       method,
       timestamp: Date.now(),
-    });
+    };
 
     switch (method) {
       case 'voice.data': {
         const p = params as HubVoiceDataParamsTS;
-        notification.voice_data = hubedgeRpc.HubVoiceDataParams.fromObject({
+        notification.voice_data = {
           from_session_id: p.fromSessionId,
           target_session_id: p.targetSessionId,
           voice_data: p.voiceData,
           timestamp: p.timestamp,
-        });
+        };
         break;
       }
       case 'edge.forceDisconnect': {
         const p = params as NotificationParams<'edge.forceDisconnect'>;
-        notification.force_disconnect = hubedgeRpc.HubForceDisconnectParams.fromObject({
+        notification.force_disconnect = {
           reason: p.reason,
-        });
+        };
         break;
       }
       case 'edge.peerJoined': {
         const p = params as HubPeerJoinedParamsTS;
-        notification.peer_joined = hubedgeRpc.HubPeerJoinedParams.fromObject({
+        notification.peer_joined = {
           id: p.id,
           name: p.name,
           host: p.host,
           port: p.port,
           voice_port: p.voicePort,
-        });
+        };
         break;
       }
       case 'hub.aclResponse': {
         const p = params as HubACLResponseParamsTS;
-        notification.acl_response = hubedgeRpc.HubACLResponseParams.fromObject({
+        notification.acl_response = {
           edge_id: p.edge_id,
           actor_session: p.actor_session,
           success: p.success,
@@ -450,7 +450,7 @@ export class TypedRPCServer {
             : undefined,
           error: p.error,
           permission_denied: p.permission_denied,
-        });
+        };
         break;
       }
     }

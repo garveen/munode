@@ -1,13 +1,8 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
-import { hubedge } from '../generated/proto/HubEdge.js';
-import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
+import { EdgeHubPacket, PacketType, RPCError as ProtoRPCError, Heartbeat, HeartbeatAck } from '../generated/proto/HubEdge.js';
+import { TypedRPCRequest, TypedRPCResponse, TypedRPCNotification } from '../generated/proto/HubEdgeRPC.js';
 import type { Logger } from '@munode/common';
-
-const { EdgeHubPacket, PacketType, RPCError: ProtoRPCError, Heartbeat, HeartbeatAck } = hubedge;
-
-// Re-export the RPC types for external use
-export { hubedgeRpc };
 
 // ============================================================================
 // Notification Parameter Types
@@ -205,10 +200,10 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
     request.method = method;
     request.timeout_ms = effectiveTimeout;
 
-    const packet = new EdgeHubPacket({
+    const packet: EdgeHubPacket = {
       type: PacketType.PACKET_TYPE_RPC_REQUEST,
       rpc_request: request,
-    });
+    };
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -230,23 +225,23 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
    * Send typed notification (no response expected)
    * Accepts either a TypedRPCNotification directly or plain object params
    */
-  notify(method: string, params: hubedgeRpc.TypedRPCNotification | NotificationParams): void {
-    let notification: hubedgeRpc.TypedRPCNotification;
+  notify(method: string, params: TypedRPCNotification | NotificationParams): void {
+    let notification: TypedRPCNotification;
     
     // If params is already a TypedRPCNotification, use it directly
-    if (params instanceof hubedgeRpc.TypedRPCNotification) {
-      notification = params;
+    if (typeof params === 'object' && 'timestamp' in params && typeof params.timestamp === 'number') {
+      notification = params as TypedRPCNotification;
       notification.method = method;
       notification.timestamp = Date.now();
     } else {
       // Create TypedRPCNotification from plain object based on method
-      notification = this.createNotification(method, params);
+      notification = this.createNotification(method, params as NotificationParams);
     }
     
-    const packet = new EdgeHubPacket({
+    const packet: EdgeHubPacket = {
       type: PacketType.PACKET_TYPE_RPC_NOTIFICATION,
       rpc_notification: notification,
-    });
+    };
 
     this.sendPacket(packet);
   }
@@ -411,24 +406,24 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
 
     if (error) {
       this.logger?.error(`RPC Error response for ${method}:`, error);
-      const packet = new EdgeHubPacket({
+      const packet: EdgeHubPacket = {
         type: PacketType.PACKET_TYPE_RPC_ERROR,
-        rpc_error: new ProtoRPCError({
+        rpc_error: {
           request_id: id,
           code: error.code,
           message: error.message,
           details: error.data,
-        }),
-      });
+        },
+      };
       this.sendPacket(packet);
     } else {
       response.request_id = id;
       response.method = method;
 
-      const packet = new EdgeHubPacket({
+      const packet: EdgeHubPacket = {
         type: PacketType.PACKET_TYPE_RPC_RESPONSE,
         rpc_response: response,
-      });
+      };
       this.sendPacket(packet);
     }
   }
@@ -438,13 +433,13 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
    */
   ping(): void {
     const seq = ++this.heartbeatSeq;
-    const packet = new EdgeHubPacket({
+    const packet: EdgeHubPacket = {
       type: PacketType.PACKET_TYPE_HEARTBEAT,
-      heartbeat: new Heartbeat({
+      heartbeat: {
         edge_id: 0,
         sequence: seq,
-      }),
-    });
+      },
+    };
     this.sendPacket(packet);
   }
 
@@ -453,7 +448,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
    */
   private handleMessage(data: Buffer): void {
     try {
-      const packet = EdgeHubPacket.deserializeBinary(new Uint8Array(data));
+      const packet = EdgeHubPacket.decode(new Uint8Array(data));
 
       switch (packet.type) {
         case PacketType.PACKET_TYPE_RPC_REQUEST:
@@ -707,27 +702,27 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
   }
 
   private handleHeartbeat(packet: hubedge.EdgeHubPacket): void {
-    if (!packet.has_heartbeat || !packet.heartbeat) {
+    if (!packet.heartbeat) {
       return;
     }
 
     const { edge_id: edgeId, sequence } = packet.heartbeat;
     
-    const ackPacket = new EdgeHubPacket({
+    const ackPacket: EdgeHubPacket = {
       type: PacketType.PACKET_TYPE_HEARTBEAT_ACK,
-      heartbeat_ack: new HeartbeatAck({
+      heartbeat_ack: {
         edge_id: edgeId,
         sequence,
         hub_timestamp: Date.now(),
-      }),
-    });
+      },
+    };
     this.sendPacket(ackPacket);
     
     this.emit('ping', Date.now());
   }
 
-  private handleHeartbeatAck(packet: hubedge.EdgeHubPacket): void {
-    if (!packet.has_heartbeat_ack || !packet.heartbeat_ack) {
+  private handleHeartbeatAck(packet: EdgeHubPacket): void {
+    if (!packet.heartbeat_ack) {
       return;
     }
 
@@ -736,15 +731,15 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
     this.emit('pong', latency);
   }
 
-  private handleClientRelay(packet: hubedge.EdgeHubPacket): void {
-    if (!packet.has_relay || !packet.relay) {
+  private handleClientRelay(packet: EdgeHubPacket): void {
+    if (!packet.relay) {
       return;
     }
     this.emit('relay', packet.relay);
   }
 
-  private handleSync(packet: hubedge.EdgeHubPacket): void {
-    if (!packet.has_sync_data || !packet.sync_data) {
+  private handleSync(packet: EdgeHubPacket): void {
+    if (!packet.sync_data) {
       return;
     }
     this.emit('sync', packet.sync_data);
@@ -759,9 +754,10 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
     this.emit('error', error);
   }
 
-  private sendPacket(packet: hubedge.EdgeHubPacket): void {
+  private sendPacket(packet: EdgeHubPacket): void {
     if (this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(packet.serializeBinary());
+      const bytes = EdgeHubPacket.encode(packet).finish();
+      this.ws.send(bytes);
     } else {
       throw new Error('WebSocket not open');
     }
