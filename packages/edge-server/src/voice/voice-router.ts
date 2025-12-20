@@ -1004,6 +1004,12 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
    * 最终包结构: [header][session][sequence][voice_data]
    */
   private serializeVoicePacket(packet: VoicePacket): Buffer {
+    // 防御性检查：确保 sender_session 有效
+    if (!packet.sender_session || packet.sender_session === 0) {
+      this.logger.error(`Invalid sender_session in voice packet: ${packet.sender_session}`);
+      throw new Error(`Cannot serialize voice packet with invalid sender_session: ${packet.sender_session}`);
+    }
+
     // 创建新的header，保留codec和target
     // target信息对于跨Edge转发至关重要（1-30=whisper, 0=PTT, 31=loopback）
     // Go中对于本地转发会清零target，但跨Edge转发需要保留

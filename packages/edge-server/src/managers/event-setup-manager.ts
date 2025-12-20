@@ -749,6 +749,32 @@ export class EventSetupManager {
             this.logger.debug('Received edge.forceDisconnect notification (handled by ClusterManager)');
             break;
 
+          case 'hub.routeTableUpdate': {
+            // 处理来自Hub的路由表更新
+            const params = message.params as { routes: Array<{
+              targetEdgeId: number;
+              type: 'direct' | 'relay' | 'fallback';
+              nextHop?: number;
+              cost: number;
+              timestamp: number;
+              source: 'hub' | 'local';
+              ttl?: number;
+            }> };
+            
+            this.logger.debug(`Received route table update from Hub: ${params.routes.length} routes`);
+            
+            if (this.voiceManager) {
+              const routingManager = this.voiceManager.getVoiceRoutingManager();
+              // 将字符串类型转换为 RouteType 枚举
+              const routes = params.routes.map(route => ({
+                ...route,
+                type: route.type as import('../types.js').RouteType
+              }));
+              routingManager.handleHubRouteTable(routes);
+            }
+            break;
+          }
+
           default:
             this.logger.warn(`Unhandled notification method: ${message.method}`);
         }

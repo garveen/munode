@@ -352,6 +352,20 @@ export class VoiceManager {
       const senderSession = this.parseSessionFromVoicePacket(voiceData);
       if (senderSession === null) {
         this.logger.warn('[VOICE-REMOTE] Failed to parse session from remote voice packet');
+        // 输出包的前几个字节用于调试
+        const hexDump = voiceData.slice(0, Math.min(20, voiceData.length)).toString('hex');
+        this.logger.warn(`[VOICE-REMOTE] Packet hex dump (first ${Math.min(20, voiceData.length)} bytes): ${hexDump}`);
+        return;
+      }
+
+      // 检查 session 是否有效（必须 > 0）
+      if (senderSession === 0) {
+        this.logger.warn(
+          `[VOICE-REMOTE] Invalid sender session 0 in remote voice packet`
+        );
+        // 输出包的前几个字节用于调试
+        const hexDump = voiceData.slice(0, Math.min(20, voiceData.length)).toString('hex');
+        this.logger.warn(`[VOICE-REMOTE] Packet hex dump (first ${Math.min(20, voiceData.length)} bytes): ${hexDump}`);
         return;
       }
 
