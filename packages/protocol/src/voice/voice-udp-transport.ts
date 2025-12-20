@@ -771,7 +771,6 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       }
       
       // 解密（如果启用）
-      let decryptedData: Buffer;
       if (this.encryptionConfig) {
         const decrypted = this.decodeEncryptedPacket(data);
         if (!decrypted) {
@@ -779,41 +778,41 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
           this.stats.errors++;
           return;
         }
-        decryptedData = Buffer.concat([
-          this.encodePacketHeader({
-            version: decrypted.version,
-            senderId: decrypted.senderId,
-            targetId: decrypted.targetId,
-            sequence: decrypted.sequence,
-            codec: decrypted.codec,
-          }),
-          decrypted.data,
-        ]);
+        
+        // 直接使用解密后的数据构建 VoicePacket
+        // 不需要重新编码和解码
+        const packet: VoicePacket = {
+          version: decrypted.version,
+          senderId: decrypted.senderId,
+          targetId: decrypted.targetId,
+          sequence: decrypted.sequence,
+          codec: decrypted.codec,
+          data: decrypted.data, // 已经是去除了 header 的 Mumble 包
+        };
+
+        // 发出事件
+        this.emit('voice-packet', packet, rinfo);
       } else {
-        decryptedData = data;
+        // 未加密的情况，需要解析
+        const decoded = this.decodePacket(data);
+        if (!decoded) {
+          this.logger.warn('Failed to parse voice packet');
+          this.stats.errors++;
+          return;
+        }
+
+        const packet: VoicePacket = {
+          version: decoded.header.version,
+          senderId: decoded.header.senderId,
+          targetId: decoded.header.targetId,
+          sequence: decoded.header.sequence,
+          codec: decoded.header.codec,
+          data: decoded.voiceData,
+        };
+
+        // 发出事件
+        this.emit('voice-packet', packet, rinfo);
       }
-
-      // 解析包头（自定义14字节header）
-      const decoded = this.decodePacket(decryptedData);
-      if (!decoded) {
-        this.logger.warn('Failed to parse voice packet');
-        this.stats.errors++;
-        return;
-      }
-
-      // 构建完整的 VoicePacket
-      const packet: VoicePacket = {
-        version: decoded.header.version,
-        senderId: decoded.header.senderId,
-        targetId: decoded.header.targetId,
-        sequence: decoded.header.sequence,
-        codec: decoded.header.codec,
-        data: decoded.voiceData,
-      };
-
-      // 发出事件
-      // voiceData 是去除了自定义header后的完整 Mumble 语音包
-      this.emit('voice-packet', packet, rinfo);
     } catch (error) {
       this.stats.errors++;
       this.logger.error('Error handling incoming voice packet:', error);
@@ -853,6 +852,13 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     };
 
     const voiceData = data.slice(14);
+
+    // 调试：验证 voiceData 不包含 header
+    this.logger.debug(
+      `[UDP-DECODE] Input data length: ${data.length}, ` +
+      `voiceData length: ${voiceData.length}, ` +
+      `voiceData first 10 bytes: ${voiceData.slice(0, Math.min(10, voiceData.length)).toString('hex')}`
+    );
 
     return { header, voiceData };
   }
