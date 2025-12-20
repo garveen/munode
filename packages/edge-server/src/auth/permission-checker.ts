@@ -127,7 +127,7 @@ export class PermissionHandlers {
         this.logger.error('PermissionQuery rejected: Hub client not available');
         // 返回默认权限
         const defaultPerms = 0x30e; // Traverse | Enter | Speak | Whisper | TextMessage
-        const permissionQueryResponse = PermissionQuery;
+        const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: channel_id, permissions: defaultPerms }).finish();
         this.messageHandler.sendMessage(
           session_id,
           MessageType.PermissionQuery,
@@ -151,7 +151,7 @@ export class PermissionHandlers {
         this.logger.warn(`PermissionQuery failed: ${result?.error}`);
         // 返回默认权限
         const defaultPerms = 0x30e;
-        const permissionQueryResponse = PermissionQuery;
+        const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: channel_id, permissions: defaultPerms }).finish();
         this.messageHandler.sendMessage(
           session_id,
           MessageType.PermissionQuery,
@@ -161,7 +161,7 @@ export class PermissionHandlers {
       }
 
       // 发送权限响应
-      const permissionQueryResponse = PermissionQuery;
+      const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: query.channel_id, permissions: permissions }).finish();
 
       this.messageHandler.sendMessage(
         session_id,
@@ -249,7 +249,7 @@ export class PermissionHandlers {
         );
 
         // 发送带 flush=true 的权限响应，通知客户端清空缓存
-        const permissionQueryResponse = PermissionQuery;
+        const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: query.channel_id, permissions: permissions }).finish();
 
         this.messageHandler.sendMessage(
           client.session,

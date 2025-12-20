@@ -190,9 +190,7 @@ export class HubDataManager {
             userStateData.recording = true;
           }
 
-          const userStateData: any = {}; // FIXME: needs proper data
-          const userStateMessage = userState;
-          
+          const userStateMessage = mumbleproto.UserState.encode(userStateData).finish();
           this.handlerFactory.messageHandler.sendMessage(client.session, MessageType.UserState, Buffer.from(userStateMessage));
           this.logger.debug(`[HUB-BROADCAST] Sent UserState to client ${client.session} (user session=${params.session_id}, channel=${params.channel_id})`);
           broadcastCount++;
@@ -226,10 +224,12 @@ export class HubDataManager {
         this.handlerFactory.stateManager.updateRemoteUserChannel(params.session_id, changes.channel_id);
       }
 
-      // 构建UserState消息
-      const userStateData: any = {}; // FIXME: needs proper data
-
-      // 只包含变更的字段
+      // 构建UserState消息，只包含变更的字段
+      const userState: any = {
+        session: params.session_id,
+        actor: params.actor_session,
+      };
+      
       if (typeof changes.channel_id === 'number') {
         userState.channel_id = changes.channel_id;
       }
@@ -255,7 +255,7 @@ export class HubDataManager {
         userState.priority_speaker = changes.priority_speaker;
       }
 
-      const userStateMessage = userState;
+      const userStateMessage = mumbleproto.UserState.encode(userState).finish();
 
       // 广播给所有本地已认证的客户端
       const allClients = this.handlerFactory.clientManager.getAllClients();

@@ -101,7 +101,7 @@ export class HubMessageHandlers {
         userStateInit.temporary_access_tokens = params.temporary_access_tokens;
       }
       
-      const userStateData: any = {}; // FIXME: needs proper data
+      const userStateMessage = mumbleproto.UserState.encode(userStateInit).finish();
 
       const targetSession = userState.session;
 
@@ -162,7 +162,7 @@ export class HubMessageHandlers {
         }
 
       // Broadcast to all local authenticated clients (if target_sessions provided, only broadcast to these clients)
-      const userStateMessage = userState;
+      // userStateMessage already encoded above
       const allClients = this.clientManager.getAllClients();
       const targetSessions = params.target_sessions; // List of target sessions in Channel Ninja mode
       const targetSessionsSet = targetSessions ? new Set(targetSessions) : null; // Convert to Set for O(1) lookup
@@ -265,7 +265,7 @@ export class HubMessageHandlers {
         }
         
         // 构建UserState消息
-        const userStateMsgData: any = {}; // FIXME: needs proper data
+        const userStateMsgMessage = mumbleproto.UserState.encode(userStateMsg).finish();
         const userStateBuffer = Buffer.from(userStateMsg);
         
         // 发送给客户端
@@ -423,8 +423,7 @@ export class HubMessageHandlers {
       if (channelState.is_enter_restricted !== undefined) channelStateInit.is_enter_restricted = channelState.is_enter_restricted;
       if (channelState.can_enter !== undefined) channelStateInit.can_enter = channelState.can_enter;
 
-      const channelStateMsgData: any = {}; // FIXME: needs proper data
-      const channelStateMessage = channelStateMsg;
+      const channelStateMessage = mumbleproto.ChannelState.encode(channelStateMsg).finish();
       const allClients = this.clientManager.getAllClients();
       for (const client of allClients) {
         if (client.user_id > 0) {
@@ -473,9 +472,8 @@ export class HubMessageHandlers {
       this.logger.debug(`Received UserRemove broadcast from Hub: session ${session}, ${isKickOrBan ? `${ban ? 'ban' : 'kick'} by ${actor}` : 'normal leave'}, ninja: ${isNinjaMode}`);
 
       // 构建UserRemove消息
-      const userRemoveData: any = {}; // FIXME: needs proper data
+      const userRemoveMessage = mumbleproto.UserRemove.encode(userRemove).finish();
 
-      const userRemoveMessage = userRemove;
 
       // 从状态管理器中移除远程用户
       if (this.stateManager) {
@@ -605,7 +603,7 @@ export class HubMessageHandlers {
       );
 
       // 构建TextMessage消息
-      const textMsgData: any = {}; // FIXME: needs proper data
+      const textMessage = mumbleproto.TextMessage.encode(textMsg).finish();
 
       const textMessageBuffer = Buffer.from(textMsg);
 
@@ -672,7 +670,7 @@ export class HubMessageHandlers {
       // 注意：根据 Mumble 协议，发送给客户端时应清除 receiverSessions
       const normalizedData = this.normalizeDataField(data);
       
-      const pluginDataMsgData: any = {}; // FIXME: needs proper data
+      const pluginDataMessage = mumbleproto.PluginDataTransmission.encode(pluginDataMsg).finish();
 
       const pluginDataBuffer = Buffer.from(pluginDataMsg);
 
@@ -752,8 +750,8 @@ export class HubMessageHandlers {
         const response: {
           session: number;
           certificates: Uint8Array[];
-          from_client?: mumbleproto.UserStats.Stats;
-          from_server?: mumbleproto.UserStats.Stats;
+          from_client?: mumbleproto.UserStats_Stats;
+          from_server?: mumbleproto.UserStats_Stats;
           udp_packets?: number;
           tcp_packets?: number;
           udp_ping_avg?: number;
@@ -801,12 +799,12 @@ export class HubMessageHandlers {
               : userStats.address;
           }
           if (userStats.version) {
-            response.version = new mumbleproto.Version({
+            response.version = {
               version: (userStats.version.major || 0) << 16 | (userStats.version.minor || 0) << 8 | (userStats.version.patch || 0),
               release: `${userStats.version.major}.${userStats.version.minor}.${userStats.version.patch || 0}`,
               os: '',
               os_version: '',
-            });
+            };
           }
           // 注意：证书链 (certificates) 由 protobuf 自动初始化为空数组
           // 如果有证书数据需要添加，在这里处理
@@ -817,10 +815,10 @@ export class HubMessageHandlers {
 
         // 添加网络统计字段（需要转换为 protobuf 对象）
         if (userStats.from_client) {
-          response.from_client = new mumbleproto.UserStats.Stats(userStats.from_client);
+          response.from_client = userStats.from_client;
         }
         if (userStats.from_server) {
-          response.from_server = new mumbleproto.UserStats.Stats(userStats.from_server);
+          response.from_server = userStats.from_server;
         }
         if (userStats.udp_packets !== undefined) {
           response.udp_packets = userStats.udp_packets;
@@ -841,8 +839,7 @@ export class HubMessageHandlers {
           response.tcp_ping_var = userStats.tcp_ping_var;
         }
 
-        const userStatsMessage = UserStats;
-        const responseMessage = userStatsMessage;
+        const responseMessage = mumbleproto.UserStats.encode(response).finish();
         
         this.messageHandler.sendMessage(actor_session, MessageType.UserStats, Buffer.from(responseMessage));
         
@@ -973,7 +970,7 @@ export class HubMessageHandlers {
           try {
             // Send a user-friendly message before disconnecting
             // Don't expose internal system details to clients
-            const textMsgData: any = {}; // FIXME: needs proper data
+            const textMessage = mumbleproto.TextMessage.encode(textMsg).finish();
             
             this.messageHandler.sendMessage(
               client.session,
