@@ -471,7 +471,7 @@ describe('Voice Integration Tests', () => {
       
       // 创建频道 VoiceTarget
       await sender.setVoiceTarget(2, [
-        { channel_id: 1 },
+        { session: [], channel_id: 1 },
       ]);
       // 等待 VoiceTarget 同步到所有 Edge（增加到 2 秒）
       await new Promise(resolve => setTimeout(resolve, 2000));

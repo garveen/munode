@@ -500,7 +500,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
   }
 
   private handleRPCRequest(packet: EdgeHubPacket): void {
-    if (!packet.rpc_request !== undefined || !packet.rpc_request) {
+    if (packet.rpc_request === undefined || !packet.rpc_request) {
       this.logger.warn('Received RPC_REQUEST packet without rpc_request field');
       return;
     }
@@ -525,7 +525,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
   }
 
   private handleRPCResponse(packet: EdgeHubPacket): void {
-    if (!packet.rpc_response !== undefined || !packet.rpc_response) {
+    if (packet.rpc_response === undefined || !packet.rpc_response) {
       this.logger.warn('Received RPC_RESPONSE packet without rpc_response field');
       return;
     }
@@ -542,7 +542,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
   }
 
   private handleRPCError(packet: EdgeHubPacket): void {
-    if (!packet.rpc_error !== undefined || !packet.rpc_error) {
+    if (packet.rpc_error === undefined || !packet.rpc_error) {
       this.logger.warn('Received RPC_ERROR packet without rpc_error field');
       return;
     }
@@ -558,7 +558,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
   }
 
   private handleRPCNotification(packet: EdgeHubPacket): void {
-    if (!packet.rpc_notification !== undefined || !packet.rpc_notification) {
+    if (packet.rpc_notification === undefined || !packet.rpc_notification) {
       this.logger.warn('Received RPC_NOTIFICATION packet without rpc_notification field');
       return;
     }
