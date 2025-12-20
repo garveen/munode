@@ -62,7 +62,7 @@ export class AdminHandlers {
           duration: entry.duration || 0,
         })),
         query: false,
-      }).finish();
+      } as any).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.BanList, Buffer.from(response));
         this.logger.debug(`Sent BanList to session ${session_id}: ${banList.length} entries`);
@@ -242,7 +242,7 @@ export class AdminHandlers {
         const userStateMessage = mumbleproto.UserState.encode({
           session: session_id,
           channel_id: toChannelId,
-        }).finish();
+        } as any).finish();
 
         this.messageHandler.broadcastMessage(MessageType.UserState, Buffer.from(userStateMessage));
 
@@ -293,7 +293,7 @@ export class AdminHandlers {
       const confirmMessage = mumbleproto.TextMessage.encode({
         actor: session_id,
         message: `Promiscuous mode ${enabled ? 'enabled' : 'disabled'}`,
-      }).finish();
+      } as any).finish();
 
       this.messageHandler.sendMessage(
         session_id,
@@ -337,7 +337,7 @@ export class AdminHandlers {
           temporary_access_tokens: [],
           listening_channel_add: [],
           listening_channel_remove: [],
-        }).finish();
+        } as any).finish();
 
         this.messageHandler.broadcastMessage(
           MessageType.UserState,
@@ -382,7 +382,7 @@ export class AdminHandlers {
                 session: targetSession,
                 texture: Buffer.from(result.data),
                 texture_hash: Buffer.from(result.hash, 'base64'),
-              }).finish();
+              } as any).finish();
               this.messageHandler.sendMessage(
                 session_id,
                 MessageType.UserState,
@@ -415,7 +415,7 @@ export class AdminHandlers {
               const userStateMessage = mumbleproto.UserState.encode({
                 session: targetSession,
                 comment: comment,
-              }).finish();
+              } as any).finish();
               this.messageHandler.sendMessage(
                 session_id,
                 MessageType.UserState,
@@ -440,7 +440,7 @@ export class AdminHandlers {
               links: [],
               links_add: [],
               links_remove: [],
-            }).finish();
+            } as any).finish();
 
             this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(response)); 
           }
@@ -483,7 +483,7 @@ export class AdminHandlers {
         // TODO: 从Hub或用户缓存获取所有用户
         const response = mumbleproto.UserList.encode({
           users: [], // 暂时返回空列表
-        }).finish();
+        } as any).finish();
 
         this.messageHandler.sendMessage(session_id, MessageType.UserList, Buffer.from(response)); 
         this.logger.debug(`Sent UserList response to session ${session_id}`);
@@ -563,7 +563,7 @@ export class AdminHandlers {
         reason: reason,
         name: denyName,
         channel_id: channel_id,
-      }).finish();
+      } as any).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.PermissionDenied, Buffer.from(denyMessage));
         this.logger.debug(`Sent PermissionDenied to session ${session_id}: ${denyName} - ${reason}`);

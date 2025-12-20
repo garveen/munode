@@ -104,7 +104,7 @@ export class ProtocolHandlers {
         late: client.crypt?.localStats.late ?? 0,
         lost: client.crypt?.localStats.lost ?? 0,
         resync: client.crypt?.localStats.resync ?? 0,
-      }).finish();
+      } as any).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.Ping, Buffer.from(pongMessage));
 

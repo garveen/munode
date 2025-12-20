@@ -315,7 +315,7 @@ export class MessageHandlers {
       const channelStateMessage = mumbleproto.ChannelState.encode({
         channel_id: channel.id,
         links_add: channel.links,
-      }).finish();
+      } as any).finish();
 
         this.logger.debug(
         `[sendChannelTree] Links: channel ${channel.id} links: [${channel.links.join(', ')}]`
@@ -569,7 +569,7 @@ export class MessageHandlers {
     const rejectMessage = mumbleproto.Reject.encode({
       type: rejectType,
       reason: reason,
-    }).finish();
+    } as any).finish();
 
     this.messageHandler.sendMessage(session_id, MessageType.Reject, Buffer.from(rejectMessage));
   }

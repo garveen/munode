@@ -136,7 +136,7 @@ export class AuthHandlers {
         key: cryptKey,
         client_nonce: serverDecryptIV,
         server_nonce: serverEncryptIV,
-      }).finish();
+      } as any).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.CryptSetup, Buffer.from(cryptSetupMessage));
 
@@ -149,7 +149,7 @@ export class AuthHandlers {
         beta: -2147483632, // CELT 0.11.0
         prefer_alpha: true,
         opus: authMessage.opus || false,
-      }).finish();
+      } as any).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.CodecVersion, Buffer.from(codecVersionMessage));
 
@@ -231,7 +231,7 @@ export class AuthHandlers {
         max_bandwidth: this.config.max_bandwidth || 128000,
         welcome_text: this.config.welcomeText || 'Welcome to Shitspeak Server',
         permissions: 0, // TODO: 计算权限
-      }).finish();
+      } as any).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.ServerSync, Buffer.from(serverSyncMessage));
 

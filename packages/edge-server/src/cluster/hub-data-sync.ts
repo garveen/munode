@@ -227,7 +227,7 @@ export class HubDataManager {
       // 构建UserState消息，只包含变更的字段
       const userState: any = {
         session: params.session_id,
-        actor: params.actor_session,
+        actor: 0,
       };
       
       if (typeof changes.channel_id === 'number') {
