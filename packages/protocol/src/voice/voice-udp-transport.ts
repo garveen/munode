@@ -181,10 +181,20 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   }
 
   /**
+   * 规范化主机名，将 localhost 转换为 127.0.0.1
+   * 这确保主机名匹配在接收数据包时能正常工作
+   */
+  private normalizeHost(host: string): string {
+    return host === 'localhost' ? '127.0.0.1' : host;
+  }
+
+  /**
    * 注册远程端点并发起握手
    */
   registerEndpoint(edgeId: number, host: string, port: number): void {
-    this.remoteEndpoints.set(edgeId, { host, port });
+    // 规范化主机名以确保匹配
+    const normalizedHost = this.normalizeHost(host);
+    this.remoteEndpoints.set(edgeId, { host: normalizedHost, port });
     
     const now = Date.now();
     // Determine if this is the active side
@@ -304,10 +314,11 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     
     const type = data.readUInt8(4);
     
-    // 找到对应的edge
+    // 找到对应的edge（使用规范化的地址进行匹配）
+    const normalizedAddress = this.normalizeHost(rinfo.address);
     let edgeId: number | undefined;
     for (const [id, endpoint] of this.remoteEndpoints) {
-      if (endpoint.host === rinfo.address && endpoint.port === rinfo.port) {
+      if (endpoint.host === normalizedAddress && endpoint.port === rinfo.port) {
         edgeId = id;
         break;
       }
@@ -371,10 +382,11 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     
     const type = data.readUInt8(4);
     
-    // 找到对应的edge
+    // 找到对应的edge（使用规范化的地址进行匹配）
+    const normalizedAddress = this.normalizeHost(rinfo.address);
     let edgeId: number | undefined;
     for (const [id, endpoint] of this.remoteEndpoints) {
-      if (endpoint.host === rinfo.address && endpoint.port === rinfo.port) {
+      if (endpoint.host === normalizedAddress && endpoint.port === rinfo.port) {
         edgeId = id;
         break;
       }
@@ -676,19 +688,18 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       return;
     }
 
-    // 编码包头
-    const headerBuffer = this.encodePacketHeader(packet);
-    const fullPacket = Buffer.concat([headerBuffer, voiceData]);
-
     // 加密（如果启用）
     let finalPacket: Buffer;
     if (this.encryptionConfig) {
+      // 加密模式：encodePacket 会自动添加 header，所以直接传递 voiceData
       finalPacket = this.encodePacket({
         ...packet,
-        data: fullPacket,
+        data: voiceData,
       });
     } else {
-      finalPacket = fullPacket;
+      // 未加密模式：需要手动添加 header
+      const headerBuffer = this.encodePacketHeader(packet);
+      finalPacket = Buffer.concat([headerBuffer, voiceData]);
     }
 
     // 发送
@@ -779,6 +790,12 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
           return;
         }
         
+        // 调试：验证 decrypted.data 不包含 header
+        this.logger.debug(
+          `[UDP-DECRYPT] Decrypted data length: ${decrypted.data.length}, ` +
+          `first 10 bytes: ${decrypted.data.slice(0, Math.min(10, decrypted.data.length)).toString('hex')}`
+        );
+        
         // 直接使用解密后的数据构建 VoicePacket
         // 不需要重新编码和解码
         const packet: VoicePacket = {
@@ -794,12 +811,19 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
         this.emit('voice-packet', packet, rinfo);
       } else {
         // 未加密的情况，需要解析
+        this.logger.debug(`[UDP-UNENCRYPTED] Processing unencrypted packet, length: ${data.length}`);
+        
         const decoded = this.decodePacket(data);
         if (!decoded) {
           this.logger.warn('Failed to parse voice packet');
           this.stats.errors++;
           return;
         }
+
+        this.logger.debug(
+          `[UDP-UNENCRYPTED] Decoded voiceData length: ${decoded.voiceData.length}, ` +
+          `first 10 bytes: ${decoded.voiceData.slice(0, Math.min(10, decoded.voiceData.length)).toString('hex')}`
+        );
 
         const packet: VoicePacket = {
           version: decoded.header.version,
@@ -839,9 +863,17 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     header: VoicePacketHeader;
     voiceData: Buffer;
   } | null {
+    this.logger.debug(`[UDP-DECODE] Decoding packet, input length: ${data.length}`);
+    
     if (data.length < 14) {
+      this.logger.warn(`[UDP-DECODE] Data too short: ${data.length} bytes`);
       return null;
     }
+
+    // 输出原始数据的前 20 字节
+    this.logger.debug(
+      `[UDP-DECODE] Input data first 20 bytes: ${data.slice(0, Math.min(20, data.length)).toString('hex')}`
+    );
 
     const header: VoicePacketHeader = {
       version: data.readUInt8(0),
@@ -850,6 +882,12 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       sequence: data.readUInt32BE(9),
       codec: data.readUInt8(13),
     };
+
+    this.logger.debug(
+      `[UDP-DECODE] Header parsed: version=${header.version}, ` +
+      `senderId=${header.senderId}, targetId=${header.targetId}, ` +
+      `sequence=${header.sequence}, codec=${header.codec}`
+    );
 
     const voiceData = data.slice(14);
 
