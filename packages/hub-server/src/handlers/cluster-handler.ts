@@ -42,7 +42,7 @@ export class ClusterHandler implements IClusterHandler {
         name: edge.name,
         host: edge.host,
         port: edge.port,
-        voicePort: edge.port + 1,
+        voice_port: edge.port + 1,
       }));
 
     // 生成加入令牌
@@ -74,7 +74,7 @@ export class ClusterHandler implements IClusterHandler {
         name: edge.name,
         host: edge.host,
         port: edge.port,
-        voicePort: edge.port + 1,
+        voice_port: edge.port + 1,
       });
     }
 
@@ -155,7 +155,7 @@ export class ClusterHandler implements IClusterHandler {
         name: edge.name,
         host: edge.host,
         port: edge.port,
-        clientCount: edge.current_load || 0,
+        client_count: edge.current_load || 0,
         status: (edge.last_seen && Date.now() - edge.last_seen < 10000 ? 'online' : 'offline'),
          last_seen: edge.last_seen,
       })),

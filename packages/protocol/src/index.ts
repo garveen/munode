@@ -30,6 +30,17 @@ export type {
   PluginDataTransmission,
 } from './generated/proto/Mumble.js';
 
+// Export all Mumble types as a namespace for backward compatibility
+import * as MumbleProto from './generated/proto/Mumble.js';
+export { MumbleProto as mumbleproto };
+
+// Export all HubEdge types as namespaces for backward compatibility
+import * as HubEdgeProto from './generated/proto/HubEdge.js';
+export { HubEdgeProto as hubedge };
+
+import * as HubEdgeRPCProto from './generated/proto/HubEdgeRPC.js';
+export { HubEdgeRPCProto as hubedgeRpc };
+
 // Export enums and MessageFns
 export {
   PermissionDenied_DenyType,
@@ -98,7 +109,8 @@ export {
 } from './transport/packet-codec.js';
 
 // Re-export commonly used protobuf types with simplified names
-export type MumbleVoiceTarget = VoiceTarget;
+import type { VoiceTarget } from './generated/proto/Mumble.js';
+export type { VoiceTarget as MumbleVoiceTarget };
 
 // Shared types (Client and Server)
 export type {

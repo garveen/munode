@@ -36,7 +36,7 @@ import type { ChannelData } from '../hub-edge-types.js';
 interface VoiceDataParams {
   fromSessionId: number;
   targetSessionId: number;
-  voiceData: Uint8Array;
+  voiceData: Buffer;
   timestamp: number;
 }
 
@@ -306,7 +306,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
           actor_session: p.actor_session,
           success: p.success,
           channel_id: p.channel_id,
-          raw_data: p.raw_data ? new TextEncoder().encode(p.raw_data) : undefined,
+          raw_data: p.raw_data ? Buffer.from(p.raw_data, 'base64') : undefined,
           error: p.error,
           permission_denied: p.permission_denied,
         };
