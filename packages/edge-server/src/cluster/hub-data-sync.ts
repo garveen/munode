@@ -190,7 +190,7 @@ export class HubDataManager {
             userStateData.recording = true;
           }
 
-          const userState = UserState;
+          const userStateData: any = {}; // FIXME: needs proper data
           const userStateMessage = userState;
           
           this.handlerFactory.messageHandler.sendMessage(client.session, MessageType.UserState, Buffer.from(userStateMessage));
@@ -227,7 +227,7 @@ export class HubDataManager {
       }
 
       // 构建UserState消息
-      const userState = UserState;
+      const userStateData: any = {}; // FIXME: needs proper data
 
       // 只包含变更的字段
       if (typeof changes.channel_id === 'number') {

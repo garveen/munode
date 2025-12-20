@@ -101,7 +101,7 @@ export class HubMessageHandlers {
         userStateInit.temporary_access_tokens = params.temporary_access_tokens;
       }
       
-      const userState = UserState;
+      const userStateData: any = {}; // FIXME: needs proper data
 
       const targetSession = userState.session;
 
@@ -265,7 +265,7 @@ export class HubMessageHandlers {
         }
         
         // 构建UserState消息
-        const userStateMsg = UserState;
+        const userStateMsgData: any = {}; // FIXME: needs proper data
         const userStateBuffer = Buffer.from(userStateMsg);
         
         // 发送给客户端
@@ -423,7 +423,7 @@ export class HubMessageHandlers {
       if (channelState.is_enter_restricted !== undefined) channelStateInit.is_enter_restricted = channelState.is_enter_restricted;
       if (channelState.can_enter !== undefined) channelStateInit.can_enter = channelState.can_enter;
 
-      const channelStateMsg = ChannelState;
+      const channelStateMsgData: any = {}; // FIXME: needs proper data
       const channelStateMessage = channelStateMsg;
       const allClients = this.clientManager.getAllClients();
       for (const client of allClients) {
@@ -473,7 +473,7 @@ export class HubMessageHandlers {
       this.logger.debug(`Received UserRemove broadcast from Hub: session ${session}, ${isKickOrBan ? `${ban ? 'ban' : 'kick'} by ${actor}` : 'normal leave'}, ninja: ${isNinjaMode}`);
 
       // 构建UserRemove消息
-      const userRemove = UserRemove;
+      const userRemoveData: any = {}; // FIXME: needs proper data
 
       const userRemoveMessage = userRemove;
 
@@ -605,7 +605,7 @@ export class HubMessageHandlers {
       );
 
       // 构建TextMessage消息
-      const textMsg = TextMessage;
+      const textMsgData: any = {}; // FIXME: needs proper data
 
       const textMessageBuffer = Buffer.from(textMsg);
 
@@ -672,7 +672,7 @@ export class HubMessageHandlers {
       // 注意：根据 Mumble 协议，发送给客户端时应清除 receiverSessions
       const normalizedData = this.normalizeDataField(data);
       
-      const pluginDataMsg = PluginDataTransmission;
+      const pluginDataMsgData: any = {}; // FIXME: needs proper data
 
       const pluginDataBuffer = Buffer.from(pluginDataMsg);
 
@@ -973,7 +973,7 @@ export class HubMessageHandlers {
           try {
             // Send a user-friendly message before disconnecting
             // Don't expose internal system details to clients
-            const textMsg = TextMessage;
+            const textMsgData: any = {}; // FIXME: needs proper data
             
             this.messageHandler.sendMessage(
               client.session,

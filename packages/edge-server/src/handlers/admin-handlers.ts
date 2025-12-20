@@ -558,9 +558,14 @@ export class AdminHandlers {
           denyName = type;
       }
 
-      const deny = PermissionDenied;
+      const denyMessage = mumbleproto.PermissionDenied.encode({
+        type: denyType,
+        reason: reason,
+        name: denyName,
+        channel_id: channel_id,
+      }).finish();
 
-      this.messageHandler.sendMessage(session_id, MessageType.PermissionDenied, Buffer.from(deny));
+      this.messageHandler.sendMessage(session_id, MessageType.PermissionDenied, Buffer.from(denyMessage));
         this.logger.debug(`Sent PermissionDenied to session ${session_id}: ${denyName} - ${reason}`);
     } catch (error) {
         this.logger.error(`Error sending PermissionDenied to session ${session_id}:`, error);
