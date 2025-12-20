@@ -51,19 +51,12 @@ export default {
     hmacSecret: 'change-this-to-a-secure-random-string', // Must match Hub's hmacSecret
   },
 
-  // Peer-to-peer server configuration
-  peerServers: {
-    enableP2P: false,
-    connectionTimeout: 10000,
-    maxConnections: 10,
-  },
-
-  // Relay configuration
-  relay: {
-    enabled: false,
-    preferredRelay: undefined,
-    fallbackRelays: [],
-  },
+  // Voice UDP transport configuration (Edge-to-Edge communication)
+  // Note: Currently encryption is NOT enabled. To enable encryption, add:
+  //   voiceUdp: {
+  //     encryptionKey: Buffer.from('your-32-byte-key-here'),
+  //     encryptionAlgorithm: 'aes-256-cbc',
+  //   }
 
   // Authentication configuration
   auth: {
@@ -84,10 +77,10 @@ export default {
   maxTextMessageLength: 5000,
   maxImageMessageLength: 131072, // 128 KB
 
-  // Client suggestions
-  suggestVersion: undefined, // Suggested client version number
-  suggestPositional: undefined, // Suggest positional audio
-  suggestPushToTalk: undefined, // Suggest push-to-talk
+  // Client suggestions (optional)
+  // suggestVersion: 0x010204, // Suggest client version 1.2.4 (format: 0xMMmmpp)
+  // suggestPositional: false, // Suggest disabling positional audio
+  // suggestPushToTalk: true,  // Suggest enabling push-to-talk
 
   // Feature flags
   features: {
@@ -97,7 +90,7 @@ export default {
     packetPool: true,
     udpMonitor: true,
     allowHtml: true,
-    allowPing: true, // 允许响应 UDP ping 请求（用于客户端服务器发现）
+    allowPing: true,
   },
 
   // Logging configuration

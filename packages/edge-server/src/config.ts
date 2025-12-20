@@ -34,14 +34,6 @@ export async function loadEdgeConfig(configPath?: string, logger?: Logger): Prom
       reconnectInterval: 5000,
       heartbeatInterval: 30000,
     },
-    peerServers: {
-      enableP2P: false,
-      connectionTimeout: 10000,
-      maxConnections: 10,
-    },
-    relay: {
-      enabled: false,
-    },
     auth: {
       apiUrl: 'http://localhost:8080/api',
       apiKey: '',

@@ -32,8 +32,6 @@ export interface EdgeConfig {
   network: NetworkConfig;
   tls: TLSConfig;
   hubServer?: HubServerConfig;
-  peerServers: PeerServersConfig;
-  relay: RelayConfig;
   voiceRouting?: EdgeVoiceRoutingConfig;  // 语音路由配置
   auth: AuthConfig;
   capacity: number;
@@ -44,7 +42,7 @@ export interface EdgeConfig {
   welcomeText?: string;
   maxTextMessageLength?: number;
   maxImageMessageLength?: number;
-  suggestVersion?: number; // 建议的客户端版本号
+  suggestVersion?: number; // 建议的客户端版本号（例如：0x010203 代表 1.2.3）
   suggestPositional?: boolean; // 建议启用位置音频
   suggestPushToTalk?: boolean; // 建议启用按键发言
 }
@@ -101,20 +99,6 @@ export interface KcpOptions {
   interval: number;
   resend: number;
   nc: number;
-}
-
-// P2P 服务器配置
-export interface PeerServersConfig {
-  enableP2P: boolean;
-  connectionTimeout: number;
-  maxConnections: number;
-}
-
-// Relay 配置
-export interface RelayConfig {
-  enabled: boolean;
-  preferredRelay?: number;
-  fallbackRelays?: number[];
 }
 
 // 语音路由配置 (Edge 侧)

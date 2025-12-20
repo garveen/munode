@@ -220,6 +220,32 @@ export class AuthHandlers {
 
       this.messageHandler.sendMessage(session_id, MessageType.ServerSync, Buffer.from(serverSyncMessage));
 
+      // 9.5. 发送 SuggestConfig 消息（如果配置了建议）
+      const suggestConfig: {
+        version?: number;
+        positional?: boolean;
+        push_to_talk?: boolean;
+      } = {};
+      let hasSuggestion = false;
+
+      if (this.config.suggestVersion !== undefined && this.config.suggestVersion > 0) {
+        suggestConfig.version = this.config.suggestVersion;
+        hasSuggestion = true;
+      }
+      if (this.config.suggestPositional !== undefined) {
+        suggestConfig.positional = this.config.suggestPositional;
+        hasSuggestion = true;
+      }
+      if (this.config.suggestPushToTalk !== undefined) {
+        suggestConfig.push_to_talk = this.config.suggestPushToTalk;
+        hasSuggestion = true;
+      }
+
+      if (hasSuggestion) {
+        const suggestMessage = new mumbleproto.SuggestConfig(suggestConfig).serialize();
+        this.messageHandler.sendMessage(session_id, MessageType.SuggestConfig, Buffer.from(suggestMessage));
+      }
+
       // 10. 更新客户端状态为 Ready
       this.clientManager.updateClient(session_id, {
         state: ClientState.Ready,
