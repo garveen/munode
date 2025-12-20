@@ -331,82 +331,82 @@ export class ClientMessageRelayHandler extends TypedEventEmitter<ClientMessageRe
     relay: hubedge.ClientMessageRelay
   ): { messageType: MessageType | null; message: unknown | null } {
     // 检查每个可能的 Mumble 消息字段
-    if (relay.has_version) {
+    if (relay !== undefined) {
       return { messageType: MessageType.Version, message: relay.version };
     }
-    if (relay.has_udp_tunnel) {
+    if (relay !== undefined) {
       return { messageType: MessageType.UDPTunnel, message: relay.udp_tunnel };
     }
-    if (relay.has_authenticate) {
+    if (relay !== undefined) {
       return { messageType: MessageType.Authenticate, message: relay.authenticate };
     }
-    if (relay.has_ping) {
+    if (relay !== undefined) {
       return { messageType: MessageType.Ping, message: relay.ping };
     }
-    if (relay.has_reject) {
+    if (relay !== undefined) {
       return { messageType: MessageType.Reject, message: relay.reject };
     }
-    if (relay.has_server_sync) {
+    if (relay !== undefined) {
       return { messageType: MessageType.ServerSync, message: relay.server_sync };
     }
-    if (relay.has_channel_remove) {
+    if (relay !== undefined) {
       return { messageType: MessageType.ChannelRemove, message: relay.channel_remove };
     }
-    if (relay.has_channel_state) {
+    if (relay !== undefined) {
       return { messageType: MessageType.ChannelState, message: relay.channel_state };
     }
-    if (relay.has_user_remove) {
+    if (relay !== undefined) {
       return { messageType: MessageType.UserRemove, message: relay.user_remove };
     }
-    if (relay.has_user_state) {
+    if (relay !== undefined) {
       return { messageType: MessageType.UserState, message: relay.user_state };
     }
-    if (relay.has_ban_list) {
+    if (relay !== undefined) {
       return { messageType: MessageType.BanList, message: relay.ban_list };
     }
-    if (relay.has_text_message) {
+    if (relay !== undefined) {
       return { messageType: MessageType.TextMessage, message: relay.text_message };
     }
-    if (relay.has_permission_denied) {
+    if (relay !== undefined) {
       return { messageType: MessageType.PermissionDenied, message: relay.permission_denied };
     }
-    if (relay.has_acl) {
+    if (relay !== undefined) {
       return { messageType: MessageType.ACL, message: relay.acl };
     }
-    if (relay.has_query_users) {
+    if (relay !== undefined) {
       return { messageType: MessageType.QueryUsers, message: relay.query_users };
     }
-    if (relay.has_crypt_setup) {
+    if (relay !== undefined) {
       return { messageType: MessageType.CryptSetup, message: relay.crypt_setup };
     }
-    if (relay.has_context_action_modify) {
+    if (relay !== undefined) {
       return { messageType: MessageType.ContextActionModify, message: relay.context_action_modify };
     }
-    if (relay.has_context_action) {
+    if (relay !== undefined) {
       return { messageType: MessageType.ContextAction, message: relay.context_action };
     }
-    if (relay.has_user_list) {
+    if (relay !== undefined) {
       return { messageType: MessageType.UserList, message: relay.user_list };
     }
-    if (relay.has_voice_target) {
+    if (relay !== undefined) {
       return { messageType: MessageType.VoiceTarget, message: relay.voice_target };
     }
-    if (relay.has_permission_query) {
+    if (relay !== undefined) {
       return { messageType: MessageType.PermissionQuery, message: relay.permission_query };
     }
-    if (relay.has_codec_version) {
+    if (relay !== undefined) {
       return { messageType: MessageType.CodecVersion, message: relay.codec_version };
     }
-    if (relay.has_user_stats) {
+    if (relay !== undefined) {
       return { messageType: MessageType.UserStats, message: relay.user_stats };
     }
-    if (relay.has_request_blob) {
+    if (relay !== undefined) {
       return { messageType: MessageType.RequestBlob, message: relay.request_blob };
     }
-    if (relay.has_server_config) {
+    if (relay !== undefined) {
       return { messageType: MessageType.ServerConfig, message: relay.server_config };
     }
-    if (relay.has_suggest_config) {
+    if (relay !== undefined) {
       return { messageType: MessageType.SuggestConfig, message: relay.suggest_config };
     }
 

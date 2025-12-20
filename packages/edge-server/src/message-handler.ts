@@ -19,7 +19,7 @@ export interface MessageHandlerEvents extends EventMap {
   'userRemove': [session: number, data: Buffer];
   'userState': [session: number, data: Buffer];
   'banListQuery': [session: number];
-  'banListUpdate': [session: number, bans: mumbleproto.BanList.BanEntry[]];
+  'banListUpdate': [session: number, bans: mumbleproto.BanList_BanEntry[]];
   'textMessage': [session: number, data: Buffer];
   'pluginDataTransmission': [session: number, data: Buffer];
   'permissionDenied': [session: number, data: Buffer];
@@ -282,12 +282,12 @@ export class MessageHandler extends TypedEventEmitter<MessageHandlerEvents> {
   private handleBanList( session_id: number, data: Buffer): void {
     // 解析 BanList 消息
     try {
-      const banList = mumbleproto.BanList.deserialize(data);
+      const banList = mumbleproto.BanList.decode(data);
 
       // 根据 query 字段判断是查询还是更新
       // query=true 或 query 未设置且 bans 为空 → 查询
       // query=false 或有 bans 数据 → 更新（包括清空）
-      const isQuery = banList.has_query ? banList.query : (!banList.bans || banList.bans.length === 0);
+      const isQuery = banList !== undefined ? banList.query : (!banList.bans || banList.bans.length === 0);
       
       if (isQuery) {
         // 查询封禁列表

@@ -50,7 +50,7 @@ export class AuthHandlers {
         this.sendReject(
           session_id,
           'Invalid state for authentication',
-          mumbleproto.Reject.RejectType.None
+          mumbleproto.Reject_RejectType.None
         );
         return;
       }
@@ -94,12 +94,12 @@ export class AuthHandlers {
         this.handleAuthFailure(
           session_id,
           authResult.reason || 'Authentication failed',
-          authResult.rejectType || mumbleproto.Reject.RejectType.None
+          authResult.rejectType || mumbleproto.Reject_RejectType.None
         );
       }
     } catch (error) {
         this.logger.error(`Authentication error for session ${session_id}:`, error);
-      this.sendReject(session_id, 'Internal authentication error', mumbleproto.Reject.RejectType.None);
+      this.sendReject(session_id, 'Internal authentication error', mumbleproto.Reject_RejectType.None);
     }
   }
 
@@ -288,7 +288,7 @@ export class AuthHandlers {
   handleAuthFailure(
     session_id: number,
     reason: string,
-    rejectType: mumbleproto.Reject.RejectType = mumbleproto.Reject.RejectType.None
+    rejectType: mumbleproto.Reject_RejectType = mumbleproto.Reject_RejectType.None
   ): void {
         this.logger.warn(`Authentication failed for session ${session_id}: ${reason}`);
     this.sendReject(session_id, reason, rejectType);
@@ -319,7 +319,7 @@ export class AuthHandlers {
   private sendReject(
     session_id: number,
     reason: string,
-    rejectType?: mumbleproto.Reject.RejectType
+    rejectType?: mumbleproto.Reject_RejectType
   ): void {
     const messageHandlers = this.factory.messageHandlers;
     messageHandlers.sendReject(session_id, reason, rejectType);

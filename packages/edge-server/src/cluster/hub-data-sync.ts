@@ -125,8 +125,8 @@ export class HubDataManager {
       
       for (const client of allClients) {
         const shouldBroadcast = isLocalUser 
-          ? client.has_full_user_list 
-          : (client.user_id > 0 && client.has_full_user_list);
+          ? client !== undefined 
+          : (client.user_id > 0 && client !== undefined);
         
         if (shouldBroadcast) {
           // 🔒 根据接收方是否为已注册用户，决定是否发送证书哈希
@@ -190,8 +190,8 @@ export class HubDataManager {
             userStateData.recording = true;
           }
 
-          const userState = new mumbleproto.UserState(userStateData);
-          const userStateMessage = userState.serialize();
+          const userState = UserState;
+          const userStateMessage = userState;
           
           this.handlerFactory.messageHandler.sendMessage(client.session, MessageType.UserState, Buffer.from(userStateMessage));
           this.logger.debug(`[HUB-BROADCAST] Sent UserState to client ${client.session} (user session=${params.session_id}, channel=${params.channel_id})`);
@@ -227,12 +227,7 @@ export class HubDataManager {
       }
 
       // 构建UserState消息
-      const userState = new mumbleproto.UserState({
-        session: params.session_id,
-        temporary_access_tokens: [],
-        listening_channel_add: [],
-        listening_channel_remove: [],
-      });
+      const userState = UserState;
 
       // 只包含变更的字段
       if (typeof changes.channel_id === 'number') {
@@ -260,17 +255,17 @@ export class HubDataManager {
         userState.priority_speaker = changes.priority_speaker;
       }
 
-      const userStateMessage = userState.serialize();
+      const userStateMessage = userState;
 
       // 广播给所有本地已认证的客户端
       const allClients = this.handlerFactory.clientManager.getAllClients();
       for (const client of allClients) {
-        if (client.user_id > 0 && client.has_full_user_list) {
+        if (client.user_id > 0 && client !== undefined) {
           this.handlerFactory.messageHandler.sendMessage(client.session, MessageType.UserState, Buffer.from(userStateMessage));
         }
       }
 
-        this.logger.debug(`Broadcasted remote user state change to ${allClients.filter(c => c.user_id > 0 && c.has_full_user_list).length} local clients`);
+        this.logger.debug(`Broadcasted remote user state change to ${allClients.filter(c => c.user_id > 0 && c !== undefined).length} local clients`);
     } catch (error) {
         this.logger.error('Error handling remote user state changed:', error);
     }

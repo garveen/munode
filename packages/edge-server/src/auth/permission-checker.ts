@@ -28,7 +28,7 @@ export class PermissionHandlers {
    */
   async handleACL(session_id: number, data: Buffer): Promise<void> {
     try {
-      const acl = mumbleproto.ACL.deserialize(data);
+      const acl = mumbleproto.ACL.decode(data);
       
       const actor = this.clientManager.getClient(session_id);
       if (!actor) {
@@ -42,7 +42,7 @@ export class PermissionHandlers {
       }
 
       // 使用 has_channel_id 检查 protobuf optional 字段是否真的设置了值（遵循 Copilot 指导）
-      if (!acl.has_channel_id) {
+      if (!acl !== undefined) {
         this.logger.warn(`ACL without channel_id from session: ${session_id}`);
         return;
       }
@@ -100,7 +100,7 @@ export class PermissionHandlers {
    */
   async handlePermissionQuery(session_id: number, data: Buffer): Promise<void> {
     try {
-      const permQuery = mumbleproto.PermissionQuery.deserialize(data);
+      const permQuery = mumbleproto.PermissionQuery.decode(data);
 
       // 获取执行操作的客户端
       const actor = this.clientManager.getClient(session_id);
@@ -117,7 +117,7 @@ export class PermissionHandlers {
         this.logger.debug(`PermissionQuery from session ${session_id}: user_id=${actor.user_id}, username=${actor.username}, groups=${JSON.stringify(actor.groups)}`);
 
       // 使用 has_channel_id 检查 protobuf optional 字段是否真的设置了值（遵循 Copilot 指导）
-      if (!permQuery.has_channel_id) {
+      if (!permQuery !== undefined) {
         this.logger.warn(`PermissionQuery without channel_id from session: ${session_id}`);
         return;
       }
@@ -127,15 +127,11 @@ export class PermissionHandlers {
         this.logger.error('PermissionQuery rejected: Hub client not available');
         // 返回默认权限
         const defaultPerms = 0x30e; // Traverse | Enter | Speak | Whisper | TextMessage
-        const permissionQueryResponse = new mumbleproto.PermissionQuery({
-          channel_id: permQuery.channel_id,
-          permissions: defaultPerms,
-          flush: false,
-        });
+        const permissionQueryResponse = PermissionQuery;
         this.messageHandler.sendMessage(
           session_id,
           MessageType.PermissionQuery,
-          Buffer.from(permissionQueryResponse.serialize())
+          Buffer.from(permissionQueryResponse)
         );
         return;
       }
@@ -155,30 +151,22 @@ export class PermissionHandlers {
         this.logger.warn(`PermissionQuery failed: ${result?.error}`);
         // 返回默认权限
         const defaultPerms = 0x30e;
-        const permissionQueryResponse = new mumbleproto.PermissionQuery({
-          channel_id: permQuery.channel_id,
-          permissions: defaultPerms,
-          flush: false,
-        });
+        const permissionQueryResponse = PermissionQuery;
         this.messageHandler.sendMessage(
           session_id,
           MessageType.PermissionQuery,
-          Buffer.from(permissionQueryResponse.serialize())
+          Buffer.from(permissionQueryResponse)
         );
         return;
       }
 
       // 发送权限响应
-      const permissionQueryResponse = new mumbleproto.PermissionQuery({
-        channel_id: permQuery.channel_id,
-        permissions: result.permissions,
-        flush: false,
-      });
+      const permissionQueryResponse = PermissionQuery;
 
       this.messageHandler.sendMessage(
         session_id,
         MessageType.PermissionQuery,
-        Buffer.from(permissionQueryResponse.serialize())
+        Buffer.from(permissionQueryResponse)
       );
 
         this.logger.debug(`Sent permission query response for channel ${permQuery.channel_id} to session ${session_id}: ${result.permissions}`);
@@ -261,16 +249,12 @@ export class PermissionHandlers {
         );
 
         // 发送带 flush=true 的权限响应，通知客户端清空缓存
-        const permissionQueryResponse = new mumbleproto.PermissionQuery({
-          channel_id: client.channel_id,
-          permissions: permissions,
-          flush: true, // 告诉客户端清空所有权限缓存
-        });
+        const permissionQueryResponse = PermissionQuery;
 
         this.messageHandler.sendMessage(
           client.session,
           MessageType.PermissionQuery,
-          Buffer.from(permissionQueryResponse.serialize())
+          Buffer.from(permissionQueryResponse)
         );
 
         this.logger.debug(`Sent flush PermissionQuery to session ${client.session} for channel ${client.channel_id}`);
@@ -315,13 +299,7 @@ export class PermissionHandlers {
           });
 
           // 广播状态变更给所有客户端
-          const userState = new mumbleproto.UserState({
-            session: client.session,
-            suppress: newSuppress,
-            temporary_access_tokens: [],
-            listening_channel_add: [],
-            listening_channel_remove: [],
-          });
+          const userState = UserState;
 
           // 广播给所有已认证的客户端
           const allClients = this.clientManager.getAllClients();
@@ -330,7 +308,7 @@ export class PermissionHandlers {
               this.messageHandler.sendMessage(
                 otherClient.session,
                 MessageType.UserState,
-                Buffer.from(userState.serialize())
+                Buffer.from(userState)
               );
             }
           }

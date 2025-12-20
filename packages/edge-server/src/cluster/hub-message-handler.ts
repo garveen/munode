@@ -101,7 +101,7 @@ export class HubMessageHandlers {
         userStateInit.temporary_access_tokens = params.temporary_access_tokens;
       }
       
-      const userState = new mumbleproto.UserState(userStateInit);
+      const userState = UserState;
 
       const targetSession = userState.session;
 
@@ -110,29 +110,29 @@ export class HubMessageHandlers {
       if (client) {
           const updates: Partial<ClientInfo> = {};
           
-          if (userState.has_channel_id && userState.channel_id !== undefined) {
+          if (userState !== undefined && userState.channel_id !== undefined) {
         this.logger.info(`[USERSTATE-DEBUG] Moving local client ${client.username} (session ${targetSession}) from channel ${client.channel_id} to ${userState.channel_id}`);
             this.clientManager.moveClient(targetSession, userState.channel_id);
           }
-          if (userState.has_mute && userState.mute !== undefined) {
+          if (userState !== undefined && userState.mute !== undefined) {
             updates.mute = userState.mute;
           }
-          if (userState.has_deaf && userState.deaf !== undefined) {
+          if (userState !== undefined && userState.deaf !== undefined) {
             updates.deaf = userState.deaf;
           }
-          if (userState.has_suppress && userState.suppress !== undefined) {
+          if (userState !== undefined && userState.suppress !== undefined) {
             updates.suppress = userState.suppress;
           }
-          if (userState.has_self_mute && userState.self_mute !== undefined) {
+          if (userState !== undefined && userState.self_mute !== undefined) {
             updates.self_mute = userState.self_mute;
           }
-          if (userState.has_self_deaf && userState.self_deaf !== undefined) {
+          if (userState !== undefined && userState.self_deaf !== undefined) {
             updates.self_deaf = userState.self_deaf;
           }
-          if (userState.has_priority_speaker && userState.priority_speaker !== undefined) {
+          if (userState !== undefined && userState.priority_speaker !== undefined) {
             updates.priority_speaker = userState.priority_speaker;
           }
-          if (userState.has_recording && userState.recording !== undefined) {
+          if (userState !== undefined && userState.recording !== undefined) {
             updates.recording = userState.recording;
           }
           
@@ -162,7 +162,7 @@ export class HubMessageHandlers {
         }
 
       // Broadcast to all local authenticated clients (if target_sessions provided, only broadcast to these clients)
-      const userStateMessage = userState.serialize();
+      const userStateMessage = userState;
       const allClients = this.clientManager.getAllClients();
       const targetSessions = params.target_sessions; // List of target sessions in Channel Ninja mode
       const targetSessionsSet = targetSessions ? new Set(targetSessions) : null; // Convert to Set for O(1) lookup
@@ -265,8 +265,8 @@ export class HubMessageHandlers {
         }
         
         // 构建UserState消息
-        const userStateMsg = new mumbleproto.UserState(userStateInit);
-        const userStateBuffer = Buffer.from(userStateMsg.serialize());
+        const userStateMsg = UserState;
+        const userStateBuffer = Buffer.from(userStateMsg);
         
         // 发送给客户端
         this.messageHandler.sendMessage(actor_session, MessageType.UserState, userStateBuffer);
@@ -423,8 +423,8 @@ export class HubMessageHandlers {
       if (channelState.is_enter_restricted !== undefined) channelStateInit.is_enter_restricted = channelState.is_enter_restricted;
       if (channelState.can_enter !== undefined) channelStateInit.can_enter = channelState.can_enter;
 
-      const channelStateMsg = new mumbleproto.ChannelState(channelStateInit);
-      const channelStateMessage = channelStateMsg.serialize();
+      const channelStateMsg = ChannelState;
+      const channelStateMessage = channelStateMsg;
       const allClients = this.clientManager.getAllClients();
       for (const client of allClients) {
         if (client.user_id > 0) {
@@ -473,14 +473,9 @@ export class HubMessageHandlers {
       this.logger.debug(`Received UserRemove broadcast from Hub: session ${session}, ${isKickOrBan ? `${ban ? 'ban' : 'kick'} by ${actor}` : 'normal leave'}, ninja: ${isNinjaMode}`);
 
       // 构建UserRemove消息
-      const userRemove = new mumbleproto.UserRemove({
-        session: session,
-        actor: actor,
-        reason: reason || '',
-        ban: ban || false,
-      });
+      const userRemove = UserRemove;
 
-      const userRemoveMessage = userRemove.serialize();
+      const userRemoveMessage = userRemove;
 
       // 从状态管理器中移除远程用户
       if (this.stateManager) {
@@ -554,7 +549,7 @@ export class HubMessageHandlers {
           'write',
           error,
           0,
-          mumbleproto.PermissionDenied.DenyType.Permission
+          mumbleproto.PermissionDenied_DenyType.Permission
         );
         this.logger.info(`Sent PermissionDenied to actor ${actor_session}: ${error}`);
       }
@@ -610,15 +605,9 @@ export class HubMessageHandlers {
       );
 
       // 构建TextMessage消息
-      const textMsg = new mumbleproto.TextMessage({
-        actor,
-        session: session || [],
-        channel_id: channel_id || [],
-        tree_id: tree_id || [],
-        message: message || '',
-      });
+      const textMsg = TextMessage;
 
-      const textMessageBuffer = Buffer.from(textMsg.serialize());
+      const textMessageBuffer = Buffer.from(textMsg);
 
       // 发送给所有本地客户端（let them filter by target）
       let sentCount = 0;
@@ -683,14 +672,9 @@ export class HubMessageHandlers {
       // 注意：根据 Mumble 协议，发送给客户端时应清除 receiverSessions
       const normalizedData = this.normalizeDataField(data);
       
-      const pluginDataMsg = new mumbleproto.PluginDataTransmission({
-        senderSession: sender_session,
-        dataID: dataID || '',
-        data: normalizedData,
-        receiverSessions: [], // 清除接收者列表，客户端不需要知道
-      });
+      const pluginDataMsg = PluginDataTransmission;
 
-      const pluginDataBuffer = Buffer.from(pluginDataMsg.serialize());
+      const pluginDataBuffer = Buffer.from(pluginDataMsg);
 
       // 发送给目标客户端
       let sentCount = 0;
@@ -857,8 +841,8 @@ export class HubMessageHandlers {
           response.tcp_ping_var = userStats.tcp_ping_var;
         }
 
-        const userStatsMessage = new mumbleproto.UserStats(response);
-        const responseMessage = userStatsMessage.serialize();
+        const userStatsMessage = UserStats;
+        const responseMessage = userStatsMessage;
         
         this.messageHandler.sendMessage(actor_session, MessageType.UserStats, Buffer.from(responseMessage));
         
@@ -989,18 +973,12 @@ export class HubMessageHandlers {
           try {
             // Send a user-friendly message before disconnecting
             // Don't expose internal system details to clients
-            const textMsg = new mumbleproto.TextMessage({
-              actor: 0, // Server message
-              session: [client.session],
-              channel_id: [],
-              tree_id: [],
-              message: 'Server is restarting. Please reconnect in a moment.',
-            });
+            const textMsg = TextMessage;
             
             this.messageHandler.sendMessage(
               client.session,
               MessageType.TextMessage,
-              Buffer.from(textMsg.serialize())
+              Buffer.from(textMsg)
             );
             
             // Disconnect the client

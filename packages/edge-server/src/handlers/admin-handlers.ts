@@ -52,7 +52,7 @@ export class AdminHandlers {
       // 返回封禁列表
       const banList = await this.banManager.getAllActiveBans();
       const response = new mumbleproto.BanList({
-        bans: banList.map((entry) => new mumbleproto.BanList.BanEntry({
+        bans: banList.map((entry) => new mumbleproto.BanList_BanEntry({
           address: entry.address ? Buffer.from(entry.address.split('.').map((x) => parseInt(x))) : undefined,
           mask: entry.mask || 32,
           name: entry.name || '',
@@ -173,7 +173,7 @@ export class AdminHandlers {
    */
   public sendContextActionModify(session_id: number, message: mumbleproto.ContextActionModify): void {
     try {
-      const data = Buffer.from(message.serialize());
+      const data = Buffer.from(message);
       this.messageHandler.sendMessage(session_id, MessageType.ContextActionModify, data);
     } catch (error) {
         this.logger.error(`Error sending ContextActionModify to session ${session_id}:`, error);
@@ -239,15 +239,9 @@ export class AdminHandlers {
         client.channel_id = toChannelId;
 
         // 广播 UserState 消息
-        const userState = new mumbleproto.UserState({
-          session: client.session,
-          channel_id: toChannelId,
-          temporary_access_tokens: [],
-          listening_channel_add: [],
-          listening_channel_remove: [],
-        });
+        const userState = UserState;
 
-        this.messageHandler.broadcastMessage(MessageType.UserState, Buffer.from(userState.serialize()));
+        this.messageHandler.broadcastMessage(MessageType.UserState, Buffer.from(userState));
 
         movedCount++;
       }
@@ -293,18 +287,12 @@ export class AdminHandlers {
         this.logger.info(`Session ${session_id} set promiscuous mode to ${enabled}`);
 
       // 发送确认（通过 TextMessage）
-      const confirmMessage = new mumbleproto.TextMessage({
-        actor: 0, // 服务器消息
-        message: `Promiscuous mode ${enabled ? 'enabled' : 'disabled'}`,
-        session: [session_id],
-        channel_id: [],
-        tree_id: [],
-      });
+      const confirmMessage = TextMessage;
 
       this.messageHandler.sendMessage(
         session_id,
         MessageType.TextMessage,
-        Buffer.from(confirmMessage.serialize())
+        Buffer.from(confirmMessage)
       );
     } catch (error) {
         this.logger.error(`Error setting promiscuous mode for session ${session_id}:`, error);
@@ -347,7 +335,7 @@ export class AdminHandlers {
 
         this.messageHandler.broadcastMessage(
           MessageType.UserState,
-          Buffer.from(clearState.serialize())
+          Buffer.from(clearState)
         );
       }
 
@@ -384,17 +372,11 @@ export class AdminHandlers {
 
             if (result.success && result.data && result.hash) {
               // 发送 UserState 消息，包含纹理数据
-              const userState = new mumbleproto.UserState({
-                session: targetSession,
-                texture: result.data,
-                temporary_access_tokens: [],
-                listening_channel_add: [],
-                listening_channel_remove: [],
-              });
+              const userState = UserState;
               this.messageHandler.sendMessage(
                 session_id,
                 MessageType.UserState,
-                Buffer.from(userState.serialize())
+                Buffer.from(userState)
               );
         this.logger.debug(`Sent texture for session ${targetSession} to session ${session_id}`);
             }
@@ -420,17 +402,11 @@ export class AdminHandlers {
               // 发送 UserState 消息，包含评论
               // result.data is Uint8Array from protobuf, convert to string
               const comment = Buffer.from(result.data).toString('utf-8');
-              const userState = new mumbleproto.UserState({
-                session: targetSession,
-                comment: comment,
-                temporary_access_tokens: [],
-                listening_channel_add: [],
-                listening_channel_remove: [],
-              });
+              const userState = UserState;
               this.messageHandler.sendMessage(
                 session_id,
                 MessageType.UserState,
-                Buffer.from(userState.serialize())
+                Buffer.from(userState)
               );
         this.logger.debug(`Sent comment for session ${targetSession} to session ${session_id}`);
             }
@@ -445,13 +421,13 @@ export class AdminHandlers {
         for (const channel_id of request.channel_description) {
           const channel = this.channelManager.getChannel(channel_id);
           if (channel && channel.description) {
-            const response = new mumbleproto.ChannelState({
+            const response = mumbleproto.ChannelState.encode({
               channel_id: channel_id,
               description: channel.description,
               links: [],
               links_add: [],
               links_remove: [],
-            }).serialize();
+            }).finish();
 
             this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(response)); 
           }
@@ -492,9 +468,9 @@ export class AdminHandlers {
       if (!userList.users || userList.users.length === 0) {
         // 返回所有注册用户
         // TODO: 从Hub或用户缓存获取所有用户
-        const response = new mumbleproto.UserList({
+        const response = mumbleproto.UserList.encode({
           users: [], // 暂时返回空列表
-        }).serialize();
+        }).finish();
 
         this.messageHandler.sendMessage(session_id, MessageType.UserList, Buffer.from(response)); 
         this.logger.debug(`Sent UserList response to session ${session_id}`);
@@ -527,16 +503,16 @@ export class AdminHandlers {
   public sendPermissionDenied(session_id: number, type: string, reason: string): void {
     try {
       // 根据类型映射到 Mumble 的 DenyType
-      let denyType = mumbleproto.PermissionDenied.DenyType.Permission;
+      let denyType = mumbleproto.PermissionDenied_DenyType.Permission;
       let denyName = '';
 
       switch (type) {
         case 'permission':
-          denyType = mumbleproto.PermissionDenied.DenyType.Permission;
+          denyType = mumbleproto.PermissionDenied_DenyType.Permission;
           denyName = 'Permission';
           break;
         case 'write':
-          denyType = mumbleproto.PermissionDenied.DenyType.ChannelName;
+          denyType = mumbleproto.PermissionDenied_DenyType.ChannelName;
           denyName = 'Write';
           break;
         case 'traverse':
@@ -549,11 +525,11 @@ export class AdminHandlers {
         case 'makeTemporaryChannel':
         case 'register':
         case 'registerSelf':
-          denyType = mumbleproto.PermissionDenied.DenyType.Permission;
+          denyType = mumbleproto.PermissionDenied_DenyType.Permission;
           denyName = type;
           break;
         case 'textMessage':
-          denyType = mumbleproto.PermissionDenied.DenyType.TextTooLong;
+          denyType = mumbleproto.PermissionDenied_DenyType.TextTooLong;
           denyName = 'TextMessage';
           break;
         case 'ban':
@@ -561,24 +537,17 @@ export class AdminHandlers {
         case 'promiscuous':
         case 'cache':
         case 'contextAction':
-          denyType = mumbleproto.PermissionDenied.DenyType.Permission;
+          denyType = mumbleproto.PermissionDenied_DenyType.Permission;
           denyName = 'Admin';
           break;
         default:
-          denyType = mumbleproto.PermissionDenied.DenyType.Permission;
+          denyType = mumbleproto.PermissionDenied_DenyType.Permission;
           denyName = type;
       }
 
-      const deny = new mumbleproto.PermissionDenied({
-        type: denyType,
-        name: denyName,
-        reason: reason,
-        permission: 0,
-        channel_id: 0,
-        session: 0,
-      });
+      const deny = PermissionDenied;
 
-      this.messageHandler.sendMessage(session_id, MessageType.PermissionDenied, Buffer.from(deny.serialize()));
+      this.messageHandler.sendMessage(session_id, MessageType.PermissionDenied, Buffer.from(deny));
         this.logger.debug(`Sent PermissionDenied to session ${session_id}: ${denyName} - ${reason}`);
     } catch (error) {
         this.logger.error(`Error sending PermissionDenied to session ${session_id}:`, error);

@@ -98,13 +98,13 @@ export class ProtocolHandlers {
       }
 
       // 回复 ping 消息，包含服务器端的接收统计
-      const pongMessage = new mumbleproto.Ping({
+      const pongMessage = mumbleproto.Ping.encode({
         timestamp: ping.timestamp,
         good: client.crypt?.localStats.good ?? 0,
         late: client.crypt?.localStats.late ?? 0,
         lost: client.crypt?.localStats.lost ?? 0,
         resync: client.crypt?.localStats.resync ?? 0,
-      }).serialize();
+      }).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.Ping, Buffer.from(pongMessage));
 

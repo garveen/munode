@@ -73,7 +73,7 @@ export class EventSetupManager {
 
     this.handlerFactory.messageHandler.on(
       'banListUpdate',
-      (session_id: number, bans: mumbleproto.BanList.BanEntry[]) => {
+      (session_id: number, bans: mumbleproto.BanList_BanEntry[]) => {
         void this.banHandler.handleBanListUpdate(session_id, bans);
       }
     );
@@ -434,8 +434,8 @@ export class EventSetupManager {
                   userStateData.hash = session.cert_hash;
                 }
                 
-                const userState = new mumbleproto.UserState(userStateData);
-                const userStateMessage = userState.serialize();
+                const userState = UserState;
+                const userStateMessage = userState;
                 const userStateBuffer = Buffer.from(userStateMessage);
                 
                 // Broadcast to all local authenticated clients
@@ -787,12 +787,7 @@ export class EventSetupManager {
    */
   private sendServerVersion(session_id: number): void {
     try {
-      const version = new mumbleproto.Version({
-        version: 0x010400, // 1.4.0
-        release: 'MuNode Edge Server',
-        os: 'Linux',
-        os_version: process.version,
-      });
+      const version = Version;
 
       this.messageManager?.sendMessageToClient(
         session_id,

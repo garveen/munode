@@ -166,11 +166,11 @@ export class MumbleClient extends EventEmitter {
       // 监听频道状态变化
       const onChannelState = (message: mumbleproto.ChannelState) => {
         // 检查是否是我们刚创建的频道 (通过名称匹配)
-        // 使用 has_xxx 检查 protobuf optional 字段是否真的设置了值
+        // 使用 !== undefined 检查 protobuf optional 字段是否真的设置了值
         // 新创建的频道channel_id必须大于0（Root频道ID为0，不是新创建的）
-        if (messagechannel_id !== undefined && message.channel_id > 0 && 
-            messagename !== undefined && message.name === name && 
-            messageparent !== undefined && message.parent === (parent || 0)) {
+        if (message.channel_id !== undefined && message.channel_id > 0 && 
+            message.name !== undefined && message.name === name && 
+            message.parent !== undefined && message.parent === (parent || 0)) {
           clearTimeout(timeout);
           this.removeListener('channelState', onChannelState);
           resolve(message.channel_id);
@@ -429,14 +429,13 @@ export class MumbleClient extends EventEmitter {
    * 发送插件数据
    */
   async sendPluginData(pluginId: string, pluginData: Buffer, receivers?: number[]): Promise<void> {
-    const pluginDataMessage = mumbleproto.PluginDataTransmission.fromJSON({
+    const serialized = mumbleproto.PluginDataTransmission.encode({
       senderSession: this.state.getSession()?.session || 0,
       receiverSessions: receivers || [],
       data: pluginData,
       dataID: pluginId
-    });
+    }).finish();
     
-    const serialized = pluginDataMessage;
     const wrappedMessage = this.connection.wrapMessage(MessageType.PluginDataTransmission, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -449,10 +448,9 @@ export class MumbleClient extends EventEmitter {
       action: action,
       text: text,
       context: contexts ? contexts.reduce((acc, ctx) => acc | ctx, 0) : 1 // 默认Server上下文
-    });
+    }).finish();
     
     const serialized = contextActionMessage;
-    const wrappedMessage = this.connection.wrapMessage(MessageType.ContextActionModify, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
 
@@ -642,11 +640,10 @@ export class MumbleClient extends EventEmitter {
         reason: reason,
         duration: duration
       }]
-    });
+    }).finish();
     
     const serialized = banListMessage;
-    const wrappedMessage = this.connection.wrapMessage(MessageType.BanList, serialized);
-    await this.connection.sendTCP(wrappedMessage);
+    const wrappedMessage = this.connection.wrapMessage(MessageType.BanList, serialized).finish();
   }
 
   /**
@@ -786,12 +783,11 @@ export class MumbleClient extends EventEmitter {
       release: 'MuNode Client',
       os: process.platform,
       os_version: process.version
-    });
+    }).finish();
 
     const serialized = versionMessage;
-    const wrappedMessage = this.connection.wrapMessage(MessageType.Version, serialized);
-    await this.connection.sendTCP(wrappedMessage);
-  }
+    const wrappedMessage = this.connection.wrapMessage(MessageType.Version, serialized).finish();
+    await this.connection.sendTCP(wrappedMessage).finish();
 
   /**
    * 加载配置
