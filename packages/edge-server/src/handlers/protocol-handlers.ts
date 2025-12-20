@@ -133,9 +133,9 @@ export class ProtocolHandlers {
 
         const serverNonce = this.voiceRouter.getClientEncryptIV(session_id);
 
-        const response = new mumbleproto.CryptSetup({
+        const response = mumbleproto.CryptSetup.encode({
           server_nonce: serverNonce || Buffer.alloc(16),
-        }).serialize();
+        } as any).finish();
 
         this.messageHandler.sendMessage(session_id, MessageType.CryptSetup, Buffer.from(response));
         this.logger.debug(`Sent crypt resync response to session ${session_id}`);
@@ -365,8 +365,13 @@ export class ProtocolHandlers {
           target_id: voiceTarget.id,
           config: {
             id: voiceTarget.id,
-            sessions,
-            channels,
+            targets: voiceTarget.targets.map(t => ({
+              session: t.session || [],
+              channel_id: t.channel_id,
+              group: t.group,
+              links: t.links,
+              children: t.children,
+            })),
           },
           timestamp: Date.now(),
         }).catch((err) => {

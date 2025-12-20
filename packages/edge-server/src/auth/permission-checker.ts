@@ -161,7 +161,7 @@ export class PermissionHandlers {
       }
 
       // 发送权限响应
-      const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: permQuery.channel_id, permissions: result.data?.permissions ?? 0 } as any).finish();
+      const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: permQuery.channel_id, permissions: result.permissions ?? 0 } as any).finish();
 
       this.messageHandler.sendMessage(
         session_id,
@@ -249,7 +249,7 @@ export class PermissionHandlers {
         );
 
         // 发送带 flush=true 的权限响应，通知客户端清空缓存
-        const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: permQuery.channel_id, permissions: permissions } as any).finish();
+        const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: client.channel_id, permissions: permissions } as any).finish();
 
         this.messageHandler.sendMessage(
           client.session,

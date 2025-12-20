@@ -173,7 +173,7 @@ export class AdminHandlers {
    */
   public sendContextActionModify(session_id: number, message: mumbleproto.ContextActionModify): void {
     try {
-      const data = Buffer.from(message);
+      const data = Buffer.from(mumbleproto.ContextActionModify.encode(message as any).finish());
       this.messageHandler.sendMessage(session_id, MessageType.ContextActionModify, data);
     } catch (error) {
         this.logger.error(`Error sending ContextActionModify to session ${session_id}:`, error);
@@ -240,7 +240,7 @@ export class AdminHandlers {
 
         // 广播 UserState 消息
         const userStateMessage = mumbleproto.UserState.encode({
-          session: session_id,
+          session: client.session,
           channel_id: toChannelId,
         } as any).finish();
 
@@ -562,7 +562,6 @@ export class AdminHandlers {
         type: denyType,
         reason: reason,
         name: denyName,
-        channel_id: channel_id,
       } as any).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.PermissionDenied, Buffer.from(denyMessage));

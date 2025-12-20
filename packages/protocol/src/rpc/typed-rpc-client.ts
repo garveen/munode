@@ -123,13 +123,13 @@ export class TypedRPCClient {
           client_session: p.client_session,
           target_id: p.target_id,
           config: p.config ? {
-            sessions: p.config.sessions?.map((s: number) => ({ session: s })),
-            channels: p.config.channels?.map((c: { channel_id: number; include_subchannels?: boolean; include_links?: boolean; group?: string }) => ({
-              channel_id: c.channel_id,
-              children: c.include_subchannels,
-              links: c.include_links,
-              group: c.group,
-            })),
+            sessions: p.config.targets?.flatMap(t => t.session.map(s => ({ session: s }))) || [],
+            channels: p.config.targets?.filter(t => t.channel_id !== undefined).map(t => ({
+              channel_id: t.channel_id!,
+              children: t.children,
+              links: t.links,
+              group: t.group,
+            })) || [],
           } : undefined,
           timestamp: p.timestamp,
         };

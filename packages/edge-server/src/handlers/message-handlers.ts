@@ -282,7 +282,7 @@ export class MessageHandlers {
         channelStateData.parent = parentId;
       }
       
-      const channelStateMessage = mumbleproto.ChannelState.encode(channelStateData).finish();
+      const channelStateMessage = mumbleproto.ChannelState.encode(channelStateData as any).finish();
 
         this.logger.debug(
         `[sendChannelTree] BFS: channel ${channel.id} (${channel.name}), ` +

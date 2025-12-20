@@ -227,98 +227,98 @@ export class ClientMessageRelayHandler extends TypedEventEmitter<ClientMessageRe
     message: unknown,
     direction: hubedge.RelayDirection
   ): hubedge.ClientMessageRelay {
-    const relay = new hubedge.ClientMessageRelay({
+    const relayData: any = {
       session_id: sessionId,
       edge_id: this.edgeId,
       direction: direction,
       timestamp: Date.now(),
-    });
+    };
 
     // 根据消息类型设置对应的字段
     switch (messageType) {
       case MessageType.Version:
-        relay.version = message as mumbleproto.Version;
+        relayData.version = message as mumbleproto.Version;
         break;
       case MessageType.UDPTunnel:
-        relay.udp_tunnel = message as mumbleproto.UDPTunnel;
+        relayData.udp_tunnel = message as mumbleproto.UDPTunnel;
         break;
       case MessageType.Authenticate:
-        relay.authenticate = message as mumbleproto.Authenticate;
+        relayData.authenticate = message as mumbleproto.Authenticate;
         break;
       case MessageType.Ping:
-        relay.ping = message as mumbleproto.Ping;
+        relayData.ping = message as mumbleproto.Ping;
         break;
       case MessageType.Reject:
-        relay.reject = message as mumbleproto.Reject;
+        relayData.reject = message as mumbleproto.Reject;
         break;
       case MessageType.ServerSync:
-        relay.server_sync = message as mumbleproto.ServerSync;
+        relayData.server_sync = message as mumbleproto.ServerSync;
         break;
       case MessageType.ChannelRemove:
-        relay.channel_remove = message as mumbleproto.ChannelRemove;
+        relayData.channel_remove = message as mumbleproto.ChannelRemove;
         break;
       case MessageType.ChannelState:
-        relay.channel_state = message as mumbleproto.ChannelState;
+        relayData.channel_state = message as mumbleproto.ChannelState;
         break;
       case MessageType.UserRemove:
-        relay.user_remove = message as mumbleproto.UserRemove;
+        relayData.user_remove = message as mumbleproto.UserRemove;
         break;
       case MessageType.UserState:
-        relay.user_state = message as mumbleproto.UserState;
+        relayData.user_state = message as mumbleproto.UserState;
         break;
       case MessageType.BanList:
-        relay.ban_list = message as mumbleproto.BanList;
+        relayData.ban_list = message as mumbleproto.BanList;
         break;
       case MessageType.TextMessage:
-        relay.text_message = message as mumbleproto.TextMessage;
+        relayData.text_message = message as mumbleproto.TextMessage;
         break;
       case MessageType.PermissionDenied:
-        relay.permission_denied = message as mumbleproto.PermissionDenied;
+        relayData.permission_denied = message as mumbleproto.PermissionDenied;
         break;
       case MessageType.ACL:
-        relay.acl = message as mumbleproto.ACL;
+        relayData.acl = message as mumbleproto.ACL;
         break;
       case MessageType.QueryUsers:
-        relay.query_users = message as mumbleproto.QueryUsers;
+        relayData.query_users = message as mumbleproto.QueryUsers;
         break;
       case MessageType.CryptSetup:
-        relay.crypt_setup = message as mumbleproto.CryptSetup;
+        relayData.crypt_setup = message as mumbleproto.CryptSetup;
         break;
       case MessageType.ContextActionModify:
-        relay.context_action_modify = message as mumbleproto.ContextActionModify;
+        relayData.context_action_modify = message as mumbleproto.ContextActionModify;
         break;
       case MessageType.ContextAction:
-        relay.context_action = message as mumbleproto.ContextAction;
+        relayData.context_action = message as mumbleproto.ContextAction;
         break;
       case MessageType.UserList:
-        relay.user_list = message as mumbleproto.UserList;
+        relayData.user_list = message as mumbleproto.UserList;
         break;
       case MessageType.VoiceTarget:
-        relay.voice_target = message as mumbleproto.VoiceTarget;
+        relayData.voice_target = message as mumbleproto.VoiceTarget;
         break;
       case MessageType.PermissionQuery:
-        relay.permission_query = message as mumbleproto.PermissionQuery;
+        relayData.permission_query = message as mumbleproto.PermissionQuery;
         break;
       case MessageType.CodecVersion:
-        relay.codec_version = message as mumbleproto.CodecVersion;
+        relayData.codec_version = message as mumbleproto.CodecVersion;
         break;
       case MessageType.UserStats:
-        relay.user_stats = message as mumbleproto.UserStats;
+        relayData.user_stats = message as mumbleproto.UserStats;
         break;
       case MessageType.RequestBlob:
-        relay.request_blob = message as mumbleproto.RequestBlob;
+        relayData.request_blob = message as mumbleproto.RequestBlob;
         break;
       case MessageType.ServerConfig:
-        relay.server_config = message as mumbleproto.ServerConfig;
+        relayData.server_config = message as mumbleproto.ServerConfig;
         break;
       case MessageType.SuggestConfig:
-        relay.suggest_config = message as mumbleproto.SuggestConfig;
+        relayData.suggest_config = message as mumbleproto.SuggestConfig;
         break;
       default:
         this.logger.warn(`Unsupported message type for relay: ${messageType}`);
     }
 
-    return relay;
+    return relayData;
   }
 
   /**

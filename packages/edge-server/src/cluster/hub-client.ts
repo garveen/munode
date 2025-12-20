@@ -339,12 +339,10 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
     try {
       const stats = await this.getServerStats();
 
-      const request = new hubedgeRpc.TypedRPCRequest({
+      const request = hubedgeRpc.TypedRPCRequest.encode({
         request_id: '',
         method: 'edge.heartbeat',
-      });
-
-      request.edge_heartbeat = hubedgeRpc.EdgeHeartbeatParams.fromObject({
+        edge_heartbeat: {
         server_id: this.config.server_id,
         stats: stats ? {
           user_count: stats.user_count,
@@ -354,9 +352,10 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
           bandwidth_in: stats.bandwidth?.in,
           bandwidth_out: stats.bandwidth?.out,
         } : undefined,
-      });
+        },
+      } as any).finish();
 
-      const response = await channel.call('edge.heartbeat', request);
+      const response = await channel.call('edge.heartbeat', hubedgeRpc.TypedRPCRequest.decode(request));
 
       // Extract heartbeat response data
       if (response.edge_heartbeat) {
@@ -569,7 +568,10 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
     try {
       const params: RPCParams<'edge.syncVoiceTarget'> = {
         edge_id: this.config.server_id,
-        ...config,
+        client_session: config.client_session,
+        target_id: config.target_id,
+        config: config.config as any || { id: 0, targets: [] },
+        timestamp: config.timestamp,
       };
       await this.client.call('edge.syncVoiceTarget', params);
     } catch (error) {

@@ -55,7 +55,7 @@ export class BanHandler {
       const bans = await this.handlerFactory.banManager.getAllActiveBans();
 
       // 转换为协议格式
-      const banEntries = bans.map((ban) => new mumbleproto.BanList_BanEntry({
+      const banEntries = bans.map((ban) => ({
         address: ban.address ? Buffer.from(ban.address) : Buffer.alloc(0),
         mask: ban.mask || 32,
         name: ban.name || undefined,

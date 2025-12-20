@@ -391,7 +391,6 @@ export class EventSetupManager {
             this.logger.info(`Processing ${remoteSessionCount} remote user sessions from fullSync`);
             
             // Import protocol dependencies once before the loop
-            const mumbleproto = await import('@munode/protocol').then(m => m.mumbleproto);
             const MessageType = await import('@munode/protocol').then(m => m.MessageType);
             
             // Get local clients once before the loop
@@ -434,8 +433,7 @@ export class EventSetupManager {
                   userStateData.hash = session.cert_hash;
                 }
                 
-                const userState = UserState;
-                const userStateMessage = userState;
+                const userStateMessage = mumbleproto.UserState.encode(userStateData as any).finish();
                 const userStateBuffer = Buffer.from(userStateMessage);
                 
                 // Broadcast to all local authenticated clients
@@ -787,12 +785,17 @@ export class EventSetupManager {
    */
   private sendServerVersion(session_id: number): void {
     try {
-      const version = Version;
+      const version = mumbleproto.Version.encode({
+        version_v1: 1,
+        version_v2: 5,
+        os: 'MuNode',
+        release: '0.1.0',
+      } as any).finish();
 
       this.messageManager?.sendMessageToClient(
         session_id,
         MessageType.Version,
-        Buffer.from(version.serializeBinary())
+        Buffer.from(version)
       );
 
       // 发送 Version 后，更新客户端状态为 ServerSentVersion
