@@ -48,26 +48,7 @@ export class HubMessageHandlers {
       // params is the userState object directly, use the type from HubNotificationParams
       // Build UserState protobuf message with only the fields that are set
       // Use any here since we're building a protobuf message dynamically
-      const userStateInit: {
-        session: number;
-        actor: number;
-        temporary_access_tokens: string[];
-        listening_channel_add: number[];
-        listening_channel_remove: number[];
-        name?: string;
-        user_id?: number;
-        channel_id?: number;
-        mute?: boolean;
-        deaf?: boolean;
-        suppress?: boolean;
-        self_mute?: boolean;
-        self_deaf?: boolean;
-        priority_speaker?: boolean;
-        recording?: boolean;
-        texture?: Uint8Array;
-        plugin_context?: Uint8Array;
-        plugin_identity?: string;
-      } = {
+      const userStateInit: any = {
         session: params.session,
         actor: params.actor,
         temporary_access_tokens: [],
@@ -110,29 +91,29 @@ export class HubMessageHandlers {
       if (client) {
           const updates: Partial<ClientInfo> = {};
           
-          if (userState !== undefined && params.channel_id !== undefined) {
+          if ( params.channel_id !== undefined) {
         this.logger.info(`[USERSTATE-DEBUG] Moving local client ${client.username} (session ${targetSession}) from channel ${client.channel_id} to ${params.channel_id}`);
             this.clientManager.moveClient(targetSession, params.channel_id);
           }
-          if (userState !== undefined && params.mute !== undefined) {
+          if ( params.mute !== undefined) {
             updates.mute = params.mute;
           }
-          if (userState !== undefined && params.deaf !== undefined) {
+          if ( params.deaf !== undefined) {
             updates.deaf = params.deaf;
           }
-          if (userState !== undefined && params.suppress !== undefined) {
+          if ( params.suppress !== undefined) {
             updates.suppress = params.suppress;
           }
-          if (userState !== undefined && params.self_mute !== undefined) {
+          if ( params.self_mute !== undefined) {
             updates.self_mute = params.self_mute;
           }
-          if (userState !== undefined && params.self_deaf !== undefined) {
+          if ( params.self_deaf !== undefined) {
             updates.self_deaf = params.self_deaf;
           }
-          if (userState !== undefined && params.priority_speaker !== undefined) {
+          if ( params.priority_speaker !== undefined) {
             updates.priority_speaker = params.priority_speaker;
           }
-          if (userState !== undefined && params.recording !== undefined) {
+          if ( params.recording !== undefined) {
             updates.recording = params.recording;
           }
           
@@ -211,26 +192,7 @@ export class HubMessageHandlers {
         // Build UserState protobuf message with only the fields that are set
         // Use the same pattern as handleUserStateBroadcastFromHub
         // Use any here since we're building a protobuf message dynamically
-        const userStateInit: {
-          session: number;
-          actor: number;
-          temporary_access_tokens: string[];
-          listening_channel_add: number[];
-          listening_channel_remove: number[];
-          name?: string;
-          user_id?: number;
-          channel_id?: number;
-          mute?: boolean;
-          deaf?: boolean;
-          suppress?: boolean;
-          self_mute?: boolean;
-          self_deaf?: boolean;
-          priority_speaker?: boolean;
-          recording?: boolean;
-          texture?: Uint8Array;
-          plugin_context?: Uint8Array;
-          plugin_identity?: string;
-        } = {
+        const userStateInit: any = {
           session: userState.session,
           actor: userState.actor,
           temporary_access_tokens: [],
