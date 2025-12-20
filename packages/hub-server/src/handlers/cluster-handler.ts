@@ -74,7 +74,7 @@ export class ClusterHandler implements IClusterHandler {
         name: edge.name,
         host: edge.host,
         port: edge.port,
-        voice_port: edge.port + 1,
+        voicePort: edge.port + 1,
       });
     }
 

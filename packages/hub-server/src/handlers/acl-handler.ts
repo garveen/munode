@@ -138,7 +138,7 @@ export class ACLHandler implements IACLHandler {
         this.logger.debug(`Built channel chain for ACL query: ${channelsInChain.map(c => c.id).join(' -> ')}`);
 
         // 收集所有相关的 ACL（包括继承的）
-        const allACLs: mumbleproto.ACL.ChanACL[] = [];
+        const allACLs: mumbleproto.ACL_ChanACL[] = [];
 
         for (const iterChannel of channelsInChain) {
           const channelACLs = this.factory.getAclManager()
@@ -168,7 +168,7 @@ export class ACLHandler implements IACLHandler {
               if (aclEntry.user_id && aclEntry.user_id > 0) {
                 chanACL.user_id = aclEntry.user_id;
               }
-              allACLs.push(new mumbleproto.ACL.ChanACL(chanACL));
+              allACLs.push((chanACL));
             }
           }
         }
@@ -176,7 +176,7 @@ export class ACLHandler implements IACLHandler {
         this.logger.debug(`Collected ${allACLs.length} total ACL entries`);
 
         // 收集频道组信息（包括继承的组）
-        const allGroups: mumbleproto.ACL.ChanGroup[] = [];
+        const allGroups: mumbleproto.ACL_ChanGroup[] = [];
 
         if (this.factory.getChannelGroupManager()) {
           const channelGroups = await this.factory.getChannelGroupManager().getChannelGroups(channel_id, true);
@@ -199,14 +199,14 @@ export class ACLHandler implements IACLHandler {
               remove: channelGroup.remove_members,
               inherited_members: channelGroup.inherited_members,
             };
-            allGroups.push(new mumbleproto.ACL.ChanGroup(chanGroup));
+            allGroups.push((chanGroup));
           }
         }
 
         this.logger.debug(`Collected ${allGroups.length} total groups`);
 
         // 构建 ACL 响应 - 确保groups字段总是存在
-        const aclResponse = new mumbleproto.ACL({
+        const aclResponse = mumbleproto.ACL.encode({
           channel_id,
           inherit_acls: Boolean(channel.inherit_acl),
           acls: allACLs.length > 0 ? allACLs : [],
@@ -214,14 +214,14 @@ export class ACLHandler implements IACLHandler {
           query: false,
         });
 
-        const responseData = aclResponse.serialize();
+        const responseData = aclResponse.finish();
         this.logger.debug(`ACL response built: ${allACLs.length} ACLs, ${allGroups.length} groups`);
 
         this.logger.info(`ACL query completed for channel ${channel_id}`);
         return {
           success: true,
           channel_id,
-          raw_data: responseData
+          raw_data: Buffer.from(responseData)
         };
       } else {
         // === 更新 ACL ===

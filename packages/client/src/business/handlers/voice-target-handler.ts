@@ -4,7 +4,6 @@
  * 处理语音目标的设置和移除
  */
 
-import { mumbleproto } from '@munode/protocol';
 import type { BusinessHandler } from '../../types/api-types.js';
 import type { ApiContext } from '../context.js';
 

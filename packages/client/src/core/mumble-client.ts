@@ -168,9 +168,9 @@ export class MumbleClient extends EventEmitter {
         // 检查是否是我们刚创建的频道 (通过名称匹配)
         // 使用 has_xxx 检查 protobuf optional 字段是否真的设置了值
         // 新创建的频道channel_id必须大于0（Root频道ID为0，不是新创建的）
-        if (message.has_channel_id && message.channel_id > 0 && 
-            message.has_name && message.name === name && 
-            message.has_parent && message.parent === (parent || 0)) {
+        if (messagechannel_id !== undefined && message.channel_id > 0 && 
+            messagename !== undefined && message.name === name && 
+            messageparent !== undefined && message.parent === (parent || 0)) {
           clearTimeout(timeout);
           this.removeListener('channelState', onChannelState);
           resolve(message.channel_id);
@@ -339,13 +339,12 @@ export class MumbleClient extends EventEmitter {
    * 清空所有监听频道
    */
   async clearListeningChannels(): Promise<void> {
-    const userStateMessage = mumbleproto.UserState.fromJSON({
+    const serialized = mumbleproto.UserState.encode({
       temporary_access_tokens: [],
       listening_channel_add: [],
       listening_channel_remove: this.state.getSession()?.listeningChannels || []
-    });
+    }).finish();
     
-    const serialized = userStateMessage;
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -405,7 +404,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 设置语音目标
    */
-  async setVoiceTarget(id: number, targets: mumbleproto.VoiceTarget.Target[]): Promise<void> {
+  async setVoiceTarget(id: number, targets: mumbleproto.VoiceTarget_Target[]): Promise<void> {
     const serialized = mumbleproto.VoiceTarget.encode({
       id: id,
       targets: targets
@@ -665,7 +664,7 @@ export class MumbleClient extends EventEmitter {
   /**
    * 更新封禁列表
    */
-  async updateBanList(bans: mumbleproto.BanList.BanEntry[]): Promise<void> {
+  async updateBanList(bans: mumbleproto.BanList_BanEntry[]): Promise<void> {
     const serialized = mumbleproto.BanList.encode({
       query: false,
       bans: bans
