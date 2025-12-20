@@ -282,16 +282,15 @@ export class MessageHandlers {
         channelStateData.parent = parentId;
       }
       
-      const channelState = ChannelState;
+      const channelStateMessage = mumbleproto.ChannelState.encode(channelStateData).finish();
 
         this.logger.debug(
         `[sendChannelTree] BFS: channel ${channel.id} (${channel.name}), ` +
         `parent=${parentId === undefined ? 'NONE' : parentId}, ` +
-        `has_parent=${channelState !== undefined}, ` +
+        `has_parent=${channelStateData.parent !== undefined}, ` +
         `pos=${channel.position}`
       );
 
-      const channelStateMessage = channelState;
       this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(channelStateMessage));
       
       // 如果有links，记录下来稍后发送
@@ -313,13 +312,15 @@ export class MessageHandlers {
 
     // === Pass 2: 发送频道链接 ===
     for (const channel of channelsToSendLinks) {
-      const channelState = ChannelState;
+      const channelStateMessage = mumbleproto.ChannelState.encode({
+        channel_id: channel.id,
+        links_add: channel.links,
+      }).finish();
 
         this.logger.debug(
         `[sendChannelTree] Links: channel ${channel.id} links: [${channel.links.join(', ')}]`
       );
 
-      const channelStateMessage = channelState;
       this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(channelStateMessage));
     }
 
@@ -407,8 +408,8 @@ export class MessageHandlers {
             
             this.logger.debug(`[EDGE-USERLIST] Sending user ${session.username}(${session.session_id}) to client ${session_id}: self_deaf=${userStateData.self_deaf}, self_mute=${userStateData.self_mute}, raw_session_state={self_deaf=${session.self_deaf}, self_mute=${session.self_mute}}`);
             
-            const userState = UserState;
-            this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(userState)); 
+            const userStateMessage = mumbleproto.UserState.encode(userStateData).finish();
+            this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(userStateMessage)); 
             sentCount++;
           }
         }
@@ -439,23 +440,29 @@ export class MessageHandlers {
       // 发送所有其他已认证的客户端状态（不包括自己）
       // 注意：降级模式下不发送敏感信息（如证书哈希）
       if (client.user_id > 0 && client.session !== session_id) {
-        const userState = UserState;
+        const userStateData: any = {
+          session: client.session,
+          name: client.username,
+          user_id: client.user_id,
+          channel_id: client.channel_id,
+        };
         
         // 🔒 证书哈希只发送给已注册用户
         if (client.cert_hash && receiverIsRegistered) {
-          userState.hash = client.cert_hash;
+          userStateData.hash = client.cert_hash;
         }
         
         // 添加其他字段
-        if (client.mute) userState.mute = client.mute;
-        if (client.deaf) userState.deaf = client.deaf;
-        if (client.suppress) userState.suppress = client.suppress;
-        if (client.self_mute) userState.self_mute = client.self_mute;
-        if (client.self_deaf) userState.self_deaf = client.self_deaf;
-        if (client.priority_speaker) userState.priority_speaker = client.priority_speaker;
-        if (client.recording) userState.recording = client.recording;
+        if (client.mute) userStateData.mute = client.mute;
+        if (client.deaf) userStateData.deaf = client.deaf;
+        if (client.suppress) userStateData.suppress = client.suppress;
+        if (client.self_mute) userStateData.self_mute = client.self_mute;
+        if (client.self_deaf) userStateData.self_deaf = client.self_deaf;
+        if (client.priority_speaker) userStateData.priority_speaker = client.priority_speaker;
+        if (client.recording) userStateData.recording = client.recording;
 
-        this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(userState)); 
+        const userStateMessage = mumbleproto.UserState.encode(userStateData).finish();
+        this.messageHandler.sendMessage(session_id, MessageType.UserState, Buffer.from(userStateMessage)); 
       }
     }
     
@@ -594,15 +601,15 @@ export class MessageHandlers {
           
           if (receiverIsRegistered) {
             // 已注册用户：发送完整的 UserState（包含证书哈希）
-            const serializedState = Buffer.from(userState);
-            this.messageHandler.sendMessage(client.session, MessageType.UserState, serializedState);
+            const serializedState = mumbleproto.UserState.encode(userState).finish();
+            this.messageHandler.sendMessage(client.session, MessageType.UserState, Buffer.from(serializedState));
             broadcastCount++;
           } else {
             // 未注册用户：需要克隆 UserState 并移除证书哈希
-            const stateWithoutHash = UserState;
+            const stateWithoutHash = { ...userState, hash: undefined };
             
-            const serializedState = Buffer.from(stateWithoutHash);
-            this.messageHandler.sendMessage(client.session, MessageType.UserState, serializedState);
+            const serializedState = mumbleproto.UserState.encode(stateWithoutHash).finish();
+            this.messageHandler.sendMessage(client.session, MessageType.UserState, Buffer.from(serializedState));
             broadcastCount++;
           }
         }
@@ -613,12 +620,12 @@ export class MessageHandlers {
       );
     } else {
       // 如果不包含证书哈希，可以直接广播给所有人
-      const serializedState = Buffer.from(userState);
+      const serializedState = mumbleproto.UserState.encode(userState).finish();
       
       for (const client of clients) {
         // 只广播给已收到完整用户列表的客户端，排除指定的会话
         if (client !== undefined && client.session !== excludeSession) {
-          this.messageHandler.sendMessage(client.session, MessageType.UserState, serializedState);
+          this.messageHandler.sendMessage(client.session, MessageType.UserState, Buffer.from(serializedState));
         }
       }
       
