@@ -310,16 +310,19 @@ export class ProtocolHandlers {
         if (target.session && target.session.length > 0) {
           converted.session = target.session;
         }
-        if (target !== undefined) {
+        // ts-proto: channel_id defaults to 0, only add if non-zero (channel 0 is root, but voice targets shouldn't target root implicitly)
+        if (target.channel_id !== undefined && target.channel_id !== 0) {
           converted.channel_id = target.channel_id;
         }
-        if (target !== undefined) {
+        // ts-proto: string fields default to "", only add if non-empty
+        if (target.group !== undefined && target.group !== '') {
           converted.group = target.group;
         }
-        if (target !== undefined) {
+        // ts-proto: boolean fields default to false, only add if explicitly true
+        if (target.links !== undefined && target.links) {
           converted.links = target.links;
         }
-        if (target !== undefined) {
+        if (target.children !== undefined && target.children) {
           converted.children = target.children;
         }
         
@@ -350,7 +353,8 @@ export class ProtocolHandlers {
           }
           
           // 如果有channel_id，添加到channels
-          if (target !== undefined) {
+          // ts-proto: channel_id defaults to 0, only add if explicitly set (non-zero)
+          if (target.channel_id !== undefined && target.channel_id !== 0) {
             channels.push({
               channel_id: target.channel_id,
               include_subchannels: !!target.children,

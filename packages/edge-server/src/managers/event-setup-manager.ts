@@ -593,12 +593,15 @@ export class EventSetupManager {
           // 转换channels
           if (params.config.channels && params.config.channels.length > 0) {
             for (const channel of params.config.channels) {
-              targets.push({
-                channel_id: channel.channel_id,
-                children: channel.include_subchannels || false,
-                links: channel.include_links || false,
-                group: channel.group,
-              });
+              // Only add channel targets with valid channel_id (non-zero)
+              if (channel.channel_id !== undefined && channel.channel_id !== 0) {
+                targets.push({
+                  channel_id: channel.channel_id,
+                  children: channel.include_subchannels || false,
+                  links: channel.include_links || false,
+                  group: channel.group,
+                });
+              }
             }
           }
           
