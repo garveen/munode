@@ -9,8 +9,8 @@ import { Server as HTTPSServer } from 'https';
 import WebSocket, { WebSocketServer } from 'ws';
 import type { ServerOptions } from 'ws';
 import { TypedEventEmitter, type EventMap } from '@munode/common';
-import { hubedge } from '../generated/proto/HubEdge';
-import { PacketCodec } from './packet-codec';
+import type { EdgeHubPacket } from '../generated/proto/HubEdge.js';
+import { PacketCodec } from './packet-codec.js';
 
 export type Logger = {
   info(message: string, ...args: unknown[]): void;
@@ -54,7 +54,7 @@ export class EdgeClient extends TypedEventEmitter<EdgeClientEvents> {
   /**
    * 发送数据包
    */
-  async send(packet: hubedge.EdgeHubPacket): Promise<void> {
+  async send(packet: EdgeHubPacket): Promise<void> {
     if (this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('WebSocket not open');
     }
@@ -101,7 +101,7 @@ export class EdgeClient extends TypedEventEmitter<EdgeClientEvents> {
  */
 export interface EdgeHubWebSocketServerEvents extends EventMap {
   'connection': [client: EdgeClient];
-  'message': [client: EdgeClient, packet: hubedge.EdgeHubPacket];
+  'message': [client: EdgeClient, packet: EdgeHubPacket];
   'disconnection': [client: EdgeClient, code: number, reason: string];
   'error': [error: Error];
 }
@@ -191,7 +191,7 @@ export class EdgeHubWebSocketServer extends TypedEventEmitter<EdgeHubWebSocketSe
   /**
    * 广播消息到所有 Edge
    */
-  async broadcast(packet: hubedge.EdgeHubPacket, exclude?: EdgeClient[]): Promise<void> {
+  async broadcast(packet: EdgeHubPacket, exclude?: EdgeClient[]): Promise<void> {
     const excludeIds = new Set(exclude?.map(c => c.id) || []);
     const promises: Promise<void>[] = [];
 
@@ -211,7 +211,7 @@ export class EdgeHubWebSocketServer extends TypedEventEmitter<EdgeHubWebSocketSe
   /**
    * 发送消息到特定 Edge
    */
-  async sendToEdge(edgeId: number, packet: hubedge.EdgeHubPacket): Promise<void> {
+  async sendToEdge(edgeId: number, packet: EdgeHubPacket): Promise<void> {
     const client = this.edgeClients.get(edgeId);
     if (!client) {
       throw new Error(`Edge ${edgeId} not found`);

@@ -1,17 +1,75 @@
-// Mumble protocol types
-export { mumbleproto } from './generated/proto/Mumble.js';
+// Mumble protocol types - ts-proto exports individual types, not a namespace
+// Export everything except conflicting helper types
+export type {
+  Version,
+  UDPTunnel,
+  Authenticate,
+  Ping,
+  Reject,
+  ServerSync,
+  ChannelRemove,
+  ChannelState,
+  UserRemove,
+  UserState,
+  BanList,
+  TextMessage,
+  PermissionDenied,
+  ACL,
+  QueryUsers,
+  CryptSetup,
+  ContextActionModify,
+  ContextAction,
+  UserList,
+  VoiceTarget,
+  PermissionQuery,
+  CodecVersion,
+  UserStats,
+  RequestBlob,
+  ServerConfig,
+  SuggestConfig,
+  PluginDataTransmission,
+} from './generated/proto/Mumble.js';
+
+// Export all Mumble types as a namespace for backward compatibility
+import * as MumbleProto from './generated/proto/Mumble.js';
+export { MumbleProto as mumbleproto };
+
+// Export all HubEdge types as namespaces for backward compatibility
+import * as HubEdgeProto from './generated/proto/HubEdge.js';
+export { HubEdgeProto as hubedge };
+
+import * as HubEdgeRPCProto from './generated/proto/HubEdgeRPC.js';
+export { HubEdgeRPCProto as hubedgeRpc };
+
+// Export enums and MessageFns
+export {
+  PermissionDenied_DenyType,
+  Reject_RejectType,
+} from './generated/proto/Mumble.js';
 
 // Hub-Edge protocol types
-export { hubedge } from './generated/proto/HubEdge.js';
+export type {
+  EdgeHubPacket,
+  RPCError as ProtoRPCError,
+  Heartbeat,
+  HeartbeatAck,
+  ClientMessageRelay,
+  ServerStats as ProtoServerStats,
+  ConfigUpdate,
+} from './generated/proto/HubEdge.js';
+
+export {
+  PacketType,
+  RelayDirection,
+  RoutingType,
+} from './generated/proto/HubEdge.js';
 
 // Hub-Edge RPC types (typed protobuf messages)
-export { hubedge as hubedgeRpc } from './generated/proto/HubEdgeRPC.js';
-
-// Re-export commonly used RPC types for convenience
-import { hubedge as _hubedgeRpc } from './generated/proto/HubEdgeRPC.js';
-export type TypedRPCRequest = _hubedgeRpc.TypedRPCRequest;
-export type TypedRPCResponse = _hubedgeRpc.TypedRPCResponse;
-export type TypedRPCNotification = _hubedgeRpc.TypedRPCNotification;
+export type {
+  TypedRPCRequest,
+  TypedRPCResponse,
+  TypedRPCNotification,
+} from './generated/proto/HubEdgeRPC.js';
 
 export {
   type EdgeToHubMethods as ProtobufEdgeToHubMethods,
@@ -50,83 +108,9 @@ export {
   PacketCodec,
 } from './transport/packet-codec.js';
 
-// Generated Protobuf types (for direct usage if needed)
-// These will be available after build
-// export {
-//   EdgeHubPacket,
-//   PacketType,
-//   RPCRequest,
-//   RPCResponse,
-//   RPCError as ProtoRPCError,
-//   ClientMessageRelay,
-//   RelayDirection,
-//   RelayRouting,
-//   RoutingType,
-//   Heartbeat,
-//   HeartbeatAck,
-//   ServerStats as ProtoServerStats,
-//   ConfigUpdate,
-//   ConfigItem,
-// } from './generated/HubEdge.js';
-
-// export {
-//   SyncData,
-//   SyncType,
-//   UserStateSync,
-//   UserOperation,
-//   UserInfo,
-//   ChannelStateSync,
-//   ChannelOperation,
-//   ChannelInfo as SyncChannelInfo,
-//   ACLSync,
-//   ACLEntry as ProtoACLEntry,
-//   ChannelGroup as SyncChannelGroup,
-//   BatchSync,
-//   FullSyncRequest,
-//   FullSyncResponse,
-//   FullSyncDataType,
-//   ShardInfo,
-//   GlobalConfig,
-//   VoiceTargetSync,
-//   VoiceTarget as ProtoVoiceTarget,
-//   ChannelTarget as ProtoChannelTarget,
-//   UserTarget,
-//   PermissionQuery as SyncPermissionQuery,
-//   PermissionResult,
-//   ConnectionEvent,
-//   ConnectionEventType,
-// } from './generated/HubEdgeSync.js';
-
-// Re-export types for convenience
-import { mumbleproto } from './generated/proto/Mumble.js';
-export type Version = mumbleproto.Version;
-export type UDPTunnel = mumbleproto.UDPTunnel;
-export type Authenticate = mumbleproto.Authenticate;
-export type Ping = mumbleproto.Ping;
-export type Reject = mumbleproto.Reject;
-export type ServerSync = mumbleproto.ServerSync;
-export type ChannelRemove = mumbleproto.ChannelRemove;
-export type ChannelState = mumbleproto.ChannelState;
-export type UserRemove = mumbleproto.UserRemove;
-export type UserState = mumbleproto.UserState;
-export type BanList = mumbleproto.BanList;
-export type TextMessage = mumbleproto.TextMessage;
-export type PermissionDenied = mumbleproto.PermissionDenied;
-export type ACL = mumbleproto.ACL;
-export type QueryUsers = mumbleproto.QueryUsers;
-export type CryptSetup = mumbleproto.CryptSetup;
-export type ContextActionModify = mumbleproto.ContextActionModify;
-export type ContextAction = mumbleproto.ContextAction;
-export type UserList = mumbleproto.UserList;
-export type MumbleVoiceTarget = mumbleproto.VoiceTarget;
-export type PermissionQuery = mumbleproto.PermissionQuery;
-export type CodecVersion = mumbleproto.CodecVersion;
-export type UserStats = mumbleproto.UserStats;
-export type RequestBlob = mumbleproto.RequestBlob;
-export type ServerConfig = mumbleproto.ServerConfig;
-export type SuggestConfig = mumbleproto.SuggestConfig;
-export type PermissionDenied_DenyType = mumbleproto.PermissionDenied.DenyType;
-export type Reject_RejectType = mumbleproto.Reject.RejectType;
+// Re-export commonly used protobuf types with simplified names
+import type { VoiceTarget } from './generated/proto/Mumble.js';
+export type { VoiceTarget as MumbleVoiceTarget };
 
 // Shared types (Client and Server)
 export type {
@@ -246,7 +230,7 @@ export type {
   ServerStats,
   FullSyncData,
   VoiceTargetConfig,
-  VoiceTarget,
+  VoiceTarget as HubVoiceTarget,
   ChannelTarget,
   GlobalSession,
   ChannelUserMap,

@@ -74,14 +74,12 @@ export class ACLManager {
     }
 
     // 发送 ACL 查询消息
-    const aclMessage = mumbleproto.ACL.fromObject({
+    const serialized = mumbleproto.ACL.encode({
       channel_id: channelId,
       query: true,
       groups: [], // 提供空数组避免 fromObject 错误
       acls: [] // 提供空数组避免 fromObject 错误
-    });
-
-    const serialized = aclMessage.serialize();
+    }).finish();
     const wrappedMessage = this.client.getConnectionManager().wrapMessage(MessageType.ACL, serialized);
     await this.client.getConnectionManager().sendTCP(wrappedMessage);
 
@@ -177,7 +175,7 @@ export class ACLManager {
     }
 
     // 构建 ACL 消息 - 确保 groups 和 acls 总是有值
-    const aclMessage = mumbleproto.ACL.fromObject({
+    const serialized = mumbleproto.ACL.encode({
       channel_id: channelId,
       inherit_acls: true, // 客户端默认继承
       acls: acls.map(acl => ({
@@ -191,9 +189,8 @@ export class ACLManager {
       })),
       groups: groupObjects, // 总是提供数组（可能为空）
       query: false
-    });
+    }).finish();
 
-    const serialized = aclMessage.serialize();
     const wrappedMessage = this.client.getConnectionManager().wrapMessage(MessageType.ACL, serialized);
     await this.client.getConnectionManager().sendTCP(wrappedMessage);
 

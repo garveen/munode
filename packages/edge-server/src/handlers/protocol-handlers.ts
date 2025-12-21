@@ -34,7 +34,7 @@ export class ProtocolHandlers {
    */
   handleVersion(session_id: number, data: Buffer): void {
     try {
-      const version = mumbleproto.Version.deserialize(data);
+      const version = mumbleproto.Version.decode(data);
       const client = this.clientManager.getClient(session_id);
 
       if (!client) {
@@ -72,7 +72,7 @@ export class ProtocolHandlers {
    */
   handlePing(session_id: number, data: Buffer): void {
     try {
-      const ping = mumbleproto.Ping.deserialize(data);
+      const ping = mumbleproto.Ping.decode(data);
       const client = this.clientManager.getClient(session_id);
 
       if (!client) {
@@ -98,13 +98,13 @@ export class ProtocolHandlers {
       }
 
       // 回复 ping 消息，包含服务器端的接收统计
-      const pongMessage = new mumbleproto.Ping({
+      const pongMessage = mumbleproto.Ping.encode({
         timestamp: ping.timestamp,
         good: client.crypt?.localStats.good ?? 0,
         late: client.crypt?.localStats.late ?? 0,
         lost: client.crypt?.localStats.lost ?? 0,
         resync: client.crypt?.localStats.resync ?? 0,
-      }).serialize();
+      } as any).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.Ping, Buffer.from(pongMessage));
 
@@ -119,7 +119,7 @@ export class ProtocolHandlers {
    */
   handleCryptSetup(session_id: number, data: Buffer): void {
     try {
-      const cryptSetup = mumbleproto.CryptSetup.deserialize(data);
+      const cryptSetup = mumbleproto.CryptSetup.decode(data);
       const client = this.clientManager.getClient(session_id);
 
       if (!client) {
@@ -133,9 +133,9 @@ export class ProtocolHandlers {
 
         const serverNonce = this.voiceRouter.getClientEncryptIV(session_id);
 
-        const response = new mumbleproto.CryptSetup({
+        const response = mumbleproto.CryptSetup.encode({
           server_nonce: serverNonce || Buffer.alloc(16),
-        }).serialize();
+        } as any).finish();
 
         this.messageHandler.sendMessage(session_id, MessageType.CryptSetup, Buffer.from(response));
         this.logger.debug(`Sent crypt resync response to session ${session_id}`);
@@ -161,7 +161,7 @@ export class ProtocolHandlers {
   async handleQueryUsers(session_id: number, data: Buffer): Promise<void> {
     try {
       // 解析查询请求
-      const queryRequest = mumbleproto.QueryUsers.deserialize(data);
+      const queryRequest = mumbleproto.QueryUsers.decode(data);
         this.logger.debug(`QueryUsers request from session ${session_id}:`, {
         ids: queryRequest.ids,
         names: queryRequest.names
@@ -226,7 +226,7 @@ export class ProtocolHandlers {
       }
 
       // 发送响应
-      const responseMessage = new mumbleproto.QueryUsers(response).serialize();
+      const responseMessage = mumbleproto.QueryUsers.encode(response).finish();
       this.messageHandler.sendMessage(session_id, MessageType.QueryUsers, Buffer.from(responseMessage));
 
         this.logger.debug(`Sent QueryUsers response to session ${session_id}: ${response.ids.length} users`);
@@ -240,7 +240,7 @@ export class ProtocolHandlers {
    */
   handleUserStats(session_id: number, data: Buffer, _hasPermission: (client: ClientInfo, channel: ChannelInfo, perm: Permission) => boolean): void {
     try {
-      const statsRequest = mumbleproto.UserStats.deserialize(data);
+      const statsRequest = mumbleproto.UserStats.decode(data);
 
       if (!statsRequest.session) {
         this.logger.warn(`UserStats request without target session from ${session_id}`);
@@ -275,7 +275,7 @@ export class ProtocolHandlers {
    */
   handleVoiceTarget(session_id: number, data: Buffer): void {
     try {
-      const voiceTarget = mumbleproto.VoiceTarget.deserialize(data);
+      const voiceTarget = mumbleproto.VoiceTarget.decode(data);
 
       if (!voiceTarget.id || voiceTarget.id < 1 || voiceTarget.id >= 0x1f) {
         this.logger.warn(`Invalid voice target ID from session ${session_id}: ${voiceTarget.id}`);
@@ -310,16 +310,19 @@ export class ProtocolHandlers {
         if (target.session && target.session.length > 0) {
           converted.session = target.session;
         }
-        if (target.has_channel_id) {
+        // ts-proto: channel_id defaults to 0, only add if non-zero (channel 0 is root, but voice targets shouldn't target root implicitly)
+        if (target.channel_id !== undefined && target.channel_id !== 0) {
           converted.channel_id = target.channel_id;
         }
-        if (target.has_group) {
+        // ts-proto: string fields default to "", only add if non-empty
+        if (target.group !== undefined && target.group !== '') {
           converted.group = target.group;
         }
-        if (target.has_links) {
+        // ts-proto: boolean fields default to false, only add if explicitly true
+        if (target.links !== undefined && target.links) {
           converted.links = target.links;
         }
-        if (target.has_children) {
+        if (target.children !== undefined && target.children) {
           converted.children = target.children;
         }
         
@@ -350,7 +353,8 @@ export class ProtocolHandlers {
           }
           
           // 如果有channel_id，添加到channels
-          if (target.has_channel_id) {
+          // ts-proto: channel_id defaults to 0, only add if explicitly set (non-zero)
+          if (target.channel_id !== undefined && target.channel_id !== 0) {
             channels.push({
               channel_id: target.channel_id,
               include_subchannels: !!target.children,
@@ -365,8 +369,13 @@ export class ProtocolHandlers {
           target_id: voiceTarget.id,
           config: {
             id: voiceTarget.id,
-            sessions,
-            channels,
+            targets: voiceTarget.targets.map(t => ({
+              session: t.session || [],
+              channel_id: t.channel_id,
+              group: t.group,
+              links: t.links,
+              children: t.children,
+            })),
           },
           timestamp: Date.now(),
         }).catch((err) => {

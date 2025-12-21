@@ -127,14 +127,12 @@ export class MumbleClient extends EventEmitter {
    */
   async joinChannel(channelId: number): Promise<void> {
     // 发送 UserState 消息设置频道
-    const userStateMessage = mumbleproto.UserState.fromObject({
+    const serialized = mumbleproto.UserState.encode({
       channel_id: channelId,
       temporary_access_tokens: [],
       listening_channel_add: [],
       listening_channel_remove: []
-    });
-    
-    const serialized = userStateMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -151,8 +149,7 @@ export class MumbleClient extends EventEmitter {
       listening_channel_add: [],
       listening_channel_remove: [],
     };
-    const userStateMessage = mumbleproto.UserState.fromObject(fullUserState);
-    const serialized = userStateMessage.serialize();
+    const serialized = mumbleproto.UserState.encode(fullUserState).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -169,11 +166,11 @@ export class MumbleClient extends EventEmitter {
       // 监听频道状态变化
       const onChannelState = (message: mumbleproto.ChannelState) => {
         // 检查是否是我们刚创建的频道 (通过名称匹配)
-        // 使用 has_xxx 检查 protobuf optional 字段是否真的设置了值
+        // 使用 !== undefined 检查 protobuf optional 字段是否真的设置了值
         // 新创建的频道channel_id必须大于0（Root频道ID为0，不是新创建的）
-        if (message.has_channel_id && message.channel_id > 0 && 
-            message.has_name && message.name === name && 
-            message.has_parent && message.parent === (parent || 0)) {
+        if (message.channel_id !== undefined && message.channel_id > 0 && 
+            message.name !== undefined && message.name === name && 
+            message.parent !== undefined && message.parent === (parent || 0)) {
           clearTimeout(timeout);
           this.removeListener('channelState', onChannelState);
           resolve(message.channel_id);
@@ -183,15 +180,16 @@ export class MumbleClient extends EventEmitter {
       this.on('channelState', onChannelState);
 
       // 发送创建频道消息
-      const channelStateMessage = mumbleproto.ChannelState.fromObject({
+      // Note: Do NOT set channel_id to signal "create new channel" to the server
+      const channelStateData: any = {
         name: name,
         parent: parent || 0,
         links: [],
         links_add: [],
         links_remove: []
-      });
-
-      const serialized = channelStateMessage.serialize();
+      };
+      // Explicitly do not set channel_id to undefined - just omit it
+      const serialized = mumbleproto.ChannelState.encode(channelStateData).finish();
       const wrappedMessage = this.connection.wrapMessage(MessageType.ChannelState, serialized);
       this.connection.sendTCP(wrappedMessage).catch((error) => {
         clearTimeout(timeout);
@@ -213,8 +211,7 @@ export class MumbleClient extends EventEmitter {
       links_add: channelState.links_add || [],
       links_remove: channelState.links_remove || [],
     };
-    const channelStateMessage = mumbleproto.ChannelState.fromObject(fullChannelState);
-    const serialized = channelStateMessage.serialize();
+    const serialized = mumbleproto.ChannelState.encode(fullChannelState).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.ChannelState, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -224,11 +221,9 @@ export class MumbleClient extends EventEmitter {
    */
   async deleteChannel(channelId: number): Promise<void> {
     // 发送 ChannelRemove 消息删除频道
-    const channelRemoveMessage = mumbleproto.ChannelRemove.fromObject({
+    const serialized = mumbleproto.ChannelRemove.encode({
       channel_id: channelId
-    });
-    
-    const serialized = channelRemoveMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.ChannelRemove, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -237,14 +232,12 @@ export class MumbleClient extends EventEmitter {
    * 发送文本消息
    */
   async sendMessage(target: MessageTarget, message: string): Promise<void> {
-    const textMessage = mumbleproto.TextMessage.fromObject({
+    const serialized = mumbleproto.TextMessage.encode({
       channel_id: target.channelId ? [target.channelId] : [],
       session: target.userId ? [target.userId] : [],
       message: message,
       tree_id: target.tree ? [target.channelId || 0] : []
-    });
-    
-    const serialized = textMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.TextMessage, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -281,14 +274,12 @@ export class MumbleClient extends EventEmitter {
    * 设置自我静音
    */
   async setSelfMute(mute: boolean): Promise<void> {
-    const userStateMessage = mumbleproto.UserState.fromObject({
+    const serialized = mumbleproto.UserState.encode({
       self_mute: mute,
       temporary_access_tokens: [],
       listening_channel_add: [],
       listening_channel_remove: []
-    });
-    
-    const serialized = userStateMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -297,14 +288,12 @@ export class MumbleClient extends EventEmitter {
    * 设置自我禁听
    */
   async setSelfDeaf(deaf: boolean): Promise<void> {
-    const userStateMessage = mumbleproto.UserState.fromObject({
+    const serialized = mumbleproto.UserState.encode({
       self_deaf: deaf,
       temporary_access_tokens: [],
       listening_channel_add: [],
       listening_channel_remove: []
-    });
-    
-    const serialized = userStateMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -313,14 +302,12 @@ export class MumbleClient extends EventEmitter {
    * 设置录音状态
    */
   async setRecording(recording: boolean): Promise<void> {
-    const userStateMessage = mumbleproto.UserState.fromObject({
+    const serialized = mumbleproto.UserState.encode({
       recording: recording,
       temporary_access_tokens: [],
       listening_channel_add: [],
       listening_channel_remove: []
-    });
-    
-    const serialized = userStateMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -329,13 +316,11 @@ export class MumbleClient extends EventEmitter {
    * 添加监听频道
    */
   async addListeningChannel(channelId: number): Promise<void> {
-    const userStateMessage = mumbleproto.UserState.fromObject({
+    const serialized = mumbleproto.UserState.encode({
       temporary_access_tokens: [],
       listening_channel_add: [channelId],
       listening_channel_remove: []
-    });
-    
-    const serialized = userStateMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -344,13 +329,11 @@ export class MumbleClient extends EventEmitter {
    * 移除监听频道
    */
   async removeListeningChannel(channelId: number): Promise<void> {
-    const userStateMessage = mumbleproto.UserState.fromObject({
+    const serialized = mumbleproto.UserState.encode({
       temporary_access_tokens: [],
       listening_channel_add: [],
       listening_channel_remove: [channelId]
-    });
-    
-    const serialized = userStateMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -359,13 +342,12 @@ export class MumbleClient extends EventEmitter {
    * 清空所有监听频道
    */
   async clearListeningChannels(): Promise<void> {
-    const userStateMessage = mumbleproto.UserState.fromObject({
+    const serialized = mumbleproto.UserState.encode({
       temporary_access_tokens: [],
       listening_channel_add: [],
       listening_channel_remove: this.state.getSession()?.listeningChannels || []
-    });
+    }).finish();
     
-    const serialized = userStateMessage.serialize();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -380,7 +362,7 @@ export class MumbleClient extends EventEmitter {
     suppress?: boolean;
     priority_speaker?: boolean;
   }): Promise<void> {
-    const userStateMessage = mumbleproto.UserState.fromObject({
+    const serialized = mumbleproto.UserState.encode({
       session: targetSession,
       mute: state.mute,
       deaf: state.deaf,
@@ -389,9 +371,7 @@ export class MumbleClient extends EventEmitter {
       temporary_access_tokens: [],
       listening_channel_add: [],
       listening_channel_remove: []
-    });
-    
-    const serialized = userStateMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -427,13 +407,11 @@ export class MumbleClient extends EventEmitter {
   /**
    * 设置语音目标
    */
-  async setVoiceTarget(id: number, targets: mumbleproto.VoiceTarget.Target[]): Promise<void> {
-    const voiceTargetMessage = mumbleproto.VoiceTarget.fromObject({
+  async setVoiceTarget(id: number, targets: mumbleproto.VoiceTarget_Target[]): Promise<void> {
+    const serialized = mumbleproto.VoiceTarget.encode({
       id: id,
       targets: targets
-    });
-    
-    const serialized = voiceTargetMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.VoiceTarget, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -442,12 +420,10 @@ export class MumbleClient extends EventEmitter {
    * 移除语音目标
    */
   async removeVoiceTarget(id: number): Promise<void> {
-    const voiceTargetMessage = mumbleproto.VoiceTarget.fromObject({
+    const serialized = mumbleproto.VoiceTarget.encode({
       id: id,
       targets: []
-    });
-    
-    const serialized = voiceTargetMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.VoiceTarget, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -456,14 +432,13 @@ export class MumbleClient extends EventEmitter {
    * 发送插件数据
    */
   async sendPluginData(pluginId: string, pluginData: Buffer, receivers?: number[]): Promise<void> {
-    const pluginDataMessage = mumbleproto.PluginDataTransmission.fromObject({
+    const serialized = mumbleproto.PluginDataTransmission.encode({
       senderSession: this.state.getSession()?.session || 0,
       receiverSessions: receivers || [],
       data: pluginData,
       dataID: pluginId
-    });
+    }).finish();
     
-    const serialized = pluginDataMessage.serialize();
     const wrappedMessage = this.connection.wrapMessage(MessageType.PluginDataTransmission, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -472,13 +447,12 @@ export class MumbleClient extends EventEmitter {
    * 注册上下文操作
    */
   async registerContextAction(action: string, text: string, contexts?: number[]): Promise<void> {
-    const contextActionMessage = mumbleproto.ContextActionModify.fromObject({
+    const serialized = mumbleproto.ContextActionModify.encode({
       action: action,
       text: text,
       context: contexts ? contexts.reduce((acc, ctx) => acc | ctx, 0) : 1 // 默认Server上下文
-    });
+    }).finish();
     
-    const serialized = contextActionMessage.serialize();
     const wrappedMessage = this.connection.wrapMessage(MessageType.ContextActionModify, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -487,13 +461,11 @@ export class MumbleClient extends EventEmitter {
    * 执行上下文操作
    */
   async executeContextAction(action: string, session?: number, channel?: number): Promise<void> {
-    const contextActionMessage = mumbleproto.ContextAction.fromObject({
+    const serialized = mumbleproto.ContextAction.encode({
       action: action,
       session: session,
       channel_id: channel
-    });
-    
-    const serialized = contextActionMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.ContextAction, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -651,13 +623,11 @@ export class MumbleClient extends EventEmitter {
    * 踢出用户
    */
   async kickUser(session: number, reason?: string): Promise<void> {
-    const userRemoveMessage = mumbleproto.UserRemove.fromObject({
+    const serialized = mumbleproto.UserRemove.encode({
       session: session,
       reason: reason,
       ban: false
-    });
-    
-    const serialized = userRemoveMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserRemove, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -666,16 +636,15 @@ export class MumbleClient extends EventEmitter {
    * 封禁用户
    */
   async banUser(_session: number, reason?: string, duration?: number): Promise<void> {
-    const banListMessage = mumbleproto.BanList.fromObject({
+    const serialized = mumbleproto.BanList.encode({
       bans: [{
-        address: new Uint8Array(), // 需要从 session 获取用户的 IP
+        address: Buffer.from([]), // 需要从 session 获取用户的 IP
         mask: 32,
         reason: reason,
         duration: duration
       }]
-    });
+    }).finish();
     
-    const serialized = banListMessage.serialize();
     const wrappedMessage = this.connection.wrapMessage(MessageType.BanList, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -684,12 +653,10 @@ export class MumbleClient extends EventEmitter {
    * 查询封禁列表
    */
   async queryBanList(): Promise<void> {
-    const banListMessage = mumbleproto.BanList.fromObject({
+    const serialized = mumbleproto.BanList.encode({
       query: true,
       bans: []
-    });
-    
-    const serialized = banListMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.BanList, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -697,13 +664,11 @@ export class MumbleClient extends EventEmitter {
   /**
    * 更新封禁列表
    */
-  async updateBanList(bans: mumbleproto.BanList.BanEntry[]): Promise<void> {
-    const banListMessage = mumbleproto.BanList.fromObject({
+  async updateBanList(bans: mumbleproto.BanList_BanEntry[]): Promise<void> {
+    const serialized = mumbleproto.BanList.encode({
       query: false,
       bans: bans
-    });
-    
-    const serialized = banListMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.BanList, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -712,14 +677,12 @@ export class MumbleClient extends EventEmitter {
    * 请求用户统计信息
    */
   async requestUserStats(session: number, statsOnly: boolean = false): Promise<void> {
-    const userStatsMessage = mumbleproto.UserStats.fromObject({
+    const serialized = mumbleproto.UserStats.encode({
       session: session,
       stats_only: statsOnly,
       certificates: [],
       celt_versions: []
-    });
-    
-    const serialized = userStatsMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserStats, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -728,12 +691,10 @@ export class MumbleClient extends EventEmitter {
    * 查询注册用户
    */
   async queryUsers(query: { ids?: number[]; names?: string[] }): Promise<void> {
-    const queryUsersMessage = mumbleproto.QueryUsers.fromObject({
+    const serialized = mumbleproto.QueryUsers.encode({
       ids: query.ids || [],
       names: query.names || []
-    });
-    
-    const serialized = queryUsersMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.QueryUsers, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -746,13 +707,11 @@ export class MumbleClient extends EventEmitter {
     sessionComment?: number[];
     channelDescription?: number[];
   }): Promise<void> {
-    const requestBlobMessage = mumbleproto.RequestBlob.fromObject({
+    const serialized = mumbleproto.RequestBlob.encode({
       session_texture: request.sessionTexture || [],
       session_comment: request.sessionComment || [],
       channel_description: request.channelDescription || []
-    });
-    
-    const serialized = requestBlobMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.RequestBlob, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -761,14 +720,12 @@ export class MumbleClient extends EventEmitter {
    * 设置用户头像
    */
   async setTexture(texture: Buffer): Promise<void> {
-    const userStateMessage = mumbleproto.UserState.fromObject({
+    const serialized = mumbleproto.UserState.encode({
       texture: texture,
       temporary_access_tokens: [],
       listening_channel_add: [],
       listening_channel_remove: []
-    });
-    
-    const serialized = userStateMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -777,14 +734,12 @@ export class MumbleClient extends EventEmitter {
    * 设置用户评论
    */
   async setComment(comment: string): Promise<void> {
-    const userStateMessage = mumbleproto.UserState.fromObject({
+    const serialized = mumbleproto.UserState.encode({
       comment: comment,
       temporary_access_tokens: [],
       listening_channel_add: [],
       listening_channel_remove: []
-    });
-    
-    const serialized = userStateMessage.serialize();
+    }).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }
@@ -826,14 +781,13 @@ export class MumbleClient extends EventEmitter {
    * 发送版本信息
    */
   private async sendVersion(): Promise<void> {
-    const versionMessage = mumbleproto.Version.fromObject({
+    const serialized = mumbleproto.Version.encode({
       version: 0x010203, // 版本号 (1.2.3)
       release: 'MuNode Client',
       os: process.platform,
       os_version: process.version
-    });
+    }).finish();
 
-    const serialized = versionMessage.serialize();
     const wrappedMessage = this.connection.wrapMessage(MessageType.Version, serialized);
     await this.connection.sendTCP(wrappedMessage);
   }

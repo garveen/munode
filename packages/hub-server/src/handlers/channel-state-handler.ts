@@ -36,9 +36,9 @@ export class ChannelStateHandler implements IChannelStateHandler {
 
   async handleChannelStateNotification(params: EdgeNotificationParams<'edge.channelStateNotification'>): Promise<void> {
     try {
-      const { edge_id, actor_session, actor_username, channelState: channelStateObj, has_channel_id } = params;
+      const { edge_id, actor_session, actor_username, channelState: channelStateObj } = params;
 
-      this.logger.info(`Hub received ChannelState from Edge ${edge_id}, actor: ${actor_username}(${actor_session}), has_channel_id: ${has_channel_id}`);
+      this.logger.info(`Hub received ChannelState from Edge ${edge_id}, actor: ${actor_username}(${actor_session}), channel_id: ${channelStateObj.channel_id}`);
 
       const sessionManager = this.factory.getSessionManager();
       const permissionChecker = this.factory.getPermissionChecker();
@@ -56,17 +56,18 @@ export class ChannelStateHandler implements IChannelStateHandler {
       }
 
       // 确定频道ID和操作类型
-      // 使用 has_channel_id 检查 protobuf optional 字段是否真的设置了值（遵循 Copilot 指导）
+      // Note: ts-proto sets channel_id to 0 (default) when not present in binary data
+      // So we treat channel_id === 0 or undefined as "not set"
       let channelId: number;
       let isNewChannel: boolean;
       
-      if (has_channel_id) {
-        // 指定了channel_id - 这是更新现有频道或链接操作
+      if (channelStateObj.channel_id !== undefined && channelStateObj.channel_id > 0) {
+        // 指定了有效的channel_id - 这是更新现有频道或链接操作
         channelId = channelStateObj.channel_id!;
         const existingChannel = channelManager?.getChannel(channelId);
         isNewChannel = !existingChannel;
       } else {
-        // 没有指定channel_id
+        // 没有指定有效的channel_id (0 or undefined)
         // 如果提供了name，这是创建新频道的请求
         if (channelStateObj.name) {
           // 生成新的频道ID
@@ -75,7 +76,7 @@ export class ChannelStateHandler implements IChannelStateHandler {
           channelId = maxId + 1;
           isNewChannel = true;
         } else {
-          // 没有name也没有channel_id，这是对当前频道的更新（如移动用户）
+          // 没有name也没有有效channel_id，这是对当前频道的更新（如移动用户）
           channelId = actorSession.channel_id ?? 0;
           isNewChannel = false;
         }
@@ -278,8 +279,8 @@ export class ChannelStateHandler implements IChannelStateHandler {
         broadcastData.links_remove = channelStateObj.links_remove;
       }
 
-      // 确保 channel_id 存在
-      if (!broadcastData.channel_id) {
+      // 确保 channel_id 存在 (channel_id can be 0 for Root channel)
+      if (broadcastData.channel_id === undefined) {
         this.logger.error('Cannot broadcast ChannelState without channel_id');
         return;
       }

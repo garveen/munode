@@ -151,57 +151,57 @@ export class ClientMessageRelayHandler extends TypedEventEmitter<ClientMessageRe
     try {
       switch (messageType) {
         case MessageType.Version:
-          return mumbleproto.Version.deserialize(messageData);
+          return mumbleproto.Version.decode(messageData);
         case MessageType.UDPTunnel:
-          return mumbleproto.UDPTunnel.deserialize(messageData);
+          return mumbleproto.UDPTunnel.decode(messageData);
         case MessageType.Authenticate:
-          return mumbleproto.Authenticate.deserialize(messageData);
+          return mumbleproto.Authenticate.decode(messageData);
         case MessageType.Ping:
-          return mumbleproto.Ping.deserialize(messageData);
+          return mumbleproto.Ping.decode(messageData);
         case MessageType.Reject:
-          return mumbleproto.Reject.deserialize(messageData);
+          return mumbleproto.Reject.decode(messageData);
         case MessageType.ServerSync:
-          return mumbleproto.ServerSync.deserialize(messageData);
+          return mumbleproto.ServerSync.decode(messageData);
         case MessageType.ChannelRemove:
-          return mumbleproto.ChannelRemove.deserialize(messageData);
+          return mumbleproto.ChannelRemove.decode(messageData);
         case MessageType.ChannelState:
-          return mumbleproto.ChannelState.deserialize(messageData);
+          return mumbleproto.ChannelState.decode(messageData);
         case MessageType.UserRemove:
-          return mumbleproto.UserRemove.deserialize(messageData);
+          return mumbleproto.UserRemove.decode(messageData);
         case MessageType.UserState:
-          return mumbleproto.UserState.deserialize(messageData);
+          return mumbleproto.UserState.decode(messageData);
         case MessageType.BanList:
-          return mumbleproto.BanList.deserialize(messageData);
+          return mumbleproto.BanList.decode(messageData);
         case MessageType.TextMessage:
-          return mumbleproto.TextMessage.deserialize(messageData);
+          return mumbleproto.TextMessage.decode(messageData);
         case MessageType.PermissionDenied:
-          return mumbleproto.PermissionDenied.deserialize(messageData);
+          return mumbleproto.PermissionDenied.decode(messageData);
         case MessageType.ACL:
-          return mumbleproto.ACL.deserialize(messageData);
+          return mumbleproto.ACL.decode(messageData);
         case MessageType.QueryUsers:
-          return mumbleproto.QueryUsers.deserialize(messageData);
+          return mumbleproto.QueryUsers.decode(messageData);
         case MessageType.CryptSetup:
-          return mumbleproto.CryptSetup.deserialize(messageData);
+          return mumbleproto.CryptSetup.decode(messageData);
         case MessageType.ContextActionModify:
-          return mumbleproto.ContextActionModify.deserialize(messageData);
+          return mumbleproto.ContextActionModify.decode(messageData);
         case MessageType.ContextAction:
-          return mumbleproto.ContextAction.deserialize(messageData);
+          return mumbleproto.ContextAction.decode(messageData);
         case MessageType.UserList:
-          return mumbleproto.UserList.deserialize(messageData);
+          return mumbleproto.UserList.decode(messageData);
         case MessageType.VoiceTarget:
-          return mumbleproto.VoiceTarget.deserialize(messageData);
+          return mumbleproto.VoiceTarget.decode(messageData);
         case MessageType.PermissionQuery:
-          return mumbleproto.PermissionQuery.deserialize(messageData);
+          return mumbleproto.PermissionQuery.decode(messageData);
         case MessageType.CodecVersion:
-          return mumbleproto.CodecVersion.deserialize(messageData);
+          return mumbleproto.CodecVersion.decode(messageData);
         case MessageType.UserStats:
-          return mumbleproto.UserStats.deserialize(messageData);
+          return mumbleproto.UserStats.decode(messageData);
         case MessageType.RequestBlob:
-          return mumbleproto.RequestBlob.deserialize(messageData);
+          return mumbleproto.RequestBlob.decode(messageData);
         case MessageType.ServerConfig:
-          return mumbleproto.ServerConfig.deserialize(messageData);
+          return mumbleproto.ServerConfig.decode(messageData);
         case MessageType.SuggestConfig:
-          return mumbleproto.SuggestConfig.deserialize(messageData);
+          return mumbleproto.SuggestConfig.decode(messageData);
         default:
           this.logger.warn(`Unsupported message type: ${messageType}`);
           return null;
@@ -227,98 +227,98 @@ export class ClientMessageRelayHandler extends TypedEventEmitter<ClientMessageRe
     message: unknown,
     direction: hubedge.RelayDirection
   ): hubedge.ClientMessageRelay {
-    const relay = new hubedge.ClientMessageRelay({
+    const relayData: any = {
       session_id: sessionId,
       edge_id: this.edgeId,
       direction: direction,
       timestamp: Date.now(),
-    });
+    };
 
     // 根据消息类型设置对应的字段
     switch (messageType) {
       case MessageType.Version:
-        relay.version = message as mumbleproto.Version;
+        relayData.version = message as mumbleproto.Version;
         break;
       case MessageType.UDPTunnel:
-        relay.udp_tunnel = message as mumbleproto.UDPTunnel;
+        relayData.udp_tunnel = message as mumbleproto.UDPTunnel;
         break;
       case MessageType.Authenticate:
-        relay.authenticate = message as mumbleproto.Authenticate;
+        relayData.authenticate = message as mumbleproto.Authenticate;
         break;
       case MessageType.Ping:
-        relay.ping = message as mumbleproto.Ping;
+        relayData.ping = message as mumbleproto.Ping;
         break;
       case MessageType.Reject:
-        relay.reject = message as mumbleproto.Reject;
+        relayData.reject = message as mumbleproto.Reject;
         break;
       case MessageType.ServerSync:
-        relay.server_sync = message as mumbleproto.ServerSync;
+        relayData.server_sync = message as mumbleproto.ServerSync;
         break;
       case MessageType.ChannelRemove:
-        relay.channel_remove = message as mumbleproto.ChannelRemove;
+        relayData.channel_remove = message as mumbleproto.ChannelRemove;
         break;
       case MessageType.ChannelState:
-        relay.channel_state = message as mumbleproto.ChannelState;
+        relayData.channel_state = message as mumbleproto.ChannelState;
         break;
       case MessageType.UserRemove:
-        relay.user_remove = message as mumbleproto.UserRemove;
+        relayData.user_remove = message as mumbleproto.UserRemove;
         break;
       case MessageType.UserState:
-        relay.user_state = message as mumbleproto.UserState;
+        relayData.user_state = message as mumbleproto.UserState;
         break;
       case MessageType.BanList:
-        relay.ban_list = message as mumbleproto.BanList;
+        relayData.ban_list = message as mumbleproto.BanList;
         break;
       case MessageType.TextMessage:
-        relay.text_message = message as mumbleproto.TextMessage;
+        relayData.text_message = message as mumbleproto.TextMessage;
         break;
       case MessageType.PermissionDenied:
-        relay.permission_denied = message as mumbleproto.PermissionDenied;
+        relayData.permission_denied = message as mumbleproto.PermissionDenied;
         break;
       case MessageType.ACL:
-        relay.acl = message as mumbleproto.ACL;
+        relayData.acl = message as mumbleproto.ACL;
         break;
       case MessageType.QueryUsers:
-        relay.query_users = message as mumbleproto.QueryUsers;
+        relayData.query_users = message as mumbleproto.QueryUsers;
         break;
       case MessageType.CryptSetup:
-        relay.crypt_setup = message as mumbleproto.CryptSetup;
+        relayData.crypt_setup = message as mumbleproto.CryptSetup;
         break;
       case MessageType.ContextActionModify:
-        relay.context_action_modify = message as mumbleproto.ContextActionModify;
+        relayData.context_action_modify = message as mumbleproto.ContextActionModify;
         break;
       case MessageType.ContextAction:
-        relay.context_action = message as mumbleproto.ContextAction;
+        relayData.context_action = message as mumbleproto.ContextAction;
         break;
       case MessageType.UserList:
-        relay.user_list = message as mumbleproto.UserList;
+        relayData.user_list = message as mumbleproto.UserList;
         break;
       case MessageType.VoiceTarget:
-        relay.voice_target = message as mumbleproto.VoiceTarget;
+        relayData.voice_target = message as mumbleproto.VoiceTarget;
         break;
       case MessageType.PermissionQuery:
-        relay.permission_query = message as mumbleproto.PermissionQuery;
+        relayData.permission_query = message as mumbleproto.PermissionQuery;
         break;
       case MessageType.CodecVersion:
-        relay.codec_version = message as mumbleproto.CodecVersion;
+        relayData.codec_version = message as mumbleproto.CodecVersion;
         break;
       case MessageType.UserStats:
-        relay.user_stats = message as mumbleproto.UserStats;
+        relayData.user_stats = message as mumbleproto.UserStats;
         break;
       case MessageType.RequestBlob:
-        relay.request_blob = message as mumbleproto.RequestBlob;
+        relayData.request_blob = message as mumbleproto.RequestBlob;
         break;
       case MessageType.ServerConfig:
-        relay.server_config = message as mumbleproto.ServerConfig;
+        relayData.server_config = message as mumbleproto.ServerConfig;
         break;
       case MessageType.SuggestConfig:
-        relay.suggest_config = message as mumbleproto.SuggestConfig;
+        relayData.suggest_config = message as mumbleproto.SuggestConfig;
         break;
       default:
         this.logger.warn(`Unsupported message type for relay: ${messageType}`);
     }
 
-    return relay;
+    return relayData;
   }
 
   /**
@@ -331,82 +331,82 @@ export class ClientMessageRelayHandler extends TypedEventEmitter<ClientMessageRe
     relay: hubedge.ClientMessageRelay
   ): { messageType: MessageType | null; message: unknown | null } {
     // 检查每个可能的 Mumble 消息字段
-    if (relay.has_version) {
+    if (relay !== undefined) {
       return { messageType: MessageType.Version, message: relay.version };
     }
-    if (relay.has_udp_tunnel) {
+    if (relay !== undefined) {
       return { messageType: MessageType.UDPTunnel, message: relay.udp_tunnel };
     }
-    if (relay.has_authenticate) {
+    if (relay !== undefined) {
       return { messageType: MessageType.Authenticate, message: relay.authenticate };
     }
-    if (relay.has_ping) {
+    if (relay !== undefined) {
       return { messageType: MessageType.Ping, message: relay.ping };
     }
-    if (relay.has_reject) {
+    if (relay !== undefined) {
       return { messageType: MessageType.Reject, message: relay.reject };
     }
-    if (relay.has_server_sync) {
+    if (relay !== undefined) {
       return { messageType: MessageType.ServerSync, message: relay.server_sync };
     }
-    if (relay.has_channel_remove) {
+    if (relay !== undefined) {
       return { messageType: MessageType.ChannelRemove, message: relay.channel_remove };
     }
-    if (relay.has_channel_state) {
+    if (relay !== undefined) {
       return { messageType: MessageType.ChannelState, message: relay.channel_state };
     }
-    if (relay.has_user_remove) {
+    if (relay !== undefined) {
       return { messageType: MessageType.UserRemove, message: relay.user_remove };
     }
-    if (relay.has_user_state) {
+    if (relay !== undefined) {
       return { messageType: MessageType.UserState, message: relay.user_state };
     }
-    if (relay.has_ban_list) {
+    if (relay !== undefined) {
       return { messageType: MessageType.BanList, message: relay.ban_list };
     }
-    if (relay.has_text_message) {
+    if (relay !== undefined) {
       return { messageType: MessageType.TextMessage, message: relay.text_message };
     }
-    if (relay.has_permission_denied) {
+    if (relay !== undefined) {
       return { messageType: MessageType.PermissionDenied, message: relay.permission_denied };
     }
-    if (relay.has_acl) {
+    if (relay !== undefined) {
       return { messageType: MessageType.ACL, message: relay.acl };
     }
-    if (relay.has_query_users) {
+    if (relay !== undefined) {
       return { messageType: MessageType.QueryUsers, message: relay.query_users };
     }
-    if (relay.has_crypt_setup) {
+    if (relay !== undefined) {
       return { messageType: MessageType.CryptSetup, message: relay.crypt_setup };
     }
-    if (relay.has_context_action_modify) {
+    if (relay !== undefined) {
       return { messageType: MessageType.ContextActionModify, message: relay.context_action_modify };
     }
-    if (relay.has_context_action) {
+    if (relay !== undefined) {
       return { messageType: MessageType.ContextAction, message: relay.context_action };
     }
-    if (relay.has_user_list) {
+    if (relay !== undefined) {
       return { messageType: MessageType.UserList, message: relay.user_list };
     }
-    if (relay.has_voice_target) {
+    if (relay !== undefined) {
       return { messageType: MessageType.VoiceTarget, message: relay.voice_target };
     }
-    if (relay.has_permission_query) {
+    if (relay !== undefined) {
       return { messageType: MessageType.PermissionQuery, message: relay.permission_query };
     }
-    if (relay.has_codec_version) {
+    if (relay !== undefined) {
       return { messageType: MessageType.CodecVersion, message: relay.codec_version };
     }
-    if (relay.has_user_stats) {
+    if (relay !== undefined) {
       return { messageType: MessageType.UserStats, message: relay.user_stats };
     }
-    if (relay.has_request_blob) {
+    if (relay !== undefined) {
       return { messageType: MessageType.RequestBlob, message: relay.request_blob };
     }
-    if (relay.has_server_config) {
+    if (relay !== undefined) {
       return { messageType: MessageType.ServerConfig, message: relay.server_config };
     }
-    if (relay.has_suggest_config) {
+    if (relay !== undefined) {
       return { messageType: MessageType.SuggestConfig, message: relay.suggest_config };
     }
 

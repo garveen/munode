@@ -145,11 +145,19 @@ export interface VoiceTargetConfig {
 // Voice target
 export interface VoiceTarget {
   id: number;
-  sessions: number[];
-  channels: ChannelTarget[];
+  targets: VoiceTargetTarget[];
 }
 
-// Channel target
+// Voice target target
+export interface VoiceTargetTarget {
+  session: number[];
+  channel_id?: number;
+  group?: string;
+  links?: boolean;
+  children?: boolean;
+}
+
+// Channel target (legacy, kept for compatibility)
 export interface ChannelTarget {
   channel_id: number;
   include_subchannels: boolean;

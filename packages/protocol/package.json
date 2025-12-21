@@ -9,21 +9,18 @@
     "build": "node esbuild.config.mjs && tsc --emitDeclarationOnly --outDir dist",
     "dev": "node esbuild.config.mjs --watch",
     "clean": "rm -rf dist *.tsbuildinfo src/generated/proto",
-    "generate:proto": "protoc --proto_path=./proto --ts_out=service=grpc-node:./src/generated/proto ./proto/Mumble.proto ./proto/HubEdgeSync.proto ./proto/HubEdgeRPC.proto ./proto/HubEdge.proto",
+    "generate:proto": "protoc --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_out=./src/generated/proto --ts_proto_opt=outputServices=generic-definitions,outputClientImpl=false,esModuleInterop=true,env=node,useOptionals=messages,oneof=unions-value,snakeToCamel=false,forceLong=number,useExactTypes=true,outputPartialMethods=true --proto_path=./proto ./proto/Mumble.proto ./proto/HubEdgeSync.proto ./proto/HubEdgeRPC.proto ./proto/HubEdge.proto",
     "test": "vitest run"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.10.1",
     "@munode/common": "workspace:*",
-    "google-protobuf": "3.21.4",
-    "protoc": "^33.1.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "@types/google-protobuf": "^3.15.12",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.18.1",
-    "protoc-gen-ts": "^0.8.7",
+    "ts-proto": "^2.8.3",
     "typescript": "^5.9.3"
   }
 }

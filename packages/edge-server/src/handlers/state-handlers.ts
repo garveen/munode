@@ -64,7 +64,7 @@ export class StateHandlers {
    */
   handleUserState(session_id: number, data: Buffer): void {
     try {
-      const userState = mumbleproto.UserState.deserialize(data);
+      const userState = mumbleproto.UserState.decode(data);
 
       // 获取执行操作的客户端（actor）
       const actor = this.clientManager.getClient(session_id);
@@ -135,53 +135,53 @@ export class StateHandlers {
       };
 
       // 只包含实际设置的字段
-      if (userState.has_channel_id) {
+      if (userState.channel_id !== undefined) {
         userStateToSend.channel_id = userState.channel_id;
       }
-      if (userState.has_self_mute) {
+      if (userState.self_mute !== undefined) {
         userStateToSend.self_mute = userState.self_mute;
       }
-      if (userState.has_self_deaf) {
+      if (userState.self_deaf !== undefined) {
         userStateToSend.self_deaf = userState.self_deaf;
       }
-      if (userState.has_mute) {
+      if (userState.mute !== undefined) {
         userStateToSend.mute = userState.mute;
       }
-      if (userState.has_deaf) {
+      if (userState.deaf !== undefined) {
         userStateToSend.deaf = userState.deaf;
       }
-      if (userState.has_suppress) {
+      if (userState.suppress !== undefined) {
         userStateToSend.suppress = userState.suppress;
       }
-      if (userState.has_priority_speaker) {
+      if (userState.priority_speaker !== undefined) {
         userStateToSend.priority_speaker = userState.priority_speaker;
       }
-      if (userState.has_recording) {
+      if (userState.recording !== undefined) {
         userStateToSend.recording = userState.recording;
       }
-      if (userState.has_comment) {
+      if (userState.comment !== undefined) {
         userStateToSend.comment = userState.comment;
       }
-      if (userState.has_texture) {
+      if (userState.texture !== undefined) {
         userStateToSend.texture = userState.texture;
       }
-      if (userState.has_plugin_context) {
+      if (userState.plugin_context !== undefined) {
         userStateToSend.plugin_context = userState.plugin_context;
       }
-      if (userState.has_plugin_identity) {
+      if (userState.plugin_identity !== undefined) {
         userStateToSend.plugin_identity = userState.plugin_identity;
       }
       
       // 处理 blob 字段（texture 和 comment）
       // 如果客户端发送了texture或comment数据，需要上传到Hub blob存储
-      if (userState.has_texture && userState.texture && userState.texture.length > 0) {
+      if (userState.texture !== undefined && userState.texture && userState.texture.length > 0) {
         // 异步上传texture到Hub，不阻塞当前处理
         this.uploadUserTexture(actor.user_id, userState.texture).catch(error => {
         this.logger.error(`Failed to upload texture for user ${actor.user_id}:`, error);
         });
       }
 
-      if (userState.has_comment && userState.comment && userState.comment.length > 128) {
+      if (userState.comment !== undefined && userState.comment && userState.comment.length > 128) {
         // 如果comment超过128字节，上传到blob存储
         // 参考 Go 实现：小于128字节的comment直接存储在消息中
         this.uploadUserComment(actor.user_id, Buffer.from(userState.comment, 'utf-8')).catch(error => {
@@ -221,7 +221,7 @@ export class StateHandlers {
    */
   async handleUserRemove(session_id: number, data: Buffer): Promise<void> {
     try {
-      const userRemove = mumbleproto.UserRemove.deserialize(data);
+      const userRemove = mumbleproto.UserRemove.decode(data);
 
       // 获取执行操作的客户端（actor）
       const actor = this.clientManager.getClient(session_id);
@@ -269,7 +269,7 @@ export class StateHandlers {
    */
   async handleChannelState(session_id: number, data: Buffer): Promise<void> {
     try {
-      const channelState = mumbleproto.ChannelState.deserialize(data);
+      const channelState = mumbleproto.ChannelState.decode(data);
         this.logger.debug(
         `Decoded mumbleproto.ChannelState from session ${session_id}: ${JSON.stringify(channelState)}`
       );
@@ -289,14 +289,12 @@ export class StateHandlers {
       }
 
       // 转发到Hub处理
-      // 需要传递 has_channel_id 因为 toObject() 会将未设置的 channel_id 转换为 0
       this.hubClient.notify('hub.handleChannelState', {
         edge_id: this.config.server_id,
         actor_session: session_id,
         actor_user_id: actor.user_id,
         actor_username: actor.username,
-        channelState: channelState.toObject(),
-        has_channel_id: channelState.has_channel_id,
+        channelState: channelState,
         raw_data: data.toString('base64'),
       });
 
@@ -311,7 +309,7 @@ export class StateHandlers {
    */
   async handleChannelRemove(session_id: number, data: Buffer): Promise<void> {
     try {
-      const channelRemove = mumbleproto.ChannelRemove.deserialize(data);
+      const channelRemove = mumbleproto.ChannelRemove.decode(data);
 
       // 获取执行操作的客户端
       const actor = this.clientManager.getClient(session_id);

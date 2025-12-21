@@ -1,13 +1,22 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
-import { hubedge } from '../generated/proto/HubEdge.js';
-import { hubedge as hubedgeRpc } from '../generated/proto/HubEdgeRPC.js';
+import { EdgeHubPacket, PacketType, RPCError as ProtoRPCError, Heartbeat, HeartbeatAck } from '../generated/proto/HubEdge.js';
+import { 
+  TypedRPCRequest, 
+  TypedRPCResponse, 
+  TypedRPCNotification,
+  HubVoiceDataParams,
+  HubForceDisconnectParams,
+  HubPeerJoinedParams,
+  HubACLResponseParams,
+  HubUserJoinedParams,
+  HubUserMovedParams,
+  HubChannelCreatedParams,
+  HubChannelRemovedParams,
+  HubChannelUpdatedParams,
+  HubSyncVoiceTargetParams,
+} from '../generated/proto/HubEdgeRPC.js';
 import type { Logger } from '@munode/common';
-
-const { EdgeHubPacket, PacketType, RPCError: ProtoRPCError, Heartbeat, HeartbeatAck } = hubedge;
-
-// Re-export the RPC types for external use
-export { hubedgeRpc };
 
 // ============================================================================
 // Notification Parameter Types
@@ -27,7 +36,7 @@ import type { ChannelData } from '../hub-edge-types.js';
 interface VoiceDataParams {
   fromSessionId: number;
   targetSessionId: number;
-  voiceData: Uint8Array;
+  voiceData: Buffer;
   timestamp: number;
 }
 
@@ -94,7 +103,7 @@ interface SyncVoiceTargetParams {
   client_session: number;
   target_id: number;
   config: unknown;
-  timestamp: number;
+  timestamp?: number; // Optional timestamp
 }
 
 // Union type of internal params used by createNotification
@@ -121,16 +130,16 @@ export type NotificationParams =
 interface NotificationDataType {
   method: string;
   timestamp: number;
-  voice_data?: hubedgeRpc.HubVoiceDataParams;
-  force_disconnect?: hubedgeRpc.HubForceDisconnectParams;
-  peer_joined?: hubedgeRpc.HubPeerJoinedParams;
-  acl_response?: hubedgeRpc.HubACLResponseParams;
-  user_joined?: hubedgeRpc.HubUserJoinedParams;
-  user_moved?: hubedgeRpc.HubUserMovedParams;
-  channel_created?: hubedgeRpc.HubChannelCreatedParams;
-  channel_removed?: hubedgeRpc.HubChannelRemovedParams;
-  channel_updated?: hubedgeRpc.HubChannelUpdatedParams;
-  sync_voice_target?: hubedgeRpc.HubSyncVoiceTargetParams;
+  voice_data?: HubVoiceDataParams;
+  force_disconnect?: HubForceDisconnectParams;
+  peer_joined?: HubPeerJoinedParams;
+  acl_response?: HubACLResponseParams;
+  user_joined?: HubUserJoinedParams;
+  user_moved?: HubUserMovedParams;
+  channel_created?: HubChannelCreatedParams;
+  channel_removed?: HubChannelRemovedParams;
+  channel_updated?: HubChannelUpdatedParams;
+  sync_voice_target?: HubSyncVoiceTargetParams;
   unknown_params_json?: string;
 }
 
@@ -139,7 +148,7 @@ interface NotificationDataType {
 // ============================================================================
 
 export interface PendingRequest {
-  resolve: (result: hubedgeRpc.TypedRPCResponse) => void;
+  resolve: (result: TypedRPCResponse) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
   method: string;
@@ -149,8 +158,8 @@ export interface Message {
   id?: string;
   type: string;
   method?: string;
-  params?: hubedgeRpc.TypedRPCRequest;
-  result?: hubedgeRpc.TypedRPCResponse;
+  params?: TypedRPCRequest;
+  result?: TypedRPCResponse;
   error?: {
     code: number;
     message: string;
@@ -163,8 +172,8 @@ export interface Message {
  * IRPCChannel - Interface for RPC communication channel
  */
 export interface IRPCChannel {
-  call(method: string, request: hubedgeRpc.TypedRPCRequest, timeout?: number): Promise<hubedgeRpc.TypedRPCResponse>;
-  notify(method: string, params: hubedgeRpc.TypedRPCNotification | NotificationParams): void;
+  call(method: string, request: TypedRPCRequest, timeout?: number): Promise<TypedRPCResponse>;
+  notify(method: string, params: TypedRPCNotification | NotificationParams): void;
   isConnected(): boolean;
 }
 
@@ -196,7 +205,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
   /**
    * Send typed RPC request
    */
-  async call(method: string, request: hubedgeRpc.TypedRPCRequest, timeout?: number): Promise<hubedgeRpc.TypedRPCResponse> {
+  async call(method: string, request: TypedRPCRequest, timeout?: number): Promise<TypedRPCResponse> {
     const id = this.generateId();
     const effectiveTimeout = timeout || this.requestTimeout;
 
@@ -205,10 +214,10 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
     request.method = method;
     request.timeout_ms = effectiveTimeout;
 
-    const packet = new EdgeHubPacket({
+    const packet: EdgeHubPacket = {
       type: PacketType.PACKET_TYPE_RPC_REQUEST,
       rpc_request: request,
-    });
+    };
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -230,23 +239,23 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
    * Send typed notification (no response expected)
    * Accepts either a TypedRPCNotification directly or plain object params
    */
-  notify(method: string, params: hubedgeRpc.TypedRPCNotification | NotificationParams): void {
-    let notification: hubedgeRpc.TypedRPCNotification;
+  notify(method: string, params: TypedRPCNotification | NotificationParams): void {
+    let notification: TypedRPCNotification;
     
     // If params is already a TypedRPCNotification, use it directly
-    if (params instanceof hubedgeRpc.TypedRPCNotification) {
-      notification = params;
+    if (typeof params === 'object' && 'timestamp' in params && typeof params.timestamp === 'number') {
+      notification = params as TypedRPCNotification;
       notification.method = method;
       notification.timestamp = Date.now();
     } else {
       // Create TypedRPCNotification from plain object based on method
-      notification = this.createNotification(method, params);
+      notification = this.createNotification(method, params as NotificationParams);
     }
     
-    const packet = new EdgeHubPacket({
+    const packet: EdgeHubPacket = {
       type: PacketType.PACKET_TYPE_RPC_NOTIFICATION,
       rpc_notification: notification,
-    });
+    };
 
     this.sendPacket(packet);
   }
@@ -255,13 +264,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
    * Create TypedRPCNotification from method and params
    * Handles known internal param types directly, falls back to JSON serialization for others
    */
-  private createNotification(method: string, params: NotificationParams): hubedgeRpc.TypedRPCNotification {
-    const { TypedRPCNotification, HubVoiceDataParams, HubForceDisconnectParams, 
-            HubPeerJoinedParams, HubACLResponseParams, HubUserJoinedParams,
-            HubUserMovedParams, HubChannelCreatedParams,
-            HubChannelRemovedParams, HubChannelUpdatedParams, HubSyncVoiceTargetParams,
-            ChannelDataProto } = hubedgeRpc;
-
+  private createNotification(method: string, params: NotificationParams): TypedRPCNotification {
     const notificationData: NotificationDataType = {
       method,
       timestamp: Date.now(),
@@ -270,48 +273,48 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
     switch (method) {
       case 'hub.voiceData': {
         const p = params as VoiceDataParams;
-        notificationData.voice_data = new HubVoiceDataParams({
+        notificationData.voice_data = {
           from_session_id: p.fromSessionId,
           target_session_id: p.targetSessionId,
           voice_data: p.voiceData,
           timestamp: p.timestamp,
-        });
+        };
         break;
       }
       case 'edge.forceDisconnect': {
         const p = params as ForceDisconnectParams;
-        notificationData.force_disconnect = new HubForceDisconnectParams({
+        notificationData.force_disconnect = {
           reason: p.reason,
-        });
+        };
         break;
       }
       case 'edge.peerJoined': {
         const p = params as PeerJoinedParams;
-        notificationData.peer_joined = new HubPeerJoinedParams({
+        notificationData.peer_joined = {
           id: p.id,
           name: p.name,
           host: p.host,
           port: p.port,
           voice_port: p.voicePort,
-        });
+        };
         break;
       }
       case 'hub.aclResponse': {
         const p = params as ACLResponseParams;
-        notificationData.acl_response = new HubACLResponseParams({
+        notificationData.acl_response = { 
           edge_id: p.edge_id,
           actor_session: p.actor_session,
           success: p.success,
           channel_id: p.channel_id,
-          raw_data: p.raw_data ? new TextEncoder().encode(p.raw_data) : undefined,
+          raw_data: p.raw_data ? Buffer.from(p.raw_data, 'base64') : undefined,
           error: p.error,
           permission_denied: p.permission_denied,
-        });
+        };
         break;
       }
       case 'hub.userJoined': {
         const p = params as UserJoinedParams;
-        notificationData.user_joined = new HubUserJoinedParams({
+        notificationData.user_joined = { 
           session_id: p.session_id,
           edge_id: p.edge_id,
           user_id: p.user_id ?? 0,
@@ -326,23 +329,23 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
           self_deaf: p.self_deaf,
           priority_speaker: p.priority_speaker,
           recording: p.recording,
-        });
+        };
         break;
       }
       case 'hub.userMoved': {
         const p = params as UserMovedParams;
-        notificationData.user_moved = new HubUserMovedParams({
+        notificationData.user_moved = { 
           session_id: p.session_id,
           edge_id: p.edge_id,
           channel_id: p.channel_id,
           actor_session: p.actor_session,
-        });
+        };
         break;
       }
       case 'hub.channelCreated': {
         const p = params as ChannelCreatedParams;
-        notificationData.channel_created = new HubChannelCreatedParams({
-          channel: new ChannelDataProto({
+        notificationData.channel_created = { 
+          channel: { 
             channel_id: p.channel.channel_id,
             name: p.channel.name ?? '', // Required field in protobuf
             parent_id: p.channel.parent_id,
@@ -352,21 +355,21 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
             temporary: p.channel.temporary,
             inherit_acl: p.channel.inherit_acl,
             links: p.channel.links ?? [],
-          }),
-        });
+          },
+        };
         break;
       }
       case 'hub.channelRemoved': {
         const p = params as ChannelRemovedParams;
-        notificationData.channel_removed = new HubChannelRemovedParams({
+        notificationData.channel_removed = { 
           channel_id: p.channel_id,
-        });
+        };
         break;
       }
       case 'hub.channelUpdated': {
         const p = params as ChannelUpdatedParams;
-        notificationData.channel_updated = new HubChannelUpdatedParams({
-          channel: new ChannelDataProto({
+        notificationData.channel_updated = { 
+          channel: { 
             channel_id: p.channel.channel_id,
             name: p.channel.name ?? '', // Required field in protobuf
             parent_id: p.channel.parent_id,
@@ -376,19 +379,19 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
             temporary: p.channel.temporary,
             inherit_acl: p.channel.inherit_acl,
             links: p.channel.links ?? [],
-          }),
-        });
+          },
+        };
         break;
       }
       case 'hub.syncVoiceTarget': {
         const p = params as SyncVoiceTargetParams;
-        notificationData.sync_voice_target = new HubSyncVoiceTargetParams({
+        notificationData.sync_voice_target = { 
           edge_id: p.edge_id,
           client_session: p.client_session,
           target_id: p.target_id,
           config_json: typeof p.config === 'string' ? p.config : JSON.stringify(p.config),
-          timestamp: p.timestamp,
-        });
+          timestamp: p.timestamp ?? Date.now(), // Use provided timestamp or current time
+        };
         break;
       }
       default:
@@ -397,13 +400,13 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
         break;
     }
 
-    return new TypedRPCNotification(notificationData);
+    return notificationData as TypedRPCNotification;
   }
 
   /**
    * Send typed response
    */
-  respond(id: string, method: string, response: hubedgeRpc.TypedRPCResponse, error?: { code: number; message: string; data?: string }): void {
+  respond(id: string, method: string, response: TypedRPCResponse, error?: { code: number; message: string; data?: string }): void {
     if (this.ws.readyState !== WebSocket.OPEN) {
       // Connection is closed, silently ignore the response
       return;
@@ -411,24 +414,24 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
 
     if (error) {
       this.logger?.error(`RPC Error response for ${method}:`, error);
-      const packet = new EdgeHubPacket({
+      const packet: EdgeHubPacket = {
         type: PacketType.PACKET_TYPE_RPC_ERROR,
-        rpc_error: new ProtoRPCError({
+        rpc_error: {
           request_id: id,
           code: error.code,
           message: error.message,
           details: error.data,
-        }),
-      });
+        },
+      };
       this.sendPacket(packet);
     } else {
       response.request_id = id;
       response.method = method;
 
-      const packet = new EdgeHubPacket({
+      const packet: EdgeHubPacket = {
         type: PacketType.PACKET_TYPE_RPC_RESPONSE,
         rpc_response: response,
-      });
+      };
       this.sendPacket(packet);
     }
   }
@@ -438,13 +441,13 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
    */
   ping(): void {
     const seq = ++this.heartbeatSeq;
-    const packet = new EdgeHubPacket({
+    const packet: EdgeHubPacket = {
       type: PacketType.PACKET_TYPE_HEARTBEAT,
-      heartbeat: new Heartbeat({
+      heartbeat: {
         edge_id: 0,
         sequence: seq,
-      }),
-    });
+      },
+    };
     this.sendPacket(packet);
   }
 
@@ -453,7 +456,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
    */
   private handleMessage(data: Buffer): void {
     try {
-      const packet = EdgeHubPacket.deserializeBinary(new Uint8Array(data));
+      const packet = EdgeHubPacket.decode(new Uint8Array(data));
 
       switch (packet.type) {
         case PacketType.PACKET_TYPE_RPC_REQUEST:
@@ -496,8 +499,8 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
     }
   }
 
-  private handleRPCRequest(packet: hubedge.EdgeHubPacket): void {
-    if (!packet.has_rpc_request || !packet.rpc_request) {
+  private handleRPCRequest(packet: EdgeHubPacket): void {
+    if (packet.rpc_request === undefined || !packet.rpc_request) {
       this.logger.warn('Received RPC_REQUEST packet without rpc_request field');
       return;
     }
@@ -516,13 +519,13 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
     };
 
     // Emit request event with Message object for control-server compatibility
-    this.emit('request', message, (response: hubedgeRpc.TypedRPCResponse, error?: { code: number; message: string; data?: string }) => {
+    this.emit('request', message, (response: TypedRPCResponse, error?: { code: number; message: string; data?: string }) => {
       this.respond(requestId, method, response, error);
     });
   }
 
-  private handleRPCResponse(packet: hubedge.EdgeHubPacket): void {
-    if (!packet.has_rpc_response || !packet.rpc_response) {
+  private handleRPCResponse(packet: EdgeHubPacket): void {
+    if (packet.rpc_response === undefined || !packet.rpc_response) {
       this.logger.warn('Received RPC_RESPONSE packet without rpc_response field');
       return;
     }
@@ -538,8 +541,8 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
     }
   }
 
-  private handleRPCError(packet: hubedge.EdgeHubPacket): void {
-    if (!packet.has_rpc_error || !packet.rpc_error) {
+  private handleRPCError(packet: EdgeHubPacket): void {
+    if (packet.rpc_error === undefined || !packet.rpc_error) {
       this.logger.warn('Received RPC_ERROR packet without rpc_error field');
       return;
     }
@@ -554,8 +557,8 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
     }
   }
 
-  private handleRPCNotification(packet: hubedge.EdgeHubPacket): void {
-    if (!packet.has_rpc_notification || !packet.rpc_notification) {
+  private handleRPCNotification(packet: EdgeHubPacket): void {
+    if (packet.rpc_notification === undefined || !packet.rpc_notification) {
       this.logger.warn('Received RPC_NOTIFICATION packet without rpc_notification field');
       return;
     }
@@ -570,7 +573,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
   /**
    * Convert TypedRPCNotification to simple format with method and params
    */
-  private convertNotificationToSimple(typedNotification: hubedgeRpc.TypedRPCNotification): { method: string; params?: unknown } {
+  private convertNotificationToSimple(typedNotification: TypedRPCNotification): { method: string; params?: unknown } {
     const result: { method: string; params?: unknown } = {
       method: typedNotification.method,
     };
@@ -706,28 +709,28 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
     return result;
   }
 
-  private handleHeartbeat(packet: hubedge.EdgeHubPacket): void {
-    if (!packet.has_heartbeat || !packet.heartbeat) {
+  private handleHeartbeat(packet: EdgeHubPacket): void {
+    if (!packet.heartbeat) {
       return;
     }
 
     const { edge_id: edgeId, sequence } = packet.heartbeat;
     
-    const ackPacket = new EdgeHubPacket({
+    const ackPacket: EdgeHubPacket = {
       type: PacketType.PACKET_TYPE_HEARTBEAT_ACK,
-      heartbeat_ack: new HeartbeatAck({
+      heartbeat_ack: {
         edge_id: edgeId,
         sequence,
         hub_timestamp: Date.now(),
-      }),
-    });
+      },
+    };
     this.sendPacket(ackPacket);
     
     this.emit('ping', Date.now());
   }
 
-  private handleHeartbeatAck(packet: hubedge.EdgeHubPacket): void {
-    if (!packet.has_heartbeat_ack || !packet.heartbeat_ack) {
+  private handleHeartbeatAck(packet: EdgeHubPacket): void {
+    if (!packet.heartbeat_ack) {
       return;
     }
 
@@ -736,15 +739,15 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
     this.emit('pong', latency);
   }
 
-  private handleClientRelay(packet: hubedge.EdgeHubPacket): void {
-    if (!packet.has_relay || !packet.relay) {
+  private handleClientRelay(packet: EdgeHubPacket): void {
+    if (!packet.relay) {
       return;
     }
     this.emit('relay', packet.relay);
   }
 
-  private handleSync(packet: hubedge.EdgeHubPacket): void {
-    if (!packet.has_sync_data || !packet.sync_data) {
+  private handleSync(packet: EdgeHubPacket): void {
+    if (!packet.sync_data) {
       return;
     }
     this.emit('sync', packet.sync_data);
@@ -759,9 +762,10 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
     this.emit('error', error);
   }
 
-  private sendPacket(packet: hubedge.EdgeHubPacket): void {
+  private sendPacket(packet: EdgeHubPacket): void {
     if (this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(packet.serializeBinary());
+      const bytes = EdgeHubPacket.encode(packet).finish();
+      this.ws.send(bytes);
     } else {
       throw new Error('WebSocket not open');
     }

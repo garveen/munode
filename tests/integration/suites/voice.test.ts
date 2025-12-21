@@ -176,7 +176,8 @@ describe('Voice Integration Tests', () => {
     const channels = tempClient.getChannels();
     await clearAllChannelLinks(adminForCleanup, channels);
     await tempClient.disconnect();
-    await new Promise(resolve => setTimeout(resolve, 200));
+    // Increase cleanup wait time to ensure full disconnection
+    await new Promise(resolve => setTimeout(resolve, 500));
   });
 
   describe('Basic Voice Broadcasting (target=0)', () => {
@@ -390,7 +391,7 @@ describe('Voice Integration Tests', () => {
       // - non_target_e2: Edge 2, 同频道 - 不应收到
       
       // 等待前面测试的客户端完全断开（额外增加时间以确保清理完成）
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       const clients = await createClients(testEnv, [
         { username: 'voice_whisper_sender', edge: 1, channelId: 0 },
@@ -471,7 +472,7 @@ describe('Voice Integration Tests', () => {
       
       // 创建频道 VoiceTarget
       await sender.setVoiceTarget(2, [
-        { channel_id: 1 },
+        { session: [], channel_id: 1 },
       ]);
       // 等待 VoiceTarget 同步到所有 Edge（增加到 2 秒）
       await new Promise(resolve => setTimeout(resolve, 2000));

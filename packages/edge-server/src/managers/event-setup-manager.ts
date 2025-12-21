@@ -73,7 +73,7 @@ export class EventSetupManager {
 
     this.handlerFactory.messageHandler.on(
       'banListUpdate',
-      (session_id: number, bans: mumbleproto.BanList.BanEntry[]) => {
+      (session_id: number, bans: mumbleproto.BanList_BanEntry[]) => {
         void this.banHandler.handleBanListUpdate(session_id, bans);
       }
     );
@@ -391,12 +391,11 @@ export class EventSetupManager {
             this.logger.info(`Processing ${remoteSessionCount} remote user sessions from fullSync`);
             
             // Import protocol dependencies once before the loop
-            const mumbleproto = await import('@munode/protocol').then(m => m.mumbleproto);
             const MessageType = await import('@munode/protocol').then(m => m.MessageType);
             
             // Get local clients once before the loop
             const allClients = this.handlerFactory.clientManager.getAllClients();
-            const authenticatedClients = allClients.filter(c => c.user_id > 0 && c.has_full_user_list);
+            const authenticatedClients = allClients.filter(c => c.user_id > 0 && c !== undefined);
             
             for (const session of syncData.sessions) {
               // Only process sessions from other edges
@@ -434,8 +433,7 @@ export class EventSetupManager {
                   userStateData.hash = session.cert_hash;
                 }
                 
-                const userState = new mumbleproto.UserState(userStateData);
-                const userStateMessage = userState.serialize();
+                const userStateMessage = mumbleproto.UserState.encode(userStateData as any).finish();
                 const userStateBuffer = Buffer.from(userStateMessage);
                 
                 // Broadcast to all local authenticated clients
@@ -595,12 +593,15 @@ export class EventSetupManager {
           // 转换channels
           if (params.config.channels && params.config.channels.length > 0) {
             for (const channel of params.config.channels) {
-              targets.push({
-                channel_id: channel.channel_id,
-                children: channel.include_subchannels || false,
-                links: channel.include_links || false,
-                group: channel.group,
-              });
+              // Only add channel targets with valid channel_id (non-zero)
+              if (channel.channel_id !== undefined && channel.channel_id !== 0) {
+                targets.push({
+                  channel_id: channel.channel_id,
+                  children: channel.include_subchannels || false,
+                  links: channel.include_links || false,
+                  group: channel.group,
+                });
+              }
             }
           }
           
@@ -787,17 +788,17 @@ export class EventSetupManager {
    */
   private sendServerVersion(session_id: number): void {
     try {
-      const version = new mumbleproto.Version({
-        version: 0x010400, // 1.4.0
-        release: 'MuNode Edge Server',
-        os: 'Linux',
-        os_version: process.version,
-      });
+      const version = mumbleproto.Version.encode({
+        version_v1: 1,
+        version_v2: 5,
+        os: 'MuNode',
+        release: '0.1.0',
+      } as any).finish();
 
       this.messageManager?.sendMessageToClient(
         session_id,
         MessageType.Version,
-        Buffer.from(version.serializeBinary())
+        Buffer.from(version)
       );
 
       // 发送 Version 后，更新客户端状态为 ServerSentVersion

@@ -224,7 +224,7 @@ export class HubControlService {
       if (message.params) {
         this.typedServer.handleRequest(channel, message.params, respond);
       } else {
-        respond(new hubedgeRpc.TypedRPCResponse({ request_id: message.id || '0' }), { code: -32600, message: 'Invalid request: missing params' });
+        respond({ request_id: message.id || '0' }), { code: -32600, message: 'Invalid request: missing params', method: message.method || "" };
       }
     });
 

@@ -224,7 +224,7 @@ export class UserStateHandler implements IUserStateHandler {
         sessionManager.updateSessionChannel(targetSession, userStateObj.channel_id);
         broadcast = true;
 
-        this.logger.info(`User ${targetGlobalSession.username} moved from channel ${oldChannelId} to ${userStateObj.channel_id}`);
+        this.logger.info(`User ${targetGlobalSession.username} moved from channel ${oldChannelId} to ${userStateObj.channel_id}, hasSpeak=${hasSpeak}`);
         
         // 如果用户没有 Speak 权限，自动设置 suppress = true
         // 注意：这是服务器端自动设置，不需要管理员权限

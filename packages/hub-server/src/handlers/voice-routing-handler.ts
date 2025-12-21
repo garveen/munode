@@ -46,7 +46,7 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
     const controlService = this.factory.getControlService();
 
     // 同步语音目标配置到本地存储
-    voiceTargetSync.syncVoiceTarget(params);
+    voiceTargetSync.syncVoiceTarget(params as any);
 
     // 广播 VoiceTarget 更新到所有其他 Edge（除了发送者）
     this.logger.info(
@@ -54,7 +54,16 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
     );
 
     // 广播到所有其他Edge（除了发送者）
-    controlService.broadcastExcept(params.edge_id, 'hub.syncVoiceTarget', params);    return { success: true };
+    // 注意：notification params 不包含 timestamp 字段，需要创建符合 HubSyncVoiceTargetNotification 的 params
+    const notificationParams = {
+      edge_id: params.edge_id,
+      client_session: params.client_session,
+      target_id: params.target_id,
+      config: params.config,
+    };
+    controlService.broadcastExcept(params.edge_id, 'hub.syncVoiceTarget', notificationParams);
+    
+    return { success: true };
   }
 
   async handleGetVoiceTargets(params: RPCParams<'edge.getVoiceTargets'>): Promise<RPCResult<'edge.getVoiceTargets'>> {

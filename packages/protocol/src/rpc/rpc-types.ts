@@ -12,36 +12,64 @@ import type {
 } from '../hub-edge-types.js';
 
 // Import protobuf generated types for result types
-import { hubedge } from '../generated/proto/HubEdgeRPC.js';
+import type {
+  EdgeRegisterResult,
+  EdgeHeartbeatResult,
+  EdgeAllocateSessionIdResult,
+  EdgeAuthenticateUserResult,
+  EdgeSyncVoiceTargetResult,
+  EdgeGetVoiceTargetsResult,
+  EdgeRouteVoiceResult,
+  EdgeAdminOperationResult,
+  EdgeExchangeCertificatesResult,
+  EdgeFullSyncResult,
+  EdgeGetChannelsResult,
+  EdgeGetACLsResult,
+  EdgeSaveChannelResult,
+  EdgeSaveACLResult,
+  EdgeJoinResult,
+  EdgeJoinCompleteResult,
+  EdgeHandleACLResult,
+  EdgeHandlePermissionQueryResult,
+  EdgeReportPeerDisconnectResult,
+  EdgeReportQualityResult,
+  ClusterGetStatusResult,
+  BlobPutResult,
+  BlobGetResult,
+  BlobGetUserTextureResult,
+  BlobGetUserCommentResult,
+  BlobSetUserTextureResult,
+  BlobSetUserCommentResult,
+} from '../generated/proto/HubEdgeRPC.js';
 
-// Extract protobuf result types using ReturnType
-type EdgeRegisterResultPb = ReturnType<typeof hubedge.EdgeRegisterResult.prototype.toObject>;
-type EdgeHeartbeatResultPb = ReturnType<typeof hubedge.EdgeHeartbeatResult.prototype.toObject>;
-type EdgeAllocateSessionIdResultPb = ReturnType<typeof hubedge.EdgeAllocateSessionIdResult.prototype.toObject>;
-type EdgeAuthenticateUserResultPb = ReturnType<typeof hubedge.EdgeAuthenticateUserResult.prototype.toObject>;
-type EdgeSyncVoiceTargetResultPb = ReturnType<typeof hubedge.EdgeSyncVoiceTargetResult.prototype.toObject>;
-type EdgeGetVoiceTargetsResultPb = ReturnType<typeof hubedge.EdgeGetVoiceTargetsResult.prototype.toObject>;
-type EdgeRouteVoiceResultPb = ReturnType<typeof hubedge.EdgeRouteVoiceResult.prototype.toObject>;
-type EdgeAdminOperationResultPb = ReturnType<typeof hubedge.EdgeAdminOperationResult.prototype.toObject>;
-type EdgeExchangeCertificatesResultPb = ReturnType<typeof hubedge.EdgeExchangeCertificatesResult.prototype.toObject>;
-type EdgeFullSyncResultPb = ReturnType<typeof hubedge.EdgeFullSyncResult.prototype.toObject>;
-type EdgeGetChannelsResultPb = ReturnType<typeof hubedge.EdgeGetChannelsResult.prototype.toObject>;
-type EdgeGetACLsResultPb = ReturnType<typeof hubedge.EdgeGetACLsResult.prototype.toObject>;
-type EdgeSaveChannelResultPb = ReturnType<typeof hubedge.EdgeSaveChannelResult.prototype.toObject>;
-type EdgeSaveACLResultPb = ReturnType<typeof hubedge.EdgeSaveACLResult.prototype.toObject>;
-type EdgeJoinResultPb = ReturnType<typeof hubedge.EdgeJoinResult.prototype.toObject>;
-type EdgeJoinCompleteResultPb = ReturnType<typeof hubedge.EdgeJoinCompleteResult.prototype.toObject>;
-type EdgeHandleACLResultPb = ReturnType<typeof hubedge.EdgeHandleACLResult.prototype.toObject>;
-type EdgeHandlePermissionQueryResultPb = ReturnType<typeof hubedge.EdgeHandlePermissionQueryResult.prototype.toObject>;
-type EdgeReportPeerDisconnectResultPb = ReturnType<typeof hubedge.EdgeReportPeerDisconnectResult.prototype.toObject>;
-type EdgeReportQualityResultPb = ReturnType<typeof hubedge.EdgeReportQualityResult.prototype.toObject>;
-type ClusterGetStatusResultPb = ReturnType<typeof hubedge.ClusterGetStatusResult.prototype.toObject>;
-type BlobPutResultPb = ReturnType<typeof hubedge.BlobPutResult.prototype.toObject>;
-type BlobGetResultPb = ReturnType<typeof hubedge.BlobGetResult.prototype.toObject>;
-type BlobGetUserTextureResultPb = ReturnType<typeof hubedge.BlobGetUserTextureResult.prototype.toObject>;
-type BlobGetUserCommentResultPb = ReturnType<typeof hubedge.BlobGetUserCommentResult.prototype.toObject>;
-type BlobSetUserTextureResultPb = ReturnType<typeof hubedge.BlobSetUserTextureResult.prototype.toObject>;
-type BlobSetUserCommentResultPb = ReturnType<typeof hubedge.BlobSetUserCommentResult.prototype.toObject>;
+// Type aliases for protobuf result types
+type EdgeRegisterResultPb = EdgeRegisterResult;
+type EdgeHeartbeatResultPb = EdgeHeartbeatResult;
+type EdgeAllocateSessionIdResultPb = EdgeAllocateSessionIdResult;
+type EdgeAuthenticateUserResultPb = EdgeAuthenticateUserResult;
+type EdgeSyncVoiceTargetResultPb = EdgeSyncVoiceTargetResult;
+type EdgeGetVoiceTargetsResultPb = EdgeGetVoiceTargetsResult;
+type EdgeRouteVoiceResultPb = EdgeRouteVoiceResult;
+type EdgeAdminOperationResultPb = EdgeAdminOperationResult;
+type EdgeExchangeCertificatesResultPb = EdgeExchangeCertificatesResult;
+type EdgeFullSyncResultPb = EdgeFullSyncResult;
+type EdgeGetChannelsResultPb = EdgeGetChannelsResult;
+type EdgeGetACLsResultPb = EdgeGetACLsResult;
+type EdgeSaveChannelResultPb = EdgeSaveChannelResult;
+type EdgeSaveACLResultPb = EdgeSaveACLResult;
+type EdgeJoinResultPb = EdgeJoinResult;
+type EdgeJoinCompleteResultPb = EdgeJoinCompleteResult;
+type EdgeHandleACLResultPb = EdgeHandleACLResult;
+type EdgeHandlePermissionQueryResultPb = EdgeHandlePermissionQueryResult;
+type EdgeReportPeerDisconnectResultPb = EdgeReportPeerDisconnectResult;
+type EdgeReportQualityResultPb = EdgeReportQualityResult;
+type ClusterGetStatusResultPb = ClusterGetStatusResult;
+type BlobPutResultPb = BlobPutResult;
+type BlobGetResultPb = BlobGetResult;
+type BlobGetUserTextureResultPb = BlobGetUserTextureResult;
+type BlobGetUserCommentResultPb = BlobGetUserCommentResult;
+type BlobSetUserTextureResultPb = BlobSetUserTextureResult;
+type BlobSetUserCommentResultPb = BlobSetUserCommentResult;
 
 // ============================================================================
 // Edge -> Hub RPC Methods
@@ -442,7 +470,6 @@ export interface EdgeChannelStateNotification {
       links_add?: number[];
       links_remove?: number[];
     };
-    has_channel_id: boolean; // protobuf optional field indicator
     raw_data?: string; // base64 encoded raw protobuf data
   };
 }
@@ -1000,6 +1027,7 @@ export interface HubSyncVoiceTargetNotification {
         group?: string;
       }>;
     } | null;
+    timestamp?: number; // Optional timestamp for tracking
   };
 }
 

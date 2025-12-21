@@ -342,7 +342,7 @@ export class ConnectionManager {
       switch (type) {
         case MessageType.Version: {
           // 版本消息，通常是服务器发送的第一个消息
-          const versionMessage = mumbleproto.Version.deserialize(payload);
+          const versionMessage = mumbleproto.Version.decode(payload);
           this.client.emit('version', versionMessage);
           break;
         }
@@ -359,84 +359,84 @@ export class ConnectionManager {
 
         case MessageType.Ping: {
           // Ping消息
-          const pingMessage = mumbleproto.Ping.deserialize(payload);
+          const pingMessage = mumbleproto.Ping.decode(payload);
           this.client.emit('ping', pingMessage);
           break;
         }
 
         case MessageType.Reject: {
           // 拒绝消息 (认证失败)
-          const rejectMessage = mumbleproto.Reject.deserialize(payload);
+          const rejectMessage = mumbleproto.Reject.decode(payload);
           this.client.getAuthManager().handleReject(rejectMessage);
           break;
         }
 
         case MessageType.ServerSync: {
           // 服务器同步消息 (认证成功)
-          const serverSyncMessage = mumbleproto.ServerSync.deserialize(payload);
+          const serverSyncMessage = mumbleproto.ServerSync.decode(payload);
           this.client.getAuthManager().handleServerSync(serverSyncMessage);
           break;
         }
 
         case MessageType.ChannelRemove: {
           // 频道删除消息
-          const channelRemoveMessage = mumbleproto.ChannelRemove.deserialize(payload);
+          const channelRemoveMessage = mumbleproto.ChannelRemove.decode(payload);
           this.client.getStateManager().handleChannelRemove(channelRemoveMessage);
           break;
         }
 
         case MessageType.ChannelState: {
           // 频道状态消息
-          const channelStateMessage = mumbleproto.ChannelState.deserialize(payload);
+          const channelStateMessage = mumbleproto.ChannelState.decode(payload);
           this.client.getStateManager().handleChannelState(channelStateMessage);
           break;
         }
 
         case MessageType.UserRemove: {
           // 用户删除消息
-          const userRemoveMessage = mumbleproto.UserRemove.deserialize(payload);
+          const userRemoveMessage = mumbleproto.UserRemove.decode(payload);
           this.client.getStateManager().handleUserRemove(userRemoveMessage);
           break;
         }
 
         case MessageType.UserState: {
           // 用户状态消息
-          const userStateMessage = mumbleproto.UserState.deserialize(payload);
+          const userStateMessage = mumbleproto.UserState.decode(payload);
           this.client.getStateManager().handleUserState(userStateMessage);
           break;
         }
 
         case MessageType.BanList: {
           // 封禁列表消息
-          const banListMessage = mumbleproto.BanList.deserialize(payload);
+          const banListMessage = mumbleproto.BanList.decode(payload);
           this.client.emit('banList', banListMessage);
           break;
         }
 
         case MessageType.TextMessage: {
           // 文本消息
-          const textMessage = mumbleproto.TextMessage.deserialize(payload);
+          const textMessage = mumbleproto.TextMessage.decode(payload);
           this.client.emit('textMessage', textMessage);
           break;
         }
 
         case MessageType.PermissionDenied: {
           // 权限拒绝消息
-          const permissionDeniedMessage = mumbleproto.PermissionDenied.deserialize(payload);
+          const permissionDeniedMessage = mumbleproto.PermissionDenied.decode(payload);
           this.client.getStateManager().handlePermissionDenied(permissionDeniedMessage);
           break;
         }
 
         case MessageType.ACL: {
           // ACL消息
-          const aclMessage = mumbleproto.ACL.deserialize(payload);
+          const aclMessage = mumbleproto.ACL.decode(payload);
           this.client.emit('acl', aclMessage);
           break;
         }
 
         case MessageType.QueryUsers: {
           // 查询用户消息
-          const queryUsersMessage = mumbleproto.QueryUsers.deserialize(payload);
+          const queryUsersMessage = mumbleproto.QueryUsers.decode(payload);
           this.client.emit('queryUsers', queryUsersMessage);
           break;
         }
@@ -444,7 +444,7 @@ export class ConnectionManager {
         case MessageType.CryptSetup: {
           // 加密设置消息
           console.log('[DEBUG] Received CryptSetup message type');
-          const cryptSetupMessage = mumbleproto.CryptSetup.deserialize(payload);
+          const cryptSetupMessage = mumbleproto.CryptSetup.decode(payload);
           // 异步处理，但不阻塞消息处理循环
           console.log('Received CryptSetup message, initializing cryptography');
           this.handleCryptSetup(cryptSetupMessage).catch(error => {
@@ -455,77 +455,77 @@ export class ConnectionManager {
 
         case MessageType.ContextActionModify: {
           // 上下文操作修改消息
-          const contextActionModifyMessage = mumbleproto.ContextActionModify.deserialize(payload);
+          const contextActionModifyMessage = mumbleproto.ContextActionModify.decode(payload);
           this.client.emit('contextActionModify', contextActionModifyMessage);
           break;
         }
 
         case MessageType.ContextAction: {
           // 上下文操作消息
-          const contextActionMessage = mumbleproto.ContextAction.deserialize(payload);
+          const contextActionMessage = mumbleproto.ContextAction.decode(payload);
           this.client.emit('contextAction', contextActionMessage);
           break;
         }
 
         case MessageType.UserList: {
           // 用户列表消息
-          const userListMessage = mumbleproto.UserList.deserialize(payload);
+          const userListMessage = mumbleproto.UserList.decode(payload);
           this.client.emit('userList', userListMessage);
           break;
         }
 
         case MessageType.VoiceTarget: {
           // 语音目标消息
-          const voiceTargetMessage = mumbleproto.VoiceTarget.deserialize(payload);
+          const voiceTargetMessage = mumbleproto.VoiceTarget.decode(payload);
           this.client.emit('voiceTarget', voiceTargetMessage);
           break;
         }
 
         case MessageType.PermissionQuery: {
           // 权限查询消息
-          const permissionQueryMessage = mumbleproto.PermissionQuery.deserialize(payload);
+          const permissionQueryMessage = mumbleproto.PermissionQuery.decode(payload);
           this.client.emit('permissionQuery', permissionQueryMessage);
           break;
         }
 
         case MessageType.CodecVersion: {
           // 编解码器版本消息
-          const codecVersionMessage = mumbleproto.CodecVersion.deserialize(payload);
+          const codecVersionMessage = mumbleproto.CodecVersion.decode(payload);
           this.client.emit('codecVersion', codecVersionMessage);
           break;
         }
 
         case MessageType.UserStats: {
           // 用户统计消息
-          const userStatsMessage = mumbleproto.UserStats.deserialize(payload);
+          const userStatsMessage = mumbleproto.UserStats.decode(payload);
           this.client.emit('userStats', userStatsMessage);
           break;
         }
 
         case MessageType.RequestBlob: {
           // 请求Blob消息
-          const requestBlobMessage = mumbleproto.RequestBlob.deserialize(payload);
+          const requestBlobMessage = mumbleproto.RequestBlob.decode(payload);
           this.client.emit('requestBlob', requestBlobMessage);
           break;
         }
 
         case MessageType.ServerConfig: {
           // 服务器配置消息
-          const serverConfigMessage = mumbleproto.ServerConfig.deserialize(payload);
+          const serverConfigMessage = mumbleproto.ServerConfig.decode(payload);
           this.client.getStateManager().handleServerConfig(serverConfigMessage);
           break;
         }
 
         case MessageType.SuggestConfig: {
           // 建议配置消息
-          const suggestConfigMessage = mumbleproto.SuggestConfig.deserialize(payload);
+          const suggestConfigMessage = mumbleproto.SuggestConfig.decode(payload);
           this.client.emit('suggestConfig', suggestConfigMessage);
           break;
         }
 
         case MessageType.PluginDataTransmission: {
           // 插件数据传输消息
-          const pluginDataMessage = mumbleproto.PluginDataTransmission.deserialize(payload);
+          const pluginDataMessage = mumbleproto.PluginDataTransmission.decode(payload);
           this.client.emit('pluginData', pluginDataMessage);
           break;
         }
@@ -837,8 +837,8 @@ export class ConnectionManager {
    */
   private async handleCryptSetup(message: mumbleproto.CryptSetup): Promise<void> {
     // 从CryptSetup消息中提取加密参数
-    // 注意：protobuf optional字段需要使用 has_xxx 方法检查是否设置
-    if (message.has_key && message.has_client_nonce && message.has_server_nonce) {
+    // 注意：protobuf optional字段需要使用 !== undefined 检查是否设置
+    if (message.key !== undefined && message.client_nonce !== undefined && message.server_nonce !== undefined) {
       this.client.getCryptoManager().setKey(
         Buffer.from(message.key),
         Buffer.from(message.client_nonce),
@@ -870,9 +870,9 @@ export class ConnectionManager {
       this.client.emit('cryptoReady');
     } else {
       console.warn('[ConnectionManager] Incomplete cryptographic setup message', {
-        has_key: message.has_key,
-        has_client_nonce: message.has_client_nonce,
-        has_server_nonce: message.has_server_nonce
+        has_key: message.key !== undefined,
+        has_client_nonce: message.client_nonce !== undefined,
+        has_server_nonce: message.server_nonce !== undefined
       });
       // Still emit cryptoReady so connection can proceed
       this.client.emit('cryptoReady');

@@ -210,7 +210,7 @@ export interface AuthResult {
   cert_hash?: string; // 返回证书哈希（如果有）
   metadata?: Record<string, string | number | boolean>;
   reason?: string;
-  rejectType?: mumbleproto.Reject.RejectType;
+  rejectType?: mumbleproto.Reject_RejectType;
   // PreConnect state fields - user's initial state returned by Hub
   mute?: boolean;
   deaf?: boolean;
