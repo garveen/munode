@@ -149,12 +149,7 @@ describe('Channel Ninja Integration Tests', () => {
       }
     }, 30000);
 
-    it.skip('should show users again when they leave ninja channel', async () => {
-      // TODO: This test is currently disabled due to a limitation with proto3 + ts-proto
-      // When a user moves to channel 0 (root), the protobuf encoder doesn't encode channel_id
-      // because 0 is the default value, making it impossible to distinguish between
-      // "move to channel 0" and "don't change channel". This needs to be fixed at the
-      // protocol level (either using proto2 or adding an explicit flag).
+    it('should show users again when they leave ninja channel', async () => {
       const ninjaUser = new MumbleClient();
       const normalUser = new MumbleClient();
 

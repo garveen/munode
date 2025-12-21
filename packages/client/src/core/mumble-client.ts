@@ -149,9 +149,35 @@ export class MumbleClient extends EventEmitter {
       listening_channel_add: [],
       listening_channel_remove: [],
     };
-    const serialized = mumbleproto.UserState.encode(fullUserState).finish();
-    const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
-    await this.connection.sendTCP(wrappedMessage);
+    
+    // WORKAROUND for ts-proto proto3 semantics with proto2 files:
+    // ts-proto doesn't encode fields with default values (0 for uint32)
+    // But we need to explicitly encode channel_id even when it's 0 to move to root channel
+    // Solution: Use a sentinel value (-1 mapped to max uint32) to force encoding, then fix it
+    // Or better: manually construct the protobuf bytes for channel_id=0
+    if (userState.channel_id === 0) {
+      // Encode without channel_id first
+      const tempState = { ...fullUserState };
+      delete tempState.channel_id;
+      const partialEncoded = mumbleproto.UserState.encode(tempState).finish();
+      
+      // Manually inject channel_id=0 field
+      // Field number 5 (channel_id), wire type 0 (varint): tag = (5 << 3) | 0 = 0x28
+      // Value 0 encoded as varint: 0x00
+      const channelIdBytes = Buffer.from([0x28, 0x00]); // tag=0x28 (field 5, varint), value=0
+      
+      // Combine: put channel_id field after session (field 1) if present
+      // For simplicity, append at the end (protobuf fields can be in any order)
+      const combined = Buffer.concat([partialEncoded, channelIdBytes]);
+      
+      const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, combined);
+      await this.connection.sendTCP(wrappedMessage);
+    } else {
+      // Normal encoding for non-zero channel_id
+      const serialized = mumbleproto.UserState.encode(fullUserState).finish();
+      const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);
+      await this.connection.sendTCP(wrappedMessage);
+    }
   }
 
   /**
