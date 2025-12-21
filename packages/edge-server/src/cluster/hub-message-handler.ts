@@ -43,7 +43,7 @@ export class HubMessageHandlers {
    */
   handleUserStateBroadcastFromHub(params: HubNotificationParams<'hub.userStateBroadcast'>): void {
     try {
-        this.logger.debug(`Edge: Received UserState broadcast from Hub: ${JSON.stringify(params)}`);
+        this.logger.info(`Edge: Received UserState broadcast from Hub for session ${params.session}, suppress=${params.suppress}, channel_id=${params.channel_id}`);
       
       // params is the userState object directly, use the type from HubNotificationParams
       // Build UserState protobuf message with only the fields that are set
