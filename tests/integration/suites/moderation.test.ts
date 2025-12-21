@@ -258,6 +258,9 @@ describe('Moderation Integration Tests', () => {
         rejectUnauthorized: false,
       });
 
+      // Wait for all clients to be fully synchronized with Hub
+      await new Promise(resolve => setTimeout(resolve, 500));
+
       const testMessage = 'Hello from integration test ' + Date.now();
 
       // 本 Edge 用户监听
