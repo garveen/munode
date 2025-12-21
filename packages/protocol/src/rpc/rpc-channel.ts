@@ -103,7 +103,7 @@ interface SyncVoiceTargetParams {
   client_session: number;
   target_id: number;
   config: unknown;
-  timestamp: number;
+  timestamp?: number; // Optional timestamp
 }
 
 // Union type of internal params used by createNotification
@@ -390,7 +390,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
           client_session: p.client_session,
           target_id: p.target_id,
           config_json: typeof p.config === 'string' ? p.config : JSON.stringify(p.config),
-          timestamp: p.timestamp,
+          timestamp: p.timestamp ?? Date.now(), // Use provided timestamp or current time
         };
         break;
       }

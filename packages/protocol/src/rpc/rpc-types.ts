@@ -1027,6 +1027,7 @@ export interface HubSyncVoiceTargetNotification {
         group?: string;
       }>;
     } | null;
+    timestamp?: number; // Optional timestamp for tracking
   };
 }
 
