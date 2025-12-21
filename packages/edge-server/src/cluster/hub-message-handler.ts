@@ -698,8 +698,12 @@ export class HubMessageHandlers {
   /**
    * 处理来自Hub的ACL更新通知
    */
-  handleACLUpdatedNotification(params: { channel_id: number; timestamp: number }): void {
+  handleACLUpdatedNotification(params: { channel_id: number; timestamp: number } | undefined): void {
     try {
+      if (!params) {
+        this.logger.warn('Received ACL update notification with undefined params');
+        return;
+      }
       const { channel_id } = params;
         this.logger.info(`Received ACL update notification for channel ${channel_id}`);
       

@@ -189,9 +189,13 @@ describe('User Info Query Integration Tests', () => {
         // 注意：protobuf 的 repeated 字段总是存在，但应该为空数组
         expect(receivedStats.certificates).toHaveLength(0);
         // stats_only 模式下不应该有详细信息字段
-        expect(receivedStats.has_strong_certificate).toBe(false);
-        expect(receivedStats.has_version).toBe(false);
-        expect(receivedStats.has_address).toBe(false);
+        // 注意：protobuf optional 字段即使未设置也会有默认值
+        expect(receivedStats.strong_certificate).toBeFalsy(); // false 或 undefined
+        expect(receivedStats.version).toBeUndefined();
+        // address 字段可能是 undefined 或空 Buffer
+        if (receivedStats.address) {
+          expect(receivedStats.address.length).toBe(0);
+        }
       }
 
       await client1.disconnect();

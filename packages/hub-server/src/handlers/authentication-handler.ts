@@ -176,13 +176,13 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         release?: string;
         os?: string;
         os_version?: string;
-        mute: boolean;
-        deaf: boolean;
-        suppress: boolean;
-        self_mute: boolean;
-        self_deaf: boolean;
-        priority_speaker: boolean;
-        recording: boolean;
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
+        self_mute?: boolean;
+        self_deaf?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
       }
 
       // 检查用户在目标频道的 ACL 权限，自动设置 suppress 状态
@@ -222,14 +222,15 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         release: params.client_info.release,
         os: params.client_info.os,
         os_version: params.client_info.os_version,
-        // Default states - client will send UserState to update these
-        mute: false,
-        deaf: false,
-        suppress: initialSuppress, // 基于 ACL 的自动 suppress
-        self_mute: false,
-        self_deaf: false,
-        priority_speaker: false,
-        recording: false,
+        // Set suppress based on ACL
+        suppress: initialSuppress,
+        // Include preConnect state from params if provided
+        mute: params.mute,
+        deaf: params.deaf,
+        self_mute: params.self_mute,
+        self_deaf: params.self_deaf,
+        priority_speaker: params.priority_speaker,
+        recording: params.recording,
       };
 
       this.logger.info(`Session created: ${params.username} (user_id: ${authResult.user_id}), groups: ${JSON.stringify(session.groups)}, channel: ${actualChannelId}`);
@@ -353,13 +354,13 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           target_sessions: sessionIds,
         };
         
-        if (session.mute === true) userJoinedData.mute = true;
-        if (session.deaf === true) userJoinedData.deaf = true;
-        if (session.suppress === true) userJoinedData.suppress = true;
-        if (session.self_mute === true) userJoinedData.self_mute = true;
-        if (session.self_deaf === true) userJoinedData.self_deaf = true;
-        if (session.priority_speaker === true) userJoinedData.priority_speaker = true;
-        if (session.recording === true) userJoinedData.recording = true;
+        if (session.mute !== undefined) userJoinedData.mute = session.mute;
+        if (session.deaf !== undefined) userJoinedData.deaf = session.deaf;
+        if (session.suppress !== undefined) userJoinedData.suppress = session.suppress;
+        if (session.self_mute !== undefined) userJoinedData.self_mute = session.self_mute;
+        if (session.self_deaf !== undefined) userJoinedData.self_deaf = session.self_deaf;
+        if (session.priority_speaker !== undefined) userJoinedData.priority_speaker = session.priority_speaker;
+        if (session.recording !== undefined) userJoinedData.recording = session.recording;
         
         this.factory.getControlService().notify(edgeId, 'hub.userJoined', userJoinedData);
       }
@@ -392,13 +393,13 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         cert_hash: session.cert_hash,
       };
       
-      if (session.mute === true) userJoinedData.mute = true;
-      if (session.deaf === true) userJoinedData.deaf = true;
-      if (session.suppress === true) userJoinedData.suppress = true;
-      if (session.self_mute === true) userJoinedData.self_mute = true;
-      if (session.self_deaf === true) userJoinedData.self_deaf = true;
-      if (session.priority_speaker === true) userJoinedData.priority_speaker = true;
-      if (session.recording === true) userJoinedData.recording = true;
+      if (session.mute !== undefined) userJoinedData.mute = session.mute;
+      if (session.deaf !== undefined) userJoinedData.deaf = session.deaf;
+      if (session.suppress !== undefined) userJoinedData.suppress = session.suppress;
+      if (session.self_mute !== undefined) userJoinedData.self_mute = session.self_mute;
+      if (session.self_deaf !== undefined) userJoinedData.self_deaf = session.self_deaf;
+      if (session.priority_speaker !== undefined) userJoinedData.priority_speaker = session.priority_speaker;
+      if (session.recording !== undefined) userJoinedData.recording = session.recording;
       
       this.factory.getControlService().broadcast('hub.userJoined', userJoinedData);
       this.logger.info(`Session ${session.session_id} created, broadcasted to all edges`);

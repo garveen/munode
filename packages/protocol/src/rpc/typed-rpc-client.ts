@@ -113,6 +113,14 @@ export class TypedRPCClient {
             os_version: p.client_info.os_version,
             certificate_hash: p.client_info.certificate_hash,
           } : undefined,
+          // PreConnect state
+          mute: p.mute,
+          deaf: p.deaf,
+          suppress: p.suppress,
+          self_mute: p.self_mute,
+          self_deaf: p.self_deaf,
+          priority_speaker: p.priority_speaker,
+          recording: p.recording,
         };
         break;
       }

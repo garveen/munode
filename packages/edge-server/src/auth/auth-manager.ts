@@ -58,6 +58,15 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
       os: string;
       os_version: string;
       certificate_hash?: string;
+    },
+    preConnectState?: {
+      self_mute?: boolean;
+      self_deaf?: boolean;
+      mute?: boolean;
+      deaf?: boolean;
+      suppress?: boolean;
+      priority_speaker?: boolean;
+      recording?: boolean;
     }
   ): Promise<AuthResult> {
     try {
@@ -77,7 +86,7 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
       // but Edge always calls Hub for each new session.
 
       // 通过 Hub 认证
-      const authResult = await this.authenticateViaHub(session_id, username, password, tokens, clientInfo);
+      const authResult = await this.authenticateViaHub(session_id, username, password, tokens, clientInfo, preConnectState);
 
       if (authResult.success) {
         this.logger.info(
@@ -115,6 +124,15 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
       os: string;
       os_version: string;
       certificate_hash?: string;
+    },
+    preConnectState?: {
+      self_mute?: boolean;
+      self_deaf?: boolean;
+      mute?: boolean;
+      deaf?: boolean;
+      suppress?: boolean;
+      priority_speaker?: boolean;
+      recording?: boolean;
     }
   ): Promise<AuthResult> {
     if (!this.hubClient || !this.hubClient.isConnected()) {
@@ -142,6 +160,14 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
           os_version: string;
           certificate_hash?: string;
         };
+        // PreConnect state
+        mute?: boolean;
+        deaf?: boolean;
+        suppress?: boolean;
+        self_mute?: boolean;
+        self_deaf?: boolean;
+        priority_speaker?: boolean;
+        recording?: boolean;
       } = {
         session_id: session_id,
         server_id: this.config.server_id,
@@ -156,6 +182,17 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
           os_version: 'unknown',
         },
       };
+
+      // Include preConnect state if available
+      if (preConnectState) {
+        if (preConnectState.mute !== undefined) authParams.mute = preConnectState.mute;
+        if (preConnectState.deaf !== undefined) authParams.deaf = preConnectState.deaf;
+        if (preConnectState.suppress !== undefined) authParams.suppress = preConnectState.suppress;
+        if (preConnectState.self_mute !== undefined) authParams.self_mute = preConnectState.self_mute;
+        if (preConnectState.self_deaf !== undefined) authParams.self_deaf = preConnectState.self_deaf;
+        if (preConnectState.priority_speaker !== undefined) authParams.priority_speaker = preConnectState.priority_speaker;
+        if (preConnectState.recording !== undefined) authParams.recording = preConnectState.recording;
+      }
 
       const response = await this.hubClient.call('edge.authenticateUser', authParams);
 

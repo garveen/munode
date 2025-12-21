@@ -38,6 +38,43 @@ export class StateHandlers {
   }
   
   /**
+   * 获取待处理的UserState（解码但不移除）
+   * 用于在认证时发送给Hub
+   */
+  getPendingUserStateDecoded(session_id: number): {
+    self_mute?: boolean;
+    self_deaf?: boolean;
+    mute?: boolean;
+    deaf?: boolean;
+    suppress?: boolean;
+    priority_speaker?: boolean;
+    recording?: boolean;
+  } | undefined {
+    const pendingData = this.pendingUserState.get(session_id);
+    if (!pendingData) {
+      return undefined;
+    }
+    
+    try {
+      const userState = mumbleproto.UserState.decode(pendingData);
+      // 只返回状态相关的字段
+      const result = {
+        self_mute: userState.self_mute,
+        self_deaf: userState.self_deaf,
+        mute: userState.mute,
+        deaf: userState.deaf,
+        suppress: userState.suppress,
+        priority_speaker: userState.priority_speaker,
+        recording: userState.recording,
+      };
+      return result;
+    } catch (error) {
+      this.logger.error(`Failed to decode pending UserState for session ${session_id}:`, error);
+      return undefined;
+    }
+  }
+  
+  /**
    * 处理待处理的UserState（在认证完成且Ready后调用）
    * 注意：只处理一次，避免无限递归
    */
@@ -106,7 +143,7 @@ export class StateHandlers {
       }
 
       // 只转发实际设置的字段，避免发送默认值
-      // 参考Edge废弃实现：只检查has_xxx来确定字段是否真正存在
+      // ts-proto with useOptionals=all: 未在消息中出现的字段将是 undefined
       const userStateToSend: {
         session: number;
         actor: number;
@@ -134,7 +171,7 @@ export class StateHandlers {
         actor: userState.actor,
       };
 
-      // 只包含实际设置的字段
+      // 只包含已设置（非 undefined）的字段
       if (userState.channel_id !== undefined) {
         userStateToSend.channel_id = userState.channel_id;
       }
@@ -172,6 +209,14 @@ export class StateHandlers {
         userStateToSend.plugin_identity = userState.plugin_identity;
       }
       
+      // 处理监听频道 - 只在字段存在时才添加
+      if (userState.listening_channel_add && userState.listening_channel_add.length > 0) {
+        userStateToSend.listening_channel_add = userState.listening_channel_add;
+      }
+      if (userState.listening_channel_remove && userState.listening_channel_remove.length > 0) {
+        userStateToSend.listening_channel_remove = userState.listening_channel_remove;
+      }
+      
       // 处理 blob 字段（texture 和 comment）
       // 如果客户端发送了texture或comment数据，需要上传到Hub blob存储
       if (userState.texture !== undefined && userState.texture && userState.texture.length > 0) {
@@ -188,14 +233,6 @@ export class StateHandlers {
         this.logger.error(`Failed to upload comment for user ${actor.user_id}:`, error);
         });
       }
-      
-      // 处理监听频道
-      if (userState.listening_channel_add && userState.listening_channel_add.length > 0) {
-        userStateToSend.listening_channel_add = userState.listening_channel_add;
-      }
-      if (userState.listening_channel_remove && userState.listening_channel_remove.length > 0) {
-        userStateToSend.listening_channel_remove = userState.listening_channel_remove;
-      }
 
       // 转发到Hub（使用notification，因为不需要等待响应）
       this.hubClient.notify('hub.handleUserState', {
@@ -206,7 +243,7 @@ export class StateHandlers {
         userState: userStateToSend,
       });
 
-        this.logger.debug(`Forwarded UserState from session ${session_id} to Hub, fields: ${Object.keys(userStateToSend).filter(k => k !== 'session' && k !== 'actor').join(', ')}`);
+        this.logger.debug(`Forwarded UserState from session ${session_id} to Hub, fields: ${Object.entries(userStateToSend).filter(([k, v]) => k !== 'session' && k !== 'actor' && v !== undefined).map(([k]) => k).join(', ')}`);
     } catch (error) {
         this.logger.error(`Error handling mumbleproto.UserState for session ${session_id}:`, error);
     }

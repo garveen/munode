@@ -24,7 +24,7 @@ describe('Moderation Integration Tests', () => {
   });
 
   describe('User Moderation', () => {
-    it.skip('should kick user from server', async () => {
+    it('should kick user from server', async () => {
       const adminClient = new MumbleClient();
       const targetClient = new MumbleClient();
 
@@ -165,7 +165,7 @@ describe('Moderation Integration Tests', () => {
       await targetClient.disconnect();
     });
 
-    it.skip('should delete channel as admin', async () => {
+    it('should delete channel as admin', async () => {
       const adminClient = new MumbleClient();
 
       await adminClient.connect({
@@ -229,7 +229,7 @@ describe('Moderation Integration Tests', () => {
   });
 
   describe('Message Moderation', () => {
-    it.skip('should send and receive text messages across edges', async () => {
+    it('should send and receive text messages across edges', async () => {
       const client1 = new MumbleClient(); // 发送者 - Edge 1
       const client2 = new MumbleClient(); // 本 Edge 接收者 - Edge 1
       const client3 = new MumbleClient(); // 跨 Edge 接收者 - Edge 2
@@ -301,7 +301,7 @@ describe('Moderation Integration Tests', () => {
       await client3.disconnect();
     });
 
-    it.skip('should send private message to specific user across edges', async () => {
+    it('should send private message to specific user across edges', async () => {
       const client1 = new MumbleClient(); // 发送者 - Edge 1
       const client2 = new MumbleClient(); // 本 Edge 接收者 - Edge 1
       const client3 = new MumbleClient(); // 跨 Edge 接收者 - Edge 2
