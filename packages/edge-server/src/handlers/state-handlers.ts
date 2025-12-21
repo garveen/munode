@@ -38,6 +38,42 @@ export class StateHandlers {
   }
   
   /**
+   * 获取待处理的UserState（解码但不移除）
+   * 用于在认证时发送给Hub
+   */
+  getPendingUserStateDecoded(session_id: number): {
+    self_mute?: boolean;
+    self_deaf?: boolean;
+    mute?: boolean;
+    deaf?: boolean;
+    suppress?: boolean;
+    priority_speaker?: boolean;
+    recording?: boolean;
+  } | undefined {
+    const pendingData = this.pendingUserState.get(session_id);
+    if (!pendingData) {
+      return undefined;
+    }
+    
+    try {
+      const userState = mumbleproto.UserState.decode(pendingData);
+      // 只返回状态相关的字段
+      return {
+        self_mute: userState.self_mute,
+        self_deaf: userState.self_deaf,
+        mute: userState.mute,
+        deaf: userState.deaf,
+        suppress: userState.suppress,
+        priority_speaker: userState.priority_speaker,
+        recording: userState.recording,
+      };
+    } catch (error) {
+      this.logger.error(`Failed to decode pending UserState for session ${session_id}:`, error);
+      return undefined;
+    }
+  }
+  
+  /**
    * 处理待处理的UserState（在认证完成且Ready后调用）
    * 注意：只处理一次，避免无限递归
    */

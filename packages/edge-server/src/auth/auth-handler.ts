@@ -77,13 +77,17 @@ export class AuthHandlers {
         certificate_hash: client.cert_hash,
       };
 
+      // Get pending UserState if it exists (preConnect state)
+      const pendingState = this.stateHandlers.getPendingUserStateDecoded(session_id);
+
       // 调用认证管理器
       const authResult = await this.authManager.authenticate(
         session_id,
         authMessage.username || '',
         authMessage.password || '',
         authMessage.tokens || [],
-        clientInfo
+        clientInfo,
+        pendingState
       );
 
       if (authResult.success) {
