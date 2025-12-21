@@ -66,6 +66,16 @@ describe('Edge External Port Configuration Tests', () => {
       enabled: true,
       path: join(tmpDataDir, 'blobs'),
     };
+    // Ensure registry config exists with matching HMAC secret
+    hubConfig.registry = hubConfig.registry || {
+      heartbeatInterval: 30,
+      timeout: 90,
+      maxEdges: 100,
+      hmacSecret: 'test-secret-key',
+      challengeTimeout: 60000,
+      enableAuth: true,
+    };
+    hubConfig.registry.hmacSecret = 'test-secret-key';
     
     const certsDir = join(__dirname, '../certs');
     hubConfig.tls = {
