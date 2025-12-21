@@ -591,7 +591,9 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
     }
 
     try {
-      return await this.client.call('edge.fullSync', {});
+      return await this.client.call('edge.fullSync', {
+        for_user_groups: [], // ts-proto requires array fields to be initialized
+      });
     } catch (error) {
       this.logger.error('Failed to request full sync:', error);
       throw error;
