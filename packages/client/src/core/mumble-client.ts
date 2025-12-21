@@ -233,8 +233,8 @@ export class MumbleClient extends EventEmitter {
    */
   async sendMessage(target: MessageTarget, message: string): Promise<void> {
     const serialized = mumbleproto.TextMessage.encode({
-      channel_id: target.channelId ? [target.channelId] : [],
-      session: target.userId ? [target.userId] : [],
+      channel_id: target.channelId !== undefined ? [target.channelId] : [],
+      session: target.userId !== undefined ? [target.userId] : [],
       message: message,
       tree_id: target.tree ? [target.channelId || 0] : []
     }).finish();

@@ -65,7 +65,7 @@ export class MessageHandlers {
         message: textMessage.message || '',
       });
 
-        this.logger.info(`[TEXT-MSG] Forwarded TextMessage from session ${session_id} (user: ${actor.username}) to Hub: channel_ids=[${(textMessage.channel_id || []).join(',')}], sessions=[${(textMessage.session || []).join(',')}], message="${textMessage.message}"`);
+        this.logger.debug(`Forwarded TextMessage from session ${session_id} to Hub`);
     } catch (error) {
         this.logger.error(`Error handling TextMessage for session ${session_id}:`, error);
     }

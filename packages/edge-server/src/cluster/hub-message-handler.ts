@@ -567,8 +567,8 @@ export class HubMessageHandlers {
     try {
       const { actor, session, channel_id, tree_id, message } = params;
 
-        this.logger.info(
-        `[TEXT-MSG] Received TextMessage broadcast from Hub: actor=${actor}, channel_ids=[${(channel_id || []).join(',')}], sessions=[${(session || []).join(',')}], message="${message}"`
+        this.logger.debug(
+        `Received TextMessage broadcast from Hub: from ${actor}`
       );
 
       // 构建TextMessage消息
@@ -593,7 +593,7 @@ export class HubMessageHandlers {
         }
       }
 
-        this.logger.info(`[TEXT-MSG] Broadcasted TextMessage to ${sentCount} local clients`);
+        this.logger.debug(`Broadcasted TextMessage to ${sentCount} local clients`);
     } catch (error) {
         this.logger.error('Error handling TextMessage broadcast from Hub:', error);
     }
