@@ -41,8 +41,8 @@ export class PermissionHandlers {
         return;
       }
 
-      // 使用 has_channel_id 检查 protobuf optional 字段是否真的设置了值（遵循 Copilot 指导）
-      if (!acl !== undefined) {
+      // ts-proto: channel_id is a required field in ACL message, always present
+      if (acl.channel_id === undefined) {
         this.logger.warn(`ACL without channel_id from session: ${session_id}`);
         return;
       }
