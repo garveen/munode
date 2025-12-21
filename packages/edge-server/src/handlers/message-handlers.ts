@@ -252,26 +252,15 @@ export class MessageHandlers {
       const parentId = this.getChannelParentForProtocol(channel);
       
       // 构造ChannelState对象 - 注意：根频道不应该设置parent字段
-      const channelStateData: {
-        channel_id: number;
-        parent?: number;
-        name: string;
-        description: string;
-        position: number;
-        temporary: boolean;
-        max_users: number;
-        links: number[];
-        links_add: number[];
-        links_remove: number[];
-        description_hash?: Uint8Array;
-      } = {
+      // ts-proto requires all repeated fields to be arrays (not undefined)
+      const channelStateData: any = {
         channel_id: channel.id,
         name: channel.name,
         description: channel.description || '',
         position: channel.position,
         temporary: channel.temporary,
         max_users: channel.max_users || 0,
-        // 不在第一遍发送links
+        // ts-proto's encoder will iterate over these fields, so they must be arrays
         links: [],
         links_add: [],
         links_remove: [],
@@ -282,7 +271,7 @@ export class MessageHandlers {
         channelStateData.parent = parentId;
       }
       
-      const channelStateMessage = mumbleproto.ChannelState.encode(channelStateData as any).finish();
+      const channelStateMessage = mumbleproto.ChannelState.encode(channelStateData).finish();
 
         this.logger.debug(
         `[sendChannelTree] BFS: channel ${channel.id} (${channel.name}), ` +
@@ -314,7 +303,9 @@ export class MessageHandlers {
     for (const channel of channelsToSendLinks) {
       const channelStateMessage = mumbleproto.ChannelState.encode({
         channel_id: channel.id,
-        links_add: channel.links,
+        links_add: channel.links || [],  // Ensure it's always an array for ts-proto
+        links: [],  // Must provide empty array for ts-proto encoder
+        links_remove: [],  // Must provide empty array for ts-proto encoder
       } as any).finish();
 
         this.logger.debug(
