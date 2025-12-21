@@ -58,7 +58,7 @@ export class StateHandlers {
     try {
       const userState = mumbleproto.UserState.decode(pendingData);
       // 只返回状态相关的字段
-      return {
+      const result = {
         self_mute: userState.self_mute,
         self_deaf: userState.self_deaf,
         mute: userState.mute,
@@ -67,6 +67,7 @@ export class StateHandlers {
         priority_speaker: userState.priority_speaker,
         recording: userState.recording,
       };
+      return result;
     } catch (error) {
       this.logger.error(`Failed to decode pending UserState for session ${session_id}:`, error);
       return undefined;

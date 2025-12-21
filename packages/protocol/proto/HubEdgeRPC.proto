@@ -90,6 +90,14 @@ message EdgeAuthenticateUserParams {
   required string password = 4;
   repeated string tokens = 5;
   optional ClientInfo client_info = 6;
+  // PreConnect state fields
+  optional bool mute = 7;
+  optional bool deaf = 8;
+  optional bool suppress = 9;
+  optional bool self_mute = 10;
+  optional bool self_deaf = 11;
+  optional bool priority_speaker = 12;
+  optional bool recording = 13;
 }
 
 message ClientInfo {

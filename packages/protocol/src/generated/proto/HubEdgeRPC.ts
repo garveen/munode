@@ -96,7 +96,17 @@ export interface EdgeAuthenticateUserParams {
   username?: string | undefined;
   password?: string | undefined;
   tokens?: string[] | undefined;
-  client_info?: ClientInfo | undefined;
+  client_info?:
+    | ClientInfo
+    | undefined;
+  /** PreConnect state fields */
+  mute?: boolean | undefined;
+  deaf?: boolean | undefined;
+  suppress?: boolean | undefined;
+  self_mute?: boolean | undefined;
+  self_deaf?: boolean | undefined;
+  priority_speaker?: boolean | undefined;
+  recording?: boolean | undefined;
 }
 
 export interface ClientInfo {
@@ -1913,6 +1923,13 @@ function createBaseEdgeAuthenticateUserParams(): EdgeAuthenticateUserParams {
     password: undefined,
     tokens: [],
     client_info: undefined,
+    mute: undefined,
+    deaf: undefined,
+    suppress: undefined,
+    self_mute: undefined,
+    self_deaf: undefined,
+    priority_speaker: undefined,
+    recording: undefined,
   };
 }
 
@@ -1937,6 +1954,27 @@ export const EdgeAuthenticateUserParams: MessageFns<EdgeAuthenticateUserParams> 
     }
     if (message.client_info !== undefined) {
       ClientInfo.encode(message.client_info, writer.uint32(50).fork()).join();
+    }
+    if (message.mute !== undefined) {
+      writer.uint32(56).bool(message.mute);
+    }
+    if (message.deaf !== undefined) {
+      writer.uint32(64).bool(message.deaf);
+    }
+    if (message.suppress !== undefined) {
+      writer.uint32(72).bool(message.suppress);
+    }
+    if (message.self_mute !== undefined) {
+      writer.uint32(80).bool(message.self_mute);
+    }
+    if (message.self_deaf !== undefined) {
+      writer.uint32(88).bool(message.self_deaf);
+    }
+    if (message.priority_speaker !== undefined) {
+      writer.uint32(96).bool(message.priority_speaker);
+    }
+    if (message.recording !== undefined) {
+      writer.uint32(104).bool(message.recording);
     }
     return writer;
   },
@@ -1999,6 +2037,62 @@ export const EdgeAuthenticateUserParams: MessageFns<EdgeAuthenticateUserParams> 
           message.client_info = ClientInfo.decode(reader, reader.uint32());
           continue;
         }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.mute = reader.bool();
+          continue;
+        }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.deaf = reader.bool();
+          continue;
+        }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.suppress = reader.bool();
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.self_mute = reader.bool();
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.self_deaf = reader.bool();
+          continue;
+        }
+        case 12: {
+          if (tag !== 96) {
+            break;
+          }
+
+          message.priority_speaker = reader.bool();
+          continue;
+        }
+        case 13: {
+          if (tag !== 104) {
+            break;
+          }
+
+          message.recording = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2016,6 +2110,13 @@ export const EdgeAuthenticateUserParams: MessageFns<EdgeAuthenticateUserParams> 
       password: isSet(object.password) ? globalThis.String(object.password) : undefined,
       tokens: globalThis.Array.isArray(object?.tokens) ? object.tokens.map((e: any) => globalThis.String(e)) : [],
       client_info: isSet(object.client_info) ? ClientInfo.fromJSON(object.client_info) : undefined,
+      mute: isSet(object.mute) ? globalThis.Boolean(object.mute) : undefined,
+      deaf: isSet(object.deaf) ? globalThis.Boolean(object.deaf) : undefined,
+      suppress: isSet(object.suppress) ? globalThis.Boolean(object.suppress) : undefined,
+      self_mute: isSet(object.self_mute) ? globalThis.Boolean(object.self_mute) : undefined,
+      self_deaf: isSet(object.self_deaf) ? globalThis.Boolean(object.self_deaf) : undefined,
+      priority_speaker: isSet(object.priority_speaker) ? globalThis.Boolean(object.priority_speaker) : undefined,
+      recording: isSet(object.recording) ? globalThis.Boolean(object.recording) : undefined,
     };
   },
 
@@ -2039,6 +2140,27 @@ export const EdgeAuthenticateUserParams: MessageFns<EdgeAuthenticateUserParams> 
     if (message.client_info !== undefined) {
       obj.client_info = ClientInfo.toJSON(message.client_info);
     }
+    if (message.mute !== undefined) {
+      obj.mute = message.mute;
+    }
+    if (message.deaf !== undefined) {
+      obj.deaf = message.deaf;
+    }
+    if (message.suppress !== undefined) {
+      obj.suppress = message.suppress;
+    }
+    if (message.self_mute !== undefined) {
+      obj.self_mute = message.self_mute;
+    }
+    if (message.self_deaf !== undefined) {
+      obj.self_deaf = message.self_deaf;
+    }
+    if (message.priority_speaker !== undefined) {
+      obj.priority_speaker = message.priority_speaker;
+    }
+    if (message.recording !== undefined) {
+      obj.recording = message.recording;
+    }
     return obj;
   },
 
@@ -2055,6 +2177,13 @@ export const EdgeAuthenticateUserParams: MessageFns<EdgeAuthenticateUserParams> 
     message.client_info = (object.client_info !== undefined && object.client_info !== null)
       ? ClientInfo.fromPartial(object.client_info)
       : undefined;
+    message.mute = object.mute ?? undefined;
+    message.deaf = object.deaf ?? undefined;
+    message.suppress = object.suppress ?? undefined;
+    message.self_mute = object.self_mute ?? undefined;
+    message.self_deaf = object.self_deaf ?? undefined;
+    message.priority_speaker = object.priority_speaker ?? undefined;
+    message.recording = object.recording ?? undefined;
     return message;
   },
 };
