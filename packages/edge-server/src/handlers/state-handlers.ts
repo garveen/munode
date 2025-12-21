@@ -107,6 +107,12 @@ export class StateHandlers {
 
       // 只转发实际设置的字段，避免发送默认值
       // 参考Edge废弃实现：只检查has_xxx来确定字段是否真正存在
+      // 
+      // 特殊处理：ts-proto decode 会设置所有字段为默认值，无法区分"未设置"和"设置为默认值"
+      // 使用消息大小作为启发式判断：小消息（<15字节）通常只包含少数字段
+      const messageSize = data.length;
+      const isSmallMessage = messageSize < 15;
+      
       const userStateToSend: {
         session: number;
         actor: number;
@@ -136,8 +142,12 @@ export class StateHandlers {
 
       // 只包含实际设置且非默认值的字段
       // 注意：protobuf decode 会设置所有字段为默认值，所以需要过滤掉默认值
-      if (userState.channel_id !== undefined && userState.channel_id !== 0) {
-        userStateToSend.channel_id = userState.channel_id;
+      // 特殊处理 channel_id: 如果是小消息且channel_id为0，则不转发（很可能是默认值）
+      // 如果是大消息或者channel_id非0，则转发
+      if (userState.channel_id !== undefined) {
+        if (!isSmallMessage || userState.channel_id !== 0) {
+          userStateToSend.channel_id = userState.channel_id;
+        }
       }
       if (userState.self_mute !== undefined && userState.self_mute !== false) {
         userStateToSend.self_mute = userState.self_mute;
