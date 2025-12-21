@@ -1,7 +1,6 @@
 import type { Logger } from 'winston';
 import { mumbleproto, ClientState } from '@munode/protocol';
 import type { HandlerFactory } from '../core/handler-factory.js';
-import { getProtobufFieldNumbers, UserStateFields } from '../utils/protobuf-parser.js';
 
 /**
  * 状态处理器 - 处理用户和频道状态变更
@@ -107,10 +106,7 @@ export class StateHandlers {
       }
 
       // 只转发实际设置的字段，避免发送默认值
-      // 使用 protobuf wire format 解析器来确定哪些字段在原始消息中真正存在
-      // 这解决了 ts-proto decoder 填充所有默认值的问题
-      const presentFields = getProtobufFieldNumbers(data);
-      
+      // ts-proto with useOptionals=all: 未在消息中出现的字段将是 undefined
       const userStateToSend: {
         session: number;
         actor: number;
@@ -138,63 +134,62 @@ export class StateHandlers {
         actor: userState.actor,
       };
 
-      // 只包含在原始 protobuf 消息中存在的字段
-      // 使用 presentFields 集合来检查字段是否真的被客户端发送
-      if (presentFields.has(UserStateFields.CHANNEL_ID)) {
+      // 只包含已设置（非 undefined）的字段
+      if (userState.channel_id !== undefined) {
         userStateToSend.channel_id = userState.channel_id;
       }
-      if (presentFields.has(UserStateFields.SELF_MUTE)) {
+      if (userState.self_mute !== undefined) {
         userStateToSend.self_mute = userState.self_mute;
       }
-      if (presentFields.has(UserStateFields.SELF_DEAF)) {
+      if (userState.self_deaf !== undefined) {
         userStateToSend.self_deaf = userState.self_deaf;
       }
-      if (presentFields.has(UserStateFields.MUTE)) {
+      if (userState.mute !== undefined) {
         userStateToSend.mute = userState.mute;
       }
-      if (presentFields.has(UserStateFields.DEAF)) {
+      if (userState.deaf !== undefined) {
         userStateToSend.deaf = userState.deaf;
       }
-      if (presentFields.has(UserStateFields.SUPPRESS)) {
+      if (userState.suppress !== undefined) {
         userStateToSend.suppress = userState.suppress;
       }
-      if (presentFields.has(UserStateFields.PRIORITY_SPEAKER)) {
+      if (userState.priority_speaker !== undefined) {
         userStateToSend.priority_speaker = userState.priority_speaker;
       }
-      if (presentFields.has(UserStateFields.RECORDING)) {
+      if (userState.recording !== undefined) {
         userStateToSend.recording = userState.recording;
       }
-      if (presentFields.has(UserStateFields.COMMENT)) {
+      if (userState.comment !== undefined) {
         userStateToSend.comment = userState.comment;
       }
-      if (presentFields.has(UserStateFields.TEXTURE)) {
+      if (userState.texture !== undefined) {
         userStateToSend.texture = userState.texture;
       }
-      if (presentFields.has(UserStateFields.PLUGIN_CONTEXT)) {
+      if (userState.plugin_context !== undefined) {
         userStateToSend.plugin_context = userState.plugin_context;
       }
-      if (presentFields.has(UserStateFields.PLUGIN_IDENTITY)) {
+      if (userState.plugin_identity !== undefined) {
         userStateToSend.plugin_identity = userState.plugin_identity;
       }
       
       // 处理监听频道 - 只在字段存在时才添加
-      if (presentFields.has(UserStateFields.LISTENING_CHANNEL_ADD) && userState.listening_channel_add) {
+      if (userState.listening_channel_add && userState.listening_channel_add.length > 0) {
         userStateToSend.listening_channel_add = userState.listening_channel_add;
       }
-      if (presentFields.has(UserStateFields.LISTENING_CHANNEL_REMOVE) && userState.listening_channel_remove) {
+      if (userState.listening_channel_remove && userState.listening_channel_remove.length > 0) {
         userStateToSend.listening_channel_remove = userState.listening_channel_remove;
       }
       
       // 处理 blob 字段（texture 和 comment）
       // 如果客户端发送了texture或comment数据，需要上传到Hub blob存储
-      if (presentFields.has(UserStateFields.TEXTURE) && userState.texture && userState.texture.length > 0) {
+      if (userState.texture !== undefined && userState.texture && userState.texture.length > 0) {
         // 异步上传texture到Hub，不阻塞当前处理
         this.uploadUserTexture(actor.user_id, userState.texture).catch(error => {
         this.logger.error(`Failed to upload texture for user ${actor.user_id}:`, error);
         });
       }
 
-      if (presentFields.has(UserStateFields.COMMENT) && userState.comment && userState.comment.length > 128) {
+      if (userState.comment !== undefined && userState.comment && userState.comment.length > 128) {
         // 如果comment超过128字节，上传到blob存储
         // 参考 Go 实现：小于128字节的comment直接存储在消息中
         this.uploadUserComment(actor.user_id, Buffer.from(userState.comment, 'utf-8')).catch(error => {
