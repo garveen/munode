@@ -134,41 +134,42 @@ export class StateHandlers {
         actor: userState.actor,
       };
 
-      // 只包含实际设置的字段
-      if (userState.channel_id !== undefined) {
+      // 只包含实际设置且非默认值的字段
+      // 注意：protobuf decode 会设置所有字段为默认值，所以需要过滤掉默认值
+      if (userState.channel_id !== undefined && userState.channel_id !== 0) {
         userStateToSend.channel_id = userState.channel_id;
       }
-      if (userState.self_mute !== undefined) {
+      if (userState.self_mute !== undefined && userState.self_mute !== false) {
         userStateToSend.self_mute = userState.self_mute;
       }
-      if (userState.self_deaf !== undefined) {
+      if (userState.self_deaf !== undefined && userState.self_deaf !== false) {
         userStateToSend.self_deaf = userState.self_deaf;
       }
-      if (userState.mute !== undefined) {
+      if (userState.mute !== undefined && userState.mute !== false) {
         userStateToSend.mute = userState.mute;
       }
-      if (userState.deaf !== undefined) {
+      if (userState.deaf !== undefined && userState.deaf !== false) {
         userStateToSend.deaf = userState.deaf;
       }
-      if (userState.suppress !== undefined) {
+      if (userState.suppress !== undefined && userState.suppress !== false) {
         userStateToSend.suppress = userState.suppress;
       }
-      if (userState.priority_speaker !== undefined) {
+      if (userState.priority_speaker !== undefined && userState.priority_speaker !== false) {
         userStateToSend.priority_speaker = userState.priority_speaker;
       }
-      if (userState.recording !== undefined) {
+      if (userState.recording !== undefined && userState.recording !== false) {
         userStateToSend.recording = userState.recording;
       }
-      if (userState.comment !== undefined) {
+      if (userState.comment !== undefined && userState.comment !== "") {
         userStateToSend.comment = userState.comment;
       }
-      if (userState.texture !== undefined) {
+      if (userState.texture !== undefined && userState.texture.length > 0) {
         userStateToSend.texture = userState.texture;
       }
-      if (userState.plugin_context !== undefined) {
+      if (userState.plugin_context !== undefined && userState.plugin_context.length > 0) {
         userStateToSend.plugin_context = userState.plugin_context;
       }
-      if (userState.plugin_identity !== undefined) {
+      if (userState.plugin_identity !== undefined && userState.plugin_identity !== "") {
         userStateToSend.plugin_identity = userState.plugin_identity;
       }
       
@@ -206,7 +207,7 @@ export class StateHandlers {
         userState: userStateToSend,
       });
 
-        this.logger.debug(`Forwarded UserState from session ${session_id} to Hub, fields: ${Object.keys(userStateToSend).filter(k => k !== 'session' && k !== 'actor').join(', ')}`);
+        this.logger.debug(`Forwarded UserState from session ${session_id} to Hub, fields: ${Object.entries(userStateToSend).filter(([k, v]) => k !== 'session' && k !== 'actor' && v !== undefined).map(([k]) => k).join(', ')}`);
     } catch (error) {
         this.logger.error(`Error handling mumbleproto.UserState for session ${session_id}:`, error);
     }
