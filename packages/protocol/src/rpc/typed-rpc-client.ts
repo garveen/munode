@@ -123,7 +123,9 @@ export class TypedRPCClient {
           client_session: p.client_session,
           target_id: p.target_id,
           config: p.config ? {
-            sessions: p.config.targets?.flatMap(t => t.session.map(s => ({ session: s }))) || [],
+            sessions: p.config.targets?.flatMap(t => 
+              (t.session && Array.isArray(t.session)) ? t.session.map(s => ({ session: s })) : []
+            ) || [],
             channels: p.config.targets?.filter(t => t.channel_id !== undefined).map(t => ({
               channel_id: t.channel_id!,
               children: t.children,
