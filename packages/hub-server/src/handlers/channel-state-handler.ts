@@ -212,17 +212,21 @@ export class ChannelStateHandler implements IChannelStateHandler {
           }
         }
 
-        try {
-          await channelManager.updateChannel(channelId, updateData);
-          this.logger.info(`Updated channel: ${updateData.name || channelId} (ID: ${channelId})`);
-        } catch (error) {
-          this.logger.error(`Failed to update channel ${channelId}:`, error);
-          this.factory.getControlService().notify(edge_id, 'hub.channelStateResponse', {
-            success: false,
-            actor_session,
-            error: `Failed to update channel: ${error}`,
-          });
-          return;
+        // 只有在有需要更新的字段时才调用 updateChannel
+        // 如果只是更新链接，updateData 会是空对象，不需要调用数据库更新
+        if (Object.keys(updateData).length > 0) {
+          try {
+            await channelManager.updateChannel(channelId, updateData);
+            this.logger.info(`Updated channel: ${updateData.name || channelId} (ID: ${channelId})`);
+          } catch (error) {
+            this.logger.error(`Failed to update channel ${channelId}:`, error);
+            this.factory.getControlService().notify(edge_id, 'hub.channelStateResponse', {
+              success: false,
+              actor_session,
+              error: `Failed to update channel: ${error}`,
+            });
+            return;
+          }
         }
       }
 
