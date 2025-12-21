@@ -110,9 +110,10 @@ function getEdgePort(testEnv: TestEnvironment, edge: 1 | 2 | 3 | 4): number {
  * 批量创建测试客户端（统一方法，从auth配置获取密码）
  */
 export async function createClients(testEnv: TestEnvironment, configs: ClientConfig[]): Promise<MumbleClient[]> {
-  const clients: (MumbleClient | null)[] = new Array(configs.length).fill(null);
+  const clients: MumbleClient[] = [];
   
-  await Promise.all(configs.map(async (config, index) => {
+  // Connect clients sequentially to avoid overwhelming the server
+  for (const config of configs) {
     const userInfo = testUserPasswords[config.username];
     if (!userInfo) {
       throw new Error(`User not found: ${config.username}`);
@@ -121,54 +122,69 @@ export async function createClients(testEnv: TestEnvironment, configs: ClientCon
     const client = new MumbleClient();
     const targetPort = getEdgePort(testEnv, config.edge);
     console.log(`[TEST] Connecting ${config.username} to Edge ${config.edge} on port ${targetPort}`);
-    await client.connect({
-      host: 'localhost',
-      port: targetPort,
-      username: config.username,
-      password: userInfo.password,
-      rejectUnauthorized: false,
-      forceTcpVoice: false,
-    });
     
-    // 等待 UDP 连接就绪
     try {
-      await client.waitForUDP(3000);
-      console.log(`[TEST] ${config.username} UDP ready`);
+      await client.connect({
+        host: 'localhost',
+        port: targetPort,
+        username: config.username,
+        password: userInfo.password,
+        rejectUnauthorized: false,
+        forceTcpVoice: false,
+      });
+      
+      // 等待 UDP 连接就绪
+      try {
+        await client.waitForUDP(3000);
+        console.log(`[TEST] ${config.username} UDP ready`);
+      } catch (error) {
+        console.warn(`[TEST] ${config.username} UDP timeout, will use TCP:`, error);
+      }
+      
+      if (config.channelId !== undefined) {
+        await client.sendUserState({ channel_id: config.channelId });
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      
+      clients.push(client);
+      
+      // Small delay between connections to avoid overwhelming the server
+      await new Promise(resolve => setTimeout(resolve, 100));
     } catch (error) {
-      console.warn(`[TEST] ${config.username} UDP timeout, will use TCP:`, error);
+      console.error(`[TEST] Failed to connect ${config.username}:`, error);
+      // Clean up any successfully connected clients
+      for (const c of clients) {
+        try {
+          await c.disconnect();
+        } catch (e) {
+          // ignore
+        }
+      }
+      throw error;
     }
-    
-    if (config.channelId !== undefined) {
-      await client.sendUserState({ channel_id: config.channelId });
-      await new Promise(resolve => setTimeout(resolve, 200));
-    }
-    
-    // Use index to preserve order
-    clients[index] = client;
-  }));
+  }
   
-  return clients as MumbleClient[];
+  return clients;
 }
 
 /**
  * 清理客户端
  */
 export async function cleanupClients(clients: MumbleClient[]): Promise<void> {
-  const promises = clients.map(async (client, index) => {
+  // Disconnect clients sequentially to avoid overwhelming the server
+  for (const [index, client] of clients.entries()) {
     try {
       await client.disconnect();
+      // Small delay between disconnections
+      await sleep(50);
     } catch (e) {
       // Log error but continue cleanup
       debugLog(`Error disconnecting client ${index}:`, e);
     }
-  });
-  
-  await Promise.all(promises);
+  }
   
   // Wait for all client connections to be fully closed
-  // Instead of a fixed sleep, we could check connection states, but clients are already disconnected
-  // A small delay is acceptable here for final cleanup
-  await sleep(50);
+  await sleep(300);
 }
 
 /**
