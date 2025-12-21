@@ -9,7 +9,7 @@
     "build": "node esbuild.config.mjs && tsc --emitDeclarationOnly --outDir dist",
     "dev": "node esbuild.config.mjs --watch",
     "clean": "rm -rf dist *.tsbuildinfo src/generated/proto",
-    "generate:proto": "protoc --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_out=./src/generated/proto --ts_proto_opt=outputServices=generic-definitions,outputClientImpl=false,esModuleInterop=true,env=node,useOptionals=all,oneof=unions-value,snakeToCamel=false,forceLong=number,useExactTypes=true,outputPartialMethods=true --proto_path=./proto ./proto/Mumble.proto ./proto/HubEdgeSync.proto ./proto/HubEdgeRPC.proto ./proto/HubEdge.proto",
+    "generate:proto": "protoc --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_out=./src/generated/proto --ts_proto_opt=outputServices=generic-definitions,outputClientImpl=false,esModuleInterop=true,env=node,useOptionals=all,oneof=unions-value,snakeToCamel=false,forceLong=number,useExactTypes=true,outputPartialMethods=true,initializeFieldsAsUndefined=true,noDefaultsForOptionals=true --proto_path=./proto ./proto/Mumble.proto ./proto/HubEdgeSync.proto ./proto/HubEdgeRPC.proto ./proto/HubEdge.proto",
     "test": "vitest run"
   },
   "dependencies": {

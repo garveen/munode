@@ -775,9 +775,9 @@ export interface ConnectionEvent {
 
 function createBaseSyncData(): SyncData {
   return {
-    type: 0,
-    sequence: 0,
-    timestamp: 0,
+    type: undefined,
+    sequence: undefined,
+    timestamp: undefined,
     user_state: undefined,
     channel_state: undefined,
     acl: undefined,
@@ -793,13 +793,13 @@ function createBaseSyncData(): SyncData {
 
 export const SyncData: MessageFns<SyncData> = {
   encode(message: SyncData, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.type !== undefined && message.type !== 0) {
+    if (message.type !== undefined) {
       writer.uint32(8).int32(message.type);
     }
-    if (message.sequence !== undefined && message.sequence !== 0) {
+    if (message.sequence !== undefined) {
       writer.uint32(16).uint64(message.sequence);
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       writer.uint32(24).int64(message.timestamp);
     }
     if (message.user_state !== undefined) {
@@ -957,9 +957,9 @@ export const SyncData: MessageFns<SyncData> = {
 
   fromJSON(object: any): SyncData {
     return {
-      type: isSet(object.type) ? syncTypeFromJSON(object.type) : 0,
-      sequence: isSet(object.sequence) ? globalThis.Number(object.sequence) : 0,
-      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
+      type: isSet(object.type) ? syncTypeFromJSON(object.type) : undefined,
+      sequence: isSet(object.sequence) ? globalThis.Number(object.sequence) : undefined,
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
       user_state: isSet(object.user_state) ? UserStateSync.fromJSON(object.user_state) : undefined,
       channel_state: isSet(object.channel_state) ? ChannelStateSync.fromJSON(object.channel_state) : undefined,
       acl: isSet(object.acl) ? ACLSync.fromJSON(object.acl) : undefined,
@@ -981,13 +981,13 @@ export const SyncData: MessageFns<SyncData> = {
 
   toJSON(message: SyncData): unknown {
     const obj: any = {};
-    if (message.type !== undefined && message.type !== 0) {
+    if (message.type !== undefined) {
       obj.type = syncTypeToJSON(message.type);
     }
-    if (message.sequence !== undefined && message.sequence !== 0) {
+    if (message.sequence !== undefined) {
       obj.sequence = Math.round(message.sequence);
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       obj.timestamp = Math.round(message.timestamp);
     }
     if (message.user_state !== undefined) {
@@ -1028,9 +1028,9 @@ export const SyncData: MessageFns<SyncData> = {
   },
   fromPartial<I extends Exact<DeepPartial<SyncData>, I>>(object: I): SyncData {
     const message = createBaseSyncData();
-    message.type = object.type ?? 0;
-    message.sequence = object.sequence ?? 0;
-    message.timestamp = object.timestamp ?? 0;
+    message.type = object.type ?? undefined;
+    message.sequence = object.sequence ?? undefined;
+    message.timestamp = object.timestamp ?? undefined;
     message.user_state = (object.user_state !== undefined && object.user_state !== null)
       ? UserStateSync.fromPartial(object.user_state)
       : undefined;
@@ -1064,18 +1064,18 @@ export const SyncData: MessageFns<SyncData> = {
 };
 
 function createBaseUserStateSync(): UserStateSync {
-  return { operation: 0, session_id: 0, edge_id: 0, user: undefined, changed_fields: [] };
+  return { operation: undefined, session_id: undefined, edge_id: undefined, user: undefined, changed_fields: [] };
 }
 
 export const UserStateSync: MessageFns<UserStateSync> = {
   encode(message: UserStateSync, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.operation !== undefined && message.operation !== 0) {
+    if (message.operation !== undefined) {
       writer.uint32(8).int32(message.operation);
     }
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       writer.uint32(16).uint32(message.session_id);
     }
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(24).uint32(message.edge_id);
     }
     if (message.user !== undefined) {
@@ -1150,9 +1150,9 @@ export const UserStateSync: MessageFns<UserStateSync> = {
 
   fromJSON(object: any): UserStateSync {
     return {
-      operation: isSet(object.operation) ? userOperationFromJSON(object.operation) : 0,
-      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : 0,
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
+      operation: isSet(object.operation) ? userOperationFromJSON(object.operation) : undefined,
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
       user: isSet(object.user) ? UserInfo.fromJSON(object.user) : undefined,
       changed_fields: globalThis.Array.isArray(object?.changed_fields)
         ? object.changed_fields.map((e: any) => globalThis.String(e))
@@ -1162,13 +1162,13 @@ export const UserStateSync: MessageFns<UserStateSync> = {
 
   toJSON(message: UserStateSync): unknown {
     const obj: any = {};
-    if (message.operation !== undefined && message.operation !== 0) {
+    if (message.operation !== undefined) {
       obj.operation = userOperationToJSON(message.operation);
     }
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       obj.session_id = Math.round(message.session_id);
     }
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
     if (message.user !== undefined) {
@@ -1185,9 +1185,9 @@ export const UserStateSync: MessageFns<UserStateSync> = {
   },
   fromPartial<I extends Exact<DeepPartial<UserStateSync>, I>>(object: I): UserStateSync {
     const message = createBaseUserStateSync();
-    message.operation = object.operation ?? 0;
-    message.session_id = object.session_id ?? 0;
-    message.edge_id = object.edge_id ?? 0;
+    message.operation = object.operation ?? undefined;
+    message.session_id = object.session_id ?? undefined;
+    message.edge_id = object.edge_id ?? undefined;
     message.user = (object.user !== undefined && object.user !== null) ? UserInfo.fromPartial(object.user) : undefined;
     message.changed_fields = object.changed_fields?.map((e) => e) || [];
     return message;
@@ -1196,63 +1196,63 @@ export const UserStateSync: MessageFns<UserStateSync> = {
 
 function createBaseUserInfo(): UserInfo {
   return {
-    session_id: 0,
-    user_id: 0,
-    username: "",
-    channel_id: 0,
-    mute: false,
-    deaf: false,
-    self_mute: false,
-    self_deaf: false,
-    suppress: false,
-    priority_speaker: false,
-    recording: false,
+    session_id: undefined,
+    user_id: undefined,
+    username: undefined,
+    channel_id: undefined,
+    mute: undefined,
+    deaf: undefined,
+    self_mute: undefined,
+    self_deaf: undefined,
+    suppress: undefined,
+    priority_speaker: undefined,
+    recording: undefined,
     groups: [],
-    comment: "",
-    cert_hash: "",
-    ip_address: "",
-    connected_at: 0,
-    last_active: 0,
-    version: "",
-    client_name: "",
-    os_name: "",
-    os_version: "",
+    comment: undefined,
+    cert_hash: undefined,
+    ip_address: undefined,
+    connected_at: undefined,
+    last_active: undefined,
+    version: undefined,
+    client_name: undefined,
+    os_name: undefined,
+    os_version: undefined,
   };
 }
 
 export const UserInfo: MessageFns<UserInfo> = {
   encode(message: UserInfo, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       writer.uint32(8).uint32(message.session_id);
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       writer.uint32(16).uint32(message.user_id);
     }
-    if (message.username !== undefined && message.username !== "") {
+    if (message.username !== undefined) {
       writer.uint32(26).string(message.username);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(32).uint32(message.channel_id);
     }
-    if (message.mute !== undefined && message.mute !== false) {
+    if (message.mute !== undefined) {
       writer.uint32(40).bool(message.mute);
     }
-    if (message.deaf !== undefined && message.deaf !== false) {
+    if (message.deaf !== undefined) {
       writer.uint32(48).bool(message.deaf);
     }
-    if (message.self_mute !== undefined && message.self_mute !== false) {
+    if (message.self_mute !== undefined) {
       writer.uint32(56).bool(message.self_mute);
     }
-    if (message.self_deaf !== undefined && message.self_deaf !== false) {
+    if (message.self_deaf !== undefined) {
       writer.uint32(64).bool(message.self_deaf);
     }
-    if (message.suppress !== undefined && message.suppress !== false) {
+    if (message.suppress !== undefined) {
       writer.uint32(72).bool(message.suppress);
     }
-    if (message.priority_speaker !== undefined && message.priority_speaker !== false) {
+    if (message.priority_speaker !== undefined) {
       writer.uint32(80).bool(message.priority_speaker);
     }
-    if (message.recording !== undefined && message.recording !== false) {
+    if (message.recording !== undefined) {
       writer.uint32(88).bool(message.recording);
     }
     if (message.groups !== undefined && message.groups.length !== 0) {
@@ -1260,31 +1260,31 @@ export const UserInfo: MessageFns<UserInfo> = {
         writer.uint32(98).string(v!);
       }
     }
-    if (message.comment !== undefined && message.comment !== "") {
+    if (message.comment !== undefined) {
       writer.uint32(106).string(message.comment);
     }
-    if (message.cert_hash !== undefined && message.cert_hash !== "") {
+    if (message.cert_hash !== undefined) {
       writer.uint32(114).string(message.cert_hash);
     }
-    if (message.ip_address !== undefined && message.ip_address !== "") {
+    if (message.ip_address !== undefined) {
       writer.uint32(122).string(message.ip_address);
     }
-    if (message.connected_at !== undefined && message.connected_at !== 0) {
+    if (message.connected_at !== undefined) {
       writer.uint32(128).int64(message.connected_at);
     }
-    if (message.last_active !== undefined && message.last_active !== 0) {
+    if (message.last_active !== undefined) {
       writer.uint32(136).int64(message.last_active);
     }
-    if (message.version !== undefined && message.version !== "") {
+    if (message.version !== undefined) {
       writer.uint32(146).string(message.version);
     }
-    if (message.client_name !== undefined && message.client_name !== "") {
+    if (message.client_name !== undefined) {
       writer.uint32(154).string(message.client_name);
     }
-    if (message.os_name !== undefined && message.os_name !== "") {
+    if (message.os_name !== undefined) {
       writer.uint32(162).string(message.os_name);
     }
-    if (message.os_version !== undefined && message.os_version !== "") {
+    if (message.os_version !== undefined) {
       writer.uint32(170).string(message.os_version);
     }
     return writer;
@@ -1479,93 +1479,93 @@ export const UserInfo: MessageFns<UserInfo> = {
 
   fromJSON(object: any): UserInfo {
     return {
-      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : 0,
-      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : 0,
-      username: isSet(object.username) ? globalThis.String(object.username) : "",
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      mute: isSet(object.mute) ? globalThis.Boolean(object.mute) : false,
-      deaf: isSet(object.deaf) ? globalThis.Boolean(object.deaf) : false,
-      self_mute: isSet(object.self_mute) ? globalThis.Boolean(object.self_mute) : false,
-      self_deaf: isSet(object.self_deaf) ? globalThis.Boolean(object.self_deaf) : false,
-      suppress: isSet(object.suppress) ? globalThis.Boolean(object.suppress) : false,
-      priority_speaker: isSet(object.priority_speaker) ? globalThis.Boolean(object.priority_speaker) : false,
-      recording: isSet(object.recording) ? globalThis.Boolean(object.recording) : false,
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : undefined,
+      username: isSet(object.username) ? globalThis.String(object.username) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      mute: isSet(object.mute) ? globalThis.Boolean(object.mute) : undefined,
+      deaf: isSet(object.deaf) ? globalThis.Boolean(object.deaf) : undefined,
+      self_mute: isSet(object.self_mute) ? globalThis.Boolean(object.self_mute) : undefined,
+      self_deaf: isSet(object.self_deaf) ? globalThis.Boolean(object.self_deaf) : undefined,
+      suppress: isSet(object.suppress) ? globalThis.Boolean(object.suppress) : undefined,
+      priority_speaker: isSet(object.priority_speaker) ? globalThis.Boolean(object.priority_speaker) : undefined,
+      recording: isSet(object.recording) ? globalThis.Boolean(object.recording) : undefined,
       groups: globalThis.Array.isArray(object?.groups) ? object.groups.map((e: any) => globalThis.String(e)) : [],
-      comment: isSet(object.comment) ? globalThis.String(object.comment) : "",
-      cert_hash: isSet(object.cert_hash) ? globalThis.String(object.cert_hash) : "",
-      ip_address: isSet(object.ip_address) ? globalThis.String(object.ip_address) : "",
-      connected_at: isSet(object.connected_at) ? globalThis.Number(object.connected_at) : 0,
-      last_active: isSet(object.last_active) ? globalThis.Number(object.last_active) : 0,
-      version: isSet(object.version) ? globalThis.String(object.version) : "",
-      client_name: isSet(object.client_name) ? globalThis.String(object.client_name) : "",
-      os_name: isSet(object.os_name) ? globalThis.String(object.os_name) : "",
-      os_version: isSet(object.os_version) ? globalThis.String(object.os_version) : "",
+      comment: isSet(object.comment) ? globalThis.String(object.comment) : undefined,
+      cert_hash: isSet(object.cert_hash) ? globalThis.String(object.cert_hash) : undefined,
+      ip_address: isSet(object.ip_address) ? globalThis.String(object.ip_address) : undefined,
+      connected_at: isSet(object.connected_at) ? globalThis.Number(object.connected_at) : undefined,
+      last_active: isSet(object.last_active) ? globalThis.Number(object.last_active) : undefined,
+      version: isSet(object.version) ? globalThis.String(object.version) : undefined,
+      client_name: isSet(object.client_name) ? globalThis.String(object.client_name) : undefined,
+      os_name: isSet(object.os_name) ? globalThis.String(object.os_name) : undefined,
+      os_version: isSet(object.os_version) ? globalThis.String(object.os_version) : undefined,
     };
   },
 
   toJSON(message: UserInfo): unknown {
     const obj: any = {};
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       obj.session_id = Math.round(message.session_id);
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       obj.user_id = Math.round(message.user_id);
     }
-    if (message.username !== undefined && message.username !== "") {
+    if (message.username !== undefined) {
       obj.username = message.username;
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.mute !== undefined && message.mute !== false) {
+    if (message.mute !== undefined) {
       obj.mute = message.mute;
     }
-    if (message.deaf !== undefined && message.deaf !== false) {
+    if (message.deaf !== undefined) {
       obj.deaf = message.deaf;
     }
-    if (message.self_mute !== undefined && message.self_mute !== false) {
+    if (message.self_mute !== undefined) {
       obj.self_mute = message.self_mute;
     }
-    if (message.self_deaf !== undefined && message.self_deaf !== false) {
+    if (message.self_deaf !== undefined) {
       obj.self_deaf = message.self_deaf;
     }
-    if (message.suppress !== undefined && message.suppress !== false) {
+    if (message.suppress !== undefined) {
       obj.suppress = message.suppress;
     }
-    if (message.priority_speaker !== undefined && message.priority_speaker !== false) {
+    if (message.priority_speaker !== undefined) {
       obj.priority_speaker = message.priority_speaker;
     }
-    if (message.recording !== undefined && message.recording !== false) {
+    if (message.recording !== undefined) {
       obj.recording = message.recording;
     }
     if (message.groups?.length) {
       obj.groups = message.groups;
     }
-    if (message.comment !== undefined && message.comment !== "") {
+    if (message.comment !== undefined) {
       obj.comment = message.comment;
     }
-    if (message.cert_hash !== undefined && message.cert_hash !== "") {
+    if (message.cert_hash !== undefined) {
       obj.cert_hash = message.cert_hash;
     }
-    if (message.ip_address !== undefined && message.ip_address !== "") {
+    if (message.ip_address !== undefined) {
       obj.ip_address = message.ip_address;
     }
-    if (message.connected_at !== undefined && message.connected_at !== 0) {
+    if (message.connected_at !== undefined) {
       obj.connected_at = Math.round(message.connected_at);
     }
-    if (message.last_active !== undefined && message.last_active !== 0) {
+    if (message.last_active !== undefined) {
       obj.last_active = Math.round(message.last_active);
     }
-    if (message.version !== undefined && message.version !== "") {
+    if (message.version !== undefined) {
       obj.version = message.version;
     }
-    if (message.client_name !== undefined && message.client_name !== "") {
+    if (message.client_name !== undefined) {
       obj.client_name = message.client_name;
     }
-    if (message.os_name !== undefined && message.os_name !== "") {
+    if (message.os_name !== undefined) {
       obj.os_name = message.os_name;
     }
-    if (message.os_version !== undefined && message.os_version !== "") {
+    if (message.os_version !== undefined) {
       obj.os_version = message.os_version;
     }
     return obj;
@@ -1576,41 +1576,41 @@ export const UserInfo: MessageFns<UserInfo> = {
   },
   fromPartial<I extends Exact<DeepPartial<UserInfo>, I>>(object: I): UserInfo {
     const message = createBaseUserInfo();
-    message.session_id = object.session_id ?? 0;
-    message.user_id = object.user_id ?? 0;
-    message.username = object.username ?? "";
-    message.channel_id = object.channel_id ?? 0;
-    message.mute = object.mute ?? false;
-    message.deaf = object.deaf ?? false;
-    message.self_mute = object.self_mute ?? false;
-    message.self_deaf = object.self_deaf ?? false;
-    message.suppress = object.suppress ?? false;
-    message.priority_speaker = object.priority_speaker ?? false;
-    message.recording = object.recording ?? false;
+    message.session_id = object.session_id ?? undefined;
+    message.user_id = object.user_id ?? undefined;
+    message.username = object.username ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    message.mute = object.mute ?? undefined;
+    message.deaf = object.deaf ?? undefined;
+    message.self_mute = object.self_mute ?? undefined;
+    message.self_deaf = object.self_deaf ?? undefined;
+    message.suppress = object.suppress ?? undefined;
+    message.priority_speaker = object.priority_speaker ?? undefined;
+    message.recording = object.recording ?? undefined;
     message.groups = object.groups?.map((e) => e) || [];
-    message.comment = object.comment ?? "";
-    message.cert_hash = object.cert_hash ?? "";
-    message.ip_address = object.ip_address ?? "";
-    message.connected_at = object.connected_at ?? 0;
-    message.last_active = object.last_active ?? 0;
-    message.version = object.version ?? "";
-    message.client_name = object.client_name ?? "";
-    message.os_name = object.os_name ?? "";
-    message.os_version = object.os_version ?? "";
+    message.comment = object.comment ?? undefined;
+    message.cert_hash = object.cert_hash ?? undefined;
+    message.ip_address = object.ip_address ?? undefined;
+    message.connected_at = object.connected_at ?? undefined;
+    message.last_active = object.last_active ?? undefined;
+    message.version = object.version ?? undefined;
+    message.client_name = object.client_name ?? undefined;
+    message.os_name = object.os_name ?? undefined;
+    message.os_version = object.os_version ?? undefined;
     return message;
   },
 };
 
 function createBaseChannelStateSync(): ChannelStateSync {
-  return { operation: 0, channel_id: 0, channel: undefined, changed_fields: [] };
+  return { operation: undefined, channel_id: undefined, channel: undefined, changed_fields: [] };
 }
 
 export const ChannelStateSync: MessageFns<ChannelStateSync> = {
   encode(message: ChannelStateSync, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.operation !== undefined && message.operation !== 0) {
+    if (message.operation !== undefined) {
       writer.uint32(8).int32(message.operation);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(16).uint32(message.channel_id);
     }
     if (message.channel !== undefined) {
@@ -1677,8 +1677,8 @@ export const ChannelStateSync: MessageFns<ChannelStateSync> = {
 
   fromJSON(object: any): ChannelStateSync {
     return {
-      operation: isSet(object.operation) ? channelOperationFromJSON(object.operation) : 0,
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
+      operation: isSet(object.operation) ? channelOperationFromJSON(object.operation) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
       channel: isSet(object.channel) ? ChannelInfo.fromJSON(object.channel) : undefined,
       changed_fields: globalThis.Array.isArray(object?.changed_fields)
         ? object.changed_fields.map((e: any) => globalThis.String(e))
@@ -1688,10 +1688,10 @@ export const ChannelStateSync: MessageFns<ChannelStateSync> = {
 
   toJSON(message: ChannelStateSync): unknown {
     const obj: any = {};
-    if (message.operation !== undefined && message.operation !== 0) {
+    if (message.operation !== undefined) {
       obj.operation = channelOperationToJSON(message.operation);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
     if (message.channel !== undefined) {
@@ -1708,8 +1708,8 @@ export const ChannelStateSync: MessageFns<ChannelStateSync> = {
   },
   fromPartial<I extends Exact<DeepPartial<ChannelStateSync>, I>>(object: I): ChannelStateSync {
     const message = createBaseChannelStateSync();
-    message.operation = object.operation ?? 0;
-    message.channel_id = object.channel_id ?? 0;
+    message.operation = object.operation ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
     message.channel = (object.channel !== undefined && object.channel !== null)
       ? ChannelInfo.fromPartial(object.channel)
       : undefined;
@@ -1720,14 +1720,14 @@ export const ChannelStateSync: MessageFns<ChannelStateSync> = {
 
 function createBaseChannelInfo(): ChannelInfo {
   return {
-    channel_id: 0,
-    name: "",
-    parent_id: 0,
-    description: "",
-    position: 0,
-    max_users: 0,
-    temporary: false,
-    inherit_acl: true,
+    channel_id: undefined,
+    name: undefined,
+    parent_id: undefined,
+    description: undefined,
+    position: undefined,
+    max_users: undefined,
+    temporary: undefined,
+    inherit_acl: undefined,
     children: [],
     links: [],
   };
@@ -1735,28 +1735,28 @@ function createBaseChannelInfo(): ChannelInfo {
 
 export const ChannelInfo: MessageFns<ChannelInfo> = {
   encode(message: ChannelInfo, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(8).uint32(message.channel_id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(18).string(message.name);
     }
-    if (message.parent_id !== undefined && message.parent_id !== 0) {
+    if (message.parent_id !== undefined) {
       writer.uint32(24).uint32(message.parent_id);
     }
-    if (message.description !== undefined && message.description !== "") {
+    if (message.description !== undefined) {
       writer.uint32(34).string(message.description);
     }
-    if (message.position !== undefined && message.position !== 0) {
+    if (message.position !== undefined) {
       writer.uint32(40).int32(message.position);
     }
-    if (message.max_users !== undefined && message.max_users !== 0) {
+    if (message.max_users !== undefined) {
       writer.uint32(48).uint32(message.max_users);
     }
-    if (message.temporary !== undefined && message.temporary !== false) {
+    if (message.temporary !== undefined) {
       writer.uint32(56).bool(message.temporary);
     }
-    if (message.inherit_acl !== undefined && message.inherit_acl !== true) {
+    if (message.inherit_acl !== undefined) {
       writer.uint32(64).bool(message.inherit_acl);
     }
     if (message.children !== undefined && message.children.length !== 0) {
@@ -1890,14 +1890,14 @@ export const ChannelInfo: MessageFns<ChannelInfo> = {
 
   fromJSON(object: any): ChannelInfo {
     return {
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      parent_id: isSet(object.parent_id) ? globalThis.Number(object.parent_id) : 0,
-      description: isSet(object.description) ? globalThis.String(object.description) : "",
-      position: isSet(object.position) ? globalThis.Number(object.position) : 0,
-      max_users: isSet(object.max_users) ? globalThis.Number(object.max_users) : 0,
-      temporary: isSet(object.temporary) ? globalThis.Boolean(object.temporary) : false,
-      inherit_acl: isSet(object.inherit_acl) ? globalThis.Boolean(object.inherit_acl) : true,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      parent_id: isSet(object.parent_id) ? globalThis.Number(object.parent_id) : undefined,
+      description: isSet(object.description) ? globalThis.String(object.description) : undefined,
+      position: isSet(object.position) ? globalThis.Number(object.position) : undefined,
+      max_users: isSet(object.max_users) ? globalThis.Number(object.max_users) : undefined,
+      temporary: isSet(object.temporary) ? globalThis.Boolean(object.temporary) : undefined,
+      inherit_acl: isSet(object.inherit_acl) ? globalThis.Boolean(object.inherit_acl) : undefined,
       children: globalThis.Array.isArray(object?.children) ? object.children.map((e: any) => globalThis.Number(e)) : [],
       links: globalThis.Array.isArray(object?.links) ? object.links.map((e: any) => globalThis.Number(e)) : [],
     };
@@ -1905,28 +1905,28 @@ export const ChannelInfo: MessageFns<ChannelInfo> = {
 
   toJSON(message: ChannelInfo): unknown {
     const obj: any = {};
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.parent_id !== undefined && message.parent_id !== 0) {
+    if (message.parent_id !== undefined) {
       obj.parent_id = Math.round(message.parent_id);
     }
-    if (message.description !== undefined && message.description !== "") {
+    if (message.description !== undefined) {
       obj.description = message.description;
     }
-    if (message.position !== undefined && message.position !== 0) {
+    if (message.position !== undefined) {
       obj.position = Math.round(message.position);
     }
-    if (message.max_users !== undefined && message.max_users !== 0) {
+    if (message.max_users !== undefined) {
       obj.max_users = Math.round(message.max_users);
     }
-    if (message.temporary !== undefined && message.temporary !== false) {
+    if (message.temporary !== undefined) {
       obj.temporary = message.temporary;
     }
-    if (message.inherit_acl !== undefined && message.inherit_acl !== true) {
+    if (message.inherit_acl !== undefined) {
       obj.inherit_acl = message.inherit_acl;
     }
     if (message.children?.length) {
@@ -1943,14 +1943,14 @@ export const ChannelInfo: MessageFns<ChannelInfo> = {
   },
   fromPartial<I extends Exact<DeepPartial<ChannelInfo>, I>>(object: I): ChannelInfo {
     const message = createBaseChannelInfo();
-    message.channel_id = object.channel_id ?? 0;
-    message.name = object.name ?? "";
-    message.parent_id = object.parent_id ?? 0;
-    message.description = object.description ?? "";
-    message.position = object.position ?? 0;
-    message.max_users = object.max_users ?? 0;
-    message.temporary = object.temporary ?? false;
-    message.inherit_acl = object.inherit_acl ?? true;
+    message.channel_id = object.channel_id ?? undefined;
+    message.name = object.name ?? undefined;
+    message.parent_id = object.parent_id ?? undefined;
+    message.description = object.description ?? undefined;
+    message.position = object.position ?? undefined;
+    message.max_users = object.max_users ?? undefined;
+    message.temporary = object.temporary ?? undefined;
+    message.inherit_acl = object.inherit_acl ?? undefined;
     message.children = object.children?.map((e) => e) || [];
     message.links = object.links?.map((e) => e) || [];
     return message;
@@ -1958,12 +1958,12 @@ export const ChannelInfo: MessageFns<ChannelInfo> = {
 };
 
 function createBaseACLSync(): ACLSync {
-  return { channel_id: 0, acl_entries: [], groups: [], inherit_acl: false };
+  return { channel_id: undefined, acl_entries: [], groups: [], inherit_acl: undefined };
 }
 
 export const ACLSync: MessageFns<ACLSync> = {
   encode(message: ACLSync, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(8).uint32(message.channel_id);
     }
     if (message.acl_entries !== undefined && message.acl_entries.length !== 0) {
@@ -1976,7 +1976,7 @@ export const ACLSync: MessageFns<ACLSync> = {
         ChannelGroup.encode(v!, writer.uint32(26).fork()).join();
       }
     }
-    if (message.inherit_acl !== undefined && message.inherit_acl !== false) {
+    if (message.inherit_acl !== undefined) {
       writer.uint32(32).bool(message.inherit_acl);
     }
     return writer;
@@ -2038,18 +2038,18 @@ export const ACLSync: MessageFns<ACLSync> = {
 
   fromJSON(object: any): ACLSync {
     return {
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
       acl_entries: globalThis.Array.isArray(object?.acl_entries)
         ? object.acl_entries.map((e: any) => ACLEntry.fromJSON(e))
         : [],
       groups: globalThis.Array.isArray(object?.groups) ? object.groups.map((e: any) => ChannelGroup.fromJSON(e)) : [],
-      inherit_acl: isSet(object.inherit_acl) ? globalThis.Boolean(object.inherit_acl) : false,
+      inherit_acl: isSet(object.inherit_acl) ? globalThis.Boolean(object.inherit_acl) : undefined,
     };
   },
 
   toJSON(message: ACLSync): unknown {
     const obj: any = {};
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
     if (message.acl_entries?.length) {
@@ -2058,7 +2058,7 @@ export const ACLSync: MessageFns<ACLSync> = {
     if (message.groups?.length) {
       obj.groups = message.groups.map((e) => ChannelGroup.toJSON(e));
     }
-    if (message.inherit_acl !== undefined && message.inherit_acl !== false) {
+    if (message.inherit_acl !== undefined) {
       obj.inherit_acl = message.inherit_acl;
     }
     return obj;
@@ -2069,36 +2069,43 @@ export const ACLSync: MessageFns<ACLSync> = {
   },
   fromPartial<I extends Exact<DeepPartial<ACLSync>, I>>(object: I): ACLSync {
     const message = createBaseACLSync();
-    message.channel_id = object.channel_id ?? 0;
+    message.channel_id = object.channel_id ?? undefined;
     message.acl_entries = object.acl_entries?.map((e) => ACLEntry.fromPartial(e)) || [];
     message.groups = object.groups?.map((e) => ChannelGroup.fromPartial(e)) || [];
-    message.inherit_acl = object.inherit_acl ?? false;
+    message.inherit_acl = object.inherit_acl ?? undefined;
     return message;
   },
 };
 
 function createBaseACLEntry(): ACLEntry {
-  return { user_id: 0, group: "", allow: 0, deny: 0, apply_here: false, apply_subs: false };
+  return {
+    user_id: undefined,
+    group: undefined,
+    allow: undefined,
+    deny: undefined,
+    apply_here: undefined,
+    apply_subs: undefined,
+  };
 }
 
 export const ACLEntry: MessageFns<ACLEntry> = {
   encode(message: ACLEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       writer.uint32(8).uint32(message.user_id);
     }
-    if (message.group !== undefined && message.group !== "") {
+    if (message.group !== undefined) {
       writer.uint32(18).string(message.group);
     }
-    if (message.allow !== undefined && message.allow !== 0) {
+    if (message.allow !== undefined) {
       writer.uint32(24).uint32(message.allow);
     }
-    if (message.deny !== undefined && message.deny !== 0) {
+    if (message.deny !== undefined) {
       writer.uint32(32).uint32(message.deny);
     }
-    if (message.apply_here !== undefined && message.apply_here !== false) {
+    if (message.apply_here !== undefined) {
       writer.uint32(40).bool(message.apply_here);
     }
-    if (message.apply_subs !== undefined && message.apply_subs !== false) {
+    if (message.apply_subs !== undefined) {
       writer.uint32(48).bool(message.apply_subs);
     }
     return writer;
@@ -2170,33 +2177,33 @@ export const ACLEntry: MessageFns<ACLEntry> = {
 
   fromJSON(object: any): ACLEntry {
     return {
-      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : 0,
-      group: isSet(object.group) ? globalThis.String(object.group) : "",
-      allow: isSet(object.allow) ? globalThis.Number(object.allow) : 0,
-      deny: isSet(object.deny) ? globalThis.Number(object.deny) : 0,
-      apply_here: isSet(object.apply_here) ? globalThis.Boolean(object.apply_here) : false,
-      apply_subs: isSet(object.apply_subs) ? globalThis.Boolean(object.apply_subs) : false,
+      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : undefined,
+      group: isSet(object.group) ? globalThis.String(object.group) : undefined,
+      allow: isSet(object.allow) ? globalThis.Number(object.allow) : undefined,
+      deny: isSet(object.deny) ? globalThis.Number(object.deny) : undefined,
+      apply_here: isSet(object.apply_here) ? globalThis.Boolean(object.apply_here) : undefined,
+      apply_subs: isSet(object.apply_subs) ? globalThis.Boolean(object.apply_subs) : undefined,
     };
   },
 
   toJSON(message: ACLEntry): unknown {
     const obj: any = {};
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       obj.user_id = Math.round(message.user_id);
     }
-    if (message.group !== undefined && message.group !== "") {
+    if (message.group !== undefined) {
       obj.group = message.group;
     }
-    if (message.allow !== undefined && message.allow !== 0) {
+    if (message.allow !== undefined) {
       obj.allow = Math.round(message.allow);
     }
-    if (message.deny !== undefined && message.deny !== 0) {
+    if (message.deny !== undefined) {
       obj.deny = Math.round(message.deny);
     }
-    if (message.apply_here !== undefined && message.apply_here !== false) {
+    if (message.apply_here !== undefined) {
       obj.apply_here = message.apply_here;
     }
-    if (message.apply_subs !== undefined && message.apply_subs !== false) {
+    if (message.apply_subs !== undefined) {
       obj.apply_subs = message.apply_subs;
     }
     return obj;
@@ -2207,32 +2214,40 @@ export const ACLEntry: MessageFns<ACLEntry> = {
   },
   fromPartial<I extends Exact<DeepPartial<ACLEntry>, I>>(object: I): ACLEntry {
     const message = createBaseACLEntry();
-    message.user_id = object.user_id ?? 0;
-    message.group = object.group ?? "";
-    message.allow = object.allow ?? 0;
-    message.deny = object.deny ?? 0;
-    message.apply_here = object.apply_here ?? false;
-    message.apply_subs = object.apply_subs ?? false;
+    message.user_id = object.user_id ?? undefined;
+    message.group = object.group ?? undefined;
+    message.allow = object.allow ?? undefined;
+    message.deny = object.deny ?? undefined;
+    message.apply_here = object.apply_here ?? undefined;
+    message.apply_subs = object.apply_subs ?? undefined;
     return message;
   },
 };
 
 function createBaseChannelGroup(): ChannelGroup {
-  return { name: "", inherited: false, inherit: false, inheritable: false, add: [], remove: [], inherited_members: [] };
+  return {
+    name: undefined,
+    inherited: undefined,
+    inherit: undefined,
+    inheritable: undefined,
+    add: [],
+    remove: [],
+    inherited_members: [],
+  };
 }
 
 export const ChannelGroup: MessageFns<ChannelGroup> = {
   encode(message: ChannelGroup, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(10).string(message.name);
     }
-    if (message.inherited !== undefined && message.inherited !== false) {
+    if (message.inherited !== undefined) {
       writer.uint32(16).bool(message.inherited);
     }
-    if (message.inherit !== undefined && message.inherit !== false) {
+    if (message.inherit !== undefined) {
       writer.uint32(24).bool(message.inherit);
     }
-    if (message.inheritable !== undefined && message.inheritable !== false) {
+    if (message.inheritable !== undefined) {
       writer.uint32(32).bool(message.inheritable);
     }
     if (message.add !== undefined && message.add.length !== 0) {
@@ -2357,10 +2372,10 @@ export const ChannelGroup: MessageFns<ChannelGroup> = {
 
   fromJSON(object: any): ChannelGroup {
     return {
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      inherited: isSet(object.inherited) ? globalThis.Boolean(object.inherited) : false,
-      inherit: isSet(object.inherit) ? globalThis.Boolean(object.inherit) : false,
-      inheritable: isSet(object.inheritable) ? globalThis.Boolean(object.inheritable) : false,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      inherited: isSet(object.inherited) ? globalThis.Boolean(object.inherited) : undefined,
+      inherit: isSet(object.inherit) ? globalThis.Boolean(object.inherit) : undefined,
+      inheritable: isSet(object.inheritable) ? globalThis.Boolean(object.inheritable) : undefined,
       add: globalThis.Array.isArray(object?.add) ? object.add.map((e: any) => globalThis.Number(e)) : [],
       remove: globalThis.Array.isArray(object?.remove) ? object.remove.map((e: any) => globalThis.Number(e)) : [],
       inherited_members: globalThis.Array.isArray(object?.inherited_members)
@@ -2371,16 +2386,16 @@ export const ChannelGroup: MessageFns<ChannelGroup> = {
 
   toJSON(message: ChannelGroup): unknown {
     const obj: any = {};
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.inherited !== undefined && message.inherited !== false) {
+    if (message.inherited !== undefined) {
       obj.inherited = message.inherited;
     }
-    if (message.inherit !== undefined && message.inherit !== false) {
+    if (message.inherit !== undefined) {
       obj.inherit = message.inherit;
     }
-    if (message.inheritable !== undefined && message.inheritable !== false) {
+    if (message.inheritable !== undefined) {
       obj.inheritable = message.inheritable;
     }
     if (message.add?.length) {
@@ -2400,10 +2415,10 @@ export const ChannelGroup: MessageFns<ChannelGroup> = {
   },
   fromPartial<I extends Exact<DeepPartial<ChannelGroup>, I>>(object: I): ChannelGroup {
     const message = createBaseChannelGroup();
-    message.name = object.name ?? "";
-    message.inherited = object.inherited ?? false;
-    message.inherit = object.inherit ?? false;
-    message.inheritable = object.inheritable ?? false;
+    message.name = object.name ?? undefined;
+    message.inherited = object.inherited ?? undefined;
+    message.inherit = object.inherit ?? undefined;
+    message.inheritable = object.inheritable ?? undefined;
     message.add = object.add?.map((e) => e) || [];
     message.remove = object.remove?.map((e) => e) || [];
     message.inherited_members = object.inherited_members?.map((e) => e) || [];
@@ -2412,12 +2427,12 @@ export const ChannelGroup: MessageFns<ChannelGroup> = {
 };
 
 function createBaseBatchSync(): BatchSync {
-  return { batch_id: "", user_updates: [], channel_updates: [], acl_updates: [] };
+  return { batch_id: undefined, user_updates: [], channel_updates: [], acl_updates: [] };
 }
 
 export const BatchSync: MessageFns<BatchSync> = {
   encode(message: BatchSync, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.batch_id !== undefined && message.batch_id !== "") {
+    if (message.batch_id !== undefined) {
       writer.uint32(10).string(message.batch_id);
     }
     if (message.user_updates !== undefined && message.user_updates.length !== 0) {
@@ -2497,7 +2512,7 @@ export const BatchSync: MessageFns<BatchSync> = {
 
   fromJSON(object: any): BatchSync {
     return {
-      batch_id: isSet(object.batch_id) ? globalThis.String(object.batch_id) : "",
+      batch_id: isSet(object.batch_id) ? globalThis.String(object.batch_id) : undefined,
       user_updates: globalThis.Array.isArray(object?.user_updates)
         ? object.user_updates.map((e: any) => UserStateSync.fromJSON(e))
         : [],
@@ -2512,7 +2527,7 @@ export const BatchSync: MessageFns<BatchSync> = {
 
   toJSON(message: BatchSync): unknown {
     const obj: any = {};
-    if (message.batch_id !== undefined && message.batch_id !== "") {
+    if (message.batch_id !== undefined) {
       obj.batch_id = message.batch_id;
     }
     if (message.user_updates?.length) {
@@ -2532,7 +2547,7 @@ export const BatchSync: MessageFns<BatchSync> = {
   },
   fromPartial<I extends Exact<DeepPartial<BatchSync>, I>>(object: I): BatchSync {
     const message = createBaseBatchSync();
-    message.batch_id = object.batch_id ?? "";
+    message.batch_id = object.batch_id ?? undefined;
     message.user_updates = object.user_updates?.map((e) => UserStateSync.fromPartial(e)) || [];
     message.channel_updates = object.channel_updates?.map((e) => ChannelStateSync.fromPartial(e)) || [];
     message.acl_updates = object.acl_updates?.map((e) => ACLSync.fromPartial(e)) || [];
@@ -2541,12 +2556,12 @@ export const BatchSync: MessageFns<BatchSync> = {
 };
 
 function createBaseFullSyncRequest(): FullSyncRequest {
-  return { edge_id: 0, data_types: [], last_sync_sequence: 0 };
+  return { edge_id: undefined, data_types: [], last_sync_sequence: undefined };
 }
 
 export const FullSyncRequest: MessageFns<FullSyncRequest> = {
   encode(message: FullSyncRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(8).uint32(message.edge_id);
     }
     if (message.data_types !== undefined && message.data_types.length !== 0) {
@@ -2554,7 +2569,7 @@ export const FullSyncRequest: MessageFns<FullSyncRequest> = {
         writer.uint32(16).int32(v!);
       }
     }
-    if (message.last_sync_sequence !== undefined && message.last_sync_sequence !== 0) {
+    if (message.last_sync_sequence !== undefined) {
       writer.uint32(24).uint64(message.last_sync_sequence);
     }
     return writer;
@@ -2612,23 +2627,23 @@ export const FullSyncRequest: MessageFns<FullSyncRequest> = {
 
   fromJSON(object: any): FullSyncRequest {
     return {
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
       data_types: globalThis.Array.isArray(object?.data_types)
         ? object.data_types.map((e: any) => fullSyncDataTypeFromJSON(e))
         : [],
-      last_sync_sequence: isSet(object.last_sync_sequence) ? globalThis.Number(object.last_sync_sequence) : 0,
+      last_sync_sequence: isSet(object.last_sync_sequence) ? globalThis.Number(object.last_sync_sequence) : undefined,
     };
   },
 
   toJSON(message: FullSyncRequest): unknown {
     const obj: any = {};
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
     if (message.data_types?.length) {
       obj.data_types = message.data_types.map((e) => fullSyncDataTypeToJSON(e));
     }
-    if (message.last_sync_sequence !== undefined && message.last_sync_sequence !== 0) {
+    if (message.last_sync_sequence !== undefined) {
       obj.last_sync_sequence = Math.round(message.last_sync_sequence);
     }
     return obj;
@@ -2639,23 +2654,31 @@ export const FullSyncRequest: MessageFns<FullSyncRequest> = {
   },
   fromPartial<I extends Exact<DeepPartial<FullSyncRequest>, I>>(object: I): FullSyncRequest {
     const message = createBaseFullSyncRequest();
-    message.edge_id = object.edge_id ?? 0;
+    message.edge_id = object.edge_id ?? undefined;
     message.data_types = object.data_types?.map((e) => e) || [];
-    message.last_sync_sequence = object.last_sync_sequence ?? 0;
+    message.last_sync_sequence = object.last_sync_sequence ?? undefined;
     return message;
   },
 };
 
 function createBaseFullSyncResponse(): FullSyncResponse {
-  return { edge_id: 0, sync_sequence: 0, users: [], channels: [], acls: [], config: undefined, shard: undefined };
+  return {
+    edge_id: undefined,
+    sync_sequence: undefined,
+    users: [],
+    channels: [],
+    acls: [],
+    config: undefined,
+    shard: undefined,
+  };
 }
 
 export const FullSyncResponse: MessageFns<FullSyncResponse> = {
   encode(message: FullSyncResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(8).uint32(message.edge_id);
     }
-    if (message.sync_sequence !== undefined && message.sync_sequence !== 0) {
+    if (message.sync_sequence !== undefined) {
       writer.uint32(16).uint64(message.sync_sequence);
     }
     if (message.users !== undefined && message.users.length !== 0) {
@@ -2765,8 +2788,8 @@ export const FullSyncResponse: MessageFns<FullSyncResponse> = {
 
   fromJSON(object: any): FullSyncResponse {
     return {
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      sync_sequence: isSet(object.sync_sequence) ? globalThis.Number(object.sync_sequence) : 0,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      sync_sequence: isSet(object.sync_sequence) ? globalThis.Number(object.sync_sequence) : undefined,
       users: globalThis.Array.isArray(object?.users) ? object.users.map((e: any) => UserInfo.fromJSON(e)) : [],
       channels: globalThis.Array.isArray(object?.channels)
         ? object.channels.map((e: any) => ChannelInfo.fromJSON(e))
@@ -2779,10 +2802,10 @@ export const FullSyncResponse: MessageFns<FullSyncResponse> = {
 
   toJSON(message: FullSyncResponse): unknown {
     const obj: any = {};
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.sync_sequence !== undefined && message.sync_sequence !== 0) {
+    if (message.sync_sequence !== undefined) {
       obj.sync_sequence = Math.round(message.sync_sequence);
     }
     if (message.users?.length) {
@@ -2808,8 +2831,8 @@ export const FullSyncResponse: MessageFns<FullSyncResponse> = {
   },
   fromPartial<I extends Exact<DeepPartial<FullSyncResponse>, I>>(object: I): FullSyncResponse {
     const message = createBaseFullSyncResponse();
-    message.edge_id = object.edge_id ?? 0;
-    message.sync_sequence = object.sync_sequence ?? 0;
+    message.edge_id = object.edge_id ?? undefined;
+    message.sync_sequence = object.sync_sequence ?? undefined;
     message.users = object.users?.map((e) => UserInfo.fromPartial(e)) || [];
     message.channels = object.channels?.map((e) => ChannelInfo.fromPartial(e)) || [];
     message.acls = object.acls?.map((e) => ACLSync.fromPartial(e)) || [];
@@ -2824,18 +2847,18 @@ export const FullSyncResponse: MessageFns<FullSyncResponse> = {
 };
 
 function createBaseShardInfo(): ShardInfo {
-  return { shard_index: 0, total_shards: 0, shard_id: "" };
+  return { shard_index: undefined, total_shards: undefined, shard_id: undefined };
 }
 
 export const ShardInfo: MessageFns<ShardInfo> = {
   encode(message: ShardInfo, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.shard_index !== undefined && message.shard_index !== 0) {
+    if (message.shard_index !== undefined) {
       writer.uint32(8).uint32(message.shard_index);
     }
-    if (message.total_shards !== undefined && message.total_shards !== 0) {
+    if (message.total_shards !== undefined) {
       writer.uint32(16).uint32(message.total_shards);
     }
-    if (message.shard_id !== undefined && message.shard_id !== "") {
+    if (message.shard_id !== undefined) {
       writer.uint32(26).string(message.shard_id);
     }
     return writer;
@@ -2883,21 +2906,21 @@ export const ShardInfo: MessageFns<ShardInfo> = {
 
   fromJSON(object: any): ShardInfo {
     return {
-      shard_index: isSet(object.shard_index) ? globalThis.Number(object.shard_index) : 0,
-      total_shards: isSet(object.total_shards) ? globalThis.Number(object.total_shards) : 0,
-      shard_id: isSet(object.shard_id) ? globalThis.String(object.shard_id) : "",
+      shard_index: isSet(object.shard_index) ? globalThis.Number(object.shard_index) : undefined,
+      total_shards: isSet(object.total_shards) ? globalThis.Number(object.total_shards) : undefined,
+      shard_id: isSet(object.shard_id) ? globalThis.String(object.shard_id) : undefined,
     };
   },
 
   toJSON(message: ShardInfo): unknown {
     const obj: any = {};
-    if (message.shard_index !== undefined && message.shard_index !== 0) {
+    if (message.shard_index !== undefined) {
       obj.shard_index = Math.round(message.shard_index);
     }
-    if (message.total_shards !== undefined && message.total_shards !== 0) {
+    if (message.total_shards !== undefined) {
       obj.total_shards = Math.round(message.total_shards);
     }
-    if (message.shard_id !== undefined && message.shard_id !== "") {
+    if (message.shard_id !== undefined) {
       obj.shard_id = message.shard_id;
     }
     return obj;
@@ -2908,15 +2931,15 @@ export const ShardInfo: MessageFns<ShardInfo> = {
   },
   fromPartial<I extends Exact<DeepPartial<ShardInfo>, I>>(object: I): ShardInfo {
     const message = createBaseShardInfo();
-    message.shard_index = object.shard_index ?? 0;
-    message.total_shards = object.total_shards ?? 0;
-    message.shard_id = object.shard_id ?? "";
+    message.shard_index = object.shard_index ?? undefined;
+    message.total_shards = object.total_shards ?? undefined;
+    message.shard_id = object.shard_id ?? undefined;
     return message;
   },
 };
 
 function createBaseGlobalConfig(): GlobalConfig {
-  return { entries: [], version: 0 };
+  return { entries: [], version: undefined };
 }
 
 export const GlobalConfig: MessageFns<GlobalConfig> = {
@@ -2926,7 +2949,7 @@ export const GlobalConfig: MessageFns<GlobalConfig> = {
         ConfigEntry.encode(v!, writer.uint32(10).fork()).join();
       }
     }
-    if (message.version !== undefined && message.version !== 0) {
+    if (message.version !== undefined) {
       writer.uint32(16).uint32(message.version);
     }
     return writer;
@@ -2970,7 +2993,7 @@ export const GlobalConfig: MessageFns<GlobalConfig> = {
   fromJSON(object: any): GlobalConfig {
     return {
       entries: globalThis.Array.isArray(object?.entries) ? object.entries.map((e: any) => ConfigEntry.fromJSON(e)) : [],
-      version: isSet(object.version) ? globalThis.Number(object.version) : 0,
+      version: isSet(object.version) ? globalThis.Number(object.version) : undefined,
     };
   },
 
@@ -2979,7 +3002,7 @@ export const GlobalConfig: MessageFns<GlobalConfig> = {
     if (message.entries?.length) {
       obj.entries = message.entries.map((e) => ConfigEntry.toJSON(e));
     }
-    if (message.version !== undefined && message.version !== 0) {
+    if (message.version !== undefined) {
       obj.version = Math.round(message.version);
     }
     return obj;
@@ -2991,21 +3014,21 @@ export const GlobalConfig: MessageFns<GlobalConfig> = {
   fromPartial<I extends Exact<DeepPartial<GlobalConfig>, I>>(object: I): GlobalConfig {
     const message = createBaseGlobalConfig();
     message.entries = object.entries?.map((e) => ConfigEntry.fromPartial(e)) || [];
-    message.version = object.version ?? 0;
+    message.version = object.version ?? undefined;
     return message;
   },
 };
 
 function createBaseConfigEntry(): ConfigEntry {
-  return { key: "", value: "" };
+  return { key: undefined, value: undefined };
 }
 
 export const ConfigEntry: MessageFns<ConfigEntry> = {
   encode(message: ConfigEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.key !== undefined && message.key !== "") {
+    if (message.key !== undefined) {
       writer.uint32(10).string(message.key);
     }
-    if (message.value !== undefined && message.value !== "") {
+    if (message.value !== undefined) {
       writer.uint32(18).string(message.value);
     }
     return writer;
@@ -3045,17 +3068,17 @@ export const ConfigEntry: MessageFns<ConfigEntry> = {
 
   fromJSON(object: any): ConfigEntry {
     return {
-      key: isSet(object.key) ? globalThis.String(object.key) : "",
-      value: isSet(object.value) ? globalThis.String(object.value) : "",
+      key: isSet(object.key) ? globalThis.String(object.key) : undefined,
+      value: isSet(object.value) ? globalThis.String(object.value) : undefined,
     };
   },
 
   toJSON(message: ConfigEntry): unknown {
     const obj: any = {};
-    if (message.key !== undefined && message.key !== "") {
+    if (message.key !== undefined) {
       obj.key = message.key;
     }
-    if (message.value !== undefined && message.value !== "") {
+    if (message.value !== undefined) {
       obj.value = message.value;
     }
     return obj;
@@ -3066,22 +3089,22 @@ export const ConfigEntry: MessageFns<ConfigEntry> = {
   },
   fromPartial<I extends Exact<DeepPartial<ConfigEntry>, I>>(object: I): ConfigEntry {
     const message = createBaseConfigEntry();
-    message.key = object.key ?? "";
-    message.value = object.value ?? "";
+    message.key = object.key ?? undefined;
+    message.value = object.value ?? undefined;
     return message;
   },
 };
 
 function createBaseVoiceTargetSync(): VoiceTargetSync {
-  return { session_id: 0, target_id: 0, targets: [], timestamp: 0 };
+  return { session_id: undefined, target_id: undefined, targets: [], timestamp: undefined };
 }
 
 export const VoiceTargetSync: MessageFns<VoiceTargetSync> = {
   encode(message: VoiceTargetSync, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       writer.uint32(8).uint32(message.session_id);
     }
-    if (message.target_id !== undefined && message.target_id !== 0) {
+    if (message.target_id !== undefined) {
       writer.uint32(16).uint32(message.target_id);
     }
     if (message.targets !== undefined && message.targets.length !== 0) {
@@ -3089,7 +3112,7 @@ export const VoiceTargetSync: MessageFns<VoiceTargetSync> = {
         VoiceTarget.encode(v!, writer.uint32(26).fork()).join();
       }
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       writer.uint32(32).int64(message.timestamp);
     }
     return writer;
@@ -3148,25 +3171,25 @@ export const VoiceTargetSync: MessageFns<VoiceTargetSync> = {
 
   fromJSON(object: any): VoiceTargetSync {
     return {
-      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : 0,
-      target_id: isSet(object.target_id) ? globalThis.Number(object.target_id) : 0,
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      target_id: isSet(object.target_id) ? globalThis.Number(object.target_id) : undefined,
       targets: globalThis.Array.isArray(object?.targets) ? object.targets.map((e: any) => VoiceTarget.fromJSON(e)) : [],
-      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
     };
   },
 
   toJSON(message: VoiceTargetSync): unknown {
     const obj: any = {};
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       obj.session_id = Math.round(message.session_id);
     }
-    if (message.target_id !== undefined && message.target_id !== 0) {
+    if (message.target_id !== undefined) {
       obj.target_id = Math.round(message.target_id);
     }
     if (message.targets?.length) {
       obj.targets = message.targets.map((e) => VoiceTarget.toJSON(e));
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       obj.timestamp = Math.round(message.timestamp);
     }
     return obj;
@@ -3177,10 +3200,10 @@ export const VoiceTargetSync: MessageFns<VoiceTargetSync> = {
   },
   fromPartial<I extends Exact<DeepPartial<VoiceTargetSync>, I>>(object: I): VoiceTargetSync {
     const message = createBaseVoiceTargetSync();
-    message.session_id = object.session_id ?? 0;
-    message.target_id = object.target_id ?? 0;
+    message.session_id = object.session_id ?? undefined;
+    message.target_id = object.target_id ?? undefined;
     message.targets = object.targets?.map((e) => VoiceTarget.fromPartial(e)) || [];
-    message.timestamp = object.timestamp ?? 0;
+    message.timestamp = object.timestamp ?? undefined;
     return message;
   },
 };
@@ -3266,21 +3289,21 @@ export const VoiceTarget: MessageFns<VoiceTarget> = {
 };
 
 function createBaseChannelTarget(): ChannelTarget {
-  return { channel_id: 0, include_children: false, links: false, group: "" };
+  return { channel_id: undefined, include_children: undefined, links: undefined, group: undefined };
 }
 
 export const ChannelTarget: MessageFns<ChannelTarget> = {
   encode(message: ChannelTarget, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(8).uint32(message.channel_id);
     }
-    if (message.include_children !== undefined && message.include_children !== false) {
+    if (message.include_children !== undefined) {
       writer.uint32(16).bool(message.include_children);
     }
-    if (message.links !== undefined && message.links !== false) {
+    if (message.links !== undefined) {
       writer.uint32(24).bool(message.links);
     }
-    if (message.group !== undefined && message.group !== "") {
+    if (message.group !== undefined) {
       writer.uint32(34).string(message.group);
     }
     return writer;
@@ -3336,25 +3359,25 @@ export const ChannelTarget: MessageFns<ChannelTarget> = {
 
   fromJSON(object: any): ChannelTarget {
     return {
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      include_children: isSet(object.include_children) ? globalThis.Boolean(object.include_children) : false,
-      links: isSet(object.links) ? globalThis.Boolean(object.links) : false,
-      group: isSet(object.group) ? globalThis.String(object.group) : "",
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      include_children: isSet(object.include_children) ? globalThis.Boolean(object.include_children) : undefined,
+      links: isSet(object.links) ? globalThis.Boolean(object.links) : undefined,
+      group: isSet(object.group) ? globalThis.String(object.group) : undefined,
     };
   },
 
   toJSON(message: ChannelTarget): unknown {
     const obj: any = {};
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.include_children !== undefined && message.include_children !== false) {
+    if (message.include_children !== undefined) {
       obj.include_children = message.include_children;
     }
-    if (message.links !== undefined && message.links !== false) {
+    if (message.links !== undefined) {
       obj.links = message.links;
     }
-    if (message.group !== undefined && message.group !== "") {
+    if (message.group !== undefined) {
       obj.group = message.group;
     }
     return obj;
@@ -3365,21 +3388,21 @@ export const ChannelTarget: MessageFns<ChannelTarget> = {
   },
   fromPartial<I extends Exact<DeepPartial<ChannelTarget>, I>>(object: I): ChannelTarget {
     const message = createBaseChannelTarget();
-    message.channel_id = object.channel_id ?? 0;
-    message.include_children = object.include_children ?? false;
-    message.links = object.links ?? false;
-    message.group = object.group ?? "";
+    message.channel_id = object.channel_id ?? undefined;
+    message.include_children = object.include_children ?? undefined;
+    message.links = object.links ?? undefined;
+    message.group = object.group ?? undefined;
     return message;
   },
 };
 
 function createBaseUserTarget(): UserTarget {
-  return { session_id: 0 };
+  return { session_id: undefined };
 }
 
 export const UserTarget: MessageFns<UserTarget> = {
   encode(message: UserTarget, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       writer.uint32(8).uint32(message.session_id);
     }
     return writer;
@@ -3410,12 +3433,12 @@ export const UserTarget: MessageFns<UserTarget> = {
   },
 
   fromJSON(object: any): UserTarget {
-    return { session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : 0 };
+    return { session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined };
   },
 
   toJSON(message: UserTarget): unknown {
     const obj: any = {};
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       obj.session_id = Math.round(message.session_id);
     }
     return obj;
@@ -3426,24 +3449,24 @@ export const UserTarget: MessageFns<UserTarget> = {
   },
   fromPartial<I extends Exact<DeepPartial<UserTarget>, I>>(object: I): UserTarget {
     const message = createBaseUserTarget();
-    message.session_id = object.session_id ?? 0;
+    message.session_id = object.session_id ?? undefined;
     return message;
   },
 };
 
 function createBasePermissionQuery(): PermissionQuery {
-  return { query_id: "", session_id: 0, channel_id: 0, permissions: [] };
+  return { query_id: undefined, session_id: undefined, channel_id: undefined, permissions: [] };
 }
 
 export const PermissionQuery: MessageFns<PermissionQuery> = {
   encode(message: PermissionQuery, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.query_id !== undefined && message.query_id !== "") {
+    if (message.query_id !== undefined) {
       writer.uint32(10).string(message.query_id);
     }
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       writer.uint32(16).uint32(message.session_id);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(24).uint32(message.channel_id);
     }
     if (message.permissions !== undefined && message.permissions.length !== 0) {
@@ -3514,9 +3537,9 @@ export const PermissionQuery: MessageFns<PermissionQuery> = {
 
   fromJSON(object: any): PermissionQuery {
     return {
-      query_id: isSet(object.query_id) ? globalThis.String(object.query_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : 0,
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
+      query_id: isSet(object.query_id) ? globalThis.String(object.query_id) : undefined,
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
       permissions: globalThis.Array.isArray(object?.permissions)
         ? object.permissions.map((e: any) => globalThis.Number(e))
         : [],
@@ -3525,13 +3548,13 @@ export const PermissionQuery: MessageFns<PermissionQuery> = {
 
   toJSON(message: PermissionQuery): unknown {
     const obj: any = {};
-    if (message.query_id !== undefined && message.query_id !== "") {
+    if (message.query_id !== undefined) {
       obj.query_id = message.query_id;
     }
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       obj.session_id = Math.round(message.session_id);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
     if (message.permissions?.length) {
@@ -3545,27 +3568,27 @@ export const PermissionQuery: MessageFns<PermissionQuery> = {
   },
   fromPartial<I extends Exact<DeepPartial<PermissionQuery>, I>>(object: I): PermissionQuery {
     const message = createBasePermissionQuery();
-    message.query_id = object.query_id ?? "";
-    message.session_id = object.session_id ?? 0;
-    message.channel_id = object.channel_id ?? 0;
+    message.query_id = object.query_id ?? undefined;
+    message.session_id = object.session_id ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
     message.permissions = object.permissions?.map((e) => e) || [];
     return message;
   },
 };
 
 function createBasePermissionResult(): PermissionResult {
-  return { query_id: "", session_id: 0, channel_id: 0, results: [] };
+  return { query_id: undefined, session_id: undefined, channel_id: undefined, results: [] };
 }
 
 export const PermissionResult: MessageFns<PermissionResult> = {
   encode(message: PermissionResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.query_id !== undefined && message.query_id !== "") {
+    if (message.query_id !== undefined) {
       writer.uint32(10).string(message.query_id);
     }
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       writer.uint32(16).uint32(message.session_id);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(24).uint32(message.channel_id);
     }
     if (message.results !== undefined && message.results.length !== 0) {
@@ -3629,9 +3652,9 @@ export const PermissionResult: MessageFns<PermissionResult> = {
 
   fromJSON(object: any): PermissionResult {
     return {
-      query_id: isSet(object.query_id) ? globalThis.String(object.query_id) : "",
-      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : 0,
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
+      query_id: isSet(object.query_id) ? globalThis.String(object.query_id) : undefined,
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
       results: globalThis.Array.isArray(object?.results)
         ? object.results.map((e: any) => PermissionResultEntry.fromJSON(e))
         : [],
@@ -3640,13 +3663,13 @@ export const PermissionResult: MessageFns<PermissionResult> = {
 
   toJSON(message: PermissionResult): unknown {
     const obj: any = {};
-    if (message.query_id !== undefined && message.query_id !== "") {
+    if (message.query_id !== undefined) {
       obj.query_id = message.query_id;
     }
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       obj.session_id = Math.round(message.session_id);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
     if (message.results?.length) {
@@ -3660,24 +3683,24 @@ export const PermissionResult: MessageFns<PermissionResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<PermissionResult>, I>>(object: I): PermissionResult {
     const message = createBasePermissionResult();
-    message.query_id = object.query_id ?? "";
-    message.session_id = object.session_id ?? 0;
-    message.channel_id = object.channel_id ?? 0;
+    message.query_id = object.query_id ?? undefined;
+    message.session_id = object.session_id ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
     message.results = object.results?.map((e) => PermissionResultEntry.fromPartial(e)) || [];
     return message;
   },
 };
 
 function createBasePermissionResultEntry(): PermissionResultEntry {
-  return { permission: 0, allowed: false };
+  return { permission: undefined, allowed: undefined };
 }
 
 export const PermissionResultEntry: MessageFns<PermissionResultEntry> = {
   encode(message: PermissionResultEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.permission !== undefined && message.permission !== 0) {
+    if (message.permission !== undefined) {
       writer.uint32(8).uint32(message.permission);
     }
-    if (message.allowed !== undefined && message.allowed !== false) {
+    if (message.allowed !== undefined) {
       writer.uint32(16).bool(message.allowed);
     }
     return writer;
@@ -3717,17 +3740,17 @@ export const PermissionResultEntry: MessageFns<PermissionResultEntry> = {
 
   fromJSON(object: any): PermissionResultEntry {
     return {
-      permission: isSet(object.permission) ? globalThis.Number(object.permission) : 0,
-      allowed: isSet(object.allowed) ? globalThis.Boolean(object.allowed) : false,
+      permission: isSet(object.permission) ? globalThis.Number(object.permission) : undefined,
+      allowed: isSet(object.allowed) ? globalThis.Boolean(object.allowed) : undefined,
     };
   },
 
   toJSON(message: PermissionResultEntry): unknown {
     const obj: any = {};
-    if (message.permission !== undefined && message.permission !== 0) {
+    if (message.permission !== undefined) {
       obj.permission = Math.round(message.permission);
     }
-    if (message.allowed !== undefined && message.allowed !== false) {
+    if (message.allowed !== undefined) {
       obj.allowed = message.allowed;
     }
     return obj;
@@ -3738,28 +3761,28 @@ export const PermissionResultEntry: MessageFns<PermissionResultEntry> = {
   },
   fromPartial<I extends Exact<DeepPartial<PermissionResultEntry>, I>>(object: I): PermissionResultEntry {
     const message = createBasePermissionResultEntry();
-    message.permission = object.permission ?? 0;
-    message.allowed = object.allowed ?? false;
+    message.permission = object.permission ?? undefined;
+    message.allowed = object.allowed ?? undefined;
     return message;
   },
 };
 
 function createBaseConnectionEvent(): ConnectionEvent {
-  return { event_type: 0, edge_id: 0, timestamp: 0, details: "" };
+  return { event_type: undefined, edge_id: undefined, timestamp: undefined, details: undefined };
 }
 
 export const ConnectionEvent: MessageFns<ConnectionEvent> = {
   encode(message: ConnectionEvent, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.event_type !== undefined && message.event_type !== 0) {
+    if (message.event_type !== undefined) {
       writer.uint32(8).int32(message.event_type);
     }
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(16).uint32(message.edge_id);
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       writer.uint32(24).int64(message.timestamp);
     }
-    if (message.details !== undefined && message.details !== "") {
+    if (message.details !== undefined) {
       writer.uint32(34).string(message.details);
     }
     return writer;
@@ -3815,25 +3838,25 @@ export const ConnectionEvent: MessageFns<ConnectionEvent> = {
 
   fromJSON(object: any): ConnectionEvent {
     return {
-      event_type: isSet(object.event_type) ? connectionEventTypeFromJSON(object.event_type) : 0,
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
-      details: isSet(object.details) ? globalThis.String(object.details) : "",
+      event_type: isSet(object.event_type) ? connectionEventTypeFromJSON(object.event_type) : undefined,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
+      details: isSet(object.details) ? globalThis.String(object.details) : undefined,
     };
   },
 
   toJSON(message: ConnectionEvent): unknown {
     const obj: any = {};
-    if (message.event_type !== undefined && message.event_type !== 0) {
+    if (message.event_type !== undefined) {
       obj.event_type = connectionEventTypeToJSON(message.event_type);
     }
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       obj.timestamp = Math.round(message.timestamp);
     }
-    if (message.details !== undefined && message.details !== "") {
+    if (message.details !== undefined) {
       obj.details = message.details;
     }
     return obj;
@@ -3844,10 +3867,10 @@ export const ConnectionEvent: MessageFns<ConnectionEvent> = {
   },
   fromPartial<I extends Exact<DeepPartial<ConnectionEvent>, I>>(object: I): ConnectionEvent {
     const message = createBaseConnectionEvent();
-    message.event_type = object.event_type ?? 0;
-    message.edge_id = object.edge_id ?? 0;
-    message.timestamp = object.timestamp ?? 0;
-    message.details = object.details ?? "";
+    message.event_type = object.event_type ?? undefined;
+    message.edge_id = object.edge_id ?? undefined;
+    message.timestamp = object.timestamp ?? undefined;
+    message.details = object.details ?? undefined;
     return message;
   },
 };

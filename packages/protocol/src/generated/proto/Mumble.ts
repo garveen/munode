@@ -1181,21 +1181,21 @@ export interface PluginDataTransmission {
 }
 
 function createBaseVersion(): Version {
-  return { version: 0, release: "", os: "", os_version: "" };
+  return { version: undefined, release: undefined, os: undefined, os_version: undefined };
 }
 
 export const Version: MessageFns<Version> = {
   encode(message: Version, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.version !== undefined && message.version !== 0) {
+    if (message.version !== undefined) {
       writer.uint32(8).uint32(message.version);
     }
-    if (message.release !== undefined && message.release !== "") {
+    if (message.release !== undefined) {
       writer.uint32(18).string(message.release);
     }
-    if (message.os !== undefined && message.os !== "") {
+    if (message.os !== undefined) {
       writer.uint32(26).string(message.os);
     }
-    if (message.os_version !== undefined && message.os_version !== "") {
+    if (message.os_version !== undefined) {
       writer.uint32(34).string(message.os_version);
     }
     return writer;
@@ -1251,25 +1251,25 @@ export const Version: MessageFns<Version> = {
 
   fromJSON(object: any): Version {
     return {
-      version: isSet(object.version) ? globalThis.Number(object.version) : 0,
-      release: isSet(object.release) ? globalThis.String(object.release) : "",
-      os: isSet(object.os) ? globalThis.String(object.os) : "",
-      os_version: isSet(object.os_version) ? globalThis.String(object.os_version) : "",
+      version: isSet(object.version) ? globalThis.Number(object.version) : undefined,
+      release: isSet(object.release) ? globalThis.String(object.release) : undefined,
+      os: isSet(object.os) ? globalThis.String(object.os) : undefined,
+      os_version: isSet(object.os_version) ? globalThis.String(object.os_version) : undefined,
     };
   },
 
   toJSON(message: Version): unknown {
     const obj: any = {};
-    if (message.version !== undefined && message.version !== 0) {
+    if (message.version !== undefined) {
       obj.version = Math.round(message.version);
     }
-    if (message.release !== undefined && message.release !== "") {
+    if (message.release !== undefined) {
       obj.release = message.release;
     }
-    if (message.os !== undefined && message.os !== "") {
+    if (message.os !== undefined) {
       obj.os = message.os;
     }
-    if (message.os_version !== undefined && message.os_version !== "") {
+    if (message.os_version !== undefined) {
       obj.os_version = message.os_version;
     }
     return obj;
@@ -1280,21 +1280,21 @@ export const Version: MessageFns<Version> = {
   },
   fromPartial<I extends Exact<DeepPartial<Version>, I>>(object: I): Version {
     const message = createBaseVersion();
-    message.version = object.version ?? 0;
-    message.release = object.release ?? "";
-    message.os = object.os ?? "";
-    message.os_version = object.os_version ?? "";
+    message.version = object.version ?? undefined;
+    message.release = object.release ?? undefined;
+    message.os = object.os ?? undefined;
+    message.os_version = object.os_version ?? undefined;
     return message;
   },
 };
 
 function createBaseUDPTunnel(): UDPTunnel {
-  return { packet: Buffer.alloc(0) };
+  return { packet: undefined };
 }
 
 export const UDPTunnel: MessageFns<UDPTunnel> = {
   encode(message: UDPTunnel, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.packet !== undefined && message.packet.length !== 0) {
+    if (message.packet !== undefined) {
       writer.uint32(10).bytes(message.packet);
     }
     return writer;
@@ -1325,12 +1325,12 @@ export const UDPTunnel: MessageFns<UDPTunnel> = {
   },
 
   fromJSON(object: any): UDPTunnel {
-    return { packet: isSet(object.packet) ? Buffer.from(bytesFromBase64(object.packet)) : Buffer.alloc(0) };
+    return { packet: isSet(object.packet) ? Buffer.from(bytesFromBase64(object.packet)) : undefined };
   },
 
   toJSON(message: UDPTunnel): unknown {
     const obj: any = {};
-    if (message.packet !== undefined && message.packet.length !== 0) {
+    if (message.packet !== undefined) {
       obj.packet = base64FromBytes(message.packet);
     }
     return obj;
@@ -1341,21 +1341,21 @@ export const UDPTunnel: MessageFns<UDPTunnel> = {
   },
   fromPartial<I extends Exact<DeepPartial<UDPTunnel>, I>>(object: I): UDPTunnel {
     const message = createBaseUDPTunnel();
-    message.packet = object.packet ?? Buffer.alloc(0);
+    message.packet = object.packet ?? undefined;
     return message;
   },
 };
 
 function createBaseAuthenticate(): Authenticate {
-  return { username: "", password: "", tokens: [], celt_versions: [], opus: false };
+  return { username: undefined, password: undefined, tokens: [], celt_versions: [], opus: undefined };
 }
 
 export const Authenticate: MessageFns<Authenticate> = {
   encode(message: Authenticate, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.username !== undefined && message.username !== "") {
+    if (message.username !== undefined) {
       writer.uint32(10).string(message.username);
     }
-    if (message.password !== undefined && message.password !== "") {
+    if (message.password !== undefined) {
       writer.uint32(18).string(message.password);
     }
     if (message.tokens !== undefined && message.tokens.length !== 0) {
@@ -1368,7 +1368,7 @@ export const Authenticate: MessageFns<Authenticate> = {
         writer.uint32(32).int32(v!);
       }
     }
-    if (message.opus !== undefined && message.opus !== false) {
+    if (message.opus !== undefined) {
       writer.uint32(40).bool(message.opus);
     }
     return writer;
@@ -1445,22 +1445,22 @@ export const Authenticate: MessageFns<Authenticate> = {
 
   fromJSON(object: any): Authenticate {
     return {
-      username: isSet(object.username) ? globalThis.String(object.username) : "",
-      password: isSet(object.password) ? globalThis.String(object.password) : "",
+      username: isSet(object.username) ? globalThis.String(object.username) : undefined,
+      password: isSet(object.password) ? globalThis.String(object.password) : undefined,
       tokens: globalThis.Array.isArray(object?.tokens) ? object.tokens.map((e: any) => globalThis.String(e)) : [],
       celt_versions: globalThis.Array.isArray(object?.celt_versions)
         ? object.celt_versions.map((e: any) => globalThis.Number(e))
         : [],
-      opus: isSet(object.opus) ? globalThis.Boolean(object.opus) : false,
+      opus: isSet(object.opus) ? globalThis.Boolean(object.opus) : undefined,
     };
   },
 
   toJSON(message: Authenticate): unknown {
     const obj: any = {};
-    if (message.username !== undefined && message.username !== "") {
+    if (message.username !== undefined) {
       obj.username = message.username;
     }
-    if (message.password !== undefined && message.password !== "") {
+    if (message.password !== undefined) {
       obj.password = message.password;
     }
     if (message.tokens?.length) {
@@ -1469,7 +1469,7 @@ export const Authenticate: MessageFns<Authenticate> = {
     if (message.celt_versions?.length) {
       obj.celt_versions = message.celt_versions.map((e) => Math.round(e));
     }
-    if (message.opus !== undefined && message.opus !== false) {
+    if (message.opus !== undefined) {
       obj.opus = message.opus;
     }
     return obj;
@@ -1480,64 +1480,64 @@ export const Authenticate: MessageFns<Authenticate> = {
   },
   fromPartial<I extends Exact<DeepPartial<Authenticate>, I>>(object: I): Authenticate {
     const message = createBaseAuthenticate();
-    message.username = object.username ?? "";
-    message.password = object.password ?? "";
+    message.username = object.username ?? undefined;
+    message.password = object.password ?? undefined;
     message.tokens = object.tokens?.map((e) => e) || [];
     message.celt_versions = object.celt_versions?.map((e) => e) || [];
-    message.opus = object.opus ?? false;
+    message.opus = object.opus ?? undefined;
     return message;
   },
 };
 
 function createBasePing(): Ping {
   return {
-    timestamp: 0,
-    good: 0,
-    late: 0,
-    lost: 0,
-    resync: 0,
-    udp_packets: 0,
-    tcp_packets: 0,
-    udp_ping_avg: 0,
-    udp_ping_var: 0,
-    tcp_ping_avg: 0,
-    tcp_ping_var: 0,
+    timestamp: undefined,
+    good: undefined,
+    late: undefined,
+    lost: undefined,
+    resync: undefined,
+    udp_packets: undefined,
+    tcp_packets: undefined,
+    udp_ping_avg: undefined,
+    udp_ping_var: undefined,
+    tcp_ping_avg: undefined,
+    tcp_ping_var: undefined,
   };
 }
 
 export const Ping: MessageFns<Ping> = {
   encode(message: Ping, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       writer.uint32(8).uint64(message.timestamp);
     }
-    if (message.good !== undefined && message.good !== 0) {
+    if (message.good !== undefined) {
       writer.uint32(16).uint32(message.good);
     }
-    if (message.late !== undefined && message.late !== 0) {
+    if (message.late !== undefined) {
       writer.uint32(24).uint32(message.late);
     }
-    if (message.lost !== undefined && message.lost !== 0) {
+    if (message.lost !== undefined) {
       writer.uint32(32).uint32(message.lost);
     }
-    if (message.resync !== undefined && message.resync !== 0) {
+    if (message.resync !== undefined) {
       writer.uint32(40).uint32(message.resync);
     }
-    if (message.udp_packets !== undefined && message.udp_packets !== 0) {
+    if (message.udp_packets !== undefined) {
       writer.uint32(48).uint32(message.udp_packets);
     }
-    if (message.tcp_packets !== undefined && message.tcp_packets !== 0) {
+    if (message.tcp_packets !== undefined) {
       writer.uint32(56).uint32(message.tcp_packets);
     }
-    if (message.udp_ping_avg !== undefined && message.udp_ping_avg !== 0) {
+    if (message.udp_ping_avg !== undefined) {
       writer.uint32(69).float(message.udp_ping_avg);
     }
-    if (message.udp_ping_var !== undefined && message.udp_ping_var !== 0) {
+    if (message.udp_ping_var !== undefined) {
       writer.uint32(77).float(message.udp_ping_var);
     }
-    if (message.tcp_ping_avg !== undefined && message.tcp_ping_avg !== 0) {
+    if (message.tcp_ping_avg !== undefined) {
       writer.uint32(85).float(message.tcp_ping_avg);
     }
-    if (message.tcp_ping_var !== undefined && message.tcp_ping_var !== 0) {
+    if (message.tcp_ping_var !== undefined) {
       writer.uint32(93).float(message.tcp_ping_var);
     }
     return writer;
@@ -1649,53 +1649,53 @@ export const Ping: MessageFns<Ping> = {
 
   fromJSON(object: any): Ping {
     return {
-      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
-      good: isSet(object.good) ? globalThis.Number(object.good) : 0,
-      late: isSet(object.late) ? globalThis.Number(object.late) : 0,
-      lost: isSet(object.lost) ? globalThis.Number(object.lost) : 0,
-      resync: isSet(object.resync) ? globalThis.Number(object.resync) : 0,
-      udp_packets: isSet(object.udp_packets) ? globalThis.Number(object.udp_packets) : 0,
-      tcp_packets: isSet(object.tcp_packets) ? globalThis.Number(object.tcp_packets) : 0,
-      udp_ping_avg: isSet(object.udp_ping_avg) ? globalThis.Number(object.udp_ping_avg) : 0,
-      udp_ping_var: isSet(object.udp_ping_var) ? globalThis.Number(object.udp_ping_var) : 0,
-      tcp_ping_avg: isSet(object.tcp_ping_avg) ? globalThis.Number(object.tcp_ping_avg) : 0,
-      tcp_ping_var: isSet(object.tcp_ping_var) ? globalThis.Number(object.tcp_ping_var) : 0,
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
+      good: isSet(object.good) ? globalThis.Number(object.good) : undefined,
+      late: isSet(object.late) ? globalThis.Number(object.late) : undefined,
+      lost: isSet(object.lost) ? globalThis.Number(object.lost) : undefined,
+      resync: isSet(object.resync) ? globalThis.Number(object.resync) : undefined,
+      udp_packets: isSet(object.udp_packets) ? globalThis.Number(object.udp_packets) : undefined,
+      tcp_packets: isSet(object.tcp_packets) ? globalThis.Number(object.tcp_packets) : undefined,
+      udp_ping_avg: isSet(object.udp_ping_avg) ? globalThis.Number(object.udp_ping_avg) : undefined,
+      udp_ping_var: isSet(object.udp_ping_var) ? globalThis.Number(object.udp_ping_var) : undefined,
+      tcp_ping_avg: isSet(object.tcp_ping_avg) ? globalThis.Number(object.tcp_ping_avg) : undefined,
+      tcp_ping_var: isSet(object.tcp_ping_var) ? globalThis.Number(object.tcp_ping_var) : undefined,
     };
   },
 
   toJSON(message: Ping): unknown {
     const obj: any = {};
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       obj.timestamp = Math.round(message.timestamp);
     }
-    if (message.good !== undefined && message.good !== 0) {
+    if (message.good !== undefined) {
       obj.good = Math.round(message.good);
     }
-    if (message.late !== undefined && message.late !== 0) {
+    if (message.late !== undefined) {
       obj.late = Math.round(message.late);
     }
-    if (message.lost !== undefined && message.lost !== 0) {
+    if (message.lost !== undefined) {
       obj.lost = Math.round(message.lost);
     }
-    if (message.resync !== undefined && message.resync !== 0) {
+    if (message.resync !== undefined) {
       obj.resync = Math.round(message.resync);
     }
-    if (message.udp_packets !== undefined && message.udp_packets !== 0) {
+    if (message.udp_packets !== undefined) {
       obj.udp_packets = Math.round(message.udp_packets);
     }
-    if (message.tcp_packets !== undefined && message.tcp_packets !== 0) {
+    if (message.tcp_packets !== undefined) {
       obj.tcp_packets = Math.round(message.tcp_packets);
     }
-    if (message.udp_ping_avg !== undefined && message.udp_ping_avg !== 0) {
+    if (message.udp_ping_avg !== undefined) {
       obj.udp_ping_avg = message.udp_ping_avg;
     }
-    if (message.udp_ping_var !== undefined && message.udp_ping_var !== 0) {
+    if (message.udp_ping_var !== undefined) {
       obj.udp_ping_var = message.udp_ping_var;
     }
-    if (message.tcp_ping_avg !== undefined && message.tcp_ping_avg !== 0) {
+    if (message.tcp_ping_avg !== undefined) {
       obj.tcp_ping_avg = message.tcp_ping_avg;
     }
-    if (message.tcp_ping_var !== undefined && message.tcp_ping_var !== 0) {
+    if (message.tcp_ping_var !== undefined) {
       obj.tcp_ping_var = message.tcp_ping_var;
     }
     return obj;
@@ -1706,31 +1706,31 @@ export const Ping: MessageFns<Ping> = {
   },
   fromPartial<I extends Exact<DeepPartial<Ping>, I>>(object: I): Ping {
     const message = createBasePing();
-    message.timestamp = object.timestamp ?? 0;
-    message.good = object.good ?? 0;
-    message.late = object.late ?? 0;
-    message.lost = object.lost ?? 0;
-    message.resync = object.resync ?? 0;
-    message.udp_packets = object.udp_packets ?? 0;
-    message.tcp_packets = object.tcp_packets ?? 0;
-    message.udp_ping_avg = object.udp_ping_avg ?? 0;
-    message.udp_ping_var = object.udp_ping_var ?? 0;
-    message.tcp_ping_avg = object.tcp_ping_avg ?? 0;
-    message.tcp_ping_var = object.tcp_ping_var ?? 0;
+    message.timestamp = object.timestamp ?? undefined;
+    message.good = object.good ?? undefined;
+    message.late = object.late ?? undefined;
+    message.lost = object.lost ?? undefined;
+    message.resync = object.resync ?? undefined;
+    message.udp_packets = object.udp_packets ?? undefined;
+    message.tcp_packets = object.tcp_packets ?? undefined;
+    message.udp_ping_avg = object.udp_ping_avg ?? undefined;
+    message.udp_ping_var = object.udp_ping_var ?? undefined;
+    message.tcp_ping_avg = object.tcp_ping_avg ?? undefined;
+    message.tcp_ping_var = object.tcp_ping_var ?? undefined;
     return message;
   },
 };
 
 function createBaseReject(): Reject {
-  return { type: 0, reason: "" };
+  return { type: undefined, reason: undefined };
 }
 
 export const Reject: MessageFns<Reject> = {
   encode(message: Reject, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.type !== undefined && message.type !== 0) {
+    if (message.type !== undefined) {
       writer.uint32(8).int32(message.type);
     }
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       writer.uint32(18).string(message.reason);
     }
     return writer;
@@ -1770,17 +1770,17 @@ export const Reject: MessageFns<Reject> = {
 
   fromJSON(object: any): Reject {
     return {
-      type: isSet(object.type) ? reject_RejectTypeFromJSON(object.type) : 0,
-      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
+      type: isSet(object.type) ? reject_RejectTypeFromJSON(object.type) : undefined,
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
     };
   },
 
   toJSON(message: Reject): unknown {
     const obj: any = {};
-    if (message.type !== undefined && message.type !== 0) {
+    if (message.type !== undefined) {
       obj.type = reject_RejectTypeToJSON(message.type);
     }
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       obj.reason = message.reason;
     }
     return obj;
@@ -1791,28 +1791,28 @@ export const Reject: MessageFns<Reject> = {
   },
   fromPartial<I extends Exact<DeepPartial<Reject>, I>>(object: I): Reject {
     const message = createBaseReject();
-    message.type = object.type ?? 0;
-    message.reason = object.reason ?? "";
+    message.type = object.type ?? undefined;
+    message.reason = object.reason ?? undefined;
     return message;
   },
 };
 
 function createBaseServerSync(): ServerSync {
-  return { session: 0, max_bandwidth: 0, welcome_text: "", permissions: 0 };
+  return { session: undefined, max_bandwidth: undefined, welcome_text: undefined, permissions: undefined };
 }
 
 export const ServerSync: MessageFns<ServerSync> = {
   encode(message: ServerSync, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       writer.uint32(8).uint32(message.session);
     }
-    if (message.max_bandwidth !== undefined && message.max_bandwidth !== 0) {
+    if (message.max_bandwidth !== undefined) {
       writer.uint32(16).uint32(message.max_bandwidth);
     }
-    if (message.welcome_text !== undefined && message.welcome_text !== "") {
+    if (message.welcome_text !== undefined) {
       writer.uint32(26).string(message.welcome_text);
     }
-    if (message.permissions !== undefined && message.permissions !== 0) {
+    if (message.permissions !== undefined) {
       writer.uint32(32).uint64(message.permissions);
     }
     return writer;
@@ -1868,25 +1868,25 @@ export const ServerSync: MessageFns<ServerSync> = {
 
   fromJSON(object: any): ServerSync {
     return {
-      session: isSet(object.session) ? globalThis.Number(object.session) : 0,
-      max_bandwidth: isSet(object.max_bandwidth) ? globalThis.Number(object.max_bandwidth) : 0,
-      welcome_text: isSet(object.welcome_text) ? globalThis.String(object.welcome_text) : "",
-      permissions: isSet(object.permissions) ? globalThis.Number(object.permissions) : 0,
+      session: isSet(object.session) ? globalThis.Number(object.session) : undefined,
+      max_bandwidth: isSet(object.max_bandwidth) ? globalThis.Number(object.max_bandwidth) : undefined,
+      welcome_text: isSet(object.welcome_text) ? globalThis.String(object.welcome_text) : undefined,
+      permissions: isSet(object.permissions) ? globalThis.Number(object.permissions) : undefined,
     };
   },
 
   toJSON(message: ServerSync): unknown {
     const obj: any = {};
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       obj.session = Math.round(message.session);
     }
-    if (message.max_bandwidth !== undefined && message.max_bandwidth !== 0) {
+    if (message.max_bandwidth !== undefined) {
       obj.max_bandwidth = Math.round(message.max_bandwidth);
     }
-    if (message.welcome_text !== undefined && message.welcome_text !== "") {
+    if (message.welcome_text !== undefined) {
       obj.welcome_text = message.welcome_text;
     }
-    if (message.permissions !== undefined && message.permissions !== 0) {
+    if (message.permissions !== undefined) {
       obj.permissions = Math.round(message.permissions);
     }
     return obj;
@@ -1897,21 +1897,21 @@ export const ServerSync: MessageFns<ServerSync> = {
   },
   fromPartial<I extends Exact<DeepPartial<ServerSync>, I>>(object: I): ServerSync {
     const message = createBaseServerSync();
-    message.session = object.session ?? 0;
-    message.max_bandwidth = object.max_bandwidth ?? 0;
-    message.welcome_text = object.welcome_text ?? "";
-    message.permissions = object.permissions ?? 0;
+    message.session = object.session ?? undefined;
+    message.max_bandwidth = object.max_bandwidth ?? undefined;
+    message.welcome_text = object.welcome_text ?? undefined;
+    message.permissions = object.permissions ?? undefined;
     return message;
   },
 };
 
 function createBaseChannelRemove(): ChannelRemove {
-  return { channel_id: 0 };
+  return { channel_id: undefined };
 }
 
 export const ChannelRemove: MessageFns<ChannelRemove> = {
   encode(message: ChannelRemove, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(8).uint32(message.channel_id);
     }
     return writer;
@@ -1942,12 +1942,12 @@ export const ChannelRemove: MessageFns<ChannelRemove> = {
   },
 
   fromJSON(object: any): ChannelRemove {
-    return { channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0 };
+    return { channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined };
   },
 
   toJSON(message: ChannelRemove): unknown {
     const obj: any = {};
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
     return obj;
@@ -1958,38 +1958,38 @@ export const ChannelRemove: MessageFns<ChannelRemove> = {
   },
   fromPartial<I extends Exact<DeepPartial<ChannelRemove>, I>>(object: I): ChannelRemove {
     const message = createBaseChannelRemove();
-    message.channel_id = object.channel_id ?? 0;
+    message.channel_id = object.channel_id ?? undefined;
     return message;
   },
 };
 
 function createBaseChannelState(): ChannelState {
   return {
-    channel_id: 0,
-    parent: 0,
-    name: "",
+    channel_id: undefined,
+    parent: undefined,
+    name: undefined,
     links: [],
-    description: "",
+    description: undefined,
     links_add: [],
     links_remove: [],
-    temporary: false,
-    position: 0,
-    description_hash: Buffer.alloc(0),
-    max_users: 0,
-    is_enter_restricted: false,
-    can_enter: false,
+    temporary: undefined,
+    position: undefined,
+    description_hash: undefined,
+    max_users: undefined,
+    is_enter_restricted: undefined,
+    can_enter: undefined,
   };
 }
 
 export const ChannelState: MessageFns<ChannelState> = {
   encode(message: ChannelState, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(8).uint32(message.channel_id);
     }
-    if (message.parent !== undefined && message.parent !== 0) {
+    if (message.parent !== undefined) {
       writer.uint32(16).uint32(message.parent);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(26).string(message.name);
     }
     if (message.links !== undefined && message.links.length !== 0) {
@@ -1997,7 +1997,7 @@ export const ChannelState: MessageFns<ChannelState> = {
         writer.uint32(32).uint32(v!);
       }
     }
-    if (message.description !== undefined && message.description !== "") {
+    if (message.description !== undefined) {
       writer.uint32(42).string(message.description);
     }
     if (message.links_add !== undefined && message.links_add.length !== 0) {
@@ -2010,22 +2010,22 @@ export const ChannelState: MessageFns<ChannelState> = {
         writer.uint32(56).uint32(v!);
       }
     }
-    if (message.temporary !== undefined && message.temporary !== false) {
+    if (message.temporary !== undefined) {
       writer.uint32(64).bool(message.temporary);
     }
-    if (message.position !== undefined && message.position !== 0) {
+    if (message.position !== undefined) {
       writer.uint32(72).int32(message.position);
     }
-    if (message.description_hash !== undefined && message.description_hash.length !== 0) {
+    if (message.description_hash !== undefined) {
       writer.uint32(82).bytes(message.description_hash);
     }
-    if (message.max_users !== undefined && message.max_users !== 0) {
+    if (message.max_users !== undefined) {
       writer.uint32(88).uint32(message.max_users);
     }
-    if (message.is_enter_restricted !== undefined && message.is_enter_restricted !== false) {
+    if (message.is_enter_restricted !== undefined) {
       writer.uint32(96).bool(message.is_enter_restricted);
     }
-    if (message.can_enter !== undefined && message.can_enter !== false) {
+    if (message.can_enter !== undefined) {
       writer.uint32(104).bool(message.can_enter);
     }
     return writer;
@@ -2183,43 +2183,45 @@ export const ChannelState: MessageFns<ChannelState> = {
 
   fromJSON(object: any): ChannelState {
     return {
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      parent: isSet(object.parent) ? globalThis.Number(object.parent) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      parent: isSet(object.parent) ? globalThis.Number(object.parent) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
       links: globalThis.Array.isArray(object?.links) ? object.links.map((e: any) => globalThis.Number(e)) : [],
-      description: isSet(object.description) ? globalThis.String(object.description) : "",
+      description: isSet(object.description) ? globalThis.String(object.description) : undefined,
       links_add: globalThis.Array.isArray(object?.links_add)
         ? object.links_add.map((e: any) => globalThis.Number(e))
         : [],
       links_remove: globalThis.Array.isArray(object?.links_remove)
         ? object.links_remove.map((e: any) => globalThis.Number(e))
         : [],
-      temporary: isSet(object.temporary) ? globalThis.Boolean(object.temporary) : false,
-      position: isSet(object.position) ? globalThis.Number(object.position) : 0,
+      temporary: isSet(object.temporary) ? globalThis.Boolean(object.temporary) : undefined,
+      position: isSet(object.position) ? globalThis.Number(object.position) : undefined,
       description_hash: isSet(object.description_hash)
         ? Buffer.from(bytesFromBase64(object.description_hash))
-        : Buffer.alloc(0),
-      max_users: isSet(object.max_users) ? globalThis.Number(object.max_users) : 0,
-      is_enter_restricted: isSet(object.is_enter_restricted) ? globalThis.Boolean(object.is_enter_restricted) : false,
-      can_enter: isSet(object.can_enter) ? globalThis.Boolean(object.can_enter) : false,
+        : undefined,
+      max_users: isSet(object.max_users) ? globalThis.Number(object.max_users) : undefined,
+      is_enter_restricted: isSet(object.is_enter_restricted)
+        ? globalThis.Boolean(object.is_enter_restricted)
+        : undefined,
+      can_enter: isSet(object.can_enter) ? globalThis.Boolean(object.can_enter) : undefined,
     };
   },
 
   toJSON(message: ChannelState): unknown {
     const obj: any = {};
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.parent !== undefined && message.parent !== 0) {
+    if (message.parent !== undefined) {
       obj.parent = Math.round(message.parent);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
     if (message.links?.length) {
       obj.links = message.links.map((e) => Math.round(e));
     }
-    if (message.description !== undefined && message.description !== "") {
+    if (message.description !== undefined) {
       obj.description = message.description;
     }
     if (message.links_add?.length) {
@@ -2228,22 +2230,22 @@ export const ChannelState: MessageFns<ChannelState> = {
     if (message.links_remove?.length) {
       obj.links_remove = message.links_remove.map((e) => Math.round(e));
     }
-    if (message.temporary !== undefined && message.temporary !== false) {
+    if (message.temporary !== undefined) {
       obj.temporary = message.temporary;
     }
-    if (message.position !== undefined && message.position !== 0) {
+    if (message.position !== undefined) {
       obj.position = Math.round(message.position);
     }
-    if (message.description_hash !== undefined && message.description_hash.length !== 0) {
+    if (message.description_hash !== undefined) {
       obj.description_hash = base64FromBytes(message.description_hash);
     }
-    if (message.max_users !== undefined && message.max_users !== 0) {
+    if (message.max_users !== undefined) {
       obj.max_users = Math.round(message.max_users);
     }
-    if (message.is_enter_restricted !== undefined && message.is_enter_restricted !== false) {
+    if (message.is_enter_restricted !== undefined) {
       obj.is_enter_restricted = message.is_enter_restricted;
     }
-    if (message.can_enter !== undefined && message.can_enter !== false) {
+    if (message.can_enter !== undefined) {
       obj.can_enter = message.can_enter;
     }
     return obj;
@@ -2254,39 +2256,39 @@ export const ChannelState: MessageFns<ChannelState> = {
   },
   fromPartial<I extends Exact<DeepPartial<ChannelState>, I>>(object: I): ChannelState {
     const message = createBaseChannelState();
-    message.channel_id = object.channel_id ?? 0;
-    message.parent = object.parent ?? 0;
-    message.name = object.name ?? "";
+    message.channel_id = object.channel_id ?? undefined;
+    message.parent = object.parent ?? undefined;
+    message.name = object.name ?? undefined;
     message.links = object.links?.map((e) => e) || [];
-    message.description = object.description ?? "";
+    message.description = object.description ?? undefined;
     message.links_add = object.links_add?.map((e) => e) || [];
     message.links_remove = object.links_remove?.map((e) => e) || [];
-    message.temporary = object.temporary ?? false;
-    message.position = object.position ?? 0;
-    message.description_hash = object.description_hash ?? Buffer.alloc(0);
-    message.max_users = object.max_users ?? 0;
-    message.is_enter_restricted = object.is_enter_restricted ?? false;
-    message.can_enter = object.can_enter ?? false;
+    message.temporary = object.temporary ?? undefined;
+    message.position = object.position ?? undefined;
+    message.description_hash = object.description_hash ?? undefined;
+    message.max_users = object.max_users ?? undefined;
+    message.is_enter_restricted = object.is_enter_restricted ?? undefined;
+    message.can_enter = object.can_enter ?? undefined;
     return message;
   },
 };
 
 function createBaseUserRemove(): UserRemove {
-  return { session: 0, actor: 0, reason: "", ban: false };
+  return { session: undefined, actor: undefined, reason: undefined, ban: undefined };
 }
 
 export const UserRemove: MessageFns<UserRemove> = {
   encode(message: UserRemove, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       writer.uint32(8).uint32(message.session);
     }
-    if (message.actor !== undefined && message.actor !== 0) {
+    if (message.actor !== undefined) {
       writer.uint32(16).uint32(message.actor);
     }
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       writer.uint32(26).string(message.reason);
     }
-    if (message.ban !== undefined && message.ban !== false) {
+    if (message.ban !== undefined) {
       writer.uint32(32).bool(message.ban);
     }
     return writer;
@@ -2342,25 +2344,25 @@ export const UserRemove: MessageFns<UserRemove> = {
 
   fromJSON(object: any): UserRemove {
     return {
-      session: isSet(object.session) ? globalThis.Number(object.session) : 0,
-      actor: isSet(object.actor) ? globalThis.Number(object.actor) : 0,
-      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
-      ban: isSet(object.ban) ? globalThis.Boolean(object.ban) : false,
+      session: isSet(object.session) ? globalThis.Number(object.session) : undefined,
+      actor: isSet(object.actor) ? globalThis.Number(object.actor) : undefined,
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
+      ban: isSet(object.ban) ? globalThis.Boolean(object.ban) : undefined,
     };
   },
 
   toJSON(message: UserRemove): unknown {
     const obj: any = {};
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       obj.session = Math.round(message.session);
     }
-    if (message.actor !== undefined && message.actor !== 0) {
+    if (message.actor !== undefined) {
       obj.actor = Math.round(message.actor);
     }
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       obj.reason = message.reason;
     }
-    if (message.ban !== undefined && message.ban !== false) {
+    if (message.ban !== undefined) {
       obj.ban = message.ban;
     }
     return obj;
@@ -2371,35 +2373,35 @@ export const UserRemove: MessageFns<UserRemove> = {
   },
   fromPartial<I extends Exact<DeepPartial<UserRemove>, I>>(object: I): UserRemove {
     const message = createBaseUserRemove();
-    message.session = object.session ?? 0;
-    message.actor = object.actor ?? 0;
-    message.reason = object.reason ?? "";
-    message.ban = object.ban ?? false;
+    message.session = object.session ?? undefined;
+    message.actor = object.actor ?? undefined;
+    message.reason = object.reason ?? undefined;
+    message.ban = object.ban ?? undefined;
     return message;
   },
 };
 
 function createBaseUserState(): UserState {
   return {
-    session: 0,
-    actor: 0,
-    name: "",
-    user_id: 0,
-    channel_id: 0,
-    mute: false,
-    deaf: false,
-    suppress: false,
-    self_mute: false,
-    self_deaf: false,
-    texture: Buffer.alloc(0),
-    plugin_context: Buffer.alloc(0),
-    plugin_identity: "",
-    comment: "",
-    hash: "",
-    comment_hash: Buffer.alloc(0),
-    texture_hash: Buffer.alloc(0),
-    priority_speaker: false,
-    recording: false,
+    session: undefined,
+    actor: undefined,
+    name: undefined,
+    user_id: undefined,
+    channel_id: undefined,
+    mute: undefined,
+    deaf: undefined,
+    suppress: undefined,
+    self_mute: undefined,
+    self_deaf: undefined,
+    texture: undefined,
+    plugin_context: undefined,
+    plugin_identity: undefined,
+    comment: undefined,
+    hash: undefined,
+    comment_hash: undefined,
+    texture_hash: undefined,
+    priority_speaker: undefined,
+    recording: undefined,
     temporary_access_tokens: [],
     listening_channel_add: [],
     listening_channel_remove: [],
@@ -2408,61 +2410,61 @@ function createBaseUserState(): UserState {
 
 export const UserState: MessageFns<UserState> = {
   encode(message: UserState, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       writer.uint32(8).uint32(message.session);
     }
-    if (message.actor !== undefined && message.actor !== 0) {
+    if (message.actor !== undefined) {
       writer.uint32(16).uint32(message.actor);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(26).string(message.name);
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       writer.uint32(32).uint32(message.user_id);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(40).uint32(message.channel_id);
     }
-    if (message.mute !== undefined && message.mute !== false) {
+    if (message.mute !== undefined) {
       writer.uint32(48).bool(message.mute);
     }
-    if (message.deaf !== undefined && message.deaf !== false) {
+    if (message.deaf !== undefined) {
       writer.uint32(56).bool(message.deaf);
     }
-    if (message.suppress !== undefined && message.suppress !== false) {
+    if (message.suppress !== undefined) {
       writer.uint32(64).bool(message.suppress);
     }
-    if (message.self_mute !== undefined && message.self_mute !== false) {
+    if (message.self_mute !== undefined) {
       writer.uint32(72).bool(message.self_mute);
     }
-    if (message.self_deaf !== undefined && message.self_deaf !== false) {
+    if (message.self_deaf !== undefined) {
       writer.uint32(80).bool(message.self_deaf);
     }
-    if (message.texture !== undefined && message.texture.length !== 0) {
+    if (message.texture !== undefined) {
       writer.uint32(90).bytes(message.texture);
     }
-    if (message.plugin_context !== undefined && message.plugin_context.length !== 0) {
+    if (message.plugin_context !== undefined) {
       writer.uint32(98).bytes(message.plugin_context);
     }
-    if (message.plugin_identity !== undefined && message.plugin_identity !== "") {
+    if (message.plugin_identity !== undefined) {
       writer.uint32(106).string(message.plugin_identity);
     }
-    if (message.comment !== undefined && message.comment !== "") {
+    if (message.comment !== undefined) {
       writer.uint32(114).string(message.comment);
     }
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       writer.uint32(122).string(message.hash);
     }
-    if (message.comment_hash !== undefined && message.comment_hash.length !== 0) {
+    if (message.comment_hash !== undefined) {
       writer.uint32(130).bytes(message.comment_hash);
     }
-    if (message.texture_hash !== undefined && message.texture_hash.length !== 0) {
+    if (message.texture_hash !== undefined) {
       writer.uint32(138).bytes(message.texture_hash);
     }
-    if (message.priority_speaker !== undefined && message.priority_speaker !== false) {
+    if (message.priority_speaker !== undefined) {
       writer.uint32(144).bool(message.priority_speaker);
     }
-    if (message.recording !== undefined && message.recording !== false) {
+    if (message.recording !== undefined) {
       writer.uint32(152).bool(message.recording);
     }
     if (message.temporary_access_tokens !== undefined && message.temporary_access_tokens.length !== 0) {
@@ -2700,27 +2702,25 @@ export const UserState: MessageFns<UserState> = {
 
   fromJSON(object: any): UserState {
     return {
-      session: isSet(object.session) ? globalThis.Number(object.session) : 0,
-      actor: isSet(object.actor) ? globalThis.Number(object.actor) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : 0,
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      mute: isSet(object.mute) ? globalThis.Boolean(object.mute) : false,
-      deaf: isSet(object.deaf) ? globalThis.Boolean(object.deaf) : false,
-      suppress: isSet(object.suppress) ? globalThis.Boolean(object.suppress) : false,
-      self_mute: isSet(object.self_mute) ? globalThis.Boolean(object.self_mute) : false,
-      self_deaf: isSet(object.self_deaf) ? globalThis.Boolean(object.self_deaf) : false,
-      texture: isSet(object.texture) ? Buffer.from(bytesFromBase64(object.texture)) : Buffer.alloc(0),
-      plugin_context: isSet(object.plugin_context)
-        ? Buffer.from(bytesFromBase64(object.plugin_context))
-        : Buffer.alloc(0),
-      plugin_identity: isSet(object.plugin_identity) ? globalThis.String(object.plugin_identity) : "",
-      comment: isSet(object.comment) ? globalThis.String(object.comment) : "",
-      hash: isSet(object.hash) ? globalThis.String(object.hash) : "",
-      comment_hash: isSet(object.comment_hash) ? Buffer.from(bytesFromBase64(object.comment_hash)) : Buffer.alloc(0),
-      texture_hash: isSet(object.texture_hash) ? Buffer.from(bytesFromBase64(object.texture_hash)) : Buffer.alloc(0),
-      priority_speaker: isSet(object.priority_speaker) ? globalThis.Boolean(object.priority_speaker) : false,
-      recording: isSet(object.recording) ? globalThis.Boolean(object.recording) : false,
+      session: isSet(object.session) ? globalThis.Number(object.session) : undefined,
+      actor: isSet(object.actor) ? globalThis.Number(object.actor) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      mute: isSet(object.mute) ? globalThis.Boolean(object.mute) : undefined,
+      deaf: isSet(object.deaf) ? globalThis.Boolean(object.deaf) : undefined,
+      suppress: isSet(object.suppress) ? globalThis.Boolean(object.suppress) : undefined,
+      self_mute: isSet(object.self_mute) ? globalThis.Boolean(object.self_mute) : undefined,
+      self_deaf: isSet(object.self_deaf) ? globalThis.Boolean(object.self_deaf) : undefined,
+      texture: isSet(object.texture) ? Buffer.from(bytesFromBase64(object.texture)) : undefined,
+      plugin_context: isSet(object.plugin_context) ? Buffer.from(bytesFromBase64(object.plugin_context)) : undefined,
+      plugin_identity: isSet(object.plugin_identity) ? globalThis.String(object.plugin_identity) : undefined,
+      comment: isSet(object.comment) ? globalThis.String(object.comment) : undefined,
+      hash: isSet(object.hash) ? globalThis.String(object.hash) : undefined,
+      comment_hash: isSet(object.comment_hash) ? Buffer.from(bytesFromBase64(object.comment_hash)) : undefined,
+      texture_hash: isSet(object.texture_hash) ? Buffer.from(bytesFromBase64(object.texture_hash)) : undefined,
+      priority_speaker: isSet(object.priority_speaker) ? globalThis.Boolean(object.priority_speaker) : undefined,
+      recording: isSet(object.recording) ? globalThis.Boolean(object.recording) : undefined,
       temporary_access_tokens: globalThis.Array.isArray(object?.temporary_access_tokens)
         ? object.temporary_access_tokens.map((e: any) => globalThis.String(e))
         : [],
@@ -2735,61 +2735,61 @@ export const UserState: MessageFns<UserState> = {
 
   toJSON(message: UserState): unknown {
     const obj: any = {};
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       obj.session = Math.round(message.session);
     }
-    if (message.actor !== undefined && message.actor !== 0) {
+    if (message.actor !== undefined) {
       obj.actor = Math.round(message.actor);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       obj.user_id = Math.round(message.user_id);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.mute !== undefined && message.mute !== false) {
+    if (message.mute !== undefined) {
       obj.mute = message.mute;
     }
-    if (message.deaf !== undefined && message.deaf !== false) {
+    if (message.deaf !== undefined) {
       obj.deaf = message.deaf;
     }
-    if (message.suppress !== undefined && message.suppress !== false) {
+    if (message.suppress !== undefined) {
       obj.suppress = message.suppress;
     }
-    if (message.self_mute !== undefined && message.self_mute !== false) {
+    if (message.self_mute !== undefined) {
       obj.self_mute = message.self_mute;
     }
-    if (message.self_deaf !== undefined && message.self_deaf !== false) {
+    if (message.self_deaf !== undefined) {
       obj.self_deaf = message.self_deaf;
     }
-    if (message.texture !== undefined && message.texture.length !== 0) {
+    if (message.texture !== undefined) {
       obj.texture = base64FromBytes(message.texture);
     }
-    if (message.plugin_context !== undefined && message.plugin_context.length !== 0) {
+    if (message.plugin_context !== undefined) {
       obj.plugin_context = base64FromBytes(message.plugin_context);
     }
-    if (message.plugin_identity !== undefined && message.plugin_identity !== "") {
+    if (message.plugin_identity !== undefined) {
       obj.plugin_identity = message.plugin_identity;
     }
-    if (message.comment !== undefined && message.comment !== "") {
+    if (message.comment !== undefined) {
       obj.comment = message.comment;
     }
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       obj.hash = message.hash;
     }
-    if (message.comment_hash !== undefined && message.comment_hash.length !== 0) {
+    if (message.comment_hash !== undefined) {
       obj.comment_hash = base64FromBytes(message.comment_hash);
     }
-    if (message.texture_hash !== undefined && message.texture_hash.length !== 0) {
+    if (message.texture_hash !== undefined) {
       obj.texture_hash = base64FromBytes(message.texture_hash);
     }
-    if (message.priority_speaker !== undefined && message.priority_speaker !== false) {
+    if (message.priority_speaker !== undefined) {
       obj.priority_speaker = message.priority_speaker;
     }
-    if (message.recording !== undefined && message.recording !== false) {
+    if (message.recording !== undefined) {
       obj.recording = message.recording;
     }
     if (message.temporary_access_tokens?.length) {
@@ -2809,25 +2809,25 @@ export const UserState: MessageFns<UserState> = {
   },
   fromPartial<I extends Exact<DeepPartial<UserState>, I>>(object: I): UserState {
     const message = createBaseUserState();
-    message.session = object.session ?? 0;
-    message.actor = object.actor ?? 0;
-    message.name = object.name ?? "";
-    message.user_id = object.user_id ?? 0;
-    message.channel_id = object.channel_id ?? 0;
-    message.mute = object.mute ?? false;
-    message.deaf = object.deaf ?? false;
-    message.suppress = object.suppress ?? false;
-    message.self_mute = object.self_mute ?? false;
-    message.self_deaf = object.self_deaf ?? false;
-    message.texture = object.texture ?? Buffer.alloc(0);
-    message.plugin_context = object.plugin_context ?? Buffer.alloc(0);
-    message.plugin_identity = object.plugin_identity ?? "";
-    message.comment = object.comment ?? "";
-    message.hash = object.hash ?? "";
-    message.comment_hash = object.comment_hash ?? Buffer.alloc(0);
-    message.texture_hash = object.texture_hash ?? Buffer.alloc(0);
-    message.priority_speaker = object.priority_speaker ?? false;
-    message.recording = object.recording ?? false;
+    message.session = object.session ?? undefined;
+    message.actor = object.actor ?? undefined;
+    message.name = object.name ?? undefined;
+    message.user_id = object.user_id ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    message.mute = object.mute ?? undefined;
+    message.deaf = object.deaf ?? undefined;
+    message.suppress = object.suppress ?? undefined;
+    message.self_mute = object.self_mute ?? undefined;
+    message.self_deaf = object.self_deaf ?? undefined;
+    message.texture = object.texture ?? undefined;
+    message.plugin_context = object.plugin_context ?? undefined;
+    message.plugin_identity = object.plugin_identity ?? undefined;
+    message.comment = object.comment ?? undefined;
+    message.hash = object.hash ?? undefined;
+    message.comment_hash = object.comment_hash ?? undefined;
+    message.texture_hash = object.texture_hash ?? undefined;
+    message.priority_speaker = object.priority_speaker ?? undefined;
+    message.recording = object.recording ?? undefined;
     message.temporary_access_tokens = object.temporary_access_tokens?.map((e) => e) || [];
     message.listening_channel_add = object.listening_channel_add?.map((e) => e) || [];
     message.listening_channel_remove = object.listening_channel_remove?.map((e) => e) || [];
@@ -2836,7 +2836,7 @@ export const UserState: MessageFns<UserState> = {
 };
 
 function createBaseBanList(): BanList {
-  return { bans: [], query: false };
+  return { bans: [], query: undefined };
 }
 
 export const BanList: MessageFns<BanList> = {
@@ -2846,7 +2846,7 @@ export const BanList: MessageFns<BanList> = {
         BanList_BanEntry.encode(v!, writer.uint32(10).fork()).join();
       }
     }
-    if (message.query !== undefined && message.query !== false) {
+    if (message.query !== undefined) {
       writer.uint32(16).bool(message.query);
     }
     return writer;
@@ -2890,7 +2890,7 @@ export const BanList: MessageFns<BanList> = {
   fromJSON(object: any): BanList {
     return {
       bans: globalThis.Array.isArray(object?.bans) ? object.bans.map((e: any) => BanList_BanEntry.fromJSON(e)) : [],
-      query: isSet(object.query) ? globalThis.Boolean(object.query) : false,
+      query: isSet(object.query) ? globalThis.Boolean(object.query) : undefined,
     };
   },
 
@@ -2899,7 +2899,7 @@ export const BanList: MessageFns<BanList> = {
     if (message.bans?.length) {
       obj.bans = message.bans.map((e) => BanList_BanEntry.toJSON(e));
     }
-    if (message.query !== undefined && message.query !== false) {
+    if (message.query !== undefined) {
       obj.query = message.query;
     }
     return obj;
@@ -2911,36 +2911,44 @@ export const BanList: MessageFns<BanList> = {
   fromPartial<I extends Exact<DeepPartial<BanList>, I>>(object: I): BanList {
     const message = createBaseBanList();
     message.bans = object.bans?.map((e) => BanList_BanEntry.fromPartial(e)) || [];
-    message.query = object.query ?? false;
+    message.query = object.query ?? undefined;
     return message;
   },
 };
 
 function createBaseBanList_BanEntry(): BanList_BanEntry {
-  return { address: Buffer.alloc(0), mask: 0, name: "", hash: "", reason: "", start: "", duration: 0 };
+  return {
+    address: undefined,
+    mask: undefined,
+    name: undefined,
+    hash: undefined,
+    reason: undefined,
+    start: undefined,
+    duration: undefined,
+  };
 }
 
 export const BanList_BanEntry: MessageFns<BanList_BanEntry> = {
   encode(message: BanList_BanEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.address !== undefined && message.address.length !== 0) {
+    if (message.address !== undefined) {
       writer.uint32(10).bytes(message.address);
     }
-    if (message.mask !== undefined && message.mask !== 0) {
+    if (message.mask !== undefined) {
       writer.uint32(16).uint32(message.mask);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(26).string(message.name);
     }
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       writer.uint32(34).string(message.hash);
     }
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       writer.uint32(42).string(message.reason);
     }
-    if (message.start !== undefined && message.start !== "") {
+    if (message.start !== undefined) {
       writer.uint32(50).string(message.start);
     }
-    if (message.duration !== undefined && message.duration !== 0) {
+    if (message.duration !== undefined) {
       writer.uint32(56).uint32(message.duration);
     }
     return writer;
@@ -3020,37 +3028,37 @@ export const BanList_BanEntry: MessageFns<BanList_BanEntry> = {
 
   fromJSON(object: any): BanList_BanEntry {
     return {
-      address: isSet(object.address) ? Buffer.from(bytesFromBase64(object.address)) : Buffer.alloc(0),
-      mask: isSet(object.mask) ? globalThis.Number(object.mask) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      hash: isSet(object.hash) ? globalThis.String(object.hash) : "",
-      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
-      start: isSet(object.start) ? globalThis.String(object.start) : "",
-      duration: isSet(object.duration) ? globalThis.Number(object.duration) : 0,
+      address: isSet(object.address) ? Buffer.from(bytesFromBase64(object.address)) : undefined,
+      mask: isSet(object.mask) ? globalThis.Number(object.mask) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      hash: isSet(object.hash) ? globalThis.String(object.hash) : undefined,
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
+      start: isSet(object.start) ? globalThis.String(object.start) : undefined,
+      duration: isSet(object.duration) ? globalThis.Number(object.duration) : undefined,
     };
   },
 
   toJSON(message: BanList_BanEntry): unknown {
     const obj: any = {};
-    if (message.address !== undefined && message.address.length !== 0) {
+    if (message.address !== undefined) {
       obj.address = base64FromBytes(message.address);
     }
-    if (message.mask !== undefined && message.mask !== 0) {
+    if (message.mask !== undefined) {
       obj.mask = Math.round(message.mask);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       obj.hash = message.hash;
     }
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       obj.reason = message.reason;
     }
-    if (message.start !== undefined && message.start !== "") {
+    if (message.start !== undefined) {
       obj.start = message.start;
     }
-    if (message.duration !== undefined && message.duration !== 0) {
+    if (message.duration !== undefined) {
       obj.duration = Math.round(message.duration);
     }
     return obj;
@@ -3061,24 +3069,24 @@ export const BanList_BanEntry: MessageFns<BanList_BanEntry> = {
   },
   fromPartial<I extends Exact<DeepPartial<BanList_BanEntry>, I>>(object: I): BanList_BanEntry {
     const message = createBaseBanList_BanEntry();
-    message.address = object.address ?? Buffer.alloc(0);
-    message.mask = object.mask ?? 0;
-    message.name = object.name ?? "";
-    message.hash = object.hash ?? "";
-    message.reason = object.reason ?? "";
-    message.start = object.start ?? "";
-    message.duration = object.duration ?? 0;
+    message.address = object.address ?? undefined;
+    message.mask = object.mask ?? undefined;
+    message.name = object.name ?? undefined;
+    message.hash = object.hash ?? undefined;
+    message.reason = object.reason ?? undefined;
+    message.start = object.start ?? undefined;
+    message.duration = object.duration ?? undefined;
     return message;
   },
 };
 
 function createBaseTextMessage(): TextMessage {
-  return { actor: 0, session: [], channel_id: [], tree_id: [], message: "" };
+  return { actor: undefined, session: [], channel_id: [], tree_id: [], message: undefined };
 }
 
 export const TextMessage: MessageFns<TextMessage> = {
   encode(message: TextMessage, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.actor !== undefined && message.actor !== 0) {
+    if (message.actor !== undefined) {
       writer.uint32(8).uint32(message.actor);
     }
     if (message.session !== undefined && message.session.length !== 0) {
@@ -3096,7 +3104,7 @@ export const TextMessage: MessageFns<TextMessage> = {
         writer.uint32(32).uint32(v!);
       }
     }
-    if (message.message !== undefined && message.message !== "") {
+    if (message.message !== undefined) {
       writer.uint32(42).string(message.message);
     }
     return writer;
@@ -3190,19 +3198,19 @@ export const TextMessage: MessageFns<TextMessage> = {
 
   fromJSON(object: any): TextMessage {
     return {
-      actor: isSet(object.actor) ? globalThis.Number(object.actor) : 0,
+      actor: isSet(object.actor) ? globalThis.Number(object.actor) : undefined,
       session: globalThis.Array.isArray(object?.session) ? object.session.map((e: any) => globalThis.Number(e)) : [],
       channel_id: globalThis.Array.isArray(object?.channel_id)
         ? object.channel_id.map((e: any) => globalThis.Number(e))
         : [],
       tree_id: globalThis.Array.isArray(object?.tree_id) ? object.tree_id.map((e: any) => globalThis.Number(e)) : [],
-      message: isSet(object.message) ? globalThis.String(object.message) : "",
+      message: isSet(object.message) ? globalThis.String(object.message) : undefined,
     };
   },
 
   toJSON(message: TextMessage): unknown {
     const obj: any = {};
-    if (message.actor !== undefined && message.actor !== 0) {
+    if (message.actor !== undefined) {
       obj.actor = Math.round(message.actor);
     }
     if (message.session?.length) {
@@ -3214,7 +3222,7 @@ export const TextMessage: MessageFns<TextMessage> = {
     if (message.tree_id?.length) {
       obj.tree_id = message.tree_id.map((e) => Math.round(e));
     }
-    if (message.message !== undefined && message.message !== "") {
+    if (message.message !== undefined) {
       obj.message = message.message;
     }
     return obj;
@@ -3225,37 +3233,44 @@ export const TextMessage: MessageFns<TextMessage> = {
   },
   fromPartial<I extends Exact<DeepPartial<TextMessage>, I>>(object: I): TextMessage {
     const message = createBaseTextMessage();
-    message.actor = object.actor ?? 0;
+    message.actor = object.actor ?? undefined;
     message.session = object.session?.map((e) => e) || [];
     message.channel_id = object.channel_id?.map((e) => e) || [];
     message.tree_id = object.tree_id?.map((e) => e) || [];
-    message.message = object.message ?? "";
+    message.message = object.message ?? undefined;
     return message;
   },
 };
 
 function createBasePermissionDenied(): PermissionDenied {
-  return { permission: 0, channel_id: 0, session: 0, reason: "", type: 0, name: "" };
+  return {
+    permission: undefined,
+    channel_id: undefined,
+    session: undefined,
+    reason: undefined,
+    type: undefined,
+    name: undefined,
+  };
 }
 
 export const PermissionDenied: MessageFns<PermissionDenied> = {
   encode(message: PermissionDenied, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.permission !== undefined && message.permission !== 0) {
+    if (message.permission !== undefined) {
       writer.uint32(8).uint32(message.permission);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(16).uint32(message.channel_id);
     }
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       writer.uint32(24).uint32(message.session);
     }
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       writer.uint32(34).string(message.reason);
     }
-    if (message.type !== undefined && message.type !== 0) {
+    if (message.type !== undefined) {
       writer.uint32(40).int32(message.type);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(50).string(message.name);
     }
     return writer;
@@ -3327,33 +3342,33 @@ export const PermissionDenied: MessageFns<PermissionDenied> = {
 
   fromJSON(object: any): PermissionDenied {
     return {
-      permission: isSet(object.permission) ? globalThis.Number(object.permission) : 0,
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      session: isSet(object.session) ? globalThis.Number(object.session) : 0,
-      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
-      type: isSet(object.type) ? permissionDenied_DenyTypeFromJSON(object.type) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      permission: isSet(object.permission) ? globalThis.Number(object.permission) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      session: isSet(object.session) ? globalThis.Number(object.session) : undefined,
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
+      type: isSet(object.type) ? permissionDenied_DenyTypeFromJSON(object.type) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
     };
   },
 
   toJSON(message: PermissionDenied): unknown {
     const obj: any = {};
-    if (message.permission !== undefined && message.permission !== 0) {
+    if (message.permission !== undefined) {
       obj.permission = Math.round(message.permission);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       obj.session = Math.round(message.session);
     }
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       obj.reason = message.reason;
     }
-    if (message.type !== undefined && message.type !== 0) {
+    if (message.type !== undefined) {
       obj.type = permissionDenied_DenyTypeToJSON(message.type);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
     return obj;
@@ -3364,26 +3379,26 @@ export const PermissionDenied: MessageFns<PermissionDenied> = {
   },
   fromPartial<I extends Exact<DeepPartial<PermissionDenied>, I>>(object: I): PermissionDenied {
     const message = createBasePermissionDenied();
-    message.permission = object.permission ?? 0;
-    message.channel_id = object.channel_id ?? 0;
-    message.session = object.session ?? 0;
-    message.reason = object.reason ?? "";
-    message.type = object.type ?? 0;
-    message.name = object.name ?? "";
+    message.permission = object.permission ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    message.session = object.session ?? undefined;
+    message.reason = object.reason ?? undefined;
+    message.type = object.type ?? undefined;
+    message.name = object.name ?? undefined;
     return message;
   },
 };
 
 function createBaseACL(): ACL {
-  return { channel_id: 0, inherit_acls: true, groups: [], acls: [], query: false };
+  return { channel_id: undefined, inherit_acls: undefined, groups: [], acls: [], query: undefined };
 }
 
 export const ACL: MessageFns<ACL> = {
   encode(message: ACL, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(8).uint32(message.channel_id);
     }
-    if (message.inherit_acls !== undefined && message.inherit_acls !== true) {
+    if (message.inherit_acls !== undefined) {
       writer.uint32(16).bool(message.inherit_acls);
     }
     if (message.groups !== undefined && message.groups.length !== 0) {
@@ -3396,7 +3411,7 @@ export const ACL: MessageFns<ACL> = {
         ACL_ChanACL.encode(v!, writer.uint32(34).fork()).join();
       }
     }
-    if (message.query !== undefined && message.query !== false) {
+    if (message.query !== undefined) {
       writer.uint32(40).bool(message.query);
     }
     return writer;
@@ -3466,20 +3481,20 @@ export const ACL: MessageFns<ACL> = {
 
   fromJSON(object: any): ACL {
     return {
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      inherit_acls: isSet(object.inherit_acls) ? globalThis.Boolean(object.inherit_acls) : true,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      inherit_acls: isSet(object.inherit_acls) ? globalThis.Boolean(object.inherit_acls) : undefined,
       groups: globalThis.Array.isArray(object?.groups) ? object.groups.map((e: any) => ACL_ChanGroup.fromJSON(e)) : [],
       acls: globalThis.Array.isArray(object?.acls) ? object.acls.map((e: any) => ACL_ChanACL.fromJSON(e)) : [],
-      query: isSet(object.query) ? globalThis.Boolean(object.query) : false,
+      query: isSet(object.query) ? globalThis.Boolean(object.query) : undefined,
     };
   },
 
   toJSON(message: ACL): unknown {
     const obj: any = {};
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.inherit_acls !== undefined && message.inherit_acls !== true) {
+    if (message.inherit_acls !== undefined) {
       obj.inherit_acls = message.inherit_acls;
     }
     if (message.groups?.length) {
@@ -3488,7 +3503,7 @@ export const ACL: MessageFns<ACL> = {
     if (message.acls?.length) {
       obj.acls = message.acls.map((e) => ACL_ChanACL.toJSON(e));
     }
-    if (message.query !== undefined && message.query !== false) {
+    if (message.query !== undefined) {
       obj.query = message.query;
     }
     return obj;
@@ -3499,31 +3514,39 @@ export const ACL: MessageFns<ACL> = {
   },
   fromPartial<I extends Exact<DeepPartial<ACL>, I>>(object: I): ACL {
     const message = createBaseACL();
-    message.channel_id = object.channel_id ?? 0;
-    message.inherit_acls = object.inherit_acls ?? true;
+    message.channel_id = object.channel_id ?? undefined;
+    message.inherit_acls = object.inherit_acls ?? undefined;
     message.groups = object.groups?.map((e) => ACL_ChanGroup.fromPartial(e)) || [];
     message.acls = object.acls?.map((e) => ACL_ChanACL.fromPartial(e)) || [];
-    message.query = object.query ?? false;
+    message.query = object.query ?? undefined;
     return message;
   },
 };
 
 function createBaseACL_ChanGroup(): ACL_ChanGroup {
-  return { name: "", inherited: true, inherit: true, inheritable: true, add: [], remove: [], inherited_members: [] };
+  return {
+    name: undefined,
+    inherited: undefined,
+    inherit: undefined,
+    inheritable: undefined,
+    add: [],
+    remove: [],
+    inherited_members: [],
+  };
 }
 
 export const ACL_ChanGroup: MessageFns<ACL_ChanGroup> = {
   encode(message: ACL_ChanGroup, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(10).string(message.name);
     }
-    if (message.inherited !== undefined && message.inherited !== true) {
+    if (message.inherited !== undefined) {
       writer.uint32(16).bool(message.inherited);
     }
-    if (message.inherit !== undefined && message.inherit !== true) {
+    if (message.inherit !== undefined) {
       writer.uint32(24).bool(message.inherit);
     }
-    if (message.inheritable !== undefined && message.inheritable !== true) {
+    if (message.inheritable !== undefined) {
       writer.uint32(32).bool(message.inheritable);
     }
     if (message.add !== undefined && message.add.length !== 0) {
@@ -3648,10 +3671,10 @@ export const ACL_ChanGroup: MessageFns<ACL_ChanGroup> = {
 
   fromJSON(object: any): ACL_ChanGroup {
     return {
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      inherited: isSet(object.inherited) ? globalThis.Boolean(object.inherited) : true,
-      inherit: isSet(object.inherit) ? globalThis.Boolean(object.inherit) : true,
-      inheritable: isSet(object.inheritable) ? globalThis.Boolean(object.inheritable) : true,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      inherited: isSet(object.inherited) ? globalThis.Boolean(object.inherited) : undefined,
+      inherit: isSet(object.inherit) ? globalThis.Boolean(object.inherit) : undefined,
+      inheritable: isSet(object.inheritable) ? globalThis.Boolean(object.inheritable) : undefined,
       add: globalThis.Array.isArray(object?.add) ? object.add.map((e: any) => globalThis.Number(e)) : [],
       remove: globalThis.Array.isArray(object?.remove) ? object.remove.map((e: any) => globalThis.Number(e)) : [],
       inherited_members: globalThis.Array.isArray(object?.inherited_members)
@@ -3662,16 +3685,16 @@ export const ACL_ChanGroup: MessageFns<ACL_ChanGroup> = {
 
   toJSON(message: ACL_ChanGroup): unknown {
     const obj: any = {};
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.inherited !== undefined && message.inherited !== true) {
+    if (message.inherited !== undefined) {
       obj.inherited = message.inherited;
     }
-    if (message.inherit !== undefined && message.inherit !== true) {
+    if (message.inherit !== undefined) {
       obj.inherit = message.inherit;
     }
-    if (message.inheritable !== undefined && message.inheritable !== true) {
+    if (message.inheritable !== undefined) {
       obj.inheritable = message.inheritable;
     }
     if (message.add?.length) {
@@ -3691,10 +3714,10 @@ export const ACL_ChanGroup: MessageFns<ACL_ChanGroup> = {
   },
   fromPartial<I extends Exact<DeepPartial<ACL_ChanGroup>, I>>(object: I): ACL_ChanGroup {
     const message = createBaseACL_ChanGroup();
-    message.name = object.name ?? "";
-    message.inherited = object.inherited ?? true;
-    message.inherit = object.inherit ?? true;
-    message.inheritable = object.inheritable ?? true;
+    message.name = object.name ?? undefined;
+    message.inherited = object.inherited ?? undefined;
+    message.inherit = object.inherit ?? undefined;
+    message.inheritable = object.inheritable ?? undefined;
     message.add = object.add?.map((e) => e) || [];
     message.remove = object.remove?.map((e) => e) || [];
     message.inherited_members = object.inherited_members?.map((e) => e) || [];
@@ -3703,30 +3726,38 @@ export const ACL_ChanGroup: MessageFns<ACL_ChanGroup> = {
 };
 
 function createBaseACL_ChanACL(): ACL_ChanACL {
-  return { apply_here: true, apply_subs: true, inherited: true, user_id: 0, group: "", grant: 0, deny: 0 };
+  return {
+    apply_here: undefined,
+    apply_subs: undefined,
+    inherited: undefined,
+    user_id: undefined,
+    group: undefined,
+    grant: undefined,
+    deny: undefined,
+  };
 }
 
 export const ACL_ChanACL: MessageFns<ACL_ChanACL> = {
   encode(message: ACL_ChanACL, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.apply_here !== undefined && message.apply_here !== true) {
+    if (message.apply_here !== undefined) {
       writer.uint32(8).bool(message.apply_here);
     }
-    if (message.apply_subs !== undefined && message.apply_subs !== true) {
+    if (message.apply_subs !== undefined) {
       writer.uint32(16).bool(message.apply_subs);
     }
-    if (message.inherited !== undefined && message.inherited !== true) {
+    if (message.inherited !== undefined) {
       writer.uint32(24).bool(message.inherited);
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       writer.uint32(32).uint32(message.user_id);
     }
-    if (message.group !== undefined && message.group !== "") {
+    if (message.group !== undefined) {
       writer.uint32(42).string(message.group);
     }
-    if (message.grant !== undefined && message.grant !== 0) {
+    if (message.grant !== undefined) {
       writer.uint32(48).uint32(message.grant);
     }
-    if (message.deny !== undefined && message.deny !== 0) {
+    if (message.deny !== undefined) {
       writer.uint32(56).uint32(message.deny);
     }
     return writer;
@@ -3806,37 +3837,37 @@ export const ACL_ChanACL: MessageFns<ACL_ChanACL> = {
 
   fromJSON(object: any): ACL_ChanACL {
     return {
-      apply_here: isSet(object.apply_here) ? globalThis.Boolean(object.apply_here) : true,
-      apply_subs: isSet(object.apply_subs) ? globalThis.Boolean(object.apply_subs) : true,
-      inherited: isSet(object.inherited) ? globalThis.Boolean(object.inherited) : true,
-      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : 0,
-      group: isSet(object.group) ? globalThis.String(object.group) : "",
-      grant: isSet(object.grant) ? globalThis.Number(object.grant) : 0,
-      deny: isSet(object.deny) ? globalThis.Number(object.deny) : 0,
+      apply_here: isSet(object.apply_here) ? globalThis.Boolean(object.apply_here) : undefined,
+      apply_subs: isSet(object.apply_subs) ? globalThis.Boolean(object.apply_subs) : undefined,
+      inherited: isSet(object.inherited) ? globalThis.Boolean(object.inherited) : undefined,
+      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : undefined,
+      group: isSet(object.group) ? globalThis.String(object.group) : undefined,
+      grant: isSet(object.grant) ? globalThis.Number(object.grant) : undefined,
+      deny: isSet(object.deny) ? globalThis.Number(object.deny) : undefined,
     };
   },
 
   toJSON(message: ACL_ChanACL): unknown {
     const obj: any = {};
-    if (message.apply_here !== undefined && message.apply_here !== true) {
+    if (message.apply_here !== undefined) {
       obj.apply_here = message.apply_here;
     }
-    if (message.apply_subs !== undefined && message.apply_subs !== true) {
+    if (message.apply_subs !== undefined) {
       obj.apply_subs = message.apply_subs;
     }
-    if (message.inherited !== undefined && message.inherited !== true) {
+    if (message.inherited !== undefined) {
       obj.inherited = message.inherited;
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       obj.user_id = Math.round(message.user_id);
     }
-    if (message.group !== undefined && message.group !== "") {
+    if (message.group !== undefined) {
       obj.group = message.group;
     }
-    if (message.grant !== undefined && message.grant !== 0) {
+    if (message.grant !== undefined) {
       obj.grant = Math.round(message.grant);
     }
-    if (message.deny !== undefined && message.deny !== 0) {
+    if (message.deny !== undefined) {
       obj.deny = Math.round(message.deny);
     }
     return obj;
@@ -3847,13 +3878,13 @@ export const ACL_ChanACL: MessageFns<ACL_ChanACL> = {
   },
   fromPartial<I extends Exact<DeepPartial<ACL_ChanACL>, I>>(object: I): ACL_ChanACL {
     const message = createBaseACL_ChanACL();
-    message.apply_here = object.apply_here ?? true;
-    message.apply_subs = object.apply_subs ?? true;
-    message.inherited = object.inherited ?? true;
-    message.user_id = object.user_id ?? 0;
-    message.group = object.group ?? "";
-    message.grant = object.grant ?? 0;
-    message.deny = object.deny ?? 0;
+    message.apply_here = object.apply_here ?? undefined;
+    message.apply_subs = object.apply_subs ?? undefined;
+    message.inherited = object.inherited ?? undefined;
+    message.user_id = object.user_id ?? undefined;
+    message.group = object.group ?? undefined;
+    message.grant = object.grant ?? undefined;
+    message.deny = object.deny ?? undefined;
     return message;
   },
 };
@@ -3952,18 +3983,18 @@ export const QueryUsers: MessageFns<QueryUsers> = {
 };
 
 function createBaseCryptSetup(): CryptSetup {
-  return { key: Buffer.alloc(0), client_nonce: Buffer.alloc(0), server_nonce: Buffer.alloc(0) };
+  return { key: undefined, client_nonce: undefined, server_nonce: undefined };
 }
 
 export const CryptSetup: MessageFns<CryptSetup> = {
   encode(message: CryptSetup, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.key !== undefined && message.key.length !== 0) {
+    if (message.key !== undefined) {
       writer.uint32(10).bytes(message.key);
     }
-    if (message.client_nonce !== undefined && message.client_nonce.length !== 0) {
+    if (message.client_nonce !== undefined) {
       writer.uint32(18).bytes(message.client_nonce);
     }
-    if (message.server_nonce !== undefined && message.server_nonce.length !== 0) {
+    if (message.server_nonce !== undefined) {
       writer.uint32(26).bytes(message.server_nonce);
     }
     return writer;
@@ -4011,21 +4042,21 @@ export const CryptSetup: MessageFns<CryptSetup> = {
 
   fromJSON(object: any): CryptSetup {
     return {
-      key: isSet(object.key) ? Buffer.from(bytesFromBase64(object.key)) : Buffer.alloc(0),
-      client_nonce: isSet(object.client_nonce) ? Buffer.from(bytesFromBase64(object.client_nonce)) : Buffer.alloc(0),
-      server_nonce: isSet(object.server_nonce) ? Buffer.from(bytesFromBase64(object.server_nonce)) : Buffer.alloc(0),
+      key: isSet(object.key) ? Buffer.from(bytesFromBase64(object.key)) : undefined,
+      client_nonce: isSet(object.client_nonce) ? Buffer.from(bytesFromBase64(object.client_nonce)) : undefined,
+      server_nonce: isSet(object.server_nonce) ? Buffer.from(bytesFromBase64(object.server_nonce)) : undefined,
     };
   },
 
   toJSON(message: CryptSetup): unknown {
     const obj: any = {};
-    if (message.key !== undefined && message.key.length !== 0) {
+    if (message.key !== undefined) {
       obj.key = base64FromBytes(message.key);
     }
-    if (message.client_nonce !== undefined && message.client_nonce.length !== 0) {
+    if (message.client_nonce !== undefined) {
       obj.client_nonce = base64FromBytes(message.client_nonce);
     }
-    if (message.server_nonce !== undefined && message.server_nonce.length !== 0) {
+    if (message.server_nonce !== undefined) {
       obj.server_nonce = base64FromBytes(message.server_nonce);
     }
     return obj;
@@ -4036,29 +4067,29 @@ export const CryptSetup: MessageFns<CryptSetup> = {
   },
   fromPartial<I extends Exact<DeepPartial<CryptSetup>, I>>(object: I): CryptSetup {
     const message = createBaseCryptSetup();
-    message.key = object.key ?? Buffer.alloc(0);
-    message.client_nonce = object.client_nonce ?? Buffer.alloc(0);
-    message.server_nonce = object.server_nonce ?? Buffer.alloc(0);
+    message.key = object.key ?? undefined;
+    message.client_nonce = object.client_nonce ?? undefined;
+    message.server_nonce = object.server_nonce ?? undefined;
     return message;
   },
 };
 
 function createBaseContextActionModify(): ContextActionModify {
-  return { action: "", text: "", context: 0, operation: 0 };
+  return { action: undefined, text: undefined, context: undefined, operation: undefined };
 }
 
 export const ContextActionModify: MessageFns<ContextActionModify> = {
   encode(message: ContextActionModify, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.action !== undefined && message.action !== "") {
+    if (message.action !== undefined) {
       writer.uint32(10).string(message.action);
     }
-    if (message.text !== undefined && message.text !== "") {
+    if (message.text !== undefined) {
       writer.uint32(18).string(message.text);
     }
-    if (message.context !== undefined && message.context !== 0) {
+    if (message.context !== undefined) {
       writer.uint32(24).uint32(message.context);
     }
-    if (message.operation !== undefined && message.operation !== 0) {
+    if (message.operation !== undefined) {
       writer.uint32(32).int32(message.operation);
     }
     return writer;
@@ -4114,25 +4145,25 @@ export const ContextActionModify: MessageFns<ContextActionModify> = {
 
   fromJSON(object: any): ContextActionModify {
     return {
-      action: isSet(object.action) ? globalThis.String(object.action) : "",
-      text: isSet(object.text) ? globalThis.String(object.text) : "",
-      context: isSet(object.context) ? globalThis.Number(object.context) : 0,
-      operation: isSet(object.operation) ? contextActionModify_OperationFromJSON(object.operation) : 0,
+      action: isSet(object.action) ? globalThis.String(object.action) : undefined,
+      text: isSet(object.text) ? globalThis.String(object.text) : undefined,
+      context: isSet(object.context) ? globalThis.Number(object.context) : undefined,
+      operation: isSet(object.operation) ? contextActionModify_OperationFromJSON(object.operation) : undefined,
     };
   },
 
   toJSON(message: ContextActionModify): unknown {
     const obj: any = {};
-    if (message.action !== undefined && message.action !== "") {
+    if (message.action !== undefined) {
       obj.action = message.action;
     }
-    if (message.text !== undefined && message.text !== "") {
+    if (message.text !== undefined) {
       obj.text = message.text;
     }
-    if (message.context !== undefined && message.context !== 0) {
+    if (message.context !== undefined) {
       obj.context = Math.round(message.context);
     }
-    if (message.operation !== undefined && message.operation !== 0) {
+    if (message.operation !== undefined) {
       obj.operation = contextActionModify_OperationToJSON(message.operation);
     }
     return obj;
@@ -4143,27 +4174,27 @@ export const ContextActionModify: MessageFns<ContextActionModify> = {
   },
   fromPartial<I extends Exact<DeepPartial<ContextActionModify>, I>>(object: I): ContextActionModify {
     const message = createBaseContextActionModify();
-    message.action = object.action ?? "";
-    message.text = object.text ?? "";
-    message.context = object.context ?? 0;
-    message.operation = object.operation ?? 0;
+    message.action = object.action ?? undefined;
+    message.text = object.text ?? undefined;
+    message.context = object.context ?? undefined;
+    message.operation = object.operation ?? undefined;
     return message;
   },
 };
 
 function createBaseContextAction(): ContextAction {
-  return { session: 0, channel_id: 0, action: "" };
+  return { session: undefined, channel_id: undefined, action: undefined };
 }
 
 export const ContextAction: MessageFns<ContextAction> = {
   encode(message: ContextAction, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       writer.uint32(8).uint32(message.session);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(16).uint32(message.channel_id);
     }
-    if (message.action !== undefined && message.action !== "") {
+    if (message.action !== undefined) {
       writer.uint32(26).string(message.action);
     }
     return writer;
@@ -4211,21 +4242,21 @@ export const ContextAction: MessageFns<ContextAction> = {
 
   fromJSON(object: any): ContextAction {
     return {
-      session: isSet(object.session) ? globalThis.Number(object.session) : 0,
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      action: isSet(object.action) ? globalThis.String(object.action) : "",
+      session: isSet(object.session) ? globalThis.Number(object.session) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      action: isSet(object.action) ? globalThis.String(object.action) : undefined,
     };
   },
 
   toJSON(message: ContextAction): unknown {
     const obj: any = {};
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       obj.session = Math.round(message.session);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.action !== undefined && message.action !== "") {
+    if (message.action !== undefined) {
       obj.action = message.action;
     }
     return obj;
@@ -4236,9 +4267,9 @@ export const ContextAction: MessageFns<ContextAction> = {
   },
   fromPartial<I extends Exact<DeepPartial<ContextAction>, I>>(object: I): ContextAction {
     const message = createBaseContextAction();
-    message.session = object.session ?? 0;
-    message.channel_id = object.channel_id ?? 0;
-    message.action = object.action ?? "";
+    message.session = object.session ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    message.action = object.action ?? undefined;
     return message;
   },
 };
@@ -4309,21 +4340,21 @@ export const UserList: MessageFns<UserList> = {
 };
 
 function createBaseUserList_User(): UserList_User {
-  return { user_id: 0, name: "", last_seen: "", last_channel: 0 };
+  return { user_id: undefined, name: undefined, last_seen: undefined, last_channel: undefined };
 }
 
 export const UserList_User: MessageFns<UserList_User> = {
   encode(message: UserList_User, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       writer.uint32(8).uint32(message.user_id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(18).string(message.name);
     }
-    if (message.last_seen !== undefined && message.last_seen !== "") {
+    if (message.last_seen !== undefined) {
       writer.uint32(26).string(message.last_seen);
     }
-    if (message.last_channel !== undefined && message.last_channel !== 0) {
+    if (message.last_channel !== undefined) {
       writer.uint32(32).uint32(message.last_channel);
     }
     return writer;
@@ -4379,25 +4410,25 @@ export const UserList_User: MessageFns<UserList_User> = {
 
   fromJSON(object: any): UserList_User {
     return {
-      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      last_seen: isSet(object.last_seen) ? globalThis.String(object.last_seen) : "",
-      last_channel: isSet(object.last_channel) ? globalThis.Number(object.last_channel) : 0,
+      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      last_seen: isSet(object.last_seen) ? globalThis.String(object.last_seen) : undefined,
+      last_channel: isSet(object.last_channel) ? globalThis.Number(object.last_channel) : undefined,
     };
   },
 
   toJSON(message: UserList_User): unknown {
     const obj: any = {};
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       obj.user_id = Math.round(message.user_id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.last_seen !== undefined && message.last_seen !== "") {
+    if (message.last_seen !== undefined) {
       obj.last_seen = message.last_seen;
     }
-    if (message.last_channel !== undefined && message.last_channel !== 0) {
+    if (message.last_channel !== undefined) {
       obj.last_channel = Math.round(message.last_channel);
     }
     return obj;
@@ -4408,21 +4439,21 @@ export const UserList_User: MessageFns<UserList_User> = {
   },
   fromPartial<I extends Exact<DeepPartial<UserList_User>, I>>(object: I): UserList_User {
     const message = createBaseUserList_User();
-    message.user_id = object.user_id ?? 0;
-    message.name = object.name ?? "";
-    message.last_seen = object.last_seen ?? "";
-    message.last_channel = object.last_channel ?? 0;
+    message.user_id = object.user_id ?? undefined;
+    message.name = object.name ?? undefined;
+    message.last_seen = object.last_seen ?? undefined;
+    message.last_channel = object.last_channel ?? undefined;
     return message;
   },
 };
 
 function createBaseVoiceTarget(): VoiceTarget {
-  return { id: 0, targets: [] };
+  return { id: undefined, targets: [] };
 }
 
 export const VoiceTarget: MessageFns<VoiceTarget> = {
   encode(message: VoiceTarget, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.id !== undefined && message.id !== 0) {
+    if (message.id !== undefined) {
       writer.uint32(8).uint32(message.id);
     }
     if (message.targets !== undefined && message.targets.length !== 0) {
@@ -4470,7 +4501,7 @@ export const VoiceTarget: MessageFns<VoiceTarget> = {
 
   fromJSON(object: any): VoiceTarget {
     return {
-      id: isSet(object.id) ? globalThis.Number(object.id) : 0,
+      id: isSet(object.id) ? globalThis.Number(object.id) : undefined,
       targets: globalThis.Array.isArray(object?.targets)
         ? object.targets.map((e: any) => VoiceTarget_Target.fromJSON(e))
         : [],
@@ -4479,7 +4510,7 @@ export const VoiceTarget: MessageFns<VoiceTarget> = {
 
   toJSON(message: VoiceTarget): unknown {
     const obj: any = {};
-    if (message.id !== undefined && message.id !== 0) {
+    if (message.id !== undefined) {
       obj.id = Math.round(message.id);
     }
     if (message.targets?.length) {
@@ -4493,14 +4524,14 @@ export const VoiceTarget: MessageFns<VoiceTarget> = {
   },
   fromPartial<I extends Exact<DeepPartial<VoiceTarget>, I>>(object: I): VoiceTarget {
     const message = createBaseVoiceTarget();
-    message.id = object.id ?? 0;
+    message.id = object.id ?? undefined;
     message.targets = object.targets?.map((e) => VoiceTarget_Target.fromPartial(e)) || [];
     return message;
   },
 };
 
 function createBaseVoiceTarget_Target(): VoiceTarget_Target {
-  return { session: [], channel_id: 0, group: "", links: false, children: false };
+  return { session: [], channel_id: undefined, group: undefined, links: undefined, children: undefined };
 }
 
 export const VoiceTarget_Target: MessageFns<VoiceTarget_Target> = {
@@ -4510,16 +4541,16 @@ export const VoiceTarget_Target: MessageFns<VoiceTarget_Target> = {
         writer.uint32(8).uint32(v!);
       }
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(16).uint32(message.channel_id);
     }
-    if (message.group !== undefined && message.group !== "") {
+    if (message.group !== undefined) {
       writer.uint32(26).string(message.group);
     }
-    if (message.links !== undefined && message.links !== false) {
+    if (message.links !== undefined) {
       writer.uint32(32).bool(message.links);
     }
-    if (message.children !== undefined && message.children !== false) {
+    if (message.children !== undefined) {
       writer.uint32(40).bool(message.children);
     }
     return writer;
@@ -4594,10 +4625,10 @@ export const VoiceTarget_Target: MessageFns<VoiceTarget_Target> = {
   fromJSON(object: any): VoiceTarget_Target {
     return {
       session: globalThis.Array.isArray(object?.session) ? object.session.map((e: any) => globalThis.Number(e)) : [],
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      group: isSet(object.group) ? globalThis.String(object.group) : "",
-      links: isSet(object.links) ? globalThis.Boolean(object.links) : false,
-      children: isSet(object.children) ? globalThis.Boolean(object.children) : false,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      group: isSet(object.group) ? globalThis.String(object.group) : undefined,
+      links: isSet(object.links) ? globalThis.Boolean(object.links) : undefined,
+      children: isSet(object.children) ? globalThis.Boolean(object.children) : undefined,
     };
   },
 
@@ -4606,16 +4637,16 @@ export const VoiceTarget_Target: MessageFns<VoiceTarget_Target> = {
     if (message.session?.length) {
       obj.session = message.session.map((e) => Math.round(e));
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.group !== undefined && message.group !== "") {
+    if (message.group !== undefined) {
       obj.group = message.group;
     }
-    if (message.links !== undefined && message.links !== false) {
+    if (message.links !== undefined) {
       obj.links = message.links;
     }
-    if (message.children !== undefined && message.children !== false) {
+    if (message.children !== undefined) {
       obj.children = message.children;
     }
     return obj;
@@ -4627,27 +4658,27 @@ export const VoiceTarget_Target: MessageFns<VoiceTarget_Target> = {
   fromPartial<I extends Exact<DeepPartial<VoiceTarget_Target>, I>>(object: I): VoiceTarget_Target {
     const message = createBaseVoiceTarget_Target();
     message.session = object.session?.map((e) => e) || [];
-    message.channel_id = object.channel_id ?? 0;
-    message.group = object.group ?? "";
-    message.links = object.links ?? false;
-    message.children = object.children ?? false;
+    message.channel_id = object.channel_id ?? undefined;
+    message.group = object.group ?? undefined;
+    message.links = object.links ?? undefined;
+    message.children = object.children ?? undefined;
     return message;
   },
 };
 
 function createBasePermissionQuery(): PermissionQuery {
-  return { channel_id: 0, permissions: 0, flush: false };
+  return { channel_id: undefined, permissions: undefined, flush: undefined };
 }
 
 export const PermissionQuery: MessageFns<PermissionQuery> = {
   encode(message: PermissionQuery, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(8).uint32(message.channel_id);
     }
-    if (message.permissions !== undefined && message.permissions !== 0) {
+    if (message.permissions !== undefined) {
       writer.uint32(16).uint32(message.permissions);
     }
-    if (message.flush !== undefined && message.flush !== false) {
+    if (message.flush !== undefined) {
       writer.uint32(24).bool(message.flush);
     }
     return writer;
@@ -4695,21 +4726,21 @@ export const PermissionQuery: MessageFns<PermissionQuery> = {
 
   fromJSON(object: any): PermissionQuery {
     return {
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      permissions: isSet(object.permissions) ? globalThis.Number(object.permissions) : 0,
-      flush: isSet(object.flush) ? globalThis.Boolean(object.flush) : false,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      permissions: isSet(object.permissions) ? globalThis.Number(object.permissions) : undefined,
+      flush: isSet(object.flush) ? globalThis.Boolean(object.flush) : undefined,
     };
   },
 
   toJSON(message: PermissionQuery): unknown {
     const obj: any = {};
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.permissions !== undefined && message.permissions !== 0) {
+    if (message.permissions !== undefined) {
       obj.permissions = Math.round(message.permissions);
     }
-    if (message.flush !== undefined && message.flush !== false) {
+    if (message.flush !== undefined) {
       obj.flush = message.flush;
     }
     return obj;
@@ -4720,29 +4751,29 @@ export const PermissionQuery: MessageFns<PermissionQuery> = {
   },
   fromPartial<I extends Exact<DeepPartial<PermissionQuery>, I>>(object: I): PermissionQuery {
     const message = createBasePermissionQuery();
-    message.channel_id = object.channel_id ?? 0;
-    message.permissions = object.permissions ?? 0;
-    message.flush = object.flush ?? false;
+    message.channel_id = object.channel_id ?? undefined;
+    message.permissions = object.permissions ?? undefined;
+    message.flush = object.flush ?? undefined;
     return message;
   },
 };
 
 function createBaseCodecVersion(): CodecVersion {
-  return { alpha: 0, beta: 0, prefer_alpha: true, opus: false };
+  return { alpha: undefined, beta: undefined, prefer_alpha: undefined, opus: undefined };
 }
 
 export const CodecVersion: MessageFns<CodecVersion> = {
   encode(message: CodecVersion, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.alpha !== undefined && message.alpha !== 0) {
+    if (message.alpha !== undefined) {
       writer.uint32(8).int32(message.alpha);
     }
-    if (message.beta !== undefined && message.beta !== 0) {
+    if (message.beta !== undefined) {
       writer.uint32(16).int32(message.beta);
     }
-    if (message.prefer_alpha !== undefined && message.prefer_alpha !== true) {
+    if (message.prefer_alpha !== undefined) {
       writer.uint32(24).bool(message.prefer_alpha);
     }
-    if (message.opus !== undefined && message.opus !== false) {
+    if (message.opus !== undefined) {
       writer.uint32(32).bool(message.opus);
     }
     return writer;
@@ -4798,25 +4829,25 @@ export const CodecVersion: MessageFns<CodecVersion> = {
 
   fromJSON(object: any): CodecVersion {
     return {
-      alpha: isSet(object.alpha) ? globalThis.Number(object.alpha) : 0,
-      beta: isSet(object.beta) ? globalThis.Number(object.beta) : 0,
-      prefer_alpha: isSet(object.prefer_alpha) ? globalThis.Boolean(object.prefer_alpha) : true,
-      opus: isSet(object.opus) ? globalThis.Boolean(object.opus) : false,
+      alpha: isSet(object.alpha) ? globalThis.Number(object.alpha) : undefined,
+      beta: isSet(object.beta) ? globalThis.Number(object.beta) : undefined,
+      prefer_alpha: isSet(object.prefer_alpha) ? globalThis.Boolean(object.prefer_alpha) : undefined,
+      opus: isSet(object.opus) ? globalThis.Boolean(object.opus) : undefined,
     };
   },
 
   toJSON(message: CodecVersion): unknown {
     const obj: any = {};
-    if (message.alpha !== undefined && message.alpha !== 0) {
+    if (message.alpha !== undefined) {
       obj.alpha = Math.round(message.alpha);
     }
-    if (message.beta !== undefined && message.beta !== 0) {
+    if (message.beta !== undefined) {
       obj.beta = Math.round(message.beta);
     }
-    if (message.prefer_alpha !== undefined && message.prefer_alpha !== true) {
+    if (message.prefer_alpha !== undefined) {
       obj.prefer_alpha = message.prefer_alpha;
     }
-    if (message.opus !== undefined && message.opus !== false) {
+    if (message.opus !== undefined) {
       obj.opus = message.opus;
     }
     return obj;
@@ -4827,44 +4858,44 @@ export const CodecVersion: MessageFns<CodecVersion> = {
   },
   fromPartial<I extends Exact<DeepPartial<CodecVersion>, I>>(object: I): CodecVersion {
     const message = createBaseCodecVersion();
-    message.alpha = object.alpha ?? 0;
-    message.beta = object.beta ?? 0;
-    message.prefer_alpha = object.prefer_alpha ?? true;
-    message.opus = object.opus ?? false;
+    message.alpha = object.alpha ?? undefined;
+    message.beta = object.beta ?? undefined;
+    message.prefer_alpha = object.prefer_alpha ?? undefined;
+    message.opus = object.opus ?? undefined;
     return message;
   },
 };
 
 function createBaseUserStats(): UserStats {
   return {
-    session: 0,
-    stats_only: false,
+    session: undefined,
+    stats_only: undefined,
     certificates: [],
     from_client: undefined,
     from_server: undefined,
-    udp_packets: 0,
-    tcp_packets: 0,
-    udp_ping_avg: 0,
-    udp_ping_var: 0,
-    tcp_ping_avg: 0,
-    tcp_ping_var: 0,
+    udp_packets: undefined,
+    tcp_packets: undefined,
+    udp_ping_avg: undefined,
+    udp_ping_var: undefined,
+    tcp_ping_avg: undefined,
+    tcp_ping_var: undefined,
     version: undefined,
     celt_versions: [],
-    address: Buffer.alloc(0),
-    bandwidth: 0,
-    onlinesecs: 0,
-    idlesecs: 0,
-    strong_certificate: false,
-    opus: false,
+    address: undefined,
+    bandwidth: undefined,
+    onlinesecs: undefined,
+    idlesecs: undefined,
+    strong_certificate: undefined,
+    opus: undefined,
   };
 }
 
 export const UserStats: MessageFns<UserStats> = {
   encode(message: UserStats, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       writer.uint32(8).uint32(message.session);
     }
-    if (message.stats_only !== undefined && message.stats_only !== false) {
+    if (message.stats_only !== undefined) {
       writer.uint32(16).bool(message.stats_only);
     }
     if (message.certificates !== undefined && message.certificates.length !== 0) {
@@ -4878,22 +4909,22 @@ export const UserStats: MessageFns<UserStats> = {
     if (message.from_server !== undefined) {
       UserStats_Stats.encode(message.from_server, writer.uint32(42).fork()).join();
     }
-    if (message.udp_packets !== undefined && message.udp_packets !== 0) {
+    if (message.udp_packets !== undefined) {
       writer.uint32(48).uint32(message.udp_packets);
     }
-    if (message.tcp_packets !== undefined && message.tcp_packets !== 0) {
+    if (message.tcp_packets !== undefined) {
       writer.uint32(56).uint32(message.tcp_packets);
     }
-    if (message.udp_ping_avg !== undefined && message.udp_ping_avg !== 0) {
+    if (message.udp_ping_avg !== undefined) {
       writer.uint32(69).float(message.udp_ping_avg);
     }
-    if (message.udp_ping_var !== undefined && message.udp_ping_var !== 0) {
+    if (message.udp_ping_var !== undefined) {
       writer.uint32(77).float(message.udp_ping_var);
     }
-    if (message.tcp_ping_avg !== undefined && message.tcp_ping_avg !== 0) {
+    if (message.tcp_ping_avg !== undefined) {
       writer.uint32(85).float(message.tcp_ping_avg);
     }
-    if (message.tcp_ping_var !== undefined && message.tcp_ping_var !== 0) {
+    if (message.tcp_ping_var !== undefined) {
       writer.uint32(93).float(message.tcp_ping_var);
     }
     if (message.version !== undefined) {
@@ -4904,22 +4935,22 @@ export const UserStats: MessageFns<UserStats> = {
         writer.uint32(104).int32(v!);
       }
     }
-    if (message.address !== undefined && message.address.length !== 0) {
+    if (message.address !== undefined) {
       writer.uint32(114).bytes(message.address);
     }
-    if (message.bandwidth !== undefined && message.bandwidth !== 0) {
+    if (message.bandwidth !== undefined) {
       writer.uint32(120).uint32(message.bandwidth);
     }
-    if (message.onlinesecs !== undefined && message.onlinesecs !== 0) {
+    if (message.onlinesecs !== undefined) {
       writer.uint32(128).uint32(message.onlinesecs);
     }
-    if (message.idlesecs !== undefined && message.idlesecs !== 0) {
+    if (message.idlesecs !== undefined) {
       writer.uint32(136).uint32(message.idlesecs);
     }
-    if (message.strong_certificate !== undefined && message.strong_certificate !== false) {
+    if (message.strong_certificate !== undefined) {
       writer.uint32(144).bool(message.strong_certificate);
     }
-    if (message.opus !== undefined && message.opus !== false) {
+    if (message.opus !== undefined) {
       writer.uint32(152).bool(message.opus);
     }
     return writer;
@@ -5108,38 +5139,38 @@ export const UserStats: MessageFns<UserStats> = {
 
   fromJSON(object: any): UserStats {
     return {
-      session: isSet(object.session) ? globalThis.Number(object.session) : 0,
-      stats_only: isSet(object.stats_only) ? globalThis.Boolean(object.stats_only) : false,
+      session: isSet(object.session) ? globalThis.Number(object.session) : undefined,
+      stats_only: isSet(object.stats_only) ? globalThis.Boolean(object.stats_only) : undefined,
       certificates: globalThis.Array.isArray(object?.certificates)
         ? object.certificates.map((e: any) => Buffer.from(bytesFromBase64(e)))
         : [],
       from_client: isSet(object.from_client) ? UserStats_Stats.fromJSON(object.from_client) : undefined,
       from_server: isSet(object.from_server) ? UserStats_Stats.fromJSON(object.from_server) : undefined,
-      udp_packets: isSet(object.udp_packets) ? globalThis.Number(object.udp_packets) : 0,
-      tcp_packets: isSet(object.tcp_packets) ? globalThis.Number(object.tcp_packets) : 0,
-      udp_ping_avg: isSet(object.udp_ping_avg) ? globalThis.Number(object.udp_ping_avg) : 0,
-      udp_ping_var: isSet(object.udp_ping_var) ? globalThis.Number(object.udp_ping_var) : 0,
-      tcp_ping_avg: isSet(object.tcp_ping_avg) ? globalThis.Number(object.tcp_ping_avg) : 0,
-      tcp_ping_var: isSet(object.tcp_ping_var) ? globalThis.Number(object.tcp_ping_var) : 0,
+      udp_packets: isSet(object.udp_packets) ? globalThis.Number(object.udp_packets) : undefined,
+      tcp_packets: isSet(object.tcp_packets) ? globalThis.Number(object.tcp_packets) : undefined,
+      udp_ping_avg: isSet(object.udp_ping_avg) ? globalThis.Number(object.udp_ping_avg) : undefined,
+      udp_ping_var: isSet(object.udp_ping_var) ? globalThis.Number(object.udp_ping_var) : undefined,
+      tcp_ping_avg: isSet(object.tcp_ping_avg) ? globalThis.Number(object.tcp_ping_avg) : undefined,
+      tcp_ping_var: isSet(object.tcp_ping_var) ? globalThis.Number(object.tcp_ping_var) : undefined,
       version: isSet(object.version) ? Version.fromJSON(object.version) : undefined,
       celt_versions: globalThis.Array.isArray(object?.celt_versions)
         ? object.celt_versions.map((e: any) => globalThis.Number(e))
         : [],
-      address: isSet(object.address) ? Buffer.from(bytesFromBase64(object.address)) : Buffer.alloc(0),
-      bandwidth: isSet(object.bandwidth) ? globalThis.Number(object.bandwidth) : 0,
-      onlinesecs: isSet(object.onlinesecs) ? globalThis.Number(object.onlinesecs) : 0,
-      idlesecs: isSet(object.idlesecs) ? globalThis.Number(object.idlesecs) : 0,
-      strong_certificate: isSet(object.strong_certificate) ? globalThis.Boolean(object.strong_certificate) : false,
-      opus: isSet(object.opus) ? globalThis.Boolean(object.opus) : false,
+      address: isSet(object.address) ? Buffer.from(bytesFromBase64(object.address)) : undefined,
+      bandwidth: isSet(object.bandwidth) ? globalThis.Number(object.bandwidth) : undefined,
+      onlinesecs: isSet(object.onlinesecs) ? globalThis.Number(object.onlinesecs) : undefined,
+      idlesecs: isSet(object.idlesecs) ? globalThis.Number(object.idlesecs) : undefined,
+      strong_certificate: isSet(object.strong_certificate) ? globalThis.Boolean(object.strong_certificate) : undefined,
+      opus: isSet(object.opus) ? globalThis.Boolean(object.opus) : undefined,
     };
   },
 
   toJSON(message: UserStats): unknown {
     const obj: any = {};
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       obj.session = Math.round(message.session);
     }
-    if (message.stats_only !== undefined && message.stats_only !== false) {
+    if (message.stats_only !== undefined) {
       obj.stats_only = message.stats_only;
     }
     if (message.certificates?.length) {
@@ -5151,22 +5182,22 @@ export const UserStats: MessageFns<UserStats> = {
     if (message.from_server !== undefined) {
       obj.from_server = UserStats_Stats.toJSON(message.from_server);
     }
-    if (message.udp_packets !== undefined && message.udp_packets !== 0) {
+    if (message.udp_packets !== undefined) {
       obj.udp_packets = Math.round(message.udp_packets);
     }
-    if (message.tcp_packets !== undefined && message.tcp_packets !== 0) {
+    if (message.tcp_packets !== undefined) {
       obj.tcp_packets = Math.round(message.tcp_packets);
     }
-    if (message.udp_ping_avg !== undefined && message.udp_ping_avg !== 0) {
+    if (message.udp_ping_avg !== undefined) {
       obj.udp_ping_avg = message.udp_ping_avg;
     }
-    if (message.udp_ping_var !== undefined && message.udp_ping_var !== 0) {
+    if (message.udp_ping_var !== undefined) {
       obj.udp_ping_var = message.udp_ping_var;
     }
-    if (message.tcp_ping_avg !== undefined && message.tcp_ping_avg !== 0) {
+    if (message.tcp_ping_avg !== undefined) {
       obj.tcp_ping_avg = message.tcp_ping_avg;
     }
-    if (message.tcp_ping_var !== undefined && message.tcp_ping_var !== 0) {
+    if (message.tcp_ping_var !== undefined) {
       obj.tcp_ping_var = message.tcp_ping_var;
     }
     if (message.version !== undefined) {
@@ -5175,22 +5206,22 @@ export const UserStats: MessageFns<UserStats> = {
     if (message.celt_versions?.length) {
       obj.celt_versions = message.celt_versions.map((e) => Math.round(e));
     }
-    if (message.address !== undefined && message.address.length !== 0) {
+    if (message.address !== undefined) {
       obj.address = base64FromBytes(message.address);
     }
-    if (message.bandwidth !== undefined && message.bandwidth !== 0) {
+    if (message.bandwidth !== undefined) {
       obj.bandwidth = Math.round(message.bandwidth);
     }
-    if (message.onlinesecs !== undefined && message.onlinesecs !== 0) {
+    if (message.onlinesecs !== undefined) {
       obj.onlinesecs = Math.round(message.onlinesecs);
     }
-    if (message.idlesecs !== undefined && message.idlesecs !== 0) {
+    if (message.idlesecs !== undefined) {
       obj.idlesecs = Math.round(message.idlesecs);
     }
-    if (message.strong_certificate !== undefined && message.strong_certificate !== false) {
+    if (message.strong_certificate !== undefined) {
       obj.strong_certificate = message.strong_certificate;
     }
-    if (message.opus !== undefined && message.opus !== false) {
+    if (message.opus !== undefined) {
       obj.opus = message.opus;
     }
     return obj;
@@ -5201,8 +5232,8 @@ export const UserStats: MessageFns<UserStats> = {
   },
   fromPartial<I extends Exact<DeepPartial<UserStats>, I>>(object: I): UserStats {
     const message = createBaseUserStats();
-    message.session = object.session ?? 0;
-    message.stats_only = object.stats_only ?? false;
+    message.session = object.session ?? undefined;
+    message.stats_only = object.stats_only ?? undefined;
     message.certificates = object.certificates?.map((e) => e) || [];
     message.from_client = (object.from_client !== undefined && object.from_client !== null)
       ? UserStats_Stats.fromPartial(object.from_client)
@@ -5210,42 +5241,42 @@ export const UserStats: MessageFns<UserStats> = {
     message.from_server = (object.from_server !== undefined && object.from_server !== null)
       ? UserStats_Stats.fromPartial(object.from_server)
       : undefined;
-    message.udp_packets = object.udp_packets ?? 0;
-    message.tcp_packets = object.tcp_packets ?? 0;
-    message.udp_ping_avg = object.udp_ping_avg ?? 0;
-    message.udp_ping_var = object.udp_ping_var ?? 0;
-    message.tcp_ping_avg = object.tcp_ping_avg ?? 0;
-    message.tcp_ping_var = object.tcp_ping_var ?? 0;
+    message.udp_packets = object.udp_packets ?? undefined;
+    message.tcp_packets = object.tcp_packets ?? undefined;
+    message.udp_ping_avg = object.udp_ping_avg ?? undefined;
+    message.udp_ping_var = object.udp_ping_var ?? undefined;
+    message.tcp_ping_avg = object.tcp_ping_avg ?? undefined;
+    message.tcp_ping_var = object.tcp_ping_var ?? undefined;
     message.version = (object.version !== undefined && object.version !== null)
       ? Version.fromPartial(object.version)
       : undefined;
     message.celt_versions = object.celt_versions?.map((e) => e) || [];
-    message.address = object.address ?? Buffer.alloc(0);
-    message.bandwidth = object.bandwidth ?? 0;
-    message.onlinesecs = object.onlinesecs ?? 0;
-    message.idlesecs = object.idlesecs ?? 0;
-    message.strong_certificate = object.strong_certificate ?? false;
-    message.opus = object.opus ?? false;
+    message.address = object.address ?? undefined;
+    message.bandwidth = object.bandwidth ?? undefined;
+    message.onlinesecs = object.onlinesecs ?? undefined;
+    message.idlesecs = object.idlesecs ?? undefined;
+    message.strong_certificate = object.strong_certificate ?? undefined;
+    message.opus = object.opus ?? undefined;
     return message;
   },
 };
 
 function createBaseUserStats_Stats(): UserStats_Stats {
-  return { good: 0, late: 0, lost: 0, resync: 0 };
+  return { good: undefined, late: undefined, lost: undefined, resync: undefined };
 }
 
 export const UserStats_Stats: MessageFns<UserStats_Stats> = {
   encode(message: UserStats_Stats, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.good !== undefined && message.good !== 0) {
+    if (message.good !== undefined) {
       writer.uint32(8).uint32(message.good);
     }
-    if (message.late !== undefined && message.late !== 0) {
+    if (message.late !== undefined) {
       writer.uint32(16).uint32(message.late);
     }
-    if (message.lost !== undefined && message.lost !== 0) {
+    if (message.lost !== undefined) {
       writer.uint32(24).uint32(message.lost);
     }
-    if (message.resync !== undefined && message.resync !== 0) {
+    if (message.resync !== undefined) {
       writer.uint32(32).uint32(message.resync);
     }
     return writer;
@@ -5301,25 +5332,25 @@ export const UserStats_Stats: MessageFns<UserStats_Stats> = {
 
   fromJSON(object: any): UserStats_Stats {
     return {
-      good: isSet(object.good) ? globalThis.Number(object.good) : 0,
-      late: isSet(object.late) ? globalThis.Number(object.late) : 0,
-      lost: isSet(object.lost) ? globalThis.Number(object.lost) : 0,
-      resync: isSet(object.resync) ? globalThis.Number(object.resync) : 0,
+      good: isSet(object.good) ? globalThis.Number(object.good) : undefined,
+      late: isSet(object.late) ? globalThis.Number(object.late) : undefined,
+      lost: isSet(object.lost) ? globalThis.Number(object.lost) : undefined,
+      resync: isSet(object.resync) ? globalThis.Number(object.resync) : undefined,
     };
   },
 
   toJSON(message: UserStats_Stats): unknown {
     const obj: any = {};
-    if (message.good !== undefined && message.good !== 0) {
+    if (message.good !== undefined) {
       obj.good = Math.round(message.good);
     }
-    if (message.late !== undefined && message.late !== 0) {
+    if (message.late !== undefined) {
       obj.late = Math.round(message.late);
     }
-    if (message.lost !== undefined && message.lost !== 0) {
+    if (message.lost !== undefined) {
       obj.lost = Math.round(message.lost);
     }
-    if (message.resync !== undefined && message.resync !== 0) {
+    if (message.resync !== undefined) {
       obj.resync = Math.round(message.resync);
     }
     return obj;
@@ -5330,10 +5361,10 @@ export const UserStats_Stats: MessageFns<UserStats_Stats> = {
   },
   fromPartial<I extends Exact<DeepPartial<UserStats_Stats>, I>>(object: I): UserStats_Stats {
     const message = createBaseUserStats_Stats();
-    message.good = object.good ?? 0;
-    message.late = object.late ?? 0;
-    message.lost = object.lost ?? 0;
-    message.resync = object.resync ?? 0;
+    message.good = object.good ?? undefined;
+    message.late = object.late ?? undefined;
+    message.lost = object.lost ?? undefined;
+    message.resync = object.resync ?? undefined;
     return message;
   },
 };
@@ -5474,37 +5505,37 @@ export const RequestBlob: MessageFns<RequestBlob> = {
 
 function createBaseServerConfig(): ServerConfig {
   return {
-    max_bandwidth: 0,
-    welcome_text: "",
-    allow_html: false,
-    message_length: 0,
-    image_message_length: 0,
-    max_users: 0,
-    recording_allowed: false,
+    max_bandwidth: undefined,
+    welcome_text: undefined,
+    allow_html: undefined,
+    message_length: undefined,
+    image_message_length: undefined,
+    max_users: undefined,
+    recording_allowed: undefined,
   };
 }
 
 export const ServerConfig: MessageFns<ServerConfig> = {
   encode(message: ServerConfig, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.max_bandwidth !== undefined && message.max_bandwidth !== 0) {
+    if (message.max_bandwidth !== undefined) {
       writer.uint32(8).uint32(message.max_bandwidth);
     }
-    if (message.welcome_text !== undefined && message.welcome_text !== "") {
+    if (message.welcome_text !== undefined) {
       writer.uint32(18).string(message.welcome_text);
     }
-    if (message.allow_html !== undefined && message.allow_html !== false) {
+    if (message.allow_html !== undefined) {
       writer.uint32(24).bool(message.allow_html);
     }
-    if (message.message_length !== undefined && message.message_length !== 0) {
+    if (message.message_length !== undefined) {
       writer.uint32(32).uint32(message.message_length);
     }
-    if (message.image_message_length !== undefined && message.image_message_length !== 0) {
+    if (message.image_message_length !== undefined) {
       writer.uint32(40).uint32(message.image_message_length);
     }
-    if (message.max_users !== undefined && message.max_users !== 0) {
+    if (message.max_users !== undefined) {
       writer.uint32(48).uint32(message.max_users);
     }
-    if (message.recording_allowed !== undefined && message.recording_allowed !== false) {
+    if (message.recording_allowed !== undefined) {
       writer.uint32(56).bool(message.recording_allowed);
     }
     return writer;
@@ -5584,37 +5615,39 @@ export const ServerConfig: MessageFns<ServerConfig> = {
 
   fromJSON(object: any): ServerConfig {
     return {
-      max_bandwidth: isSet(object.max_bandwidth) ? globalThis.Number(object.max_bandwidth) : 0,
-      welcome_text: isSet(object.welcome_text) ? globalThis.String(object.welcome_text) : "",
-      allow_html: isSet(object.allow_html) ? globalThis.Boolean(object.allow_html) : false,
-      message_length: isSet(object.message_length) ? globalThis.Number(object.message_length) : 0,
-      image_message_length: isSet(object.image_message_length) ? globalThis.Number(object.image_message_length) : 0,
-      max_users: isSet(object.max_users) ? globalThis.Number(object.max_users) : 0,
-      recording_allowed: isSet(object.recording_allowed) ? globalThis.Boolean(object.recording_allowed) : false,
+      max_bandwidth: isSet(object.max_bandwidth) ? globalThis.Number(object.max_bandwidth) : undefined,
+      welcome_text: isSet(object.welcome_text) ? globalThis.String(object.welcome_text) : undefined,
+      allow_html: isSet(object.allow_html) ? globalThis.Boolean(object.allow_html) : undefined,
+      message_length: isSet(object.message_length) ? globalThis.Number(object.message_length) : undefined,
+      image_message_length: isSet(object.image_message_length)
+        ? globalThis.Number(object.image_message_length)
+        : undefined,
+      max_users: isSet(object.max_users) ? globalThis.Number(object.max_users) : undefined,
+      recording_allowed: isSet(object.recording_allowed) ? globalThis.Boolean(object.recording_allowed) : undefined,
     };
   },
 
   toJSON(message: ServerConfig): unknown {
     const obj: any = {};
-    if (message.max_bandwidth !== undefined && message.max_bandwidth !== 0) {
+    if (message.max_bandwidth !== undefined) {
       obj.max_bandwidth = Math.round(message.max_bandwidth);
     }
-    if (message.welcome_text !== undefined && message.welcome_text !== "") {
+    if (message.welcome_text !== undefined) {
       obj.welcome_text = message.welcome_text;
     }
-    if (message.allow_html !== undefined && message.allow_html !== false) {
+    if (message.allow_html !== undefined) {
       obj.allow_html = message.allow_html;
     }
-    if (message.message_length !== undefined && message.message_length !== 0) {
+    if (message.message_length !== undefined) {
       obj.message_length = Math.round(message.message_length);
     }
-    if (message.image_message_length !== undefined && message.image_message_length !== 0) {
+    if (message.image_message_length !== undefined) {
       obj.image_message_length = Math.round(message.image_message_length);
     }
-    if (message.max_users !== undefined && message.max_users !== 0) {
+    if (message.max_users !== undefined) {
       obj.max_users = Math.round(message.max_users);
     }
-    if (message.recording_allowed !== undefined && message.recording_allowed !== false) {
+    if (message.recording_allowed !== undefined) {
       obj.recording_allowed = message.recording_allowed;
     }
     return obj;
@@ -5625,30 +5658,30 @@ export const ServerConfig: MessageFns<ServerConfig> = {
   },
   fromPartial<I extends Exact<DeepPartial<ServerConfig>, I>>(object: I): ServerConfig {
     const message = createBaseServerConfig();
-    message.max_bandwidth = object.max_bandwidth ?? 0;
-    message.welcome_text = object.welcome_text ?? "";
-    message.allow_html = object.allow_html ?? false;
-    message.message_length = object.message_length ?? 0;
-    message.image_message_length = object.image_message_length ?? 0;
-    message.max_users = object.max_users ?? 0;
-    message.recording_allowed = object.recording_allowed ?? false;
+    message.max_bandwidth = object.max_bandwidth ?? undefined;
+    message.welcome_text = object.welcome_text ?? undefined;
+    message.allow_html = object.allow_html ?? undefined;
+    message.message_length = object.message_length ?? undefined;
+    message.image_message_length = object.image_message_length ?? undefined;
+    message.max_users = object.max_users ?? undefined;
+    message.recording_allowed = object.recording_allowed ?? undefined;
     return message;
   },
 };
 
 function createBaseSuggestConfig(): SuggestConfig {
-  return { version: 0, positional: false, push_to_talk: false };
+  return { version: undefined, positional: undefined, push_to_talk: undefined };
 }
 
 export const SuggestConfig: MessageFns<SuggestConfig> = {
   encode(message: SuggestConfig, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.version !== undefined && message.version !== 0) {
+    if (message.version !== undefined) {
       writer.uint32(8).uint32(message.version);
     }
-    if (message.positional !== undefined && message.positional !== false) {
+    if (message.positional !== undefined) {
       writer.uint32(16).bool(message.positional);
     }
-    if (message.push_to_talk !== undefined && message.push_to_talk !== false) {
+    if (message.push_to_talk !== undefined) {
       writer.uint32(24).bool(message.push_to_talk);
     }
     return writer;
@@ -5696,21 +5729,21 @@ export const SuggestConfig: MessageFns<SuggestConfig> = {
 
   fromJSON(object: any): SuggestConfig {
     return {
-      version: isSet(object.version) ? globalThis.Number(object.version) : 0,
-      positional: isSet(object.positional) ? globalThis.Boolean(object.positional) : false,
-      push_to_talk: isSet(object.push_to_talk) ? globalThis.Boolean(object.push_to_talk) : false,
+      version: isSet(object.version) ? globalThis.Number(object.version) : undefined,
+      positional: isSet(object.positional) ? globalThis.Boolean(object.positional) : undefined,
+      push_to_talk: isSet(object.push_to_talk) ? globalThis.Boolean(object.push_to_talk) : undefined,
     };
   },
 
   toJSON(message: SuggestConfig): unknown {
     const obj: any = {};
-    if (message.version !== undefined && message.version !== 0) {
+    if (message.version !== undefined) {
       obj.version = Math.round(message.version);
     }
-    if (message.positional !== undefined && message.positional !== false) {
+    if (message.positional !== undefined) {
       obj.positional = message.positional;
     }
-    if (message.push_to_talk !== undefined && message.push_to_talk !== false) {
+    if (message.push_to_talk !== undefined) {
       obj.push_to_talk = message.push_to_talk;
     }
     return obj;
@@ -5721,20 +5754,20 @@ export const SuggestConfig: MessageFns<SuggestConfig> = {
   },
   fromPartial<I extends Exact<DeepPartial<SuggestConfig>, I>>(object: I): SuggestConfig {
     const message = createBaseSuggestConfig();
-    message.version = object.version ?? 0;
-    message.positional = object.positional ?? false;
-    message.push_to_talk = object.push_to_talk ?? false;
+    message.version = object.version ?? undefined;
+    message.positional = object.positional ?? undefined;
+    message.push_to_talk = object.push_to_talk ?? undefined;
     return message;
   },
 };
 
 function createBasePluginDataTransmission(): PluginDataTransmission {
-  return { senderSession: 0, receiverSessions: [], data: Buffer.alloc(0), dataID: "" };
+  return { senderSession: undefined, receiverSessions: [], data: undefined, dataID: undefined };
 }
 
 export const PluginDataTransmission: MessageFns<PluginDataTransmission> = {
   encode(message: PluginDataTransmission, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.senderSession !== undefined && message.senderSession !== 0) {
+    if (message.senderSession !== undefined) {
       writer.uint32(8).uint32(message.senderSession);
     }
     if (message.receiverSessions !== undefined && message.receiverSessions.length !== 0) {
@@ -5744,10 +5777,10 @@ export const PluginDataTransmission: MessageFns<PluginDataTransmission> = {
       }
       writer.join();
     }
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       writer.uint32(26).bytes(message.data);
     }
-    if (message.dataID !== undefined && message.dataID !== "") {
+    if (message.dataID !== undefined) {
       writer.uint32(34).string(message.dataID);
     }
     return writer;
@@ -5813,27 +5846,27 @@ export const PluginDataTransmission: MessageFns<PluginDataTransmission> = {
 
   fromJSON(object: any): PluginDataTransmission {
     return {
-      senderSession: isSet(object.senderSession) ? globalThis.Number(object.senderSession) : 0,
+      senderSession: isSet(object.senderSession) ? globalThis.Number(object.senderSession) : undefined,
       receiverSessions: globalThis.Array.isArray(object?.receiverSessions)
         ? object.receiverSessions.map((e: any) => globalThis.Number(e))
         : [],
-      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : Buffer.alloc(0),
-      dataID: isSet(object.dataID) ? globalThis.String(object.dataID) : "",
+      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : undefined,
+      dataID: isSet(object.dataID) ? globalThis.String(object.dataID) : undefined,
     };
   },
 
   toJSON(message: PluginDataTransmission): unknown {
     const obj: any = {};
-    if (message.senderSession !== undefined && message.senderSession !== 0) {
+    if (message.senderSession !== undefined) {
       obj.senderSession = Math.round(message.senderSession);
     }
     if (message.receiverSessions?.length) {
       obj.receiverSessions = message.receiverSessions.map((e) => Math.round(e));
     }
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       obj.data = base64FromBytes(message.data);
     }
-    if (message.dataID !== undefined && message.dataID !== "") {
+    if (message.dataID !== undefined) {
       obj.dataID = message.dataID;
     }
     return obj;
@@ -5844,10 +5877,10 @@ export const PluginDataTransmission: MessageFns<PluginDataTransmission> = {
   },
   fromPartial<I extends Exact<DeepPartial<PluginDataTransmission>, I>>(object: I): PluginDataTransmission {
     const message = createBasePluginDataTransmission();
-    message.senderSession = object.senderSession ?? 0;
+    message.senderSession = object.senderSession ?? undefined;
     message.receiverSessions = object.receiverSessions?.map((e) => e) || [];
-    message.data = object.data ?? Buffer.alloc(0);
-    message.dataID = object.dataID ?? "";
+    message.data = object.data ?? undefined;
+    message.dataID = object.dataID ?? undefined;
     return message;
   },
 };

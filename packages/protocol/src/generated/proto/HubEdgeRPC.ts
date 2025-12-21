@@ -917,45 +917,45 @@ export interface TypedRPCNotification {
 
 function createBaseEdgeInfo(): EdgeInfo {
   return {
-    server_id: 0,
-    name: "",
-    host: "",
-    port: 0,
-    region: "",
-    current_load: 0,
-    capacity: 0,
-    certificate: "",
-    last_seen: 0,
+    server_id: undefined,
+    name: undefined,
+    host: undefined,
+    port: undefined,
+    region: undefined,
+    current_load: undefined,
+    capacity: undefined,
+    certificate: undefined,
+    last_seen: undefined,
   };
 }
 
 export const EdgeInfo: MessageFns<EdgeInfo> = {
   encode(message: EdgeInfo, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       writer.uint32(8).uint32(message.server_id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(18).string(message.name);
     }
-    if (message.host !== undefined && message.host !== "") {
+    if (message.host !== undefined) {
       writer.uint32(26).string(message.host);
     }
-    if (message.port !== undefined && message.port !== 0) {
+    if (message.port !== undefined) {
       writer.uint32(32).uint32(message.port);
     }
-    if (message.region !== undefined && message.region !== "") {
+    if (message.region !== undefined) {
       writer.uint32(42).string(message.region);
     }
-    if (message.current_load !== undefined && message.current_load !== 0) {
+    if (message.current_load !== undefined) {
       writer.uint32(48).uint32(message.current_load);
     }
-    if (message.capacity !== undefined && message.capacity !== 0) {
+    if (message.capacity !== undefined) {
       writer.uint32(56).uint32(message.capacity);
     }
-    if (message.certificate !== undefined && message.certificate !== "") {
+    if (message.certificate !== undefined) {
       writer.uint32(66).string(message.certificate);
     }
-    if (message.last_seen !== undefined && message.last_seen !== 0) {
+    if (message.last_seen !== undefined) {
       writer.uint32(72).int64(message.last_seen);
     }
     return writer;
@@ -1051,45 +1051,45 @@ export const EdgeInfo: MessageFns<EdgeInfo> = {
 
   fromJSON(object: any): EdgeInfo {
     return {
-      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      host: isSet(object.host) ? globalThis.String(object.host) : "",
-      port: isSet(object.port) ? globalThis.Number(object.port) : 0,
-      region: isSet(object.region) ? globalThis.String(object.region) : "",
-      current_load: isSet(object.current_load) ? globalThis.Number(object.current_load) : 0,
-      capacity: isSet(object.capacity) ? globalThis.Number(object.capacity) : 0,
-      certificate: isSet(object.certificate) ? globalThis.String(object.certificate) : "",
-      last_seen: isSet(object.last_seen) ? globalThis.Number(object.last_seen) : 0,
+      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      host: isSet(object.host) ? globalThis.String(object.host) : undefined,
+      port: isSet(object.port) ? globalThis.Number(object.port) : undefined,
+      region: isSet(object.region) ? globalThis.String(object.region) : undefined,
+      current_load: isSet(object.current_load) ? globalThis.Number(object.current_load) : undefined,
+      capacity: isSet(object.capacity) ? globalThis.Number(object.capacity) : undefined,
+      certificate: isSet(object.certificate) ? globalThis.String(object.certificate) : undefined,
+      last_seen: isSet(object.last_seen) ? globalThis.Number(object.last_seen) : undefined,
     };
   },
 
   toJSON(message: EdgeInfo): unknown {
     const obj: any = {};
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       obj.server_id = Math.round(message.server_id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.host !== undefined && message.host !== "") {
+    if (message.host !== undefined) {
       obj.host = message.host;
     }
-    if (message.port !== undefined && message.port !== 0) {
+    if (message.port !== undefined) {
       obj.port = Math.round(message.port);
     }
-    if (message.region !== undefined && message.region !== "") {
+    if (message.region !== undefined) {
       obj.region = message.region;
     }
-    if (message.current_load !== undefined && message.current_load !== 0) {
+    if (message.current_load !== undefined) {
       obj.current_load = Math.round(message.current_load);
     }
-    if (message.capacity !== undefined && message.capacity !== 0) {
+    if (message.capacity !== undefined) {
       obj.capacity = Math.round(message.capacity);
     }
-    if (message.certificate !== undefined && message.certificate !== "") {
+    if (message.certificate !== undefined) {
       obj.certificate = message.certificate;
     }
-    if (message.last_seen !== undefined && message.last_seen !== 0) {
+    if (message.last_seen !== undefined) {
       obj.last_seen = Math.round(message.last_seen);
     }
     return obj;
@@ -1100,60 +1100,60 @@ export const EdgeInfo: MessageFns<EdgeInfo> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeInfo>, I>>(object: I): EdgeInfo {
     const message = createBaseEdgeInfo();
-    message.server_id = object.server_id ?? 0;
-    message.name = object.name ?? "";
-    message.host = object.host ?? "";
-    message.port = object.port ?? 0;
-    message.region = object.region ?? "";
-    message.current_load = object.current_load ?? 0;
-    message.capacity = object.capacity ?? 0;
-    message.certificate = object.certificate ?? "";
-    message.last_seen = object.last_seen ?? 0;
+    message.server_id = object.server_id ?? undefined;
+    message.name = object.name ?? undefined;
+    message.host = object.host ?? undefined;
+    message.port = object.port ?? undefined;
+    message.region = object.region ?? undefined;
+    message.current_load = object.current_load ?? undefined;
+    message.capacity = object.capacity ?? undefined;
+    message.certificate = object.certificate ?? undefined;
+    message.last_seen = object.last_seen ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeRegisterParams(): EdgeRegisterParams {
   return {
-    server_id: 0,
-    name: "",
-    host: "",
-    port: 0,
-    region: "",
-    capacity: 0,
-    certificate: "",
-    challenge: "",
-    challenge_response: "",
+    server_id: undefined,
+    name: undefined,
+    host: undefined,
+    port: undefined,
+    region: undefined,
+    capacity: undefined,
+    certificate: undefined,
+    challenge: undefined,
+    challenge_response: undefined,
   };
 }
 
 export const EdgeRegisterParams: MessageFns<EdgeRegisterParams> = {
   encode(message: EdgeRegisterParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       writer.uint32(8).uint32(message.server_id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(18).string(message.name);
     }
-    if (message.host !== undefined && message.host !== "") {
+    if (message.host !== undefined) {
       writer.uint32(26).string(message.host);
     }
-    if (message.port !== undefined && message.port !== 0) {
+    if (message.port !== undefined) {
       writer.uint32(32).uint32(message.port);
     }
-    if (message.region !== undefined && message.region !== "") {
+    if (message.region !== undefined) {
       writer.uint32(42).string(message.region);
     }
-    if (message.capacity !== undefined && message.capacity !== 0) {
+    if (message.capacity !== undefined) {
       writer.uint32(48).uint32(message.capacity);
     }
-    if (message.certificate !== undefined && message.certificate !== "") {
+    if (message.certificate !== undefined) {
       writer.uint32(58).string(message.certificate);
     }
-    if (message.challenge !== undefined && message.challenge !== "") {
+    if (message.challenge !== undefined) {
       writer.uint32(66).string(message.challenge);
     }
-    if (message.challenge_response !== undefined && message.challenge_response !== "") {
+    if (message.challenge_response !== undefined) {
       writer.uint32(74).string(message.challenge_response);
     }
     return writer;
@@ -1249,45 +1249,45 @@ export const EdgeRegisterParams: MessageFns<EdgeRegisterParams> = {
 
   fromJSON(object: any): EdgeRegisterParams {
     return {
-      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      host: isSet(object.host) ? globalThis.String(object.host) : "",
-      port: isSet(object.port) ? globalThis.Number(object.port) : 0,
-      region: isSet(object.region) ? globalThis.String(object.region) : "",
-      capacity: isSet(object.capacity) ? globalThis.Number(object.capacity) : 0,
-      certificate: isSet(object.certificate) ? globalThis.String(object.certificate) : "",
-      challenge: isSet(object.challenge) ? globalThis.String(object.challenge) : "",
-      challenge_response: isSet(object.challenge_response) ? globalThis.String(object.challenge_response) : "",
+      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      host: isSet(object.host) ? globalThis.String(object.host) : undefined,
+      port: isSet(object.port) ? globalThis.Number(object.port) : undefined,
+      region: isSet(object.region) ? globalThis.String(object.region) : undefined,
+      capacity: isSet(object.capacity) ? globalThis.Number(object.capacity) : undefined,
+      certificate: isSet(object.certificate) ? globalThis.String(object.certificate) : undefined,
+      challenge: isSet(object.challenge) ? globalThis.String(object.challenge) : undefined,
+      challenge_response: isSet(object.challenge_response) ? globalThis.String(object.challenge_response) : undefined,
     };
   },
 
   toJSON(message: EdgeRegisterParams): unknown {
     const obj: any = {};
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       obj.server_id = Math.round(message.server_id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.host !== undefined && message.host !== "") {
+    if (message.host !== undefined) {
       obj.host = message.host;
     }
-    if (message.port !== undefined && message.port !== 0) {
+    if (message.port !== undefined) {
       obj.port = Math.round(message.port);
     }
-    if (message.region !== undefined && message.region !== "") {
+    if (message.region !== undefined) {
       obj.region = message.region;
     }
-    if (message.capacity !== undefined && message.capacity !== 0) {
+    if (message.capacity !== undefined) {
       obj.capacity = Math.round(message.capacity);
     }
-    if (message.certificate !== undefined && message.certificate !== "") {
+    if (message.certificate !== undefined) {
       obj.certificate = message.certificate;
     }
-    if (message.challenge !== undefined && message.challenge !== "") {
+    if (message.challenge !== undefined) {
       obj.challenge = message.challenge;
     }
-    if (message.challenge_response !== undefined && message.challenge_response !== "") {
+    if (message.challenge_response !== undefined) {
       obj.challenge_response = message.challenge_response;
     }
     return obj;
@@ -1298,29 +1298,36 @@ export const EdgeRegisterParams: MessageFns<EdgeRegisterParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeRegisterParams>, I>>(object: I): EdgeRegisterParams {
     const message = createBaseEdgeRegisterParams();
-    message.server_id = object.server_id ?? 0;
-    message.name = object.name ?? "";
-    message.host = object.host ?? "";
-    message.port = object.port ?? 0;
-    message.region = object.region ?? "";
-    message.capacity = object.capacity ?? 0;
-    message.certificate = object.certificate ?? "";
-    message.challenge = object.challenge ?? "";
-    message.challenge_response = object.challenge_response ?? "";
+    message.server_id = object.server_id ?? undefined;
+    message.name = object.name ?? undefined;
+    message.host = object.host ?? undefined;
+    message.port = object.port ?? undefined;
+    message.region = object.region ?? undefined;
+    message.capacity = object.capacity ?? undefined;
+    message.certificate = object.certificate ?? undefined;
+    message.challenge = object.challenge ?? undefined;
+    message.challenge_response = object.challenge_response ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeRegisterResult(): EdgeRegisterResult {
-  return { success: false, hub_server_id: 0, edge_list: [], challenge: "", challenge_timeout: 0, error: "" };
+  return {
+    success: undefined,
+    hub_server_id: undefined,
+    edge_list: [],
+    challenge: undefined,
+    challenge_timeout: undefined,
+    error: undefined,
+  };
 }
 
 export const EdgeRegisterResult: MessageFns<EdgeRegisterResult> = {
   encode(message: EdgeRegisterResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.hub_server_id !== undefined && message.hub_server_id !== 0) {
+    if (message.hub_server_id !== undefined) {
       writer.uint32(16).uint32(message.hub_server_id);
     }
     if (message.edge_list !== undefined && message.edge_list.length !== 0) {
@@ -1328,13 +1335,13 @@ export const EdgeRegisterResult: MessageFns<EdgeRegisterResult> = {
         EdgeInfo.encode(v!, writer.uint32(26).fork()).join();
       }
     }
-    if (message.challenge !== undefined && message.challenge !== "") {
+    if (message.challenge !== undefined) {
       writer.uint32(34).string(message.challenge);
     }
-    if (message.challenge_timeout !== undefined && message.challenge_timeout !== 0) {
+    if (message.challenge_timeout !== undefined) {
       writer.uint32(40).uint32(message.challenge_timeout);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(50).string(message.error);
     }
     return writer;
@@ -1409,35 +1416,35 @@ export const EdgeRegisterResult: MessageFns<EdgeRegisterResult> = {
 
   fromJSON(object: any): EdgeRegisterResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      hub_server_id: isSet(object.hub_server_id) ? globalThis.Number(object.hub_server_id) : 0,
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      hub_server_id: isSet(object.hub_server_id) ? globalThis.Number(object.hub_server_id) : undefined,
       edge_list: globalThis.Array.isArray(object?.edge_list)
         ? object.edge_list.map((e: any) => EdgeInfo.fromJSON(e))
         : [],
-      challenge: isSet(object.challenge) ? globalThis.String(object.challenge) : "",
-      challenge_timeout: isSet(object.challenge_timeout) ? globalThis.Number(object.challenge_timeout) : 0,
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      challenge: isSet(object.challenge) ? globalThis.String(object.challenge) : undefined,
+      challenge_timeout: isSet(object.challenge_timeout) ? globalThis.Number(object.challenge_timeout) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: EdgeRegisterResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.hub_server_id !== undefined && message.hub_server_id !== 0) {
+    if (message.hub_server_id !== undefined) {
       obj.hub_server_id = Math.round(message.hub_server_id);
     }
     if (message.edge_list?.length) {
       obj.edge_list = message.edge_list.map((e) => EdgeInfo.toJSON(e));
     }
-    if (message.challenge !== undefined && message.challenge !== "") {
+    if (message.challenge !== undefined) {
       obj.challenge = message.challenge;
     }
-    if (message.challenge_timeout !== undefined && message.challenge_timeout !== 0) {
+    if (message.challenge_timeout !== undefined) {
       obj.challenge_timeout = Math.round(message.challenge_timeout);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -1448,23 +1455,23 @@ export const EdgeRegisterResult: MessageFns<EdgeRegisterResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeRegisterResult>, I>>(object: I): EdgeRegisterResult {
     const message = createBaseEdgeRegisterResult();
-    message.success = object.success ?? false;
-    message.hub_server_id = object.hub_server_id ?? 0;
+    message.success = object.success ?? undefined;
+    message.hub_server_id = object.hub_server_id ?? undefined;
     message.edge_list = object.edge_list?.map((e) => EdgeInfo.fromPartial(e)) || [];
-    message.challenge = object.challenge ?? "";
-    message.challenge_timeout = object.challenge_timeout ?? 0;
-    message.error = object.error ?? "";
+    message.challenge = object.challenge ?? undefined;
+    message.challenge_timeout = object.challenge_timeout ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeHeartbeatParams(): EdgeHeartbeatParams {
-  return { server_id: 0, stats: undefined };
+  return { server_id: undefined, stats: undefined };
 }
 
 export const EdgeHeartbeatParams: MessageFns<EdgeHeartbeatParams> = {
   encode(message: EdgeHeartbeatParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       writer.uint32(8).uint32(message.server_id);
     }
     if (message.stats !== undefined) {
@@ -1507,14 +1514,14 @@ export const EdgeHeartbeatParams: MessageFns<EdgeHeartbeatParams> = {
 
   fromJSON(object: any): EdgeHeartbeatParams {
     return {
-      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : 0,
+      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : undefined,
       stats: isSet(object.stats) ? EdgeServerStats.fromJSON(object.stats) : undefined,
     };
   },
 
   toJSON(message: EdgeHeartbeatParams): unknown {
     const obj: any = {};
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       obj.server_id = Math.round(message.server_id);
     }
     if (message.stats !== undefined) {
@@ -1528,7 +1535,7 @@ export const EdgeHeartbeatParams: MessageFns<EdgeHeartbeatParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeHeartbeatParams>, I>>(object: I): EdgeHeartbeatParams {
     const message = createBaseEdgeHeartbeatParams();
-    message.server_id = object.server_id ?? 0;
+    message.server_id = object.server_id ?? undefined;
     message.stats = (object.stats !== undefined && object.stats !== null)
       ? EdgeServerStats.fromPartial(object.stats)
       : undefined;
@@ -1537,27 +1544,34 @@ export const EdgeHeartbeatParams: MessageFns<EdgeHeartbeatParams> = {
 };
 
 function createBaseEdgeServerStats(): EdgeServerStats {
-  return { user_count: 0, channel_count: 0, cpu_usage: 0, memory_usage_mb: 0, bandwidth_in: 0, bandwidth_out: 0 };
+  return {
+    user_count: undefined,
+    channel_count: undefined,
+    cpu_usage: undefined,
+    memory_usage_mb: undefined,
+    bandwidth_in: undefined,
+    bandwidth_out: undefined,
+  };
 }
 
 export const EdgeServerStats: MessageFns<EdgeServerStats> = {
   encode(message: EdgeServerStats, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.user_count !== undefined && message.user_count !== 0) {
+    if (message.user_count !== undefined) {
       writer.uint32(8).uint32(message.user_count);
     }
-    if (message.channel_count !== undefined && message.channel_count !== 0) {
+    if (message.channel_count !== undefined) {
       writer.uint32(16).uint32(message.channel_count);
     }
-    if (message.cpu_usage !== undefined && message.cpu_usage !== 0) {
+    if (message.cpu_usage !== undefined) {
       writer.uint32(29).float(message.cpu_usage);
     }
-    if (message.memory_usage_mb !== undefined && message.memory_usage_mb !== 0) {
+    if (message.memory_usage_mb !== undefined) {
       writer.uint32(32).uint64(message.memory_usage_mb);
     }
-    if (message.bandwidth_in !== undefined && message.bandwidth_in !== 0) {
+    if (message.bandwidth_in !== undefined) {
       writer.uint32(45).float(message.bandwidth_in);
     }
-    if (message.bandwidth_out !== undefined && message.bandwidth_out !== 0) {
+    if (message.bandwidth_out !== undefined) {
       writer.uint32(53).float(message.bandwidth_out);
     }
     return writer;
@@ -1629,33 +1643,33 @@ export const EdgeServerStats: MessageFns<EdgeServerStats> = {
 
   fromJSON(object: any): EdgeServerStats {
     return {
-      user_count: isSet(object.user_count) ? globalThis.Number(object.user_count) : 0,
-      channel_count: isSet(object.channel_count) ? globalThis.Number(object.channel_count) : 0,
-      cpu_usage: isSet(object.cpu_usage) ? globalThis.Number(object.cpu_usage) : 0,
-      memory_usage_mb: isSet(object.memory_usage_mb) ? globalThis.Number(object.memory_usage_mb) : 0,
-      bandwidth_in: isSet(object.bandwidth_in) ? globalThis.Number(object.bandwidth_in) : 0,
-      bandwidth_out: isSet(object.bandwidth_out) ? globalThis.Number(object.bandwidth_out) : 0,
+      user_count: isSet(object.user_count) ? globalThis.Number(object.user_count) : undefined,
+      channel_count: isSet(object.channel_count) ? globalThis.Number(object.channel_count) : undefined,
+      cpu_usage: isSet(object.cpu_usage) ? globalThis.Number(object.cpu_usage) : undefined,
+      memory_usage_mb: isSet(object.memory_usage_mb) ? globalThis.Number(object.memory_usage_mb) : undefined,
+      bandwidth_in: isSet(object.bandwidth_in) ? globalThis.Number(object.bandwidth_in) : undefined,
+      bandwidth_out: isSet(object.bandwidth_out) ? globalThis.Number(object.bandwidth_out) : undefined,
     };
   },
 
   toJSON(message: EdgeServerStats): unknown {
     const obj: any = {};
-    if (message.user_count !== undefined && message.user_count !== 0) {
+    if (message.user_count !== undefined) {
       obj.user_count = Math.round(message.user_count);
     }
-    if (message.channel_count !== undefined && message.channel_count !== 0) {
+    if (message.channel_count !== undefined) {
       obj.channel_count = Math.round(message.channel_count);
     }
-    if (message.cpu_usage !== undefined && message.cpu_usage !== 0) {
+    if (message.cpu_usage !== undefined) {
       obj.cpu_usage = message.cpu_usage;
     }
-    if (message.memory_usage_mb !== undefined && message.memory_usage_mb !== 0) {
+    if (message.memory_usage_mb !== undefined) {
       obj.memory_usage_mb = Math.round(message.memory_usage_mb);
     }
-    if (message.bandwidth_in !== undefined && message.bandwidth_in !== 0) {
+    if (message.bandwidth_in !== undefined) {
       obj.bandwidth_in = message.bandwidth_in;
     }
-    if (message.bandwidth_out !== undefined && message.bandwidth_out !== 0) {
+    if (message.bandwidth_out !== undefined) {
       obj.bandwidth_out = message.bandwidth_out;
     }
     return obj;
@@ -1666,23 +1680,23 @@ export const EdgeServerStats: MessageFns<EdgeServerStats> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeServerStats>, I>>(object: I): EdgeServerStats {
     const message = createBaseEdgeServerStats();
-    message.user_count = object.user_count ?? 0;
-    message.channel_count = object.channel_count ?? 0;
-    message.cpu_usage = object.cpu_usage ?? 0;
-    message.memory_usage_mb = object.memory_usage_mb ?? 0;
-    message.bandwidth_in = object.bandwidth_in ?? 0;
-    message.bandwidth_out = object.bandwidth_out ?? 0;
+    message.user_count = object.user_count ?? undefined;
+    message.channel_count = object.channel_count ?? undefined;
+    message.cpu_usage = object.cpu_usage ?? undefined;
+    message.memory_usage_mb = object.memory_usage_mb ?? undefined;
+    message.bandwidth_in = object.bandwidth_in ?? undefined;
+    message.bandwidth_out = object.bandwidth_out ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeHeartbeatResult(): EdgeHeartbeatResult {
-  return { success: false, updated_edges: [], error: "" };
+  return { success: undefined, updated_edges: [], error: undefined };
 }
 
 export const EdgeHeartbeatResult: MessageFns<EdgeHeartbeatResult> = {
   encode(message: EdgeHeartbeatResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
     if (message.updated_edges !== undefined && message.updated_edges.length !== 0) {
@@ -1690,7 +1704,7 @@ export const EdgeHeartbeatResult: MessageFns<EdgeHeartbeatResult> = {
         EdgeInfo.encode(v!, writer.uint32(18).fork()).join();
       }
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(26).string(message.error);
     }
     return writer;
@@ -1741,23 +1755,23 @@ export const EdgeHeartbeatResult: MessageFns<EdgeHeartbeatResult> = {
 
   fromJSON(object: any): EdgeHeartbeatResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
       updated_edges: globalThis.Array.isArray(object?.updated_edges)
         ? object.updated_edges.map((e: any) => EdgeInfo.fromJSON(e))
         : [],
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: EdgeHeartbeatResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
     if (message.updated_edges?.length) {
       obj.updated_edges = message.updated_edges.map((e) => EdgeInfo.toJSON(e));
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -1768,20 +1782,20 @@ export const EdgeHeartbeatResult: MessageFns<EdgeHeartbeatResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeHeartbeatResult>, I>>(object: I): EdgeHeartbeatResult {
     const message = createBaseEdgeHeartbeatResult();
-    message.success = object.success ?? false;
+    message.success = object.success ?? undefined;
     message.updated_edges = object.updated_edges?.map((e) => EdgeInfo.fromPartial(e)) || [];
-    message.error = object.error ?? "";
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeAllocateSessionIdParams(): EdgeAllocateSessionIdParams {
-  return { edge_id: 0 };
+  return { edge_id: undefined };
 }
 
 export const EdgeAllocateSessionIdParams: MessageFns<EdgeAllocateSessionIdParams> = {
   encode(message: EdgeAllocateSessionIdParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(8).uint32(message.edge_id);
     }
     return writer;
@@ -1812,12 +1826,12 @@ export const EdgeAllocateSessionIdParams: MessageFns<EdgeAllocateSessionIdParams
   },
 
   fromJSON(object: any): EdgeAllocateSessionIdParams {
-    return { edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0 };
+    return { edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined };
   },
 
   toJSON(message: EdgeAllocateSessionIdParams): unknown {
     const obj: any = {};
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
     return obj;
@@ -1828,18 +1842,18 @@ export const EdgeAllocateSessionIdParams: MessageFns<EdgeAllocateSessionIdParams
   },
   fromPartial<I extends Exact<DeepPartial<EdgeAllocateSessionIdParams>, I>>(object: I): EdgeAllocateSessionIdParams {
     const message = createBaseEdgeAllocateSessionIdParams();
-    message.edge_id = object.edge_id ?? 0;
+    message.edge_id = object.edge_id ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeAllocateSessionIdResult(): EdgeAllocateSessionIdResult {
-  return { session_id: 0 };
+  return { session_id: undefined };
 }
 
 export const EdgeAllocateSessionIdResult: MessageFns<EdgeAllocateSessionIdResult> = {
   encode(message: EdgeAllocateSessionIdResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       writer.uint32(8).uint32(message.session_id);
     }
     return writer;
@@ -1870,12 +1884,12 @@ export const EdgeAllocateSessionIdResult: MessageFns<EdgeAllocateSessionIdResult
   },
 
   fromJSON(object: any): EdgeAllocateSessionIdResult {
-    return { session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : 0 };
+    return { session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined };
   },
 
   toJSON(message: EdgeAllocateSessionIdResult): unknown {
     const obj: any = {};
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       obj.session_id = Math.round(message.session_id);
     }
     return obj;
@@ -1886,27 +1900,34 @@ export const EdgeAllocateSessionIdResult: MessageFns<EdgeAllocateSessionIdResult
   },
   fromPartial<I extends Exact<DeepPartial<EdgeAllocateSessionIdResult>, I>>(object: I): EdgeAllocateSessionIdResult {
     const message = createBaseEdgeAllocateSessionIdResult();
-    message.session_id = object.session_id ?? 0;
+    message.session_id = object.session_id ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeAuthenticateUserParams(): EdgeAuthenticateUserParams {
-  return { session_id: 0, server_id: 0, username: "", password: "", tokens: [], client_info: undefined };
+  return {
+    session_id: undefined,
+    server_id: undefined,
+    username: undefined,
+    password: undefined,
+    tokens: [],
+    client_info: undefined,
+  };
 }
 
 export const EdgeAuthenticateUserParams: MessageFns<EdgeAuthenticateUserParams> = {
   encode(message: EdgeAuthenticateUserParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       writer.uint32(8).uint32(message.session_id);
     }
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       writer.uint32(16).uint32(message.server_id);
     }
-    if (message.username !== undefined && message.username !== "") {
+    if (message.username !== undefined) {
       writer.uint32(26).string(message.username);
     }
-    if (message.password !== undefined && message.password !== "") {
+    if (message.password !== undefined) {
       writer.uint32(34).string(message.password);
     }
     if (message.tokens !== undefined && message.tokens.length !== 0) {
@@ -1989,10 +2010,10 @@ export const EdgeAuthenticateUserParams: MessageFns<EdgeAuthenticateUserParams> 
 
   fromJSON(object: any): EdgeAuthenticateUserParams {
     return {
-      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : 0,
-      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : 0,
-      username: isSet(object.username) ? globalThis.String(object.username) : "",
-      password: isSet(object.password) ? globalThis.String(object.password) : "",
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : undefined,
+      username: isSet(object.username) ? globalThis.String(object.username) : undefined,
+      password: isSet(object.password) ? globalThis.String(object.password) : undefined,
       tokens: globalThis.Array.isArray(object?.tokens) ? object.tokens.map((e: any) => globalThis.String(e)) : [],
       client_info: isSet(object.client_info) ? ClientInfo.fromJSON(object.client_info) : undefined,
     };
@@ -2000,16 +2021,16 @@ export const EdgeAuthenticateUserParams: MessageFns<EdgeAuthenticateUserParams> 
 
   toJSON(message: EdgeAuthenticateUserParams): unknown {
     const obj: any = {};
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       obj.session_id = Math.round(message.session_id);
     }
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       obj.server_id = Math.round(message.server_id);
     }
-    if (message.username !== undefined && message.username !== "") {
+    if (message.username !== undefined) {
       obj.username = message.username;
     }
-    if (message.password !== undefined && message.password !== "") {
+    if (message.password !== undefined) {
       obj.password = message.password;
     }
     if (message.tokens?.length) {
@@ -2026,10 +2047,10 @@ export const EdgeAuthenticateUserParams: MessageFns<EdgeAuthenticateUserParams> 
   },
   fromPartial<I extends Exact<DeepPartial<EdgeAuthenticateUserParams>, I>>(object: I): EdgeAuthenticateUserParams {
     const message = createBaseEdgeAuthenticateUserParams();
-    message.session_id = object.session_id ?? 0;
-    message.server_id = object.server_id ?? 0;
-    message.username = object.username ?? "";
-    message.password = object.password ?? "";
+    message.session_id = object.session_id ?? undefined;
+    message.server_id = object.server_id ?? undefined;
+    message.username = object.username ?? undefined;
+    message.password = object.password ?? undefined;
     message.tokens = object.tokens?.map((e) => e) || [];
     message.client_info = (object.client_info !== undefined && object.client_info !== null)
       ? ClientInfo.fromPartial(object.client_info)
@@ -2039,30 +2060,38 @@ export const EdgeAuthenticateUserParams: MessageFns<EdgeAuthenticateUserParams> 
 };
 
 function createBaseClientInfo(): ClientInfo {
-  return { ip_address: "", ip_version: "", release: "", version: 0, os: "", os_version: "", certificate_hash: "" };
+  return {
+    ip_address: undefined,
+    ip_version: undefined,
+    release: undefined,
+    version: undefined,
+    os: undefined,
+    os_version: undefined,
+    certificate_hash: undefined,
+  };
 }
 
 export const ClientInfo: MessageFns<ClientInfo> = {
   encode(message: ClientInfo, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.ip_address !== undefined && message.ip_address !== "") {
+    if (message.ip_address !== undefined) {
       writer.uint32(10).string(message.ip_address);
     }
-    if (message.ip_version !== undefined && message.ip_version !== "") {
+    if (message.ip_version !== undefined) {
       writer.uint32(18).string(message.ip_version);
     }
-    if (message.release !== undefined && message.release !== "") {
+    if (message.release !== undefined) {
       writer.uint32(26).string(message.release);
     }
-    if (message.version !== undefined && message.version !== 0) {
+    if (message.version !== undefined) {
       writer.uint32(32).uint32(message.version);
     }
-    if (message.os !== undefined && message.os !== "") {
+    if (message.os !== undefined) {
       writer.uint32(42).string(message.os);
     }
-    if (message.os_version !== undefined && message.os_version !== "") {
+    if (message.os_version !== undefined) {
       writer.uint32(50).string(message.os_version);
     }
-    if (message.certificate_hash !== undefined && message.certificate_hash !== "") {
+    if (message.certificate_hash !== undefined) {
       writer.uint32(58).string(message.certificate_hash);
     }
     return writer;
@@ -2142,37 +2171,37 @@ export const ClientInfo: MessageFns<ClientInfo> = {
 
   fromJSON(object: any): ClientInfo {
     return {
-      ip_address: isSet(object.ip_address) ? globalThis.String(object.ip_address) : "",
-      ip_version: isSet(object.ip_version) ? globalThis.String(object.ip_version) : "",
-      release: isSet(object.release) ? globalThis.String(object.release) : "",
-      version: isSet(object.version) ? globalThis.Number(object.version) : 0,
-      os: isSet(object.os) ? globalThis.String(object.os) : "",
-      os_version: isSet(object.os_version) ? globalThis.String(object.os_version) : "",
-      certificate_hash: isSet(object.certificate_hash) ? globalThis.String(object.certificate_hash) : "",
+      ip_address: isSet(object.ip_address) ? globalThis.String(object.ip_address) : undefined,
+      ip_version: isSet(object.ip_version) ? globalThis.String(object.ip_version) : undefined,
+      release: isSet(object.release) ? globalThis.String(object.release) : undefined,
+      version: isSet(object.version) ? globalThis.Number(object.version) : undefined,
+      os: isSet(object.os) ? globalThis.String(object.os) : undefined,
+      os_version: isSet(object.os_version) ? globalThis.String(object.os_version) : undefined,
+      certificate_hash: isSet(object.certificate_hash) ? globalThis.String(object.certificate_hash) : undefined,
     };
   },
 
   toJSON(message: ClientInfo): unknown {
     const obj: any = {};
-    if (message.ip_address !== undefined && message.ip_address !== "") {
+    if (message.ip_address !== undefined) {
       obj.ip_address = message.ip_address;
     }
-    if (message.ip_version !== undefined && message.ip_version !== "") {
+    if (message.ip_version !== undefined) {
       obj.ip_version = message.ip_version;
     }
-    if (message.release !== undefined && message.release !== "") {
+    if (message.release !== undefined) {
       obj.release = message.release;
     }
-    if (message.version !== undefined && message.version !== 0) {
+    if (message.version !== undefined) {
       obj.version = Math.round(message.version);
     }
-    if (message.os !== undefined && message.os !== "") {
+    if (message.os !== undefined) {
       obj.os = message.os;
     }
-    if (message.os_version !== undefined && message.os_version !== "") {
+    if (message.os_version !== undefined) {
       obj.os_version = message.os_version;
     }
-    if (message.certificate_hash !== undefined && message.certificate_hash !== "") {
+    if (message.certificate_hash !== undefined) {
       obj.certificate_hash = message.certificate_hash;
     }
     return obj;
@@ -2183,49 +2212,49 @@ export const ClientInfo: MessageFns<ClientInfo> = {
   },
   fromPartial<I extends Exact<DeepPartial<ClientInfo>, I>>(object: I): ClientInfo {
     const message = createBaseClientInfo();
-    message.ip_address = object.ip_address ?? "";
-    message.ip_version = object.ip_version ?? "";
-    message.release = object.release ?? "";
-    message.version = object.version ?? 0;
-    message.os = object.os ?? "";
-    message.os_version = object.os_version ?? "";
-    message.certificate_hash = object.certificate_hash ?? "";
+    message.ip_address = object.ip_address ?? undefined;
+    message.ip_version = object.ip_version ?? undefined;
+    message.release = object.release ?? undefined;
+    message.version = object.version ?? undefined;
+    message.os = object.os ?? undefined;
+    message.os_version = object.os_version ?? undefined;
+    message.certificate_hash = object.certificate_hash ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeAuthenticateUserResult(): EdgeAuthenticateUserResult {
   return {
-    success: false,
-    user_id: 0,
-    username: "",
-    display_name: "",
+    success: undefined,
+    user_id: undefined,
+    username: undefined,
+    display_name: undefined,
     groups: [],
-    reason: "",
-    reject_type: 0,
-    channel_id: 0,
-    mute: false,
-    deaf: false,
-    suppress: false,
-    self_mute: false,
-    self_deaf: false,
-    priority_speaker: false,
-    recording: false,
+    reason: undefined,
+    reject_type: undefined,
+    channel_id: undefined,
+    mute: undefined,
+    deaf: undefined,
+    suppress: undefined,
+    self_mute: undefined,
+    self_deaf: undefined,
+    priority_speaker: undefined,
+    recording: undefined,
   };
 }
 
 export const EdgeAuthenticateUserResult: MessageFns<EdgeAuthenticateUserResult> = {
   encode(message: EdgeAuthenticateUserResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       writer.uint32(16).uint32(message.user_id);
     }
-    if (message.username !== undefined && message.username !== "") {
+    if (message.username !== undefined) {
       writer.uint32(26).string(message.username);
     }
-    if (message.display_name !== undefined && message.display_name !== "") {
+    if (message.display_name !== undefined) {
       writer.uint32(34).string(message.display_name);
     }
     if (message.groups !== undefined && message.groups.length !== 0) {
@@ -2233,34 +2262,34 @@ export const EdgeAuthenticateUserResult: MessageFns<EdgeAuthenticateUserResult> 
         writer.uint32(42).string(v!);
       }
     }
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       writer.uint32(50).string(message.reason);
     }
-    if (message.reject_type !== undefined && message.reject_type !== 0) {
+    if (message.reject_type !== undefined) {
       writer.uint32(56).uint32(message.reject_type);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(64).uint32(message.channel_id);
     }
-    if (message.mute !== undefined && message.mute !== false) {
+    if (message.mute !== undefined) {
       writer.uint32(72).bool(message.mute);
     }
-    if (message.deaf !== undefined && message.deaf !== false) {
+    if (message.deaf !== undefined) {
       writer.uint32(80).bool(message.deaf);
     }
-    if (message.suppress !== undefined && message.suppress !== false) {
+    if (message.suppress !== undefined) {
       writer.uint32(88).bool(message.suppress);
     }
-    if (message.self_mute !== undefined && message.self_mute !== false) {
+    if (message.self_mute !== undefined) {
       writer.uint32(96).bool(message.self_mute);
     }
-    if (message.self_deaf !== undefined && message.self_deaf !== false) {
+    if (message.self_deaf !== undefined) {
       writer.uint32(104).bool(message.self_deaf);
     }
-    if (message.priority_speaker !== undefined && message.priority_speaker !== false) {
+    if (message.priority_speaker !== undefined) {
       writer.uint32(112).bool(message.priority_speaker);
     }
-    if (message.recording !== undefined && message.recording !== false) {
+    if (message.recording !== undefined) {
       writer.uint32(120).bool(message.recording);
     }
     return writer;
@@ -2407,69 +2436,69 @@ export const EdgeAuthenticateUserResult: MessageFns<EdgeAuthenticateUserResult> 
 
   fromJSON(object: any): EdgeAuthenticateUserResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : 0,
-      username: isSet(object.username) ? globalThis.String(object.username) : "",
-      display_name: isSet(object.display_name) ? globalThis.String(object.display_name) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : undefined,
+      username: isSet(object.username) ? globalThis.String(object.username) : undefined,
+      display_name: isSet(object.display_name) ? globalThis.String(object.display_name) : undefined,
       groups: globalThis.Array.isArray(object?.groups) ? object.groups.map((e: any) => globalThis.String(e)) : [],
-      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
-      reject_type: isSet(object.reject_type) ? globalThis.Number(object.reject_type) : 0,
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      mute: isSet(object.mute) ? globalThis.Boolean(object.mute) : false,
-      deaf: isSet(object.deaf) ? globalThis.Boolean(object.deaf) : false,
-      suppress: isSet(object.suppress) ? globalThis.Boolean(object.suppress) : false,
-      self_mute: isSet(object.self_mute) ? globalThis.Boolean(object.self_mute) : false,
-      self_deaf: isSet(object.self_deaf) ? globalThis.Boolean(object.self_deaf) : false,
-      priority_speaker: isSet(object.priority_speaker) ? globalThis.Boolean(object.priority_speaker) : false,
-      recording: isSet(object.recording) ? globalThis.Boolean(object.recording) : false,
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
+      reject_type: isSet(object.reject_type) ? globalThis.Number(object.reject_type) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      mute: isSet(object.mute) ? globalThis.Boolean(object.mute) : undefined,
+      deaf: isSet(object.deaf) ? globalThis.Boolean(object.deaf) : undefined,
+      suppress: isSet(object.suppress) ? globalThis.Boolean(object.suppress) : undefined,
+      self_mute: isSet(object.self_mute) ? globalThis.Boolean(object.self_mute) : undefined,
+      self_deaf: isSet(object.self_deaf) ? globalThis.Boolean(object.self_deaf) : undefined,
+      priority_speaker: isSet(object.priority_speaker) ? globalThis.Boolean(object.priority_speaker) : undefined,
+      recording: isSet(object.recording) ? globalThis.Boolean(object.recording) : undefined,
     };
   },
 
   toJSON(message: EdgeAuthenticateUserResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       obj.user_id = Math.round(message.user_id);
     }
-    if (message.username !== undefined && message.username !== "") {
+    if (message.username !== undefined) {
       obj.username = message.username;
     }
-    if (message.display_name !== undefined && message.display_name !== "") {
+    if (message.display_name !== undefined) {
       obj.display_name = message.display_name;
     }
     if (message.groups?.length) {
       obj.groups = message.groups;
     }
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       obj.reason = message.reason;
     }
-    if (message.reject_type !== undefined && message.reject_type !== 0) {
+    if (message.reject_type !== undefined) {
       obj.reject_type = Math.round(message.reject_type);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.mute !== undefined && message.mute !== false) {
+    if (message.mute !== undefined) {
       obj.mute = message.mute;
     }
-    if (message.deaf !== undefined && message.deaf !== false) {
+    if (message.deaf !== undefined) {
       obj.deaf = message.deaf;
     }
-    if (message.suppress !== undefined && message.suppress !== false) {
+    if (message.suppress !== undefined) {
       obj.suppress = message.suppress;
     }
-    if (message.self_mute !== undefined && message.self_mute !== false) {
+    if (message.self_mute !== undefined) {
       obj.self_mute = message.self_mute;
     }
-    if (message.self_deaf !== undefined && message.self_deaf !== false) {
+    if (message.self_deaf !== undefined) {
       obj.self_deaf = message.self_deaf;
     }
-    if (message.priority_speaker !== undefined && message.priority_speaker !== false) {
+    if (message.priority_speaker !== undefined) {
       obj.priority_speaker = message.priority_speaker;
     }
-    if (message.recording !== undefined && message.recording !== false) {
+    if (message.recording !== undefined) {
       obj.recording = message.recording;
     }
     return obj;
@@ -2480,35 +2509,35 @@ export const EdgeAuthenticateUserResult: MessageFns<EdgeAuthenticateUserResult> 
   },
   fromPartial<I extends Exact<DeepPartial<EdgeAuthenticateUserResult>, I>>(object: I): EdgeAuthenticateUserResult {
     const message = createBaseEdgeAuthenticateUserResult();
-    message.success = object.success ?? false;
-    message.user_id = object.user_id ?? 0;
-    message.username = object.username ?? "";
-    message.display_name = object.display_name ?? "";
+    message.success = object.success ?? undefined;
+    message.user_id = object.user_id ?? undefined;
+    message.username = object.username ?? undefined;
+    message.display_name = object.display_name ?? undefined;
     message.groups = object.groups?.map((e) => e) || [];
-    message.reason = object.reason ?? "";
-    message.reject_type = object.reject_type ?? 0;
-    message.channel_id = object.channel_id ?? 0;
-    message.mute = object.mute ?? false;
-    message.deaf = object.deaf ?? false;
-    message.suppress = object.suppress ?? false;
-    message.self_mute = object.self_mute ?? false;
-    message.self_deaf = object.self_deaf ?? false;
-    message.priority_speaker = object.priority_speaker ?? false;
-    message.recording = object.recording ?? false;
+    message.reason = object.reason ?? undefined;
+    message.reject_type = object.reject_type ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    message.mute = object.mute ?? undefined;
+    message.deaf = object.deaf ?? undefined;
+    message.suppress = object.suppress ?? undefined;
+    message.self_mute = object.self_mute ?? undefined;
+    message.self_deaf = object.self_deaf ?? undefined;
+    message.priority_speaker = object.priority_speaker ?? undefined;
+    message.recording = object.recording ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeReportSessionResult(): EdgeReportSessionResult {
-  return { success: false, error: "" };
+  return { success: undefined, error: undefined };
 }
 
 export const EdgeReportSessionResult: MessageFns<EdgeReportSessionResult> = {
   encode(message: EdgeReportSessionResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(18).string(message.error);
     }
     return writer;
@@ -2548,17 +2577,17 @@ export const EdgeReportSessionResult: MessageFns<EdgeReportSessionResult> = {
 
   fromJSON(object: any): EdgeReportSessionResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: EdgeReportSessionResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -2569,31 +2598,37 @@ export const EdgeReportSessionResult: MessageFns<EdgeReportSessionResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeReportSessionResult>, I>>(object: I): EdgeReportSessionResult {
     const message = createBaseEdgeReportSessionResult();
-    message.success = object.success ?? false;
-    message.error = object.error ?? "";
+    message.success = object.success ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeSyncVoiceTargetParams(): EdgeSyncVoiceTargetParams {
-  return { edge_id: 0, client_session: 0, target_id: 0, config: undefined, timestamp: 0 };
+  return {
+    edge_id: undefined,
+    client_session: undefined,
+    target_id: undefined,
+    config: undefined,
+    timestamp: undefined,
+  };
 }
 
 export const EdgeSyncVoiceTargetParams: MessageFns<EdgeSyncVoiceTargetParams> = {
   encode(message: EdgeSyncVoiceTargetParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(8).uint32(message.edge_id);
     }
-    if (message.client_session !== undefined && message.client_session !== 0) {
+    if (message.client_session !== undefined) {
       writer.uint32(16).uint32(message.client_session);
     }
-    if (message.target_id !== undefined && message.target_id !== 0) {
+    if (message.target_id !== undefined) {
       writer.uint32(24).uint32(message.target_id);
     }
     if (message.config !== undefined) {
       VoiceTargetConfigProto.encode(message.config, writer.uint32(34).fork()).join();
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       writer.uint32(40).int64(message.timestamp);
     }
     return writer;
@@ -2657,29 +2692,29 @@ export const EdgeSyncVoiceTargetParams: MessageFns<EdgeSyncVoiceTargetParams> = 
 
   fromJSON(object: any): EdgeSyncVoiceTargetParams {
     return {
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      client_session: isSet(object.client_session) ? globalThis.Number(object.client_session) : 0,
-      target_id: isSet(object.target_id) ? globalThis.Number(object.target_id) : 0,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      client_session: isSet(object.client_session) ? globalThis.Number(object.client_session) : undefined,
+      target_id: isSet(object.target_id) ? globalThis.Number(object.target_id) : undefined,
       config: isSet(object.config) ? VoiceTargetConfigProto.fromJSON(object.config) : undefined,
-      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
     };
   },
 
   toJSON(message: EdgeSyncVoiceTargetParams): unknown {
     const obj: any = {};
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.client_session !== undefined && message.client_session !== 0) {
+    if (message.client_session !== undefined) {
       obj.client_session = Math.round(message.client_session);
     }
-    if (message.target_id !== undefined && message.target_id !== 0) {
+    if (message.target_id !== undefined) {
       obj.target_id = Math.round(message.target_id);
     }
     if (message.config !== undefined) {
       obj.config = VoiceTargetConfigProto.toJSON(message.config);
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       obj.timestamp = Math.round(message.timestamp);
     }
     return obj;
@@ -2690,13 +2725,13 @@ export const EdgeSyncVoiceTargetParams: MessageFns<EdgeSyncVoiceTargetParams> = 
   },
   fromPartial<I extends Exact<DeepPartial<EdgeSyncVoiceTargetParams>, I>>(object: I): EdgeSyncVoiceTargetParams {
     const message = createBaseEdgeSyncVoiceTargetParams();
-    message.edge_id = object.edge_id ?? 0;
-    message.client_session = object.client_session ?? 0;
-    message.target_id = object.target_id ?? 0;
+    message.edge_id = object.edge_id ?? undefined;
+    message.client_session = object.client_session ?? undefined;
+    message.target_id = object.target_id ?? undefined;
     message.config = (object.config !== undefined && object.config !== null)
       ? VoiceTargetConfigProto.fromPartial(object.config)
       : undefined;
-    message.timestamp = object.timestamp ?? 0;
+    message.timestamp = object.timestamp ?? undefined;
     return message;
   },
 };
@@ -2792,12 +2827,12 @@ export const VoiceTargetConfigProto: MessageFns<VoiceTargetConfigProto> = {
 };
 
 function createBaseVoiceTargetSession(): VoiceTargetSession {
-  return { session: 0 };
+  return { session: undefined };
 }
 
 export const VoiceTargetSession: MessageFns<VoiceTargetSession> = {
   encode(message: VoiceTargetSession, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       writer.uint32(8).uint32(message.session);
     }
     return writer;
@@ -2828,12 +2863,12 @@ export const VoiceTargetSession: MessageFns<VoiceTargetSession> = {
   },
 
   fromJSON(object: any): VoiceTargetSession {
-    return { session: isSet(object.session) ? globalThis.Number(object.session) : 0 };
+    return { session: isSet(object.session) ? globalThis.Number(object.session) : undefined };
   },
 
   toJSON(message: VoiceTargetSession): unknown {
     const obj: any = {};
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       obj.session = Math.round(message.session);
     }
     return obj;
@@ -2844,27 +2879,27 @@ export const VoiceTargetSession: MessageFns<VoiceTargetSession> = {
   },
   fromPartial<I extends Exact<DeepPartial<VoiceTargetSession>, I>>(object: I): VoiceTargetSession {
     const message = createBaseVoiceTargetSession();
-    message.session = object.session ?? 0;
+    message.session = object.session ?? undefined;
     return message;
   },
 };
 
 function createBaseVoiceTargetChannel(): VoiceTargetChannel {
-  return { channel_id: 0, children: false, links: false, group: "" };
+  return { channel_id: undefined, children: undefined, links: undefined, group: undefined };
 }
 
 export const VoiceTargetChannel: MessageFns<VoiceTargetChannel> = {
   encode(message: VoiceTargetChannel, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(8).uint32(message.channel_id);
     }
-    if (message.children !== undefined && message.children !== false) {
+    if (message.children !== undefined) {
       writer.uint32(16).bool(message.children);
     }
-    if (message.links !== undefined && message.links !== false) {
+    if (message.links !== undefined) {
       writer.uint32(24).bool(message.links);
     }
-    if (message.group !== undefined && message.group !== "") {
+    if (message.group !== undefined) {
       writer.uint32(34).string(message.group);
     }
     return writer;
@@ -2920,25 +2955,25 @@ export const VoiceTargetChannel: MessageFns<VoiceTargetChannel> = {
 
   fromJSON(object: any): VoiceTargetChannel {
     return {
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      children: isSet(object.children) ? globalThis.Boolean(object.children) : false,
-      links: isSet(object.links) ? globalThis.Boolean(object.links) : false,
-      group: isSet(object.group) ? globalThis.String(object.group) : "",
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      children: isSet(object.children) ? globalThis.Boolean(object.children) : undefined,
+      links: isSet(object.links) ? globalThis.Boolean(object.links) : undefined,
+      group: isSet(object.group) ? globalThis.String(object.group) : undefined,
     };
   },
 
   toJSON(message: VoiceTargetChannel): unknown {
     const obj: any = {};
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.children !== undefined && message.children !== false) {
+    if (message.children !== undefined) {
       obj.children = message.children;
     }
-    if (message.links !== undefined && message.links !== false) {
+    if (message.links !== undefined) {
       obj.links = message.links;
     }
-    if (message.group !== undefined && message.group !== "") {
+    if (message.group !== undefined) {
       obj.group = message.group;
     }
     return obj;
@@ -2949,24 +2984,24 @@ export const VoiceTargetChannel: MessageFns<VoiceTargetChannel> = {
   },
   fromPartial<I extends Exact<DeepPartial<VoiceTargetChannel>, I>>(object: I): VoiceTargetChannel {
     const message = createBaseVoiceTargetChannel();
-    message.channel_id = object.channel_id ?? 0;
-    message.children = object.children ?? false;
-    message.links = object.links ?? false;
-    message.group = object.group ?? "";
+    message.channel_id = object.channel_id ?? undefined;
+    message.children = object.children ?? undefined;
+    message.links = object.links ?? undefined;
+    message.group = object.group ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeSyncVoiceTargetResult(): EdgeSyncVoiceTargetResult {
-  return { success: false, error: "" };
+  return { success: undefined, error: undefined };
 }
 
 export const EdgeSyncVoiceTargetResult: MessageFns<EdgeSyncVoiceTargetResult> = {
   encode(message: EdgeSyncVoiceTargetResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(18).string(message.error);
     }
     return writer;
@@ -3006,17 +3041,17 @@ export const EdgeSyncVoiceTargetResult: MessageFns<EdgeSyncVoiceTargetResult> = 
 
   fromJSON(object: any): EdgeSyncVoiceTargetResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: EdgeSyncVoiceTargetResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -3027,19 +3062,19 @@ export const EdgeSyncVoiceTargetResult: MessageFns<EdgeSyncVoiceTargetResult> = 
   },
   fromPartial<I extends Exact<DeepPartial<EdgeSyncVoiceTargetResult>, I>>(object: I): EdgeSyncVoiceTargetResult {
     const message = createBaseEdgeSyncVoiceTargetResult();
-    message.success = object.success ?? false;
-    message.error = object.error ?? "";
+    message.success = object.success ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeGetVoiceTargetsParams(): EdgeGetVoiceTargetsParams {
-  return { edge_id: 0 };
+  return { edge_id: undefined };
 }
 
 export const EdgeGetVoiceTargetsParams: MessageFns<EdgeGetVoiceTargetsParams> = {
   encode(message: EdgeGetVoiceTargetsParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(8).uint32(message.edge_id);
     }
     return writer;
@@ -3070,12 +3105,12 @@ export const EdgeGetVoiceTargetsParams: MessageFns<EdgeGetVoiceTargetsParams> = 
   },
 
   fromJSON(object: any): EdgeGetVoiceTargetsParams {
-    return { edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0 };
+    return { edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined };
   },
 
   toJSON(message: EdgeGetVoiceTargetsParams): unknown {
     const obj: any = {};
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
     return obj;
@@ -3086,7 +3121,7 @@ export const EdgeGetVoiceTargetsParams: MessageFns<EdgeGetVoiceTargetsParams> = 
   },
   fromPartial<I extends Exact<DeepPartial<EdgeGetVoiceTargetsParams>, I>>(object: I): EdgeGetVoiceTargetsParams {
     const message = createBaseEdgeGetVoiceTargetsParams();
-    message.edge_id = object.edge_id ?? 0;
+    message.edge_id = object.edge_id ?? undefined;
     return message;
   },
 };
@@ -3159,24 +3194,30 @@ export const EdgeGetVoiceTargetsResult: MessageFns<EdgeGetVoiceTargetsResult> = 
 };
 
 function createBaseVoiceTargetConfigEntry(): VoiceTargetConfigEntry {
-  return { edge_id: 0, client_session: 0, target_id: 0, config: undefined, timestamp: 0 };
+  return {
+    edge_id: undefined,
+    client_session: undefined,
+    target_id: undefined,
+    config: undefined,
+    timestamp: undefined,
+  };
 }
 
 export const VoiceTargetConfigEntry: MessageFns<VoiceTargetConfigEntry> = {
   encode(message: VoiceTargetConfigEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(8).uint32(message.edge_id);
     }
-    if (message.client_session !== undefined && message.client_session !== 0) {
+    if (message.client_session !== undefined) {
       writer.uint32(16).uint32(message.client_session);
     }
-    if (message.target_id !== undefined && message.target_id !== 0) {
+    if (message.target_id !== undefined) {
       writer.uint32(24).uint32(message.target_id);
     }
     if (message.config !== undefined) {
       VoiceTargetConfigProto.encode(message.config, writer.uint32(34).fork()).join();
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       writer.uint32(40).int64(message.timestamp);
     }
     return writer;
@@ -3240,29 +3281,29 @@ export const VoiceTargetConfigEntry: MessageFns<VoiceTargetConfigEntry> = {
 
   fromJSON(object: any): VoiceTargetConfigEntry {
     return {
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      client_session: isSet(object.client_session) ? globalThis.Number(object.client_session) : 0,
-      target_id: isSet(object.target_id) ? globalThis.Number(object.target_id) : 0,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      client_session: isSet(object.client_session) ? globalThis.Number(object.client_session) : undefined,
+      target_id: isSet(object.target_id) ? globalThis.Number(object.target_id) : undefined,
       config: isSet(object.config) ? VoiceTargetConfigProto.fromJSON(object.config) : undefined,
-      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
     };
   },
 
   toJSON(message: VoiceTargetConfigEntry): unknown {
     const obj: any = {};
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.client_session !== undefined && message.client_session !== 0) {
+    if (message.client_session !== undefined) {
       obj.client_session = Math.round(message.client_session);
     }
-    if (message.target_id !== undefined && message.target_id !== 0) {
+    if (message.target_id !== undefined) {
       obj.target_id = Math.round(message.target_id);
     }
     if (message.config !== undefined) {
       obj.config = VoiceTargetConfigProto.toJSON(message.config);
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       obj.timestamp = Math.round(message.timestamp);
     }
     return obj;
@@ -3273,36 +3314,42 @@ export const VoiceTargetConfigEntry: MessageFns<VoiceTargetConfigEntry> = {
   },
   fromPartial<I extends Exact<DeepPartial<VoiceTargetConfigEntry>, I>>(object: I): VoiceTargetConfigEntry {
     const message = createBaseVoiceTargetConfigEntry();
-    message.edge_id = object.edge_id ?? 0;
-    message.client_session = object.client_session ?? 0;
-    message.target_id = object.target_id ?? 0;
+    message.edge_id = object.edge_id ?? undefined;
+    message.client_session = object.client_session ?? undefined;
+    message.target_id = object.target_id ?? undefined;
     message.config = (object.config !== undefined && object.config !== null)
       ? VoiceTargetConfigProto.fromPartial(object.config)
       : undefined;
-    message.timestamp = object.timestamp ?? 0;
+    message.timestamp = object.timestamp ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeRouteVoiceParams(): EdgeRouteVoiceParams {
-  return { from_edge_id: 0, from_session_id: 0, target_id: 0, voice_data: Buffer.alloc(0), timestamp: 0 };
+  return {
+    from_edge_id: undefined,
+    from_session_id: undefined,
+    target_id: undefined,
+    voice_data: undefined,
+    timestamp: undefined,
+  };
 }
 
 export const EdgeRouteVoiceParams: MessageFns<EdgeRouteVoiceParams> = {
   encode(message: EdgeRouteVoiceParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.from_edge_id !== undefined && message.from_edge_id !== 0) {
+    if (message.from_edge_id !== undefined) {
       writer.uint32(8).uint32(message.from_edge_id);
     }
-    if (message.from_session_id !== undefined && message.from_session_id !== 0) {
+    if (message.from_session_id !== undefined) {
       writer.uint32(16).uint32(message.from_session_id);
     }
-    if (message.target_id !== undefined && message.target_id !== 0) {
+    if (message.target_id !== undefined) {
       writer.uint32(24).uint32(message.target_id);
     }
-    if (message.voice_data !== undefined && message.voice_data.length !== 0) {
+    if (message.voice_data !== undefined) {
       writer.uint32(34).bytes(message.voice_data);
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       writer.uint32(40).int64(message.timestamp);
     }
     return writer;
@@ -3366,29 +3413,29 @@ export const EdgeRouteVoiceParams: MessageFns<EdgeRouteVoiceParams> = {
 
   fromJSON(object: any): EdgeRouteVoiceParams {
     return {
-      from_edge_id: isSet(object.from_edge_id) ? globalThis.Number(object.from_edge_id) : 0,
-      from_session_id: isSet(object.from_session_id) ? globalThis.Number(object.from_session_id) : 0,
-      target_id: isSet(object.target_id) ? globalThis.Number(object.target_id) : 0,
-      voice_data: isSet(object.voice_data) ? Buffer.from(bytesFromBase64(object.voice_data)) : Buffer.alloc(0),
-      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
+      from_edge_id: isSet(object.from_edge_id) ? globalThis.Number(object.from_edge_id) : undefined,
+      from_session_id: isSet(object.from_session_id) ? globalThis.Number(object.from_session_id) : undefined,
+      target_id: isSet(object.target_id) ? globalThis.Number(object.target_id) : undefined,
+      voice_data: isSet(object.voice_data) ? Buffer.from(bytesFromBase64(object.voice_data)) : undefined,
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
     };
   },
 
   toJSON(message: EdgeRouteVoiceParams): unknown {
     const obj: any = {};
-    if (message.from_edge_id !== undefined && message.from_edge_id !== 0) {
+    if (message.from_edge_id !== undefined) {
       obj.from_edge_id = Math.round(message.from_edge_id);
     }
-    if (message.from_session_id !== undefined && message.from_session_id !== 0) {
+    if (message.from_session_id !== undefined) {
       obj.from_session_id = Math.round(message.from_session_id);
     }
-    if (message.target_id !== undefined && message.target_id !== 0) {
+    if (message.target_id !== undefined) {
       obj.target_id = Math.round(message.target_id);
     }
-    if (message.voice_data !== undefined && message.voice_data.length !== 0) {
+    if (message.voice_data !== undefined) {
       obj.voice_data = base64FromBytes(message.voice_data);
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       obj.timestamp = Math.round(message.timestamp);
     }
     return obj;
@@ -3399,22 +3446,22 @@ export const EdgeRouteVoiceParams: MessageFns<EdgeRouteVoiceParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeRouteVoiceParams>, I>>(object: I): EdgeRouteVoiceParams {
     const message = createBaseEdgeRouteVoiceParams();
-    message.from_edge_id = object.from_edge_id ?? 0;
-    message.from_session_id = object.from_session_id ?? 0;
-    message.target_id = object.target_id ?? 0;
-    message.voice_data = object.voice_data ?? Buffer.alloc(0);
-    message.timestamp = object.timestamp ?? 0;
+    message.from_edge_id = object.from_edge_id ?? undefined;
+    message.from_session_id = object.from_session_id ?? undefined;
+    message.target_id = object.target_id ?? undefined;
+    message.voice_data = object.voice_data ?? undefined;
+    message.timestamp = object.timestamp ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeRouteVoiceResult(): EdgeRouteVoiceResult {
-  return { success: false, routed_to: [] };
+  return { success: undefined, routed_to: [] };
 }
 
 export const EdgeRouteVoiceResult: MessageFns<EdgeRouteVoiceResult> = {
   encode(message: EdgeRouteVoiceResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
     if (message.routed_to !== undefined && message.routed_to.length !== 0) {
@@ -3462,7 +3509,7 @@ export const EdgeRouteVoiceResult: MessageFns<EdgeRouteVoiceResult> = {
 
   fromJSON(object: any): EdgeRouteVoiceResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
       routed_to: globalThis.Array.isArray(object?.routed_to)
         ? object.routed_to.map((e: any) => RouteTarget.fromJSON(e))
         : [],
@@ -3471,7 +3518,7 @@ export const EdgeRouteVoiceResult: MessageFns<EdgeRouteVoiceResult> = {
 
   toJSON(message: EdgeRouteVoiceResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
     if (message.routed_to?.length) {
@@ -3485,22 +3532,22 @@ export const EdgeRouteVoiceResult: MessageFns<EdgeRouteVoiceResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeRouteVoiceResult>, I>>(object: I): EdgeRouteVoiceResult {
     const message = createBaseEdgeRouteVoiceResult();
-    message.success = object.success ?? false;
+    message.success = object.success ?? undefined;
     message.routed_to = object.routed_to?.map((e) => RouteTarget.fromPartial(e)) || [];
     return message;
   },
 };
 
 function createBaseRouteTarget(): RouteTarget {
-  return { session_id: 0, edge_id: 0 };
+  return { session_id: undefined, edge_id: undefined };
 }
 
 export const RouteTarget: MessageFns<RouteTarget> = {
   encode(message: RouteTarget, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       writer.uint32(8).uint32(message.session_id);
     }
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(16).uint32(message.edge_id);
     }
     return writer;
@@ -3540,17 +3587,17 @@ export const RouteTarget: MessageFns<RouteTarget> = {
 
   fromJSON(object: any): RouteTarget {
     return {
-      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : 0,
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
     };
   },
 
   toJSON(message: RouteTarget): unknown {
     const obj: any = {};
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       obj.session_id = Math.round(message.session_id);
     }
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
     return obj;
@@ -3561,22 +3608,22 @@ export const RouteTarget: MessageFns<RouteTarget> = {
   },
   fromPartial<I extends Exact<DeepPartial<RouteTarget>, I>>(object: I): RouteTarget {
     const message = createBaseRouteTarget();
-    message.session_id = object.session_id ?? 0;
-    message.edge_id = object.edge_id ?? 0;
+    message.session_id = object.session_id ?? undefined;
+    message.edge_id = object.edge_id ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeAdminOperationParams(): EdgeAdminOperationParams {
-  return { operation: "", data: Buffer.alloc(0) };
+  return { operation: undefined, data: undefined };
 }
 
 export const EdgeAdminOperationParams: MessageFns<EdgeAdminOperationParams> = {
   encode(message: EdgeAdminOperationParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.operation !== undefined && message.operation !== "") {
+    if (message.operation !== undefined) {
       writer.uint32(10).string(message.operation);
     }
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       writer.uint32(18).bytes(message.data);
     }
     return writer;
@@ -3616,17 +3663,17 @@ export const EdgeAdminOperationParams: MessageFns<EdgeAdminOperationParams> = {
 
   fromJSON(object: any): EdgeAdminOperationParams {
     return {
-      operation: isSet(object.operation) ? globalThis.String(object.operation) : "",
-      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : Buffer.alloc(0),
+      operation: isSet(object.operation) ? globalThis.String(object.operation) : undefined,
+      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : undefined,
     };
   },
 
   toJSON(message: EdgeAdminOperationParams): unknown {
     const obj: any = {};
-    if (message.operation !== undefined && message.operation !== "") {
+    if (message.operation !== undefined) {
       obj.operation = message.operation;
     }
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       obj.data = base64FromBytes(message.data);
     }
     return obj;
@@ -3637,22 +3684,22 @@ export const EdgeAdminOperationParams: MessageFns<EdgeAdminOperationParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeAdminOperationParams>, I>>(object: I): EdgeAdminOperationParams {
     const message = createBaseEdgeAdminOperationParams();
-    message.operation = object.operation ?? "";
-    message.data = object.data ?? Buffer.alloc(0);
+    message.operation = object.operation ?? undefined;
+    message.data = object.data ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeAdminOperationResult(): EdgeAdminOperationResult {
-  return { success: false, message: "", stats: undefined };
+  return { success: undefined, message: undefined, stats: undefined };
 }
 
 export const EdgeAdminOperationResult: MessageFns<EdgeAdminOperationResult> = {
   encode(message: EdgeAdminOperationResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.message !== undefined && message.message !== "") {
+    if (message.message !== undefined) {
       writer.uint32(18).string(message.message);
     }
     if (message.stats !== undefined) {
@@ -3703,18 +3750,18 @@ export const EdgeAdminOperationResult: MessageFns<EdgeAdminOperationResult> = {
 
   fromJSON(object: any): EdgeAdminOperationResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      message: isSet(object.message) ? globalThis.String(object.message) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      message: isSet(object.message) ? globalThis.String(object.message) : undefined,
       stats: isSet(object.stats) ? AdminStats.fromJSON(object.stats) : undefined,
     };
   },
 
   toJSON(message: EdgeAdminOperationResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.message !== undefined && message.message !== "") {
+    if (message.message !== undefined) {
       obj.message = message.message;
     }
     if (message.stats !== undefined) {
@@ -3728,8 +3775,8 @@ export const EdgeAdminOperationResult: MessageFns<EdgeAdminOperationResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeAdminOperationResult>, I>>(object: I): EdgeAdminOperationResult {
     const message = createBaseEdgeAdminOperationResult();
-    message.success = object.success ?? false;
-    message.message = object.message ?? "";
+    message.success = object.success ?? undefined;
+    message.message = object.message ?? undefined;
     message.stats = (object.stats !== undefined && object.stats !== null)
       ? AdminStats.fromPartial(object.stats)
       : undefined;
@@ -3738,21 +3785,21 @@ export const EdgeAdminOperationResult: MessageFns<EdgeAdminOperationResult> = {
 };
 
 function createBaseAdminStats(): AdminStats {
-  return { edges: 0, sessions: 0, voice_targets: 0, channels: 0 };
+  return { edges: undefined, sessions: undefined, voice_targets: undefined, channels: undefined };
 }
 
 export const AdminStats: MessageFns<AdminStats> = {
   encode(message: AdminStats, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.edges !== undefined && message.edges !== 0) {
+    if (message.edges !== undefined) {
       writer.uint32(8).uint32(message.edges);
     }
-    if (message.sessions !== undefined && message.sessions !== 0) {
+    if (message.sessions !== undefined) {
       writer.uint32(16).uint32(message.sessions);
     }
-    if (message.voice_targets !== undefined && message.voice_targets !== 0) {
+    if (message.voice_targets !== undefined) {
       writer.uint32(24).uint32(message.voice_targets);
     }
-    if (message.channels !== undefined && message.channels !== 0) {
+    if (message.channels !== undefined) {
       writer.uint32(32).uint32(message.channels);
     }
     return writer;
@@ -3808,25 +3855,25 @@ export const AdminStats: MessageFns<AdminStats> = {
 
   fromJSON(object: any): AdminStats {
     return {
-      edges: isSet(object.edges) ? globalThis.Number(object.edges) : 0,
-      sessions: isSet(object.sessions) ? globalThis.Number(object.sessions) : 0,
-      voice_targets: isSet(object.voice_targets) ? globalThis.Number(object.voice_targets) : 0,
-      channels: isSet(object.channels) ? globalThis.Number(object.channels) : 0,
+      edges: isSet(object.edges) ? globalThis.Number(object.edges) : undefined,
+      sessions: isSet(object.sessions) ? globalThis.Number(object.sessions) : undefined,
+      voice_targets: isSet(object.voice_targets) ? globalThis.Number(object.voice_targets) : undefined,
+      channels: isSet(object.channels) ? globalThis.Number(object.channels) : undefined,
     };
   },
 
   toJSON(message: AdminStats): unknown {
     const obj: any = {};
-    if (message.edges !== undefined && message.edges !== 0) {
+    if (message.edges !== undefined) {
       obj.edges = Math.round(message.edges);
     }
-    if (message.sessions !== undefined && message.sessions !== 0) {
+    if (message.sessions !== undefined) {
       obj.sessions = Math.round(message.sessions);
     }
-    if (message.voice_targets !== undefined && message.voice_targets !== 0) {
+    if (message.voice_targets !== undefined) {
       obj.voice_targets = Math.round(message.voice_targets);
     }
-    if (message.channels !== undefined && message.channels !== 0) {
+    if (message.channels !== undefined) {
       obj.channels = Math.round(message.channels);
     }
     return obj;
@@ -3837,24 +3884,24 @@ export const AdminStats: MessageFns<AdminStats> = {
   },
   fromPartial<I extends Exact<DeepPartial<AdminStats>, I>>(object: I): AdminStats {
     const message = createBaseAdminStats();
-    message.edges = object.edges ?? 0;
-    message.sessions = object.sessions ?? 0;
-    message.voice_targets = object.voice_targets ?? 0;
-    message.channels = object.channels ?? 0;
+    message.edges = object.edges ?? undefined;
+    message.sessions = object.sessions ?? undefined;
+    message.voice_targets = object.voice_targets ?? undefined;
+    message.channels = object.channels ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeExchangeCertificatesParams(): EdgeExchangeCertificatesParams {
-  return { server_id: 0, certificate: "" };
+  return { server_id: undefined, certificate: undefined };
 }
 
 export const EdgeExchangeCertificatesParams: MessageFns<EdgeExchangeCertificatesParams> = {
   encode(message: EdgeExchangeCertificatesParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       writer.uint32(8).uint32(message.server_id);
     }
-    if (message.certificate !== undefined && message.certificate !== "") {
+    if (message.certificate !== undefined) {
       writer.uint32(18).string(message.certificate);
     }
     return writer;
@@ -3894,17 +3941,17 @@ export const EdgeExchangeCertificatesParams: MessageFns<EdgeExchangeCertificates
 
   fromJSON(object: any): EdgeExchangeCertificatesParams {
     return {
-      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : 0,
-      certificate: isSet(object.certificate) ? globalThis.String(object.certificate) : "",
+      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : undefined,
+      certificate: isSet(object.certificate) ? globalThis.String(object.certificate) : undefined,
     };
   },
 
   toJSON(message: EdgeExchangeCertificatesParams): unknown {
     const obj: any = {};
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       obj.server_id = Math.round(message.server_id);
     }
-    if (message.certificate !== undefined && message.certificate !== "") {
+    if (message.certificate !== undefined) {
       obj.certificate = message.certificate;
     }
     return obj;
@@ -3917,22 +3964,22 @@ export const EdgeExchangeCertificatesParams: MessageFns<EdgeExchangeCertificates
     object: I,
   ): EdgeExchangeCertificatesParams {
     const message = createBaseEdgeExchangeCertificatesParams();
-    message.server_id = object.server_id ?? 0;
-    message.certificate = object.certificate ?? "";
+    message.server_id = object.server_id ?? undefined;
+    message.certificate = object.certificate ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeExchangeCertificatesResult(): EdgeExchangeCertificatesResult {
-  return { success: false, error: "" };
+  return { success: undefined, error: undefined };
 }
 
 export const EdgeExchangeCertificatesResult: MessageFns<EdgeExchangeCertificatesResult> = {
   encode(message: EdgeExchangeCertificatesResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(18).string(message.error);
     }
     return writer;
@@ -3972,17 +4019,17 @@ export const EdgeExchangeCertificatesResult: MessageFns<EdgeExchangeCertificates
 
   fromJSON(object: any): EdgeExchangeCertificatesResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: EdgeExchangeCertificatesResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -3995,19 +4042,19 @@ export const EdgeExchangeCertificatesResult: MessageFns<EdgeExchangeCertificates
     object: I,
   ): EdgeExchangeCertificatesResult {
     const message = createBaseEdgeExchangeCertificatesResult();
-    message.success = object.success ?? false;
-    message.error = object.error ?? "";
+    message.success = object.success ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeFullSyncParams(): EdgeFullSyncParams {
-  return { for_user_id: 0, for_user_groups: [], for_user_channel_id: 0, for_user_cert_hash: "" };
+  return { for_user_id: undefined, for_user_groups: [], for_user_channel_id: undefined, for_user_cert_hash: undefined };
 }
 
 export const EdgeFullSyncParams: MessageFns<EdgeFullSyncParams> = {
   encode(message: EdgeFullSyncParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.for_user_id !== undefined && message.for_user_id !== 0) {
+    if (message.for_user_id !== undefined) {
       writer.uint32(8).uint32(message.for_user_id);
     }
     if (message.for_user_groups !== undefined && message.for_user_groups.length !== 0) {
@@ -4015,10 +4062,10 @@ export const EdgeFullSyncParams: MessageFns<EdgeFullSyncParams> = {
         writer.uint32(18).string(v!);
       }
     }
-    if (message.for_user_channel_id !== undefined && message.for_user_channel_id !== 0) {
+    if (message.for_user_channel_id !== undefined) {
       writer.uint32(24).uint32(message.for_user_channel_id);
     }
-    if (message.for_user_cert_hash !== undefined && message.for_user_cert_hash !== "") {
+    if (message.for_user_cert_hash !== undefined) {
       writer.uint32(34).string(message.for_user_cert_hash);
     }
     return writer;
@@ -4077,27 +4124,29 @@ export const EdgeFullSyncParams: MessageFns<EdgeFullSyncParams> = {
 
   fromJSON(object: any): EdgeFullSyncParams {
     return {
-      for_user_id: isSet(object.for_user_id) ? globalThis.Number(object.for_user_id) : 0,
+      for_user_id: isSet(object.for_user_id) ? globalThis.Number(object.for_user_id) : undefined,
       for_user_groups: globalThis.Array.isArray(object?.for_user_groups)
         ? object.for_user_groups.map((e: any) => globalThis.String(e))
         : [],
-      for_user_channel_id: isSet(object.for_user_channel_id) ? globalThis.Number(object.for_user_channel_id) : 0,
-      for_user_cert_hash: isSet(object.for_user_cert_hash) ? globalThis.String(object.for_user_cert_hash) : "",
+      for_user_channel_id: isSet(object.for_user_channel_id)
+        ? globalThis.Number(object.for_user_channel_id)
+        : undefined,
+      for_user_cert_hash: isSet(object.for_user_cert_hash) ? globalThis.String(object.for_user_cert_hash) : undefined,
     };
   },
 
   toJSON(message: EdgeFullSyncParams): unknown {
     const obj: any = {};
-    if (message.for_user_id !== undefined && message.for_user_id !== 0) {
+    if (message.for_user_id !== undefined) {
       obj.for_user_id = Math.round(message.for_user_id);
     }
     if (message.for_user_groups?.length) {
       obj.for_user_groups = message.for_user_groups;
     }
-    if (message.for_user_channel_id !== undefined && message.for_user_channel_id !== 0) {
+    if (message.for_user_channel_id !== undefined) {
       obj.for_user_channel_id = Math.round(message.for_user_channel_id);
     }
-    if (message.for_user_cert_hash !== undefined && message.for_user_cert_hash !== "") {
+    if (message.for_user_cert_hash !== undefined) {
       obj.for_user_cert_hash = message.for_user_cert_hash;
     }
     return obj;
@@ -4108,16 +4157,25 @@ export const EdgeFullSyncParams: MessageFns<EdgeFullSyncParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeFullSyncParams>, I>>(object: I): EdgeFullSyncParams {
     const message = createBaseEdgeFullSyncParams();
-    message.for_user_id = object.for_user_id ?? 0;
+    message.for_user_id = object.for_user_id ?? undefined;
     message.for_user_groups = object.for_user_groups?.map((e) => e) || [];
-    message.for_user_channel_id = object.for_user_channel_id ?? 0;
-    message.for_user_cert_hash = object.for_user_cert_hash ?? "";
+    message.for_user_channel_id = object.for_user_channel_id ?? undefined;
+    message.for_user_cert_hash = object.for_user_cert_hash ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeFullSyncResult(): EdgeFullSyncResult {
-  return { channels: [], channel_links: [], acls: [], bans: [], sessions: [], timestamp: 0, sequence: 0, edges: [] };
+  return {
+    channels: [],
+    channel_links: [],
+    acls: [],
+    bans: [],
+    sessions: [],
+    timestamp: undefined,
+    sequence: undefined,
+    edges: [],
+  };
 }
 
 export const EdgeFullSyncResult: MessageFns<EdgeFullSyncResult> = {
@@ -4147,10 +4205,10 @@ export const EdgeFullSyncResult: MessageFns<EdgeFullSyncResult> = {
         GlobalSessionProto.encode(v!, writer.uint32(42).fork()).join();
       }
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       writer.uint32(48).int64(message.timestamp);
     }
-    if (message.sequence !== undefined && message.sequence !== 0) {
+    if (message.sequence !== undefined) {
       writer.uint32(56).uint64(message.sequence);
     }
     if (message.edges !== undefined && message.edges.length !== 0) {
@@ -4272,8 +4330,8 @@ export const EdgeFullSyncResult: MessageFns<EdgeFullSyncResult> = {
       sessions: globalThis.Array.isArray(object?.sessions)
         ? object.sessions.map((e: any) => GlobalSessionProto.fromJSON(e))
         : [],
-      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
-      sequence: isSet(object.sequence) ? globalThis.Number(object.sequence) : 0,
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
+      sequence: isSet(object.sequence) ? globalThis.Number(object.sequence) : undefined,
       edges: globalThis.Array.isArray(object?.edges) ? object.edges.map((e: any) => EdgeInfoProto.fromJSON(e)) : [],
     };
   },
@@ -4295,10 +4353,10 @@ export const EdgeFullSyncResult: MessageFns<EdgeFullSyncResult> = {
     if (message.sessions?.length) {
       obj.sessions = message.sessions.map((e) => GlobalSessionProto.toJSON(e));
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       obj.timestamp = Math.round(message.timestamp);
     }
-    if (message.sequence !== undefined && message.sequence !== 0) {
+    if (message.sequence !== undefined) {
       obj.sequence = Math.round(message.sequence);
     }
     if (message.edges?.length) {
@@ -4317,8 +4375,8 @@ export const EdgeFullSyncResult: MessageFns<EdgeFullSyncResult> = {
     message.acls = object.acls?.map((e) => ACLDataProto.fromPartial(e)) || [];
     message.bans = object.bans?.map((e) => BanDataProto.fromPartial(e)) || [];
     message.sessions = object.sessions?.map((e) => GlobalSessionProto.fromPartial(e)) || [];
-    message.timestamp = object.timestamp ?? 0;
-    message.sequence = object.sequence ?? 0;
+    message.timestamp = object.timestamp ?? undefined;
+    message.sequence = object.sequence ?? undefined;
     message.edges = object.edges?.map((e) => EdgeInfoProto.fromPartial(e)) || [];
     return message;
   },
@@ -4326,42 +4384,42 @@ export const EdgeFullSyncResult: MessageFns<EdgeFullSyncResult> = {
 
 function createBaseChannelDataProto(): ChannelDataProto {
   return {
-    channel_id: 0,
-    name: "",
-    parent_id: 0,
-    description: "",
-    position: 0,
-    max_users: 0,
-    temporary: false,
-    inherit_acl: false,
+    channel_id: undefined,
+    name: undefined,
+    parent_id: undefined,
+    description: undefined,
+    position: undefined,
+    max_users: undefined,
+    temporary: undefined,
+    inherit_acl: undefined,
     links: [],
   };
 }
 
 export const ChannelDataProto: MessageFns<ChannelDataProto> = {
   encode(message: ChannelDataProto, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(8).uint32(message.channel_id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(18).string(message.name);
     }
-    if (message.parent_id !== undefined && message.parent_id !== 0) {
+    if (message.parent_id !== undefined) {
       writer.uint32(24).uint32(message.parent_id);
     }
-    if (message.description !== undefined && message.description !== "") {
+    if (message.description !== undefined) {
       writer.uint32(34).string(message.description);
     }
-    if (message.position !== undefined && message.position !== 0) {
+    if (message.position !== undefined) {
       writer.uint32(40).int32(message.position);
     }
-    if (message.max_users !== undefined && message.max_users !== 0) {
+    if (message.max_users !== undefined) {
       writer.uint32(48).uint32(message.max_users);
     }
-    if (message.temporary !== undefined && message.temporary !== false) {
+    if (message.temporary !== undefined) {
       writer.uint32(56).bool(message.temporary);
     }
-    if (message.inherit_acl !== undefined && message.inherit_acl !== false) {
+    if (message.inherit_acl !== undefined) {
       writer.uint32(64).bool(message.inherit_acl);
     }
     if (message.links !== undefined && message.links.length !== 0) {
@@ -4472,42 +4530,42 @@ export const ChannelDataProto: MessageFns<ChannelDataProto> = {
 
   fromJSON(object: any): ChannelDataProto {
     return {
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      parent_id: isSet(object.parent_id) ? globalThis.Number(object.parent_id) : 0,
-      description: isSet(object.description) ? globalThis.String(object.description) : "",
-      position: isSet(object.position) ? globalThis.Number(object.position) : 0,
-      max_users: isSet(object.max_users) ? globalThis.Number(object.max_users) : 0,
-      temporary: isSet(object.temporary) ? globalThis.Boolean(object.temporary) : false,
-      inherit_acl: isSet(object.inherit_acl) ? globalThis.Boolean(object.inherit_acl) : false,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      parent_id: isSet(object.parent_id) ? globalThis.Number(object.parent_id) : undefined,
+      description: isSet(object.description) ? globalThis.String(object.description) : undefined,
+      position: isSet(object.position) ? globalThis.Number(object.position) : undefined,
+      max_users: isSet(object.max_users) ? globalThis.Number(object.max_users) : undefined,
+      temporary: isSet(object.temporary) ? globalThis.Boolean(object.temporary) : undefined,
+      inherit_acl: isSet(object.inherit_acl) ? globalThis.Boolean(object.inherit_acl) : undefined,
       links: globalThis.Array.isArray(object?.links) ? object.links.map((e: any) => globalThis.Number(e)) : [],
     };
   },
 
   toJSON(message: ChannelDataProto): unknown {
     const obj: any = {};
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.parent_id !== undefined && message.parent_id !== 0) {
+    if (message.parent_id !== undefined) {
       obj.parent_id = Math.round(message.parent_id);
     }
-    if (message.description !== undefined && message.description !== "") {
+    if (message.description !== undefined) {
       obj.description = message.description;
     }
-    if (message.position !== undefined && message.position !== 0) {
+    if (message.position !== undefined) {
       obj.position = Math.round(message.position);
     }
-    if (message.max_users !== undefined && message.max_users !== 0) {
+    if (message.max_users !== undefined) {
       obj.max_users = Math.round(message.max_users);
     }
-    if (message.temporary !== undefined && message.temporary !== false) {
+    if (message.temporary !== undefined) {
       obj.temporary = message.temporary;
     }
-    if (message.inherit_acl !== undefined && message.inherit_acl !== false) {
+    if (message.inherit_acl !== undefined) {
       obj.inherit_acl = message.inherit_acl;
     }
     if (message.links?.length) {
@@ -4521,29 +4579,29 @@ export const ChannelDataProto: MessageFns<ChannelDataProto> = {
   },
   fromPartial<I extends Exact<DeepPartial<ChannelDataProto>, I>>(object: I): ChannelDataProto {
     const message = createBaseChannelDataProto();
-    message.channel_id = object.channel_id ?? 0;
-    message.name = object.name ?? "";
-    message.parent_id = object.parent_id ?? 0;
-    message.description = object.description ?? "";
-    message.position = object.position ?? 0;
-    message.max_users = object.max_users ?? 0;
-    message.temporary = object.temporary ?? false;
-    message.inherit_acl = object.inherit_acl ?? false;
+    message.channel_id = object.channel_id ?? undefined;
+    message.name = object.name ?? undefined;
+    message.parent_id = object.parent_id ?? undefined;
+    message.description = object.description ?? undefined;
+    message.position = object.position ?? undefined;
+    message.max_users = object.max_users ?? undefined;
+    message.temporary = object.temporary ?? undefined;
+    message.inherit_acl = object.inherit_acl ?? undefined;
     message.links = object.links?.map((e) => e) || [];
     return message;
   },
 };
 
 function createBaseChannelLinkProto(): ChannelLinkProto {
-  return { channel_id: 0, target_id: 0 };
+  return { channel_id: undefined, target_id: undefined };
 }
 
 export const ChannelLinkProto: MessageFns<ChannelLinkProto> = {
   encode(message: ChannelLinkProto, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(8).uint32(message.channel_id);
     }
-    if (message.target_id !== undefined && message.target_id !== 0) {
+    if (message.target_id !== undefined) {
       writer.uint32(16).uint32(message.target_id);
     }
     return writer;
@@ -4583,17 +4641,17 @@ export const ChannelLinkProto: MessageFns<ChannelLinkProto> = {
 
   fromJSON(object: any): ChannelLinkProto {
     return {
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      target_id: isSet(object.target_id) ? globalThis.Number(object.target_id) : 0,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      target_id: isSet(object.target_id) ? globalThis.Number(object.target_id) : undefined,
     };
   },
 
   toJSON(message: ChannelLinkProto): unknown {
     const obj: any = {};
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.target_id !== undefined && message.target_id !== 0) {
+    if (message.target_id !== undefined) {
       obj.target_id = Math.round(message.target_id);
     }
     return obj;
@@ -4604,40 +4662,49 @@ export const ChannelLinkProto: MessageFns<ChannelLinkProto> = {
   },
   fromPartial<I extends Exact<DeepPartial<ChannelLinkProto>, I>>(object: I): ChannelLinkProto {
     const message = createBaseChannelLinkProto();
-    message.channel_id = object.channel_id ?? 0;
-    message.target_id = object.target_id ?? 0;
+    message.channel_id = object.channel_id ?? undefined;
+    message.target_id = object.target_id ?? undefined;
     return message;
   },
 };
 
 function createBaseACLDataProto(): ACLDataProto {
-  return { id: 0, channel_id: 0, user_id: 0, group: "", apply_here: false, apply_subs: false, allow: 0, deny: 0 };
+  return {
+    id: undefined,
+    channel_id: undefined,
+    user_id: undefined,
+    group: undefined,
+    apply_here: undefined,
+    apply_subs: undefined,
+    allow: undefined,
+    deny: undefined,
+  };
 }
 
 export const ACLDataProto: MessageFns<ACLDataProto> = {
   encode(message: ACLDataProto, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.id !== undefined && message.id !== 0) {
+    if (message.id !== undefined) {
       writer.uint32(8).uint32(message.id);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(16).uint32(message.channel_id);
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       writer.uint32(24).uint32(message.user_id);
     }
-    if (message.group !== undefined && message.group !== "") {
+    if (message.group !== undefined) {
       writer.uint32(34).string(message.group);
     }
-    if (message.apply_here !== undefined && message.apply_here !== false) {
+    if (message.apply_here !== undefined) {
       writer.uint32(40).bool(message.apply_here);
     }
-    if (message.apply_subs !== undefined && message.apply_subs !== false) {
+    if (message.apply_subs !== undefined) {
       writer.uint32(48).bool(message.apply_subs);
     }
-    if (message.allow !== undefined && message.allow !== 0) {
+    if (message.allow !== undefined) {
       writer.uint32(56).uint32(message.allow);
     }
-    if (message.deny !== undefined && message.deny !== 0) {
+    if (message.deny !== undefined) {
       writer.uint32(64).uint32(message.deny);
     }
     return writer;
@@ -4725,41 +4792,41 @@ export const ACLDataProto: MessageFns<ACLDataProto> = {
 
   fromJSON(object: any): ACLDataProto {
     return {
-      id: isSet(object.id) ? globalThis.Number(object.id) : 0,
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : 0,
-      group: isSet(object.group) ? globalThis.String(object.group) : "",
-      apply_here: isSet(object.apply_here) ? globalThis.Boolean(object.apply_here) : false,
-      apply_subs: isSet(object.apply_subs) ? globalThis.Boolean(object.apply_subs) : false,
-      allow: isSet(object.allow) ? globalThis.Number(object.allow) : 0,
-      deny: isSet(object.deny) ? globalThis.Number(object.deny) : 0,
+      id: isSet(object.id) ? globalThis.Number(object.id) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : undefined,
+      group: isSet(object.group) ? globalThis.String(object.group) : undefined,
+      apply_here: isSet(object.apply_here) ? globalThis.Boolean(object.apply_here) : undefined,
+      apply_subs: isSet(object.apply_subs) ? globalThis.Boolean(object.apply_subs) : undefined,
+      allow: isSet(object.allow) ? globalThis.Number(object.allow) : undefined,
+      deny: isSet(object.deny) ? globalThis.Number(object.deny) : undefined,
     };
   },
 
   toJSON(message: ACLDataProto): unknown {
     const obj: any = {};
-    if (message.id !== undefined && message.id !== 0) {
+    if (message.id !== undefined) {
       obj.id = Math.round(message.id);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       obj.user_id = Math.round(message.user_id);
     }
-    if (message.group !== undefined && message.group !== "") {
+    if (message.group !== undefined) {
       obj.group = message.group;
     }
-    if (message.apply_here !== undefined && message.apply_here !== false) {
+    if (message.apply_here !== undefined) {
       obj.apply_here = message.apply_here;
     }
-    if (message.apply_subs !== undefined && message.apply_subs !== false) {
+    if (message.apply_subs !== undefined) {
       obj.apply_subs = message.apply_subs;
     }
-    if (message.allow !== undefined && message.allow !== 0) {
+    if (message.allow !== undefined) {
       obj.allow = Math.round(message.allow);
     }
-    if (message.deny !== undefined && message.deny !== 0) {
+    if (message.deny !== undefined) {
       obj.deny = Math.round(message.deny);
     }
     return obj;
@@ -4770,43 +4837,51 @@ export const ACLDataProto: MessageFns<ACLDataProto> = {
   },
   fromPartial<I extends Exact<DeepPartial<ACLDataProto>, I>>(object: I): ACLDataProto {
     const message = createBaseACLDataProto();
-    message.id = object.id ?? 0;
-    message.channel_id = object.channel_id ?? 0;
-    message.user_id = object.user_id ?? 0;
-    message.group = object.group ?? "";
-    message.apply_here = object.apply_here ?? false;
-    message.apply_subs = object.apply_subs ?? false;
-    message.allow = object.allow ?? 0;
-    message.deny = object.deny ?? 0;
+    message.id = object.id ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    message.user_id = object.user_id ?? undefined;
+    message.group = object.group ?? undefined;
+    message.apply_here = object.apply_here ?? undefined;
+    message.apply_subs = object.apply_subs ?? undefined;
+    message.allow = object.allow ?? undefined;
+    message.deny = object.deny ?? undefined;
     return message;
   },
 };
 
 function createBaseBanDataProto(): BanDataProto {
-  return { address: "", mask: 0, username: "", cert_hash: "", reason: "", start: 0, duration: 0 };
+  return {
+    address: undefined,
+    mask: undefined,
+    username: undefined,
+    cert_hash: undefined,
+    reason: undefined,
+    start: undefined,
+    duration: undefined,
+  };
 }
 
 export const BanDataProto: MessageFns<BanDataProto> = {
   encode(message: BanDataProto, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.address !== undefined && message.address !== "") {
+    if (message.address !== undefined) {
       writer.uint32(10).string(message.address);
     }
-    if (message.mask !== undefined && message.mask !== 0) {
+    if (message.mask !== undefined) {
       writer.uint32(16).uint32(message.mask);
     }
-    if (message.username !== undefined && message.username !== "") {
+    if (message.username !== undefined) {
       writer.uint32(26).string(message.username);
     }
-    if (message.cert_hash !== undefined && message.cert_hash !== "") {
+    if (message.cert_hash !== undefined) {
       writer.uint32(34).string(message.cert_hash);
     }
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       writer.uint32(42).string(message.reason);
     }
-    if (message.start !== undefined && message.start !== 0) {
+    if (message.start !== undefined) {
       writer.uint32(48).int64(message.start);
     }
-    if (message.duration !== undefined && message.duration !== 0) {
+    if (message.duration !== undefined) {
       writer.uint32(56).uint32(message.duration);
     }
     return writer;
@@ -4886,37 +4961,37 @@ export const BanDataProto: MessageFns<BanDataProto> = {
 
   fromJSON(object: any): BanDataProto {
     return {
-      address: isSet(object.address) ? globalThis.String(object.address) : "",
-      mask: isSet(object.mask) ? globalThis.Number(object.mask) : 0,
-      username: isSet(object.username) ? globalThis.String(object.username) : "",
-      cert_hash: isSet(object.cert_hash) ? globalThis.String(object.cert_hash) : "",
-      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
-      start: isSet(object.start) ? globalThis.Number(object.start) : 0,
-      duration: isSet(object.duration) ? globalThis.Number(object.duration) : 0,
+      address: isSet(object.address) ? globalThis.String(object.address) : undefined,
+      mask: isSet(object.mask) ? globalThis.Number(object.mask) : undefined,
+      username: isSet(object.username) ? globalThis.String(object.username) : undefined,
+      cert_hash: isSet(object.cert_hash) ? globalThis.String(object.cert_hash) : undefined,
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
+      start: isSet(object.start) ? globalThis.Number(object.start) : undefined,
+      duration: isSet(object.duration) ? globalThis.Number(object.duration) : undefined,
     };
   },
 
   toJSON(message: BanDataProto): unknown {
     const obj: any = {};
-    if (message.address !== undefined && message.address !== "") {
+    if (message.address !== undefined) {
       obj.address = message.address;
     }
-    if (message.mask !== undefined && message.mask !== 0) {
+    if (message.mask !== undefined) {
       obj.mask = Math.round(message.mask);
     }
-    if (message.username !== undefined && message.username !== "") {
+    if (message.username !== undefined) {
       obj.username = message.username;
     }
-    if (message.cert_hash !== undefined && message.cert_hash !== "") {
+    if (message.cert_hash !== undefined) {
       obj.cert_hash = message.cert_hash;
     }
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       obj.reason = message.reason;
     }
-    if (message.start !== undefined && message.start !== 0) {
+    if (message.start !== undefined) {
       obj.start = Math.round(message.start);
     }
-    if (message.duration !== undefined && message.duration !== 0) {
+    if (message.duration !== undefined) {
       obj.duration = Math.round(message.duration);
     }
     return obj;
@@ -4927,62 +5002,62 @@ export const BanDataProto: MessageFns<BanDataProto> = {
   },
   fromPartial<I extends Exact<DeepPartial<BanDataProto>, I>>(object: I): BanDataProto {
     const message = createBaseBanDataProto();
-    message.address = object.address ?? "";
-    message.mask = object.mask ?? 0;
-    message.username = object.username ?? "";
-    message.cert_hash = object.cert_hash ?? "";
-    message.reason = object.reason ?? "";
-    message.start = object.start ?? 0;
-    message.duration = object.duration ?? 0;
+    message.address = object.address ?? undefined;
+    message.mask = object.mask ?? undefined;
+    message.username = object.username ?? undefined;
+    message.cert_hash = object.cert_hash ?? undefined;
+    message.reason = object.reason ?? undefined;
+    message.start = object.start ?? undefined;
+    message.duration = object.duration ?? undefined;
     return message;
   },
 };
 
 function createBaseGlobalSessionProto(): GlobalSessionProto {
   return {
-    session_id: 0,
-    edge_id: 0,
-    user_id: 0,
-    username: "",
-    channel_id: 0,
-    ip_address: "",
-    cert_hash: "",
-    connected_at: 0,
+    session_id: undefined,
+    edge_id: undefined,
+    user_id: undefined,
+    username: undefined,
+    channel_id: undefined,
+    ip_address: undefined,
+    cert_hash: undefined,
+    connected_at: undefined,
     groups: [],
-    mute: false,
-    deaf: false,
-    suppress: false,
-    self_mute: false,
-    self_deaf: false,
-    priority_speaker: false,
-    recording: false,
+    mute: undefined,
+    deaf: undefined,
+    suppress: undefined,
+    self_mute: undefined,
+    self_deaf: undefined,
+    priority_speaker: undefined,
+    recording: undefined,
   };
 }
 
 export const GlobalSessionProto: MessageFns<GlobalSessionProto> = {
   encode(message: GlobalSessionProto, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       writer.uint32(8).uint32(message.session_id);
     }
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(16).uint32(message.edge_id);
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       writer.uint32(24).uint32(message.user_id);
     }
-    if (message.username !== undefined && message.username !== "") {
+    if (message.username !== undefined) {
       writer.uint32(34).string(message.username);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(40).uint32(message.channel_id);
     }
-    if (message.ip_address !== undefined && message.ip_address !== "") {
+    if (message.ip_address !== undefined) {
       writer.uint32(50).string(message.ip_address);
     }
-    if (message.cert_hash !== undefined && message.cert_hash !== "") {
+    if (message.cert_hash !== undefined) {
       writer.uint32(58).string(message.cert_hash);
     }
-    if (message.connected_at !== undefined && message.connected_at !== 0) {
+    if (message.connected_at !== undefined) {
       writer.uint32(64).int64(message.connected_at);
     }
     if (message.groups !== undefined && message.groups.length !== 0) {
@@ -4990,25 +5065,25 @@ export const GlobalSessionProto: MessageFns<GlobalSessionProto> = {
         writer.uint32(74).string(v!);
       }
     }
-    if (message.mute !== undefined && message.mute !== false) {
+    if (message.mute !== undefined) {
       writer.uint32(80).bool(message.mute);
     }
-    if (message.deaf !== undefined && message.deaf !== false) {
+    if (message.deaf !== undefined) {
       writer.uint32(88).bool(message.deaf);
     }
-    if (message.suppress !== undefined && message.suppress !== false) {
+    if (message.suppress !== undefined) {
       writer.uint32(96).bool(message.suppress);
     }
-    if (message.self_mute !== undefined && message.self_mute !== false) {
+    if (message.self_mute !== undefined) {
       writer.uint32(104).bool(message.self_mute);
     }
-    if (message.self_deaf !== undefined && message.self_deaf !== false) {
+    if (message.self_deaf !== undefined) {
       writer.uint32(112).bool(message.self_deaf);
     }
-    if (message.priority_speaker !== undefined && message.priority_speaker !== false) {
+    if (message.priority_speaker !== undefined) {
       writer.uint32(120).bool(message.priority_speaker);
     }
-    if (message.recording !== undefined && message.recording !== false) {
+    if (message.recording !== undefined) {
       writer.uint32(128).bool(message.recording);
     }
     return writer;
@@ -5163,73 +5238,73 @@ export const GlobalSessionProto: MessageFns<GlobalSessionProto> = {
 
   fromJSON(object: any): GlobalSessionProto {
     return {
-      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : 0,
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : 0,
-      username: isSet(object.username) ? globalThis.String(object.username) : "",
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      ip_address: isSet(object.ip_address) ? globalThis.String(object.ip_address) : "",
-      cert_hash: isSet(object.cert_hash) ? globalThis.String(object.cert_hash) : "",
-      connected_at: isSet(object.connected_at) ? globalThis.Number(object.connected_at) : 0,
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : undefined,
+      username: isSet(object.username) ? globalThis.String(object.username) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      ip_address: isSet(object.ip_address) ? globalThis.String(object.ip_address) : undefined,
+      cert_hash: isSet(object.cert_hash) ? globalThis.String(object.cert_hash) : undefined,
+      connected_at: isSet(object.connected_at) ? globalThis.Number(object.connected_at) : undefined,
       groups: globalThis.Array.isArray(object?.groups) ? object.groups.map((e: any) => globalThis.String(e)) : [],
-      mute: isSet(object.mute) ? globalThis.Boolean(object.mute) : false,
-      deaf: isSet(object.deaf) ? globalThis.Boolean(object.deaf) : false,
-      suppress: isSet(object.suppress) ? globalThis.Boolean(object.suppress) : false,
-      self_mute: isSet(object.self_mute) ? globalThis.Boolean(object.self_mute) : false,
-      self_deaf: isSet(object.self_deaf) ? globalThis.Boolean(object.self_deaf) : false,
-      priority_speaker: isSet(object.priority_speaker) ? globalThis.Boolean(object.priority_speaker) : false,
-      recording: isSet(object.recording) ? globalThis.Boolean(object.recording) : false,
+      mute: isSet(object.mute) ? globalThis.Boolean(object.mute) : undefined,
+      deaf: isSet(object.deaf) ? globalThis.Boolean(object.deaf) : undefined,
+      suppress: isSet(object.suppress) ? globalThis.Boolean(object.suppress) : undefined,
+      self_mute: isSet(object.self_mute) ? globalThis.Boolean(object.self_mute) : undefined,
+      self_deaf: isSet(object.self_deaf) ? globalThis.Boolean(object.self_deaf) : undefined,
+      priority_speaker: isSet(object.priority_speaker) ? globalThis.Boolean(object.priority_speaker) : undefined,
+      recording: isSet(object.recording) ? globalThis.Boolean(object.recording) : undefined,
     };
   },
 
   toJSON(message: GlobalSessionProto): unknown {
     const obj: any = {};
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       obj.session_id = Math.round(message.session_id);
     }
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       obj.user_id = Math.round(message.user_id);
     }
-    if (message.username !== undefined && message.username !== "") {
+    if (message.username !== undefined) {
       obj.username = message.username;
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.ip_address !== undefined && message.ip_address !== "") {
+    if (message.ip_address !== undefined) {
       obj.ip_address = message.ip_address;
     }
-    if (message.cert_hash !== undefined && message.cert_hash !== "") {
+    if (message.cert_hash !== undefined) {
       obj.cert_hash = message.cert_hash;
     }
-    if (message.connected_at !== undefined && message.connected_at !== 0) {
+    if (message.connected_at !== undefined) {
       obj.connected_at = Math.round(message.connected_at);
     }
     if (message.groups?.length) {
       obj.groups = message.groups;
     }
-    if (message.mute !== undefined && message.mute !== false) {
+    if (message.mute !== undefined) {
       obj.mute = message.mute;
     }
-    if (message.deaf !== undefined && message.deaf !== false) {
+    if (message.deaf !== undefined) {
       obj.deaf = message.deaf;
     }
-    if (message.suppress !== undefined && message.suppress !== false) {
+    if (message.suppress !== undefined) {
       obj.suppress = message.suppress;
     }
-    if (message.self_mute !== undefined && message.self_mute !== false) {
+    if (message.self_mute !== undefined) {
       obj.self_mute = message.self_mute;
     }
-    if (message.self_deaf !== undefined && message.self_deaf !== false) {
+    if (message.self_deaf !== undefined) {
       obj.self_deaf = message.self_deaf;
     }
-    if (message.priority_speaker !== undefined && message.priority_speaker !== false) {
+    if (message.priority_speaker !== undefined) {
       obj.priority_speaker = message.priority_speaker;
     }
-    if (message.recording !== undefined && message.recording !== false) {
+    if (message.recording !== undefined) {
       obj.recording = message.recording;
     }
     return obj;
@@ -5240,51 +5315,59 @@ export const GlobalSessionProto: MessageFns<GlobalSessionProto> = {
   },
   fromPartial<I extends Exact<DeepPartial<GlobalSessionProto>, I>>(object: I): GlobalSessionProto {
     const message = createBaseGlobalSessionProto();
-    message.session_id = object.session_id ?? 0;
-    message.edge_id = object.edge_id ?? 0;
-    message.user_id = object.user_id ?? 0;
-    message.username = object.username ?? "";
-    message.channel_id = object.channel_id ?? 0;
-    message.ip_address = object.ip_address ?? "";
-    message.cert_hash = object.cert_hash ?? "";
-    message.connected_at = object.connected_at ?? 0;
+    message.session_id = object.session_id ?? undefined;
+    message.edge_id = object.edge_id ?? undefined;
+    message.user_id = object.user_id ?? undefined;
+    message.username = object.username ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    message.ip_address = object.ip_address ?? undefined;
+    message.cert_hash = object.cert_hash ?? undefined;
+    message.connected_at = object.connected_at ?? undefined;
     message.groups = object.groups?.map((e) => e) || [];
-    message.mute = object.mute ?? false;
-    message.deaf = object.deaf ?? false;
-    message.suppress = object.suppress ?? false;
-    message.self_mute = object.self_mute ?? false;
-    message.self_deaf = object.self_deaf ?? false;
-    message.priority_speaker = object.priority_speaker ?? false;
-    message.recording = object.recording ?? false;
+    message.mute = object.mute ?? undefined;
+    message.deaf = object.deaf ?? undefined;
+    message.suppress = object.suppress ?? undefined;
+    message.self_mute = object.self_mute ?? undefined;
+    message.self_deaf = object.self_deaf ?? undefined;
+    message.priority_speaker = object.priority_speaker ?? undefined;
+    message.recording = object.recording ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeInfoProto(): EdgeInfoProto {
-  return { server_id: 0, name: "", host: "", port: 0, region: "", current_load: 0, capacity: 0 };
+  return {
+    server_id: undefined,
+    name: undefined,
+    host: undefined,
+    port: undefined,
+    region: undefined,
+    current_load: undefined,
+    capacity: undefined,
+  };
 }
 
 export const EdgeInfoProto: MessageFns<EdgeInfoProto> = {
   encode(message: EdgeInfoProto, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       writer.uint32(8).uint32(message.server_id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(18).string(message.name);
     }
-    if (message.host !== undefined && message.host !== "") {
+    if (message.host !== undefined) {
       writer.uint32(26).string(message.host);
     }
-    if (message.port !== undefined && message.port !== 0) {
+    if (message.port !== undefined) {
       writer.uint32(32).uint32(message.port);
     }
-    if (message.region !== undefined && message.region !== "") {
+    if (message.region !== undefined) {
       writer.uint32(42).string(message.region);
     }
-    if (message.current_load !== undefined && message.current_load !== 0) {
+    if (message.current_load !== undefined) {
       writer.uint32(48).uint32(message.current_load);
     }
-    if (message.capacity !== undefined && message.capacity !== 0) {
+    if (message.capacity !== undefined) {
       writer.uint32(56).uint32(message.capacity);
     }
     return writer;
@@ -5364,37 +5447,37 @@ export const EdgeInfoProto: MessageFns<EdgeInfoProto> = {
 
   fromJSON(object: any): EdgeInfoProto {
     return {
-      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      host: isSet(object.host) ? globalThis.String(object.host) : "",
-      port: isSet(object.port) ? globalThis.Number(object.port) : 0,
-      region: isSet(object.region) ? globalThis.String(object.region) : "",
-      current_load: isSet(object.current_load) ? globalThis.Number(object.current_load) : 0,
-      capacity: isSet(object.capacity) ? globalThis.Number(object.capacity) : 0,
+      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      host: isSet(object.host) ? globalThis.String(object.host) : undefined,
+      port: isSet(object.port) ? globalThis.Number(object.port) : undefined,
+      region: isSet(object.region) ? globalThis.String(object.region) : undefined,
+      current_load: isSet(object.current_load) ? globalThis.Number(object.current_load) : undefined,
+      capacity: isSet(object.capacity) ? globalThis.Number(object.capacity) : undefined,
     };
   },
 
   toJSON(message: EdgeInfoProto): unknown {
     const obj: any = {};
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       obj.server_id = Math.round(message.server_id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.host !== undefined && message.host !== "") {
+    if (message.host !== undefined) {
       obj.host = message.host;
     }
-    if (message.port !== undefined && message.port !== 0) {
+    if (message.port !== undefined) {
       obj.port = Math.round(message.port);
     }
-    if (message.region !== undefined && message.region !== "") {
+    if (message.region !== undefined) {
       obj.region = message.region;
     }
-    if (message.current_load !== undefined && message.current_load !== 0) {
+    if (message.current_load !== undefined) {
       obj.current_load = Math.round(message.current_load);
     }
-    if (message.capacity !== undefined && message.capacity !== 0) {
+    if (message.capacity !== undefined) {
       obj.capacity = Math.round(message.capacity);
     }
     return obj;
@@ -5405,13 +5488,13 @@ export const EdgeInfoProto: MessageFns<EdgeInfoProto> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeInfoProto>, I>>(object: I): EdgeInfoProto {
     const message = createBaseEdgeInfoProto();
-    message.server_id = object.server_id ?? 0;
-    message.name = object.name ?? "";
-    message.host = object.host ?? "";
-    message.port = object.port ?? 0;
-    message.region = object.region ?? "";
-    message.current_load = object.current_load ?? 0;
-    message.capacity = object.capacity ?? 0;
+    message.server_id = object.server_id ?? undefined;
+    message.name = object.name ?? undefined;
+    message.host = object.host ?? undefined;
+    message.port = object.port ?? undefined;
+    message.region = object.region ?? undefined;
+    message.current_load = object.current_load ?? undefined;
+    message.capacity = object.capacity ?? undefined;
     return message;
   },
 };
@@ -5527,12 +5610,12 @@ export const EdgeGetChannelsResult: MessageFns<EdgeGetChannelsResult> = {
 };
 
 function createBaseEdgeGetACLsParams(): EdgeGetACLsParams {
-  return { channel_id: 0 };
+  return { channel_id: undefined };
 }
 
 export const EdgeGetACLsParams: MessageFns<EdgeGetACLsParams> = {
   encode(message: EdgeGetACLsParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(8).uint32(message.channel_id);
     }
     return writer;
@@ -5563,12 +5646,12 @@ export const EdgeGetACLsParams: MessageFns<EdgeGetACLsParams> = {
   },
 
   fromJSON(object: any): EdgeGetACLsParams {
-    return { channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0 };
+    return { channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined };
   },
 
   toJSON(message: EdgeGetACLsParams): unknown {
     const obj: any = {};
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
     return obj;
@@ -5579,7 +5662,7 @@ export const EdgeGetACLsParams: MessageFns<EdgeGetACLsParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeGetACLsParams>, I>>(object: I): EdgeGetACLsParams {
     const message = createBaseEdgeGetACLsParams();
-    message.channel_id = object.channel_id ?? 0;
+    message.channel_id = object.channel_id ?? undefined;
     return message;
   },
 };
@@ -5651,41 +5734,41 @@ export const EdgeGetACLsResult: MessageFns<EdgeGetACLsResult> = {
 
 function createBaseEdgeSaveChannelParams(): EdgeSaveChannelParams {
   return {
-    id: 0,
-    name: "",
-    position: 0,
-    max_users: 0,
-    parent_id: 0,
-    inherit_acl: false,
-    description: "",
-    description_blob: "",
+    id: undefined,
+    name: undefined,
+    position: undefined,
+    max_users: undefined,
+    parent_id: undefined,
+    inherit_acl: undefined,
+    description: undefined,
+    description_blob: undefined,
   };
 }
 
 export const EdgeSaveChannelParams: MessageFns<EdgeSaveChannelParams> = {
   encode(message: EdgeSaveChannelParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.id !== undefined && message.id !== 0) {
+    if (message.id !== undefined) {
       writer.uint32(8).uint32(message.id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(18).string(message.name);
     }
-    if (message.position !== undefined && message.position !== 0) {
+    if (message.position !== undefined) {
       writer.uint32(24).int32(message.position);
     }
-    if (message.max_users !== undefined && message.max_users !== 0) {
+    if (message.max_users !== undefined) {
       writer.uint32(32).uint32(message.max_users);
     }
-    if (message.parent_id !== undefined && message.parent_id !== 0) {
+    if (message.parent_id !== undefined) {
       writer.uint32(40).uint32(message.parent_id);
     }
-    if (message.inherit_acl !== undefined && message.inherit_acl !== false) {
+    if (message.inherit_acl !== undefined) {
       writer.uint32(48).bool(message.inherit_acl);
     }
-    if (message.description !== undefined && message.description !== "") {
+    if (message.description !== undefined) {
       writer.uint32(58).string(message.description);
     }
-    if (message.description_blob !== undefined && message.description_blob !== "") {
+    if (message.description_blob !== undefined) {
       writer.uint32(66).string(message.description_blob);
     }
     return writer;
@@ -5773,41 +5856,41 @@ export const EdgeSaveChannelParams: MessageFns<EdgeSaveChannelParams> = {
 
   fromJSON(object: any): EdgeSaveChannelParams {
     return {
-      id: isSet(object.id) ? globalThis.Number(object.id) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      position: isSet(object.position) ? globalThis.Number(object.position) : 0,
-      max_users: isSet(object.max_users) ? globalThis.Number(object.max_users) : 0,
-      parent_id: isSet(object.parent_id) ? globalThis.Number(object.parent_id) : 0,
-      inherit_acl: isSet(object.inherit_acl) ? globalThis.Boolean(object.inherit_acl) : false,
-      description: isSet(object.description) ? globalThis.String(object.description) : "",
-      description_blob: isSet(object.description_blob) ? globalThis.String(object.description_blob) : "",
+      id: isSet(object.id) ? globalThis.Number(object.id) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      position: isSet(object.position) ? globalThis.Number(object.position) : undefined,
+      max_users: isSet(object.max_users) ? globalThis.Number(object.max_users) : undefined,
+      parent_id: isSet(object.parent_id) ? globalThis.Number(object.parent_id) : undefined,
+      inherit_acl: isSet(object.inherit_acl) ? globalThis.Boolean(object.inherit_acl) : undefined,
+      description: isSet(object.description) ? globalThis.String(object.description) : undefined,
+      description_blob: isSet(object.description_blob) ? globalThis.String(object.description_blob) : undefined,
     };
   },
 
   toJSON(message: EdgeSaveChannelParams): unknown {
     const obj: any = {};
-    if (message.id !== undefined && message.id !== 0) {
+    if (message.id !== undefined) {
       obj.id = Math.round(message.id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.position !== undefined && message.position !== 0) {
+    if (message.position !== undefined) {
       obj.position = Math.round(message.position);
     }
-    if (message.max_users !== undefined && message.max_users !== 0) {
+    if (message.max_users !== undefined) {
       obj.max_users = Math.round(message.max_users);
     }
-    if (message.parent_id !== undefined && message.parent_id !== 0) {
+    if (message.parent_id !== undefined) {
       obj.parent_id = Math.round(message.parent_id);
     }
-    if (message.inherit_acl !== undefined && message.inherit_acl !== false) {
+    if (message.inherit_acl !== undefined) {
       obj.inherit_acl = message.inherit_acl;
     }
-    if (message.description !== undefined && message.description !== "") {
+    if (message.description !== undefined) {
       obj.description = message.description;
     }
-    if (message.description_blob !== undefined && message.description_blob !== "") {
+    if (message.description_blob !== undefined) {
       obj.description_blob = message.description_blob;
     }
     return obj;
@@ -5818,31 +5901,31 @@ export const EdgeSaveChannelParams: MessageFns<EdgeSaveChannelParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeSaveChannelParams>, I>>(object: I): EdgeSaveChannelParams {
     const message = createBaseEdgeSaveChannelParams();
-    message.id = object.id ?? 0;
-    message.name = object.name ?? "";
-    message.position = object.position ?? 0;
-    message.max_users = object.max_users ?? 0;
-    message.parent_id = object.parent_id ?? 0;
-    message.inherit_acl = object.inherit_acl ?? false;
-    message.description = object.description ?? "";
-    message.description_blob = object.description_blob ?? "";
+    message.id = object.id ?? undefined;
+    message.name = object.name ?? undefined;
+    message.position = object.position ?? undefined;
+    message.max_users = object.max_users ?? undefined;
+    message.parent_id = object.parent_id ?? undefined;
+    message.inherit_acl = object.inherit_acl ?? undefined;
+    message.description = object.description ?? undefined;
+    message.description_blob = object.description_blob ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeSaveChannelResult(): EdgeSaveChannelResult {
-  return { success: false, channel_id: 0, error: "" };
+  return { success: undefined, channel_id: undefined, error: undefined };
 }
 
 export const EdgeSaveChannelResult: MessageFns<EdgeSaveChannelResult> = {
   encode(message: EdgeSaveChannelResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(16).uint32(message.channel_id);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(26).string(message.error);
     }
     return writer;
@@ -5890,21 +5973,21 @@ export const EdgeSaveChannelResult: MessageFns<EdgeSaveChannelResult> = {
 
   fromJSON(object: any): EdgeSaveChannelResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: EdgeSaveChannelResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -5915,20 +5998,20 @@ export const EdgeSaveChannelResult: MessageFns<EdgeSaveChannelResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeSaveChannelResult>, I>>(object: I): EdgeSaveChannelResult {
     const message = createBaseEdgeSaveChannelResult();
-    message.success = object.success ?? false;
-    message.channel_id = object.channel_id ?? 0;
-    message.error = object.error ?? "";
+    message.success = object.success ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeSaveACLParams(): EdgeSaveACLParams {
-  return { channel_id: 0, acls: [] };
+  return { channel_id: undefined, acls: [] };
 }
 
 export const EdgeSaveACLParams: MessageFns<EdgeSaveACLParams> = {
   encode(message: EdgeSaveACLParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(8).uint32(message.channel_id);
     }
     if (message.acls !== undefined && message.acls.length !== 0) {
@@ -5976,14 +6059,14 @@ export const EdgeSaveACLParams: MessageFns<EdgeSaveACLParams> = {
 
   fromJSON(object: any): EdgeSaveACLParams {
     return {
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
       acls: globalThis.Array.isArray(object?.acls) ? object.acls.map((e: any) => ACLEntryProto.fromJSON(e)) : [],
     };
   },
 
   toJSON(message: EdgeSaveACLParams): unknown {
     const obj: any = {};
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
     if (message.acls?.length) {
@@ -5997,40 +6080,49 @@ export const EdgeSaveACLParams: MessageFns<EdgeSaveACLParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeSaveACLParams>, I>>(object: I): EdgeSaveACLParams {
     const message = createBaseEdgeSaveACLParams();
-    message.channel_id = object.channel_id ?? 0;
+    message.channel_id = object.channel_id ?? undefined;
     message.acls = object.acls?.map((e) => ACLEntryProto.fromPartial(e)) || [];
     return message;
   },
 };
 
 function createBaseACLEntryProto(): ACLEntryProto {
-  return { id: 0, channel_id: 0, user_id: 0, group: "", apply_here: false, apply_subs: false, allow: 0, deny: 0 };
+  return {
+    id: undefined,
+    channel_id: undefined,
+    user_id: undefined,
+    group: undefined,
+    apply_here: undefined,
+    apply_subs: undefined,
+    allow: undefined,
+    deny: undefined,
+  };
 }
 
 export const ACLEntryProto: MessageFns<ACLEntryProto> = {
   encode(message: ACLEntryProto, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.id !== undefined && message.id !== 0) {
+    if (message.id !== undefined) {
       writer.uint32(8).uint32(message.id);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(16).uint32(message.channel_id);
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       writer.uint32(24).uint32(message.user_id);
     }
-    if (message.group !== undefined && message.group !== "") {
+    if (message.group !== undefined) {
       writer.uint32(34).string(message.group);
     }
-    if (message.apply_here !== undefined && message.apply_here !== false) {
+    if (message.apply_here !== undefined) {
       writer.uint32(40).bool(message.apply_here);
     }
-    if (message.apply_subs !== undefined && message.apply_subs !== false) {
+    if (message.apply_subs !== undefined) {
       writer.uint32(48).bool(message.apply_subs);
     }
-    if (message.allow !== undefined && message.allow !== 0) {
+    if (message.allow !== undefined) {
       writer.uint32(56).uint32(message.allow);
     }
-    if (message.deny !== undefined && message.deny !== 0) {
+    if (message.deny !== undefined) {
       writer.uint32(64).uint32(message.deny);
     }
     return writer;
@@ -6118,41 +6210,41 @@ export const ACLEntryProto: MessageFns<ACLEntryProto> = {
 
   fromJSON(object: any): ACLEntryProto {
     return {
-      id: isSet(object.id) ? globalThis.Number(object.id) : 0,
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : 0,
-      group: isSet(object.group) ? globalThis.String(object.group) : "",
-      apply_here: isSet(object.apply_here) ? globalThis.Boolean(object.apply_here) : false,
-      apply_subs: isSet(object.apply_subs) ? globalThis.Boolean(object.apply_subs) : false,
-      allow: isSet(object.allow) ? globalThis.Number(object.allow) : 0,
-      deny: isSet(object.deny) ? globalThis.Number(object.deny) : 0,
+      id: isSet(object.id) ? globalThis.Number(object.id) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : undefined,
+      group: isSet(object.group) ? globalThis.String(object.group) : undefined,
+      apply_here: isSet(object.apply_here) ? globalThis.Boolean(object.apply_here) : undefined,
+      apply_subs: isSet(object.apply_subs) ? globalThis.Boolean(object.apply_subs) : undefined,
+      allow: isSet(object.allow) ? globalThis.Number(object.allow) : undefined,
+      deny: isSet(object.deny) ? globalThis.Number(object.deny) : undefined,
     };
   },
 
   toJSON(message: ACLEntryProto): unknown {
     const obj: any = {};
-    if (message.id !== undefined && message.id !== 0) {
+    if (message.id !== undefined) {
       obj.id = Math.round(message.id);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       obj.user_id = Math.round(message.user_id);
     }
-    if (message.group !== undefined && message.group !== "") {
+    if (message.group !== undefined) {
       obj.group = message.group;
     }
-    if (message.apply_here !== undefined && message.apply_here !== false) {
+    if (message.apply_here !== undefined) {
       obj.apply_here = message.apply_here;
     }
-    if (message.apply_subs !== undefined && message.apply_subs !== false) {
+    if (message.apply_subs !== undefined) {
       obj.apply_subs = message.apply_subs;
     }
-    if (message.allow !== undefined && message.allow !== 0) {
+    if (message.allow !== undefined) {
       obj.allow = Math.round(message.allow);
     }
-    if (message.deny !== undefined && message.deny !== 0) {
+    if (message.deny !== undefined) {
       obj.deny = Math.round(message.deny);
     }
     return obj;
@@ -6163,25 +6255,25 @@ export const ACLEntryProto: MessageFns<ACLEntryProto> = {
   },
   fromPartial<I extends Exact<DeepPartial<ACLEntryProto>, I>>(object: I): ACLEntryProto {
     const message = createBaseACLEntryProto();
-    message.id = object.id ?? 0;
-    message.channel_id = object.channel_id ?? 0;
-    message.user_id = object.user_id ?? 0;
-    message.group = object.group ?? "";
-    message.apply_here = object.apply_here ?? false;
-    message.apply_subs = object.apply_subs ?? false;
-    message.allow = object.allow ?? 0;
-    message.deny = object.deny ?? 0;
+    message.id = object.id ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    message.user_id = object.user_id ?? undefined;
+    message.group = object.group ?? undefined;
+    message.apply_here = object.apply_here ?? undefined;
+    message.apply_subs = object.apply_subs ?? undefined;
+    message.allow = object.allow ?? undefined;
+    message.deny = object.deny ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeSaveACLResult(): EdgeSaveACLResult {
-  return { success: false, acl_ids: [], error: "" };
+  return { success: undefined, acl_ids: [], error: undefined };
 }
 
 export const EdgeSaveACLResult: MessageFns<EdgeSaveACLResult> = {
   encode(message: EdgeSaveACLResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
     if (message.acl_ids !== undefined && message.acl_ids.length !== 0) {
@@ -6189,7 +6281,7 @@ export const EdgeSaveACLResult: MessageFns<EdgeSaveACLResult> = {
         writer.uint32(16).uint32(v!);
       }
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(26).string(message.error);
     }
     return writer;
@@ -6247,21 +6339,21 @@ export const EdgeSaveACLResult: MessageFns<EdgeSaveACLResult> = {
 
   fromJSON(object: any): EdgeSaveACLResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
       acl_ids: globalThis.Array.isArray(object?.acl_ids) ? object.acl_ids.map((e: any) => globalThis.Number(e)) : [],
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: EdgeSaveACLResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
     if (message.acl_ids?.length) {
       obj.acl_ids = message.acl_ids.map((e) => Math.round(e));
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -6272,35 +6364,42 @@ export const EdgeSaveACLResult: MessageFns<EdgeSaveACLResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeSaveACLResult>, I>>(object: I): EdgeSaveACLResult {
     const message = createBaseEdgeSaveACLResult();
-    message.success = object.success ?? false;
+    message.success = object.success ?? undefined;
     message.acl_ids = object.acl_ids?.map((e) => e) || [];
-    message.error = object.error ?? "";
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeJoinParams(): EdgeJoinParams {
-  return { server_id: 0, name: "", host: "", port: 0, voice_port: 0, capacity: 0 };
+  return {
+    server_id: undefined,
+    name: undefined,
+    host: undefined,
+    port: undefined,
+    voice_port: undefined,
+    capacity: undefined,
+  };
 }
 
 export const EdgeJoinParams: MessageFns<EdgeJoinParams> = {
   encode(message: EdgeJoinParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       writer.uint32(8).uint32(message.server_id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(18).string(message.name);
     }
-    if (message.host !== undefined && message.host !== "") {
+    if (message.host !== undefined) {
       writer.uint32(26).string(message.host);
     }
-    if (message.port !== undefined && message.port !== 0) {
+    if (message.port !== undefined) {
       writer.uint32(32).uint32(message.port);
     }
-    if (message.voice_port !== undefined && message.voice_port !== 0) {
+    if (message.voice_port !== undefined) {
       writer.uint32(40).uint32(message.voice_port);
     }
-    if (message.capacity !== undefined && message.capacity !== 0) {
+    if (message.capacity !== undefined) {
       writer.uint32(48).uint32(message.capacity);
     }
     return writer;
@@ -6372,33 +6471,33 @@ export const EdgeJoinParams: MessageFns<EdgeJoinParams> = {
 
   fromJSON(object: any): EdgeJoinParams {
     return {
-      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      host: isSet(object.host) ? globalThis.String(object.host) : "",
-      port: isSet(object.port) ? globalThis.Number(object.port) : 0,
-      voice_port: isSet(object.voice_port) ? globalThis.Number(object.voice_port) : 0,
-      capacity: isSet(object.capacity) ? globalThis.Number(object.capacity) : 0,
+      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      host: isSet(object.host) ? globalThis.String(object.host) : undefined,
+      port: isSet(object.port) ? globalThis.Number(object.port) : undefined,
+      voice_port: isSet(object.voice_port) ? globalThis.Number(object.voice_port) : undefined,
+      capacity: isSet(object.capacity) ? globalThis.Number(object.capacity) : undefined,
     };
   },
 
   toJSON(message: EdgeJoinParams): unknown {
     const obj: any = {};
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       obj.server_id = Math.round(message.server_id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.host !== undefined && message.host !== "") {
+    if (message.host !== undefined) {
       obj.host = message.host;
     }
-    if (message.port !== undefined && message.port !== 0) {
+    if (message.port !== undefined) {
       obj.port = Math.round(message.port);
     }
-    if (message.voice_port !== undefined && message.voice_port !== 0) {
+    if (message.voice_port !== undefined) {
       obj.voice_port = Math.round(message.voice_port);
     }
-    if (message.capacity !== undefined && message.capacity !== 0) {
+    if (message.capacity !== undefined) {
       obj.capacity = Math.round(message.capacity);
     }
     return obj;
@@ -6409,26 +6508,26 @@ export const EdgeJoinParams: MessageFns<EdgeJoinParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeJoinParams>, I>>(object: I): EdgeJoinParams {
     const message = createBaseEdgeJoinParams();
-    message.server_id = object.server_id ?? 0;
-    message.name = object.name ?? "";
-    message.host = object.host ?? "";
-    message.port = object.port ?? 0;
-    message.voice_port = object.voice_port ?? 0;
-    message.capacity = object.capacity ?? 0;
+    message.server_id = object.server_id ?? undefined;
+    message.name = object.name ?? undefined;
+    message.host = object.host ?? undefined;
+    message.port = object.port ?? undefined;
+    message.voice_port = object.voice_port ?? undefined;
+    message.capacity = object.capacity ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeJoinResult(): EdgeJoinResult {
-  return { success: false, token: "", peers: [], timeout: 0, error: "" };
+  return { success: undefined, token: undefined, peers: [], timeout: undefined, error: undefined };
 }
 
 export const EdgeJoinResult: MessageFns<EdgeJoinResult> = {
   encode(message: EdgeJoinResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.token !== undefined && message.token !== "") {
+    if (message.token !== undefined) {
       writer.uint32(18).string(message.token);
     }
     if (message.peers !== undefined && message.peers.length !== 0) {
@@ -6436,10 +6535,10 @@ export const EdgeJoinResult: MessageFns<EdgeJoinResult> = {
         PeerInfoProto.encode(v!, writer.uint32(26).fork()).join();
       }
     }
-    if (message.timeout !== undefined && message.timeout !== 0) {
+    if (message.timeout !== undefined) {
       writer.uint32(32).uint32(message.timeout);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(42).string(message.error);
     }
     return writer;
@@ -6506,29 +6605,29 @@ export const EdgeJoinResult: MessageFns<EdgeJoinResult> = {
 
   fromJSON(object: any): EdgeJoinResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      token: isSet(object.token) ? globalThis.String(object.token) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      token: isSet(object.token) ? globalThis.String(object.token) : undefined,
       peers: globalThis.Array.isArray(object?.peers) ? object.peers.map((e: any) => PeerInfoProto.fromJSON(e)) : [],
-      timeout: isSet(object.timeout) ? globalThis.Number(object.timeout) : 0,
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      timeout: isSet(object.timeout) ? globalThis.Number(object.timeout) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: EdgeJoinResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.token !== undefined && message.token !== "") {
+    if (message.token !== undefined) {
       obj.token = message.token;
     }
     if (message.peers?.length) {
       obj.peers = message.peers.map((e) => PeerInfoProto.toJSON(e));
     }
-    if (message.timeout !== undefined && message.timeout !== 0) {
+    if (message.timeout !== undefined) {
       obj.timeout = Math.round(message.timeout);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -6539,34 +6638,34 @@ export const EdgeJoinResult: MessageFns<EdgeJoinResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeJoinResult>, I>>(object: I): EdgeJoinResult {
     const message = createBaseEdgeJoinResult();
-    message.success = object.success ?? false;
-    message.token = object.token ?? "";
+    message.success = object.success ?? undefined;
+    message.token = object.token ?? undefined;
     message.peers = object.peers?.map((e) => PeerInfoProto.fromPartial(e)) || [];
-    message.timeout = object.timeout ?? 0;
-    message.error = object.error ?? "";
+    message.timeout = object.timeout ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBasePeerInfoProto(): PeerInfoProto {
-  return { id: 0, name: "", host: "", port: 0, voice_port: 0 };
+  return { id: undefined, name: undefined, host: undefined, port: undefined, voice_port: undefined };
 }
 
 export const PeerInfoProto: MessageFns<PeerInfoProto> = {
   encode(message: PeerInfoProto, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.id !== undefined && message.id !== 0) {
+    if (message.id !== undefined) {
       writer.uint32(8).uint32(message.id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(18).string(message.name);
     }
-    if (message.host !== undefined && message.host !== "") {
+    if (message.host !== undefined) {
       writer.uint32(26).string(message.host);
     }
-    if (message.port !== undefined && message.port !== 0) {
+    if (message.port !== undefined) {
       writer.uint32(32).uint32(message.port);
     }
-    if (message.voice_port !== undefined && message.voice_port !== 0) {
+    if (message.voice_port !== undefined) {
       writer.uint32(40).uint32(message.voice_port);
     }
     return writer;
@@ -6630,29 +6729,29 @@ export const PeerInfoProto: MessageFns<PeerInfoProto> = {
 
   fromJSON(object: any): PeerInfoProto {
     return {
-      id: isSet(object.id) ? globalThis.Number(object.id) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      host: isSet(object.host) ? globalThis.String(object.host) : "",
-      port: isSet(object.port) ? globalThis.Number(object.port) : 0,
-      voice_port: isSet(object.voice_port) ? globalThis.Number(object.voice_port) : 0,
+      id: isSet(object.id) ? globalThis.Number(object.id) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      host: isSet(object.host) ? globalThis.String(object.host) : undefined,
+      port: isSet(object.port) ? globalThis.Number(object.port) : undefined,
+      voice_port: isSet(object.voice_port) ? globalThis.Number(object.voice_port) : undefined,
     };
   },
 
   toJSON(message: PeerInfoProto): unknown {
     const obj: any = {};
-    if (message.id !== undefined && message.id !== 0) {
+    if (message.id !== undefined) {
       obj.id = Math.round(message.id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.host !== undefined && message.host !== "") {
+    if (message.host !== undefined) {
       obj.host = message.host;
     }
-    if (message.port !== undefined && message.port !== 0) {
+    if (message.port !== undefined) {
       obj.port = Math.round(message.port);
     }
-    if (message.voice_port !== undefined && message.voice_port !== 0) {
+    if (message.voice_port !== undefined) {
       obj.voice_port = Math.round(message.voice_port);
     }
     return obj;
@@ -6663,25 +6762,25 @@ export const PeerInfoProto: MessageFns<PeerInfoProto> = {
   },
   fromPartial<I extends Exact<DeepPartial<PeerInfoProto>, I>>(object: I): PeerInfoProto {
     const message = createBasePeerInfoProto();
-    message.id = object.id ?? 0;
-    message.name = object.name ?? "";
-    message.host = object.host ?? "";
-    message.port = object.port ?? 0;
-    message.voice_port = object.voice_port ?? 0;
+    message.id = object.id ?? undefined;
+    message.name = object.name ?? undefined;
+    message.host = object.host ?? undefined;
+    message.port = object.port ?? undefined;
+    message.voice_port = object.voice_port ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeJoinCompleteParams(): EdgeJoinCompleteParams {
-  return { server_id: 0, token: "", connected_peers: [] };
+  return { server_id: undefined, token: undefined, connected_peers: [] };
 }
 
 export const EdgeJoinCompleteParams: MessageFns<EdgeJoinCompleteParams> = {
   encode(message: EdgeJoinCompleteParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       writer.uint32(8).uint32(message.server_id);
     }
-    if (message.token !== undefined && message.token !== "") {
+    if (message.token !== undefined) {
       writer.uint32(18).string(message.token);
     }
     if (message.connected_peers !== undefined && message.connected_peers.length !== 0) {
@@ -6744,8 +6843,8 @@ export const EdgeJoinCompleteParams: MessageFns<EdgeJoinCompleteParams> = {
 
   fromJSON(object: any): EdgeJoinCompleteParams {
     return {
-      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : 0,
-      token: isSet(object.token) ? globalThis.String(object.token) : "",
+      server_id: isSet(object.server_id) ? globalThis.Number(object.server_id) : undefined,
+      token: isSet(object.token) ? globalThis.String(object.token) : undefined,
       connected_peers: globalThis.Array.isArray(object?.connected_peers)
         ? object.connected_peers.map((e: any) => globalThis.Number(e))
         : [],
@@ -6754,10 +6853,10 @@ export const EdgeJoinCompleteParams: MessageFns<EdgeJoinCompleteParams> = {
 
   toJSON(message: EdgeJoinCompleteParams): unknown {
     const obj: any = {};
-    if (message.server_id !== undefined && message.server_id !== 0) {
+    if (message.server_id !== undefined) {
       obj.server_id = Math.round(message.server_id);
     }
-    if (message.token !== undefined && message.token !== "") {
+    if (message.token !== undefined) {
       obj.token = message.token;
     }
     if (message.connected_peers?.length) {
@@ -6771,23 +6870,23 @@ export const EdgeJoinCompleteParams: MessageFns<EdgeJoinCompleteParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeJoinCompleteParams>, I>>(object: I): EdgeJoinCompleteParams {
     const message = createBaseEdgeJoinCompleteParams();
-    message.server_id = object.server_id ?? 0;
-    message.token = object.token ?? "";
+    message.server_id = object.server_id ?? undefined;
+    message.token = object.token ?? undefined;
     message.connected_peers = object.connected_peers?.map((e) => e) || [];
     return message;
   },
 };
 
 function createBaseEdgeJoinCompleteResult(): EdgeJoinCompleteResult {
-  return { success: false, error: "" };
+  return { success: undefined, error: undefined };
 }
 
 export const EdgeJoinCompleteResult: MessageFns<EdgeJoinCompleteResult> = {
   encode(message: EdgeJoinCompleteResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(18).string(message.error);
     }
     return writer;
@@ -6827,17 +6926,17 @@ export const EdgeJoinCompleteResult: MessageFns<EdgeJoinCompleteResult> = {
 
   fromJSON(object: any): EdgeJoinCompleteResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: EdgeJoinCompleteResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -6848,45 +6947,45 @@ export const EdgeJoinCompleteResult: MessageFns<EdgeJoinCompleteResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeJoinCompleteResult>, I>>(object: I): EdgeJoinCompleteResult {
     const message = createBaseEdgeJoinCompleteResult();
-    message.success = object.success ?? false;
-    message.error = object.error ?? "";
+    message.success = object.success ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeHandleACLParams(): EdgeHandleACLParams {
   return {
-    edge_id: 0,
-    actor_session: 0,
-    actor_user_id: 0,
-    actor_username: "",
-    channel_id: 0,
-    query: false,
-    raw_data: Buffer.alloc(0),
+    edge_id: undefined,
+    actor_session: undefined,
+    actor_user_id: undefined,
+    actor_username: undefined,
+    channel_id: undefined,
+    query: undefined,
+    raw_data: undefined,
   };
 }
 
 export const EdgeHandleACLParams: MessageFns<EdgeHandleACLParams> = {
   encode(message: EdgeHandleACLParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(8).uint32(message.edge_id);
     }
-    if (message.actor_session !== undefined && message.actor_session !== 0) {
+    if (message.actor_session !== undefined) {
       writer.uint32(16).uint32(message.actor_session);
     }
-    if (message.actor_user_id !== undefined && message.actor_user_id !== 0) {
+    if (message.actor_user_id !== undefined) {
       writer.uint32(24).uint32(message.actor_user_id);
     }
-    if (message.actor_username !== undefined && message.actor_username !== "") {
+    if (message.actor_username !== undefined) {
       writer.uint32(34).string(message.actor_username);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(40).uint32(message.channel_id);
     }
-    if (message.query !== undefined && message.query !== false) {
+    if (message.query !== undefined) {
       writer.uint32(48).bool(message.query);
     }
-    if (message.raw_data !== undefined && message.raw_data.length !== 0) {
+    if (message.raw_data !== undefined) {
       writer.uint32(58).bytes(message.raw_data);
     }
     return writer;
@@ -6966,37 +7065,37 @@ export const EdgeHandleACLParams: MessageFns<EdgeHandleACLParams> = {
 
   fromJSON(object: any): EdgeHandleACLParams {
     return {
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      actor_session: isSet(object.actor_session) ? globalThis.Number(object.actor_session) : 0,
-      actor_user_id: isSet(object.actor_user_id) ? globalThis.Number(object.actor_user_id) : 0,
-      actor_username: isSet(object.actor_username) ? globalThis.String(object.actor_username) : "",
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      query: isSet(object.query) ? globalThis.Boolean(object.query) : false,
-      raw_data: isSet(object.raw_data) ? Buffer.from(bytesFromBase64(object.raw_data)) : Buffer.alloc(0),
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      actor_session: isSet(object.actor_session) ? globalThis.Number(object.actor_session) : undefined,
+      actor_user_id: isSet(object.actor_user_id) ? globalThis.Number(object.actor_user_id) : undefined,
+      actor_username: isSet(object.actor_username) ? globalThis.String(object.actor_username) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      query: isSet(object.query) ? globalThis.Boolean(object.query) : undefined,
+      raw_data: isSet(object.raw_data) ? Buffer.from(bytesFromBase64(object.raw_data)) : undefined,
     };
   },
 
   toJSON(message: EdgeHandleACLParams): unknown {
     const obj: any = {};
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.actor_session !== undefined && message.actor_session !== 0) {
+    if (message.actor_session !== undefined) {
       obj.actor_session = Math.round(message.actor_session);
     }
-    if (message.actor_user_id !== undefined && message.actor_user_id !== 0) {
+    if (message.actor_user_id !== undefined) {
       obj.actor_user_id = Math.round(message.actor_user_id);
     }
-    if (message.actor_username !== undefined && message.actor_username !== "") {
+    if (message.actor_username !== undefined) {
       obj.actor_username = message.actor_username;
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.query !== undefined && message.query !== false) {
+    if (message.query !== undefined) {
       obj.query = message.query;
     }
-    if (message.raw_data !== undefined && message.raw_data.length !== 0) {
+    if (message.raw_data !== undefined) {
       obj.raw_data = base64FromBytes(message.raw_data);
     }
     return obj;
@@ -7007,36 +7106,42 @@ export const EdgeHandleACLParams: MessageFns<EdgeHandleACLParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeHandleACLParams>, I>>(object: I): EdgeHandleACLParams {
     const message = createBaseEdgeHandleACLParams();
-    message.edge_id = object.edge_id ?? 0;
-    message.actor_session = object.actor_session ?? 0;
-    message.actor_user_id = object.actor_user_id ?? 0;
-    message.actor_username = object.actor_username ?? "";
-    message.channel_id = object.channel_id ?? 0;
-    message.query = object.query ?? false;
-    message.raw_data = object.raw_data ?? Buffer.alloc(0);
+    message.edge_id = object.edge_id ?? undefined;
+    message.actor_session = object.actor_session ?? undefined;
+    message.actor_user_id = object.actor_user_id ?? undefined;
+    message.actor_username = object.actor_username ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    message.query = object.query ?? undefined;
+    message.raw_data = object.raw_data ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeHandleACLResult(): EdgeHandleACLResult {
-  return { success: false, error: "", permission_denied: false, channel_id: 0, raw_data: Buffer.alloc(0) };
+  return {
+    success: undefined,
+    error: undefined,
+    permission_denied: undefined,
+    channel_id: undefined,
+    raw_data: undefined,
+  };
 }
 
 export const EdgeHandleACLResult: MessageFns<EdgeHandleACLResult> = {
   encode(message: EdgeHandleACLResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(18).string(message.error);
     }
-    if (message.permission_denied !== undefined && message.permission_denied !== false) {
+    if (message.permission_denied !== undefined) {
       writer.uint32(24).bool(message.permission_denied);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(32).uint32(message.channel_id);
     }
-    if (message.raw_data !== undefined && message.raw_data.length !== 0) {
+    if (message.raw_data !== undefined) {
       writer.uint32(42).bytes(message.raw_data);
     }
     return writer;
@@ -7100,29 +7205,29 @@ export const EdgeHandleACLResult: MessageFns<EdgeHandleACLResult> = {
 
   fromJSON(object: any): EdgeHandleACLResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
-      permission_denied: isSet(object.permission_denied) ? globalThis.Boolean(object.permission_denied) : false,
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      raw_data: isSet(object.raw_data) ? Buffer.from(bytesFromBase64(object.raw_data)) : Buffer.alloc(0),
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+      permission_denied: isSet(object.permission_denied) ? globalThis.Boolean(object.permission_denied) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      raw_data: isSet(object.raw_data) ? Buffer.from(bytesFromBase64(object.raw_data)) : undefined,
     };
   },
 
   toJSON(message: EdgeHandleACLResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
-    if (message.permission_denied !== undefined && message.permission_denied !== false) {
+    if (message.permission_denied !== undefined) {
       obj.permission_denied = message.permission_denied;
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.raw_data !== undefined && message.raw_data.length !== 0) {
+    if (message.raw_data !== undefined) {
       obj.raw_data = base64FromBytes(message.raw_data);
     }
     return obj;
@@ -7133,34 +7238,40 @@ export const EdgeHandleACLResult: MessageFns<EdgeHandleACLResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeHandleACLResult>, I>>(object: I): EdgeHandleACLResult {
     const message = createBaseEdgeHandleACLResult();
-    message.success = object.success ?? false;
-    message.error = object.error ?? "";
-    message.permission_denied = object.permission_denied ?? false;
-    message.channel_id = object.channel_id ?? 0;
-    message.raw_data = object.raw_data ?? Buffer.alloc(0);
+    message.success = object.success ?? undefined;
+    message.error = object.error ?? undefined;
+    message.permission_denied = object.permission_denied ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    message.raw_data = object.raw_data ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeHandlePermissionQueryParams(): EdgeHandlePermissionQueryParams {
-  return { edge_id: 0, actor_session: 0, actor_user_id: 0, actor_username: "", channel_id: 0 };
+  return {
+    edge_id: undefined,
+    actor_session: undefined,
+    actor_user_id: undefined,
+    actor_username: undefined,
+    channel_id: undefined,
+  };
 }
 
 export const EdgeHandlePermissionQueryParams: MessageFns<EdgeHandlePermissionQueryParams> = {
   encode(message: EdgeHandlePermissionQueryParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(8).uint32(message.edge_id);
     }
-    if (message.actor_session !== undefined && message.actor_session !== 0) {
+    if (message.actor_session !== undefined) {
       writer.uint32(16).uint32(message.actor_session);
     }
-    if (message.actor_user_id !== undefined && message.actor_user_id !== 0) {
+    if (message.actor_user_id !== undefined) {
       writer.uint32(24).uint32(message.actor_user_id);
     }
-    if (message.actor_username !== undefined && message.actor_username !== "") {
+    if (message.actor_username !== undefined) {
       writer.uint32(34).string(message.actor_username);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(40).uint32(message.channel_id);
     }
     return writer;
@@ -7224,29 +7335,29 @@ export const EdgeHandlePermissionQueryParams: MessageFns<EdgeHandlePermissionQue
 
   fromJSON(object: any): EdgeHandlePermissionQueryParams {
     return {
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      actor_session: isSet(object.actor_session) ? globalThis.Number(object.actor_session) : 0,
-      actor_user_id: isSet(object.actor_user_id) ? globalThis.Number(object.actor_user_id) : 0,
-      actor_username: isSet(object.actor_username) ? globalThis.String(object.actor_username) : "",
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      actor_session: isSet(object.actor_session) ? globalThis.Number(object.actor_session) : undefined,
+      actor_user_id: isSet(object.actor_user_id) ? globalThis.Number(object.actor_user_id) : undefined,
+      actor_username: isSet(object.actor_username) ? globalThis.String(object.actor_username) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
     };
   },
 
   toJSON(message: EdgeHandlePermissionQueryParams): unknown {
     const obj: any = {};
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.actor_session !== undefined && message.actor_session !== 0) {
+    if (message.actor_session !== undefined) {
       obj.actor_session = Math.round(message.actor_session);
     }
-    if (message.actor_user_id !== undefined && message.actor_user_id !== 0) {
+    if (message.actor_user_id !== undefined) {
       obj.actor_user_id = Math.round(message.actor_user_id);
     }
-    if (message.actor_username !== undefined && message.actor_username !== "") {
+    if (message.actor_username !== undefined) {
       obj.actor_username = message.actor_username;
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
     return obj;
@@ -7259,28 +7370,28 @@ export const EdgeHandlePermissionQueryParams: MessageFns<EdgeHandlePermissionQue
     object: I,
   ): EdgeHandlePermissionQueryParams {
     const message = createBaseEdgeHandlePermissionQueryParams();
-    message.edge_id = object.edge_id ?? 0;
-    message.actor_session = object.actor_session ?? 0;
-    message.actor_user_id = object.actor_user_id ?? 0;
-    message.actor_username = object.actor_username ?? "";
-    message.channel_id = object.channel_id ?? 0;
+    message.edge_id = object.edge_id ?? undefined;
+    message.actor_session = object.actor_session ?? undefined;
+    message.actor_user_id = object.actor_user_id ?? undefined;
+    message.actor_username = object.actor_username ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeHandlePermissionQueryResult(): EdgeHandlePermissionQueryResult {
-  return { success: false, permissions: 0, error: "" };
+  return { success: undefined, permissions: undefined, error: undefined };
 }
 
 export const EdgeHandlePermissionQueryResult: MessageFns<EdgeHandlePermissionQueryResult> = {
   encode(message: EdgeHandlePermissionQueryResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.permissions !== undefined && message.permissions !== 0) {
+    if (message.permissions !== undefined) {
       writer.uint32(16).uint32(message.permissions);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(26).string(message.error);
     }
     return writer;
@@ -7328,21 +7439,21 @@ export const EdgeHandlePermissionQueryResult: MessageFns<EdgeHandlePermissionQue
 
   fromJSON(object: any): EdgeHandlePermissionQueryResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      permissions: isSet(object.permissions) ? globalThis.Number(object.permissions) : 0,
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      permissions: isSet(object.permissions) ? globalThis.Number(object.permissions) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: EdgeHandlePermissionQueryResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.permissions !== undefined && message.permissions !== 0) {
+    if (message.permissions !== undefined) {
       obj.permissions = Math.round(message.permissions);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -7355,26 +7466,26 @@ export const EdgeHandlePermissionQueryResult: MessageFns<EdgeHandlePermissionQue
     object: I,
   ): EdgeHandlePermissionQueryResult {
     const message = createBaseEdgeHandlePermissionQueryResult();
-    message.success = object.success ?? false;
-    message.permissions = object.permissions ?? 0;
-    message.error = object.error ?? "";
+    message.success = object.success ?? undefined;
+    message.permissions = object.permissions ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeReportPeerDisconnectParams(): EdgeReportPeerDisconnectParams {
-  return { local_edge_id: 0, remote_edge_id: 0, local_client_count: 0 };
+  return { local_edge_id: undefined, remote_edge_id: undefined, local_client_count: undefined };
 }
 
 export const EdgeReportPeerDisconnectParams: MessageFns<EdgeReportPeerDisconnectParams> = {
   encode(message: EdgeReportPeerDisconnectParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.local_edge_id !== undefined && message.local_edge_id !== 0) {
+    if (message.local_edge_id !== undefined) {
       writer.uint32(8).uint32(message.local_edge_id);
     }
-    if (message.remote_edge_id !== undefined && message.remote_edge_id !== 0) {
+    if (message.remote_edge_id !== undefined) {
       writer.uint32(16).uint32(message.remote_edge_id);
     }
-    if (message.local_client_count !== undefined && message.local_client_count !== 0) {
+    if (message.local_client_count !== undefined) {
       writer.uint32(24).uint32(message.local_client_count);
     }
     return writer;
@@ -7422,21 +7533,21 @@ export const EdgeReportPeerDisconnectParams: MessageFns<EdgeReportPeerDisconnect
 
   fromJSON(object: any): EdgeReportPeerDisconnectParams {
     return {
-      local_edge_id: isSet(object.local_edge_id) ? globalThis.Number(object.local_edge_id) : 0,
-      remote_edge_id: isSet(object.remote_edge_id) ? globalThis.Number(object.remote_edge_id) : 0,
-      local_client_count: isSet(object.local_client_count) ? globalThis.Number(object.local_client_count) : 0,
+      local_edge_id: isSet(object.local_edge_id) ? globalThis.Number(object.local_edge_id) : undefined,
+      remote_edge_id: isSet(object.remote_edge_id) ? globalThis.Number(object.remote_edge_id) : undefined,
+      local_client_count: isSet(object.local_client_count) ? globalThis.Number(object.local_client_count) : undefined,
     };
   },
 
   toJSON(message: EdgeReportPeerDisconnectParams): unknown {
     const obj: any = {};
-    if (message.local_edge_id !== undefined && message.local_edge_id !== 0) {
+    if (message.local_edge_id !== undefined) {
       obj.local_edge_id = Math.round(message.local_edge_id);
     }
-    if (message.remote_edge_id !== undefined && message.remote_edge_id !== 0) {
+    if (message.remote_edge_id !== undefined) {
       obj.remote_edge_id = Math.round(message.remote_edge_id);
     }
-    if (message.local_client_count !== undefined && message.local_client_count !== 0) {
+    if (message.local_client_count !== undefined) {
       obj.local_client_count = Math.round(message.local_client_count);
     }
     return obj;
@@ -7449,20 +7560,20 @@ export const EdgeReportPeerDisconnectParams: MessageFns<EdgeReportPeerDisconnect
     object: I,
   ): EdgeReportPeerDisconnectParams {
     const message = createBaseEdgeReportPeerDisconnectParams();
-    message.local_edge_id = object.local_edge_id ?? 0;
-    message.remote_edge_id = object.remote_edge_id ?? 0;
-    message.local_client_count = object.local_client_count ?? 0;
+    message.local_edge_id = object.local_edge_id ?? undefined;
+    message.remote_edge_id = object.remote_edge_id ?? undefined;
+    message.local_client_count = object.local_client_count ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeReportPeerDisconnectResult(): EdgeReportPeerDisconnectResult {
-  return { action: "" };
+  return { action: undefined };
 }
 
 export const EdgeReportPeerDisconnectResult: MessageFns<EdgeReportPeerDisconnectResult> = {
   encode(message: EdgeReportPeerDisconnectResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.action !== undefined && message.action !== "") {
+    if (message.action !== undefined) {
       writer.uint32(10).string(message.action);
     }
     return writer;
@@ -7493,12 +7604,12 @@ export const EdgeReportPeerDisconnectResult: MessageFns<EdgeReportPeerDisconnect
   },
 
   fromJSON(object: any): EdgeReportPeerDisconnectResult {
-    return { action: isSet(object.action) ? globalThis.String(object.action) : "" };
+    return { action: isSet(object.action) ? globalThis.String(object.action) : undefined };
   },
 
   toJSON(message: EdgeReportPeerDisconnectResult): unknown {
     const obj: any = {};
-    if (message.action !== undefined && message.action !== "") {
+    if (message.action !== undefined) {
       obj.action = message.action;
     }
     return obj;
@@ -7511,21 +7622,21 @@ export const EdgeReportPeerDisconnectResult: MessageFns<EdgeReportPeerDisconnect
     object: I,
   ): EdgeReportPeerDisconnectResult {
     const message = createBaseEdgeReportPeerDisconnectResult();
-    message.action = object.action ?? "";
+    message.action = object.action ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeReportQualityParams(): EdgeReportQualityParams {
-  return { edge_id: 0, target_edge_id: 0, quality: undefined };
+  return { edge_id: undefined, target_edge_id: undefined, quality: undefined };
 }
 
 export const EdgeReportQualityParams: MessageFns<EdgeReportQualityParams> = {
   encode(message: EdgeReportQualityParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(8).uint32(message.edge_id);
     }
-    if (message.target_edge_id !== undefined && message.target_edge_id !== 0) {
+    if (message.target_edge_id !== undefined) {
       writer.uint32(16).uint32(message.target_edge_id);
     }
     if (message.quality !== undefined) {
@@ -7576,18 +7687,18 @@ export const EdgeReportQualityParams: MessageFns<EdgeReportQualityParams> = {
 
   fromJSON(object: any): EdgeReportQualityParams {
     return {
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      target_edge_id: isSet(object.target_edge_id) ? globalThis.Number(object.target_edge_id) : 0,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      target_edge_id: isSet(object.target_edge_id) ? globalThis.Number(object.target_edge_id) : undefined,
       quality: isSet(object.quality) ? NetworkQualityProto.fromJSON(object.quality) : undefined,
     };
   },
 
   toJSON(message: EdgeReportQualityParams): unknown {
     const obj: any = {};
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.target_edge_id !== undefined && message.target_edge_id !== 0) {
+    if (message.target_edge_id !== undefined) {
       obj.target_edge_id = Math.round(message.target_edge_id);
     }
     if (message.quality !== undefined) {
@@ -7601,8 +7712,8 @@ export const EdgeReportQualityParams: MessageFns<EdgeReportQualityParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeReportQualityParams>, I>>(object: I): EdgeReportQualityParams {
     const message = createBaseEdgeReportQualityParams();
-    message.edge_id = object.edge_id ?? 0;
-    message.target_edge_id = object.target_edge_id ?? 0;
+    message.edge_id = object.edge_id ?? undefined;
+    message.target_edge_id = object.target_edge_id ?? undefined;
     message.quality = (object.quality !== undefined && object.quality !== null)
       ? NetworkQualityProto.fromPartial(object.quality)
       : undefined;
@@ -7611,21 +7722,21 @@ export const EdgeReportQualityParams: MessageFns<EdgeReportQualityParams> = {
 };
 
 function createBaseNetworkQualityProto(): NetworkQualityProto {
-  return { rtt: 0, packet_loss: 0, jitter: 0, samples: 0 };
+  return { rtt: undefined, packet_loss: undefined, jitter: undefined, samples: undefined };
 }
 
 export const NetworkQualityProto: MessageFns<NetworkQualityProto> = {
   encode(message: NetworkQualityProto, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.rtt !== undefined && message.rtt !== 0) {
+    if (message.rtt !== undefined) {
       writer.uint32(13).float(message.rtt);
     }
-    if (message.packet_loss !== undefined && message.packet_loss !== 0) {
+    if (message.packet_loss !== undefined) {
       writer.uint32(21).float(message.packet_loss);
     }
-    if (message.jitter !== undefined && message.jitter !== 0) {
+    if (message.jitter !== undefined) {
       writer.uint32(29).float(message.jitter);
     }
-    if (message.samples !== undefined && message.samples !== 0) {
+    if (message.samples !== undefined) {
       writer.uint32(32).uint32(message.samples);
     }
     return writer;
@@ -7681,25 +7792,25 @@ export const NetworkQualityProto: MessageFns<NetworkQualityProto> = {
 
   fromJSON(object: any): NetworkQualityProto {
     return {
-      rtt: isSet(object.rtt) ? globalThis.Number(object.rtt) : 0,
-      packet_loss: isSet(object.packet_loss) ? globalThis.Number(object.packet_loss) : 0,
-      jitter: isSet(object.jitter) ? globalThis.Number(object.jitter) : 0,
-      samples: isSet(object.samples) ? globalThis.Number(object.samples) : 0,
+      rtt: isSet(object.rtt) ? globalThis.Number(object.rtt) : undefined,
+      packet_loss: isSet(object.packet_loss) ? globalThis.Number(object.packet_loss) : undefined,
+      jitter: isSet(object.jitter) ? globalThis.Number(object.jitter) : undefined,
+      samples: isSet(object.samples) ? globalThis.Number(object.samples) : undefined,
     };
   },
 
   toJSON(message: NetworkQualityProto): unknown {
     const obj: any = {};
-    if (message.rtt !== undefined && message.rtt !== 0) {
+    if (message.rtt !== undefined) {
       obj.rtt = message.rtt;
     }
-    if (message.packet_loss !== undefined && message.packet_loss !== 0) {
+    if (message.packet_loss !== undefined) {
       obj.packet_loss = message.packet_loss;
     }
-    if (message.jitter !== undefined && message.jitter !== 0) {
+    if (message.jitter !== undefined) {
       obj.jitter = message.jitter;
     }
-    if (message.samples !== undefined && message.samples !== 0) {
+    if (message.samples !== undefined) {
       obj.samples = Math.round(message.samples);
     }
     return obj;
@@ -7710,21 +7821,21 @@ export const NetworkQualityProto: MessageFns<NetworkQualityProto> = {
   },
   fromPartial<I extends Exact<DeepPartial<NetworkQualityProto>, I>>(object: I): NetworkQualityProto {
     const message = createBaseNetworkQualityProto();
-    message.rtt = object.rtt ?? 0;
-    message.packet_loss = object.packet_loss ?? 0;
-    message.jitter = object.jitter ?? 0;
-    message.samples = object.samples ?? 0;
+    message.rtt = object.rtt ?? undefined;
+    message.packet_loss = object.packet_loss ?? undefined;
+    message.jitter = object.jitter ?? undefined;
+    message.samples = object.samples ?? undefined;
     return message;
   },
 };
 
 function createBaseEdgeReportQualityResult(): EdgeReportQualityResult {
-  return { success: false };
+  return { success: undefined };
 }
 
 export const EdgeReportQualityResult: MessageFns<EdgeReportQualityResult> = {
   encode(message: EdgeReportQualityResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
     return writer;
@@ -7755,12 +7866,12 @@ export const EdgeReportQualityResult: MessageFns<EdgeReportQualityResult> = {
   },
 
   fromJSON(object: any): EdgeReportQualityResult {
-    return { success: isSet(object.success) ? globalThis.Boolean(object.success) : false };
+    return { success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined };
   },
 
   toJSON(message: EdgeReportQualityResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
     return obj;
@@ -7771,7 +7882,7 @@ export const EdgeReportQualityResult: MessageFns<EdgeReportQualityResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeReportQualityResult>, I>>(object: I): EdgeReportQualityResult {
     const message = createBaseEdgeReportQualityResult();
-    message.success = object.success ?? false;
+    message.success = object.success ?? undefined;
     return message;
   },
 };
@@ -7887,30 +7998,38 @@ export const ClusterGetStatusResult: MessageFns<ClusterGetStatusResult> = {
 };
 
 function createBaseClusterEdgeStatusProto(): ClusterEdgeStatusProto {
-  return { id: 0, name: "", host: "", port: 0, client_count: 0, status: "", last_seen: 0 };
+  return {
+    id: undefined,
+    name: undefined,
+    host: undefined,
+    port: undefined,
+    client_count: undefined,
+    status: undefined,
+    last_seen: undefined,
+  };
 }
 
 export const ClusterEdgeStatusProto: MessageFns<ClusterEdgeStatusProto> = {
   encode(message: ClusterEdgeStatusProto, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.id !== undefined && message.id !== 0) {
+    if (message.id !== undefined) {
       writer.uint32(8).uint32(message.id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(18).string(message.name);
     }
-    if (message.host !== undefined && message.host !== "") {
+    if (message.host !== undefined) {
       writer.uint32(26).string(message.host);
     }
-    if (message.port !== undefined && message.port !== 0) {
+    if (message.port !== undefined) {
       writer.uint32(32).uint32(message.port);
     }
-    if (message.client_count !== undefined && message.client_count !== 0) {
+    if (message.client_count !== undefined) {
       writer.uint32(40).uint32(message.client_count);
     }
-    if (message.status !== undefined && message.status !== "") {
+    if (message.status !== undefined) {
       writer.uint32(50).string(message.status);
     }
-    if (message.last_seen !== undefined && message.last_seen !== 0) {
+    if (message.last_seen !== undefined) {
       writer.uint32(56).int64(message.last_seen);
     }
     return writer;
@@ -7990,37 +8109,37 @@ export const ClusterEdgeStatusProto: MessageFns<ClusterEdgeStatusProto> = {
 
   fromJSON(object: any): ClusterEdgeStatusProto {
     return {
-      id: isSet(object.id) ? globalThis.Number(object.id) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      host: isSet(object.host) ? globalThis.String(object.host) : "",
-      port: isSet(object.port) ? globalThis.Number(object.port) : 0,
-      client_count: isSet(object.client_count) ? globalThis.Number(object.client_count) : 0,
-      status: isSet(object.status) ? globalThis.String(object.status) : "",
-      last_seen: isSet(object.last_seen) ? globalThis.Number(object.last_seen) : 0,
+      id: isSet(object.id) ? globalThis.Number(object.id) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      host: isSet(object.host) ? globalThis.String(object.host) : undefined,
+      port: isSet(object.port) ? globalThis.Number(object.port) : undefined,
+      client_count: isSet(object.client_count) ? globalThis.Number(object.client_count) : undefined,
+      status: isSet(object.status) ? globalThis.String(object.status) : undefined,
+      last_seen: isSet(object.last_seen) ? globalThis.Number(object.last_seen) : undefined,
     };
   },
 
   toJSON(message: ClusterEdgeStatusProto): unknown {
     const obj: any = {};
-    if (message.id !== undefined && message.id !== 0) {
+    if (message.id !== undefined) {
       obj.id = Math.round(message.id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.host !== undefined && message.host !== "") {
+    if (message.host !== undefined) {
       obj.host = message.host;
     }
-    if (message.port !== undefined && message.port !== 0) {
+    if (message.port !== undefined) {
       obj.port = Math.round(message.port);
     }
-    if (message.client_count !== undefined && message.client_count !== 0) {
+    if (message.client_count !== undefined) {
       obj.client_count = Math.round(message.client_count);
     }
-    if (message.status !== undefined && message.status !== "") {
+    if (message.status !== undefined) {
       obj.status = message.status;
     }
-    if (message.last_seen !== undefined && message.last_seen !== 0) {
+    if (message.last_seen !== undefined) {
       obj.last_seen = Math.round(message.last_seen);
     }
     return obj;
@@ -8031,24 +8150,24 @@ export const ClusterEdgeStatusProto: MessageFns<ClusterEdgeStatusProto> = {
   },
   fromPartial<I extends Exact<DeepPartial<ClusterEdgeStatusProto>, I>>(object: I): ClusterEdgeStatusProto {
     const message = createBaseClusterEdgeStatusProto();
-    message.id = object.id ?? 0;
-    message.name = object.name ?? "";
-    message.host = object.host ?? "";
-    message.port = object.port ?? 0;
-    message.client_count = object.client_count ?? 0;
-    message.status = object.status ?? "";
-    message.last_seen = object.last_seen ?? 0;
+    message.id = object.id ?? undefined;
+    message.name = object.name ?? undefined;
+    message.host = object.host ?? undefined;
+    message.port = object.port ?? undefined;
+    message.client_count = object.client_count ?? undefined;
+    message.status = object.status ?? undefined;
+    message.last_seen = object.last_seen ?? undefined;
     return message;
   },
 };
 
 function createBaseBlobPutParams(): BlobPutParams {
-  return { data: Buffer.alloc(0) };
+  return { data: undefined };
 }
 
 export const BlobPutParams: MessageFns<BlobPutParams> = {
   encode(message: BlobPutParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       writer.uint32(10).bytes(message.data);
     }
     return writer;
@@ -8079,12 +8198,12 @@ export const BlobPutParams: MessageFns<BlobPutParams> = {
   },
 
   fromJSON(object: any): BlobPutParams {
-    return { data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : Buffer.alloc(0) };
+    return { data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : undefined };
   },
 
   toJSON(message: BlobPutParams): unknown {
     const obj: any = {};
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       obj.data = base64FromBytes(message.data);
     }
     return obj;
@@ -8095,24 +8214,24 @@ export const BlobPutParams: MessageFns<BlobPutParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<BlobPutParams>, I>>(object: I): BlobPutParams {
     const message = createBaseBlobPutParams();
-    message.data = object.data ?? Buffer.alloc(0);
+    message.data = object.data ?? undefined;
     return message;
   },
 };
 
 function createBaseBlobPutResult(): BlobPutResult {
-  return { success: false, hash: "", error: "" };
+  return { success: undefined, hash: undefined, error: undefined };
 }
 
 export const BlobPutResult: MessageFns<BlobPutResult> = {
   encode(message: BlobPutResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       writer.uint32(18).string(message.hash);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(26).string(message.error);
     }
     return writer;
@@ -8160,21 +8279,21 @@ export const BlobPutResult: MessageFns<BlobPutResult> = {
 
   fromJSON(object: any): BlobPutResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      hash: isSet(object.hash) ? globalThis.String(object.hash) : "",
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      hash: isSet(object.hash) ? globalThis.String(object.hash) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: BlobPutResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       obj.hash = message.hash;
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -8185,20 +8304,20 @@ export const BlobPutResult: MessageFns<BlobPutResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<BlobPutResult>, I>>(object: I): BlobPutResult {
     const message = createBaseBlobPutResult();
-    message.success = object.success ?? false;
-    message.hash = object.hash ?? "";
-    message.error = object.error ?? "";
+    message.success = object.success ?? undefined;
+    message.hash = object.hash ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseBlobGetParams(): BlobGetParams {
-  return { hash: "" };
+  return { hash: undefined };
 }
 
 export const BlobGetParams: MessageFns<BlobGetParams> = {
   encode(message: BlobGetParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       writer.uint32(10).string(message.hash);
     }
     return writer;
@@ -8229,12 +8348,12 @@ export const BlobGetParams: MessageFns<BlobGetParams> = {
   },
 
   fromJSON(object: any): BlobGetParams {
-    return { hash: isSet(object.hash) ? globalThis.String(object.hash) : "" };
+    return { hash: isSet(object.hash) ? globalThis.String(object.hash) : undefined };
   },
 
   toJSON(message: BlobGetParams): unknown {
     const obj: any = {};
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       obj.hash = message.hash;
     }
     return obj;
@@ -8245,24 +8364,24 @@ export const BlobGetParams: MessageFns<BlobGetParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<BlobGetParams>, I>>(object: I): BlobGetParams {
     const message = createBaseBlobGetParams();
-    message.hash = object.hash ?? "";
+    message.hash = object.hash ?? undefined;
     return message;
   },
 };
 
 function createBaseBlobGetResult(): BlobGetResult {
-  return { success: false, data: Buffer.alloc(0), error: "" };
+  return { success: undefined, data: undefined, error: undefined };
 }
 
 export const BlobGetResult: MessageFns<BlobGetResult> = {
   encode(message: BlobGetResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       writer.uint32(18).bytes(message.data);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(26).string(message.error);
     }
     return writer;
@@ -8310,21 +8429,21 @@ export const BlobGetResult: MessageFns<BlobGetResult> = {
 
   fromJSON(object: any): BlobGetResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : Buffer.alloc(0),
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: BlobGetResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       obj.data = base64FromBytes(message.data);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -8335,20 +8454,20 @@ export const BlobGetResult: MessageFns<BlobGetResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<BlobGetResult>, I>>(object: I): BlobGetResult {
     const message = createBaseBlobGetResult();
-    message.success = object.success ?? false;
-    message.data = object.data ?? Buffer.alloc(0);
-    message.error = object.error ?? "";
+    message.success = object.success ?? undefined;
+    message.data = object.data ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseBlobGetUserTextureParams(): BlobGetUserTextureParams {
-  return { user_id: 0 };
+  return { user_id: undefined };
 }
 
 export const BlobGetUserTextureParams: MessageFns<BlobGetUserTextureParams> = {
   encode(message: BlobGetUserTextureParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       writer.uint32(8).uint32(message.user_id);
     }
     return writer;
@@ -8379,12 +8498,12 @@ export const BlobGetUserTextureParams: MessageFns<BlobGetUserTextureParams> = {
   },
 
   fromJSON(object: any): BlobGetUserTextureParams {
-    return { user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : 0 };
+    return { user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : undefined };
   },
 
   toJSON(message: BlobGetUserTextureParams): unknown {
     const obj: any = {};
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       obj.user_id = Math.round(message.user_id);
     }
     return obj;
@@ -8395,27 +8514,27 @@ export const BlobGetUserTextureParams: MessageFns<BlobGetUserTextureParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<BlobGetUserTextureParams>, I>>(object: I): BlobGetUserTextureParams {
     const message = createBaseBlobGetUserTextureParams();
-    message.user_id = object.user_id ?? 0;
+    message.user_id = object.user_id ?? undefined;
     return message;
   },
 };
 
 function createBaseBlobGetUserTextureResult(): BlobGetUserTextureResult {
-  return { success: false, data: Buffer.alloc(0), hash: "", error: "" };
+  return { success: undefined, data: undefined, hash: undefined, error: undefined };
 }
 
 export const BlobGetUserTextureResult: MessageFns<BlobGetUserTextureResult> = {
   encode(message: BlobGetUserTextureResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       writer.uint32(18).bytes(message.data);
     }
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       writer.uint32(26).string(message.hash);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(34).string(message.error);
     }
     return writer;
@@ -8471,25 +8590,25 @@ export const BlobGetUserTextureResult: MessageFns<BlobGetUserTextureResult> = {
 
   fromJSON(object: any): BlobGetUserTextureResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : Buffer.alloc(0),
-      hash: isSet(object.hash) ? globalThis.String(object.hash) : "",
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : undefined,
+      hash: isSet(object.hash) ? globalThis.String(object.hash) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: BlobGetUserTextureResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       obj.data = base64FromBytes(message.data);
     }
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       obj.hash = message.hash;
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -8500,21 +8619,21 @@ export const BlobGetUserTextureResult: MessageFns<BlobGetUserTextureResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<BlobGetUserTextureResult>, I>>(object: I): BlobGetUserTextureResult {
     const message = createBaseBlobGetUserTextureResult();
-    message.success = object.success ?? false;
-    message.data = object.data ?? Buffer.alloc(0);
-    message.hash = object.hash ?? "";
-    message.error = object.error ?? "";
+    message.success = object.success ?? undefined;
+    message.data = object.data ?? undefined;
+    message.hash = object.hash ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseBlobGetUserCommentParams(): BlobGetUserCommentParams {
-  return { user_id: 0 };
+  return { user_id: undefined };
 }
 
 export const BlobGetUserCommentParams: MessageFns<BlobGetUserCommentParams> = {
   encode(message: BlobGetUserCommentParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       writer.uint32(8).uint32(message.user_id);
     }
     return writer;
@@ -8545,12 +8664,12 @@ export const BlobGetUserCommentParams: MessageFns<BlobGetUserCommentParams> = {
   },
 
   fromJSON(object: any): BlobGetUserCommentParams {
-    return { user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : 0 };
+    return { user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : undefined };
   },
 
   toJSON(message: BlobGetUserCommentParams): unknown {
     const obj: any = {};
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       obj.user_id = Math.round(message.user_id);
     }
     return obj;
@@ -8561,27 +8680,27 @@ export const BlobGetUserCommentParams: MessageFns<BlobGetUserCommentParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<BlobGetUserCommentParams>, I>>(object: I): BlobGetUserCommentParams {
     const message = createBaseBlobGetUserCommentParams();
-    message.user_id = object.user_id ?? 0;
+    message.user_id = object.user_id ?? undefined;
     return message;
   },
 };
 
 function createBaseBlobGetUserCommentResult(): BlobGetUserCommentResult {
-  return { success: false, data: Buffer.alloc(0), hash: "", error: "" };
+  return { success: undefined, data: undefined, hash: undefined, error: undefined };
 }
 
 export const BlobGetUserCommentResult: MessageFns<BlobGetUserCommentResult> = {
   encode(message: BlobGetUserCommentResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       writer.uint32(18).bytes(message.data);
     }
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       writer.uint32(26).string(message.hash);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(34).string(message.error);
     }
     return writer;
@@ -8637,25 +8756,25 @@ export const BlobGetUserCommentResult: MessageFns<BlobGetUserCommentResult> = {
 
   fromJSON(object: any): BlobGetUserCommentResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : Buffer.alloc(0),
-      hash: isSet(object.hash) ? globalThis.String(object.hash) : "",
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : undefined,
+      hash: isSet(object.hash) ? globalThis.String(object.hash) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: BlobGetUserCommentResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       obj.data = base64FromBytes(message.data);
     }
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       obj.hash = message.hash;
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -8666,24 +8785,24 @@ export const BlobGetUserCommentResult: MessageFns<BlobGetUserCommentResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<BlobGetUserCommentResult>, I>>(object: I): BlobGetUserCommentResult {
     const message = createBaseBlobGetUserCommentResult();
-    message.success = object.success ?? false;
-    message.data = object.data ?? Buffer.alloc(0);
-    message.hash = object.hash ?? "";
-    message.error = object.error ?? "";
+    message.success = object.success ?? undefined;
+    message.data = object.data ?? undefined;
+    message.hash = object.hash ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseBlobSetUserTextureParams(): BlobSetUserTextureParams {
-  return { user_id: 0, data: Buffer.alloc(0) };
+  return { user_id: undefined, data: undefined };
 }
 
 export const BlobSetUserTextureParams: MessageFns<BlobSetUserTextureParams> = {
   encode(message: BlobSetUserTextureParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       writer.uint32(8).uint32(message.user_id);
     }
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       writer.uint32(18).bytes(message.data);
     }
     return writer;
@@ -8723,17 +8842,17 @@ export const BlobSetUserTextureParams: MessageFns<BlobSetUserTextureParams> = {
 
   fromJSON(object: any): BlobSetUserTextureParams {
     return {
-      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : 0,
-      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : Buffer.alloc(0),
+      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : undefined,
+      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : undefined,
     };
   },
 
   toJSON(message: BlobSetUserTextureParams): unknown {
     const obj: any = {};
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       obj.user_id = Math.round(message.user_id);
     }
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       obj.data = base64FromBytes(message.data);
     }
     return obj;
@@ -8744,25 +8863,25 @@ export const BlobSetUserTextureParams: MessageFns<BlobSetUserTextureParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<BlobSetUserTextureParams>, I>>(object: I): BlobSetUserTextureParams {
     const message = createBaseBlobSetUserTextureParams();
-    message.user_id = object.user_id ?? 0;
-    message.data = object.data ?? Buffer.alloc(0);
+    message.user_id = object.user_id ?? undefined;
+    message.data = object.data ?? undefined;
     return message;
   },
 };
 
 function createBaseBlobSetUserTextureResult(): BlobSetUserTextureResult {
-  return { success: false, hash: "", error: "" };
+  return { success: undefined, hash: undefined, error: undefined };
 }
 
 export const BlobSetUserTextureResult: MessageFns<BlobSetUserTextureResult> = {
   encode(message: BlobSetUserTextureResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       writer.uint32(18).string(message.hash);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(26).string(message.error);
     }
     return writer;
@@ -8810,21 +8929,21 @@ export const BlobSetUserTextureResult: MessageFns<BlobSetUserTextureResult> = {
 
   fromJSON(object: any): BlobSetUserTextureResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      hash: isSet(object.hash) ? globalThis.String(object.hash) : "",
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      hash: isSet(object.hash) ? globalThis.String(object.hash) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: BlobSetUserTextureResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       obj.hash = message.hash;
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -8835,23 +8954,23 @@ export const BlobSetUserTextureResult: MessageFns<BlobSetUserTextureResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<BlobSetUserTextureResult>, I>>(object: I): BlobSetUserTextureResult {
     const message = createBaseBlobSetUserTextureResult();
-    message.success = object.success ?? false;
-    message.hash = object.hash ?? "";
-    message.error = object.error ?? "";
+    message.success = object.success ?? undefined;
+    message.hash = object.hash ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseBlobSetUserCommentParams(): BlobSetUserCommentParams {
-  return { user_id: 0, data: Buffer.alloc(0) };
+  return { user_id: undefined, data: undefined };
 }
 
 export const BlobSetUserCommentParams: MessageFns<BlobSetUserCommentParams> = {
   encode(message: BlobSetUserCommentParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       writer.uint32(8).uint32(message.user_id);
     }
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       writer.uint32(18).bytes(message.data);
     }
     return writer;
@@ -8891,17 +9010,17 @@ export const BlobSetUserCommentParams: MessageFns<BlobSetUserCommentParams> = {
 
   fromJSON(object: any): BlobSetUserCommentParams {
     return {
-      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : 0,
-      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : Buffer.alloc(0),
+      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : undefined,
+      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : undefined,
     };
   },
 
   toJSON(message: BlobSetUserCommentParams): unknown {
     const obj: any = {};
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       obj.user_id = Math.round(message.user_id);
     }
-    if (message.data !== undefined && message.data.length !== 0) {
+    if (message.data !== undefined) {
       obj.data = base64FromBytes(message.data);
     }
     return obj;
@@ -8912,25 +9031,25 @@ export const BlobSetUserCommentParams: MessageFns<BlobSetUserCommentParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<BlobSetUserCommentParams>, I>>(object: I): BlobSetUserCommentParams {
     const message = createBaseBlobSetUserCommentParams();
-    message.user_id = object.user_id ?? 0;
-    message.data = object.data ?? Buffer.alloc(0);
+    message.user_id = object.user_id ?? undefined;
+    message.data = object.data ?? undefined;
     return message;
   },
 };
 
 function createBaseBlobSetUserCommentResult(): BlobSetUserCommentResult {
-  return { success: false, hash: "", error: "" };
+  return { success: undefined, hash: undefined, error: undefined };
 }
 
 export const BlobSetUserCommentResult: MessageFns<BlobSetUserCommentResult> = {
   encode(message: BlobSetUserCommentResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       writer.uint32(18).string(message.hash);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(26).string(message.error);
     }
     return writer;
@@ -8978,21 +9097,21 @@ export const BlobSetUserCommentResult: MessageFns<BlobSetUserCommentResult> = {
 
   fromJSON(object: any): BlobSetUserCommentResult {
     return {
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      hash: isSet(object.hash) ? globalThis.String(object.hash) : "",
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      hash: isSet(object.hash) ? globalThis.String(object.hash) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
   toJSON(message: BlobSetUserCommentResult): unknown {
     const obj: any = {};
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.hash !== undefined && message.hash !== "") {
+    if (message.hash !== undefined) {
       obj.hash = message.hash;
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
     return obj;
@@ -9003,29 +9122,29 @@ export const BlobSetUserCommentResult: MessageFns<BlobSetUserCommentResult> = {
   },
   fromPartial<I extends Exact<DeepPartial<BlobSetUserCommentResult>, I>>(object: I): BlobSetUserCommentResult {
     const message = createBaseBlobSetUserCommentResult();
-    message.success = object.success ?? false;
-    message.hash = object.hash ?? "";
-    message.error = object.error ?? "";
+    message.success = object.success ?? undefined;
+    message.hash = object.hash ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
 
 function createBaseHubVoiceDataParams(): HubVoiceDataParams {
-  return { from_session_id: 0, target_session_id: 0, voice_data: Buffer.alloc(0), timestamp: 0 };
+  return { from_session_id: undefined, target_session_id: undefined, voice_data: undefined, timestamp: undefined };
 }
 
 export const HubVoiceDataParams: MessageFns<HubVoiceDataParams> = {
   encode(message: HubVoiceDataParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.from_session_id !== undefined && message.from_session_id !== 0) {
+    if (message.from_session_id !== undefined) {
       writer.uint32(8).uint32(message.from_session_id);
     }
-    if (message.target_session_id !== undefined && message.target_session_id !== 0) {
+    if (message.target_session_id !== undefined) {
       writer.uint32(16).uint32(message.target_session_id);
     }
-    if (message.voice_data !== undefined && message.voice_data.length !== 0) {
+    if (message.voice_data !== undefined) {
       writer.uint32(26).bytes(message.voice_data);
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       writer.uint32(32).int64(message.timestamp);
     }
     return writer;
@@ -9081,25 +9200,25 @@ export const HubVoiceDataParams: MessageFns<HubVoiceDataParams> = {
 
   fromJSON(object: any): HubVoiceDataParams {
     return {
-      from_session_id: isSet(object.from_session_id) ? globalThis.Number(object.from_session_id) : 0,
-      target_session_id: isSet(object.target_session_id) ? globalThis.Number(object.target_session_id) : 0,
-      voice_data: isSet(object.voice_data) ? Buffer.from(bytesFromBase64(object.voice_data)) : Buffer.alloc(0),
-      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
+      from_session_id: isSet(object.from_session_id) ? globalThis.Number(object.from_session_id) : undefined,
+      target_session_id: isSet(object.target_session_id) ? globalThis.Number(object.target_session_id) : undefined,
+      voice_data: isSet(object.voice_data) ? Buffer.from(bytesFromBase64(object.voice_data)) : undefined,
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
     };
   },
 
   toJSON(message: HubVoiceDataParams): unknown {
     const obj: any = {};
-    if (message.from_session_id !== undefined && message.from_session_id !== 0) {
+    if (message.from_session_id !== undefined) {
       obj.from_session_id = Math.round(message.from_session_id);
     }
-    if (message.target_session_id !== undefined && message.target_session_id !== 0) {
+    if (message.target_session_id !== undefined) {
       obj.target_session_id = Math.round(message.target_session_id);
     }
-    if (message.voice_data !== undefined && message.voice_data.length !== 0) {
+    if (message.voice_data !== undefined) {
       obj.voice_data = base64FromBytes(message.voice_data);
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       obj.timestamp = Math.round(message.timestamp);
     }
     return obj;
@@ -9110,21 +9229,21 @@ export const HubVoiceDataParams: MessageFns<HubVoiceDataParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<HubVoiceDataParams>, I>>(object: I): HubVoiceDataParams {
     const message = createBaseHubVoiceDataParams();
-    message.from_session_id = object.from_session_id ?? 0;
-    message.target_session_id = object.target_session_id ?? 0;
-    message.voice_data = object.voice_data ?? Buffer.alloc(0);
-    message.timestamp = object.timestamp ?? 0;
+    message.from_session_id = object.from_session_id ?? undefined;
+    message.target_session_id = object.target_session_id ?? undefined;
+    message.voice_data = object.voice_data ?? undefined;
+    message.timestamp = object.timestamp ?? undefined;
     return message;
   },
 };
 
 function createBaseHubForceDisconnectParams(): HubForceDisconnectParams {
-  return { reason: "" };
+  return { reason: undefined };
 }
 
 export const HubForceDisconnectParams: MessageFns<HubForceDisconnectParams> = {
   encode(message: HubForceDisconnectParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       writer.uint32(10).string(message.reason);
     }
     return writer;
@@ -9155,12 +9274,12 @@ export const HubForceDisconnectParams: MessageFns<HubForceDisconnectParams> = {
   },
 
   fromJSON(object: any): HubForceDisconnectParams {
-    return { reason: isSet(object.reason) ? globalThis.String(object.reason) : "" };
+    return { reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined };
   },
 
   toJSON(message: HubForceDisconnectParams): unknown {
     const obj: any = {};
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       obj.reason = message.reason;
     }
     return obj;
@@ -9171,30 +9290,30 @@ export const HubForceDisconnectParams: MessageFns<HubForceDisconnectParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<HubForceDisconnectParams>, I>>(object: I): HubForceDisconnectParams {
     const message = createBaseHubForceDisconnectParams();
-    message.reason = object.reason ?? "";
+    message.reason = object.reason ?? undefined;
     return message;
   },
 };
 
 function createBaseHubPeerJoinedParams(): HubPeerJoinedParams {
-  return { id: 0, name: "", host: "", port: 0, voice_port: 0 };
+  return { id: undefined, name: undefined, host: undefined, port: undefined, voice_port: undefined };
 }
 
 export const HubPeerJoinedParams: MessageFns<HubPeerJoinedParams> = {
   encode(message: HubPeerJoinedParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.id !== undefined && message.id !== 0) {
+    if (message.id !== undefined) {
       writer.uint32(8).uint32(message.id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       writer.uint32(18).string(message.name);
     }
-    if (message.host !== undefined && message.host !== "") {
+    if (message.host !== undefined) {
       writer.uint32(26).string(message.host);
     }
-    if (message.port !== undefined && message.port !== 0) {
+    if (message.port !== undefined) {
       writer.uint32(32).uint32(message.port);
     }
-    if (message.voice_port !== undefined && message.voice_port !== 0) {
+    if (message.voice_port !== undefined) {
       writer.uint32(40).uint32(message.voice_port);
     }
     return writer;
@@ -9258,29 +9377,29 @@ export const HubPeerJoinedParams: MessageFns<HubPeerJoinedParams> = {
 
   fromJSON(object: any): HubPeerJoinedParams {
     return {
-      id: isSet(object.id) ? globalThis.Number(object.id) : 0,
-      name: isSet(object.name) ? globalThis.String(object.name) : "",
-      host: isSet(object.host) ? globalThis.String(object.host) : "",
-      port: isSet(object.port) ? globalThis.Number(object.port) : 0,
-      voice_port: isSet(object.voice_port) ? globalThis.Number(object.voice_port) : 0,
+      id: isSet(object.id) ? globalThis.Number(object.id) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      host: isSet(object.host) ? globalThis.String(object.host) : undefined,
+      port: isSet(object.port) ? globalThis.Number(object.port) : undefined,
+      voice_port: isSet(object.voice_port) ? globalThis.Number(object.voice_port) : undefined,
     };
   },
 
   toJSON(message: HubPeerJoinedParams): unknown {
     const obj: any = {};
-    if (message.id !== undefined && message.id !== 0) {
+    if (message.id !== undefined) {
       obj.id = Math.round(message.id);
     }
-    if (message.name !== undefined && message.name !== "") {
+    if (message.name !== undefined) {
       obj.name = message.name;
     }
-    if (message.host !== undefined && message.host !== "") {
+    if (message.host !== undefined) {
       obj.host = message.host;
     }
-    if (message.port !== undefined && message.port !== 0) {
+    if (message.port !== undefined) {
       obj.port = Math.round(message.port);
     }
-    if (message.voice_port !== undefined && message.voice_port !== 0) {
+    if (message.voice_port !== undefined) {
       obj.voice_port = Math.round(message.voice_port);
     }
     return obj;
@@ -9291,48 +9410,48 @@ export const HubPeerJoinedParams: MessageFns<HubPeerJoinedParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<HubPeerJoinedParams>, I>>(object: I): HubPeerJoinedParams {
     const message = createBaseHubPeerJoinedParams();
-    message.id = object.id ?? 0;
-    message.name = object.name ?? "";
-    message.host = object.host ?? "";
-    message.port = object.port ?? 0;
-    message.voice_port = object.voice_port ?? 0;
+    message.id = object.id ?? undefined;
+    message.name = object.name ?? undefined;
+    message.host = object.host ?? undefined;
+    message.port = object.port ?? undefined;
+    message.voice_port = object.voice_port ?? undefined;
     return message;
   },
 };
 
 function createBaseHubACLResponseParams(): HubACLResponseParams {
   return {
-    edge_id: 0,
-    actor_session: 0,
-    success: false,
-    channel_id: 0,
-    raw_data: Buffer.alloc(0),
-    error: "",
-    permission_denied: false,
+    edge_id: undefined,
+    actor_session: undefined,
+    success: undefined,
+    channel_id: undefined,
+    raw_data: undefined,
+    error: undefined,
+    permission_denied: undefined,
   };
 }
 
 export const HubACLResponseParams: MessageFns<HubACLResponseParams> = {
   encode(message: HubACLResponseParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(8).uint32(message.edge_id);
     }
-    if (message.actor_session !== undefined && message.actor_session !== 0) {
+    if (message.actor_session !== undefined) {
       writer.uint32(16).uint32(message.actor_session);
     }
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       writer.uint32(24).bool(message.success);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(32).uint32(message.channel_id);
     }
-    if (message.raw_data !== undefined && message.raw_data.length !== 0) {
+    if (message.raw_data !== undefined) {
       writer.uint32(42).bytes(message.raw_data);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       writer.uint32(50).string(message.error);
     }
-    if (message.permission_denied !== undefined && message.permission_denied !== false) {
+    if (message.permission_denied !== undefined) {
       writer.uint32(56).bool(message.permission_denied);
     }
     return writer;
@@ -9412,37 +9531,37 @@ export const HubACLResponseParams: MessageFns<HubACLResponseParams> = {
 
   fromJSON(object: any): HubACLResponseParams {
     return {
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      actor_session: isSet(object.actor_session) ? globalThis.Number(object.actor_session) : 0,
-      success: isSet(object.success) ? globalThis.Boolean(object.success) : false,
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      raw_data: isSet(object.raw_data) ? Buffer.from(bytesFromBase64(object.raw_data)) : Buffer.alloc(0),
-      error: isSet(object.error) ? globalThis.String(object.error) : "",
-      permission_denied: isSet(object.permission_denied) ? globalThis.Boolean(object.permission_denied) : false,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      actor_session: isSet(object.actor_session) ? globalThis.Number(object.actor_session) : undefined,
+      success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      raw_data: isSet(object.raw_data) ? Buffer.from(bytesFromBase64(object.raw_data)) : undefined,
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+      permission_denied: isSet(object.permission_denied) ? globalThis.Boolean(object.permission_denied) : undefined,
     };
   },
 
   toJSON(message: HubACLResponseParams): unknown {
     const obj: any = {};
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.actor_session !== undefined && message.actor_session !== 0) {
+    if (message.actor_session !== undefined) {
       obj.actor_session = Math.round(message.actor_session);
     }
-    if (message.success !== undefined && message.success !== false) {
+    if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.raw_data !== undefined && message.raw_data.length !== 0) {
+    if (message.raw_data !== undefined) {
       obj.raw_data = base64FromBytes(message.raw_data);
     }
-    if (message.error !== undefined && message.error !== "") {
+    if (message.error !== undefined) {
       obj.error = message.error;
     }
-    if (message.permission_denied !== undefined && message.permission_denied !== false) {
+    if (message.permission_denied !== undefined) {
       obj.permission_denied = message.permission_denied;
     }
     return obj;
@@ -9453,51 +9572,51 @@ export const HubACLResponseParams: MessageFns<HubACLResponseParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<HubACLResponseParams>, I>>(object: I): HubACLResponseParams {
     const message = createBaseHubACLResponseParams();
-    message.edge_id = object.edge_id ?? 0;
-    message.actor_session = object.actor_session ?? 0;
-    message.success = object.success ?? false;
-    message.channel_id = object.channel_id ?? 0;
-    message.raw_data = object.raw_data ?? Buffer.alloc(0);
-    message.error = object.error ?? "";
-    message.permission_denied = object.permission_denied ?? false;
+    message.edge_id = object.edge_id ?? undefined;
+    message.actor_session = object.actor_session ?? undefined;
+    message.success = object.success ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    message.raw_data = object.raw_data ?? undefined;
+    message.error = object.error ?? undefined;
+    message.permission_denied = object.permission_denied ?? undefined;
     return message;
   },
 };
 
 function createBaseHubUserJoinedParams(): HubUserJoinedParams {
   return {
-    session_id: 0,
-    edge_id: 0,
-    user_id: 0,
-    username: "",
-    channel_id: 0,
+    session_id: undefined,
+    edge_id: undefined,
+    user_id: undefined,
+    username: undefined,
+    channel_id: undefined,
     groups: [],
-    cert_hash: "",
-    mute: false,
-    deaf: false,
-    suppress: false,
-    self_mute: false,
-    self_deaf: false,
-    priority_speaker: false,
-    recording: false,
+    cert_hash: undefined,
+    mute: undefined,
+    deaf: undefined,
+    suppress: undefined,
+    self_mute: undefined,
+    self_deaf: undefined,
+    priority_speaker: undefined,
+    recording: undefined,
   };
 }
 
 export const HubUserJoinedParams: MessageFns<HubUserJoinedParams> = {
   encode(message: HubUserJoinedParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       writer.uint32(8).uint32(message.session_id);
     }
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(16).uint32(message.edge_id);
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       writer.uint32(24).uint32(message.user_id);
     }
-    if (message.username !== undefined && message.username !== "") {
+    if (message.username !== undefined) {
       writer.uint32(34).string(message.username);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(40).uint32(message.channel_id);
     }
     if (message.groups !== undefined && message.groups.length !== 0) {
@@ -9505,28 +9624,28 @@ export const HubUserJoinedParams: MessageFns<HubUserJoinedParams> = {
         writer.uint32(50).string(v!);
       }
     }
-    if (message.cert_hash !== undefined && message.cert_hash !== "") {
+    if (message.cert_hash !== undefined) {
       writer.uint32(58).string(message.cert_hash);
     }
-    if (message.mute !== undefined && message.mute !== false) {
+    if (message.mute !== undefined) {
       writer.uint32(64).bool(message.mute);
     }
-    if (message.deaf !== undefined && message.deaf !== false) {
+    if (message.deaf !== undefined) {
       writer.uint32(72).bool(message.deaf);
     }
-    if (message.suppress !== undefined && message.suppress !== false) {
+    if (message.suppress !== undefined) {
       writer.uint32(80).bool(message.suppress);
     }
-    if (message.self_mute !== undefined && message.self_mute !== false) {
+    if (message.self_mute !== undefined) {
       writer.uint32(88).bool(message.self_mute);
     }
-    if (message.self_deaf !== undefined && message.self_deaf !== false) {
+    if (message.self_deaf !== undefined) {
       writer.uint32(96).bool(message.self_deaf);
     }
-    if (message.priority_speaker !== undefined && message.priority_speaker !== false) {
+    if (message.priority_speaker !== undefined) {
       writer.uint32(104).bool(message.priority_speaker);
     }
-    if (message.recording !== undefined && message.recording !== false) {
+    if (message.recording !== undefined) {
       writer.uint32(112).bool(message.recording);
     }
     return writer;
@@ -9665,65 +9784,65 @@ export const HubUserJoinedParams: MessageFns<HubUserJoinedParams> = {
 
   fromJSON(object: any): HubUserJoinedParams {
     return {
-      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : 0,
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : 0,
-      username: isSet(object.username) ? globalThis.String(object.username) : "",
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      user_id: isSet(object.user_id) ? globalThis.Number(object.user_id) : undefined,
+      username: isSet(object.username) ? globalThis.String(object.username) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
       groups: globalThis.Array.isArray(object?.groups) ? object.groups.map((e: any) => globalThis.String(e)) : [],
-      cert_hash: isSet(object.cert_hash) ? globalThis.String(object.cert_hash) : "",
-      mute: isSet(object.mute) ? globalThis.Boolean(object.mute) : false,
-      deaf: isSet(object.deaf) ? globalThis.Boolean(object.deaf) : false,
-      suppress: isSet(object.suppress) ? globalThis.Boolean(object.suppress) : false,
-      self_mute: isSet(object.self_mute) ? globalThis.Boolean(object.self_mute) : false,
-      self_deaf: isSet(object.self_deaf) ? globalThis.Boolean(object.self_deaf) : false,
-      priority_speaker: isSet(object.priority_speaker) ? globalThis.Boolean(object.priority_speaker) : false,
-      recording: isSet(object.recording) ? globalThis.Boolean(object.recording) : false,
+      cert_hash: isSet(object.cert_hash) ? globalThis.String(object.cert_hash) : undefined,
+      mute: isSet(object.mute) ? globalThis.Boolean(object.mute) : undefined,
+      deaf: isSet(object.deaf) ? globalThis.Boolean(object.deaf) : undefined,
+      suppress: isSet(object.suppress) ? globalThis.Boolean(object.suppress) : undefined,
+      self_mute: isSet(object.self_mute) ? globalThis.Boolean(object.self_mute) : undefined,
+      self_deaf: isSet(object.self_deaf) ? globalThis.Boolean(object.self_deaf) : undefined,
+      priority_speaker: isSet(object.priority_speaker) ? globalThis.Boolean(object.priority_speaker) : undefined,
+      recording: isSet(object.recording) ? globalThis.Boolean(object.recording) : undefined,
     };
   },
 
   toJSON(message: HubUserJoinedParams): unknown {
     const obj: any = {};
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       obj.session_id = Math.round(message.session_id);
     }
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.user_id !== undefined && message.user_id !== 0) {
+    if (message.user_id !== undefined) {
       obj.user_id = Math.round(message.user_id);
     }
-    if (message.username !== undefined && message.username !== "") {
+    if (message.username !== undefined) {
       obj.username = message.username;
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
     if (message.groups?.length) {
       obj.groups = message.groups;
     }
-    if (message.cert_hash !== undefined && message.cert_hash !== "") {
+    if (message.cert_hash !== undefined) {
       obj.cert_hash = message.cert_hash;
     }
-    if (message.mute !== undefined && message.mute !== false) {
+    if (message.mute !== undefined) {
       obj.mute = message.mute;
     }
-    if (message.deaf !== undefined && message.deaf !== false) {
+    if (message.deaf !== undefined) {
       obj.deaf = message.deaf;
     }
-    if (message.suppress !== undefined && message.suppress !== false) {
+    if (message.suppress !== undefined) {
       obj.suppress = message.suppress;
     }
-    if (message.self_mute !== undefined && message.self_mute !== false) {
+    if (message.self_mute !== undefined) {
       obj.self_mute = message.self_mute;
     }
-    if (message.self_deaf !== undefined && message.self_deaf !== false) {
+    if (message.self_deaf !== undefined) {
       obj.self_deaf = message.self_deaf;
     }
-    if (message.priority_speaker !== undefined && message.priority_speaker !== false) {
+    if (message.priority_speaker !== undefined) {
       obj.priority_speaker = message.priority_speaker;
     }
-    if (message.recording !== undefined && message.recording !== false) {
+    if (message.recording !== undefined) {
       obj.recording = message.recording;
     }
     return obj;
@@ -9734,40 +9853,40 @@ export const HubUserJoinedParams: MessageFns<HubUserJoinedParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<HubUserJoinedParams>, I>>(object: I): HubUserJoinedParams {
     const message = createBaseHubUserJoinedParams();
-    message.session_id = object.session_id ?? 0;
-    message.edge_id = object.edge_id ?? 0;
-    message.user_id = object.user_id ?? 0;
-    message.username = object.username ?? "";
-    message.channel_id = object.channel_id ?? 0;
+    message.session_id = object.session_id ?? undefined;
+    message.edge_id = object.edge_id ?? undefined;
+    message.user_id = object.user_id ?? undefined;
+    message.username = object.username ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
     message.groups = object.groups?.map((e) => e) || [];
-    message.cert_hash = object.cert_hash ?? "";
-    message.mute = object.mute ?? false;
-    message.deaf = object.deaf ?? false;
-    message.suppress = object.suppress ?? false;
-    message.self_mute = object.self_mute ?? false;
-    message.self_deaf = object.self_deaf ?? false;
-    message.priority_speaker = object.priority_speaker ?? false;
-    message.recording = object.recording ?? false;
+    message.cert_hash = object.cert_hash ?? undefined;
+    message.mute = object.mute ?? undefined;
+    message.deaf = object.deaf ?? undefined;
+    message.suppress = object.suppress ?? undefined;
+    message.self_mute = object.self_mute ?? undefined;
+    message.self_deaf = object.self_deaf ?? undefined;
+    message.priority_speaker = object.priority_speaker ?? undefined;
+    message.recording = object.recording ?? undefined;
     return message;
   },
 };
 
 function createBaseHubUserRemoveBroadcastParams(): HubUserRemoveBroadcastParams {
-  return { session: 0, actor: 0, reason: "", ban: false, target_sessions: [] };
+  return { session: undefined, actor: undefined, reason: undefined, ban: undefined, target_sessions: [] };
 }
 
 export const HubUserRemoveBroadcastParams: MessageFns<HubUserRemoveBroadcastParams> = {
   encode(message: HubUserRemoveBroadcastParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       writer.uint32(8).uint32(message.session);
     }
-    if (message.actor !== undefined && message.actor !== 0) {
+    if (message.actor !== undefined) {
       writer.uint32(16).uint32(message.actor);
     }
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       writer.uint32(26).string(message.reason);
     }
-    if (message.ban !== undefined && message.ban !== false) {
+    if (message.ban !== undefined) {
       writer.uint32(32).bool(message.ban);
     }
     if (message.target_sessions !== undefined && message.target_sessions.length !== 0) {
@@ -9846,10 +9965,10 @@ export const HubUserRemoveBroadcastParams: MessageFns<HubUserRemoveBroadcastPara
 
   fromJSON(object: any): HubUserRemoveBroadcastParams {
     return {
-      session: isSet(object.session) ? globalThis.Number(object.session) : 0,
-      actor: isSet(object.actor) ? globalThis.Number(object.actor) : 0,
-      reason: isSet(object.reason) ? globalThis.String(object.reason) : "",
-      ban: isSet(object.ban) ? globalThis.Boolean(object.ban) : false,
+      session: isSet(object.session) ? globalThis.Number(object.session) : undefined,
+      actor: isSet(object.actor) ? globalThis.Number(object.actor) : undefined,
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
+      ban: isSet(object.ban) ? globalThis.Boolean(object.ban) : undefined,
       target_sessions: globalThis.Array.isArray(object?.target_sessions)
         ? object.target_sessions.map((e: any) => globalThis.Number(e))
         : [],
@@ -9858,16 +9977,16 @@ export const HubUserRemoveBroadcastParams: MessageFns<HubUserRemoveBroadcastPara
 
   toJSON(message: HubUserRemoveBroadcastParams): unknown {
     const obj: any = {};
-    if (message.session !== undefined && message.session !== 0) {
+    if (message.session !== undefined) {
       obj.session = Math.round(message.session);
     }
-    if (message.actor !== undefined && message.actor !== 0) {
+    if (message.actor !== undefined) {
       obj.actor = Math.round(message.actor);
     }
-    if (message.reason !== undefined && message.reason !== "") {
+    if (message.reason !== undefined) {
       obj.reason = message.reason;
     }
-    if (message.ban !== undefined && message.ban !== false) {
+    if (message.ban !== undefined) {
       obj.ban = message.ban;
     }
     if (message.target_sessions?.length) {
@@ -9881,31 +10000,31 @@ export const HubUserRemoveBroadcastParams: MessageFns<HubUserRemoveBroadcastPara
   },
   fromPartial<I extends Exact<DeepPartial<HubUserRemoveBroadcastParams>, I>>(object: I): HubUserRemoveBroadcastParams {
     const message = createBaseHubUserRemoveBroadcastParams();
-    message.session = object.session ?? 0;
-    message.actor = object.actor ?? 0;
-    message.reason = object.reason ?? "";
-    message.ban = object.ban ?? false;
+    message.session = object.session ?? undefined;
+    message.actor = object.actor ?? undefined;
+    message.reason = object.reason ?? undefined;
+    message.ban = object.ban ?? undefined;
     message.target_sessions = object.target_sessions?.map((e) => e) || [];
     return message;
   },
 };
 
 function createBaseHubUserMovedParams(): HubUserMovedParams {
-  return { session_id: 0, edge_id: 0, channel_id: 0, actor_session: 0 };
+  return { session_id: undefined, edge_id: undefined, channel_id: undefined, actor_session: undefined };
 }
 
 export const HubUserMovedParams: MessageFns<HubUserMovedParams> = {
   encode(message: HubUserMovedParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       writer.uint32(8).uint32(message.session_id);
     }
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(16).uint32(message.edge_id);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(24).uint32(message.channel_id);
     }
-    if (message.actor_session !== undefined && message.actor_session !== 0) {
+    if (message.actor_session !== undefined) {
       writer.uint32(32).uint32(message.actor_session);
     }
     return writer;
@@ -9961,25 +10080,25 @@ export const HubUserMovedParams: MessageFns<HubUserMovedParams> = {
 
   fromJSON(object: any): HubUserMovedParams {
     return {
-      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : 0,
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0,
-      actor_session: isSet(object.actor_session) ? globalThis.Number(object.actor_session) : 0,
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      actor_session: isSet(object.actor_session) ? globalThis.Number(object.actor_session) : undefined,
     };
   },
 
   toJSON(message: HubUserMovedParams): unknown {
     const obj: any = {};
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       obj.session_id = Math.round(message.session_id);
     }
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
-    if (message.actor_session !== undefined && message.actor_session !== 0) {
+    if (message.actor_session !== undefined) {
       obj.actor_session = Math.round(message.actor_session);
     }
     return obj;
@@ -9990,10 +10109,10 @@ export const HubUserMovedParams: MessageFns<HubUserMovedParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<HubUserMovedParams>, I>>(object: I): HubUserMovedParams {
     const message = createBaseHubUserMovedParams();
-    message.session_id = object.session_id ?? 0;
-    message.edge_id = object.edge_id ?? 0;
-    message.channel_id = object.channel_id ?? 0;
-    message.actor_session = object.actor_session ?? 0;
+    message.session_id = object.session_id ?? undefined;
+    message.edge_id = object.edge_id ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    message.actor_session = object.actor_session ?? undefined;
     return message;
   },
 };
@@ -10059,12 +10178,12 @@ export const HubChannelCreatedParams: MessageFns<HubChannelCreatedParams> = {
 };
 
 function createBaseHubChannelRemovedParams(): HubChannelRemovedParams {
-  return { channel_id: 0 };
+  return { channel_id: undefined };
 }
 
 export const HubChannelRemovedParams: MessageFns<HubChannelRemovedParams> = {
   encode(message: HubChannelRemovedParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       writer.uint32(8).uint32(message.channel_id);
     }
     return writer;
@@ -10095,12 +10214,12 @@ export const HubChannelRemovedParams: MessageFns<HubChannelRemovedParams> = {
   },
 
   fromJSON(object: any): HubChannelRemovedParams {
-    return { channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : 0 };
+    return { channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined };
   },
 
   toJSON(message: HubChannelRemovedParams): unknown {
     const obj: any = {};
-    if (message.channel_id !== undefined && message.channel_id !== 0) {
+    if (message.channel_id !== undefined) {
       obj.channel_id = Math.round(message.channel_id);
     }
     return obj;
@@ -10111,7 +10230,7 @@ export const HubChannelRemovedParams: MessageFns<HubChannelRemovedParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<HubChannelRemovedParams>, I>>(object: I): HubChannelRemovedParams {
     const message = createBaseHubChannelRemovedParams();
-    message.channel_id = object.channel_id ?? 0;
+    message.channel_id = object.channel_id ?? undefined;
     return message;
   },
 };
@@ -10177,24 +10296,30 @@ export const HubChannelUpdatedParams: MessageFns<HubChannelUpdatedParams> = {
 };
 
 function createBaseHubSyncVoiceTargetParams(): HubSyncVoiceTargetParams {
-  return { edge_id: 0, client_session: 0, target_id: 0, config_json: "", timestamp: 0 };
+  return {
+    edge_id: undefined,
+    client_session: undefined,
+    target_id: undefined,
+    config_json: undefined,
+    timestamp: undefined,
+  };
 }
 
 export const HubSyncVoiceTargetParams: MessageFns<HubSyncVoiceTargetParams> = {
   encode(message: HubSyncVoiceTargetParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(8).uint32(message.edge_id);
     }
-    if (message.client_session !== undefined && message.client_session !== 0) {
+    if (message.client_session !== undefined) {
       writer.uint32(16).uint32(message.client_session);
     }
-    if (message.target_id !== undefined && message.target_id !== 0) {
+    if (message.target_id !== undefined) {
       writer.uint32(24).uint32(message.target_id);
     }
-    if (message.config_json !== undefined && message.config_json !== "") {
+    if (message.config_json !== undefined) {
       writer.uint32(34).string(message.config_json);
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       writer.uint32(40).int64(message.timestamp);
     }
     return writer;
@@ -10258,29 +10383,29 @@ export const HubSyncVoiceTargetParams: MessageFns<HubSyncVoiceTargetParams> = {
 
   fromJSON(object: any): HubSyncVoiceTargetParams {
     return {
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      client_session: isSet(object.client_session) ? globalThis.Number(object.client_session) : 0,
-      target_id: isSet(object.target_id) ? globalThis.Number(object.target_id) : 0,
-      config_json: isSet(object.config_json) ? globalThis.String(object.config_json) : "",
-      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      client_session: isSet(object.client_session) ? globalThis.Number(object.client_session) : undefined,
+      target_id: isSet(object.target_id) ? globalThis.Number(object.target_id) : undefined,
+      config_json: isSet(object.config_json) ? globalThis.String(object.config_json) : undefined,
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
     };
   },
 
   toJSON(message: HubSyncVoiceTargetParams): unknown {
     const obj: any = {};
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.client_session !== undefined && message.client_session !== 0) {
+    if (message.client_session !== undefined) {
       obj.client_session = Math.round(message.client_session);
     }
-    if (message.target_id !== undefined && message.target_id !== 0) {
+    if (message.target_id !== undefined) {
       obj.target_id = Math.round(message.target_id);
     }
-    if (message.config_json !== undefined && message.config_json !== "") {
+    if (message.config_json !== undefined) {
       obj.config_json = message.config_json;
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       obj.timestamp = Math.round(message.timestamp);
     }
     return obj;
@@ -10291,20 +10416,20 @@ export const HubSyncVoiceTargetParams: MessageFns<HubSyncVoiceTargetParams> = {
   },
   fromPartial<I extends Exact<DeepPartial<HubSyncVoiceTargetParams>, I>>(object: I): HubSyncVoiceTargetParams {
     const message = createBaseHubSyncVoiceTargetParams();
-    message.edge_id = object.edge_id ?? 0;
-    message.client_session = object.client_session ?? 0;
-    message.target_id = object.target_id ?? 0;
-    message.config_json = object.config_json ?? "";
-    message.timestamp = object.timestamp ?? 0;
+    message.edge_id = object.edge_id ?? undefined;
+    message.client_session = object.client_session ?? undefined;
+    message.target_id = object.target_id ?? undefined;
+    message.config_json = object.config_json ?? undefined;
+    message.timestamp = object.timestamp ?? undefined;
     return message;
   },
 };
 
 function createBaseTypedRPCRequest(): TypedRPCRequest {
   return {
-    request_id: "",
-    method: "",
-    timeout_ms: 0,
+    request_id: undefined,
+    method: undefined,
+    timeout_ms: undefined,
     edge_register: undefined,
     edge_heartbeat: undefined,
     edge_allocate_session_id: undefined,
@@ -10337,13 +10462,13 @@ function createBaseTypedRPCRequest(): TypedRPCRequest {
 
 export const TypedRPCRequest: MessageFns<TypedRPCRequest> = {
   encode(message: TypedRPCRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.request_id !== undefined && message.request_id !== "") {
+    if (message.request_id !== undefined) {
       writer.uint32(10).string(message.request_id);
     }
-    if (message.method !== undefined && message.method !== "") {
+    if (message.method !== undefined) {
       writer.uint32(18).string(message.method);
     }
-    if (message.timeout_ms !== undefined && message.timeout_ms !== 0) {
+    if (message.timeout_ms !== undefined) {
       writer.uint32(24).uint32(message.timeout_ms);
     }
     if (message.edge_register !== undefined) {
@@ -10688,9 +10813,9 @@ export const TypedRPCRequest: MessageFns<TypedRPCRequest> = {
 
   fromJSON(object: any): TypedRPCRequest {
     return {
-      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
-      method: isSet(object.method) ? globalThis.String(object.method) : "",
-      timeout_ms: isSet(object.timeout_ms) ? globalThis.Number(object.timeout_ms) : 0,
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : undefined,
+      method: isSet(object.method) ? globalThis.String(object.method) : undefined,
+      timeout_ms: isSet(object.timeout_ms) ? globalThis.Number(object.timeout_ms) : undefined,
       edge_register: isSet(object.edge_register) ? EdgeRegisterParams.fromJSON(object.edge_register) : undefined,
       edge_heartbeat: isSet(object.edge_heartbeat) ? EdgeHeartbeatParams.fromJSON(object.edge_heartbeat) : undefined,
       edge_allocate_session_id: isSet(object.edge_allocate_session_id)
@@ -10759,13 +10884,13 @@ export const TypedRPCRequest: MessageFns<TypedRPCRequest> = {
 
   toJSON(message: TypedRPCRequest): unknown {
     const obj: any = {};
-    if (message.request_id !== undefined && message.request_id !== "") {
+    if (message.request_id !== undefined) {
       obj.request_id = message.request_id;
     }
-    if (message.method !== undefined && message.method !== "") {
+    if (message.method !== undefined) {
       obj.method = message.method;
     }
-    if (message.timeout_ms !== undefined && message.timeout_ms !== 0) {
+    if (message.timeout_ms !== undefined) {
       obj.timeout_ms = Math.round(message.timeout_ms);
     }
     if (message.edge_register !== undefined) {
@@ -10857,9 +10982,9 @@ export const TypedRPCRequest: MessageFns<TypedRPCRequest> = {
   },
   fromPartial<I extends Exact<DeepPartial<TypedRPCRequest>, I>>(object: I): TypedRPCRequest {
     const message = createBaseTypedRPCRequest();
-    message.request_id = object.request_id ?? "";
-    message.method = object.method ?? "";
-    message.timeout_ms = object.timeout_ms ?? 0;
+    message.request_id = object.request_id ?? undefined;
+    message.method = object.method ?? undefined;
+    message.timeout_ms = object.timeout_ms ?? undefined;
     message.edge_register = (object.edge_register !== undefined && object.edge_register !== null)
       ? EdgeRegisterParams.fromPartial(object.edge_register)
       : undefined;
@@ -10958,9 +11083,9 @@ export const TypedRPCRequest: MessageFns<TypedRPCRequest> = {
 
 function createBaseTypedRPCResponse(): TypedRPCResponse {
   return {
-    request_id: "",
-    method: "",
-    processing_time_ms: 0,
+    request_id: undefined,
+    method: undefined,
+    processing_time_ms: undefined,
     edge_register: undefined,
     edge_heartbeat: undefined,
     edge_allocate_session_id: undefined,
@@ -10994,13 +11119,13 @@ function createBaseTypedRPCResponse(): TypedRPCResponse {
 
 export const TypedRPCResponse: MessageFns<TypedRPCResponse> = {
   encode(message: TypedRPCResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.request_id !== undefined && message.request_id !== "") {
+    if (message.request_id !== undefined) {
       writer.uint32(10).string(message.request_id);
     }
-    if (message.method !== undefined && message.method !== "") {
+    if (message.method !== undefined) {
       writer.uint32(18).string(message.method);
     }
-    if (message.processing_time_ms !== undefined && message.processing_time_ms !== 0) {
+    if (message.processing_time_ms !== undefined) {
       writer.uint32(24).uint32(message.processing_time_ms);
     }
     if (message.edge_register !== undefined) {
@@ -11356,9 +11481,9 @@ export const TypedRPCResponse: MessageFns<TypedRPCResponse> = {
 
   fromJSON(object: any): TypedRPCResponse {
     return {
-      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
-      method: isSet(object.method) ? globalThis.String(object.method) : "",
-      processing_time_ms: isSet(object.processing_time_ms) ? globalThis.Number(object.processing_time_ms) : 0,
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : undefined,
+      method: isSet(object.method) ? globalThis.String(object.method) : undefined,
+      processing_time_ms: isSet(object.processing_time_ms) ? globalThis.Number(object.processing_time_ms) : undefined,
       edge_register: isSet(object.edge_register) ? EdgeRegisterResult.fromJSON(object.edge_register) : undefined,
       edge_heartbeat: isSet(object.edge_heartbeat) ? EdgeHeartbeatResult.fromJSON(object.edge_heartbeat) : undefined,
       edge_allocate_session_id: isSet(object.edge_allocate_session_id)
@@ -11430,13 +11555,13 @@ export const TypedRPCResponse: MessageFns<TypedRPCResponse> = {
 
   toJSON(message: TypedRPCResponse): unknown {
     const obj: any = {};
-    if (message.request_id !== undefined && message.request_id !== "") {
+    if (message.request_id !== undefined) {
       obj.request_id = message.request_id;
     }
-    if (message.method !== undefined && message.method !== "") {
+    if (message.method !== undefined) {
       obj.method = message.method;
     }
-    if (message.processing_time_ms !== undefined && message.processing_time_ms !== 0) {
+    if (message.processing_time_ms !== undefined) {
       obj.processing_time_ms = Math.round(message.processing_time_ms);
     }
     if (message.edge_register !== undefined) {
@@ -11531,9 +11656,9 @@ export const TypedRPCResponse: MessageFns<TypedRPCResponse> = {
   },
   fromPartial<I extends Exact<DeepPartial<TypedRPCResponse>, I>>(object: I): TypedRPCResponse {
     const message = createBaseTypedRPCResponse();
-    message.request_id = object.request_id ?? "";
-    message.method = object.method ?? "";
-    message.processing_time_ms = object.processing_time_ms ?? 0;
+    message.request_id = object.request_id ?? undefined;
+    message.method = object.method ?? undefined;
+    message.processing_time_ms = object.processing_time_ms ?? undefined;
     message.edge_register = (object.edge_register !== undefined && object.edge_register !== null)
       ? EdgeRegisterResult.fromPartial(object.edge_register)
       : undefined;
@@ -11635,8 +11760,8 @@ export const TypedRPCResponse: MessageFns<TypedRPCResponse> = {
 
 function createBaseTypedRPCNotification(): TypedRPCNotification {
   return {
-    method: "",
-    timestamp: 0,
+    method: undefined,
+    timestamp: undefined,
     voice_data: undefined,
     force_disconnect: undefined,
     peer_joined: undefined,
@@ -11648,16 +11773,16 @@ function createBaseTypedRPCNotification(): TypedRPCNotification {
     channel_removed: undefined,
     channel_updated: undefined,
     sync_voice_target: undefined,
-    unknown_params_json: "",
+    unknown_params_json: undefined,
   };
 }
 
 export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
   encode(message: TypedRPCNotification, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.method !== undefined && message.method !== "") {
+    if (message.method !== undefined) {
       writer.uint32(10).string(message.method);
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       writer.uint32(16).int64(message.timestamp);
     }
     if (message.voice_data !== undefined) {
@@ -11693,7 +11818,7 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
     if (message.sync_voice_target !== undefined) {
       HubSyncVoiceTargetParams.encode(message.sync_voice_target, writer.uint32(162).fork()).join();
     }
-    if (message.unknown_params_json !== undefined && message.unknown_params_json !== "") {
+    if (message.unknown_params_json !== undefined) {
       writer.uint32(794).string(message.unknown_params_json);
     }
     return writer;
@@ -11829,8 +11954,8 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
 
   fromJSON(object: any): TypedRPCNotification {
     return {
-      method: isSet(object.method) ? globalThis.String(object.method) : "",
-      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
+      method: isSet(object.method) ? globalThis.String(object.method) : undefined,
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
       voice_data: isSet(object.voice_data) ? HubVoiceDataParams.fromJSON(object.voice_data) : undefined,
       force_disconnect: isSet(object.force_disconnect)
         ? HubForceDisconnectParams.fromJSON(object.force_disconnect)
@@ -11854,16 +11979,18 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
       sync_voice_target: isSet(object.sync_voice_target)
         ? HubSyncVoiceTargetParams.fromJSON(object.sync_voice_target)
         : undefined,
-      unknown_params_json: isSet(object.unknown_params_json) ? globalThis.String(object.unknown_params_json) : "",
+      unknown_params_json: isSet(object.unknown_params_json)
+        ? globalThis.String(object.unknown_params_json)
+        : undefined,
     };
   },
 
   toJSON(message: TypedRPCNotification): unknown {
     const obj: any = {};
-    if (message.method !== undefined && message.method !== "") {
+    if (message.method !== undefined) {
       obj.method = message.method;
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       obj.timestamp = Math.round(message.timestamp);
     }
     if (message.voice_data !== undefined) {
@@ -11899,7 +12026,7 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
     if (message.sync_voice_target !== undefined) {
       obj.sync_voice_target = HubSyncVoiceTargetParams.toJSON(message.sync_voice_target);
     }
-    if (message.unknown_params_json !== undefined && message.unknown_params_json !== "") {
+    if (message.unknown_params_json !== undefined) {
       obj.unknown_params_json = message.unknown_params_json;
     }
     return obj;
@@ -11910,8 +12037,8 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
   },
   fromPartial<I extends Exact<DeepPartial<TypedRPCNotification>, I>>(object: I): TypedRPCNotification {
     const message = createBaseTypedRPCNotification();
-    message.method = object.method ?? "";
-    message.timestamp = object.timestamp ?? 0;
+    message.method = object.method ?? undefined;
+    message.timestamp = object.timestamp ?? undefined;
     message.voice_data = (object.voice_data !== undefined && object.voice_data !== null)
       ? HubVoiceDataParams.fromPartial(object.voice_data)
       : undefined;
@@ -11946,7 +12073,7 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
     message.sync_voice_target = (object.sync_voice_target !== undefined && object.sync_voice_target !== null)
       ? HubSyncVoiceTargetParams.fromPartial(object.sync_voice_target)
       : undefined;
-    message.unknown_params_json = object.unknown_params_json ?? "";
+    message.unknown_params_json = object.unknown_params_json ?? undefined;
     return message;
   },
 };

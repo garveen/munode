@@ -426,7 +426,7 @@ export interface ConfigItem {
 
 function createBaseEdgeHubPacket(): EdgeHubPacket {
   return {
-    type: 0,
+    type: undefined,
     rpc_request: undefined,
     rpc_response: undefined,
     rpc_error: undefined,
@@ -440,7 +440,7 @@ function createBaseEdgeHubPacket(): EdgeHubPacket {
 
 export const EdgeHubPacket: MessageFns<EdgeHubPacket> = {
   encode(message: EdgeHubPacket, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.type !== undefined && message.type !== 0) {
+    if (message.type !== undefined) {
       writer.uint32(8).int32(message.type);
     }
     if (message.rpc_request !== undefined) {
@@ -560,7 +560,7 @@ export const EdgeHubPacket: MessageFns<EdgeHubPacket> = {
 
   fromJSON(object: any): EdgeHubPacket {
     return {
-      type: isSet(object.type) ? packetTypeFromJSON(object.type) : 0,
+      type: isSet(object.type) ? packetTypeFromJSON(object.type) : undefined,
       rpc_request: isSet(object.rpc_request) ? TypedRPCRequest.fromJSON(object.rpc_request) : undefined,
       rpc_response: isSet(object.rpc_response) ? TypedRPCResponse.fromJSON(object.rpc_response) : undefined,
       rpc_error: isSet(object.rpc_error) ? RPCError.fromJSON(object.rpc_error) : undefined,
@@ -576,7 +576,7 @@ export const EdgeHubPacket: MessageFns<EdgeHubPacket> = {
 
   toJSON(message: EdgeHubPacket): unknown {
     const obj: any = {};
-    if (message.type !== undefined && message.type !== 0) {
+    if (message.type !== undefined) {
       obj.type = packetTypeToJSON(message.type);
     }
     if (message.rpc_request !== undefined) {
@@ -611,7 +611,7 @@ export const EdgeHubPacket: MessageFns<EdgeHubPacket> = {
   },
   fromPartial<I extends Exact<DeepPartial<EdgeHubPacket>, I>>(object: I): EdgeHubPacket {
     const message = createBaseEdgeHubPacket();
-    message.type = object.type ?? 0;
+    message.type = object.type ?? undefined;
     message.rpc_request = (object.rpc_request !== undefined && object.rpc_request !== null)
       ? TypedRPCRequest.fromPartial(object.rpc_request)
       : undefined;
@@ -641,21 +641,21 @@ export const EdgeHubPacket: MessageFns<EdgeHubPacket> = {
 };
 
 function createBaseRPCError(): RPCError {
-  return { request_id: "", code: 0, message: "", details: "" };
+  return { request_id: undefined, code: undefined, message: undefined, details: undefined };
 }
 
 export const RPCError: MessageFns<RPCError> = {
   encode(message: RPCError, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.request_id !== undefined && message.request_id !== "") {
+    if (message.request_id !== undefined) {
       writer.uint32(10).string(message.request_id);
     }
-    if (message.code !== undefined && message.code !== 0) {
+    if (message.code !== undefined) {
       writer.uint32(16).int32(message.code);
     }
-    if (message.message !== undefined && message.message !== "") {
+    if (message.message !== undefined) {
       writer.uint32(26).string(message.message);
     }
-    if (message.details !== undefined && message.details !== "") {
+    if (message.details !== undefined) {
       writer.uint32(34).string(message.details);
     }
     return writer;
@@ -711,25 +711,25 @@ export const RPCError: MessageFns<RPCError> = {
 
   fromJSON(object: any): RPCError {
     return {
-      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : "",
-      code: isSet(object.code) ? globalThis.Number(object.code) : 0,
-      message: isSet(object.message) ? globalThis.String(object.message) : "",
-      details: isSet(object.details) ? globalThis.String(object.details) : "",
+      request_id: isSet(object.request_id) ? globalThis.String(object.request_id) : undefined,
+      code: isSet(object.code) ? globalThis.Number(object.code) : undefined,
+      message: isSet(object.message) ? globalThis.String(object.message) : undefined,
+      details: isSet(object.details) ? globalThis.String(object.details) : undefined,
     };
   },
 
   toJSON(message: RPCError): unknown {
     const obj: any = {};
-    if (message.request_id !== undefined && message.request_id !== "") {
+    if (message.request_id !== undefined) {
       obj.request_id = message.request_id;
     }
-    if (message.code !== undefined && message.code !== 0) {
+    if (message.code !== undefined) {
       obj.code = Math.round(message.code);
     }
-    if (message.message !== undefined && message.message !== "") {
+    if (message.message !== undefined) {
       obj.message = message.message;
     }
-    if (message.details !== undefined && message.details !== "") {
+    if (message.details !== undefined) {
       obj.details = message.details;
     }
     return obj;
@@ -740,21 +740,21 @@ export const RPCError: MessageFns<RPCError> = {
   },
   fromPartial<I extends Exact<DeepPartial<RPCError>, I>>(object: I): RPCError {
     const message = createBaseRPCError();
-    message.request_id = object.request_id ?? "";
-    message.code = object.code ?? 0;
-    message.message = object.message ?? "";
-    message.details = object.details ?? "";
+    message.request_id = object.request_id ?? undefined;
+    message.code = object.code ?? undefined;
+    message.message = object.message ?? undefined;
+    message.details = object.details ?? undefined;
     return message;
   },
 };
 
 function createBaseClientMessageRelay(): ClientMessageRelay {
   return {
-    session_id: 0,
-    edge_id: 0,
-    direction: 0,
+    session_id: undefined,
+    edge_id: undefined,
+    direction: undefined,
     routing: undefined,
-    timestamp: 0,
+    timestamp: undefined,
     version: undefined,
     udp_tunnel: undefined,
     authenticate: undefined,
@@ -786,19 +786,19 @@ function createBaseClientMessageRelay(): ClientMessageRelay {
 
 export const ClientMessageRelay: MessageFns<ClientMessageRelay> = {
   encode(message: ClientMessageRelay, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       writer.uint32(8).uint32(message.session_id);
     }
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(16).uint32(message.edge_id);
     }
-    if (message.direction !== undefined && message.direction !== 0) {
+    if (message.direction !== undefined) {
       writer.uint32(24).int32(message.direction);
     }
     if (message.routing !== undefined) {
       RelayRouting.encode(message.routing, writer.uint32(34).fork()).join();
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       writer.uint32(40).int64(message.timestamp);
     }
     if (message.version !== undefined) {
@@ -1148,11 +1148,11 @@ export const ClientMessageRelay: MessageFns<ClientMessageRelay> = {
 
   fromJSON(object: any): ClientMessageRelay {
     return {
-      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : 0,
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      direction: isSet(object.direction) ? relayDirectionFromJSON(object.direction) : 0,
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      direction: isSet(object.direction) ? relayDirectionFromJSON(object.direction) : undefined,
       routing: isSet(object.routing) ? RelayRouting.fromJSON(object.routing) : undefined,
-      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : 0,
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
       version: isSet(object.version) ? Version.fromJSON(object.version) : undefined,
       udp_tunnel: isSet(object.udp_tunnel) ? UDPTunnel.fromJSON(object.udp_tunnel) : undefined,
       authenticate: isSet(object.authenticate) ? Authenticate.fromJSON(object.authenticate) : undefined,
@@ -1188,19 +1188,19 @@ export const ClientMessageRelay: MessageFns<ClientMessageRelay> = {
 
   toJSON(message: ClientMessageRelay): unknown {
     const obj: any = {};
-    if (message.session_id !== undefined && message.session_id !== 0) {
+    if (message.session_id !== undefined) {
       obj.session_id = Math.round(message.session_id);
     }
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.direction !== undefined && message.direction !== 0) {
+    if (message.direction !== undefined) {
       obj.direction = relayDirectionToJSON(message.direction);
     }
     if (message.routing !== undefined) {
       obj.routing = RelayRouting.toJSON(message.routing);
     }
-    if (message.timestamp !== undefined && message.timestamp !== 0) {
+    if (message.timestamp !== undefined) {
       obj.timestamp = Math.round(message.timestamp);
     }
     if (message.version !== undefined) {
@@ -1289,13 +1289,13 @@ export const ClientMessageRelay: MessageFns<ClientMessageRelay> = {
   },
   fromPartial<I extends Exact<DeepPartial<ClientMessageRelay>, I>>(object: I): ClientMessageRelay {
     const message = createBaseClientMessageRelay();
-    message.session_id = object.session_id ?? 0;
-    message.edge_id = object.edge_id ?? 0;
-    message.direction = object.direction ?? 0;
+    message.session_id = object.session_id ?? undefined;
+    message.edge_id = object.edge_id ?? undefined;
+    message.direction = object.direction ?? undefined;
     message.routing = (object.routing !== undefined && object.routing !== null)
       ? RelayRouting.fromPartial(object.routing)
       : undefined;
-    message.timestamp = object.timestamp ?? 0;
+    message.timestamp = object.timestamp ?? undefined;
     message.version = (object.version !== undefined && object.version !== null)
       ? Version.fromPartial(object.version)
       : undefined;
@@ -1376,12 +1376,12 @@ export const ClientMessageRelay: MessageFns<ClientMessageRelay> = {
 };
 
 function createBaseRelayRouting(): RelayRouting {
-  return { type: 0, target_sessions: [], target_channel: 0, exclude_sessions: [] };
+  return { type: undefined, target_sessions: [], target_channel: undefined, exclude_sessions: [] };
 }
 
 export const RelayRouting: MessageFns<RelayRouting> = {
   encode(message: RelayRouting, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.type !== undefined && message.type !== 0) {
+    if (message.type !== undefined) {
       writer.uint32(8).int32(message.type);
     }
     if (message.target_sessions !== undefined && message.target_sessions.length !== 0) {
@@ -1389,7 +1389,7 @@ export const RelayRouting: MessageFns<RelayRouting> = {
         writer.uint32(16).uint32(v!);
       }
     }
-    if (message.target_channel !== undefined && message.target_channel !== 0) {
+    if (message.target_channel !== undefined) {
       writer.uint32(24).uint32(message.target_channel);
     }
     if (message.exclude_sessions !== undefined && message.exclude_sessions.length !== 0) {
@@ -1470,11 +1470,11 @@ export const RelayRouting: MessageFns<RelayRouting> = {
 
   fromJSON(object: any): RelayRouting {
     return {
-      type: isSet(object.type) ? routingTypeFromJSON(object.type) : 0,
+      type: isSet(object.type) ? routingTypeFromJSON(object.type) : undefined,
       target_sessions: globalThis.Array.isArray(object?.target_sessions)
         ? object.target_sessions.map((e: any) => globalThis.Number(e))
         : [],
-      target_channel: isSet(object.target_channel) ? globalThis.Number(object.target_channel) : 0,
+      target_channel: isSet(object.target_channel) ? globalThis.Number(object.target_channel) : undefined,
       exclude_sessions: globalThis.Array.isArray(object?.exclude_sessions)
         ? object.exclude_sessions.map((e: any) => globalThis.Number(e))
         : [],
@@ -1483,13 +1483,13 @@ export const RelayRouting: MessageFns<RelayRouting> = {
 
   toJSON(message: RelayRouting): unknown {
     const obj: any = {};
-    if (message.type !== undefined && message.type !== 0) {
+    if (message.type !== undefined) {
       obj.type = routingTypeToJSON(message.type);
     }
     if (message.target_sessions?.length) {
       obj.target_sessions = message.target_sessions.map((e) => Math.round(e));
     }
-    if (message.target_channel !== undefined && message.target_channel !== 0) {
+    if (message.target_channel !== undefined) {
       obj.target_channel = Math.round(message.target_channel);
     }
     if (message.exclude_sessions?.length) {
@@ -1503,24 +1503,24 @@ export const RelayRouting: MessageFns<RelayRouting> = {
   },
   fromPartial<I extends Exact<DeepPartial<RelayRouting>, I>>(object: I): RelayRouting {
     const message = createBaseRelayRouting();
-    message.type = object.type ?? 0;
+    message.type = object.type ?? undefined;
     message.target_sessions = object.target_sessions?.map((e) => e) || [];
-    message.target_channel = object.target_channel ?? 0;
+    message.target_channel = object.target_channel ?? undefined;
     message.exclude_sessions = object.exclude_sessions?.map((e) => e) || [];
     return message;
   },
 };
 
 function createBaseHeartbeat(): Heartbeat {
-  return { edge_id: 0, sequence: 0, stats: undefined };
+  return { edge_id: undefined, sequence: undefined, stats: undefined };
 }
 
 export const Heartbeat: MessageFns<Heartbeat> = {
   encode(message: Heartbeat, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(8).uint32(message.edge_id);
     }
-    if (message.sequence !== undefined && message.sequence !== 0) {
+    if (message.sequence !== undefined) {
       writer.uint32(16).uint64(message.sequence);
     }
     if (message.stats !== undefined) {
@@ -1571,18 +1571,18 @@ export const Heartbeat: MessageFns<Heartbeat> = {
 
   fromJSON(object: any): Heartbeat {
     return {
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      sequence: isSet(object.sequence) ? globalThis.Number(object.sequence) : 0,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      sequence: isSet(object.sequence) ? globalThis.Number(object.sequence) : undefined,
       stats: isSet(object.stats) ? ServerStats.fromJSON(object.stats) : undefined,
     };
   },
 
   toJSON(message: Heartbeat): unknown {
     const obj: any = {};
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.sequence !== undefined && message.sequence !== 0) {
+    if (message.sequence !== undefined) {
       obj.sequence = Math.round(message.sequence);
     }
     if (message.stats !== undefined) {
@@ -1596,8 +1596,8 @@ export const Heartbeat: MessageFns<Heartbeat> = {
   },
   fromPartial<I extends Exact<DeepPartial<Heartbeat>, I>>(object: I): Heartbeat {
     const message = createBaseHeartbeat();
-    message.edge_id = object.edge_id ?? 0;
-    message.sequence = object.sequence ?? 0;
+    message.edge_id = object.edge_id ?? undefined;
+    message.sequence = object.sequence ?? undefined;
     message.stats = (object.stats !== undefined && object.stats !== null)
       ? ServerStats.fromPartial(object.stats)
       : undefined;
@@ -1606,18 +1606,18 @@ export const Heartbeat: MessageFns<Heartbeat> = {
 };
 
 function createBaseHeartbeatAck(): HeartbeatAck {
-  return { edge_id: 0, sequence: 0, hub_timestamp: 0, config_update: undefined };
+  return { edge_id: undefined, sequence: undefined, hub_timestamp: undefined, config_update: undefined };
 }
 
 export const HeartbeatAck: MessageFns<HeartbeatAck> = {
   encode(message: HeartbeatAck, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       writer.uint32(8).uint32(message.edge_id);
     }
-    if (message.sequence !== undefined && message.sequence !== 0) {
+    if (message.sequence !== undefined) {
       writer.uint32(16).uint64(message.sequence);
     }
-    if (message.hub_timestamp !== undefined && message.hub_timestamp !== 0) {
+    if (message.hub_timestamp !== undefined) {
       writer.uint32(24).int64(message.hub_timestamp);
     }
     if (message.config_update !== undefined) {
@@ -1676,22 +1676,22 @@ export const HeartbeatAck: MessageFns<HeartbeatAck> = {
 
   fromJSON(object: any): HeartbeatAck {
     return {
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : 0,
-      sequence: isSet(object.sequence) ? globalThis.Number(object.sequence) : 0,
-      hub_timestamp: isSet(object.hub_timestamp) ? globalThis.Number(object.hub_timestamp) : 0,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      sequence: isSet(object.sequence) ? globalThis.Number(object.sequence) : undefined,
+      hub_timestamp: isSet(object.hub_timestamp) ? globalThis.Number(object.hub_timestamp) : undefined,
       config_update: isSet(object.config_update) ? ConfigUpdate.fromJSON(object.config_update) : undefined,
     };
   },
 
   toJSON(message: HeartbeatAck): unknown {
     const obj: any = {};
-    if (message.edge_id !== undefined && message.edge_id !== 0) {
+    if (message.edge_id !== undefined) {
       obj.edge_id = Math.round(message.edge_id);
     }
-    if (message.sequence !== undefined && message.sequence !== 0) {
+    if (message.sequence !== undefined) {
       obj.sequence = Math.round(message.sequence);
     }
-    if (message.hub_timestamp !== undefined && message.hub_timestamp !== 0) {
+    if (message.hub_timestamp !== undefined) {
       obj.hub_timestamp = Math.round(message.hub_timestamp);
     }
     if (message.config_update !== undefined) {
@@ -1705,9 +1705,9 @@ export const HeartbeatAck: MessageFns<HeartbeatAck> = {
   },
   fromPartial<I extends Exact<DeepPartial<HeartbeatAck>, I>>(object: I): HeartbeatAck {
     const message = createBaseHeartbeatAck();
-    message.edge_id = object.edge_id ?? 0;
-    message.sequence = object.sequence ?? 0;
-    message.hub_timestamp = object.hub_timestamp ?? 0;
+    message.edge_id = object.edge_id ?? undefined;
+    message.sequence = object.sequence ?? undefined;
+    message.hub_timestamp = object.hub_timestamp ?? undefined;
     message.config_update = (object.config_update !== undefined && object.config_update !== null)
       ? ConfigUpdate.fromPartial(object.config_update)
       : undefined;
@@ -1717,37 +1717,37 @@ export const HeartbeatAck: MessageFns<HeartbeatAck> = {
 
 function createBaseServerStats(): ServerStats {
   return {
-    user_count: 0,
-    channel_count: 0,
-    cpu_usage: 0,
-    memory_usage_mb: 0,
-    network_send_kbps: 0,
-    network_recv_kbps: 0,
-    uptime_seconds: 0,
+    user_count: undefined,
+    channel_count: undefined,
+    cpu_usage: undefined,
+    memory_usage_mb: undefined,
+    network_send_kbps: undefined,
+    network_recv_kbps: undefined,
+    uptime_seconds: undefined,
   };
 }
 
 export const ServerStats: MessageFns<ServerStats> = {
   encode(message: ServerStats, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.user_count !== undefined && message.user_count !== 0) {
+    if (message.user_count !== undefined) {
       writer.uint32(8).uint32(message.user_count);
     }
-    if (message.channel_count !== undefined && message.channel_count !== 0) {
+    if (message.channel_count !== undefined) {
       writer.uint32(16).uint32(message.channel_count);
     }
-    if (message.cpu_usage !== undefined && message.cpu_usage !== 0) {
+    if (message.cpu_usage !== undefined) {
       writer.uint32(29).float(message.cpu_usage);
     }
-    if (message.memory_usage_mb !== undefined && message.memory_usage_mb !== 0) {
+    if (message.memory_usage_mb !== undefined) {
       writer.uint32(32).uint64(message.memory_usage_mb);
     }
-    if (message.network_send_kbps !== undefined && message.network_send_kbps !== 0) {
+    if (message.network_send_kbps !== undefined) {
       writer.uint32(45).float(message.network_send_kbps);
     }
-    if (message.network_recv_kbps !== undefined && message.network_recv_kbps !== 0) {
+    if (message.network_recv_kbps !== undefined) {
       writer.uint32(53).float(message.network_recv_kbps);
     }
-    if (message.uptime_seconds !== undefined && message.uptime_seconds !== 0) {
+    if (message.uptime_seconds !== undefined) {
       writer.uint32(56).uint64(message.uptime_seconds);
     }
     return writer;
@@ -1827,37 +1827,37 @@ export const ServerStats: MessageFns<ServerStats> = {
 
   fromJSON(object: any): ServerStats {
     return {
-      user_count: isSet(object.user_count) ? globalThis.Number(object.user_count) : 0,
-      channel_count: isSet(object.channel_count) ? globalThis.Number(object.channel_count) : 0,
-      cpu_usage: isSet(object.cpu_usage) ? globalThis.Number(object.cpu_usage) : 0,
-      memory_usage_mb: isSet(object.memory_usage_mb) ? globalThis.Number(object.memory_usage_mb) : 0,
-      network_send_kbps: isSet(object.network_send_kbps) ? globalThis.Number(object.network_send_kbps) : 0,
-      network_recv_kbps: isSet(object.network_recv_kbps) ? globalThis.Number(object.network_recv_kbps) : 0,
-      uptime_seconds: isSet(object.uptime_seconds) ? globalThis.Number(object.uptime_seconds) : 0,
+      user_count: isSet(object.user_count) ? globalThis.Number(object.user_count) : undefined,
+      channel_count: isSet(object.channel_count) ? globalThis.Number(object.channel_count) : undefined,
+      cpu_usage: isSet(object.cpu_usage) ? globalThis.Number(object.cpu_usage) : undefined,
+      memory_usage_mb: isSet(object.memory_usage_mb) ? globalThis.Number(object.memory_usage_mb) : undefined,
+      network_send_kbps: isSet(object.network_send_kbps) ? globalThis.Number(object.network_send_kbps) : undefined,
+      network_recv_kbps: isSet(object.network_recv_kbps) ? globalThis.Number(object.network_recv_kbps) : undefined,
+      uptime_seconds: isSet(object.uptime_seconds) ? globalThis.Number(object.uptime_seconds) : undefined,
     };
   },
 
   toJSON(message: ServerStats): unknown {
     const obj: any = {};
-    if (message.user_count !== undefined && message.user_count !== 0) {
+    if (message.user_count !== undefined) {
       obj.user_count = Math.round(message.user_count);
     }
-    if (message.channel_count !== undefined && message.channel_count !== 0) {
+    if (message.channel_count !== undefined) {
       obj.channel_count = Math.round(message.channel_count);
     }
-    if (message.cpu_usage !== undefined && message.cpu_usage !== 0) {
+    if (message.cpu_usage !== undefined) {
       obj.cpu_usage = message.cpu_usage;
     }
-    if (message.memory_usage_mb !== undefined && message.memory_usage_mb !== 0) {
+    if (message.memory_usage_mb !== undefined) {
       obj.memory_usage_mb = Math.round(message.memory_usage_mb);
     }
-    if (message.network_send_kbps !== undefined && message.network_send_kbps !== 0) {
+    if (message.network_send_kbps !== undefined) {
       obj.network_send_kbps = message.network_send_kbps;
     }
-    if (message.network_recv_kbps !== undefined && message.network_recv_kbps !== 0) {
+    if (message.network_recv_kbps !== undefined) {
       obj.network_recv_kbps = message.network_recv_kbps;
     }
-    if (message.uptime_seconds !== undefined && message.uptime_seconds !== 0) {
+    if (message.uptime_seconds !== undefined) {
       obj.uptime_seconds = Math.round(message.uptime_seconds);
     }
     return obj;
@@ -1868,19 +1868,19 @@ export const ServerStats: MessageFns<ServerStats> = {
   },
   fromPartial<I extends Exact<DeepPartial<ServerStats>, I>>(object: I): ServerStats {
     const message = createBaseServerStats();
-    message.user_count = object.user_count ?? 0;
-    message.channel_count = object.channel_count ?? 0;
-    message.cpu_usage = object.cpu_usage ?? 0;
-    message.memory_usage_mb = object.memory_usage_mb ?? 0;
-    message.network_send_kbps = object.network_send_kbps ?? 0;
-    message.network_recv_kbps = object.network_recv_kbps ?? 0;
-    message.uptime_seconds = object.uptime_seconds ?? 0;
+    message.user_count = object.user_count ?? undefined;
+    message.channel_count = object.channel_count ?? undefined;
+    message.cpu_usage = object.cpu_usage ?? undefined;
+    message.memory_usage_mb = object.memory_usage_mb ?? undefined;
+    message.network_send_kbps = object.network_send_kbps ?? undefined;
+    message.network_recv_kbps = object.network_recv_kbps ?? undefined;
+    message.uptime_seconds = object.uptime_seconds ?? undefined;
     return message;
   },
 };
 
 function createBaseConfigUpdate(): ConfigUpdate {
-  return { items: [], version: 0 };
+  return { items: [], version: undefined };
 }
 
 export const ConfigUpdate: MessageFns<ConfigUpdate> = {
@@ -1890,7 +1890,7 @@ export const ConfigUpdate: MessageFns<ConfigUpdate> = {
         ConfigItem.encode(v!, writer.uint32(10).fork()).join();
       }
     }
-    if (message.version !== undefined && message.version !== 0) {
+    if (message.version !== undefined) {
       writer.uint32(16).uint32(message.version);
     }
     return writer;
@@ -1934,7 +1934,7 @@ export const ConfigUpdate: MessageFns<ConfigUpdate> = {
   fromJSON(object: any): ConfigUpdate {
     return {
       items: globalThis.Array.isArray(object?.items) ? object.items.map((e: any) => ConfigItem.fromJSON(e)) : [],
-      version: isSet(object.version) ? globalThis.Number(object.version) : 0,
+      version: isSet(object.version) ? globalThis.Number(object.version) : undefined,
     };
   },
 
@@ -1943,7 +1943,7 @@ export const ConfigUpdate: MessageFns<ConfigUpdate> = {
     if (message.items?.length) {
       obj.items = message.items.map((e) => ConfigItem.toJSON(e));
     }
-    if (message.version !== undefined && message.version !== 0) {
+    if (message.version !== undefined) {
       obj.version = Math.round(message.version);
     }
     return obj;
@@ -1955,21 +1955,21 @@ export const ConfigUpdate: MessageFns<ConfigUpdate> = {
   fromPartial<I extends Exact<DeepPartial<ConfigUpdate>, I>>(object: I): ConfigUpdate {
     const message = createBaseConfigUpdate();
     message.items = object.items?.map((e) => ConfigItem.fromPartial(e)) || [];
-    message.version = object.version ?? 0;
+    message.version = object.version ?? undefined;
     return message;
   },
 };
 
 function createBaseConfigItem(): ConfigItem {
-  return { key: "", value: "" };
+  return { key: undefined, value: undefined };
 }
 
 export const ConfigItem: MessageFns<ConfigItem> = {
   encode(message: ConfigItem, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.key !== undefined && message.key !== "") {
+    if (message.key !== undefined) {
       writer.uint32(10).string(message.key);
     }
-    if (message.value !== undefined && message.value !== "") {
+    if (message.value !== undefined) {
       writer.uint32(18).string(message.value);
     }
     return writer;
@@ -2009,17 +2009,17 @@ export const ConfigItem: MessageFns<ConfigItem> = {
 
   fromJSON(object: any): ConfigItem {
     return {
-      key: isSet(object.key) ? globalThis.String(object.key) : "",
-      value: isSet(object.value) ? globalThis.String(object.value) : "",
+      key: isSet(object.key) ? globalThis.String(object.key) : undefined,
+      value: isSet(object.value) ? globalThis.String(object.value) : undefined,
     };
   },
 
   toJSON(message: ConfigItem): unknown {
     const obj: any = {};
-    if (message.key !== undefined && message.key !== "") {
+    if (message.key !== undefined) {
       obj.key = message.key;
     }
-    if (message.value !== undefined && message.value !== "") {
+    if (message.value !== undefined) {
       obj.value = message.value;
     }
     return obj;
@@ -2030,8 +2030,8 @@ export const ConfigItem: MessageFns<ConfigItem> = {
   },
   fromPartial<I extends Exact<DeepPartial<ConfigItem>, I>>(object: I): ConfigItem {
     const message = createBaseConfigItem();
-    message.key = object.key ?? "";
-    message.value = object.value ?? "";
+    message.key = object.key ?? undefined;
+    message.value = object.value ?? undefined;
     return message;
   },
 };
