@@ -188,10 +188,10 @@ describe('User Info Query Integration Tests', () => {
         // stats_only 模式应该只包含统计数据，不包含证书等
         // 注意：protobuf 的 repeated 字段总是存在，但应该为空数组
         expect(receivedStats.certificates).toHaveLength(0);
-        // stats_only 模式下不应该有详细信息字段
-        expect(receivedStats.has_strong_certificate).toBe(false);
-        expect(receivedStats.has_version).toBe(false);
-        expect(receivedStats.has_address).toBe(false);
+        // stats_only 模式下不应该有详细信息字段（这些字段应该是 undefined）
+        expect(receivedStats.strong_certificate).toBeUndefined();
+        expect(receivedStats.version).toBeUndefined();
+        expect(receivedStats.address).toBeUndefined();
       }
 
       await client1.disconnect();
