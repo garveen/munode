@@ -100,10 +100,7 @@ describe('Voice Target Permission Validation Tests', () => {
       const admin = await createAdminClient(testEnv, 1);
 
       // Create a restricted channel without Whisper permission
-      const restrictedChannelId = await admin.createChannel({
-        parent: 0,
-        name: 'NoWhisper',
-      });
+      const restrictedChannelId = await admin.createChannel('NoWhisper', 0);
       await sleep(500);
 
       // Remove Whisper permission from the channel
@@ -153,10 +150,7 @@ describe('Voice Target Permission Validation Tests', () => {
       const admin = await createAdminClient(testEnv, 1);
 
       // Create a public channel
-      const publicChannelId = await admin.createChannel({
-        parent: 0,
-        name: 'PublicChannel',
-      });
+      const publicChannelId = await admin.createChannel('PublicChannel', 0);
       await sleep(500);
 
       const clients = await createClients(testEnv, [
@@ -186,10 +180,7 @@ describe('Voice Target Permission Validation Tests', () => {
       const admin = await createAdminClient(testEnv, 1);
 
       // Create a restricted channel
-      const restrictedChannelId = await admin.createChannel({
-        parent: 0,
-        name: 'RestrictedChannel',
-      });
+      const restrictedChannelId = await admin.createChannel('RestrictedChannel', 0);
       await sleep(500);
 
       // Remove Enter and Listen permissions for all users
@@ -340,10 +331,7 @@ describe('Voice Target Permission Validation Tests', () => {
       const admin = await createAdminClient(testEnv, 1);
 
       // Create a public channel
-      const publicChannelId = await admin.createChannel({
-        parent: 0,
-        name: 'MultiTargetChannel',
-      });
+      const publicChannelId = await admin.createChannel('MultiTargetChannel', 0);
       await sleep(500);
 
       const clients = await createClients(testEnv, [
@@ -378,10 +366,7 @@ describe('Voice Target Permission Validation Tests', () => {
       const admin = await createAdminClient(testEnv, 1);
 
       // Create a restricted channel
-      const restrictedChannelId = await admin.createChannel({
-        parent: 0,
-        name: 'PartiallyAccessible',
-      });
+      const restrictedChannelId = await admin.createChannel('PartiallyAccessible', 0);
       await sleep(500);
 
       // Deny access to the channel
