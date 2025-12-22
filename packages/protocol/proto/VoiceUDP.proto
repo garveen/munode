@@ -1,0 +1,176 @@
+syntax = "proto2";
+
+package voiceudp;
+
+/**
+ * VoiceUDP.proto
+ * 
+ * 定义 Edge 和 Edge 之间 UDP 语音传输的控制协议
+ * 包括握手、心跳、身份验证等
+ */
+
+// ============================================================================
+// UDP 包装消息 - 所有 UDP 语音传输的控制消息
+// ============================================================================
+
+/**
+ * VoiceUDPPacket - UDP 语音传输的顶层包装
+ * 
+ * 每个通过 UDP 发送的控制消息都必须是这个格式
+ */
+message VoiceUDPPacket {
+  // 包类型
+  required UDPPacketType type = 1;
+  
+  // 实际的消息内容（根据 type 选择其中一个）
+  optional HandshakeSyn handshake_syn = 10;
+  optional HandshakeSynAck handshake_syn_ack = 11;
+  optional HandshakeAck handshake_ack = 12;
+  
+  optional HeartbeatPing heartbeat_ping = 20;
+  optional HeartbeatPong heartbeat_pong = 21;
+}
+
+/**
+ * UDP 包类型枚举
+ */
+enum UDPPacketType {
+  UDP_PACKET_TYPE_UNKNOWN = 0;
+  
+  // 握手相关
+  UDP_PACKET_TYPE_HANDSHAKE_SYN = 1;
+  UDP_PACKET_TYPE_HANDSHAKE_SYN_ACK = 2;
+  UDP_PACKET_TYPE_HANDSHAKE_ACK = 3;
+  
+  // 心跳相关
+  UDP_PACKET_TYPE_HEARTBEAT_PING = 4;
+  UDP_PACKET_TYPE_HEARTBEAT_PONG = 5;
+}
+
+// ============================================================================
+// 握手消息
+// ============================================================================
+
+/**
+ * HandshakeSyn - 握手请求（SYN）
+ * 
+ * 发起方发送此消息以请求建立 UDP 连接
+ */
+message HandshakeSyn {
+  // 发起方的 Edge ID
+  required uint32 edge_id = 1;
+  
+  // 时间戳（用于防重放攻击）
+  required uint64 timestamp = 2;
+  
+  // 协议版本
+  required uint32 protocol_version = 3;
+  
+  // 随机 nonce（用于身份验证）
+  required bytes nonce = 4;
+  
+  // 签名（使用共享密钥对 edge_id + timestamp + nonce 进行 HMAC-SHA256）
+  required bytes signature = 5;
+}
+
+/**
+ * HandshakeSynAck - 握手响应（SYN-ACK）
+ * 
+ * 响应方发送此消息以确认握手请求并提供自己的认证信息
+ */
+message HandshakeSynAck {
+  // 响应方的 Edge ID
+  required uint32 edge_id = 1;
+  
+  // 时间戳
+  required uint64 timestamp = 2;
+  
+  // 协议版本
+  required uint32 protocol_version = 3;
+  
+  // 响应 nonce（对方的 nonce）
+  required bytes response_nonce = 4;
+  
+  // 自己的随机 nonce
+  required bytes nonce = 5;
+  
+  // 签名（使用共享密钥对 edge_id + timestamp + response_nonce + nonce 进行 HMAC-SHA256）
+  required bytes signature = 6;
+}
+
+/**
+ * HandshakeAck - 握手确认（ACK）
+ * 
+ * 发起方发送此消息以确认握手完成
+ */
+message HandshakeAck {
+  // 发起方的 Edge ID
+  required uint32 edge_id = 1;
+  
+  // 时间戳
+  required uint64 timestamp = 2;
+  
+  // 响应 nonce（对方的 nonce）
+  required bytes response_nonce = 3;
+  
+  // 签名（使用共享密钥对 edge_id + timestamp + response_nonce 进行 HMAC-SHA256）
+  required bytes signature = 4;
+}
+
+// ============================================================================
+// 心跳消息
+// ============================================================================
+
+/**
+ * HeartbeatPing - 心跳请求
+ * 
+ * 主动方定期发送此消息以保持连接活跃
+ */
+message HeartbeatPing {
+  // 发送方的 Edge ID
+  required uint32 edge_id = 1;
+  
+  // 时间戳
+  required uint64 timestamp = 2;
+  
+  // 序列号（用于检测丢包）
+  required uint32 sequence = 3;
+}
+
+/**
+ * HeartbeatPong - 心跳响应
+ * 
+ * 被动方收到 Ping 后回复此消息
+ */
+message HeartbeatPong {
+  // 响应方的 Edge ID
+  required uint32 edge_id = 1;
+  
+  // 时间戳
+  required uint64 timestamp = 2;
+  
+  // 响应的序列号（与 Ping 的序列号相同）
+  required uint32 sequence = 3;
+}
+
+// ============================================================================
+// 语音数据传输
+// ============================================================================
+
+/**
+ * 注意：实际的语音数据不通过 protobuf 传输
+ * 
+ * 语音数据使用自定义的轻量级二进制格式传输：
+ * [12字节Header][Mumble语音数据]
+ * 
+ * Header格式：
+ * - senderId (4 bytes): 发送方 Edge ID
+ * - targetId (4 bytes): Mumble target (0=PTT, 1-30=whisper, 31=loopback)
+ * - sequence (4 bytes): 序列号（用于丢包检测和网络质量统计）
+ * 
+ * 这样设计是因为：
+ * 1. 语音数据是高频实时流量，轻量级格式性能更好
+ * 2. protobuf 仅用于低频的控制消息（握手、心跳）
+ * 3. 上层路由系统直接处理语音包的具体内容
+ * 4. version 和 codec 等信息已包含在 Mumble 语音数据内部，无需重复传输
+ */

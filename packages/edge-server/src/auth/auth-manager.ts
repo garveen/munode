@@ -206,21 +206,4 @@ export class AuthManager extends TypedEventEmitter<AuthManagerEvents> {
       };
     }
   }
-
-  /**
-   * 检查用户权限（占位实现）
-   */
-  checkPermission(_userId: number, _permission: string, _channelId?: number): boolean {
-    // TODO: 实现权限检查逻辑
-    return true;
-  }
-
-  /**
-   * 获取用户权限组（占位实现）
-   */
-  getUserGroups(_userId: number): string[] {
-    // TODO: 实现获取用户权限组逻辑
-    return [];
-  }
-
 }

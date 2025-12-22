@@ -99,6 +99,9 @@ export interface HubConfig {
   
   // 语音路由配置（Edge间中转路由功能）
   voiceRouting?: VoiceRoutingConfig;
+  
+  // UDP 语音传输握手认证密钥
+  voiceUdpSharedSecret?: string;
 }
 
 /**

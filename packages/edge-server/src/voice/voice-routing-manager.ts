@@ -257,6 +257,44 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
   }
 
   /**
+   * 移除指定 Edge 的路由和质量信息
+   * 当 Edge 断开连接时调用
+   */
+  removeEdge(edgeId: number): void {
+    // 移除路由表中的路由
+    const removed = this.routingTable.delete(edgeId);
+    
+    // 移除 Hub 路由表中的路由
+    this.hubRouteTable.delete(edgeId);
+    
+    // 移除质量信息
+    this.connectionQualities.delete(edgeId);
+    
+    // 移除质量样本
+    this.qualitySamples.delete(edgeId);
+    
+    // 移除序列号追踪
+    this.sequenceTracking.delete(edgeId);
+    
+    // 清除相关缓存
+    this.routeCache.delete(edgeId);
+    this.statsCache = null;
+    
+    // 清除所有使用该 Edge 作为 nextHop 的路由
+    for (const [targetEdgeId, route] of this.routingTable) {
+      if (route.nextHop === edgeId) {
+        this.routingTable.delete(targetEdgeId);
+        this.routeCache.delete(targetEdgeId);
+        this.logger.debug(`Removed route to Edge ${targetEdgeId} (via disconnected Edge ${edgeId})`);
+      }
+    }
+    
+    if (removed) {
+      this.logger.debug(`Removed routing information for Edge ${edgeId}`);
+    }
+  }
+
+  /**
    * 设置功能启用状态（由 Hub 配置控制）
    */
   setEnabled(enabled: boolean): void {

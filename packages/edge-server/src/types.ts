@@ -33,6 +33,7 @@ export interface EdgeConfig {
   tls: TLSConfig;
   hubServer?: HubServerConfig;
   voiceRouting?: EdgeVoiceRoutingConfig;  // 语音路由配置
+  voiceUdpSharedSecret?: string;  // UDP 语音传输握手认证密钥
   auth: AuthConfig;
   capacity: number;
   max_bandwidth: number;

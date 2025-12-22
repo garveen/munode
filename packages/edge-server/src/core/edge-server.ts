@@ -107,6 +107,9 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
         port: voicePort,
         host: this.config.network.host,
         localEdgeId: this.config.server_id, // Pass local edge ID for heartbeat role determination
+        sharedSecret: this.config.voiceUdpSharedSecret 
+          ? Buffer.from(this.config.voiceUdpSharedSecret, 'utf-8') 
+          : undefined,
       }, 
       this.logger,
     );

@@ -94,6 +94,9 @@ export class HubServer {
         {
           port: this.config.voicePort,
           host: this.config.host,
+          sharedSecret: this.config.voiceUdpSharedSecret 
+            ? Buffer.from(this.config.voiceUdpSharedSecret, 'utf-8') 
+            : undefined,
         },
         this.logger,
       );
@@ -313,11 +316,9 @@ export class HubServer {
       const targetEdgeId = packet.targetId;
       
       const header: VoicePacketHeader = {
-        version: packet.version,
         senderId: packet.senderId,
         targetId: packet.targetId,
         sequence: packet.sequence,
-        codec: packet.codec,
       };
       
       if (targetEdgeId) {

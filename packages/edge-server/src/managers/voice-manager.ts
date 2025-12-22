@@ -232,18 +232,15 @@ export class VoiceManager {
     this.handlerFactory.voiceRouter.on('broadcastVoicePacket', (broadcast: VoiceBroadcast) => {
         this.logger.debug(`Received broadcastVoicePacket event: sender=${broadcast.sender_id}, target=${broadcast.target}`);
 
-      // 从 Mumble 语音包中提取 codec
+      // 从 Mumble 语音包中提取信息
       const header = broadcast.packet.readUInt8(0);
-      const codec = (header >> 5) & 0x07;
       const target = header & 0x1f;
 
-      // 构造完整的 VoicePacketHeader
+      // 构造完整的 VoicePacketHeader（简化版，不包含 version 和 codec）
       const voicePacket: VoicePacketHeader = {
-        version: 1,
         senderId: broadcast.sender_id,
         targetId: target,
         sequence: 0, // TODO: 实现序列号跟踪
-        codec: codec,
       };
 
       // 获取所有已注册的Edge端点（从VoiceUDPTransport获取，而不是从StateManager获取）
@@ -264,7 +261,7 @@ export class VoiceManager {
 
         this.logger.debug(
         `Broadcasted voice to ${sentCount} edges: ` +
-        `sender=${broadcast.sender_id}, target=${target}, codec=${codec}, packet_size=${broadcast.packet.length}`
+        `sender=${broadcast.sender_id}, target=${target}, packet_size=${broadcast.packet.length}`
       );
     });
 
@@ -274,7 +271,7 @@ export class VoiceManager {
         this.logger.debug(
         `[VOICE-REMOTE] Received voice packet: ` +
         `sender_edge=${packet.senderId}, target=${packet.targetId}, ` +
-        `codec=${packet.codec}, data_size=${packet.data.length}`
+        `seq=${packet.sequence}, data_size=${packet.data.length}`
       );
 
       // 记录收到的包用于网络质量统计（被动探测）
@@ -324,6 +321,11 @@ export class VoiceManager {
     // 监听Edge断开连接事件
     this.voiceTransport.on('edge-disconnected', (edgeId: number) => {
       this.logger.warn(`Edge ${edgeId} disconnected (heartbeat timeout)`);
+      
+      // 清理路由信息
+      if (this.voiceRoutingManager.isEnabled()) {
+        this.voiceRoutingManager.removeEdge(edgeId);
+      }
     });
     
     // 监听重连失败事件（双向都失败时需要Hub决定）

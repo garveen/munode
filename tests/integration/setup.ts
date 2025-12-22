@@ -349,6 +349,11 @@ async function startEdgeServer(
   edgeConfig.network = edgeConfig.network || { host: '127.0.0.1', port, externalHost: '127.0.0.1' };
   edgeConfig.network.port = port;
   edgeConfig.logLevel = silent ? 'error' : 'debug';
+  
+  // 配置UDP语音传输的共享密钥用于握手验证
+  if (!edgeConfig.voiceUdpSharedSecret) {
+    edgeConfig.voiceUdpSharedSecret = 'test-shared-secret-for-udp-voice-handshake';
+  }
 
   const certsDir = join(__dirname, 'certs');
   edgeConfig.tls = {
@@ -674,6 +679,11 @@ export async function setupTestEnvironment(
         hubConfig.webApi = hubConfig.webApi || { port: webApiPort, host: '127.0.0.1', cors: { enabled: true, origins: ['*'] } };
         hubConfig.webApi.port = webApiPort;
         hubConfig.voicePort = hubVoicePort;
+        
+        // 配置UDP语音传输的共享密钥用于握手验证
+        if (!hubConfig.voiceUdpSharedSecret) {
+          hubConfig.voiceUdpSharedSecret = 'test-shared-secret-for-udp-voice-handshake';
+        }
         
         // Preserve existing auth config fields and merge with new values
         const existingAuth = hubConfig.auth || {};

@@ -203,6 +203,17 @@ export type {
   RemoteEndpoint,
 } from './voice/voice-udp-transport.js';
 
+// VoiceUDP Protocol Types
+export type {
+  VoiceUDPPacket,
+  HandshakeSyn,
+  HandshakeSynAck,
+  HandshakeAck,
+  HeartbeatPing,
+  HeartbeatPong,
+} from './generated/proto/VoiceUDP.js';
+export { UDPPacketType } from './generated/proto/VoiceUDP.js';
+
 // Control Channel (基础 RPC 通道 - ControlChannelServer/Client 已移至各自的服务器包)
 // Protocol 包只导出基础的 RPC 通道和消息类型
 

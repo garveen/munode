@@ -14,6 +14,15 @@
 import dgram from 'dgram';
 import crypto from 'crypto';
 import { type Logger, TypedEventEmitter, type EventMap } from '@munode/common';
+import { 
+  VoiceUDPPacket, 
+  HandshakeSyn, 
+  HandshakeSynAck, 
+  HandshakeAck,
+  HeartbeatPing,
+  HeartbeatPong,
+  UDPPacketType 
+} from '../generated/proto/VoiceUDP.js';
 
 // Constants
 const HANDSHAKE_RETRY_INTERVAL_MS = 2000;
@@ -21,7 +30,8 @@ const HANDSHAKE_MAX_ATTEMPTS = 5;
 const HEARTBEAT_INTERVAL_MS = 10000; // Heartbeat interval: 10 seconds
 const HEARTBEAT_TIMEOUT_MS = 30000; // Connection timeout: 30 seconds without response
 const RECONNECT_DELAY_MS = 3000; // Delay before reconnect attempt
-const TIMESTAMP_MASK = 0xFFFFFFFF; // Mask for 32-bit timestamp
+const PROTOCOL_VERSION = 1; // UDP voice protocol version
+const NONCE_SIZE = 32; // Nonce size in bytes for authentication
 
 export interface VoiceUDPConfig {
   port: number;
@@ -29,14 +39,13 @@ export interface VoiceUDPConfig {
   encryptionKey?: Buffer;
   encryptionAlgorithm?: string;
   localEdgeId?: number; // Local edge ID for determining active/passive side
+  sharedSecret?: Buffer; // Shared secret for HMAC authentication
 }
 
 export interface VoicePacketHeader {
-  version: number;
-  senderId: number;
-  targetId: number;
-  sequence: number;
-  codec: number;
+  senderId: number;    // 发送方 Edge ID
+  targetId: number;    // Mumble target (0=PTT, 1-30=whisper, 31=loopback)
+  sequence: number;    // 序列号（用于丢包检测和网络质量统计）
 }
 
 export interface RemoteEndpoint {
@@ -45,11 +54,9 @@ export interface RemoteEndpoint {
 }
 
 export interface VoicePacket {
-  version: number;
   senderId: number;
   targetId: number;
   sequence: number;
-  codec: number;
   data: Buffer;
 }
 
@@ -69,6 +76,9 @@ export interface EdgeConnectionStatus {
   reconnecting: boolean;
   reconnectAttempts: number;
   isActiveSide: boolean; // true if this edge is the active side (initiator) for heartbeat
+  localNonce?: Buffer; // Local nonce for handshake
+  remoteNonce?: Buffer; // Remote nonce received during handshake
+  heartbeatSequence: number; // Heartbeat sequence number
 }
 
 /**
@@ -93,6 +103,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   private encryptedPacketCache = new Map<string, Buffer>(); // cacheKey -> encrypted packet
   private logger: Logger;
   private localEdgeId: number;
+  private sharedSecret: Buffer | null = null; // Shared secret for HMAC authentication
   private stats = {
     packetsSent: 0,
     packetsReceived: 0,
@@ -115,6 +126,13 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     this.logger = logger;
     // Default to 0 if not provided (used by Hub, though Hub doesn't participate in edge-to-edge connections)
     this.localEdgeId = config.localEdgeId ?? 0;
+
+    // Setup shared secret for HMAC authentication
+    if (config.sharedSecret) {
+      this.sharedSecret = config.sharedSecret;
+    } else {
+      this.logger.warn('No shared secret provided for UDP voice transport - handshake authentication disabled');
+    }
 
     // Setup encryption config if encryption key is provided
     if (config.encryptionKey) {
@@ -213,6 +231,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       reconnecting: false,
       reconnectAttempts: 0,
       isActiveSide,
+      heartbeatSequence: 0,
     });
     
     this.logger.info(
@@ -248,8 +267,15 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       return;
     }
     
+    // 生成本地 nonce
+    status.localNonce = crypto.randomBytes(NONCE_SIZE);
+    
     // 构造握手包
-    const handshakePacket = this.createHandshakePacket('SYN');
+    const handshakePacket = this.createHandshakeSyn(edgeId, status.localNonce);
+    if (!handshakePacket) {
+      this.logger.error(`Failed to create handshake SYN for edge ${edgeId}`);
+      return;
+    }
     
     // 发送握手包
     this.sendPacket(handshakePacket, endpoint.host, endpoint.port);
@@ -271,49 +297,181 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   }
   
   /**
-   * Create handshake packet
+   * 创建 HMAC 签名
    */
-  private createHandshakePacket(type: 'SYN' | 'SYN-ACK' | 'ACK'): Buffer {
-    const packet = Buffer.alloc(9); // Magic(4) + Type(1) + Timestamp(4) = 9 bytes
-    packet.write('MUHS', 0); // MUNode HandShake magic
+  private createSignature(data: Buffer): Buffer | null {
+    if (!this.sharedSecret) {
+      return null;
+    }
+    const hmac = crypto.createHmac('sha256', this.sharedSecret);
+    hmac.update(data);
+    return hmac.digest();
+  }
+  
+  /**
+   * 验证 HMAC 签名
+   */
+  private verifySignature(data: Buffer, signature: Buffer): boolean {
+    if (!this.sharedSecret) {
+      return false;
+    }
+    const expectedSignature = this.createSignature(data);
+    if (!expectedSignature) {
+      return false;
+    }
+    return crypto.timingSafeEqual(signature, expectedSignature);
+  }
+  
+  /**
+   * 创建 HandshakeSyn 包
+   */
+  private createHandshakeSyn(edgeId: number, nonce: Buffer): Buffer | null {
+    const timestamp = Date.now();
     
-    switch (type) {
-      case 'SYN':
-        packet.writeUInt8(1, 4);
-        break;
-      case 'SYN-ACK':
-        packet.writeUInt8(2, 4);
-        break;
-      case 'ACK':
-        packet.writeUInt8(3, 4);
-        break;
+    // 构造待签名数据: edge_id + timestamp + nonce
+    const dataToSign = Buffer.concat([
+      Buffer.from(new Uint32Array([edgeId]).buffer),
+      Buffer.from(new BigUint64Array([BigInt(timestamp)]).buffer),
+      nonce,
+    ]);
+    
+    const signature = this.createSignature(dataToSign);
+    if (!signature) {
+      this.logger.error('Failed to create signature for HandshakeSyn');
+      return null;
     }
     
-    packet.writeUInt32BE(Date.now() & TIMESTAMP_MASK, 5); // Timestamp (lower 32 bits)
-    return packet;
+    const handshakeSyn: HandshakeSyn = {
+      edge_id: edgeId,
+      timestamp,
+      protocol_version: PROTOCOL_VERSION,
+      nonce,
+      signature,
+    };
+    
+    const packet: VoiceUDPPacket = {
+      type: UDPPacketType.UDP_PACKET_TYPE_HANDSHAKE_SYN,
+      handshake_syn: handshakeSyn,
+    };
+    
+    return Buffer.from(VoiceUDPPacket.encode(packet).finish());
+  }
+  
+  /**
+   * 创建 HandshakeSynAck 包
+   */
+  private createHandshakeSynAck(edgeId: number, responseNonce: Buffer, localNonce: Buffer): Buffer | null {
+    const timestamp = Date.now();
+    
+    // 构造待签名数据: edge_id + timestamp + response_nonce + nonce
+    const dataToSign = Buffer.concat([
+      Buffer.from(new Uint32Array([edgeId]).buffer),
+      Buffer.from(new BigUint64Array([BigInt(timestamp)]).buffer),
+      responseNonce,
+      localNonce,
+    ]);
+    
+    const signature = this.createSignature(dataToSign);
+    if (!signature) {
+      this.logger.error('Failed to create signature for HandshakeSynAck');
+      return null;
+    }
+    
+    const handshakeSynAck: HandshakeSynAck = {
+      edge_id: edgeId,
+      timestamp,
+      protocol_version: PROTOCOL_VERSION,
+      response_nonce: responseNonce,
+      nonce: localNonce,
+      signature,
+    };
+    
+    const packet: VoiceUDPPacket = {
+      type: UDPPacketType.UDP_PACKET_TYPE_HANDSHAKE_SYN_ACK,
+      handshake_syn_ack: handshakeSynAck,
+    };
+    
+    return Buffer.from(VoiceUDPPacket.encode(packet).finish());
+  }
+  
+  /**
+   * 创建 HandshakeAck 包
+   */
+  private createHandshakeAck(edgeId: number, responseNonce: Buffer): Buffer | null {
+    const timestamp = Date.now();
+    
+    // 构造待签名数据: edge_id + timestamp + response_nonce
+    const dataToSign = Buffer.concat([
+      Buffer.from(new Uint32Array([edgeId]).buffer),
+      Buffer.from(new BigUint64Array([BigInt(timestamp)]).buffer),
+      responseNonce,
+    ]);
+    
+    const signature = this.createSignature(dataToSign);
+    if (!signature) {
+      this.logger.error('Failed to create signature for HandshakeAck');
+      return null;
+    }
+    
+    const handshakeAck: HandshakeAck = {
+      edge_id: edgeId,
+      timestamp,
+      response_nonce: responseNonce,
+      signature,
+    };
+    
+    const packet: VoiceUDPPacket = {
+      type: UDPPacketType.UDP_PACKET_TYPE_HANDSHAKE_ACK,
+      handshake_ack: handshakeAck,
+    };
+    
+    return Buffer.from(VoiceUDPPacket.encode(packet).finish());
   }
   
   /**
    * Create heartbeat packet
    */
-  private createHeartbeatPacket(type: 'PING' | 'PONG'): Buffer {
-    const packet = Buffer.alloc(9); // Magic(4) + Type(1) + Timestamp(4) = 9 bytes
-    packet.write('MUHB', 0); // MUNode HeartBeat magic
-    packet.writeUInt8(type === 'PING' ? 1 : 2, 4);
-    packet.writeUInt32BE(Date.now() & TIMESTAMP_MASK, 5); // Timestamp (lower 32 bits)
-    return packet;
+  private createHeartbeatPing(edgeId: number, sequence: number): Buffer {
+    const timestamp = Date.now();
+    
+    const heartbeatPing: HeartbeatPing = {
+      edge_id: edgeId,
+      timestamp,
+      sequence,
+    };
+    
+    const packet: VoiceUDPPacket = {
+      type: UDPPacketType.UDP_PACKET_TYPE_HEARTBEAT_PING,
+      heartbeat_ping: heartbeatPing,
+    };
+    
+    return Buffer.from(VoiceUDPPacket.encode(packet).finish());
+  }
+  
+  /**
+   * Create heartbeat pong packet
+   */
+  private createHeartbeatPong(edgeId: number, sequence: number): Buffer {
+    const timestamp = Date.now();
+    
+    const heartbeatPong: HeartbeatPong = {
+      edge_id: edgeId,
+      timestamp,
+      sequence,
+    };
+    
+    const packet: VoiceUDPPacket = {
+      type: UDPPacketType.UDP_PACKET_TYPE_HEARTBEAT_PONG,
+      heartbeat_pong: heartbeatPong,
+    };
+    
+    return Buffer.from(VoiceUDPPacket.encode(packet).finish());
   }
   
   /**
    * Handle handshake packet
    */
-  private handleHandshakePacket(data: Buffer, rinfo: dgram.RemoteInfo): void {
-    if (data.length < 9 || data.toString('utf8', 0, 4) !== 'MUHS') {
-      return; // Not a handshake packet
-    }
-    
-    const type = data.readUInt8(4);
-    
+  private handleHandshakePacket(packet: VoiceUDPPacket, rinfo: dgram.RemoteInfo): void {
     // 找到对应的edge（使用规范化的地址进行匹配）
     const normalizedAddress = this.normalizeHost(rinfo.address);
     let edgeId: number | undefined;
@@ -324,45 +482,175 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       }
     }
     
-    if (!edgeId) {
-      this.logger.debug(`Received handshake from unknown endpoint: ${rinfo.address}:${rinfo.port}`);
-      return;
-    }
-    
-    const status = this.connectionStatus.get(edgeId);
-    if (!status) return;
-    
     const now = Date.now();
-    status.lastSeen = now;
-    status.lastHeartbeatReceived = now;
-    this.stats.handshakeReceived++;
     
-    if (type === 1) { // SYN
-      this.logger.debug(`Received handshake SYN from edge ${edgeId}`);
+    if (packet.type === UDPPacketType.UDP_PACKET_TYPE_HANDSHAKE_SYN && packet.handshake_syn) {
+      const syn = packet.handshake_syn;
+      
+      // 验证协议版本
+      if (syn.protocol_version !== PROTOCOL_VERSION) {
+        this.logger.warn(`Received HandshakeSyn with unsupported protocol version: ${syn.protocol_version}`);
+        return;
+      }
+      
+      // 验证签名
+      const dataToVerify = Buffer.concat([
+        Buffer.from(new Uint32Array([syn.edge_id]).buffer),
+        Buffer.from(new BigUint64Array([BigInt(syn.timestamp)]).buffer),
+        Buffer.from(syn.nonce),
+      ]);
+      
+      if (!this.verifySignature(dataToVerify, Buffer.from(syn.signature))) {
+        this.logger.error(`HandshakeSyn signature verification failed from ${rinfo.address}:${rinfo.port}`);
+        return;
+      }
+      
+      // 如果没有预注册的edgeId，使用消息中的edgeId
+      if (!edgeId) {
+        edgeId = syn.edge_id;
+        this.logger.info(`Received HandshakeSyn from unknown endpoint, auto-registering edge ${edgeId}`);
+        this.remoteEndpoints.set(edgeId, { host: normalizedAddress, port: rinfo.port });
+        
+        const isActiveSide = this.localEdgeId < edgeId;
+        this.connectionStatus.set(edgeId, {
+          edgeId,
+          connected: false,
+          lastSeen: now,
+          handshakeAttempts: 0,
+          handshakeComplete: false,
+          lastHeartbeatSent: now,
+          lastHeartbeatReceived: now,
+          reconnecting: false,
+          reconnectAttempts: 0,
+          isActiveSide,
+          heartbeatSequence: 0,
+        });
+      }
+      
+      const status = this.connectionStatus.get(edgeId);
+      if (!status) return;
+      
+      status.lastSeen = now;
+      status.lastHeartbeatReceived = now;
+      status.remoteNonce = Buffer.from(syn.nonce);
+      this.stats.handshakeReceived++;
+      
+      this.logger.debug(`Received HandshakeSyn from edge ${edgeId}`);
+      
+      // 生成本地 nonce（如果还没有）
+      if (!status.localNonce) {
+        status.localNonce = crypto.randomBytes(NONCE_SIZE);
+      }
+      
       // 发送 SYN-ACK
-      const synAck = this.createHandshakePacket('SYN-ACK');
-      this.sendPacket(synAck, rinfo.address, rinfo.port);
-      this.stats.handshakeSent++;
-      status.handshakeComplete = true;
-      status.connected = true;
-      status.reconnecting = false;
-      status.reconnectAttempts = 0;
-      this.logger.info(`UDP handshake complete with edge ${edgeId} (received SYN)`);
-      this.emit('edge-connected', edgeId);
-    } else if (type === 2) { // SYN-ACK
-      this.logger.debug(`Received handshake SYN-ACK from edge ${edgeId}`);
+      const synAck = this.createHandshakeSynAck(this.localEdgeId, syn.nonce, status.localNonce);
+      if (synAck) {
+        this.sendPacket(synAck, rinfo.address, rinfo.port);
+        this.stats.handshakeSent++;
+        status.handshakeComplete = true;
+        status.connected = true;
+        status.reconnecting = false;
+        status.reconnectAttempts = 0;
+        this.logger.info(`UDP handshake complete with edge ${edgeId} (received SYN)`);
+        this.emit('edge-connected', edgeId);
+      }
+    } else if (packet.type === UDPPacketType.UDP_PACKET_TYPE_HANDSHAKE_SYN_ACK && packet.handshake_syn_ack) {
+      const synAck = packet.handshake_syn_ack;
+      
+      if (!edgeId) {
+        this.logger.warn(`Received HandshakeSynAck from unknown endpoint: ${rinfo.address}:${rinfo.port}`);
+        return;
+      }
+      
+      const status = this.connectionStatus.get(edgeId);
+      if (!status || !status.localNonce) {
+        this.logger.warn(`Received HandshakeSynAck from edge ${edgeId} but no local nonce found`);
+        return;
+      }
+      
+      // 验证协议版本
+      if (synAck.protocol_version !== PROTOCOL_VERSION) {
+        this.logger.warn(`Received HandshakeSynAck with unsupported protocol version: ${synAck.protocol_version}`);
+        return;
+      }
+      
+      // 验证响应的nonce是否匹配我们发送的nonce
+      const responseNonceBuf = Buffer.from(synAck.response_nonce);
+      if (!responseNonceBuf.equals(status.localNonce)) {
+        this.logger.error(`HandshakeSynAck response_nonce mismatch from edge ${edgeId}`);
+        return;
+      }
+      
+      // 验证签名
+      const dataToVerify = Buffer.concat([
+        Buffer.from(new Uint32Array([synAck.edge_id]).buffer),
+        Buffer.from(new BigUint64Array([BigInt(synAck.timestamp)]).buffer),
+        Buffer.from(synAck.response_nonce),
+        Buffer.from(synAck.nonce),
+      ]);
+      
+      if (!this.verifySignature(dataToVerify, Buffer.from(synAck.signature))) {
+        this.logger.error(`HandshakeSynAck signature verification failed from edge ${edgeId}`);
+        return;
+      }
+      
+      status.lastSeen = now;
+      status.lastHeartbeatReceived = now;
+      status.remoteNonce = Buffer.from(synAck.nonce);
+      this.stats.handshakeReceived++;
+      
+      this.logger.debug(`Received HandshakeSynAck from edge ${edgeId}`);
+      
       // 发送 ACK
-      const ack = this.createHandshakePacket('ACK');
-      this.sendPacket(ack, rinfo.address, rinfo.port);
-      this.stats.handshakeSent++;
-      status.handshakeComplete = true;
-      status.connected = true;
-      status.reconnecting = false;
-      status.reconnectAttempts = 0;
-      this.logger.info(`UDP handshake complete with edge ${edgeId} (received SYN-ACK)`);
-      this.emit('edge-connected', edgeId);
-    } else if (type === 3) { // ACK
-      this.logger.debug(`Received handshake ACK from edge ${edgeId}`);
+      const ack = this.createHandshakeAck(this.localEdgeId, synAck.nonce);
+      if (ack) {
+        this.sendPacket(ack, rinfo.address, rinfo.port);
+        this.stats.handshakeSent++;
+        status.handshakeComplete = true;
+        status.connected = true;
+        status.reconnecting = false;
+        status.reconnectAttempts = 0;
+        this.logger.info(`UDP handshake complete with edge ${edgeId} (received SYN-ACK)`);
+        this.emit('edge-connected', edgeId);
+      }
+    } else if (packet.type === UDPPacketType.UDP_PACKET_TYPE_HANDSHAKE_ACK && packet.handshake_ack) {
+      const ack = packet.handshake_ack;
+      
+      if (!edgeId) {
+        this.logger.warn(`Received HandshakeAck from unknown endpoint: ${rinfo.address}:${rinfo.port}`);
+        return;
+      }
+      
+      const status = this.connectionStatus.get(edgeId);
+      if (!status || !status.localNonce) {
+        this.logger.warn(`Received HandshakeAck from edge ${edgeId} but no local nonce found`);
+        return;
+      }
+      
+      // 验证响应的nonce是否匹配我们发送的nonce
+      const responseNonceBuf = Buffer.from(ack.response_nonce);
+      if (!responseNonceBuf.equals(status.localNonce)) {
+        this.logger.error(`HandshakeAck response_nonce mismatch from edge ${edgeId}`);
+        return;
+      }
+      
+      // 验证签名
+      const dataToVerify = Buffer.concat([
+        Buffer.from(new Uint32Array([ack.edge_id]).buffer),
+        Buffer.from(new BigUint64Array([BigInt(ack.timestamp)]).buffer),
+        Buffer.from(ack.response_nonce),
+      ]);
+      
+      if (!this.verifySignature(dataToVerify, Buffer.from(ack.signature))) {
+        this.logger.error(`HandshakeAck signature verification failed from edge ${edgeId}`);
+        return;
+      }
+      
+      status.lastSeen = now;
+      status.lastHeartbeatReceived = now;
+      this.stats.handshakeReceived++;
+      
+      this.logger.debug(`Received HandshakeAck from edge ${edgeId}`);
       status.handshakeComplete = true;
       status.connected = true;
       status.reconnecting = false;
@@ -375,13 +663,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   /**
    * Handle heartbeat packet
    */
-  private handleHeartbeatPacket(data: Buffer, rinfo: dgram.RemoteInfo): void {
-    if (data.length < 9 || data.toString('utf8', 0, 4) !== 'MUHB') {
-      return; // Not a heartbeat packet
-    }
-    
-    const type = data.readUInt8(4);
-    
+  private handleHeartbeatPacket(packet: VoiceUDPPacket, rinfo: dgram.RemoteInfo): void {
     // 找到对应的edge（使用规范化的地址进行匹配）
     const normalizedAddress = this.normalizeHost(rinfo.address);
     let edgeId: number | undefined;
@@ -404,14 +686,16 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     status.lastSeen = now;
     status.lastHeartbeatReceived = now;
     
-    if (type === 1) { // PING
-      this.logger.debug(`Received heartbeat PING from edge ${edgeId}`);
+    if (packet.type === UDPPacketType.UDP_PACKET_TYPE_HEARTBEAT_PING && packet.heartbeat_ping) {
+      const ping = packet.heartbeat_ping;
+      this.logger.debug(`Received heartbeat PING from edge ${edgeId}, sequence: ${ping.sequence}`);
       // 回复 PONG
-      const pong = this.createHeartbeatPacket('PONG');
+      const pong = this.createHeartbeatPong(this.localEdgeId, ping.sequence);
       this.sendPacket(pong, rinfo.address, rinfo.port);
       this.stats.heartbeatsReceived++;
-    } else if (type === 2) { // PONG
-      this.logger.debug(`Received heartbeat PONG from edge ${edgeId}`);
+    } else if (packet.type === UDPPacketType.UDP_PACKET_TYPE_HEARTBEAT_PONG && packet.heartbeat_pong) {
+      const pong = packet.heartbeat_pong;
+      this.logger.debug(`Received heartbeat PONG from edge ${edgeId}, sequence: ${pong.sequence}`);
       this.stats.heartbeatsReceived++;
     }
   }
@@ -452,11 +736,12 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       if (status.handshakeComplete && !status.reconnecting && status.isActiveSide) {
         const endpoint = this.remoteEndpoints.get(edgeId);
         if (endpoint) {
-          const ping = this.createHeartbeatPacket('PING');
+          status.heartbeatSequence++;
+          const ping = this.createHeartbeatPing(this.localEdgeId, status.heartbeatSequence);
           this.sendPacket(ping, endpoint.host, endpoint.port);
           status.lastHeartbeatSent = now;
           this.stats.heartbeatsSent++;
-          this.logger.debug(`Sent heartbeat PING to edge ${edgeId} (active side)`);
+          this.logger.debug(`Sent heartbeat PING to edge ${edgeId} (active side), sequence: ${status.heartbeatSequence}`);
         }
       }
     }
@@ -543,10 +828,15 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     status.reconnectAttempts++;
     this.logger.debug(`Reconnecting to edge ${edgeId}, attempt ${status.reconnectAttempts}`);
     
+    // 重新生成 nonce 进行握手
+    status.localNonce = crypto.randomBytes(NONCE_SIZE);
+    
     // 重新发起握手
-    const handshakePacket = this.createHandshakePacket('SYN');
-    this.sendPacket(handshakePacket, endpoint.host, endpoint.port);
-    this.stats.handshakeSent++;
+    const handshakePacket = this.createHandshakeSyn(edgeId, status.localNonce);
+    if (handshakePacket) {
+      this.sendPacket(handshakePacket, endpoint.host, endpoint.port);
+      this.stats.handshakeSent++;
+    }
     
     // 如果重连次数达到上限，检查连接状态再决定是否报告失败
     if (status.reconnectAttempts >= HANDSHAKE_MAX_ATTEMPTS) {
@@ -612,14 +902,12 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       throw new Error('Encryption not configured');
     }
 
-    // 编码明文包头 + 数据
-    const plainBuffer = this.getBuffer(14 + packet.data.length);
-    plainBuffer.writeUInt8(packet.version, 0);
-    plainBuffer.writeUInt32BE(packet.senderId, 1);
-    plainBuffer.writeUInt32BE(packet.targetId, 5);
-    plainBuffer.writeUInt32BE(packet.sequence, 9);
-    plainBuffer.writeUInt8(packet.codec, 13);
-    packet.data.copy(plainBuffer, 14);
+    // 编码明文包头 + 数据（12字节header）
+    const plainBuffer = this.getBuffer(12 + packet.data.length);
+    plainBuffer.writeUInt32BE(packet.senderId, 0);
+    plainBuffer.writeUInt32BE(packet.targetId, 4);
+    plainBuffer.writeUInt32BE(packet.sequence, 8);
+    packet.data.copy(plainBuffer, 12);
 
     // 生成随机IV (16字节 for CBC)
     const iv = crypto.randomBytes(16);
@@ -660,17 +948,15 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
         decipher.final()
       ]);
 
-      // 验证解密后的数据长度
-      if (decryptedData.length < 14) return null;
+      // 验证解密后的数据长度（12字节header）
+      if (decryptedData.length < 12) return null;
 
       // 解析包头
       return {
-        version: decryptedData.readUInt8(0),
-        senderId: decryptedData.readUInt32BE(1),
-        targetId: decryptedData.readUInt32BE(5),
-        sequence: decryptedData.readUInt32BE(9),
-        codec: decryptedData.readUInt8(13),
-        data: decryptedData.slice(14),
+        senderId: decryptedData.readUInt32BE(0),
+        targetId: decryptedData.readUInt32BE(4),
+        sequence: decryptedData.readUInt32BE(8),
+        data: decryptedData.slice(12),
       };
     } catch (_error) {
       // 解密失败，返回null
@@ -685,6 +971,13 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     const endpoint = this.remoteEndpoints.get(edgeId);
     if (!endpoint) {
       this.logger.warn(`No endpoint registered for edge ${edgeId}`);
+      return;
+    }
+
+    // 检查握手状态 - 只发送给已完成握手的Edge
+    const status = this.connectionStatus.get(edgeId);
+    if (status && !status.handshakeComplete) {
+      this.logger.debug(`Cannot send to edge ${edgeId} - handshake not complete`);
       return;
     }
 
@@ -716,7 +1009,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     voiceData: Buffer,
     excludeEdge?: number
   ): void {
-    // 编码包头（自定义14字节header，用于Edge间通信）
+    // 编码包头（自定义12字节header，用于Edge间通信）
     const headerBuffer = this.encodePacketHeader(packet);
     // voiceData 是完整的 Mumble 语音包格式：[header][session][sequence][voice_data]
     const fullPacket = Buffer.concat([headerBuffer, voiceData]);
@@ -756,7 +1049,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       this.logger.debug(
         `Broadcasted voice packet to ${sentCount} peers: ` +
         `sender=${packet.senderId}, target=${packet.targetId}, ` +
-        `codec=${packet.codec}, total_size=${finalPacket.length}`
+        `seq=${packet.sequence}, total_size=${finalPacket.length}`
       );
     }
   }
@@ -769,16 +1062,30 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     this.stats.bytesReceived += data.length;
 
     try {
-      // Check if it's a handshake packet
-      if (data.length >= 9 && data.toString('utf8', 0, 4) === 'MUHS') {
-        this.handleHandshakePacket(data, rinfo);
-        return;
-      }
-      
-      // Check if it's a heartbeat packet
-      if (data.length >= 9 && data.toString('utf8', 0, 4) === 'MUHB') {
-        this.handleHeartbeatPacket(data, rinfo);
-        return;
+      // 尝试解析为protobuf控制消息
+      try {
+        const packet = VoiceUDPPacket.decode(data);
+        
+        // 处理握手消息
+        if (packet.type === UDPPacketType.UDP_PACKET_TYPE_HANDSHAKE_SYN ||
+            packet.type === UDPPacketType.UDP_PACKET_TYPE_HANDSHAKE_SYN_ACK ||
+            packet.type === UDPPacketType.UDP_PACKET_TYPE_HANDSHAKE_ACK) {
+          this.handleHandshakePacket(packet, rinfo);
+          return;
+        }
+        
+        // 处理心跳消息
+        if (packet.type === UDPPacketType.UDP_PACKET_TYPE_HEARTBEAT_PING ||
+            packet.type === UDPPacketType.UDP_PACKET_TYPE_HEARTBEAT_PONG) {
+          this.handleHeartbeatPacket(packet, rinfo);
+          return;
+        }
+        
+        // 注意：语音数据不使用 protobuf 格式
+        // 语音包使用自定义的 14 字节 header + Mumble 数据格式
+        // 这样设计是为了最小化开销，提高实时性能
+      } catch (_parseError) {
+        // 不是protobuf格式，继续处理为语音数据
       }
       
       // 解密（如果启用）
@@ -793,11 +1100,9 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
         // 直接使用解密后的数据构建 VoicePacket
         // 不需要重新编码和解码
         const packet: VoicePacket = {
-          version: decrypted.version,
           senderId: decrypted.senderId,
           targetId: decrypted.targetId,
           sequence: decrypted.sequence,
-          codec: decrypted.codec,
           data: decrypted.data, // 已经是去除了 header 的 Mumble 包
         };
 
@@ -813,11 +1118,9 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
         }
 
         const packet: VoicePacket = {
-          version: decoded.header.version,
           senderId: decoded.header.senderId,
           targetId: decoded.header.targetId,
           sequence: decoded.header.sequence,
-          codec: decoded.header.codec,
           data: decoded.voiceData,
         };
 
@@ -831,15 +1134,18 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   }
 
   /**
-   * 编码包头（14字节）
+   * 编码包头（12字节）
+   * 
+   * 格式：
+   * - senderId (4 bytes): 发送方 Edge ID
+   * - targetId (4 bytes): Mumble target
+   * - sequence (4 bytes): 序列号
    */
   private encodePacketHeader(packet: VoicePacketHeader): Buffer {
-    const buffer = Buffer.allocUnsafe(14);
-    buffer.writeUInt8(packet.version, 0);
-    buffer.writeUInt32BE(packet.senderId, 1);
-    buffer.writeUInt32BE(packet.targetId, 5);
-    buffer.writeUInt32BE(packet.sequence, 9);
-    buffer.writeUInt8(packet.codec, 13);
+    const buffer = Buffer.allocUnsafe(12);
+    buffer.writeUInt32BE(packet.senderId, 0);
+    buffer.writeUInt32BE(packet.targetId, 4);
+    buffer.writeUInt32BE(packet.sequence, 8);
     return buffer;
   }
 
@@ -850,19 +1156,17 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     header: VoicePacketHeader;
     voiceData: Buffer;
   } | null {
-    if (data.length < 14) {
+    if (data.length < 12) {
       return null;
     }
 
     const header: VoicePacketHeader = {
-      version: data.readUInt8(0),
-      senderId: data.readUInt32BE(1),
-      targetId: data.readUInt32BE(5),
-      sequence: data.readUInt32BE(9),
-      codec: data.readUInt8(13),
+      senderId: data.readUInt32BE(0),
+      targetId: data.readUInt32BE(4),
+      sequence: data.readUInt32BE(8),
     };
 
-    const voiceData = data.slice(14);
+    const voiceData = data.slice(12);
 
     return { header, voiceData };
   }
