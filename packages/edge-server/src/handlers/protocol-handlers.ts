@@ -104,7 +104,7 @@ export class ProtocolHandlers {
         late: client.crypt?.localStats.late ?? 0,
         lost: client.crypt?.localStats.lost ?? 0,
         resync: client.crypt?.localStats.resync ?? 0,
-      } as any).finish();
+      }).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.Ping, Buffer.from(pongMessage));
 
@@ -135,7 +135,7 @@ export class ProtocolHandlers {
 
         const response = mumbleproto.CryptSetup.encode({
           server_nonce: serverNonce || Buffer.alloc(16),
-        } as any).finish();
+        }).finish();
 
         this.messageHandler.sendMessage(session_id, MessageType.CryptSetup, Buffer.from(response));
         this.logger.debug(`Sent crypt resync response to session ${session_id}`);
@@ -293,7 +293,6 @@ export class ProtocolHandlers {
             client_session: session_id,
             target_id: voiceTarget.id,
             config: null,
-            timestamp: Date.now(),
           }).catch((err) => {
         this.logger.error(`Failed to sync voice target deletion to Hub:`, err);
           });
@@ -377,7 +376,6 @@ export class ProtocolHandlers {
               children: t.children,
             })),
           },
-          timestamp: Date.now(),
         }).catch((err) => {
         this.logger.error(`Failed to sync voice target to Hub:`, err);
         });

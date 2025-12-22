@@ -67,7 +67,6 @@ export class VoiceTargetSyncService {
             client_session,
             target_id,
             config,
-            timestamp: Date.now(),
           });
         }
       }
@@ -91,7 +90,6 @@ export class VoiceTargetSyncService {
             client_session,
             target_id,
             config,
-            timestamp: Date.now(),
           });
         }
       }

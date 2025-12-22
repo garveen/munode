@@ -168,7 +168,6 @@ export interface EdgeSyncVoiceTargetMethod {
     client_session: number;
     target_id: number;
     config: VoiceTargetConfig['config'];
-    timestamp: number;
   };
   result: EdgeSyncVoiceTargetResultPb;
 }
@@ -1027,7 +1026,6 @@ export interface HubSyncVoiceTargetNotification {
         group?: string;
       }>;
     } | null;
-    timestamp?: number; // Optional timestamp for tracking
   };
 }
 

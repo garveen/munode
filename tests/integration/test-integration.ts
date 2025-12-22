@@ -341,14 +341,6 @@ function createEdgeConfig(server_id: number, port: number): EdgeConfig {
       reconnectInterval: 5000,
       heartbeatInterval: 10000,
     },
-    peerServers: {
-      enableP2P: false,
-      connectionTimeout: 30000,
-      maxConnections: 10,
-    },
-    relay: {
-      enabled: false,
-    },
     auth: {
       apiUrl: 'http://localhost:8080/auth',
       apiKey: '',

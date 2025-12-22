@@ -295,7 +295,6 @@ export interface VoiceTargetConfig {
    client_session: number;
    target_id: number;
   config: import('@munode/protocol').VoiceTarget | null;
-  timestamp: number;
 }
 
 // 导出 VoiceTarget 类型别名

@@ -141,7 +141,6 @@ export class TypedRPCClient {
               group: t.group,
             })) || [],
           } : undefined,
-          timestamp: p.timestamp,
         };
         break;
       }

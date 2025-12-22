@@ -142,7 +142,6 @@ message EdgeSyncVoiceTargetParams {
   required uint32 client_session = 2;
   required uint32 target_id = 3;
   optional VoiceTargetConfigProto config = 4;
-  required int64 timestamp = 5;
 }
 
 message VoiceTargetConfigProto {

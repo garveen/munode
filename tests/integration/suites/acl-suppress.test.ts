@@ -56,10 +56,10 @@ describe('ACL Suppress Integration Tests', () => {
 
       // 设置 ACL：允许进入但拒绝说话
       await adminClient.addACLEntry(channelId, {
-        applyHere: true,
-        applySubs: false,
+        apply_here: true,
+        apply_subs: false,
         group: 'all',
-        grant: PermissionFlag.Enter | PermissionFlag.Traverse,
+        allow: PermissionFlag.Enter | PermissionFlag.Traverse,
         deny: PermissionFlag.Speak,
       });
 
@@ -129,19 +129,19 @@ describe('ACL Suppress Integration Tests', () => {
 
       // 设置 NoSpeak 频道 ACL
       await adminClient.addACLEntry(noSpeakId, {
-        applyHere: true,
-        applySubs: false,
+        apply_here: true,
+        apply_subs: false,
         group: 'all',
-        grant: PermissionFlag.Enter | PermissionFlag.Traverse,
+        allow: PermissionFlag.Enter | PermissionFlag.Traverse,
         deny: PermissionFlag.Speak,
       });
 
       // 设置 CanSpeak 频道 ACL（明确允许说话）
       await adminClient.addACLEntry(canSpeakId, {
-        applyHere: true,
-        applySubs: false,
+        apply_here: true,
+        apply_subs: false,
         group: 'all',
-        grant: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak,
+        allow: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak,
         deny: 0,
       });
 
@@ -227,10 +227,10 @@ describe('ACL Suppress Integration Tests', () => {
       const channelId = await adminClient.createChannel(channelName, 0);
 
       await adminClient.addACLEntry(channelId, {
-        applyHere: true,
-        applySubs: false,
+        apply_here: true,
+        apply_subs: false,
         group: 'all',
-        grant: PermissionFlag.Enter | PermissionFlag.Traverse,
+        allow: PermissionFlag.Enter | PermissionFlag.Traverse,
         deny: PermissionFlag.Speak,
       });
 
@@ -275,10 +275,10 @@ describe('ACL Suppress Integration Tests', () => {
 
       // 设置 ACL：允许进入但拒绝说话
       await adminClient.addACLEntry(channelId, {
-        applyHere: true,
-        applySubs: false,
+        apply_here: true,
+        apply_subs: false,
         group: 'all',
-        grant: PermissionFlag.Enter | PermissionFlag.Traverse,
+        allow: PermissionFlag.Enter | PermissionFlag.Traverse,
         deny: PermissionFlag.Speak,
       });
 

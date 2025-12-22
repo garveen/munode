@@ -46,7 +46,7 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
     const controlService = this.factory.getControlService();
 
     // 同步语音目标配置到本地存储
-    voiceTargetSync.syncVoiceTarget(params as any);
+    voiceTargetSync.syncVoiceTarget(params);
 
     // 广播 VoiceTarget 更新到所有其他 Edge（除了发送者）
     this.logger.info(

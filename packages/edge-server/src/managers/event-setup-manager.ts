@@ -433,7 +433,7 @@ export class EventSetupManager {
                   userStateData.hash = session.cert_hash;
                 }
                 
-                const userStateMessage = mumbleproto.UserState.encode(userStateData as any).finish();
+                const userStateMessage = mumbleproto.UserState.encode(userStateData).finish();
                 const userStateBuffer = Buffer.from(userStateMessage);
                 
                 // Broadcast to all local authenticated clients
@@ -789,11 +789,10 @@ export class EventSetupManager {
   private sendServerVersion(session_id: number): void {
     try {
       const version = mumbleproto.Version.encode({
-        version_v1: 1,
-        version_v2: 5,
+        version: 0x010400,
         os: 'MuNode',
         release: '0.1.0',
-      } as any).finish();
+      }).finish();
 
       this.messageManager?.sendMessageToClient(
         session_id,

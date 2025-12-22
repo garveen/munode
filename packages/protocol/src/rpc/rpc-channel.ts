@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
-import { EdgeHubPacket, PacketType, RPCError as ProtoRPCError, Heartbeat, HeartbeatAck } from '../generated/proto/HubEdge.js';
+import { EdgeHubPacket, PacketType } from '../generated/proto/HubEdge.js';
 import { 
   TypedRPCRequest, 
   TypedRPCResponse, 
@@ -103,7 +103,6 @@ interface SyncVoiceTargetParams {
   client_session: number;
   target_id: number;
   config: unknown;
-  timestamp?: number; // Optional timestamp
 }
 
 // Union type of internal params used by createNotification
@@ -390,7 +389,6 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
           client_session: p.client_session,
           target_id: p.target_id,
           config_json: typeof p.config === 'string' ? p.config : JSON.stringify(p.config),
-          timestamp: p.timestamp ?? Date.now(), // Use provided timestamp or current time
         };
         break;
       }
@@ -500,7 +498,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
   }
 
   private handleRPCRequest(packet: EdgeHubPacket): void {
-    if (packet.rpc_request === undefined || !packet.rpc_request) {
+    if (!packet.rpc_request) {
       this.logger.warn('Received RPC_REQUEST packet without rpc_request field');
       return;
     }
@@ -525,7 +523,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
   }
 
   private handleRPCResponse(packet: EdgeHubPacket): void {
-    if (packet.rpc_response === undefined || !packet.rpc_response) {
+    if (!packet.rpc_response) {
       this.logger.warn('Received RPC_RESPONSE packet without rpc_response field');
       return;
     }
@@ -542,7 +540,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
   }
 
   private handleRPCError(packet: EdgeHubPacket): void {
-    if (packet.rpc_error === undefined || !packet.rpc_error) {
+    if (!packet.rpc_error) {
       this.logger.warn('Received RPC_ERROR packet without rpc_error field');
       return;
     }
@@ -558,7 +556,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
   }
 
   private handleRPCNotification(packet: EdgeHubPacket): void {
-    if (packet.rpc_notification === undefined || !packet.rpc_notification) {
+    if (!packet.rpc_notification) {
       this.logger.warn('Received RPC_NOTIFICATION packet without rpc_notification field');
       return;
     }

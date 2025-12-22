@@ -144,13 +144,13 @@ export interface VoiceTargetConfig {
 
 // Voice target
 export interface VoiceTarget {
-  id: number;
-  targets: VoiceTargetTarget[];
+  id?: number;
+  targets?: VoiceTargetTarget[];
 }
 
 // Voice target target
 export interface VoiceTargetTarget {
-  session: number[];
+  session?: number[];
   channel_id?: number;
   group?: string;
   links?: boolean;

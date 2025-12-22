@@ -353,7 +353,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
           bandwidth_out: stats.bandwidth?.out,
         } : undefined,
         },
-      } as any).finish();
+      }).finish();
 
       const response = await channel.call('edge.heartbeat', hubedgeRpc.TypedRPCRequest.decode(request));
 
@@ -559,7 +559,6 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
     client_session: number;
     target_id: number;
     config: VoiceTarget | null;
-    timestamp: number;
   }): Promise<void> {
     if (!this.isConnected() || (!this.useExternalClient && !this.registered)) {
       return;
@@ -570,8 +569,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
         edge_id: this.config.server_id,
         client_session: config.client_session,
         target_id: config.target_id,
-        config: config.config as any || { id: 0, targets: [] },
-        timestamp: config.timestamp,
+        config: config.config || { id: 0, targets: [] },
       };
       await this.client.call('edge.syncVoiceTarget', params);
     } catch (error) {
