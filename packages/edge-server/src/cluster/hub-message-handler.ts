@@ -48,7 +48,7 @@ export class HubMessageHandlers {
       // params is the userState object directly, use the type from HubNotificationParams
       // Build UserState protobuf message with only the fields that are set
       // Use any here since we're building a protobuf message dynamically
-      const userStateInit: any = {
+      const userStateInit: mumbleproto.UserState = {
         session: params.session,
         actor: params.actor,
         temporary_access_tokens: [],
@@ -192,7 +192,7 @@ export class HubMessageHandlers {
         // Build UserState protobuf message with only the fields that are set
         // Use the same pattern as handleUserStateBroadcastFromHub
         // Use any here since we're building a protobuf message dynamically
-        const userStateInit: any = {
+        const userStateInit: mumbleproto.UserState = {
           session: userState.session,
           actor: userState.actor,
           temporary_access_tokens: [],
@@ -434,7 +434,7 @@ export class HubMessageHandlers {
       this.logger.debug(`Received UserRemove broadcast from Hub: session ${session}, ${isKickOrBan ? `${ban ? 'ban' : 'kick'} by ${actor}` : 'normal leave'}, ninja: ${isNinjaMode}`);
 
       // 构建UserRemove消息
-      const userRemoveData: any = {
+      const userRemoveData: mumbleproto.UserRemove = {
         session: session,
       };
       if (actor !== undefined) userRemoveData.actor = actor;
@@ -572,7 +572,7 @@ export class HubMessageHandlers {
       );
 
       // 构建TextMessage消息
-      const textMsgData: any = {
+      const textMsgData: mumbleproto.TextMessage = {
         actor: actor,
         message: message,
       };
@@ -601,9 +601,9 @@ export class HubMessageHandlers {
 
   /**
    * 将来自 RPC 的数据字段规范化为 Uint8Array
-   * msgpack 序列化可能产生不同的数据类型
+   * Protobuf 原生支持 Buffer/Uint8Array
    */
-  private normalizeDataField(data: Buffer | Uint8Array | { type: string; data: number[] } | null | undefined): Uint8Array {
+  private normalizeDataField(data: Buffer | Uint8Array | null | undefined): Uint8Array {
     if (!data) {
       return new Uint8Array(0);
     }
@@ -612,18 +612,6 @@ export class HubMessageHandlers {
     }
     if (data instanceof Uint8Array) {
       return data;
-    }
-    if (typeof data === 'object') {
-      // Handle { type: 'Buffer', data: [...] } format (Node.js Buffer.toJSON())
-      if (data.type === 'Buffer' && Array.isArray(data.data)) {
-        return Buffer.from(data.data);
-      }
-      
-      // Handle array-like object with numeric keys (msgpack serialization of Uint8Array/Buffer)
-      if (Object.keys(data).every((k: string) => !isNaN(Number(k)))) {
-        const values = Object.keys(data).sort((a, b) => Number(a) - Number(b)).map(k => data[k]);
-        return Buffer.from(values);
-      }
     }
     return new Uint8Array(0);
   }
@@ -647,10 +635,10 @@ export class HubMessageHandlers {
       // 注意：根据 Mumble 协议，发送给客户端时应清除 receiverSessions
       const normalizedData = this.normalizeDataField(data);
       
-      const pluginDataMsgData: any = {
-        sender_session: sender_session,
+      const pluginDataMsgData: mumbleproto.PluginDataTransmission = {
+        senderSession: sender_session,
         dataID: dataID,
-        data: normalizedData,
+        data: Buffer.from(normalizedData),
       };
       
       const pluginDataMessage = mumbleproto.PluginDataTransmission.encode(pluginDataMsgData).finish();
@@ -734,7 +722,7 @@ export class HubMessageHandlers {
         
         // 构建 UserStats protobuf 对象
         // Use any here since we're building a protobuf message dynamically
-        const response: any = {
+        const response: mumbleproto.UserStats = {
           session: userStats.session,
           certificates: [],
           celt_versions: [],
@@ -761,9 +749,7 @@ export class HubMessageHandlers {
           }
           if (userStats.address) {
             // Convert address string to Uint8Array if needed
-            response.address = typeof userStats.address === 'string' 
-              ? new TextEncoder().encode(userStats.address)
-              : userStats.address;
+            response.address = Buffer.from(new TextEncoder().encode(userStats.address));
           }
           if (userStats.version) {
             response.version = {
@@ -937,7 +923,7 @@ export class HubMessageHandlers {
           try {
             // Send a user-friendly message before disconnecting
             // Don't expose internal system details to clients
-            const textMsgData: any = {
+            const textMsgData: mumbleproto.TextMessage = {
               actor: 0,
               message: 'Server is shutting down for maintenance. Please reconnect in a few moments.',
             };

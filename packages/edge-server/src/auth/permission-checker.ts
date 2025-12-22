@@ -117,7 +117,7 @@ export class PermissionHandlers {
         this.logger.debug(`PermissionQuery from session ${session_id}: user_id=${actor.user_id}, username=${actor.username}, groups=${JSON.stringify(actor.groups)}`);
 
       // 使用 has_channel_id 检查 protobuf optional 字段是否真的设置了值（遵循 Copilot 指导）
-      if (!permQuery !== undefined) {
+      if (permQuery.channel_id === undefined) {
         this.logger.warn(`PermissionQuery without channel_id from session: ${session_id}`);
         return;
       }
@@ -127,7 +127,7 @@ export class PermissionHandlers {
         this.logger.error('PermissionQuery rejected: Hub client not available');
         // 返回默认权限
         const defaultPerms = 0x30e; // Traverse | Enter | Speak | Whisper | TextMessage
-        const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: permQuery.channel_id, permissions: defaultPerms } as any).finish();
+        const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: permQuery.channel_id, permissions: defaultPerms }).finish();
         this.messageHandler.sendMessage(
           session_id,
           MessageType.PermissionQuery,
@@ -151,7 +151,7 @@ export class PermissionHandlers {
         this.logger.warn(`PermissionQuery failed: ${result?.error}`);
         // 返回默认权限
         const defaultPerms = 0x30e;
-        const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: permQuery.channel_id, permissions: defaultPerms } as any).finish();
+        const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: permQuery.channel_id, permissions: defaultPerms }).finish();
         this.messageHandler.sendMessage(
           session_id,
           MessageType.PermissionQuery,
@@ -161,7 +161,7 @@ export class PermissionHandlers {
       }
 
       // 发送权限响应
-      const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: permQuery.channel_id, permissions: result.permissions ?? 0 } as any).finish();
+      const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: permQuery.channel_id, permissions: result.permissions ?? 0 }).finish();
 
       this.messageHandler.sendMessage(
         session_id,
@@ -249,7 +249,7 @@ export class PermissionHandlers {
         );
 
         // 发送带 flush=true 的权限响应，通知客户端清空缓存
-        const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: client.channel_id, permissions: permissions } as any).finish();
+        const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: client.channel_id, permissions: permissions }).finish();
 
         this.messageHandler.sendMessage(
           client.session,
@@ -302,7 +302,7 @@ export class PermissionHandlers {
           const userStateMessage = mumbleproto.UserState.encode({
             session: client.session,
             suppress: newSuppress,
-          } as any).finish();
+          }).finish();
 
           // 广播给所有已认证的客户端
           const allClients = this.clientManager.getAllClients();

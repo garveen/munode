@@ -62,7 +62,7 @@ export interface SyncUpdate {
   type: string | number;
   sequence: number;
   timestamp: number;
-  data: Record<string, unknown>; // 已经通过 msgpack 解析的数据
+  data: Record<string, unknown>; // 已经通过 protobuf 解析的数据
 }
 
 // 完整快照类型
@@ -330,7 +330,7 @@ export class EdgeStateManager {
       switch (typeStr) {
         case 'CHANNEL_CREATE':
         case 'CHANNEL_UPDATE': {
-          // msgpack 已解析，直接使用
+          // 数据已解析，直接使用
           const data = update.data as { channel: ChannelData };
           if (data.channel) {
             this.handleChannelUpdate(data.channel);

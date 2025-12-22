@@ -250,7 +250,7 @@ export class MessageHandlers {
       
       // 构造ChannelState对象 - 注意：根频道不应该设置parent字段
       // ts-proto requires all repeated fields to be arrays (not undefined)
-      const channelStateData: any = {
+      const channelStateData: mumbleproto.ChannelState = {
         channel_id: channel.id,
         name: channel.name,
         description: channel.description || '',
@@ -303,7 +303,7 @@ export class MessageHandlers {
         links_add: channel.links || [],  // Ensure it's always an array for ts-proto
         links: [],  // Must provide empty array for ts-proto encoder
         links_remove: [],  // Must provide empty array for ts-proto encoder
-      } as any).finish();
+      }).finish();
 
         this.logger.debug(
         `[sendChannelTree] Links: channel ${channel.id} links: [${channel.links.join(', ')}]`
@@ -428,7 +428,7 @@ export class MessageHandlers {
       // 发送所有其他已认证的客户端状态（不包括自己）
       // 注意：降级模式下不发送敏感信息（如证书哈希）
       if (client.user_id > 0 && client.session !== session_id) {
-        const userStateData: any = {
+        const userStateData: mumbleproto.UserState = {
           session: client.session,
           name: client.username,
           user_id: client.user_id,
@@ -557,7 +557,7 @@ export class MessageHandlers {
     const rejectMessage = mumbleproto.Reject.encode({
       type: rejectType,
       reason: reason,
-    } as any).finish();
+    }).finish();
 
     this.messageHandler.sendMessage(session_id, MessageType.Reject, Buffer.from(rejectMessage));
   }

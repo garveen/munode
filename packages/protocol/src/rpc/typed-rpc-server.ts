@@ -174,11 +174,9 @@ export class TypedRPCServer {
       case 'edge.allocateSessionId':
         return request.edge_allocate_session_id as RPCParams<'edge.allocateSessionId'>;
       case 'edge.authenticateUser':
-        // 直接返回protobuf对象，保留has_字段信息
-        return request.edge_authenticate_user as any as RPCParams<'edge.authenticateUser'>;
-
+        return request.edge_authenticate_user as RPCParams<'edge.authenticateUser'>;
       case 'edge.syncVoiceTarget':
-        return request.edge_sync_voice_target as any as RPCParams<'edge.syncVoiceTarget'>;
+        return request.edge_sync_voice_target as RPCParams<'edge.syncVoiceTarget'>;
       case 'edge.getVoiceTargets':
         return request.edge_get_voice_targets as RPCParams<'edge.getVoiceTargets'>;
       case 'edge.routeVoice': {
@@ -262,7 +260,7 @@ export class TypedRPCServer {
         throw new Error('Missing edge.reportPeerDisconnect params');
       }
       case 'edge.reportQuality':
-        return request.edge_report_quality as any as RPCParams<'edge.reportQuality'>;
+        return request.edge_report_quality as RPCParams<'edge.reportQuality'>;
       case 'cluster.getStatus':
         return {} as RPCParams<'cluster.getStatus'>;
       case 'blob.put':

@@ -62,7 +62,7 @@ export class AdminHandlers {
           duration: entry.duration || 0,
         })),
         query: false,
-      } as any).finish();
+      }).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.BanList, Buffer.from(response));
         this.logger.debug(`Sent BanList to session ${session_id}: ${banList.length} entries`);
@@ -136,7 +136,7 @@ export class AdminHandlers {
   /**
    * 处理 ContextAction 消息
    */
-  public async handleContextAction(session_id: number, data: Buffer): Promise<void> {
+  public handleContextAction(session_id: number, data: Buffer): void {
     try {
       const action = mumbleproto.ContextAction.decode(data);
         this.logger.debug(
@@ -173,7 +173,7 @@ export class AdminHandlers {
    */
   public sendContextActionModify(session_id: number, message: mumbleproto.ContextActionModify): void {
     try {
-      const data = Buffer.from(mumbleproto.ContextActionModify.encode(message as any).finish());
+      const data = Buffer.from(mumbleproto.ContextActionModify.encode(message).finish());
       this.messageHandler.sendMessage(session_id, MessageType.ContextActionModify, data);
     } catch (error) {
         this.logger.error(`Error sending ContextActionModify to session ${session_id}:`, error);
@@ -242,7 +242,7 @@ export class AdminHandlers {
         const userStateMessage = mumbleproto.UserState.encode({
           session: client.session,
           channel_id: toChannelId,
-        } as any).finish();
+        }).finish();
 
         this.messageHandler.broadcastMessage(MessageType.UserState, Buffer.from(userStateMessage));
 
@@ -293,7 +293,7 @@ export class AdminHandlers {
       const confirmMessage = mumbleproto.TextMessage.encode({
         actor: session_id,
         message: `Promiscuous mode ${enabled ? 'enabled' : 'disabled'}`,
-      } as any).finish();
+      }).finish();
 
       this.messageHandler.sendMessage(
         session_id,
@@ -337,7 +337,7 @@ export class AdminHandlers {
           temporary_access_tokens: [],
           listening_channel_add: [],
           listening_channel_remove: [],
-        } as any).finish();
+        }).finish();
 
         this.messageHandler.broadcastMessage(
           MessageType.UserState,
@@ -382,7 +382,7 @@ export class AdminHandlers {
                 session: targetSession,
                 texture: Buffer.from(result.data),
                 texture_hash: Buffer.from(result.hash, 'base64'),
-              } as any).finish();
+              }).finish();
               this.messageHandler.sendMessage(
                 session_id,
                 MessageType.UserState,
@@ -415,7 +415,7 @@ export class AdminHandlers {
               const userStateMessage = mumbleproto.UserState.encode({
                 session: targetSession,
                 comment: comment,
-              } as any).finish();
+              }).finish();
               this.messageHandler.sendMessage(
                 session_id,
                 MessageType.UserState,
@@ -440,7 +440,7 @@ export class AdminHandlers {
               links: [],
               links_add: [],
               links_remove: [],
-            } as any).finish();
+            }).finish();
 
             this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(response)); 
           }
@@ -483,7 +483,7 @@ export class AdminHandlers {
         // TODO: 从Hub或用户缓存获取所有用户
         const response = mumbleproto.UserList.encode({
           users: [], // 暂时返回空列表
-        } as any).finish();
+        }).finish();
 
         this.messageHandler.sendMessage(session_id, MessageType.UserList, Buffer.from(response)); 
         this.logger.debug(`Sent UserList response to session ${session_id}`);
@@ -562,7 +562,7 @@ export class AdminHandlers {
         type: denyType,
         reason: reason,
         name: denyName,
-      } as any).finish();
+      }).finish();
 
       this.messageHandler.sendMessage(session_id, MessageType.PermissionDenied, Buffer.from(denyMessage));
         this.logger.debug(`Sent PermissionDenied to session ${session_id}: ${denyName} - ${reason}`);
