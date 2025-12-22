@@ -331,30 +331,12 @@ export class ACLHandler implements IACLHandler {
 
         // 通知所有 Edge 刷新该频道的权限
         // 这会触发 Edge 重新计算频道内所有用户的 suppress 状态
+        // Edge收到通知后会清空whisper target缓存，强制下次使用时重新检查权限
         this.logger.info(`Broadcasting ACL update notification for channel ${channel_id}`);
         this.factory.getControlService().broadcast('edge.aclUpdated', {
           channel_id,
           timestamp: Date.now(),
         });
-
-        // 验证并清理因ACL更改而无效的 VoiceTarget
-        // 这确保用户不能使用他们不再有权限的 VoiceTarget
-        if (this.factory.getVoiceRoutingHandler()) {
-          // 获取受影响的频道列表（当前频道及其子频道，如果apply_subs为true）
-          const affectedChannels = [channel_id];
-          
-          // 检查是否有apply_subs的ACL，如果有，需要检查所有子频道
-          const hasApplySubs = aclData.some(acl => acl.apply_subs);
-          if (hasApplySubs) {
-            // 获取所有子频道（递归）
-            const allChannels = await this.factory.getDatabase().getAllChannels();
-            const childChannels = this.getDescendantChannels(channel_id, allChannels);
-            affectedChannels.push(...childChannels);
-          }
-          
-          this.logger.debug(`Validating VoiceTargets for affected channels: ${affectedChannels.join(', ')}`);
-          await this.factory.getVoiceRoutingHandler().validateAndCleanupVoiceTargets(affectedChannels);
-        }
 
         this.logger.info(`ACL update completed for channel ${channel_id}`);
         return {
@@ -445,38 +427,6 @@ export class ACLHandler implements IACLHandler {
     // Use ACLManager to save ACLs
     const aclIds = await this.factory.getAclManager().saveACLs(channel_id, aclData);
 
-    // 验证并清理因ACL更改而无效的 VoiceTarget
-    if (this.factory.getVoiceRoutingHandler()) {
-      const affectedChannels = [channel_id];
-      
-      // 检查是否有apply_subs的ACL
-      const hasApplySubs = aclData.some(acl => acl.apply_subs);
-      if (hasApplySubs) {
-        const allChannels = await this.factory.getDatabase().getAllChannels();
-        const childChannels = this.getDescendantChannels(channel_id, allChannels);
-        affectedChannels.push(...childChannels);
-      }
-      
-      this.logger.debug(`Validating VoiceTargets after saveACL for channels: ${affectedChannels.join(', ')}`);
-      await this.factory.getVoiceRoutingHandler().validateAndCleanupVoiceTargets(affectedChannels);
-    }
-
     return { success: true, acl_ids: aclIds };
-  }
-
-  /**
-   * 获取指定频道的所有后代频道（递归）
-   */
-  private getDescendantChannels(parentId: number, allChannels: Array<{ id: number; parent_id: number }>): number[] {
-    const descendants: number[] = [];
-    const children = allChannels.filter(ch => ch.parent_id === parentId);
-    
-    for (const child of children) {
-      descendants.push(child.id);
-      // 递归获取子频道的后代
-      descendants.push(...this.getDescendantChannels(child.id, allChannels));
-    }
-    
-    return descendants;
   }
 }

@@ -698,6 +698,11 @@ export class HubMessageHandlers {
       // 触发频道权限刷新（委托给 PermissionHandlers）
       const permissionHandlers = this.factory.permissionHandlers;
       void permissionHandlers.refreshChannelPermissions(channel_id);
+      
+      // 清空whisper target缓存，强制下次使用VoiceTarget时重新检查权限
+      // 这与Murmur的实现一致：ACL变动后通过clearWhisperTargetCache清空缓存
+      this.factory.voiceRouter.clearWhisperTargetCache();
+      this.logger.debug(`Cleared whisper target cache after ACL update for channel ${channel_id}`);
     } catch (error) {
         this.logger.error('Error handling ACL update notification:', error);
     }
