@@ -18,6 +18,11 @@ export interface IVoiceRoutingHandler {
   handleGetVoiceTargets(params: RPCParams<'edge.getVoiceTargets'>): Promise<RPCResult<'edge.getVoiceTargets'>>;
 
   /**
+   * 验证并清理因ACL更改而无效的 VoiceTarget
+   */
+  validateAndCleanupVoiceTargets(affectedChannelIds: number[]): Promise<void>;
+
+  /**
    * NOTE: Voice packet routing through hub has been removed.
    * 
    * Architecture: Voice packets now flow edge-to-edge directly via UDP (VoiceUDPTransport).
@@ -106,18 +111,18 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
     // 验证目标频道权限
     if (params.config.targets) {
       for (const target of params.config.targets) {
-        // 如果指定了目标频道，检查用户是否有权限访问该频道
+        // 如果指定了目标频道，检查用户是否有权限在该频道发言
         // Note: channel_id can be 0 (root channel), which should also be validated
         if (target.channel_id !== undefined) {
-          const canAccess = await permissionChecker.canUserAccessChannel(target.channel_id, userInfo);
+          const canSpeak = await permissionChecker.hasPermission(target.channel_id, userInfo, 0x8); // Permission.Speak
           
-          if (!canAccess) {
+          if (!canSpeak) {
             this.logger.warn(
-              `VoiceTarget denied: Session ${params.client_session} cannot access channel ${target.channel_id}`
+              `VoiceTarget denied: Session ${params.client_session} cannot speak in channel ${target.channel_id}`
             );
             return { 
               success: false, 
-              error: `Permission denied: No access to channel ${target.channel_id}` 
+              error: `Permission denied: Speak permission required in channel ${target.channel_id}` 
             };
           }
         }
@@ -198,6 +203,149 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
     }
 
     return { voice_targets: configs };
+  }
+
+  /**
+   * 验证并清理因ACL更改而无效的 VoiceTarget
+   * 当ACL发生变化时，需要重新验证所有现有的VoiceTarget配置
+   * 如果用户不再有权限使用某个VoiceTarget，则删除它
+   * 
+   * @param affectedChannelIds - 受影响的频道ID列表（ACL被修改的频道）
+   */
+  async validateAndCleanupVoiceTargets(affectedChannelIds: number[]): Promise<void> {
+    const voiceTargetSync = this.factory.getVoiceTargetSync();
+    const sessionManager = this.factory.getSessionManager();
+    const permissionChecker = this.factory.getPermissionChecker();
+    const controlService = this.factory.getControlService();
+
+    // 清除受影响频道的权限缓存
+    for (const channelId of affectedChannelIds) {
+      permissionChecker.clearCacheForChannel(channelId);
+    }
+
+    // 获取所有 VoiceTarget 配置
+    const allConfigs = voiceTargetSync.getAllConfigs();
+    
+    this.logger.info(`Validating ${allConfigs.length} VoiceTargets after ACL change on channels: ${affectedChannelIds.join(', ')}`);
+
+    let invalidCount = 0;
+
+    for (const config of allConfigs) {
+      if (!config.config || !config.config.targets) {
+        continue;
+      }
+
+      // 获取会话信息
+      const session = sessionManager.getSession(config.client_session);
+      if (!session || session.channel_id === undefined) {
+        // 会话不存在或不在任何频道，删除此VoiceTarget
+        voiceTargetSync.syncVoiceTarget({
+          edge_id: config.edge_id,
+          client_session: config.client_session,
+          target_id: config.target_id,
+          config: null,
+        });
+        
+        // 广播删除通知
+        controlService.broadcastExcept(config.edge_id, 'hub.syncVoiceTarget', {
+          edge_id: config.edge_id,
+          client_session: config.client_session,
+          target_id: config.target_id,
+          config: null,
+        });
+        
+        invalidCount++;
+        this.logger.info(`Removed VoiceTarget ${config.target_id} for session ${config.client_session}: session not found or no channel`);
+        continue;
+      }
+
+      const userInfo = permissionChecker.sessionToUserInfo(session, session.channel_id);
+      let isValid = true;
+
+      // 检查用户是否仍有 Whisper 权限
+      const hasWhisper = await permissionChecker.hasPermission(
+        session.channel_id,
+        userInfo,
+        0x100 // Permission.Whisper
+      );
+
+      if (!hasWhisper) {
+        isValid = false;
+        this.logger.debug(`VoiceTarget ${config.target_id} for session ${config.client_session} invalid: no Whisper permission`);
+      }
+
+      // 检查每个目标的权限
+      if (isValid) {
+        for (const target of config.config.targets) {
+          // 检查目标频道权限
+          if (target.channel_id !== undefined) {
+            const canSpeak = await permissionChecker.hasPermission(target.channel_id, userInfo, 0x8); // Permission.Speak
+            
+            if (!canSpeak) {
+              isValid = false;
+              this.logger.debug(`VoiceTarget ${config.target_id} for session ${config.client_session} invalid: cannot speak in channel ${target.channel_id}`);
+              break;
+            }
+          }
+
+          // 检查目标用户是否可见
+          if (target.session && target.session.length > 0) {
+            for (const targetSessionId of target.session) {
+              const targetSession = sessionManager.getSession(targetSessionId);
+              if (!targetSession || targetSession.channel_id === undefined) {
+                isValid = false;
+                this.logger.debug(`VoiceTarget ${config.target_id} for session ${config.client_session} invalid: target session ${targetSessionId} not found`);
+                break;
+              }
+
+              const ninjaChannels = this.factory.getConfig().ninjaChannels 
+                ? new Set(this.factory.getConfig().ninjaChannels) 
+                : undefined;
+              
+              const canSeeUser = await permissionChecker.canUserSeeOtherUser(
+                userInfo,
+                session.channel_id,
+                targetSession.channel_id,
+                ninjaChannels
+              );
+
+              if (!canSeeUser) {
+                isValid = false;
+                this.logger.debug(`VoiceTarget ${config.target_id} for session ${config.client_session} invalid: cannot see target session ${targetSessionId}`);
+                break;
+              }
+            }
+            
+            if (!isValid) break;
+          }
+        }
+      }
+
+      // 如果VoiceTarget无效，删除它
+      if (!isValid) {
+        voiceTargetSync.syncVoiceTarget({
+          edge_id: config.edge_id,
+          client_session: config.client_session,
+          target_id: config.target_id,
+          config: null,
+        });
+        
+        // 广播删除通知
+        controlService.broadcastExcept(config.edge_id, 'hub.syncVoiceTarget', {
+          edge_id: config.edge_id,
+          client_session: config.client_session,
+          target_id: config.target_id,
+          config: null,
+        });
+        
+        invalidCount++;
+        this.logger.info(`Removed invalid VoiceTarget ${config.target_id} for session ${config.client_session} (Edge ${config.edge_id})`);
+      }
+    }
+
+    if (invalidCount > 0) {
+      this.logger.info(`Cleaned up ${invalidCount} invalid VoiceTargets after ACL change`);
+    }
   }
 
   // Implementation removed - see interface documentation above
