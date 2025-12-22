@@ -40,7 +40,7 @@ export class GlobalSessionManager {
     this.userSessions.get(session.user_id).add(session.session_id);
 
     // 更新频道会话索引
-    if (session.channel_id) {
+    if (session.channel_id !== undefined) {
       if (!this.channelSessions.has(session.channel_id)) {
         this.channelSessions.set(session.channel_id, new Set());
       }
@@ -61,7 +61,7 @@ export class GlobalSessionManager {
     if (!session) return;
 
     // 从旧频道移除
-    if (session.channel_id) {
+    if (session.channel_id !== undefined) {
       const oldChannelSessions = this.channelSessions.get(session.channel_id);
       if (oldChannelSessions) {
         oldChannelSessions.delete(session_id);

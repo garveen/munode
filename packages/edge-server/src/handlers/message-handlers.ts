@@ -53,19 +53,16 @@ export class MessageHandlers {
       textMessage.actor = session_id;
 
       // 转发到Hub处理（Hub会进行权限检查、目标解析和广播）
+      // 注意：参数需要扁平化，不使用嵌套的textMessage对象
       this.hubClient.notify('hub.handleTextMessage', {
         edge_id: this.config.server_id,
         actor_session: session_id,
         actor_user_id: actor.user_id,
         actor_username: actor.username,
-        actor_channel_id: actor.channel_id,
-        textMessage: {
-          actor: session_id,
-          session: textMessage.session || [],
-          channel_id: textMessage.channel_id || [],
-          tree_id: textMessage.tree_id || [],
-          message: textMessage.message || '',
-        },
+        session: textMessage.session || [],
+        channel_id: textMessage.channel_id || [],
+        tree_id: textMessage.tree_id || [],
+        message: textMessage.message || '',
       });
 
         this.logger.debug(`Forwarded TextMessage from session ${session_id} to Hub`);
