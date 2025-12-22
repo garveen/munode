@@ -44,7 +44,7 @@ export class AdminHandlers {
         return;
       }
 
-      if (!this.checkAdminPermission(client)) {
+      if (!(await this.checkAdminPermission(client))) {
         this.sendPermissionDenied(session_id, 'ban', 'Requires admin permission');
         return;
       }
@@ -82,7 +82,7 @@ export class AdminHandlers {
         return;
       }
 
-      if (!this.checkAdminPermission(client)) {
+      if (!(await this.checkAdminPermission(client))) {
         this.sendPermissionDenied(session_id, 'ban', 'Requires admin permission');
         return;
       }
@@ -183,11 +183,11 @@ export class AdminHandlers {
   /**
    * 处理批量移动频道成员
    */
-  public handleMoveChannelMembers(
+  public async handleMoveChannelMembers(
     actorSession: number,
     fromChannelId: number,
     toChannelId: number
-  ): void {
+  ): Promise<void> {
     try {
       const actor = this.clientManager.getClient(actorSession);
       if (!actor) {
@@ -209,7 +209,7 @@ export class AdminHandlers {
       }
 
       // 检查移动权限：需要源频道的 Move 权限
-      if (!this.hasPermission(actor, fromChannel, Permission.Move)) {
+      if (!(await this.hasPermission(actor, fromChannel, Permission.Move))) {
         this.sendPermissionDenied(
           actorSession,
           'move',
@@ -230,7 +230,7 @@ export class AdminHandlers {
       let movedCount = 0;
       for (const client of usersToMove) {
         // 检查目标频道的 Enter 权限
-        if (!this.hasPermission(client, toChannel, Permission.Enter)) {
+        if (!(await this.hasPermission(client, toChannel, Permission.Enter))) {
         this.logger.debug(`User ${client.username} cannot enter target channel ${toChannelId}`);
           continue;
         }
@@ -264,7 +264,7 @@ export class AdminHandlers {
    * 处理混杂模式设置
    * 混杂模式允许用户接收所有频道的语音
    */
-  public handleSetPromiscuousMode(session_id: number, enabled: boolean): void {
+  public async handleSetPromiscuousMode(session_id: number, enabled: boolean): Promise<void> {
     try {
       const client = this.clientManager.getClient(session_id);
       if (!client) {
@@ -278,7 +278,7 @@ export class AdminHandlers {
         return;
       }
 
-      if (!this.checkAdminPermission(client)) {
+      if (!(await this.checkAdminPermission(client))) {
         this.sendPermissionDenied(session_id, 'promiscuous', 'Requires admin permission');
         return;
       }
@@ -309,7 +309,7 @@ export class AdminHandlers {
    * 处理清除用户缓存（仅清理客户端纹理和评论缓存）
    * Edge 不再保留本地用户数据缓存
    */
-  public handleClearUserCache(session_id: number): void {
+  public async handleClearUserCache(session_id: number): Promise<void> {
     try {
       const client = this.clientManager.getClient(session_id);
       if (!client) {
@@ -318,7 +318,7 @@ export class AdminHandlers {
       }
 
       // 需要管理员权限
-      if (!this.checkAdminPermission(client)) {
+      if (!(await this.checkAdminPermission(client))) {
         this.sendPermissionDenied(session_id, 'cache', 'Requires admin permission');
         return;
       }
@@ -456,7 +456,7 @@ export class AdminHandlers {
   /**
    * 处理 UserList 消息
    */
-  public handleUserList(session_id: number, data: Buffer): void {
+  public async handleUserList(session_id: number, data: Buffer): Promise<void> {
     try {
       const userList = mumbleproto.UserList.decode(data);
 
@@ -468,7 +468,7 @@ export class AdminHandlers {
 
       // 需要根频道的Register权限
       const rootChannel = this.channelManager.getChannel(0);
-      if (!rootChannel || !this.hasPermission(actor, rootChannel, Permission.Register)) {
+      if (!rootChannel || !(await this.hasPermission(actor, rootChannel, Permission.Register))) {
         this.sendPermissionDenied(
           session_id,
           'register',
@@ -500,14 +500,14 @@ export class AdminHandlers {
   /**
    * 检查管理员权限
    */
-  private checkAdminPermission(client: ClientInfo): boolean {
+  private async checkAdminPermission(client: ClientInfo): Promise<boolean> {
     const rootChannel = this.channelManager.getChannel(0);
     if (!rootChannel) {
       return false;
     }
 
     // 检查是否有 root 频道的 Write 权限（通常表示管理员）
-    return this.hasPermission(client, rootChannel, Permission.Write);
+    return await this.hasPermission(client, rootChannel, Permission.Write);
   }
 
   /**
@@ -572,10 +572,10 @@ export class AdminHandlers {
   }
 
   /**
-   * 检查权限（委托给 PermissionHandlers）
+   * 检查权限（委托给 Hub RPC）
    */
-  private hasPermission(client: ClientInfo, channel: ChannelInfo, permission: Permission): boolean {
+  private async hasPermission(client: ClientInfo, channel: ChannelInfo, permission: Permission): Promise<boolean> {
     const permissionHandlers = this.factory.permissionHandlers;
-    return permissionHandlers.checkPermission(client.session, channel.id, permission);
+    return await permissionHandlers.checkPermission(client.session, channel.id, permission);
   }
 }

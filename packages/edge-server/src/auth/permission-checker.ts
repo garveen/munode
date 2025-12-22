@@ -1,7 +1,6 @@
 import type { Logger } from 'winston';
 import { mumbleproto } from '@munode/protocol';
 import { MessageType, Permission } from '@munode/protocol';
-import type { ChannelInfo } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
 /**
@@ -17,10 +16,8 @@ export class PermissionHandlers {
   private get clientManager() { return this.factory.clientManager; }
   private get channelManager() { return this.factory.channelManager; }
   private get messageHandler() { return this.factory.messageHandler; }
-  private get permissionManager() { return this.factory.permissionManager; }
   private get config() { return this.factory.config; }
   private get hubClient() { return this.factory.hubClient; }
-  private get aclMap() { return this.factory.aclMap; }
 
   /**
    * 处理 ACL 消息 (查询或更新)
@@ -191,34 +188,14 @@ export class PermissionHandlers {
       }
 
       // Reload ACLs from Hub for this channel
+      // Note: ACL data is loaded from Hub during sync, so we don't need to manually reload
+      // The Hub will broadcast ACL updates to all Edges via the sync mechanism
       if (this.hubClient && this.hubClient.isConnected()) {
         try {
-          const aclData = await this.hubClient.getACLs(channel_id);
-          
-          // Update local aclMap with new ACL data
-          const aclMap = this.aclMap;
-          aclMap.delete(channel_id); // Clear existing ACLs for this channel
-          
-          if (aclData.length > 0) {
-            aclMap.set(channel_id, []);
-            for (const acl of aclData) {
-              aclMap.get(channel_id).push({
-                user_id: acl.user_id,
-                group: acl.group || '',
-                apply_here: acl.apply_here,
-                apply_subs: acl.apply_subs,
-                allow: acl.allow,
-                deny: acl.deny,
-              });
-            }
-          }
-          
-        this.logger.debug(`Reloaded ${aclData.length} ACL entries for channel ${channel_id}`);
-          
-          // Clear permission cache
-          this.permissionManager.clearCache();
+          // Just verify connection, ACLs are managed by Hub sync
+          this.logger.debug(`ACLs for channel ${channel_id} will be updated via Hub sync`);
         } catch (error) {
-        this.logger.error(`Failed to reload ACLs from Hub for channel ${channel_id}:`, error);
+        this.logger.error(`Failed to communicate with Hub for channel ${channel_id}:`, error);
         }
       }
 
@@ -235,29 +212,36 @@ export class PermissionHandlers {
 
       // 向所有已认证客户端发送带 flush=true 的 PermissionQuery
       // 这会清空客户端的权限缓存，客户端会重新请求需要的权限
+      // 权限由 Hub 计算，不在 Edge 本地计算
       for (const client of authenticatedClients) {
-        const channelTree = this.channelManager.getChannelTree();
         const currentChannel = this.channelManager.getChannel(client.channel_id);
         if (!currentChannel) continue;
 
-        // 计算客户端当前所在频道的权限
-        const permissions = this.permissionManager.calculatePermission(
-          currentChannel,
-          client,
-          channelTree,
-          this.aclMap
-        );
+        try {
+          // 调用 Hub RPC 获取用户在当前频道的权限
+          const result = await this.hubClient.call('edge.handlePermissionQuery', {
+            edge_id: this.config.server_id,
+            actor_session: client.session,
+            actor_user_id: client.user_id,
+            actor_username: client.username,
+            channel_id: client.channel_id,
+          });
 
-        // 发送带 flush=true 的权限响应，通知客户端清空缓存
-        const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: client.channel_id, permissions: permissions }).finish();
+          const permissions = result?.success ? (result.permissions ?? 0) : 0;
 
-        this.messageHandler.sendMessage(
-          client.session,
-          MessageType.PermissionQuery,
-          Buffer.from(permissionQueryResponse)
-        );
+          // 发送带 flush=true 的权限响应，通知客户端清空缓存
+          const permissionQueryResponse = mumbleproto.PermissionQuery.encode({ channel_id: client.channel_id, permissions: permissions }).finish();
 
-        this.logger.debug(`Sent flush PermissionQuery to session ${client.session} for channel ${client.channel_id}`);
+          this.messageHandler.sendMessage(
+            client.session,
+            MessageType.PermissionQuery,
+            Buffer.from(permissionQueryResponse)
+          );
+
+          this.logger.debug(`Sent flush PermissionQuery to session ${client.session} for channel ${client.channel_id}`);
+        } catch (error) {
+          this.logger.error(`Failed to query permission from Hub for session ${client.session}:`, error);
+        }
       }
 
       // 获取频道内的所有用户，更新他们的 suppress 状态
@@ -338,44 +322,45 @@ export class PermissionHandlers {
 
   /**
    * 检查用户是否有某个权限
+   * 
+   * 注意：此方法已废弃，应该通过 Hub RPC 进行权限检查
+   * Edge 不应该本地计算权限，Hub 是唯一的权限真实来源
+   * 
+   * @deprecated 使用 Hub RPC 'edge.handlePermissionQuery' 代替
    */
-  checkPermission(
+  async checkPermission(
     session_id: number,
     channel_id: number,
     permission: Permission
-  ): boolean {
+  ): Promise<boolean> {
     try {
       const client = this.clientManager.getClient(session_id);
       if (!client || !client.user_id) {
         return false;
       }
 
-      // 如果有 PermissionManager，使用它来检查权限
-      if (this.permissionManager) {
-        const channel = this.channelManager.getChannel(channel_id);
-        if (channel) {
-          // 构建客户端信息对象
-          const channelTree = new Map<number, ChannelInfo>();
-          // 获取所有频道构建频道树
-          const allChannels = this.channelManager.getAllChannels();
-          for (const ch of allChannels) {
-            channelTree.set(ch.id, ch);
-          }
-          
-          return this.permissionManager.hasPermission(
-            channel,
-            client,
-            permission,
-            channelTree,
-            this.aclMap
-          );
-        }
+      // 必须通过 Hub 检查权限
+      if (!this.hubClient || !this.hubClient.isConnected()) {
+        this.logger.warn(`Cannot check permission: Hub client not available`);
+        return false;
       }
 
-      // Fallback: 如果本地无法检查，返回 false
-      // TODO: 可以考虑添加 Hub RPC 接口来检查权限
-        this.logger.debug(`Cannot check permission locally for user ${client.user_id} on channel ${channel_id}`);
-      return false;
+      // 调用 Hub RPC 查询权限
+      const result = await this.hubClient.call('edge.handlePermissionQuery', {
+        edge_id: this.config.server_id,
+        actor_session: session_id,
+        actor_user_id: client.user_id,
+        actor_username: client.username,
+        channel_id: channel_id,
+      });
+
+      if (!result?.success || result.permissions === undefined) {
+        this.logger.warn(`Permission query failed: ${result?.error}`);
+        return false;
+      }
+
+      // 检查返回的权限位是否包含所需权限
+      return (result.permissions & permission) !== 0;
     } catch (error) {
         this.logger.error(`Error checking permission:`, error);
       return false;
