@@ -248,21 +248,9 @@ export class StateManager {
    * 处理 PermissionDenied 消息
    */
   handlePermissionDenied(message: mumbleproto.PermissionDenied): void {
-    // 解析权限拒绝消息
-    const permission = message.permission || 0;
-    const type = message.type || 0;
-    const reason = message.reason || '';
-    const channelId = message.channel_id || 0;
-    const session = message.session || 0;
-
-    // 触发权限拒绝事件
-    this.client.emit('permissionDenied', {
-      permission,
-      type,
-      reason,
-      channelId,
-      session
-    });
+    // 触发权限拒绝事件，直接传递原始 protobuf 消息
+    // 这样监听器可以正确访问 channel_id 等字段
+    this.client.emit('permissionDenied', message);
   }
 
   /**
