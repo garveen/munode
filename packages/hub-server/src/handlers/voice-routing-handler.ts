@@ -107,7 +107,8 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
     if (params.config.targets) {
       for (const target of params.config.targets) {
         // 如果指定了目标频道，检查用户是否有权限访问该频道
-        if (target.channel_id !== undefined && target.channel_id !== 0) {
+        // Note: channel_id can be 0 (root channel), which should also be validated
+        if (target.channel_id !== undefined) {
           const canAccess = await permissionChecker.canUserAccessChannel(target.channel_id, userInfo);
           
           if (!canAccess) {
