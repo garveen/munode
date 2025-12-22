@@ -100,7 +100,8 @@ export class ServerLifecycleManager {
           }
         } catch (error) {
           this.logger.error('Failed to join cluster:', error);
-          // 不抛出错误，允许服务器在standalone模式下运行
+          // Edge must connect to Hub - no standalone mode supported
+          throw new Error('Edge server requires Hub connection to operate');
         }
       }
     } catch (error) {

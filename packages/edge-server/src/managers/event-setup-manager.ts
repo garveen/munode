@@ -6,7 +6,7 @@ import { HubDataManager } from '../cluster/hub-data-sync.js';
 import { BanHandler } from './ban-handler.js';
 import { MessageManager } from './message-manager.js';
 import { mumbleproto, MessageType, ClientState } from '@munode/protocol';
-import type { EdgeConfig, ClientInfo, ChannelInfo } from '../types.js';
+import type { EdgeConfig, ChannelInfo } from '../types.js';
 import type { FullSnapshot } from '../state/state-manager.js';
 
 /**
@@ -146,22 +146,9 @@ export class EventSetupManager {
 
     // UserStats 事件
     this.handlerFactory.messageHandler.on('userStats', (session_id: number, data: Buffer) => {
-      // 创建一个权限检查函数包装器
-      const hasPermission = (client: ClientInfo, channel: ChannelInfo, perm: number): boolean => {
-        if (!this.handlerFactory.permissionHandlers) return false;
-        // PermissionHandlers.checkPermission 是异步的，但 handleUserStats 需要同步
-        // 这里我们使用同步方式，直接调用 PermissionManager
-        const channelTree = this.handlerFactory.channelManager.getChannelTree();
-        const aclMap = this.handlerFactory.aclMap;
-        return this.handlerFactory.permissionManager.hasPermission(
-          channel,
-          client,
-          perm,
-          channelTree,
-          aclMap
-        );
-      };
-      this.handlerFactory.protocolHandlers.handleUserStats(session_id, data, hasPermission);
+      // UserStats is forwarded to Hub for processing
+      // No local permission checking needed
+      this.handlerFactory.protocolHandlers.handleUserStats(session_id, data, () => false);
     });
 
     // userStatsForward 转发事件 - 转发到 Hub 处理
