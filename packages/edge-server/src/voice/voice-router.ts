@@ -792,6 +792,7 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
     let cached = this.routingCache.get(cacheKey);
     if (!cached) {
       // 缓存不存在，立即构建
+      // 注意：权限检查通过ACL缓存完成，ACL变化时清空缓存
       const targetSessions = this.calculateWhisperTargets(voiceTarget);
       cached = {
         targetSessions,
@@ -856,7 +857,13 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
 
   /**
    * 计算 VoiceTarget 的目标会话列表
-   * 使用索引实现高效查找
+   * 根据VoiceTarget配置计算目标会话
+   * 
+   * 注意：权限检查在Hub设置VoiceTarget时不进行（与Murmur一致）
+   * 实际权限过滤通过ACL缓存在Edge完成，当ACL变化时清空缓存强制重建
+   * 
+   * @param voiceTarget - VoiceTarget配置
+   * @returns 目标会话ID集合
    */
   private calculateWhisperTargets(
     voiceTarget: VoiceTargetData[]
@@ -1506,6 +1513,26 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
     
     if (count > 0) {
       this.logger.debug(`[VOICE-CACHE] Cleared all caches: ${count} routing entries`);
+    }
+  }
+  
+  /**
+   * 清除whisper target缓存
+   * 当ACL发生变化时调用，强制下次使用VoiceTarget时重新检查权限
+   * 这与Murmur的实现一致：ACL变动后通过clearWhisperTargetCache清空缓存
+   */
+  clearWhisperTargetCache(): void {
+    let count = 0;
+    const keys = Array.from(this.routingCache.keys());
+    for (const key of keys) {
+      if (key.startsWith('whisper_')) {
+        this.routingCache.delete(key);
+        count++;
+      }
+    }
+    
+    if (count > 0) {
+      this.logger.debug(`[VOICE-CACHE] Cleared ${count} whisper target cache entries after ACL change`);
     }
   }
   

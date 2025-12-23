@@ -331,6 +331,7 @@ export class ACLHandler implements IACLHandler {
 
         // 通知所有 Edge 刷新该频道的权限
         // 这会触发 Edge 重新计算频道内所有用户的 suppress 状态
+        // Edge收到通知后会清空whisper target缓存，强制下次使用时重新检查权限
         this.logger.info(`Broadcasting ACL update notification for channel ${channel_id}`);
         this.factory.getControlService().broadcast('edge.aclUpdated', {
           channel_id,

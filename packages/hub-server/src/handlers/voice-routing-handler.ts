@@ -45,16 +45,22 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
     const voiceTargetSync = this.factory.getVoiceTargetSync();
     const controlService = this.factory.getControlService();
 
-    // 同步语音目标配置到本地存储
+    // 同步语音目标配置到本地存储（不进行权限验证）
+    // 权限检查在实际使用VoiceTarget发送语音时进行（在Edge的voice router中）
+    // 这与Murmur的实现一致：msgVoiceTarget只负责设置qmTargets，不验证权限
     voiceTargetSync.syncVoiceTarget(params);
 
-    // 广播 VoiceTarget 更新到所有其他 Edge（除了发送者）
-    this.logger.info(
-      `Broadcasting VoiceTarget update: Edge ${params.edge_id}, Session ${params.client_session}, Target ${params.target_id}`
-    );
+    if (params.config === null || params.config === undefined) {
+      this.logger.info(
+        `VoiceTarget deleted: Edge ${params.edge_id}, Session ${params.client_session}, Target ${params.target_id}`
+      );
+    } else {
+      this.logger.info(
+        `VoiceTarget set: Edge ${params.edge_id}, Session ${params.client_session}, Target ${params.target_id}`
+      );
+    }
 
-    // 广播到所有其他Edge（除了发送者）
-    // 注意：notification params 不包含 timestamp 字段，需要创建符合 HubSyncVoiceTargetNotification 的 params
+    // 广播 VoiceTarget 更新到所有其他 Edge（除了发送者）
     const notificationParams = {
       edge_id: params.edge_id,
       client_session: params.client_session,
