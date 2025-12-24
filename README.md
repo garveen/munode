@@ -8,7 +8,7 @@ A modern, distributed Mumble server implementation built with Node.js 22 and Typ
 - ✅ **Full Protocol Support** - Compatible with Mumble 1.3.x and 1.4.x clients
 - ✅ **Distributed Architecture** - Hub-Edge design for horizontal scaling
 - ✅ **External Authentication** - Third-party Web API integration
-- ✅ **Multiple Transport Options** - SMUX/gRPC/KCP for server-to-server communication
+- ✅ **WebSocket + Protobuf RPC** - Type-safe server-to-server communication
 - ✅ **Persistent Storage** - SQLite with async operations
 - ✅ **Voice Encryption** - OCB2-AES128 encryption for audio streams
 
@@ -20,11 +20,13 @@ A modern, distributed Mumble server implementation built with Node.js 22 and Typ
 - ✅ **ACL Inheritance** - Hierarchical permission system with group support
 - ✅ **Listen Channel Support** - Monitor channels without joining
 - ✅ **Plugin Data Transmission** - Support for positional audio and game plugins
+- ✅ **Cross-Edge Voice Relay** - Seamless voice transmission across Edge servers
 
 ### Recent Improvements
 - ✅ **Pre-connect User State** - Preserve client settings during authentication
 - ✅ **Dynamic Permission Refresh** - ACL changes take effect immediately
-- ✅ **Enhanced Testing** - Comprehensive integration test suite (42+ test cases)
+- ✅ **Type-safe RPC System** - Protobuf-based type-safe communication
+- ✅ **Enhanced Testing** - Comprehensive integration test suite (27 test suites, 100+ test cases)
 
 ## Quick Start
 
@@ -37,8 +39,8 @@ A modern, distributed Mumble server implementation built with Node.js 22 and Typ
 
 ```bash
 # Clone the repository
-git clone <repository-url>
-cd node
+git clone https://github.com/garveen/munode.git
+cd munode
 
 # Install dependencies
 pnpm install
@@ -145,22 +147,26 @@ pnpm start:edge --config config/edge.json
 ## Project Structure
 
 ```
-node/
+munode/
 ├── packages/
 │   ├── common/          # Shared utilities, types, logging
 │   ├── protocol/        # Mumble protocol, encryption, RPC
 │   ├── hub-server/      # Central management server
 │   ├── edge-server/     # Edge server for client connections
-│   ├── client/          # Test client implementation
+│   ├── client/          # Mumble client implementation (for testing)
 │   └── cli/             # Command-line tools
 ├── config/              # Configuration files
-│   ├── hub.example.json
-│   └── edge.example.json
-├── tests/               # Integration tests
-│   └── integration/
-│       └── suites/
-├── docs/                # Documentation (in ../docs/)
-└── scripts/             # Build and utility scripts
+│   ├── hub.example.js
+│   ├── edge.example.js
+│   └── client.example.js
+├── tests/               # Test suites
+│   ├── integration/     # Integration tests (27 test suites)
+│   ├── unit/            # Unit tests
+│   └── utils/           # Test utilities
+├── docs/                # Documentation
+├── scripts/             # Build and utility scripts
+└── .github/             # GitHub configurations
+    └── copilot-instructions.md  # AI coding guidelines
 ```
 
 ## Development
@@ -198,77 +204,134 @@ pnpm generate:proto   # Generate TS code from .proto files
 
 The project includes comprehensive integration tests covering:
 
-- **Authentication** (10 tests) - Password, certificate, token auth
-- **ACL System** (8 tests) - Permissions, inheritance, groups
-- **Channel Management** (11 tests) - Create, move, link, delete
-- **Voice Transmission** (8 tests) - Normal, whisper, VoiceTarget
-- **Hub-Edge Communication** (5 tests) - Registration, sync, routing
-- **Moderation** (tests) - Ban system, user management
-- **Plugin System** (tests) - Plugin data transmission
-- **Listen Channel** (tests) - Monitor channels feature
+- **Authentication** (10+ tests) - Password, certificate, token auth
+- **ACL System** (15+ tests) - Permissions, inheritance, groups, suppress
+- **Channel Management** (11+ tests) - Create, move, link, delete
+- **Voice Transmission** (15+ tests) - Normal, whisper, VoiceTarget, loopback
+- **Voice Routing** (10+ tests) - Cross-edge routing, quality detection
+- **Hub-Edge Communication** (8+ tests) - Registration, sync, routing
+- **Ban System** (6+ tests) - IP, certificate, username bans
+- **Plugin System** (9+ tests) - Plugin data transmission
+- **UDP Quality** (5+ tests) - Connection quality simulation
+- **TCP Voice** (8+ tests) - TCP voice fallback
+- **User Visibility** (4+ tests) - Cross-edge user state sync
+- **Pre-connect State** (3+ tests) - Client state preservation
 
-Total: 42+ integration test cases
+Total: **27 test suites, 100+ integration test cases**
 
 Run tests with:
 ```bash
+# Run all integration tests
 pnpm test:integration
+
+# Run specific test suite
+pnpm test:integration tests/integration/suites/voice.test.ts
+
+# Run tests in watch mode
+pnpm test:integration:watch
+
+# Run tests with UI
+pnpm test:integration:ui
 ```
 
 ## Configuration
 
 ### Hub Server Configuration
 
-Key configuration options in `config/hub.json`:
+Key configuration options in `config/hub.js`:
 
 - **Network** - Host, port, TLS settings
-- **Database** - SQLite path, backup settings
-- **Registry** - Edge server management
+- **Database** - SQLite path, backup settings  
+- **Control Channel** - WebSocket port for Edge connections
 - **Blob Store** - User avatars and channel descriptions
 - **Web API** - Optional REST API (for management)
+- **Voice UDP** - Shared secret for UDP handshake
 
 ### Edge Server Configuration
 
-Key configuration options in `config/edge.json`:
+Key configuration options in `config/edge.js`:
 
 - **Network** - Host, port, region, capacity
-- **Hub Connection** - Hub server address and TLS
+- **Hub Connection** - Hub server address, control port, TLS
 - **Authentication** - External API configuration
 - **Server Settings** - Welcome text, limits, permissions
 - **UDP** - Stability detection settings
 - **Ban System** - Ban database configuration
+- **Voice Encryption** - OCB2-AES128 settings
 
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for complete configuration reference.
+See configuration examples in the `config/` directory.
 
 ## Deployment
 
-For production deployment instructions, including:
-- System requirements
-- Installation steps
-- Certificate generation
-- Process management (PM2, systemd)
-- Monitoring and logging
-- Performance tuning
-- Backup strategies
+For production deployment:
 
-Please refer to [DEPLOYMENT.md](./DEPLOYMENT.md)
+1. **Build the project**:
+   ```bash
+   pnpm install
+   pnpm generate:proto
+   pnpm build
+   ```
+
+2. **Configure servers**:
+   ```bash
+   cp config/hub.example.js config/hub.js
+   cp config/edge.example.js config/edge.js
+   # Edit configuration files as needed
+   ```
+
+3. **Generate certificates**:
+   ```bash
+   pnpm generate:cert
+   ```
+
+4. **Start services**:
+   ```bash
+   # Using PM2 (recommended)
+   pm2 start pnpm --name munode-hub -- start:hub
+   pm2 start pnpm --name munode-edge -- start:edge
+   
+   # Or using systemd
+   # Create systemd service files for hub and edge
+   ```
+
+### System Requirements
+
+- **CPU**: 2+ cores recommended
+- **Memory**: 2GB+ RAM (Hub), 4GB+ RAM per Edge (1000 users)
+- **Network**: Low latency connection between Hub and Edge servers
+- **Storage**: SSD recommended for database
+
+### Performance Tuning
+
+- Enable UDP for better voice quality
+- Use dedicated servers for Hub and Edge in production
+- Configure appropriate `maxClients` per Edge based on your hardware
+- Monitor memory usage and adjust Node.js heap size if needed
 
 ## Documentation
 
-### User Documentation
-- [Deployment Guide](./DEPLOYMENT.md) - Production deployment instructions
-
-### Developer Documentation (Chinese)
-- [Project Overview](../docs/01-项目概述.md)
-- [Protocol Implementation](../docs/02-协议实现.md)
-- [Authentication System](../docs/03-认证系统.md)
-- [Hub Server](../docs/04-中心服务器.md)
-- [Edge Server](../docs/05-边缘服务器.md)
-- [Voice Routing](../docs/06-语音路由.md)
-
-### Technical Documentation
-- [Integration Tests Guide](tests/integration/INTEGRATION_TESTS.md)
+### Core Documentation
+- [Copilot Instructions](.github/copilot-instructions.md) - Coding guidelines and architecture overview
 - [Implementation Comparison](./IMPLEMENTATION_COMPARISON.md) - Node vs Go implementation
-- [Missing Features](./MISSING_FEATURES.md) - Roadmap and TODO items
+
+### Technical Documentation (Chinese)
+Located in `docs/` directory:
+- [10-数据同步架构.md](docs/10-数据同步架构.md)
+- [Edge-Hub-WebSocket-Protobuf重构方案.md](docs/Edge-Hub-WebSocket-Protobuf重构方案.md)
+- [Edge间语音中转路由设计.md](docs/Edge间语音中转路由设计.md)
+- [Edge语音路由实现总结.md](docs/Edge语音路由实现总结.md)
+- [RPC路由降级架构设计.md](docs/RPC路由降级架构设计.md)
+- [通信信道技术选型.md](docs/通信信道技术选型.md)
+- [频道树传输流程.md](docs/频道树传输流程.md)
+- [语音传输逻辑.md](docs/语音传输逻辑.md)
+
+### API Documentation
+Each package contains detailed README files:
+- `packages/common/README.md` - Shared utilities
+- `packages/protocol/README.md` - Protocol implementation
+- `packages/hub-server/README.md` - Hub server API
+- `packages/edge-server/README.md` - Edge server API
+- `packages/client/README.md` - Client API
 
 ## Performance
 
@@ -297,12 +360,30 @@ We welcome contributions! Please:
 
 ### Development Guidelines
 
-- Follow TypeScript strict mode
-- Write tests for new features
-- Follow existing code style
-- Update documentation
+- Follow TypeScript strict mode - no `any`, `unknown`, or loose types
+- Prefer `interface` over `type` for object types
+- Use ESModule syntax (not CommonJS)
+- Write integration tests for new features
+- Follow existing code style and naming conventions
+- Update documentation for significant changes
 
 See [.github/copilot-instructions.md](./.github/copilot-instructions.md) for detailed coding guidelines.
+
+### Running Tests
+
+```bash
+# Run all tests
+pnpm test
+
+# Run unit tests
+pnpm test:unit
+
+# Run integration tests
+pnpm test:integration
+
+# Run tests in watch mode
+pnpm test:integration:watch
+```
 
 ## License
 
@@ -310,26 +391,39 @@ MIT License - see [LICENSE](../LICENSE) for details
 
 ## Acknowledgments
 
-This project is based on and inspired by:
+This project is inspired by and based on:
 
 - [Mumble Protocol](https://github.com/mumble-voip/mumble) - The original Mumble VoIP protocol
 - [Grumble](https://github.com/mumble-voip/grumble) - Go implementation of Mumble server
-- [ShitSpeak](https://github.com/wfjsw/shitspeak.go) - Go-based Mumble server with enhancements
+- [Hall (ShitSpeak)](https://github.com/wfjsw/hall) - Go-based Mumble server with enhancements
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/your-org/munode/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/your-org/munode/discussions)
+- **Issues**: [GitHub Issues](https://github.com/garveen/munode/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/garveen/munode/discussions)
 
 ## Status
 
 **Current Version**: 0.1.0 (Beta)
 
-**Production Ready**: Suitable for testing and small-to-medium deployments. Large-scale production use should be thoroughly tested in your environment first.
+**Production Ready**: ⚠️ Beta stage - suitable for testing and small-to-medium deployments. Thoroughly test in your environment before large-scale production use.
+
+**Core Features Status**:
+- ✅ Full Mumble protocol support (1.3.x and 1.4.x)
+- ✅ Hub-Edge distributed architecture
+- ✅ Voice transmission (UDP + TCP fallback)
+- ✅ Channel and user management
+- ✅ ACL and permission system
+- ✅ Plugin data transmission
+- ✅ Cross-edge voice routing
+- ✅ External authentication integration
 
 **Known Limitations**:
-- Blob storage system (avatars, comments) partially implemented
-- Some statistics counters return placeholder values
-- UserList management features not fully implemented
+- ⚠️ Blob storage system (avatars, comments) partially implemented
+- ⚠️ Some statistics counters return placeholder values  
+- ⚠️ Limited production deployment experience
 
-See [MISSING_FEATURES.md](./MISSING_FEATURES.md) for detailed status and roadmap.
+**Test Coverage**:
+- ✅ 27 integration test suites
+- ✅ 100+ test cases covering core functionality
+- ✅ All critical features tested and verified
