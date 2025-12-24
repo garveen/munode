@@ -733,6 +733,29 @@ message HubSyncVoiceTargetParams {
   required int64 timestamp = 5;
 }
 
+// ---------------------------------------------------------------------------
+// hub.pluginDataBroadcast - Hub 广播插件数据到 Edge
+// ---------------------------------------------------------------------------
+message HubPluginDataBroadcastParams {
+  required uint32 sender_session = 1;
+  required string dataID = 2;
+  required bytes data = 3;
+  repeated uint32 target_sessions = 4;
+}
+
+// ---------------------------------------------------------------------------
+// edge.pluginDataTransmission - Edge 通知 Hub 插件数据传输
+// ---------------------------------------------------------------------------
+message EdgePluginDataTransmissionParams {
+  required uint32 edge_id = 1;
+  required uint32 actor_session = 2;
+  required string actor_username = 3;
+  required uint32 sender_session = 4;
+  required string dataID = 5;
+  required bytes data = 6;
+  repeated uint32 receiver_sessions = 7;
+}
+
 // ============================================================================
 // 类型安全的 RPC 请求/响应包装
 // ============================================================================
@@ -835,6 +858,8 @@ message TypedRPCNotification {
   optional HubChannelRemovedParams channel_removed = 18;
   optional HubChannelUpdatedParams channel_updated = 19;
   optional HubSyncVoiceTargetParams sync_voice_target = 20;
+  optional HubPluginDataBroadcastParams plugin_data_broadcast = 21;
+  optional EdgePluginDataTransmissionParams plugin_data_transmission = 22;
   
   // For unknown notification types, store params as JSON string
   optional string unknown_params_json = 99;

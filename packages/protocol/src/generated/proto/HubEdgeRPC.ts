@@ -820,6 +820,33 @@ export interface HubSyncVoiceTargetParams {
 }
 
 /**
+ * ---------------------------------------------------------------------------
+ * hub.pluginDataBroadcast - Hub 广播插件数据到 Edge
+ * ---------------------------------------------------------------------------
+ */
+export interface HubPluginDataBroadcastParams {
+  sender_session?: number | undefined;
+  dataID?: string | undefined;
+  data?: Buffer | undefined;
+  target_sessions?: number[] | undefined;
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * edge.pluginDataTransmission - Edge 通知 Hub 插件数据传输
+ * ---------------------------------------------------------------------------
+ */
+export interface EdgePluginDataTransmissionParams {
+  edge_id?: number | undefined;
+  actor_session?: number | undefined;
+  actor_username?: string | undefined;
+  sender_session?: number | undefined;
+  dataID?: string | undefined;
+  data?: Buffer | undefined;
+  receiver_sessions?: number[] | undefined;
+}
+
+/**
  * TypedRPCRequest - 类型安全的 RPC 请求
  * 使用 method 字段标识方法，params 字段根据方法类型选择
  */
@@ -917,8 +944,10 @@ export interface TypedRPCNotification {
   channel_created?: HubChannelCreatedParams | undefined;
   channel_removed?: HubChannelRemovedParams | undefined;
   channel_updated?: HubChannelUpdatedParams | undefined;
-  sync_voice_target?:
-    | HubSyncVoiceTargetParams
+  sync_voice_target?: HubSyncVoiceTargetParams | undefined;
+  plugin_data_broadcast?: HubPluginDataBroadcastParams | undefined;
+  plugin_data_transmission?:
+    | EdgePluginDataTransmissionParams
     | undefined;
   /** For unknown notification types, store params as JSON string */
   unknown_params_json?: string | undefined;
@@ -10531,6 +10560,310 @@ export const HubSyncVoiceTargetParams: MessageFns<HubSyncVoiceTargetParams> = {
   },
 };
 
+function createBaseHubPluginDataBroadcastParams(): HubPluginDataBroadcastParams {
+  return { sender_session: undefined, dataID: undefined, data: undefined, target_sessions: [] };
+}
+
+export const HubPluginDataBroadcastParams: MessageFns<HubPluginDataBroadcastParams> = {
+  encode(message: HubPluginDataBroadcastParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.sender_session !== undefined) {
+      writer.uint32(8).uint32(message.sender_session);
+    }
+    if (message.dataID !== undefined) {
+      writer.uint32(18).string(message.dataID);
+    }
+    if (message.data !== undefined) {
+      writer.uint32(26).bytes(message.data);
+    }
+    if (message.target_sessions !== undefined && message.target_sessions.length !== 0) {
+      for (const v of message.target_sessions) {
+        writer.uint32(32).uint32(v!);
+      }
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): HubPluginDataBroadcastParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseHubPluginDataBroadcastParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.sender_session = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.dataID = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.data = Buffer.from(reader.bytes());
+          continue;
+        }
+        case 4: {
+          if (tag === 32) {
+            message.target_sessions!.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 34) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.target_sessions!.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): HubPluginDataBroadcastParams {
+    return {
+      sender_session: isSet(object.sender_session) ? globalThis.Number(object.sender_session) : undefined,
+      dataID: isSet(object.dataID) ? globalThis.String(object.dataID) : undefined,
+      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : undefined,
+      target_sessions: globalThis.Array.isArray(object?.target_sessions)
+        ? object.target_sessions.map((e: any) => globalThis.Number(e))
+        : [],
+    };
+  },
+
+  toJSON(message: HubPluginDataBroadcastParams): unknown {
+    const obj: any = {};
+    if (message.sender_session !== undefined) {
+      obj.sender_session = Math.round(message.sender_session);
+    }
+    if (message.dataID !== undefined) {
+      obj.dataID = message.dataID;
+    }
+    if (message.data !== undefined) {
+      obj.data = base64FromBytes(message.data);
+    }
+    if (message.target_sessions?.length) {
+      obj.target_sessions = message.target_sessions.map((e) => Math.round(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<HubPluginDataBroadcastParams>, I>>(base?: I): HubPluginDataBroadcastParams {
+    return HubPluginDataBroadcastParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<HubPluginDataBroadcastParams>, I>>(object: I): HubPluginDataBroadcastParams {
+    const message = createBaseHubPluginDataBroadcastParams();
+    message.sender_session = object.sender_session ?? undefined;
+    message.dataID = object.dataID ?? undefined;
+    message.data = object.data ?? undefined;
+    message.target_sessions = object.target_sessions?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseEdgePluginDataTransmissionParams(): EdgePluginDataTransmissionParams {
+  return {
+    edge_id: undefined,
+    actor_session: undefined,
+    actor_username: undefined,
+    sender_session: undefined,
+    dataID: undefined,
+    data: undefined,
+    receiver_sessions: [],
+  };
+}
+
+export const EdgePluginDataTransmissionParams: MessageFns<EdgePluginDataTransmissionParams> = {
+  encode(message: EdgePluginDataTransmissionParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.edge_id !== undefined) {
+      writer.uint32(8).uint32(message.edge_id);
+    }
+    if (message.actor_session !== undefined) {
+      writer.uint32(16).uint32(message.actor_session);
+    }
+    if (message.actor_username !== undefined) {
+      writer.uint32(26).string(message.actor_username);
+    }
+    if (message.sender_session !== undefined) {
+      writer.uint32(32).uint32(message.sender_session);
+    }
+    if (message.dataID !== undefined) {
+      writer.uint32(42).string(message.dataID);
+    }
+    if (message.data !== undefined) {
+      writer.uint32(50).bytes(message.data);
+    }
+    if (message.receiver_sessions !== undefined && message.receiver_sessions.length !== 0) {
+      for (const v of message.receiver_sessions) {
+        writer.uint32(56).uint32(v!);
+      }
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EdgePluginDataTransmissionParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseEdgePluginDataTransmissionParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.edge_id = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.actor_session = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.actor_username = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.sender_session = reader.uint32();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.dataID = reader.string();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.data = Buffer.from(reader.bytes());
+          continue;
+        }
+        case 7: {
+          if (tag === 56) {
+            message.receiver_sessions!.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 58) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.receiver_sessions!.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): EdgePluginDataTransmissionParams {
+    return {
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      actor_session: isSet(object.actor_session) ? globalThis.Number(object.actor_session) : undefined,
+      actor_username: isSet(object.actor_username) ? globalThis.String(object.actor_username) : undefined,
+      sender_session: isSet(object.sender_session) ? globalThis.Number(object.sender_session) : undefined,
+      dataID: isSet(object.dataID) ? globalThis.String(object.dataID) : undefined,
+      data: isSet(object.data) ? Buffer.from(bytesFromBase64(object.data)) : undefined,
+      receiver_sessions: globalThis.Array.isArray(object?.receiver_sessions)
+        ? object.receiver_sessions.map((e: any) => globalThis.Number(e))
+        : [],
+    };
+  },
+
+  toJSON(message: EdgePluginDataTransmissionParams): unknown {
+    const obj: any = {};
+    if (message.edge_id !== undefined) {
+      obj.edge_id = Math.round(message.edge_id);
+    }
+    if (message.actor_session !== undefined) {
+      obj.actor_session = Math.round(message.actor_session);
+    }
+    if (message.actor_username !== undefined) {
+      obj.actor_username = message.actor_username;
+    }
+    if (message.sender_session !== undefined) {
+      obj.sender_session = Math.round(message.sender_session);
+    }
+    if (message.dataID !== undefined) {
+      obj.dataID = message.dataID;
+    }
+    if (message.data !== undefined) {
+      obj.data = base64FromBytes(message.data);
+    }
+    if (message.receiver_sessions?.length) {
+      obj.receiver_sessions = message.receiver_sessions.map((e) => Math.round(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EdgePluginDataTransmissionParams>, I>>(
+    base?: I,
+  ): EdgePluginDataTransmissionParams {
+    return EdgePluginDataTransmissionParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EdgePluginDataTransmissionParams>, I>>(
+    object: I,
+  ): EdgePluginDataTransmissionParams {
+    const message = createBaseEdgePluginDataTransmissionParams();
+    message.edge_id = object.edge_id ?? undefined;
+    message.actor_session = object.actor_session ?? undefined;
+    message.actor_username = object.actor_username ?? undefined;
+    message.sender_session = object.sender_session ?? undefined;
+    message.dataID = object.dataID ?? undefined;
+    message.data = object.data ?? undefined;
+    message.receiver_sessions = object.receiver_sessions?.map((e) => e) || [];
+    return message;
+  },
+};
+
 function createBaseTypedRPCRequest(): TypedRPCRequest {
   return {
     request_id: undefined,
@@ -11879,6 +12212,8 @@ function createBaseTypedRPCNotification(): TypedRPCNotification {
     channel_removed: undefined,
     channel_updated: undefined,
     sync_voice_target: undefined,
+    plugin_data_broadcast: undefined,
+    plugin_data_transmission: undefined,
     unknown_params_json: undefined,
   };
 }
@@ -11923,6 +12258,12 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
     }
     if (message.sync_voice_target !== undefined) {
       HubSyncVoiceTargetParams.encode(message.sync_voice_target, writer.uint32(162).fork()).join();
+    }
+    if (message.plugin_data_broadcast !== undefined) {
+      HubPluginDataBroadcastParams.encode(message.plugin_data_broadcast, writer.uint32(170).fork()).join();
+    }
+    if (message.plugin_data_transmission !== undefined) {
+      EdgePluginDataTransmissionParams.encode(message.plugin_data_transmission, writer.uint32(178).fork()).join();
     }
     if (message.unknown_params_json !== undefined) {
       writer.uint32(794).string(message.unknown_params_json);
@@ -12041,6 +12382,22 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
           message.sync_voice_target = HubSyncVoiceTargetParams.decode(reader, reader.uint32());
           continue;
         }
+        case 21: {
+          if (tag !== 170) {
+            break;
+          }
+
+          message.plugin_data_broadcast = HubPluginDataBroadcastParams.decode(reader, reader.uint32());
+          continue;
+        }
+        case 22: {
+          if (tag !== 178) {
+            break;
+          }
+
+          message.plugin_data_transmission = EdgePluginDataTransmissionParams.decode(reader, reader.uint32());
+          continue;
+        }
         case 99: {
           if (tag !== 794) {
             break;
@@ -12084,6 +12441,12 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
         : undefined,
       sync_voice_target: isSet(object.sync_voice_target)
         ? HubSyncVoiceTargetParams.fromJSON(object.sync_voice_target)
+        : undefined,
+      plugin_data_broadcast: isSet(object.plugin_data_broadcast)
+        ? HubPluginDataBroadcastParams.fromJSON(object.plugin_data_broadcast)
+        : undefined,
+      plugin_data_transmission: isSet(object.plugin_data_transmission)
+        ? EdgePluginDataTransmissionParams.fromJSON(object.plugin_data_transmission)
         : undefined,
       unknown_params_json: isSet(object.unknown_params_json)
         ? globalThis.String(object.unknown_params_json)
@@ -12132,6 +12495,12 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
     if (message.sync_voice_target !== undefined) {
       obj.sync_voice_target = HubSyncVoiceTargetParams.toJSON(message.sync_voice_target);
     }
+    if (message.plugin_data_broadcast !== undefined) {
+      obj.plugin_data_broadcast = HubPluginDataBroadcastParams.toJSON(message.plugin_data_broadcast);
+    }
+    if (message.plugin_data_transmission !== undefined) {
+      obj.plugin_data_transmission = EdgePluginDataTransmissionParams.toJSON(message.plugin_data_transmission);
+    }
     if (message.unknown_params_json !== undefined) {
       obj.unknown_params_json = message.unknown_params_json;
     }
@@ -12179,6 +12548,14 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
     message.sync_voice_target = (object.sync_voice_target !== undefined && object.sync_voice_target !== null)
       ? HubSyncVoiceTargetParams.fromPartial(object.sync_voice_target)
       : undefined;
+    message.plugin_data_broadcast =
+      (object.plugin_data_broadcast !== undefined && object.plugin_data_broadcast !== null)
+        ? HubPluginDataBroadcastParams.fromPartial(object.plugin_data_broadcast)
+        : undefined;
+    message.plugin_data_transmission =
+      (object.plugin_data_transmission !== undefined && object.plugin_data_transmission !== null)
+        ? EdgePluginDataTransmissionParams.fromPartial(object.plugin_data_transmission)
+        : undefined;
     message.unknown_params_json = object.unknown_params_json ?? undefined;
     return message;
   },

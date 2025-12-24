@@ -233,6 +233,7 @@ export class NotificationHandler implements INotificationHandler {
     } catch (error) {
       this.logger.error('Error handling PluginDataTransmission notification:', error);
     }
+    return Promise.resolve();
   }
 
   /**
@@ -483,6 +484,7 @@ export class NotificationHandler implements INotificationHandler {
     } catch (error) {
       this.logger.error('Error handling connection failure notification:', error);
     }
+    return Promise.resolve();
   }
 
   /**
@@ -702,6 +704,7 @@ export class NotificationHandler implements INotificationHandler {
         this.logger.error(`Failed to send shutdown request to Edge ${edgeId}:`, error);
       }
     }
+    return Promise.resolve();
   }
 
   /**

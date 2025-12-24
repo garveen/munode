@@ -550,6 +550,57 @@ export class MumbleClient extends EventEmitter {
   }
 
   /**
+   * 设置 ACL（saveACL 的别名，为了测试兼容性）
+   */
+  async setACL(params: {
+    channelId: number;
+    acls: Array<{
+      applyHere: boolean;
+      applySubs: boolean;
+      inherited?: boolean;
+      userId?: number;
+      group?: string;
+      grant: number;
+      deny: number;
+    }>;
+    groups?: Array<{
+      name: string;
+      inherited: boolean;
+      inherit: boolean;
+      inheritable: boolean;
+      add: number[];
+      remove: number[];
+      inheritedMembers: number[];
+    }>;
+    inherit?: boolean;
+  }): Promise<number[]> {
+    // 转换为 saveACL 的参数格式
+    const convertedAcls = params.acls.map(acl => ({
+      apply_here: acl.applyHere,
+      apply_subs: acl.applySubs,
+      inherited: acl.inherited,
+      user_id: acl.userId,
+      group: acl.group,
+      allow: acl.grant,
+      deny: acl.deny,
+    }));
+
+    const convertedGroups = params.groups
+      ? new Map(params.groups.map(group => [group.name, {
+          name: group.name,
+          inherited: group.inherited,
+          inherit: group.inherit,
+          inheritable: group.inheritable,
+          add: group.add,
+          remove: group.remove,
+          inherited_members: group.inheritedMembers,
+        }]))
+      : undefined;
+
+    return this.aclManager.saveACL(params.channelId, convertedAcls, convertedGroups);
+  }
+
+  /**
    * 添加 ACL 条目
    */
   async addACLEntry(channelId: number, entry: {

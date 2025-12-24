@@ -53,10 +53,7 @@ export default {
 
   // Voice UDP transport configuration (Edge-to-Edge communication)
   // Note: Currently encryption is NOT enabled. To enable encryption, add:
-  //   voiceUdp: {
-  //     encryptionKey: Buffer.from('your-32-byte-key-here'),
-  //     encryptionAlgorithm: 'aes-256-cbc',
-  //   }
+  voiceUdpSharedSecret: 'change-this-to-a-secure-random-string', // Shared secret for UDP encryption
 
   // Authentication configuration
   auth: {

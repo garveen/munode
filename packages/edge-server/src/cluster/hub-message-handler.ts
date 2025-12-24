@@ -639,6 +639,7 @@ export class HubMessageHandlers {
         senderSession: sender_session,
         dataID: dataID,
         data: Buffer.from(normalizedData),
+        receiverSessions: [],
       };
       
       const pluginDataMessage = mumbleproto.PluginDataTransmission.encode(pluginDataMsgData).finish();

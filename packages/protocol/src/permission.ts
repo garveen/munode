@@ -251,7 +251,6 @@ export class PermissionManager {
     // TODO: 实现超级用户检查逻辑
     // 可以基于特定的用户组或用户ID
     const isSuperUser = client.groups?.includes('admin') || client.groups?.includes('superuser') || false;
-    console.log(`[PermissionManager] isSuperUser check for session ${client.session}: groups=${JSON.stringify(client.groups)}, result=${isSuperUser}`);
     return isSuperUser;
   }
 

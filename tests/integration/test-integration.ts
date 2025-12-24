@@ -341,6 +341,8 @@ function createEdgeConfig(server_id: number, port: number): EdgeConfig {
       reconnectInterval: 5000,
       heartbeatInterval: 10000,
     },
+    voiceUdpSharedSecret: 'change-this-to-a-secure-random-string', // Shared secret for UDP encryption
+
     auth: {
       apiUrl: 'http://localhost:8080/auth',
       apiKey: '',
@@ -352,6 +354,7 @@ function createEdgeConfig(server_id: number, port: number): EdgeConfig {
       trackSessions: true,
       allowCacheFallback: true,
     },
+    
     features: {
       geoip: false,
       banSystem: false,

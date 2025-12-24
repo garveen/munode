@@ -104,6 +104,13 @@ export class MessageHandlers {
       // 设置发送者
       pluginData.senderSession = session_id;
 
+      // 确保 data 是 Buffer 类型
+      const dataBuffer = pluginData.data 
+        ? (Buffer.isBuffer(pluginData.data) ? pluginData.data : Buffer.from(pluginData.data))
+        : Buffer.alloc(0);
+
+      this.logger.debug(`[EDGE-PLUGIN] Forwarding to Hub: dataID=${pluginData.dataID}, data.length=${dataBuffer.length}`);
+
       // 转发到Hub处理（Hub会进行目标解析和广播）
       this.hubClient.notify('hub.handlePluginDataTransmission', {
         edge_id: this.config.server_id,
@@ -113,13 +120,13 @@ export class MessageHandlers {
         actor_channel_id: actor.channel_id,
         sender_session: session_id,
         dataID: pluginData.dataID || '',
-        data: pluginData.data || Buffer.alloc(0),
+        data: dataBuffer,
         receiver_sessions: pluginData.receiverSessions || [],
       });
 
-        this.logger.debug(`Forwarded PluginDataTransmission from session ${session_id} to Hub`);
+      this.logger.debug(`Forwarded PluginDataTransmission from session ${session_id} to Hub`);
     } catch (error) {
-        this.logger.error(`Error handling PluginDataTransmission for session ${session_id}:`, error);
+      this.logger.error(`Error handling PluginDataTransmission for session ${session_id}:`, error);
     }
   }
 

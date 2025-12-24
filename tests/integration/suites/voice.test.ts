@@ -74,7 +74,7 @@ async function linkChannels(adminClient: MumbleClient, channelId1: number, chann
   });
   console.log(`[TEST] linkChannels sent, waiting for sync...`);
   // 等待链接广播到所有 Edge（增加到 2 秒确保完全同步）
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  await new Promise(resolve => setTimeout(resolve, 500));
   console.log(`[TEST] linkChannels wait completed`);
 }
 
@@ -86,7 +86,7 @@ async function unlinkChannels(adminClient: MumbleClient, channelId1: number, cha
     channel_id: channelId1,
     links_remove: [channelId2],
   });
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  await new Promise(resolve => setTimeout(resolve, 500));
 }
 
 /**
@@ -101,7 +101,7 @@ async function clearAllChannelLinks(adminClient: MumbleClient, channels: Channel
       });
     }
   }
-  await new Promise(resolve => setTimeout(resolve, 1000));
+  await new Promise(resolve => setTimeout(resolve, 500));
 }
 
 /**
@@ -122,27 +122,6 @@ async function createAdminClient(testEnv: TestEnvironment, edge: 1 | 2 = 1): Pro
   });
   await new Promise(resolve => setTimeout(resolve, 300));
   return admin;
-}
-
-/**
- * 等待接收语音包
- */
-function waitForVoice(client: MumbleClient, senderSession: number, timeoutMs: number = 2000): Promise<boolean> {
-  return new Promise((resolve) => {
-    let voiceReceived = false;
-    const timer = setTimeout(() => resolve(voiceReceived), timeoutMs);
-    
-    const voiceHandler = (data: VoiceData) => {
-      if (data.session === senderSession) {
-        voiceReceived = true;
-        clearTimeout(timer);
-        client.removeListener('voice', voiceHandler);
-        resolve(true);
-      }
-    };
-    
-    client.on('voice', voiceHandler);
-  });
 }
 
 describe('Voice Integration Tests', () => {
@@ -172,7 +151,6 @@ describe('Voice Integration Tests', () => {
       password: 'password1',
       rejectUnauthorized: false,
     });
-    await new Promise(resolve => setTimeout(resolve, 300));
     const channels = tempClient.getChannels();
     await clearAllChannelLinks(adminForCleanup, channels);
     await tempClient.disconnect();
@@ -226,12 +204,11 @@ describe('Voice Integration Tests', () => {
       });
       
       // 发送语音包
-      await new Promise(resolve => setTimeout(resolve, 1000));
       const voicePacket = createVoicePacket(4, 0, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
       
       // 等待语音包到达
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // 验证结果
       expect(receivedVoice.recvE1Same).toBe(true); // 同 Edge 同频道应该收到
@@ -279,11 +256,10 @@ describe('Voice Integration Tests', () => {
       });
       
       // 发送语音包
-      await new Promise(resolve => setTimeout(resolve, 1000));
       const voicePacket = createVoicePacket(4, 0, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
       
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // 验证：deaf 用户不应收到，normal 用户应该收到
       expect(receivedVoice.deafE1).toBe(false);
@@ -317,8 +293,8 @@ describe('Voice Integration Tests', () => {
         { username: 'voice_recv_e1_ch2', edge: 1, channelId: 2 },
       ]);
       
-      // 等待所有客户端完全初始化并接收频道链接信息（增加到 1.5 秒）
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // 等待所有客户端完全初始化并接收频道链接信息（增加到 0.5 秒）
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       const [sender, recvE1Ch0, recvE2Ch0, recvE1Ch1, recvE2Ch1, recvE1Ch2] = clients;
       
@@ -361,12 +337,10 @@ describe('Voice Integration Tests', () => {
         if (data.session === senderSession) receivedVoice.recvE1Ch2 = true;
       });
       
-      // UDP 连接已在 createClients 中确认就绪，等待监听器设置完成
-      await new Promise(resolve => setTimeout(resolve, 500));
       const voicePacket = createVoicePacket(4, 0, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
       
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // 验证
       expect(receivedVoice.recvE1Ch0).toBe(true); // 同频道同 Edge
@@ -390,9 +364,6 @@ describe('Voice Integration Tests', () => {
       // - non_target_e1: Edge 1, 同频道 - 不应收到
       // - non_target_e2: Edge 2, 同频道 - 不应收到
       
-      // 等待前面测试的客户端完全断开（额外增加时间以确保清理完成）
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
       const clients = await createClients(testEnv, [
         { username: 'voice_whisper_sender', edge: 1, channelId: 0 },
         { username: 'voice_target1_e1', edge: 1, channelId: 0 },
@@ -407,8 +378,8 @@ describe('Voice Integration Tests', () => {
       await sender.setVoiceTarget(1, [
         { session: [target1E1.getStateManager().getSession()?.session || 0, target1E2.getStateManager().getSession()?.session || 0] },
       ]);
-      // 等待 VoiceTarget 同步到所有 Edge（增加到 2 秒）
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // 等待 VoiceTarget 同步到所有 Edge（增加到 0.5 秒）
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       const receivedVoice = {
         target1E1: false,
@@ -439,8 +410,8 @@ describe('Voice Integration Tests', () => {
       const voicePacket = createVoicePacket(4, 1, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
       
-      // 等待语音包跨 Edge 传输（增加到 2 秒）
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // 等待语音包跨 Edge 传输（增加到 0.5 秒）
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // 验证：只有 target 用户收到
       expect(receivedVoice.target1E1).toBe(true);
@@ -474,8 +445,8 @@ describe('Voice Integration Tests', () => {
       await sender.setVoiceTarget(2, [
         { session: [], channel_id: 1 },
       ]);
-      // 等待 VoiceTarget 同步到所有 Edge（增加到 2 秒）
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // 等待 VoiceTarget 同步到所有 Edge（增加到 0.5 秒）
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       const receivedVoice = {
         recvE1Ch1: false,
@@ -507,7 +478,7 @@ describe('Voice Integration Tests', () => {
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
       
       // 等待语音包跨 Edge 传输（增加到 2 秒）
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // 验证
       expect(receivedVoice.recvE1Ch1).toBe(true);
@@ -544,13 +515,11 @@ describe('Voice Integration Tests', () => {
         if (data.session === senderSession) receivedVoice.other = true;
       });
       
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
       // 发送 loopback 语音包
       const voicePacket = createVoicePacket(4, 31, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
       
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // 验证：只有发送者自己收到
       expect(receivedVoice.sender).toBe(true);
@@ -586,8 +555,6 @@ describe('Voice Integration Tests', () => {
         if (data.session === senderSession) receivedCount.recvE2++;
       });
       
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
       // 发送 5 个语音包
       for (let i = 0; i < 5; i++) {
         const voicePacket = createVoicePacket(4, 0, i);
@@ -595,7 +562,7 @@ describe('Voice Integration Tests', () => {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // 验证：两个接收者都应该收到 5 个包
       expect(receivedCount.recvE1).toBe(5);
@@ -639,8 +606,8 @@ describe('Voice Integration Tests', () => {
       await sender.setVoiceTarget(3, [
         { session: [whisperTargetE2.getStateManager().getSession()?.session || 0] },
       ]);
-      // 等待 VoiceTarget 同步到所有 Edge（增加到 2 秒）
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // 等待 VoiceTarget 同步到所有 Edge（增加到 0.5 秒）
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       const receivedVoice = {
         recvE1Ch0: false,
@@ -668,18 +635,15 @@ describe('Voice Integration Tests', () => {
         if (data.session === senderSession) receivedVoice.normalE1Ch2 = true;
       });
       
-      // UDP 连接已在 createClients 中确认就绪，等待监听器设置完成
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
       // 第一次：普通 push-to-talk (target=0)
       const voicePacket1 = createVoicePacket(4, 0, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket1);
-      await new Promise(resolve => setTimeout(resolve, 800));
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // 第二次：whisper (target=3)
       const voicePacket2 = createVoicePacket(4, 3, 1);
       await sender.getConnectionManager().sendVoicePacket(voicePacket2);
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 500));
       
       // 验证
       expect(receivedVoice.recvE1Ch0).toBe(true); // 接收 push-to-talk

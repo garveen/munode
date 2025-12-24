@@ -70,9 +70,6 @@ describe('TCP Voice Transmission Integration Tests', () => {
         rejectUnauthorized: false,
       });
 
-      // 等待连接稳定
-      await new Promise(resolve => setTimeout(resolve, 500));
-
       // 监听接收者的语音包
       let receivedVoice = false;
       receiver.on('udpTunnel', (data: Buffer) => {
@@ -86,7 +83,7 @@ describe('TCP Voice Transmission Integration Tests', () => {
       await sender.getConnectionManager().sendVoicePacket(mockVoiceData);
 
       // 等待接收
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 500));
 
       // TCP模式下，语音包应该通过UDPTunnel消息发送
       // 注意：在测试环境中，我们可能无法完全验证语音包的路由
@@ -166,9 +163,6 @@ describe('TCP Voice Transmission Integration Tests', () => {
         forceTcpVoice: false,
       });
 
-      // 等待连接稳定
-      await new Promise(resolve => setTimeout(resolve, 500));
-
       // 验证所有客户端已连接
       expect(tcpClient1.isConnected()).toBe(true);
       expect(tcpClient2.isConnected()).toBe(true);
@@ -219,8 +213,6 @@ describe('TCP Voice Transmission Integration Tests', () => {
         rejectUnauthorized: false,
         forceTcpVoice: false,
       });
-
-      await new Promise(resolve => setTimeout(resolve, 500));
 
       // 发送语音包
       const mockVoiceData = createVoicePacket(4, 0, 1);
@@ -292,8 +284,6 @@ describe('TCP Voice Transmission Integration Tests', () => {
         forceTcpVoice: true,
       });
 
-      // 等待认证完成
-      await new Promise(resolve => setTimeout(resolve, 1000));
 
       // 构造模拟语音包（使用正确的格式）
       const mockAudioData = createVoicePacket(4, 0, 1);
@@ -318,8 +308,6 @@ describe('TCP Voice Transmission Integration Tests', () => {
         rejectUnauthorized: false,
         forceTcpVoice: true,
       });
-
-      await new Promise(resolve => setTimeout(resolve, 1000));
 
       // 发送多个随机语音包（使用正确的格式）
       for (let i = 0; i < 5; i++) {
@@ -360,14 +348,12 @@ describe('TCP Voice Transmission Integration Tests', () => {
         forceTcpVoice: true,
       });
 
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
       // 发送语音包
       const mockVoiceData = createVoicePacket(4, 0, 1);
       await edge1Client.getConnectionManager().sendVoicePacket(mockVoiceData);
 
       // 等待跨Edge路由
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 500));
 
       // 验证两个客户端都保持连接
       expect(edge1Client.isConnected()).toBe(true);
@@ -423,8 +409,6 @@ describe('TCP Voice Transmission Integration Tests', () => {
         rejectUnauthorized: false,
         forceTcpVoice: true,
       });
-
-      await new Promise(resolve => setTimeout(resolve, 1000));
 
       // 发送大的语音包（使用正确的格式，但增加语音数据部分的大小）
       // 创建一个大的语音包：header(1) + sequence(1) + large_voice_data(2046)

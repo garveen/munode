@@ -15,6 +15,8 @@ import {
   HubChannelRemovedParams,
   HubChannelUpdatedParams,
   HubSyncVoiceTargetParams,
+  HubPluginDataBroadcastParams,
+  EdgePluginDataTransmissionParams,
 } from '../generated/proto/HubEdgeRPC.js';
 import type { Logger } from '@munode/common';
 
@@ -139,6 +141,8 @@ interface NotificationDataType {
   channel_removed?: HubChannelRemovedParams;
   channel_updated?: HubChannelUpdatedParams;
   sync_voice_target?: HubSyncVoiceTargetParams;
+  plugin_data_broadcast?: HubPluginDataBroadcastParams;
+  plugin_data_transmission?: EdgePluginDataTransmissionParams;
   unknown_params_json?: string;
 }
 
@@ -389,6 +393,29 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
           client_session: p.client_session,
           target_id: p.target_id,
           config_json: typeof p.config === 'string' ? p.config : JSON.stringify(p.config),
+        };
+        break;
+      }
+      case 'hub.pluginDataBroadcast': {
+        const p = params as HubPluginDataBroadcastParams;
+        notificationData.plugin_data_broadcast = {
+          sender_session: p.sender_session,
+          dataID: p.dataID,
+          data: p.data,
+          target_sessions: p.target_sessions || [],
+        };
+        break;
+      }
+      case 'hub.handlePluginDataTransmission': {
+        const p = params as EdgePluginDataTransmissionParams;
+        notificationData.plugin_data_transmission = {
+          edge_id: p.edge_id,
+          actor_session: p.actor_session,
+          actor_username: p.actor_username,
+          sender_session: p.sender_session,
+          dataID: p.dataID,
+          data: p.data,
+          receiver_sessions: p.receiver_sessions || [],
         };
         break;
       }
@@ -689,6 +716,29 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
             target_id: typedNotification.sync_voice_target.target_id,
             config: config,
             timestamp: typedNotification.sync_voice_target.timestamp,
+          };
+        }
+        break;
+      case 'hub.pluginDataBroadcast':
+        if (typedNotification.plugin_data_broadcast) {
+          result.params = {
+            sender_session: typedNotification.plugin_data_broadcast.sender_session,
+            dataID: typedNotification.plugin_data_broadcast.dataID,
+            data: typedNotification.plugin_data_broadcast.data,
+            target_sessions: typedNotification.plugin_data_broadcast.target_sessions,
+          };
+        }
+        break;
+      case 'hub.handlePluginDataTransmission':
+        if (typedNotification.plugin_data_transmission) {
+          result.params = {
+            edge_id: typedNotification.plugin_data_transmission.edge_id,
+            actor_session: typedNotification.plugin_data_transmission.actor_session,
+            actor_username: typedNotification.plugin_data_transmission.actor_username,
+            sender_session: typedNotification.plugin_data_transmission.sender_session,
+            dataID: typedNotification.plugin_data_transmission.dataID,
+            data: typedNotification.plugin_data_transmission.data,
+            receiver_sessions: typedNotification.plugin_data_transmission.receiver_sessions,
           };
         }
         break;

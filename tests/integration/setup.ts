@@ -679,6 +679,8 @@ export async function setupTestEnvironment(
         hubConfig.webApi = hubConfig.webApi || { port: webApiPort, host: '127.0.0.1', cors: { enabled: true, origins: ['*'] } };
         hubConfig.webApi.port = webApiPort;
         hubConfig.voicePort = hubVoicePort;
+
+        hubConfig.blobStore = hubConfig.blobStore || { type: 'filesystem', options: { path: join(PROJECT_ROOT, 'data/hub-blobs') } };
         
         // 配置UDP语音传输的共享密钥用于握手验证
         if (!hubConfig.voiceUdpSharedSecret) {

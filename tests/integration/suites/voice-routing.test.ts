@@ -86,12 +86,10 @@ describe('Voice Routing Integration Tests', () => {
         }
       });
       
-      await sleep(1000);
-      
       const voicePacket = createVoicePacket(4, 0, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
       
-      await sleep(2000);
+      await sleep(500);
       
       expect(receivedCount).toBeGreaterThan(0);
       
@@ -119,8 +117,6 @@ describe('Voice Routing Integration Tests', () => {
         forceTcpVoice: true,
       });
       
-      await sleep(500);
-      
       const receivedVoice = { count: 0 };
       const senderSession = sender.getStateManager().getSession()?.session || 0;
       
@@ -130,13 +126,11 @@ describe('Voice Routing Integration Tests', () => {
         }
       });
       
-      await sleep(1000);
-      
       // 发送语音包
       const voicePacket = createVoicePacket(4, 0, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
       
-      await sleep(2000);
+      await sleep(500);
       
       // TCP 模式下也应该收到语音
       expect(receivedVoice.count).toBeGreaterThan(0);
@@ -244,8 +238,6 @@ describe('Voice Routing Integration Tests', () => {
         }
       });
       
-      await sleep(1000);
-      
       // 发送语音包
       for (let i = 0; i < 5; i++) {
         const voicePacket = createVoicePacket(4, 0, i);
@@ -253,7 +245,7 @@ describe('Voice Routing Integration Tests', () => {
         await sleep(50);
       }
       
-      await sleep(2000);
+      await sleep(500);
       
       // 验证接收者收到语音包（即使是通过直连而非中转）
       expect(receivedCount).toBeGreaterThan(0);
@@ -311,8 +303,6 @@ describe('Voice Routing Stress Tests', () => {
       }
     });
     
-    await sleep(1000);
-    
     // 发送 100 个语音包（模拟 2 秒的高频语音流）
     const startTime = Date.now();
     for (let i = 0; i < 100; i++) {
@@ -322,7 +312,7 @@ describe('Voice Routing Stress Tests', () => {
     }
     const sendTime = Date.now() - startTime;
     
-    await sleep(3000);
+    await sleep(500);
     
     console.log(`[STRESS TEST] Sent 100 packets in ${sendTime}ms, received ${receivedCount}`);
     
@@ -390,8 +380,6 @@ describe('4-Edge Voice Routing Tests', () => {
         if (data.session === senderSession) received4++;
       });
       
-      await sleep(1000);
-      
       // 从 Edge1 发送语音包
       for (let i = 0; i < 20; i++) {
         const voicePacket = createVoicePacket(4, 0, i);
@@ -399,7 +387,7 @@ describe('4-Edge Voice Routing Tests', () => {
         await sleep(50);
       }
       
-      await sleep(3000);
+      await sleep(500);
       
       console.log(`[4-EDGE TEST] Received: Edge2=${received2}, Edge3=${received3}, Edge4=${received4}`);
       
@@ -432,8 +420,6 @@ describe('4-Edge Voice Routing Tests', () => {
         if (data.session === senderSession) receivedCount++;
       });
       
-      await sleep(1000);
-      
       // Edge1 -> Edge4 的语音传输
       // 根据网络拓扑，可能通过 Edge2 或 Edge3 中转
       for (let i = 0; i < 10; i++) {
@@ -442,7 +428,7 @@ describe('4-Edge Voice Routing Tests', () => {
         await sleep(50);
       }
       
-      await sleep(2000);
+      await sleep(500);
       
       expect(receivedCount).toBeGreaterThan(0);
       
@@ -482,8 +468,6 @@ describe('4-Edge Voice Routing Tests', () => {
         if (data.session === senderSession) receivedCount++;
       });
       
-      await sleep(1000);
-      
       // 发送语音包
       for (let i = 0; i < 15; i++) {
         const voicePacket = createVoicePacket(4, 0, i);
@@ -491,7 +475,7 @@ describe('4-Edge Voice Routing Tests', () => {
         await sleep(50);
       }
       
-      await sleep(2000);
+      await sleep(500);
       
       console.log(`[MULTI-HOP TEST] Sent 15 packets, received ${receivedCount}`);
       
@@ -562,8 +546,6 @@ describe('4-Edge Voice Routing Tests', () => {
         }
       });
       
-      await sleep(1000);
-      
       // 发送一系列语音包来收集网络质量数据
       const startTime = Date.now();
       for (let i = 0; i < 30; i++) {
@@ -572,7 +554,7 @@ describe('4-Edge Voice Routing Tests', () => {
         await sleep(50);
       }
       
-      await sleep(3000);
+      await sleep(500);
       
       // 分析接收到的包
       const receiveRate = receivedPackets.length / 30;
@@ -629,8 +611,6 @@ describe('4-Edge Voice Routing Tests', () => {
         if (data.session === senderSession) receivedCount++;
       });
       
-      await sleep(1000);
-      
       // 发送 20 个包
       for (let i = 0; i < 20; i++) {
         const voicePacket = createVoicePacket(4, 0, i);
@@ -638,7 +618,7 @@ describe('4-Edge Voice Routing Tests', () => {
         await sleep(50);
       }
       
-      await sleep(4000);
+      await sleep(500);
       
       console.log(`[SEVERE TEST] Received ${receivedCount}/20 packets with 50% loss`);
       
@@ -689,8 +669,6 @@ describe('4-Edge Voice Routing Tests', () => {
         }
       });
       
-      await sleep(1000);
-      
       // Phase 1: 劣化网络下发送（减少发送次数）
       for (let i = 0; i < 10; i++) {
         const voicePacket = createVoicePacket(4, 0, i);
@@ -698,7 +676,7 @@ describe('4-Edge Voice Routing Tests', () => {
         await sleep(50);
       }
       
-      await sleep(1500);
+      await sleep(500);
       console.log(`[RECOVERY TEST] Phase 1: Received ${phase1Count}/10 packets`);
       
       // Phase 2: 恢复网络质量
@@ -709,8 +687,6 @@ describe('4-Edge Voice Routing Tests', () => {
       });
       console.log('[RECOVERY TEST] Phase 2: Network recovered');
       
-      await sleep(1000);
-      
       // 继续发送（减少发送次数）
       for (let i = 10; i < 20; i++) {
         const voicePacket = createVoicePacket(4, 0, i);
@@ -718,7 +694,7 @@ describe('4-Edge Voice Routing Tests', () => {
         await sleep(50);
       }
       
-      await sleep(1500);
+      await sleep(500);
       console.log(`[RECOVERY TEST] Phase 2: Received ${phase2Count}/10 packets`);
       
       // 恢复后应该收到更多包
@@ -750,8 +726,6 @@ describe('4-Edge Voice Routing Tests', () => {
         }
       });
       
-      await sleep(1000);
-      
       // 发送一系列语音包来收集网络质量数据
       const startTime = Date.now();
       for (let i = 0; i < 30; i++) {
@@ -760,7 +734,7 @@ describe('4-Edge Voice Routing Tests', () => {
         await sleep(50);
       }
       
-      await sleep(3000);
+      await sleep(500);
       
       const receivedCount = receivedPackets.length;
       console.log(`[NETWORK METRICS TEST] Sent 30, received ${receivedCount}`);

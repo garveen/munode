@@ -139,7 +139,7 @@ describe('User Visibility Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'sender_edge1',
-        password: 'password1',
+        password: 'sender_edge1_pass',
         rejectUnauthorized: false,
       });
       
@@ -150,8 +150,8 @@ describe('User Visibility Integration Tests', () => {
       await clientEdge2.connect({
         host: 'localhost',
         port: testEnv.edgePort2,
-        username: 'sender_edge2',
-        password: 'password1',
+        username: 'target_edge2',
+        password: 'target_edge2_pass',
         rejectUnauthorized: false,
       });
       
@@ -166,7 +166,7 @@ describe('User Visibility Integration Tests', () => {
       // Edge 1 上的用户也应该能看到 Edge 2 上的用户
       const usersOnEdge1 = clientEdge1.getUsers();
       
-      const edge2UserVisible = usersOnEdge1.some(u => u.name === 'sender_edge2');
+      const edge2UserVisible = usersOnEdge1.some(u => u.name === 'target_edge2');
       
       // Test both to see which one fails
       expect(edge1UserVisible).toBe(true);
