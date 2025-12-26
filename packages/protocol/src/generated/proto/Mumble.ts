@@ -439,7 +439,21 @@ export interface UserState {
     | number[]
     | undefined;
   /** a list of channels the user does no longer want to listen to. */
-  listening_channel_remove?: number[] | undefined;
+  listening_channel_remove?:
+    | number[]
+    | undefined;
+  /** A list of volume adjustments the user has applied to listeners */
+  listening_volume_adjustment?: UserState_VolumeAdjustment[] | undefined;
+}
+
+/** Volume adjustment for a specific channel listener */
+export interface UserState_VolumeAdjustment {
+  /** The channel ID being listened to */
+  listening_channel?:
+    | number
+    | undefined;
+  /** Volume adjustment factor (1.0 = normal, 0.0 = muted, >1.0 = amplified) */
+  volume_adjustment?: number | undefined;
 }
 
 /**
@@ -2405,6 +2419,7 @@ function createBaseUserState(): UserState {
     temporary_access_tokens: [],
     listening_channel_add: [],
     listening_channel_remove: [],
+    listening_volume_adjustment: [],
   };
 }
 
@@ -2480,6 +2495,11 @@ export const UserState: MessageFns<UserState> = {
     if (message.listening_channel_remove !== undefined && message.listening_channel_remove.length !== 0) {
       for (const v of message.listening_channel_remove) {
         writer.uint32(176).uint32(v!);
+      }
+    }
+    if (message.listening_volume_adjustment !== undefined && message.listening_volume_adjustment.length !== 0) {
+      for (const v of message.listening_volume_adjustment) {
+        UserState_VolumeAdjustment.encode(v!, writer.uint32(186).fork()).join();
       }
     }
     return writer;
@@ -2691,6 +2711,17 @@ export const UserState: MessageFns<UserState> = {
 
           break;
         }
+        case 23: {
+          if (tag !== 186) {
+            break;
+          }
+
+          const el = UserState_VolumeAdjustment.decode(reader, reader.uint32());
+          if (el !== undefined) {
+            message.listening_volume_adjustment!.push(el);
+          }
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2729,6 +2760,9 @@ export const UserState: MessageFns<UserState> = {
         : [],
       listening_channel_remove: globalThis.Array.isArray(object?.listening_channel_remove)
         ? object.listening_channel_remove.map((e: any) => globalThis.Number(e))
+        : [],
+      listening_volume_adjustment: globalThis.Array.isArray(object?.listening_volume_adjustment)
+        ? object.listening_volume_adjustment.map((e: any) => UserState_VolumeAdjustment.fromJSON(e))
         : [],
     };
   },
@@ -2801,6 +2835,11 @@ export const UserState: MessageFns<UserState> = {
     if (message.listening_channel_remove?.length) {
       obj.listening_channel_remove = message.listening_channel_remove.map((e) => Math.round(e));
     }
+    if (message.listening_volume_adjustment?.length) {
+      obj.listening_volume_adjustment = message.listening_volume_adjustment.map((e) =>
+        UserState_VolumeAdjustment.toJSON(e)
+      );
+    }
     return obj;
   },
 
@@ -2831,6 +2870,84 @@ export const UserState: MessageFns<UserState> = {
     message.temporary_access_tokens = object.temporary_access_tokens?.map((e) => e) || [];
     message.listening_channel_add = object.listening_channel_add?.map((e) => e) || [];
     message.listening_channel_remove = object.listening_channel_remove?.map((e) => e) || [];
+    message.listening_volume_adjustment =
+      object.listening_volume_adjustment?.map((e) => UserState_VolumeAdjustment.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseUserState_VolumeAdjustment(): UserState_VolumeAdjustment {
+  return { listening_channel: undefined, volume_adjustment: undefined };
+}
+
+export const UserState_VolumeAdjustment: MessageFns<UserState_VolumeAdjustment> = {
+  encode(message: UserState_VolumeAdjustment, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.listening_channel !== undefined) {
+      writer.uint32(8).uint32(message.listening_channel);
+    }
+    if (message.volume_adjustment !== undefined) {
+      writer.uint32(21).float(message.volume_adjustment);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): UserState_VolumeAdjustment {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseUserState_VolumeAdjustment();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.listening_channel = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 21) {
+            break;
+          }
+
+          message.volume_adjustment = reader.float();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): UserState_VolumeAdjustment {
+    return {
+      listening_channel: isSet(object.listening_channel) ? globalThis.Number(object.listening_channel) : undefined,
+      volume_adjustment: isSet(object.volume_adjustment) ? globalThis.Number(object.volume_adjustment) : undefined,
+    };
+  },
+
+  toJSON(message: UserState_VolumeAdjustment): unknown {
+    const obj: any = {};
+    if (message.listening_channel !== undefined) {
+      obj.listening_channel = Math.round(message.listening_channel);
+    }
+    if (message.volume_adjustment !== undefined) {
+      obj.volume_adjustment = message.volume_adjustment;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<UserState_VolumeAdjustment>, I>>(base?: I): UserState_VolumeAdjustment {
+    return UserState_VolumeAdjustment.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<UserState_VolumeAdjustment>, I>>(object: I): UserState_VolumeAdjustment {
+    const message = createBaseUserState_VolumeAdjustment();
+    message.listening_channel = object.listening_channel ?? undefined;
+    message.volume_adjustment = object.volume_adjustment ?? undefined;
     return message;
   },
 };

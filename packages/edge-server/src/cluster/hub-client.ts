@@ -105,6 +105,7 @@ export interface EdgeControlClientEvents extends EventMap {
   'voiceTargetUpdate': [params: SyncVoiceTargetParams];
   'voiceData': [data: VoiceDataParams, respond: (response: { success: boolean }) => void];
   'voiceRoutingConfig': [config: VoiceRoutingConfigParams];
+  'relayVoicePacket': [params: { from_edge_id: number; voice_packet: Buffer; timestamp: number }];
 }
 
 /**
@@ -516,6 +517,13 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
           break;
         }
 
+        case 'hub.relayVoicePacket': {
+          // 接收来自 Hub 的 TCP 降级语音包
+          const params = message.params as { from_edge_id: number; voice_packet: Buffer; timestamp: number };
+          this.emit('relayVoicePacket', params);
+          break;
+        }
+
         case 'hub.routeTableUpdate':
           // 路由表更新通知
           this.emit('routeTableUpdate', message.params);
@@ -577,8 +585,31 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
     }
   }
 
-  // NOTE: routeVoice removed - voice packets should flow edge-to-edge directly via UDP
-  // Hub is not involved in voice packet forwarding
+  /**
+   * 通过 Hub TCP 中转发送语音包（降级模式）
+   * 当 UDP 直连和中转都不可用时使用
+   */
+  async relayVoiceViaTcp(targetEdgeId: number, voicePacket: Buffer): Promise<boolean> {
+    if (!this.isConnected() || (!this.useExternalClient && !this.registered)) {
+      this.logger.warn('Cannot relay voice via TCP: not connected to Hub');
+      return false;
+    }
+
+    try {
+      const params: RPCParams<'edge.relayVoiceViaTcp'> = {
+        from_edge_id: this.config.server_id,
+        target_edge_id: targetEdgeId,
+        voice_packet: voicePacket,
+        timestamp: Date.now(),
+      };
+      
+      const result = await this.client.call('edge.relayVoiceViaTcp', params);
+      return result.success;
+    } catch (error) {
+      this.logger.error(`Failed to relay voice via TCP to Edge ${targetEdgeId}:`, error);
+      return false;
+    }
+  }
 
   /**
    * 请求完整同步

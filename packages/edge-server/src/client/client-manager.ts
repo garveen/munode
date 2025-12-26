@@ -1,7 +1,14 @@
 import { Socket } from 'net';
 import { TLSSocket } from 'tls';
 import type { Logger } from 'winston';
-import { TypedEventEmitter, type EventMap } from '@munode/common';
+import { 
+  TypedEventEmitter, 
+  type EventMap, 
+  MultiTypeRateLimiter, 
+  DEFAULT_RATE_LIMITS,
+  ClientStatisticsCollector,
+  ChannelListenerVolumeManager,
+} from '@munode/common';
 import { EdgeConfig, ClientInfo, ClientState } from '../types.js';
 
 /**
@@ -29,6 +36,15 @@ export class ClientManager extends TypedEventEmitter<ClientManagerEvents> {
   // 性能优化：频道用户索引，实现 O(1) 查找
   private channelUsersIndex: Map<number, Set<number>> = new Map(); // channelId -> Set<sessionId>
   private listeningUsersIndex: Map<number, Set<number>> = new Map(); // channelId -> Set<sessionId> (监听该频道的用户)
+  
+  // 速率限制器：为每个客户端独立管理
+  private rateLimiters: Map<number, MultiTypeRateLimiter> = new Map(); // sessionId -> MultiTypeRateLimiter
+  
+  // 统计收集器：为每个客户端收集详细统计数据
+  private statisticsCollectors: Map<number, ClientStatisticsCollector> = new Map(); // sessionId -> ClientStatisticsCollector
+  
+  // 频道监听器音量调节管理器
+  private volumeManager: ChannelListenerVolumeManager = new ChannelListenerVolumeManager();
 
   constructor(config: EdgeConfig, logger: Logger) {
     super();
@@ -76,6 +92,18 @@ export class ClientManager extends TypedEventEmitter<ClientManagerEvents> {
     // 更新频道索引
     this.addClientToChannelIndex(sessionId, client.channel_id);
     
+    // 初始化速率限制器
+    const rateLimiter = new MultiTypeRateLimiter();
+    rateLimiter.register('message', DEFAULT_RATE_LIMITS.message);
+    rateLimiter.register('pluginMessage', DEFAULT_RATE_LIMITS.pluginMessage);
+    rateLimiter.register('command', DEFAULT_RATE_LIMITS.command);
+    rateLimiter.register('stateUpdate', DEFAULT_RATE_LIMITS.stateUpdate);
+    this.rateLimiters.set(sessionId, rateLimiter);
+    
+    // 初始化统计收集器
+    const statsCollector = new ClientStatisticsCollector();
+    this.statisticsCollectors.set(sessionId, statsCollector);
+    
     this.logger.info(`Client connected: session=${sessionId}, ip=${clientAddress}`);
 
     // 设置 socket 事件处理器
@@ -103,6 +131,9 @@ export class ClientManager extends TypedEventEmitter<ClientManagerEvents> {
       
       this.clients.delete(sessionId);
       this.sockets.delete(sessionId); // 删除 socket 引用
+      this.rateLimiters.delete(sessionId); // 删除速率限制器
+      this.statisticsCollectors.delete(sessionId); // 删除统计收集器
+      this.volumeManager.clearUserAdjustments(sessionId); // 清理音量调节设置
       this.logger.info(`Client disconnected: session=${sessionId}, username=${client.username}`);
       this.emit('clientDisconnected', client);
     }
@@ -440,5 +471,119 @@ export class ClientManager extends TypedEventEmitter<ClientManagerEvents> {
    */
   getListeningUserSessions(channelId: number): Set<number> {
     return this.listeningUsersIndex.get(channelId) || new Set();
+  }
+
+  /**
+   * 检查客户端是否被速率限制
+   * 
+   * @param sessionId 客户端会话ID
+   * @param type 操作类型 ('message', 'pluginMessage', 'command', 'stateUpdate')
+   * @param tokens 消耗的令牌数，默认为 1
+   * @returns 如果被限制返回 true，否则返回 false
+   */
+  checkRateLimit(sessionId: number, type: string, tokens: number = 1): boolean {
+    const rateLimiter = this.rateLimiters.get(sessionId);
+    if (!rateLimiter) {
+      // 如果没有限制器（可能客户端刚断开），允许操作
+      return false;
+    }
+
+    const isLimited = rateLimiter.ratelimit(type, tokens);
+    
+    if (isLimited) {
+      this.logger.warn(`Client rate limited: session=${sessionId}, type=${type}, tokens=${tokens}`);
+    }
+    
+    return isLimited;
+  }
+
+  /**
+   * 检查是否会被限制（不消耗令牌）
+   */
+  wouldRateLimit(sessionId: number, type: string, tokens: number = 1): boolean {
+    const rateLimiter = this.rateLimiters.get(sessionId);
+    if (!rateLimiter) {
+      return false;
+    }
+    return rateLimiter.wouldRatelimit(type, tokens);
+  }
+
+  /**
+   * 重置客户端的速率限制器
+   */
+  resetRateLimit(sessionId: number, type?: string): void {
+    const rateLimiter = this.rateLimiters.get(sessionId);
+    if (!rateLimiter) {
+      return;
+    }
+
+    if (type) {
+      rateLimiter.reset(type);
+      this.logger.debug(`Reset rate limit for client: session=${sessionId}, type=${type}`);
+    } else {
+      rateLimiter.resetAll();
+      this.logger.debug(`Reset all rate limits for client: session=${sessionId}`);
+    }
+  }
+
+  /**
+   * 获取客户端可用令牌数
+   */
+  getAvailableTokens(sessionId: number, type: string): number | undefined {
+    const rateLimiter = this.rateLimiters.get(sessionId);
+    if (!rateLimiter) {
+      return undefined;
+    }
+    return rateLimiter.getAvailableTokens(type);
+  }
+
+  /**
+   * 获取客户端统计收集器
+   */
+  getStatisticsCollector(sessionId: number): ClientStatisticsCollector | undefined {
+    return this.statisticsCollectors.get(sessionId);
+  }
+
+  /**
+   * 获取客户端统计数据
+   */
+  getClientStatistics(sessionId: number) {
+    const collector = this.statisticsCollectors.get(sessionId);
+    return collector?.getStatistics();
+  }
+
+  /**
+   * 设置频道监听器的音量调节
+   */
+  setListenerVolumeAdjustment(userSession: number, channelId: number, factor: number): void {
+    this.volumeManager.setVolumeAdjustment(userSession, channelId, factor);
+    this.logger.debug(`Set listener volume: session=${userSession}, channel=${channelId}, factor=${factor}`);
+  }
+
+  /**
+   * 获取频道监听器的音量调节
+   */
+  getListenerVolumeAdjustment(userSession: number, channelId: number): number {
+    return this.volumeManager.getVolumeAdjustment(userSession, channelId);
+  }
+
+  /**
+   * 获取用户的所有音量调节设置
+   */
+  getAllListenerVolumeAdjustments(userSession: number) {
+    return this.volumeManager.getAllVolumeAdjustments(userSession);
+  }
+
+  /**
+   * 清理所有数据
+   */
+  clearAll(): void {
+    this.clients.clear();
+    this.sockets.clear();
+    this.channelUsersIndex.clear();
+    this.listeningUsersIndex.clear();
+    this.rateLimiters.clear();
+    this.statisticsCollectors.clear();
+    this.volumeManager.clear();
   }
 }

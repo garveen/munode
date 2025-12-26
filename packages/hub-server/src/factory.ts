@@ -112,6 +112,18 @@ export class HubHandlerFactory {
     if (!HubHandlerFactory.instance) {
       HubHandlerFactory.instance = new HubHandlerFactory(config, database, logger);
       HubHandlerFactory.instance.controlService = controlService;
+      
+      // 初始化 BlobStore（如果启用）
+      if (config.blobStore.enabled) {
+        HubHandlerFactory.instance.blobStore = new BlobStore(config.blobStore.path, true, logger);
+        await HubHandlerFactory.instance.blobStore.init();
+        // 将BlobStore设置到DatabaseOperations中
+        HubHandlerFactory.instance.databaseOperations.setBlobStore(HubHandlerFactory.instance.blobStore);
+        logger.info(`BlobStore initialized at ${config.blobStore.path}`);
+      } else {
+        logger.debug('BlobStore disabled');
+      }
+      
       await HubHandlerFactory.instance.channelManager.init();
       await HubHandlerFactory.instance.aclManager.init();
       await HubHandlerFactory.instance.channelGroupManager.init();

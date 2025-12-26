@@ -70,6 +70,7 @@ export interface UserInfo {
   cert_hash?: string;
   channel_id?: number;
   groups?: string[];
+  temporary_tokens?: string[];
 }
 
 /**
@@ -121,11 +122,16 @@ export class HubPermissionChecker {
    * 计算用户在频道中的权限
    */
   async calculatePermission(channelId: number, user: UserInfo): Promise<Permission> {
+    // 如果有临时令牌，不使用缓存（临时令牌可能随时改变）
+    const hasTemporaryTokens = user.temporary_tokens && user.temporary_tokens.length > 0;
+    
     // 检查缓存
     const cacheKey = `${user.session_id}:${channelId}`;
-    const cached = this.aclCache.get(cacheKey);
-    if (cached !== undefined) {
-      return cached;
+    if (!hasTemporaryTokens) {
+      const cached = this.aclCache.get(cacheKey);
+      if (cached !== undefined) {
+        return cached;
+      }
     }
 
     // 获取频道信息
@@ -204,8 +210,10 @@ export class HubPermissionChecker {
       }
     }
 
-    // 缓存结果
-    this.aclCache.set(cacheKey, granted);
+    // 只有在没有临时令牌时才缓存结果
+    if (!hasTemporaryTokens) {
+      this.aclCache.set(cacheKey, granted);
+    }
 
     return granted;
   }
@@ -245,7 +253,15 @@ export class HubPermissionChecker {
     // 令牌组 (以 # 开头)
     if (group.startsWith('#')) {
       const token = group.substring(1);
-      return user.groups?.includes(token) || false;
+      // 检查永久令牌
+      if (user.groups?.includes(token)) {
+        return true;
+      }
+      // 检查临时令牌
+      if (user.temporary_tokens?.includes(token)) {
+        return true;
+      }
+      return false;
     }
 
     // 普通组检查 - 从数据库查询频道组定义
@@ -472,13 +488,14 @@ export class HubPermissionChecker {
   /**
    * 从GlobalSession创建UserInfo
    */
-  sessionToUserInfo(session: GlobalSession, channelId?: number): UserInfo {
+  sessionToUserInfo(session: GlobalSession, channelId?: number, temporaryTokens?: string[]): UserInfo {
     return {
       session_id: session.session_id,
       user_id: session.user_id,
       cert_hash: session.cert_hash,
       channel_id: channelId,
       groups: session.groups || [], // 从 session 中获取用户组
+      temporary_tokens: temporaryTokens || session.temporary_tokens || [], // 支持临时令牌
     };
   }
 

@@ -637,6 +637,19 @@ export class EventSetupManager {
         }
       });
 
+      // 监听来自 Hub 的 TCP 降级语音包
+      this.hubClient.on('relayVoicePacket', (params) => {
+        // 接收来自 Hub 的 TCP 降级语音包
+        this.logger.debug(
+          `Received TCP relay voice packet from Edge ${params.from_edge_id}, ` +
+          `size=${params.voice_packet.length}, timestamp=${params.timestamp}`
+        );
+        
+        // 将语音包路由到本地客户端
+        // 使用 VoiceRouter 的远程语音包处理逻辑
+        this.handlerFactory.voiceRouter.handleTcpRelayVoicePacket(params.voice_packet);
+      });
+
       // 监听来自Hub的所有通知消息（合并多个监听器）
       this.hubClient.on('notification', (message) => {
         // 使用 discriminated union 的类型守卫来处理不同消息类型

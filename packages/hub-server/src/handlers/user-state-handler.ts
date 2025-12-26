@@ -96,6 +96,10 @@ export class UserStateHandler implements IUserStateHandler {
         recording?: boolean;
         listening_channel_add?: number[];
         listening_channel_remove?: number[];
+        listening_volume_adjustment?: Array<{
+          listening_channel?: number;
+          volume_adjustment?: number;
+        }>;
       }> = {
         session: targetSession,
         actor: actor_session,
@@ -114,13 +118,17 @@ export class UserStateHandler implements IUserStateHandler {
 
         // 将channel_id添加到广播对象
         broadcastUserState.channel_id = newChannelId;
+        broadcast = true;
 
         // 权限检查：移动其他用户需要特殊权限
         if (!isActorTarget) {
           const database = this.factory.getDatabase();
           if (database) {
+            // 获取临时令牌（用于当前请求的权限检查）
+            const temporaryTokens = userStateObj.temporary_access_tokens || [];
+            
             // 检查目标用户是否对新频道有EnterPermission
-            const targetUserInfo = this.permissionChecker.sessionToUserInfo(targetGlobalSession, oldChannelId);
+            const targetUserInfo = this.permissionChecker.sessionToUserInfo(targetGlobalSession, oldChannelId, temporaryTokens);
             const targetHasEnter = await this.permissionChecker.hasPermission(
               newChannelId,
               targetUserInfo,
@@ -128,7 +136,7 @@ export class UserStateHandler implements IUserStateHandler {
             );
 
             // 检查actor是否对目标用户当前频道有MovePermission
-            const actorUserInfo = this.permissionChecker.sessionToUserInfo(actorSession, actorSession.channel_id);
+            const actorUserInfo = this.permissionChecker.sessionToUserInfo(actorSession, actorSession.channel_id, temporaryTokens);
             const actorHasMove = oldChannelId !== undefined
               ? await this.permissionChecker.hasPermission(oldChannelId, actorUserInfo, Permission.Move)
               : false;
@@ -446,7 +454,9 @@ export class UserStateHandler implements IUserStateHandler {
       // 处理监听频道（listening_channel_add/remove）
       if (userStateObj.listening_channel_add && userStateObj.listening_channel_add.length > 0) {
         // 权限检查：需要对每个频道有Listen权限
-        const actorUserInfo = this.permissionChecker.sessionToUserInfo(actorSession, actorSession.channel_id);
+        // 使用临时令牌进行权限检查
+        const temporaryTokens = userStateObj.temporary_access_tokens || [];
+        const actorUserInfo = this.permissionChecker.sessionToUserInfo(actorSession, actorSession.channel_id, temporaryTokens);
         const allowedChannels: number[] = [];
 
         for (const channelId of userStateObj.listening_channel_add) {
@@ -483,6 +493,18 @@ export class UserStateHandler implements IUserStateHandler {
         broadcastUserState.listening_channel_remove = userStateObj.listening_channel_remove;
         broadcast = true;
         this.logger.info(`User ${actor_username} stopped listening to channels: ${userStateObj.listening_channel_remove.join(', ')}`);
+      }
+
+      // 处理音量调节（listening_volume_adjustment）
+      if (userStateObj.listening_volume_adjustment && userStateObj.listening_volume_adjustment.length > 0) {
+        // 音量调节直接广播，不需要权限检查（用户只能调节自己的监听器音量）
+        broadcastUserState.listening_volume_adjustment = userStateObj.listening_volume_adjustment;
+        broadcast = true;
+        
+        const adjustmentInfo = userStateObj.listening_volume_adjustment.map(adj => 
+          `ch${adj.listening_channel}:${adj.volume_adjustment?.toFixed(2)}`
+        ).join(', ');
+        this.logger.info(`User ${actor_username} adjusted listener volumes: ${adjustmentInfo}`);
       }
 
       if (!broadcast) {

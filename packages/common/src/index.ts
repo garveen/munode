@@ -8,3 +8,6 @@ export * from './blob-store.js';
 export * from './crypto/ocb2-aes128.js';
 export * from './util/buffer-pool.js';
 export * from './typed-events.js';
+export * from './rate-limiter.js';
+export * from './statistics/client-statistics.js';
+export * from './channel-listener-manager.js';

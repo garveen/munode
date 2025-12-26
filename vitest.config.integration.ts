@@ -45,6 +45,7 @@ export default defineConfig({
       '@munode/common': path.resolve(__dirname, 'packages/common/dist/index.js'),
       '@munode/hub-server': path.resolve(__dirname, 'packages/hub-server/dist/index.js'),
       '@munode/edge-server': path.resolve(__dirname, 'packages/edge-server/dist/index.js'),
+      '@munode/client': path.resolve(__dirname, 'packages/client/dist/index.js'),
     },
   },
   optimizeDeps: {

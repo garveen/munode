@@ -212,6 +212,9 @@ export class StateManager {
 
     // 如果是当前用户，更新会话状态
     if (this.session && this.session.session === session) {
+      if (user.user_id !== undefined) {
+        this.session.user_id = user.user_id;
+      }
       this.session.channel_id = user.channel_id;
       this.session.mute = user.mute;
       this.session.deaf = user.deaf;

@@ -64,16 +64,7 @@ export class HubServer {
     this.registry = this.factory.getRegistry();
     this.sessionManager = this.factory.getSessionManager();
     this.voiceTargetSync = this.factory.getVoiceTargetSync();
-    
-
-    // 初始化 BlobStore（如果启用）
-    if (this.config.blobStore.enabled) {
-      this.blobStore = new BlobStore(this.config.blobStore.path, true, this.logger);
-      await this.blobStore.init();
-    this.logger.debug('BlobStore enabled');
-    } else {
-    this.logger.debug('BlobStore disabled');
-    }
+    this.blobStore = this.factory.getBlobStore(); // 获取从factory初始化的BlobStore
 
 
 
@@ -247,6 +238,27 @@ export class HubServer {
    */
   getRegistry(): ServiceRegistry {
     return this.registry;
+  }
+
+  /**
+   * 获取Handler Factory（用于测试）
+   */
+  getHandlerFactory(): HubHandlerFactory {
+    return this.factory;
+  }
+
+  /**
+   * 获取数据库实例（用于测试）
+   */
+  getDatabase(): HubDatabase {
+    return this.database;
+  }
+
+  /**
+   * 获取Blob存储实例（用于测试）
+   */
+  getBlobStore(): BlobStore | undefined {
+    return this.blobStore;
   }
 
   /**

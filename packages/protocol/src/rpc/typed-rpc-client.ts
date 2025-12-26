@@ -151,13 +151,12 @@ export class TypedRPCClient {
         };
         break;
       }
-      case 'edge.routeVoice': {
-        const p = params as RPCParams<'edge.routeVoice'>;
-        request.edge_route_voice = {
-          from_edge_id: p.fromEdgeId,
-          from_session_id: p.fromSessionId,
-          target_id: p.target_id,
-          voice_data: p.voiceData,
+      case 'edge.relayVoiceViaTcp': {
+        const p = params as RPCParams<'edge.relayVoiceViaTcp'>;
+        request.edge_relay_voice_via_tcp = {
+          from_edge_id: p.from_edge_id,
+          target_edge_id: p.target_edge_id,
+          voice_packet: p.voice_packet,
           timestamp: p.timestamp,
         };
         break;
@@ -371,8 +370,8 @@ export class TypedRPCClient {
         return response.edge_sync_voice_target as RPCResult<M>;
       case 'edge.getVoiceTargets':
         return response.edge_get_voice_targets as RPCResult<M>;
-      case 'edge.routeVoice':
-        return response.edge_route_voice as RPCResult<M>;
+      case 'edge.relayVoiceViaTcp':
+        return response.edge_relay_voice_via_tcp as RPCResult<M>;
       case 'edge.adminOperation':
         return response.edge_admin_operation as RPCResult<M>;
       case 'edge.exchangeCertificates':

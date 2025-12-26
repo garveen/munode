@@ -18,14 +18,10 @@ export interface IVoiceRoutingHandler {
   handleGetVoiceTargets(params: RPCParams<'edge.getVoiceTargets'>): Promise<RPCResult<'edge.getVoiceTargets'>>;
 
   /**
-   * NOTE: Voice packet routing through hub has been removed.
-   * 
-   * Architecture: Voice packets now flow edge-to-edge directly via UDP (VoiceUDPTransport).
-   * Hub only handles VoiceTarget configuration synchronization, not voice data packets.
-   * 
-   * This method (handleRouteVoice) has been removed as it's no longer needed.
-   * @deprecated Since voice routing architecture change - will be removed in future version
+   * 处理 TCP 降级语音中转
+   * 当 Edge 之间 UDP 连接不可用时，通过 Hub 中转语音数据
    */
+  handleRelayVoiceViaTcp(params: RPCParams<'edge.relayVoiceViaTcp'>): Promise<RPCResult<'edge.relayVoiceViaTcp'>>;
 }
 
 /**
@@ -87,5 +83,38 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
     return { voice_targets: configs };
   }
 
-  // Implementation removed - see interface documentation above
+  /**
+   * 处理 TCP 降级语音中转
+   * 当 UDP 连接不可用时，Edge 通过 Hub 的 WebSocket 控制通道转发语音包
+   */
+  async handleRelayVoiceViaTcp(params: RPCParams<'edge.relayVoiceViaTcp'>): Promise<RPCResult<'edge.relayVoiceViaTcp'>> {
+    const controlService = this.factory.getControlService();
+    const { from_edge_id, target_edge_id, voice_packet, timestamp } = params;
+
+    try {
+      // 记录 TCP 降级转发
+      this.logger.debug(
+        `TCP fallback relay: Edge ${from_edge_id} -> Edge ${target_edge_id}, ` +
+        `packet_size=${voice_packet.length}, timestamp=${timestamp}`
+      );
+
+      // 通过控制服务的 notify 方法发送给目标 Edge
+      // 使用通知机制，不需要等待响应
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      controlService.notify(target_edge_id, 'hub.relayVoicePacket', {
+        from_edge_id,
+        voice_packet,
+        timestamp,
+      } as any);
+
+      this.logger.debug(`TCP relay successful: ${voice_packet.length} bytes to Edge ${target_edge_id}`);
+      return { success: true };
+    } catch (error) {
+      this.logger.error(`TCP relay error from Edge ${from_edge_id} to ${target_edge_id}:`, error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      };
+    }
+  }
 }

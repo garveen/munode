@@ -123,6 +123,13 @@ export class DatabaseOperations implements IDatabaseOperations {
     this.blobStore = blobStore;
   }
 
+  /**
+   * 设置BlobStore（用于延迟初始化）
+   */
+  setBlobStore(blobStore: BlobStore): void {
+    this.blobStore = blobStore;
+  }
+
   async addBan(banData: {
     address: Buffer;
     mask: number;

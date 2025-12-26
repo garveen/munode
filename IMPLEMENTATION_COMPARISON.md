@@ -526,30 +526,112 @@
 
 ---
 
-## 推荐行动
+## C++ Mumble 官方实现特有功能
 
-### 短期 (1-2周)
-1. ✅ 实现 PluginDataTransmission
-2. ✅ 实现 PreConnectUserState
-3. ✅ 完善统计系统
-4. ✅ 实现 ListenChannel
+基于对 `c-implement/src/murmur/` 的深入分析，以下是 C++ 官方实现中存在但 Node 版本尚未实现的功能：
 
-### 中期 (1-2月)
-1. 完整的 Blob 存储系统
-2. UserList 完整实现
-3. CodecVersion 动态协商
-4. 临时访问令牌
+### 1. **ICE/RPC 远程管理接口** ❌
+- `MumbleServerIce.h/cpp` - 完整的 RPC 管理接口
+- `MumbleServer.ice` - ICE 接口定义
+- 支持远程创建/删除用户、频道管理、权限设置
+- **Node 版本完全未实现**
 
-### 长期 (3-6月)
-1. 性能优化
-2. 完整的测试覆盖
-3. 监控和管理界面
-4. 文档完善
+### 2. **Zeroconf/Bonjour 服务发现** ❌
+- `Zeroconf.h/cpp` - DNS-SD 服务注册
+- 自动在局域网广播服务器信息
+- **Node 版本完全未实现**
+
+### 3. **频道监听器音量调节** ⚠️
+- `ChannelListenerManager` - 完整的监听器管理
+- 支持每个监听器的音量调节
+- 数据库持久化监听配置
+- **Node 版本已实现基础监听功能，缺少音量调节和持久化**
+
+### 4. **详细统计数据收集** ⚠️
+- 加密统计 (good/late/lost/resync packets)
+- UDP/TCP 包计数器
+- Ping 统计 (平均值、方差)
+- 带宽使用统计
+- **Node 版本返回固定值或 0**
+
+### 5. **Blob 存储系统** ⚠️
+- 用户纹理 (头像) 完整存储和检索
+- 用户评论存储
+- 频道描述 (长文本) 哈希和缓存
+- **Node 版本部分实现**
+
+### 6. **编解码器动态协商** ⚠️
+- `recheckCodecVersions()` - 根据客户端能力协商
+- Opus 阈值检查 (如超过 X% 客户端支持则启用)
+- CELT Alpha/Beta 版本管理
+- **Node 版本使用固定配置**
+
+### 7. **外部认证器接口** ⚠️
+- `ServerAuthenticator` / `ServerUpdatingAuthenticator` 接口
+- 支持插拔式外部认证系统
+- 支持注册用户、更新纹理等
+- **Node 版本仅有简单的 HTTP 外部认证**
+
+### 8. **服务器公共列表注册** ⚠️
+- `Register.cpp` - 自动注册到公共服务器列表
+- 定期向 mumble.info 报告服务器信息
+- **Node 版本未实现**
+
+### 9. **高级权限功能** ⚠️
+- 临时访问令牌 (temporary_access_tokens)
+- `is_enter_restricted` 频道标记
+- `can_enter` 权限实时检查
+- **Node 版本基础 ACL 已实现，缺少这些功能**
+
+### 10. **速率限制 (Rate Limiting)** ❌
+- 漏桶算法 (Leaky Bucket) 限制消息频率
+- `iMessageLimit` / `iMessageBurst` 配置
+- `iPluginMessageLimit` / `iPluginMessageBurst`
+- **Node 版本完全未实现**
+
+### 11. **QoS (Quality of Service)** ❌
+- IP_TOS 设置
+- UDP 数据包优先级标记
+- **Node 版本未实现**
+
+### 12. **Tracy 性能分析** ❌
+- 集成 Tracy profiler 进行性能分析
+- **Node 版本未实现**
 
 ---
 
-**文档版本**: 1.0  
+## 推荐行动
+
+### 高优先级 - 立即实施 (1-2周)
+1. 🔴 **统计数据收集** - 用于监控和调试
+2. 🔴 **速率限制** - 防止滥用和 DoS 攻击
+3. 🔴 **频道监听器音量调节** - 完善现有功能
+4. 🟡 **临时访问令牌** - 增强权限系统
+5. 🟡 **Blob 存储完善** - 支持用户头像和评论
+
+### 中优先级 - 计划实施 (1-2月)
+1. 🟡 编解码器动态协商
+2. 🟡 服务器注册系统
+3. 🟡 外部认证器扩展
+4. 🟡 用户列表管理完善
+5. 🟡 `is_enter_restricted` / `can_enter` 权限功能
+
+### 低优先级 - 可选实施 (3-6月)
+1. ⚪ ICE/RPC 管理接口 (可用 HTTP API 替代)
+2. ⚪ Zeroconf 服务发现
+3. ⚪ QoS 标记
+4. ⚪ Tracy 集成
+5. ⚪ 性能优化
+6. ⚪ 完整的测试覆盖
+7. ⚪ 监控和管理界面
+
+---
+
+**文档版本**: 2.0  
 **对比基准**: 
-- Go 实现: shitspeak.go (当前版本)
-- Node 实现: munode (当前开发版本)
+- C++ 实现: mumble/src/murmur/ (官方实现)
+- Go 实现: go-implement/ (参考实现)
+- Node 实现: packages/ (当前开发版本)
 - Protocol: Mumble.proto (Mumble 1.4+)
+
+**更新日期**: 2025-12-24

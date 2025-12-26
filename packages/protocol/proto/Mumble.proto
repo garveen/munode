@@ -175,6 +175,14 @@ message UserRemove {
 // First seen during login procedure. May be sent by the client when it wishes
 // to alter its state.
 message UserState {
+	// Volume adjustment for a specific channel listener
+	message VolumeAdjustment {
+		// The channel ID being listened to
+		optional uint32 listening_channel = 1;
+		// Volume adjustment factor (1.0 = normal, 0.0 = muted, >1.0 = amplified)
+		optional float volume_adjustment = 2;
+	}
+
 	// Unique user session ID of the user whose state this is, may change on
 	// reconnect.
 	optional uint32 session = 1;
@@ -226,6 +234,8 @@ message UserState {
 	repeated uint32 listening_channel_add = 21;
 	// a list of channels the user does no longer want to listen to.
 	repeated uint32 listening_channel_remove = 22;
+	// A list of volume adjustments the user has applied to listeners
+	repeated VolumeAdjustment listening_volume_adjustment = 23;
 }
 
 // Relays information on the bans. The client may send the BanList message to

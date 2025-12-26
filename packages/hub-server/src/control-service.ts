@@ -300,7 +300,7 @@ export class HubControlService {
       // VoiceTarget 同步
       { method: 'edge.syncVoiceTarget', handler: async (_channel, params) => await this.factory.getVoiceRoutingHandler().handleSyncVoiceTarget(params as RPCParams<'edge.syncVoiceTarget'>) },
       { method: 'edge.getVoiceTargets', handler: async (_channel, params) => await this.factory.getVoiceRoutingHandler().handleGetVoiceTargets(params as RPCParams<'edge.getVoiceTargets'>) },
-      // NOTE: edge.routeVoice removed - voice packets should flow edge-to-edge directly via UDP
+      { method: 'edge.relayVoiceViaTcp', handler: async (_channel, params) => await this.factory.getVoiceRoutingHandler().handleRelayVoiceViaTcp(params as RPCParams<'edge.relayVoiceViaTcp'>) },
       
       // 管理操作
       { method: 'edge.adminOperation', handler: async (_channel, params) => await this.adminOperationHandler.handleAdminOperation(params as RPCParams<'edge.adminOperation'>) },

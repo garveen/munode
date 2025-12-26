@@ -185,24 +185,19 @@ message VoiceTargetConfigEntry {
 }
 
 // ---------------------------------------------------------------------------
-// edge.routeVoice - Edge 请求路由语音数据
+// edge.relayVoiceViaTcp - TCP 降级：Edge 通过 Hub 中转语音数据
+// 当 UDP 直连和中转路由都不可用时使用
 // ---------------------------------------------------------------------------
-message EdgeRouteVoiceParams {
-  required uint32 from_edge_id = 1;
-  required uint32 from_session_id = 2;
-  required uint32 target_id = 3;
-  required bytes voice_data = 4;
-  required int64 timestamp = 5;
+message EdgeRelayVoiceViaTcpParams {
+  required uint32 from_edge_id = 1;      // 源 Edge ID
+  required uint32 target_edge_id = 2;    // 目标 Edge ID
+  required bytes voice_packet = 3;       // 完整的语音包（包含 header）
+  required int64 timestamp = 4;          // 时间戳
 }
 
-message EdgeRouteVoiceResult {
+message EdgeRelayVoiceViaTcpResult {
   required bool success = 1;
-  repeated RouteTarget routed_to = 2;
-}
-
-message RouteTarget {
-  required uint32 session_id = 1;
-  required uint32 edge_id = 2;
+  optional string error = 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -776,7 +771,7 @@ message TypedRPCRequest {
   optional EdgeAuthenticateUserParams edge_authenticate_user = 13;
   optional EdgeSyncVoiceTargetParams edge_sync_voice_target = 15;
   optional EdgeGetVoiceTargetsParams edge_get_voice_targets = 16;
-  optional EdgeRouteVoiceParams edge_route_voice = 17;
+  optional EdgeRelayVoiceViaTcpParams edge_relay_voice_via_tcp = 17;
   optional EdgeAdminOperationParams edge_admin_operation = 18;
   optional EdgeExchangeCertificatesParams edge_exchange_certificates = 19;
   optional EdgeFullSyncParams edge_full_sync = 20;
@@ -816,7 +811,7 @@ message TypedRPCResponse {
   optional EdgeReportSessionResult edge_report_session = 14;
   optional EdgeSyncVoiceTargetResult edge_sync_voice_target = 15;
   optional EdgeGetVoiceTargetsResult edge_get_voice_targets = 16;
-  optional EdgeRouteVoiceResult edge_route_voice = 17;
+  optional EdgeRelayVoiceViaTcpResult edge_relay_voice_via_tcp = 17;
   optional EdgeAdminOperationResult edge_admin_operation = 18;
   optional EdgeExchangeCertificatesResult edge_exchange_certificates = 19;
   optional EdgeFullSyncResult edge_full_sync = 20;

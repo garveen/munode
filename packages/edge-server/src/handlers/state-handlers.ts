@@ -166,6 +166,10 @@ export class StateHandlers {
         texture_hash?: Uint8Array;
         listening_channel_add?: number[];
         listening_channel_remove?: number[];
+        listening_volume_adjustment?: Array<{
+          listening_channel?: number;
+          volume_adjustment?: number;
+        }>;
       } = {
         session: userState.session,
         actor: userState.actor,
@@ -215,6 +219,27 @@ export class StateHandlers {
       }
       if (userState.listening_channel_remove && userState.listening_channel_remove.length > 0) {
         userStateToSend.listening_channel_remove = userState.listening_channel_remove;
+      }
+      
+      // 处理音量调节 - 只在客户端提供时才处理
+      if (userState.listening_volume_adjustment && userState.listening_volume_adjustment.length > 0) {
+        // 存储音量调节到本地管理器
+        for (const adjustment of userState.listening_volume_adjustment) {
+          if (adjustment.listening_channel !== undefined && adjustment.volume_adjustment !== undefined) {
+            try {
+              this.clientManager.setListenerVolumeAdjustment(
+                session_id,
+                adjustment.listening_channel,
+                adjustment.volume_adjustment
+              );
+            } catch (error) {
+              this.logger.warn(`Invalid volume adjustment: ${error instanceof Error ? error.message : error}`);
+            }
+          }
+        }
+        
+        // 转发到其他客户端
+        userStateToSend.listening_volume_adjustment = userState.listening_volume_adjustment;
       }
       
       // 处理 blob 字段（texture 和 comment）

@@ -201,25 +201,30 @@ export interface VoiceTargetConfigEntry {
 
 /**
  * ---------------------------------------------------------------------------
- * edge.routeVoice - Edge 请求路由语音数据
+ * edge.relayVoiceViaTcp - TCP 降级：Edge 通过 Hub 中转语音数据
+ * 当 UDP 直连和中转路由都不可用时使用
  * ---------------------------------------------------------------------------
  */
-export interface EdgeRouteVoiceParams {
-  from_edge_id?: number | undefined;
-  from_session_id?: number | undefined;
-  target_id?: number | undefined;
-  voice_data?: Buffer | undefined;
+export interface EdgeRelayVoiceViaTcpParams {
+  /** 源 Edge ID */
+  from_edge_id?:
+    | number
+    | undefined;
+  /** 目标 Edge ID */
+  target_edge_id?:
+    | number
+    | undefined;
+  /** 完整的语音包（包含 header） */
+  voice_packet?:
+    | Buffer
+    | undefined;
+  /** 时间戳 */
   timestamp?: number | undefined;
 }
 
-export interface EdgeRouteVoiceResult {
+export interface EdgeRelayVoiceViaTcpResult {
   success?: boolean | undefined;
-  routed_to?: RouteTarget[] | undefined;
-}
-
-export interface RouteTarget {
-  session_id?: number | undefined;
-  edge_id?: number | undefined;
+  error?: string | undefined;
 }
 
 /**
@@ -863,7 +868,7 @@ export interface TypedRPCRequest {
   edge_authenticate_user?: EdgeAuthenticateUserParams | undefined;
   edge_sync_voice_target?: EdgeSyncVoiceTargetParams | undefined;
   edge_get_voice_targets?: EdgeGetVoiceTargetsParams | undefined;
-  edge_route_voice?: EdgeRouteVoiceParams | undefined;
+  edge_relay_voice_via_tcp?: EdgeRelayVoiceViaTcpParams | undefined;
   edge_admin_operation?: EdgeAdminOperationParams | undefined;
   edge_exchange_certificates?: EdgeExchangeCertificatesParams | undefined;
   edge_full_sync?: EdgeFullSyncParams | undefined;
@@ -904,7 +909,7 @@ export interface TypedRPCResponse {
   edge_report_session?: EdgeReportSessionResult | undefined;
   edge_sync_voice_target?: EdgeSyncVoiceTargetResult | undefined;
   edge_get_voice_targets?: EdgeGetVoiceTargetsResult | undefined;
-  edge_route_voice?: EdgeRouteVoiceResult | undefined;
+  edge_relay_voice_via_tcp?: EdgeRelayVoiceViaTcpResult | undefined;
   edge_admin_operation?: EdgeAdminOperationResult | undefined;
   edge_exchange_certificates?: EdgeExchangeCertificatesResult | undefined;
   edge_full_sync?: EdgeFullSyncResult | undefined;
@@ -3460,40 +3465,31 @@ export const VoiceTargetConfigEntry: MessageFns<VoiceTargetConfigEntry> = {
   },
 };
 
-function createBaseEdgeRouteVoiceParams(): EdgeRouteVoiceParams {
-  return {
-    from_edge_id: undefined,
-    from_session_id: undefined,
-    target_id: undefined,
-    voice_data: undefined,
-    timestamp: undefined,
-  };
+function createBaseEdgeRelayVoiceViaTcpParams(): EdgeRelayVoiceViaTcpParams {
+  return { from_edge_id: undefined, target_edge_id: undefined, voice_packet: undefined, timestamp: undefined };
 }
 
-export const EdgeRouteVoiceParams: MessageFns<EdgeRouteVoiceParams> = {
-  encode(message: EdgeRouteVoiceParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+export const EdgeRelayVoiceViaTcpParams: MessageFns<EdgeRelayVoiceViaTcpParams> = {
+  encode(message: EdgeRelayVoiceViaTcpParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.from_edge_id !== undefined) {
       writer.uint32(8).uint32(message.from_edge_id);
     }
-    if (message.from_session_id !== undefined) {
-      writer.uint32(16).uint32(message.from_session_id);
+    if (message.target_edge_id !== undefined) {
+      writer.uint32(16).uint32(message.target_edge_id);
     }
-    if (message.target_id !== undefined) {
-      writer.uint32(24).uint32(message.target_id);
-    }
-    if (message.voice_data !== undefined) {
-      writer.uint32(34).bytes(message.voice_data);
+    if (message.voice_packet !== undefined) {
+      writer.uint32(26).bytes(message.voice_packet);
     }
     if (message.timestamp !== undefined) {
-      writer.uint32(40).int64(message.timestamp);
+      writer.uint32(32).int64(message.timestamp);
     }
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): EdgeRouteVoiceParams {
+  decode(input: BinaryReader | Uint8Array, length?: number): EdgeRelayVoiceViaTcpParams {
     const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseEdgeRouteVoiceParams();
+    const message = createBaseEdgeRelayVoiceViaTcpParams();
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
@@ -3510,27 +3506,19 @@ export const EdgeRouteVoiceParams: MessageFns<EdgeRouteVoiceParams> = {
             break;
           }
 
-          message.from_session_id = reader.uint32();
+          message.target_edge_id = reader.uint32();
           continue;
         }
         case 3: {
-          if (tag !== 24) {
+          if (tag !== 26) {
             break;
           }
 
-          message.target_id = reader.uint32();
+          message.voice_packet = Buffer.from(reader.bytes());
           continue;
         }
         case 4: {
-          if (tag !== 34) {
-            break;
-          }
-
-          message.voice_data = Buffer.from(reader.bytes());
-          continue;
-        }
-        case 5: {
-          if (tag !== 40) {
+          if (tag !== 32) {
             break;
           }
 
@@ -3546,29 +3534,25 @@ export const EdgeRouteVoiceParams: MessageFns<EdgeRouteVoiceParams> = {
     return message;
   },
 
-  fromJSON(object: any): EdgeRouteVoiceParams {
+  fromJSON(object: any): EdgeRelayVoiceViaTcpParams {
     return {
       from_edge_id: isSet(object.from_edge_id) ? globalThis.Number(object.from_edge_id) : undefined,
-      from_session_id: isSet(object.from_session_id) ? globalThis.Number(object.from_session_id) : undefined,
-      target_id: isSet(object.target_id) ? globalThis.Number(object.target_id) : undefined,
-      voice_data: isSet(object.voice_data) ? Buffer.from(bytesFromBase64(object.voice_data)) : undefined,
+      target_edge_id: isSet(object.target_edge_id) ? globalThis.Number(object.target_edge_id) : undefined,
+      voice_packet: isSet(object.voice_packet) ? Buffer.from(bytesFromBase64(object.voice_packet)) : undefined,
       timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
     };
   },
 
-  toJSON(message: EdgeRouteVoiceParams): unknown {
+  toJSON(message: EdgeRelayVoiceViaTcpParams): unknown {
     const obj: any = {};
     if (message.from_edge_id !== undefined) {
       obj.from_edge_id = Math.round(message.from_edge_id);
     }
-    if (message.from_session_id !== undefined) {
-      obj.from_session_id = Math.round(message.from_session_id);
+    if (message.target_edge_id !== undefined) {
+      obj.target_edge_id = Math.round(message.target_edge_id);
     }
-    if (message.target_id !== undefined) {
-      obj.target_id = Math.round(message.target_id);
-    }
-    if (message.voice_data !== undefined) {
-      obj.voice_data = base64FromBytes(message.voice_data);
+    if (message.voice_packet !== undefined) {
+      obj.voice_packet = base64FromBytes(message.voice_packet);
     }
     if (message.timestamp !== undefined) {
       obj.timestamp = Math.round(message.timestamp);
@@ -3576,41 +3560,38 @@ export const EdgeRouteVoiceParams: MessageFns<EdgeRouteVoiceParams> = {
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<EdgeRouteVoiceParams>, I>>(base?: I): EdgeRouteVoiceParams {
-    return EdgeRouteVoiceParams.fromPartial(base ?? ({} as any));
+  create<I extends Exact<DeepPartial<EdgeRelayVoiceViaTcpParams>, I>>(base?: I): EdgeRelayVoiceViaTcpParams {
+    return EdgeRelayVoiceViaTcpParams.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<EdgeRouteVoiceParams>, I>>(object: I): EdgeRouteVoiceParams {
-    const message = createBaseEdgeRouteVoiceParams();
+  fromPartial<I extends Exact<DeepPartial<EdgeRelayVoiceViaTcpParams>, I>>(object: I): EdgeRelayVoiceViaTcpParams {
+    const message = createBaseEdgeRelayVoiceViaTcpParams();
     message.from_edge_id = object.from_edge_id ?? undefined;
-    message.from_session_id = object.from_session_id ?? undefined;
-    message.target_id = object.target_id ?? undefined;
-    message.voice_data = object.voice_data ?? undefined;
+    message.target_edge_id = object.target_edge_id ?? undefined;
+    message.voice_packet = object.voice_packet ?? undefined;
     message.timestamp = object.timestamp ?? undefined;
     return message;
   },
 };
 
-function createBaseEdgeRouteVoiceResult(): EdgeRouteVoiceResult {
-  return { success: undefined, routed_to: [] };
+function createBaseEdgeRelayVoiceViaTcpResult(): EdgeRelayVoiceViaTcpResult {
+  return { success: undefined, error: undefined };
 }
 
-export const EdgeRouteVoiceResult: MessageFns<EdgeRouteVoiceResult> = {
-  encode(message: EdgeRouteVoiceResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+export const EdgeRelayVoiceViaTcpResult: MessageFns<EdgeRelayVoiceViaTcpResult> = {
+  encode(message: EdgeRelayVoiceViaTcpResult, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.success !== undefined) {
       writer.uint32(8).bool(message.success);
     }
-    if (message.routed_to !== undefined && message.routed_to.length !== 0) {
-      for (const v of message.routed_to) {
-        RouteTarget.encode(v!, writer.uint32(18).fork()).join();
-      }
+    if (message.error !== undefined) {
+      writer.uint32(18).string(message.error);
     }
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): EdgeRouteVoiceResult {
+  decode(input: BinaryReader | Uint8Array, length?: number): EdgeRelayVoiceViaTcpResult {
     const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
     const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseEdgeRouteVoiceResult();
+    const message = createBaseEdgeRelayVoiceViaTcpResult();
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
@@ -3627,10 +3608,7 @@ export const EdgeRouteVoiceResult: MessageFns<EdgeRouteVoiceResult> = {
             break;
           }
 
-          const el = RouteTarget.decode(reader, reader.uint32());
-          if (el !== undefined) {
-            message.routed_to!.push(el);
-          }
+          message.error = reader.string();
           continue;
         }
       }
@@ -3642,109 +3620,31 @@ export const EdgeRouteVoiceResult: MessageFns<EdgeRouteVoiceResult> = {
     return message;
   },
 
-  fromJSON(object: any): EdgeRouteVoiceResult {
+  fromJSON(object: any): EdgeRelayVoiceViaTcpResult {
     return {
       success: isSet(object.success) ? globalThis.Boolean(object.success) : undefined,
-      routed_to: globalThis.Array.isArray(object?.routed_to)
-        ? object.routed_to.map((e: any) => RouteTarget.fromJSON(e))
-        : [],
+      error: isSet(object.error) ? globalThis.String(object.error) : undefined,
     };
   },
 
-  toJSON(message: EdgeRouteVoiceResult): unknown {
+  toJSON(message: EdgeRelayVoiceViaTcpResult): unknown {
     const obj: any = {};
     if (message.success !== undefined) {
       obj.success = message.success;
     }
-    if (message.routed_to?.length) {
-      obj.routed_to = message.routed_to.map((e) => RouteTarget.toJSON(e));
+    if (message.error !== undefined) {
+      obj.error = message.error;
     }
     return obj;
   },
 
-  create<I extends Exact<DeepPartial<EdgeRouteVoiceResult>, I>>(base?: I): EdgeRouteVoiceResult {
-    return EdgeRouteVoiceResult.fromPartial(base ?? ({} as any));
+  create<I extends Exact<DeepPartial<EdgeRelayVoiceViaTcpResult>, I>>(base?: I): EdgeRelayVoiceViaTcpResult {
+    return EdgeRelayVoiceViaTcpResult.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<EdgeRouteVoiceResult>, I>>(object: I): EdgeRouteVoiceResult {
-    const message = createBaseEdgeRouteVoiceResult();
+  fromPartial<I extends Exact<DeepPartial<EdgeRelayVoiceViaTcpResult>, I>>(object: I): EdgeRelayVoiceViaTcpResult {
+    const message = createBaseEdgeRelayVoiceViaTcpResult();
     message.success = object.success ?? undefined;
-    message.routed_to = object.routed_to?.map((e) => RouteTarget.fromPartial(e)) || [];
-    return message;
-  },
-};
-
-function createBaseRouteTarget(): RouteTarget {
-  return { session_id: undefined, edge_id: undefined };
-}
-
-export const RouteTarget: MessageFns<RouteTarget> = {
-  encode(message: RouteTarget, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.session_id !== undefined) {
-      writer.uint32(8).uint32(message.session_id);
-    }
-    if (message.edge_id !== undefined) {
-      writer.uint32(16).uint32(message.edge_id);
-    }
-    return writer;
-  },
-
-  decode(input: BinaryReader | Uint8Array, length?: number): RouteTarget {
-    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
-    const end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBaseRouteTarget();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 8) {
-            break;
-          }
-
-          message.session_id = reader.uint32();
-          continue;
-        }
-        case 2: {
-          if (tag !== 16) {
-            break;
-          }
-
-          message.edge_id = reader.uint32();
-          continue;
-        }
-      }
-      if ((tag & 7) === 4 || tag === 0) {
-        break;
-      }
-      reader.skip(tag & 7);
-    }
-    return message;
-  },
-
-  fromJSON(object: any): RouteTarget {
-    return {
-      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
-      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
-    };
-  },
-
-  toJSON(message: RouteTarget): unknown {
-    const obj: any = {};
-    if (message.session_id !== undefined) {
-      obj.session_id = Math.round(message.session_id);
-    }
-    if (message.edge_id !== undefined) {
-      obj.edge_id = Math.round(message.edge_id);
-    }
-    return obj;
-  },
-
-  create<I extends Exact<DeepPartial<RouteTarget>, I>>(base?: I): RouteTarget {
-    return RouteTarget.fromPartial(base ?? ({} as any));
-  },
-  fromPartial<I extends Exact<DeepPartial<RouteTarget>, I>>(object: I): RouteTarget {
-    const message = createBaseRouteTarget();
-    message.session_id = object.session_id ?? undefined;
-    message.edge_id = object.edge_id ?? undefined;
+    message.error = object.error ?? undefined;
     return message;
   },
 };
@@ -10875,7 +10775,7 @@ function createBaseTypedRPCRequest(): TypedRPCRequest {
     edge_authenticate_user: undefined,
     edge_sync_voice_target: undefined,
     edge_get_voice_targets: undefined,
-    edge_route_voice: undefined,
+    edge_relay_voice_via_tcp: undefined,
     edge_admin_operation: undefined,
     edge_exchange_certificates: undefined,
     edge_full_sync: undefined,
@@ -10928,8 +10828,8 @@ export const TypedRPCRequest: MessageFns<TypedRPCRequest> = {
     if (message.edge_get_voice_targets !== undefined) {
       EdgeGetVoiceTargetsParams.encode(message.edge_get_voice_targets, writer.uint32(130).fork()).join();
     }
-    if (message.edge_route_voice !== undefined) {
-      EdgeRouteVoiceParams.encode(message.edge_route_voice, writer.uint32(138).fork()).join();
+    if (message.edge_relay_voice_via_tcp !== undefined) {
+      EdgeRelayVoiceViaTcpParams.encode(message.edge_relay_voice_via_tcp, writer.uint32(138).fork()).join();
     }
     if (message.edge_admin_operation !== undefined) {
       EdgeAdminOperationParams.encode(message.edge_admin_operation, writer.uint32(146).fork()).join();
@@ -11078,7 +10978,7 @@ export const TypedRPCRequest: MessageFns<TypedRPCRequest> = {
             break;
           }
 
-          message.edge_route_voice = EdgeRouteVoiceParams.decode(reader, reader.uint32());
+          message.edge_relay_voice_via_tcp = EdgeRelayVoiceViaTcpParams.decode(reader, reader.uint32());
           continue;
         }
         case 18: {
@@ -11269,8 +11169,8 @@ export const TypedRPCRequest: MessageFns<TypedRPCRequest> = {
       edge_get_voice_targets: isSet(object.edge_get_voice_targets)
         ? EdgeGetVoiceTargetsParams.fromJSON(object.edge_get_voice_targets)
         : undefined,
-      edge_route_voice: isSet(object.edge_route_voice)
-        ? EdgeRouteVoiceParams.fromJSON(object.edge_route_voice)
+      edge_relay_voice_via_tcp: isSet(object.edge_relay_voice_via_tcp)
+        ? EdgeRelayVoiceViaTcpParams.fromJSON(object.edge_relay_voice_via_tcp)
         : undefined,
       edge_admin_operation: isSet(object.edge_admin_operation)
         ? EdgeAdminOperationParams.fromJSON(object.edge_admin_operation)
@@ -11350,8 +11250,8 @@ export const TypedRPCRequest: MessageFns<TypedRPCRequest> = {
     if (message.edge_get_voice_targets !== undefined) {
       obj.edge_get_voice_targets = EdgeGetVoiceTargetsParams.toJSON(message.edge_get_voice_targets);
     }
-    if (message.edge_route_voice !== undefined) {
-      obj.edge_route_voice = EdgeRouteVoiceParams.toJSON(message.edge_route_voice);
+    if (message.edge_relay_voice_via_tcp !== undefined) {
+      obj.edge_relay_voice_via_tcp = EdgeRelayVoiceViaTcpParams.toJSON(message.edge_relay_voice_via_tcp);
     }
     if (message.edge_admin_operation !== undefined) {
       obj.edge_admin_operation = EdgeAdminOperationParams.toJSON(message.edge_admin_operation);
@@ -11446,9 +11346,10 @@ export const TypedRPCRequest: MessageFns<TypedRPCRequest> = {
       (object.edge_get_voice_targets !== undefined && object.edge_get_voice_targets !== null)
         ? EdgeGetVoiceTargetsParams.fromPartial(object.edge_get_voice_targets)
         : undefined;
-    message.edge_route_voice = (object.edge_route_voice !== undefined && object.edge_route_voice !== null)
-      ? EdgeRouteVoiceParams.fromPartial(object.edge_route_voice)
-      : undefined;
+    message.edge_relay_voice_via_tcp =
+      (object.edge_relay_voice_via_tcp !== undefined && object.edge_relay_voice_via_tcp !== null)
+        ? EdgeRelayVoiceViaTcpParams.fromPartial(object.edge_relay_voice_via_tcp)
+        : undefined;
     message.edge_admin_operation = (object.edge_admin_operation !== undefined && object.edge_admin_operation !== null)
       ? EdgeAdminOperationParams.fromPartial(object.edge_admin_operation)
       : undefined;
@@ -11532,7 +11433,7 @@ function createBaseTypedRPCResponse(): TypedRPCResponse {
     edge_report_session: undefined,
     edge_sync_voice_target: undefined,
     edge_get_voice_targets: undefined,
-    edge_route_voice: undefined,
+    edge_relay_voice_via_tcp: undefined,
     edge_admin_operation: undefined,
     edge_exchange_certificates: undefined,
     edge_full_sync: undefined,
@@ -11588,8 +11489,8 @@ export const TypedRPCResponse: MessageFns<TypedRPCResponse> = {
     if (message.edge_get_voice_targets !== undefined) {
       EdgeGetVoiceTargetsResult.encode(message.edge_get_voice_targets, writer.uint32(130).fork()).join();
     }
-    if (message.edge_route_voice !== undefined) {
-      EdgeRouteVoiceResult.encode(message.edge_route_voice, writer.uint32(138).fork()).join();
+    if (message.edge_relay_voice_via_tcp !== undefined) {
+      EdgeRelayVoiceViaTcpResult.encode(message.edge_relay_voice_via_tcp, writer.uint32(138).fork()).join();
     }
     if (message.edge_admin_operation !== undefined) {
       EdgeAdminOperationResult.encode(message.edge_admin_operation, writer.uint32(146).fork()).join();
@@ -11746,7 +11647,7 @@ export const TypedRPCResponse: MessageFns<TypedRPCResponse> = {
             break;
           }
 
-          message.edge_route_voice = EdgeRouteVoiceResult.decode(reader, reader.uint32());
+          message.edge_relay_voice_via_tcp = EdgeRelayVoiceViaTcpResult.decode(reader, reader.uint32());
           continue;
         }
         case 18: {
@@ -11940,8 +11841,8 @@ export const TypedRPCResponse: MessageFns<TypedRPCResponse> = {
       edge_get_voice_targets: isSet(object.edge_get_voice_targets)
         ? EdgeGetVoiceTargetsResult.fromJSON(object.edge_get_voice_targets)
         : undefined,
-      edge_route_voice: isSet(object.edge_route_voice)
-        ? EdgeRouteVoiceResult.fromJSON(object.edge_route_voice)
+      edge_relay_voice_via_tcp: isSet(object.edge_relay_voice_via_tcp)
+        ? EdgeRelayVoiceViaTcpResult.fromJSON(object.edge_relay_voice_via_tcp)
         : undefined,
       edge_admin_operation: isSet(object.edge_admin_operation)
         ? EdgeAdminOperationResult.fromJSON(object.edge_admin_operation)
@@ -12024,8 +11925,8 @@ export const TypedRPCResponse: MessageFns<TypedRPCResponse> = {
     if (message.edge_get_voice_targets !== undefined) {
       obj.edge_get_voice_targets = EdgeGetVoiceTargetsResult.toJSON(message.edge_get_voice_targets);
     }
-    if (message.edge_route_voice !== undefined) {
-      obj.edge_route_voice = EdgeRouteVoiceResult.toJSON(message.edge_route_voice);
+    if (message.edge_relay_voice_via_tcp !== undefined) {
+      obj.edge_relay_voice_via_tcp = EdgeRelayVoiceViaTcpResult.toJSON(message.edge_relay_voice_via_tcp);
     }
     if (message.edge_admin_operation !== undefined) {
       obj.edge_admin_operation = EdgeAdminOperationResult.toJSON(message.edge_admin_operation);
@@ -12123,9 +12024,10 @@ export const TypedRPCResponse: MessageFns<TypedRPCResponse> = {
       (object.edge_get_voice_targets !== undefined && object.edge_get_voice_targets !== null)
         ? EdgeGetVoiceTargetsResult.fromPartial(object.edge_get_voice_targets)
         : undefined;
-    message.edge_route_voice = (object.edge_route_voice !== undefined && object.edge_route_voice !== null)
-      ? EdgeRouteVoiceResult.fromPartial(object.edge_route_voice)
-      : undefined;
+    message.edge_relay_voice_via_tcp =
+      (object.edge_relay_voice_via_tcp !== undefined && object.edge_relay_voice_via_tcp !== null)
+        ? EdgeRelayVoiceViaTcpResult.fromPartial(object.edge_relay_voice_via_tcp)
+        : undefined;
     message.edge_admin_operation = (object.edge_admin_operation !== undefined && object.edge_admin_operation !== null)
       ? EdgeAdminOperationResult.fromPartial(object.edge_admin_operation)
       : undefined;

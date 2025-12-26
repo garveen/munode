@@ -178,6 +178,7 @@ export interface GlobalSession {
   connected_at: number;
   last_active: number;
   groups?: string[]; // 用户所属的组（如 admin、user 等）
+  temporary_tokens?: string[]; // 临时访问令牌（仅适用于当前请求）
   // 客户端信息
   version?: string; // 客户端版本（如 "1.5.634"）
   release?: string; // 客户端名称（如 "Mumble"）

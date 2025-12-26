@@ -550,11 +550,11 @@ export class VoiceManager {
    * 通过 TCP 降级发送语音包
    * 使用 Hub 控制通道作为备用传输路径
    */
-  private sendVoiceViaTcpFallback(
+  private async sendVoiceViaTcpFallback(
     targetEdgeId: number,
-    voicePacket: VoicePacketHeader,
+    _voicePacket: VoicePacketHeader,
     packetData: Buffer
-  ): void {
+  ): Promise<void> {
     try {
       // 设置 TCP 降级状态
       this.setTcpFallbackState(targetEdgeId);
@@ -573,27 +573,17 @@ export class VoiceManager {
       }
       
       // TCP 降级：将语音包通过控制通道转发
-      // 注意：这会增加延迟，但在 UDP 完全不可用时提供保底传输
-      // TODO: 实现专用的 Hub TCP 中转接口
-      // 目前仅记录日志，不实际发送
-      // 完整实现需要：
-      // 1. Hub 侧添加 edge.tcpRelayVoice RPC 处理
-      // 2. Hub 将语音数据转发给目标 Edge
-      // 3. 目标 Edge 解包并路由给本地客户端
+      this.logger.debug(`Sending voice via TCP fallback to Edge ${targetEdgeId}, size=${packetData.length}`);
       
-        this.logger.debug(`TCP fallback packet queued for Edge ${targetEdgeId}, size=${packetData.length}`);
+      const success = await hubClient.relayVoiceViaTcp(targetEdgeId, packetData);
       
-      // 临时实现：直接尝试 UDP 发送（即使可能失败）
-      // 这样至少不会完全丢失语音
-      if (this.voiceTransport) {
-        try {
-          this.voiceTransport.sendToEdge(targetEdgeId, voicePacket, packetData);
-        } catch (_e) {
-          // 忽略 UDP 发送失败
-        }
+      if (success) {
+        this.logger.debug(`TCP fallback successful for Edge ${targetEdgeId}`);
+      } else {
+        this.logger.warn(`TCP fallback failed for Edge ${targetEdgeId}`);
       }
     } catch (error) {
-        this.logger.error(`Error in TCP fallback for Edge ${targetEdgeId}:`, error);
+      this.logger.error(`Error in TCP fallback for Edge ${targetEdgeId}:`, error);
     }
   }
 }

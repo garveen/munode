@@ -964,4 +964,18 @@ export class MumbleClient extends EventEmitter {
   getAudioManager(): AudioStreamManager {
     return this.audioManager;
   }
+
+  /**
+   * 获取当前客户端的 session ID
+   */
+  getSession(): number {
+    return this.state.getSession()?.session || 0;
+  }
+
+  /**
+   * 获取当前客户端的 user ID（注册用户）
+   */
+  getUserId(): number | undefined {
+    return this.state.getSession()?.user_id;
+  }
 }

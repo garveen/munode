@@ -680,7 +680,7 @@ export async function setupTestEnvironment(
         hubConfig.webApi.port = webApiPort;
         hubConfig.voicePort = hubVoicePort;
 
-        hubConfig.blobStore = hubConfig.blobStore || { type: 'filesystem', options: { path: join(PROJECT_ROOT, 'data/hub-blobs') } };
+        hubConfig.blobStore = hubConfig.blobStore || { enabled: true, path: join(PROJECT_ROOT, 'data/blobs-test') };
         
         // 配置UDP语音传输的共享密钥用于握手验证
         if (!hubConfig.voiceUdpSharedSecret) {

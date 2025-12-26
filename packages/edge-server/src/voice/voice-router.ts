@@ -444,6 +444,96 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
   }
 
   /**
+   * 处理来自 Hub 的 TCP 降级语音包
+   * @param voiceData 完整的 Mumble 语音包数据
+   */
+  handleTcpRelayVoicePacket(voiceData: Buffer): void {
+    try {
+      // 解析语音包头部
+      if (voiceData.length < 2) {
+        this.logger.warn('TCP relay voice packet too small');
+        return;
+      }
+
+      const header = voiceData.readUInt8(0);
+      const target = header & 0x1f;
+
+      // 解析 session ID
+      const sessionId = this.parseSessionFromVoicePacket(voiceData);
+      if (sessionId === null) {
+        this.logger.warn('Failed to parse session ID from TCP relay packet');
+        return;
+      }
+
+      // 获取发送者的频道ID（从本地客户端信息获取，如果是远程客户端则从状态管理器获取）
+      let senderChannelId = 0;
+      const sender = this.clientManager?.getClient(sessionId);
+      if (sender) {
+        senderChannelId = sender.channel_id;
+      }
+
+      // 构造语音包对象
+      const packet: VoicePacket = {
+        sender_session: sessionId,
+        target,
+        data: voiceData,
+        sequence: 0, // TCP 降级时序列号不重要
+        codec: (header >> 5) & 0x07, // 从header提取codec
+        timestamp: Date.now(),
+      };
+
+      this.logger.debug(
+        `Handling TCP relay voice packet: session=${sessionId}, target=${target}, ` +
+        `channel=${senderChannelId}, size=${voiceData.length}`
+      );
+
+      // 路由到本地客户端（不再广播，因为是接收的中转包）
+      this.routeRemoteVoicePacket(packet, senderChannelId, voiceData);
+    } catch (error) {
+      this.logger.error('Error handling TCP relay voice packet:', error);
+    }
+  }
+
+  /**
+   * 从语音包中解析 session ID
+   */
+  private parseSessionFromVoicePacket(data: Buffer): number | null {
+    if (data.length < 2) {
+      return null;
+    }
+
+    // 跳过header（1字节）
+    let offset = 1;
+
+    // 解析varint格式的session ID
+    const v = data.readUInt8(offset);
+
+    if ((v & 0x80) === 0x00) {
+      // 单字节
+      return v & 0x7f;
+    } else if ((v & 0xc0) === 0x80) {
+      // 双字节
+      if (offset + 1 >= data.length) return null;
+      return ((v & 0x3f) << 8) | data.readUInt8(offset + 1);
+    } else if ((v & 0xf0) === 0xf0) {
+      // 完整32位整数
+      if (offset + 4 >= data.length) return null;
+      return (
+        (data.readUInt8(offset + 1) << 24) |
+        (data.readUInt8(offset + 2) << 16) |
+        (data.readUInt8(offset + 3) << 8) |
+        data.readUInt8(offset + 4)
+      ) >>> 0;
+    } else if ((v & 0xe0) === 0xc0) {
+      // 3字节
+      if (offset + 2 >= data.length) return null;
+      return ((v & 0x1f) << 16) | (data.readUInt8(offset + 1) << 8) | data.readUInt8(offset + 2);
+    }
+
+    return null;
+  }
+
+  /**
    * 路由语音包（本地客户端）
    * 
    * 根据 target 字段路由:

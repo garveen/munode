@@ -281,6 +281,7 @@ export interface ServerInfo {
  */
 export interface SessionState {
   session: number;
+  user_id?: number; // 注册用户 ID
   channel_id: number;
   mute: boolean;
   deaf: boolean;

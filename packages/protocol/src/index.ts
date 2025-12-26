@@ -166,7 +166,7 @@ export type {
   EdgeHeartbeatMethod,
   EdgeSyncVoiceTargetMethod,
   EdgeGetVoiceTargetsMethod,
-  EdgeRouteVoiceMethod,
+  EdgeRelayVoiceViaTcpMethod,
   EdgeAdminOperationMethod,
   EdgeExchangeCertificatesMethod,
   EdgeFullSyncMethod,

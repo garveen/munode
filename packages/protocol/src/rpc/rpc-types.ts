@@ -19,7 +19,7 @@ import type {
   EdgeAuthenticateUserResult,
   EdgeSyncVoiceTargetResult,
   EdgeGetVoiceTargetsResult,
-  EdgeRouteVoiceResult,
+  EdgeRelayVoiceViaTcpResult,
   EdgeAdminOperationResult,
   EdgeExchangeCertificatesResult,
   EdgeFullSyncResult,
@@ -49,7 +49,7 @@ type EdgeAllocateSessionIdResultPb = EdgeAllocateSessionIdResult;
 type EdgeAuthenticateUserResultPb = EdgeAuthenticateUserResult;
 type EdgeSyncVoiceTargetResultPb = EdgeSyncVoiceTargetResult;
 type EdgeGetVoiceTargetsResultPb = EdgeGetVoiceTargetsResult;
-type EdgeRouteVoiceResultPb = EdgeRouteVoiceResult;
+type EdgeRelayVoiceViaTcpResultPb = EdgeRelayVoiceViaTcpResult;
 type EdgeAdminOperationResultPb = EdgeAdminOperationResult;
 type EdgeExchangeCertificatesResultPb = EdgeExchangeCertificatesResult;
 type EdgeFullSyncResultPb = EdgeFullSyncResult;
@@ -184,18 +184,17 @@ export interface EdgeGetVoiceTargetsMethod {
 }
 
 /**
- * Edge 请求路由语音数据
+ * Edge 通过 Hub TCP 中转语音数据（降级模式）
  */
-export interface EdgeRouteVoiceMethod {
-  method: 'edge.routeVoice';
+export interface EdgeRelayVoiceViaTcpMethod {
+  method: 'edge.relayVoiceViaTcp';
   params: {
-    fromEdgeId: number;
-    fromSessionId: number;
-    target_id: number;
-    voiceData: Buffer;
+    from_edge_id: number;
+    target_edge_id: number;
+    voice_packet: Buffer;
     timestamp: number;
   };
-  result: EdgeRouteVoiceResultPb;
+  result: EdgeRelayVoiceViaTcpResultPb;
 }
 
 /**
@@ -427,6 +426,10 @@ export interface EdgeUserStateNotification {
       recording?: boolean;
       listening_channel_add?: number[];
       listening_channel_remove?: number[];
+      listening_volume_adjustment?: Array<{
+        listening_channel?: number;
+        volume_adjustment?: number;
+      }>;
       temporary_access_tokens?: string[];
       texture?: Buffer;
       plugin_context?: Buffer;
@@ -1097,7 +1100,7 @@ export type EdgeToHubMethods =
   | EdgeAuthenticateUserMethod
   | EdgeSyncVoiceTargetMethod
   | EdgeGetVoiceTargetsMethod
-  | EdgeRouteVoiceMethod
+  | EdgeRelayVoiceViaTcpMethod
   | EdgeAdminOperationMethod
   | EdgeExchangeCertificatesMethod
   | EdgeFullSyncMethod

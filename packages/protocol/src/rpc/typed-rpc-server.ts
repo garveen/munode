@@ -179,18 +179,17 @@ export class TypedRPCServer {
         return request.edge_sync_voice_target as RPCParams<'edge.syncVoiceTarget'>;
       case 'edge.getVoiceTargets':
         return request.edge_get_voice_targets as RPCParams<'edge.getVoiceTargets'>;
-      case 'edge.routeVoice': {
-        const routeVoice = request.edge_route_voice;
-        if (routeVoice) {
+      case 'edge.relayVoiceViaTcp': {
+        const p = request.edge_relay_voice_via_tcp;
+        if (p && p.from_edge_id !== undefined && p.target_edge_id !== undefined && p.voice_packet && p.timestamp !== undefined) {
           return {
-            fromEdgeId: routeVoice.from_edge_id,
-            fromSessionId: routeVoice.from_session_id,
-            target_id: routeVoice.target_id,
-            voiceData: Buffer.from(routeVoice.voice_data),
-            timestamp: routeVoice.timestamp,
-          } as RPCParams<'edge.routeVoice'>;
+            from_edge_id: p.from_edge_id,
+            target_edge_id: p.target_edge_id,
+            voice_packet: Buffer.from(p.voice_packet),
+            timestamp: p.timestamp,
+          } as RPCParams<'edge.relayVoiceViaTcp'>;
         }
-        throw new Error('Missing edge.routeVoice params');
+        throw new Error('Missing edge.relayVoiceViaTcp params');
       }
       case 'edge.adminOperation':
         return request.edge_admin_operation as RPCParams<'edge.adminOperation'>;
@@ -316,8 +315,8 @@ export class TypedRPCServer {
       case 'edge.getVoiceTargets':
         response.edge_get_voice_targets = result as RPCResult<'edge.getVoiceTargets'>;
         break;
-      case 'edge.routeVoice':
-        response.edge_route_voice = result as RPCResult<'edge.routeVoice'>;
+      case 'edge.relayVoiceViaTcp':
+        response.edge_relay_voice_via_tcp = result as RPCResult<'edge.relayVoiceViaTcp'>;
         break;
       case 'edge.adminOperation':
         response.edge_admin_operation = result as RPCResult<'edge.adminOperation'>;
