@@ -320,7 +320,6 @@ export class EventSetupManager {
     this.handlerFactory.channelManager.on('channelUpdated', (channel: ChannelInfo) => {
       // 频道更新可能包括链接变化，重建该频道的PTT缓存
       if (channel && channel.id !== undefined) {
-        this.logger.debug(`Channel ${channel.id} updated, rebuilding cache`);
         this.handlerFactory.voiceRouter.rebuildChannelCache(channel.id);
       }
     });

@@ -269,7 +269,6 @@ export class EdgeStateManager {
     // Load channels - through ChannelManager
     if (snapshot.channels && Array.isArray(snapshot.channels)) {
       for (const channel of snapshot.channels) {
-        this.logger.debug(`Loading channel from snapshot: ${JSON.stringify(channel)}`);
         const channelInfo = channelDataToInfo(channel);
         this.channelManager.addOrUpdateChannel(channelInfo);
       }
