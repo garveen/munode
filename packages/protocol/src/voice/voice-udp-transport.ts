@@ -570,15 +570,30 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     } else if (packet.type === UDPPacketType.UDP_PACKET_TYPE_HANDSHAKE_SYN_ACK && packet.handshake_syn_ack) {
       const synAck = packet.handshake_syn_ack;
       
+      // 优先使用包中的 edge_id，因为 NAT 可能改变源端口导致地址匹配失败
+      const packetEdgeId = synAck.edge_id;
       if (!edgeId) {
-        this.logger.warn(`Received HandshakeSynAck from unknown endpoint: ${rinfo.address}:${rinfo.port}`);
-        return;
+        // 地址匹配失败，使用包中的 edge_id
+        edgeId = packetEdgeId;
+        this.logger.debug(`Using edge_id from SynAck packet: ${edgeId} (from ${rinfo.address}:${rinfo.port})`);
+      } else if (edgeId !== packetEdgeId) {
+        // 地址匹配的 edge_id 与包中不一致，使用包中的
+        this.logger.warn(`Edge ID mismatch: address matched ${edgeId}, packet says ${packetEdgeId}, using packet value`);
+        edgeId = packetEdgeId;
       }
       
       const status = this.connectionStatus.get(edgeId);
       if (!status || !status.localNonce) {
         this.logger.warn(`Received HandshakeSynAck from edge ${edgeId} but no local nonce found`);
         return;
+      }
+      
+      // 更新远程端点地址（可能因为 NAT 而变化）
+      const endpoint = this.remoteEndpoints.get(edgeId);
+      if (endpoint && (endpoint.host !== normalizedAddress || endpoint.port !== rinfo.port)) {
+        this.logger.info(`Updating endpoint for edge ${edgeId}: ${endpoint.host}:${endpoint.port} -> ${normalizedAddress}:${rinfo.port}`);
+        endpoint.host = normalizedAddress;
+        endpoint.port = rinfo.port;
       }
       
       // 验证协议版本

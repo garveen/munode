@@ -823,6 +823,11 @@ export class EventSetupManager {
             break;
           }
 
+          case 'hub.voiceRoutingConfig':
+            // 转发到已有的事件处理器
+            this.hubClient.emit('voiceRoutingConfig', message.params);
+            break;
+
           default:
             this.logger.warn(`Unhandled notification method: ${message.method}`);
         }
