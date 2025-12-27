@@ -806,7 +806,6 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
       for (const linkedId of linkedChannels) {
         targetChannels.add(linkedId);
       }
-      this.logger.debug(`Calculated target channels for ${channelId}: [${Array.from(targetChannels).join(', ')}], linked=${linkedChannels.size}`);
     }
 
     return targetChannels;
@@ -1580,7 +1579,6 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
       targetSessions: targetChannels,
       timestamp: Date.now(),
     });
-    this.logger.debug(`[VOICE-CACHE] Rebuilt PTT cache for channel ${channelId}: ${targetChannels.size} channels`);
   }
   
   /**

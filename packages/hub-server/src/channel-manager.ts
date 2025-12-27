@@ -102,7 +102,6 @@ export class ChannelManager {
         description_blob: dbUpdated.description_blob,
       };
       this.channelCache.set(id, updated);
-    this.logger.info(`Channel updated: ${id}`, updates);
     }
   }
 

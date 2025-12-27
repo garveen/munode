@@ -60,7 +60,6 @@ export class HubDataManager {
 
         // 将频道添加到ChannelManager
         this.handlerFactory.channelManager.addOrUpdateChannel(channel);
-        this.logger.debug(`Loaded channel: ${channel.name} (${channel.id})`);
       }
 
       // 从Hub获取所有ACL（channel_id为0表示获取所有频道的ACL）
