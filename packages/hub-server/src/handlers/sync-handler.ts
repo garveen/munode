@@ -201,16 +201,23 @@ export class SyncHandler implements ISyncHandler {
     const dbAcls = this.factory.getAclManager()
       ? await this.factory.getAclManager().getChannelACLs(params.channel_id)
       : await this.factory.getDatabase().getChannelACLs(params.channel_id);
-    const acls: ACLData[] = dbAcls.map((acl) => ({
-      id: acl.id,
-      channel_id: acl.channel_id,
-      user_id: acl.user_id,
-      group: acl.group,
-      apply_here: acl.apply_here,
-      apply_subs: acl.apply_subs,
-      allow: acl.allow,
-      deny: acl.deny,
-    }));
+    const acls: ACLData[] = dbAcls.map((acl) => {
+      const result: ACLData = {
+        id: acl.id,
+        channel_id: acl.channel_id,
+        group: acl.group,
+        apply_here: acl.apply_here,
+        apply_subs: acl.apply_subs,
+        allow: acl.allow,
+        deny: acl.deny,
+      };
+      // Only include user_id if it's a valid positive number
+      // Protobuf user_id is optional uint32
+      if (acl.user_id && acl.user_id > 0) {
+        result.user_id = acl.user_id;
+      }
+      return result;
+    });
     return { acls };
   }
 

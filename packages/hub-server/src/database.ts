@@ -948,7 +948,9 @@ export class HubDatabase {
     const stmt = await this.prepare(query);
     const result = await stmt.all() as ACLData[];
     result.forEach((acl: ACLData) => {
-      if (acl.user_id === 0) {
+      // Remove user_id if it's -1 (group rule) or 0 (invalid)
+      // Protobuf user_id is optional uint32, cannot be negative
+      if (acl.user_id === 0 || acl.user_id === -1) {
         delete acl.user_id;
       }
     });
@@ -969,7 +971,9 @@ export class HubDatabase {
     const stmt = await this.prepare(query);
     const result = await stmt.all(...params) as ACLData[];
     result.forEach((acl: ACLData) => {
-      if (acl.user_id === 0) {
+      // Remove user_id if it's -1 (group rule) or 0 (invalid)
+      // Protobuf user_id is optional uint32, cannot be negative
+      if (acl.user_id === 0 || acl.user_id === -1) {
         delete acl.user_id;
       }
     });
@@ -997,7 +1001,7 @@ export class HubDatabase {
 
     const result = await stmt.run(
       acl.channel_id,
-      acl.user_id !== undefined ? acl.user_id : 0,
+      acl.user_id !== undefined ? acl.user_id : -1,
       acl.group || null,
       acl.apply_here ? 1 : 0,
       acl.apply_subs ? 1 : 0,
