@@ -324,6 +324,33 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
   }
 
   /**
+   * 更新策略配置的别名方法（用于 event-setup-manager）
+   */
+  updatePolicy(policy: Partial<EdgeRoutingPolicy>): void {
+    Object.assign(this.voiceRoutingConfig.hubPolicy, policy);
+    this.logger.debug('Hub routing policy updated', { policy });
+    this.emit('policy-updated', this.voiceRoutingConfig.hubPolicy);
+  }
+
+  /**
+   * 更新 TCP fallback 配置
+   */
+  updateFallbackConfig(config: { enableTcpFallback?: boolean; tcpFallbackDelay?: number; udpRecoveryCheckInterval?: number }): void {
+    Object.assign(this.voiceRoutingConfig.fallback, config);
+    this.logger.info('TCP fallback config updated:', {
+      enableTcpFallback: this.voiceRoutingConfig.fallback.enableTcpFallback,
+      tcpFallbackDelay: this.voiceRoutingConfig.fallback.tcpFallbackDelay,
+    });
+    
+    // 清除路由缓存，强制重新计算
+    this.clearRouteCache();
+    this.routingTable.clear();
+    
+    // 触发路由重新计算（fallback 状态变化可能影响路由选择）
+    this.emit('policy-updated', this.voiceRoutingConfig.hubPolicy);
+  }
+
+  /**
    * 处理 Hub 推送的路由表
    */
   handleHubRouteTable(routes: RouteEntry[]): void {

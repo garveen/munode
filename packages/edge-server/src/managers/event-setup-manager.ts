@@ -615,6 +615,22 @@ export class EventSetupManager {
       // 监听语音路由配置推送（包含加密密钥）
       this.hubClient.on('voiceRoutingConfig', (config: {
         enabled: boolean;
+        policy?: {
+          directRttThreshold: number;
+          directLossThreshold: number;
+          enableRelay: boolean;
+          maxRelayHops: number;
+          relayCostFactor: number;
+          routeSwitchHysteresis: number;
+          routeSwitchCostDelta: number;
+          maxRelayLoadPerEdge: number;
+          probeInterval: number;
+          routeTableUpdateInterval: number;
+        };
+        preferredRelayEdges?: number[];
+        hubRelay?: {
+          enableTcpFallback: boolean;
+        };
         encryption?: {
           algorithm: string;
           key: string;
@@ -625,11 +641,23 @@ export class EventSetupManager {
           enabled: config.enabled,
           hasEncryption: !!config.encryption,
           encryptionVersion: config.encryption?.version,
+          enableTcpFallback: config.hubRelay?.enableTcpFallback,
         });
         
         // 设置语音路由启用状态
         if (this.voiceManager) {
-          this.voiceManager.getVoiceRoutingManager().setEnabled(config.enabled);
+          const routingManager = this.voiceManager.getVoiceRoutingManager();
+          routingManager.setEnabled(config.enabled);
+          
+          // 更新 TCP fallback 配置
+          if (config.hubRelay) {
+            routingManager.updateFallbackConfig(config.hubRelay);
+          }
+          
+          // 更新策略配置
+          if (config.policy) {
+            routingManager.updatePolicy(config.policy);
+          }
         }
         
         // 更新加密密钥

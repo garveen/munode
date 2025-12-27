@@ -267,7 +267,6 @@ function createHubConfig(): HubConfig {
     host: '0.0.0.0',
     port: 50051,
     controlPort: 8443, // 控制信道端口
-    voicePort: 8444,   // 语音信道端口
     database: {
       path: path.join(__dirname, 'data/hub-test.db'),
       backupDir: path.join(__dirname, 'data/backups'),
@@ -303,6 +302,9 @@ function createHubConfig(): HubConfig {
     },
     voiceRouting: {
       enabled: true,
+      hubRelay: {
+        enableTcpFallback: false, // use edge-hub tcp websocket link for voice relay as last choice
+      },
     },
     logLevel: 'info',
   };

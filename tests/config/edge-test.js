@@ -47,12 +47,6 @@ export default {
     },
   },
   
-  peerServers: {
-    enableP2P: false,
-    connectionTimeout: 10000,
-    maxConnections: 10,
-  },
-  
   relay: {
     enabled: false,
   },

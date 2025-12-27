@@ -1,5 +1,6 @@
 import type { Logger } from '@munode/common';
 import { HubHandlerFactory } from '../factory.js';
+import { type HubControlService } from '../control-service.js';
 import type { RPCParams, RPCResult } from '@munode/protocol';
 
 
@@ -29,17 +30,24 @@ export interface IVoiceRoutingHandler {
  */
 export class VoiceRoutingHandler implements IVoiceRoutingHandler {
   private factory: HubHandlerFactory;
-
-    private logger: Logger;
+  private logger: Logger;
+  private enableTcpFallback: boolean;
+  private controlService: HubControlService;
 
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
     this.logger = factory.getLogger();
+    this.controlService = factory.getControlService();
+    
+    // 缓存 TCP 降级配置开关，避免每次处理语音包时都读取
+    const config = factory.getConfig();
+    this.enableTcpFallback = config.voiceRouting?.hubRelay?.enableTcpFallback ?? true;
+    
+    this.logger.info(`VoiceRoutingHandler initialized, TCP fallback: ${this.enableTcpFallback}`);
   }
 
   async handleSyncVoiceTarget(params: RPCParams<'edge.syncVoiceTarget'>): Promise<RPCResult<'edge.syncVoiceTarget'>> {
     const voiceTargetSync = this.factory.getVoiceTargetSync();
-    const controlService = this.factory.getControlService();
 
     // 同步语音目标配置到本地存储（不进行权限验证）
     // 权限检查在实际使用VoiceTarget发送语音时进行（在Edge的voice router中）
@@ -63,7 +71,7 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
       target_id: params.target_id,
       config: params.config,
     };
-    controlService.broadcastExcept(params.edge_id, 'hub.syncVoiceTarget', notificationParams);
+    this.controlService.broadcastExcept(params.edge_id, 'hub.syncVoiceTarget', notificationParams);
     
     return { success: true };
   }
@@ -88,8 +96,18 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
    * 当 UDP 连接不可用时，Edge 通过 Hub 的 WebSocket 控制通道转发语音包
    */
   async handleRelayVoiceViaTcp(params: RPCParams<'edge.relayVoiceViaTcp'>): Promise<RPCResult<'edge.relayVoiceViaTcp'>> {
-    const controlService = this.factory.getControlService();
     const { from_edge_id, target_edge_id, voice_packet, timestamp } = params;
+
+    // 检查 TCP 降级功能是否启用（使用缓存的配置）
+    if (!this.enableTcpFallback) {
+      this.logger.debug(
+        `TCP fallback relay is disabled, rejecting relay request from Edge ${from_edge_id} to Edge ${target_edge_id}`
+      );
+      return {
+        success: false,
+        error: 'TCP fallback relay is disabled'
+      };
+    }
 
     try {
       // 记录 TCP 降级转发
@@ -101,11 +119,11 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
       // 通过控制服务的 notify 方法发送给目标 Edge
       // 使用通知机制，不需要等待响应
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      controlService.notify(target_edge_id, 'hub.relayVoicePacket', {
+      this.controlService.notify(target_edge_id, 'hub.relayVoicePacket', {
         from_edge_id,
         voice_packet,
         timestamp,
-      } as any);
+      });
 
       this.logger.debug(`TCP relay successful: ${voice_packet.length} bytes to Edge ${target_edge_id}`);
       return { success: true };

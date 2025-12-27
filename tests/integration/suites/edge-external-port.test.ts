@@ -189,14 +189,6 @@ describe('Edge External Port Configuration Tests', () => {
         requireClientCert: false,
         rejectUnauthorized: false,
       },
-      peerServers: {
-        enableP2P: false,
-        connectionTimeout: 10000,
-        maxConnections: 10,
-      },
-      relay: {
-        enabled: false,
-      },
       auth: {
         apiUrl: 'http://example.com',
         apiKey: 'key',
@@ -243,14 +235,6 @@ describe('Edge External Port Configuration Tests', () => {
         key: './key.pem',
         requireClientCert: false,
         rejectUnauthorized: false,
-      },
-      peerServers: {
-        enableP2P: false,
-        connectionTimeout: 10000,
-        maxConnections: 10,
-      },
-      relay: {
-        enabled: false,
       },
       auth: {
         apiUrl: 'http://example.com',

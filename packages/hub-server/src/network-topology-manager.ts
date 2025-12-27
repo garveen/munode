@@ -101,6 +101,9 @@ export class NetworkTopologyManager extends TypedEventEmitter<NetworkTopologyMan
   // 路由策略配置
   private policy: Required<RoutingPolicy>;
   
+  // TCP fallback 配置
+  private enableTcpFallback: boolean;
+  
   // 路由表更新定时器
   private updateTimer?: NodeJS.Timeout;
   
@@ -135,10 +138,12 @@ export class NetworkTopologyManager extends TypedEventEmitter<NetworkTopologyMan
       routeTableUpdateInterval: config?.policy?.routeTableUpdateInterval ?? DEFAULT_ROUTING_POLICY.routeTableUpdateInterval,
     };
     
+    this.enableTcpFallback = config?.hubRelay?.enableTcpFallback ?? true;
     this._isEnabled = config?.enabled ?? false;
     
     this.logger.info('NetworkTopologyManager initialized', {
       enabled: this._isEnabled,
+      enableTcpFallback: this.enableTcpFallback,
       policy: this.policy,
     });
   }
@@ -467,14 +472,17 @@ export class NetworkTopologyManager extends TypedEventEmitter<NetworkTopologyMan
         }
       }
       
-      // 降级到 TCP fallback
-      routeTable.set(targetEdgeId, {
-        targetEdgeId,
-        type: RouteType.FALLBACK,
-        cost: 9999,
-        timestamp: Date.now(),
-        source: 'hub',
-      });
+      // 降级到 TCP fallback (只有在启用时才添加)
+      if (this.enableTcpFallback) {
+        routeTable.set(targetEdgeId, {
+          targetEdgeId,
+          type: RouteType.FALLBACK,
+          cost: 9999,
+          timestamp: Date.now(),
+          source: 'hub',
+        });
+      }
+      // 如果 TCP fallback 被禁用，不添加任何路由（路由为 undefined）
     }
     
     return routeTable;
