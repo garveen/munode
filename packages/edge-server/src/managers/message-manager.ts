@@ -235,9 +235,6 @@ export class MessageManager {
       socket.write(header);
       socket.write(messageData);
 
-        this.logger.debug(
-        `Sent message: session=${session_id}, type=${messageType}, length=${messageData.length}`
-      );
     } catch (error) {
         this.logger.error(`Error sending message to session ${session_id}:`, error);
       this.handlerFactory.clientManager.removeClient(session_id);

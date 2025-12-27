@@ -179,11 +179,6 @@ export class MessageHandlers {
     if (this.stateManager) {
       const stateChannels = this.stateManager.getAllChannels();
       
-        this.logger.debug(`[sendChannelTree] DEBUG: stateManager.getAllChannels() returned ${stateChannels.length} channels`);
-      stateChannels.forEach(ch => {
-        this.logger.debug(`[sendChannelTree] DEBUG: Channel from state: id=${ch.channel_id}, name=${ch.name}, parent_id=${ch.parent_id}`);
-      });
-      
       // 转换ChannelData为ChannelInfo
       channels = stateChannels.map((ch) => ({
         id: ch.channel_id,
@@ -197,10 +192,6 @@ export class MessageHandlers {
         children: [],
         links: ch.links || [],
       }));
-      
-        this.logger.debug(
-        `[sendChannelTree] Cluster mode: sending ${channels.length} channels from stateManager to session ${session_id}`
-      );
     } else {
       channels = [];
     }
@@ -232,7 +223,7 @@ export class MessageHandlers {
       }
     }
 
-        this.logger.debug(`[sendChannelTree] Starting BFS channel tree traversal for session ${session_id}`);
+    this.logger.debug(`[sendChannelTree] Starting BFS channel tree traversal for session ${session_id}`);
 
     // === Pass 1: BFS遍历发送所有频道的完整信息 ===
     const queue: ChannelInfo[] = [];
@@ -277,13 +268,6 @@ export class MessageHandlers {
       
       const channelStateMessage = mumbleproto.ChannelState.encode(channelStateData).finish();
 
-        this.logger.debug(
-        `[sendChannelTree] BFS: channel ${channel.id} (${channel.name}), ` +
-        `parent=${parentId === undefined ? 'NONE' : parentId}, ` +
-        `has_parent=${channelStateData.parent !== undefined}, ` +
-        `pos=${channel.position}`
-      );
-
       this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(channelStateMessage));
       
       // 如果有links，记录下来稍后发送
@@ -311,10 +295,6 @@ export class MessageHandlers {
         links: [],  // Must provide empty array for ts-proto encoder
         links_remove: [],  // Must provide empty array for ts-proto encoder
       }).finish();
-
-        this.logger.debug(
-        `[sendChannelTree] Links: channel ${channel.id} links: [${channel.links.join(', ')}]`
-      );
 
       this.messageHandler.sendMessage(session_id, MessageType.ChannelState, Buffer.from(channelStateMessage));
     }
