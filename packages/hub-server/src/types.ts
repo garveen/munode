@@ -15,9 +15,8 @@ export interface HubConfig {
   name: string;
   registerName?: string; // Root频道的显示名称（默认为"Root"）
   host: string;
-  port: number;
+  port: number; // 主端口（统一UDP/TCP端口）
   controlPort?: number; // 控制信道端口
-  voicePort?: number;   // 语音信道端口
   
   // 基础网络配置
   timeout?: number; // 客户端超时时间（秒），默认: 30

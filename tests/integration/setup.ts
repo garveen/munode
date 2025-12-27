@@ -56,7 +56,7 @@ export async function isPortAvailable(port: number): Promise<boolean> {
  */
 export async function findAvailablePort(startPort: number = 8080, maxAttempts: number = 100): Promise<number> {
   for (let port = startPort; port < startPort + maxAttempts; port++) {
-    if (await isPortAvailable(port) && await isPortAvailable(port + 1) && await isPortAvailable(port + 2)) {
+    if (await isPortAvailable(port)) {
       return port;
     }
   }
@@ -622,27 +622,26 @@ export async function setupTestEnvironment(
   let edgeServer3: EdgeServer | undefined;
   let edgeServer4: EdgeServer | undefined;
   
-  // 动态分配端口
+  // 动态分配端口（统一UDP端口架构：不再为voice单独分配端口）
   const authPort = finalOptions.startAuth !== false ? await findAvailablePort(basePort) : 0;
   const hubPort = finalOptions.startHub !== false ? await findAvailablePort(authPort + 1) : 0;
   const controlPort = finalOptions.startHub !== false ? await findAvailablePort(hubPort + 1) : 0;
   const webApiPort = finalOptions.startHub !== false ? await findAvailablePort(controlPort + 1) : 0;
-  const hubVoicePort = finalOptions.startHub !== false ? await findAvailablePort(webApiPort + 1) : 0;
   
-  const edgeBasePort = Math.max(hubVoicePort, basePort - 1);
+  const edgeBasePort = Math.max(webApiPort, basePort - 1);
   const edgePort = finalOptions.startEdge !== false ? await findAvailablePort(edgeBasePort + 2) : 0;
-  const edgeUdpPort = edgePort > 0 ? edgePort + 1 : 0;
+  const edgeUdpPort = edgePort; // 统一UDP端口：与TLS端口相同
   
-  const edgePort2 = (finalOptions.startEdge2 === true && edgePort > 0) ? await findAvailablePort(edgeUdpPort + 2) : 0;
-  const edgeUdpPort2 = edgePort2 > 0 ? edgePort2 + 1 : 0;
+  const edgePort2 = (finalOptions.startEdge2 === true && edgePort > 0) ? await findAvailablePort(edgePort + 2) : 0;
+  const edgeUdpPort2 = edgePort2; // 统一UDP端口：与TLS端口相同
   
-  const edgePort3 = (finalOptions.startEdge3 === true && edgePort2 > 0) ? await findAvailablePort(edgeUdpPort2 + 2) : 0;
-  const edgeUdpPort3 = edgePort3 > 0 ? edgePort3 + 1 : 0;
+  const edgePort3 = (finalOptions.startEdge3 === true && edgePort2 > 0) ? await findAvailablePort(edgePort2 + 2) : 0;
+  const edgeUdpPort3 = edgePort3; // 统一UDP端口：与TLS端口相同
   
-  const edgePort4 = (finalOptions.startEdge4 === true && edgePort3 > 0) ? await findAvailablePort(edgeUdpPort3 + 2) : 0;
-  const edgeUdpPort4 = edgePort4 > 0 ? edgePort4 + 1 : 0;
+  const edgePort4 = (finalOptions.startEdge4 === true && edgePort3 > 0) ? await findAvailablePort(edgePort3 + 2) : 0;
+  const edgeUdpPort4 = edgePort4; // 统一UDP端口：与TLS端口相同
   
-  console.log(`Allocated ports - Auth: ${authPort}, Hub: ${hubPort}(TCP)/${hubVoicePort}(UDP), Control: ${controlPort}, WebAPI: ${webApiPort}`);
+  console.log(`Allocated ports - Auth: ${authPort}, Hub: ${hubPort}(Unified UDP/TCP), Control: ${controlPort}, WebAPI: ${webApiPort}`);
   console.log(`Edge ports - Edge1: ${edgePort}(TLS)/${edgeUdpPort}(UDP), Edge2: ${edgePort2}(TLS)/${edgeUdpPort2}(UDP), Edge3: ${edgePort3}(TLS)/${edgeUdpPort3}(UDP), Edge4: ${edgePort4}(TLS)/${edgeUdpPort4}(UDP)`);
 
   try {
@@ -678,7 +677,7 @@ export async function setupTestEnvironment(
         hubConfig.controlPort = controlPort;
         hubConfig.webApi = hubConfig.webApi || { port: webApiPort, host: '127.0.0.1', cors: { enabled: true, origins: ['*'] } };
         hubConfig.webApi.port = webApiPort;
-        hubConfig.voicePort = hubVoicePort;
+        // 不再设置 voicePort，使用统一端口
 
         hubConfig.blobStore = hubConfig.blobStore || { enabled: true, path: join(PROJECT_ROOT, 'data/blobs-test') };
         
@@ -899,7 +898,7 @@ export async function setupTestEnvironment(
         await hubServer.stop();
         debugLog('Hub server stopped');
         // Wait for Hub ports to be released
-        await waitForPortsAvailable([hubPort, controlPort, webApiPort, hubVoicePort], 5000);
+        await waitForPortsAvailable([hubPort, controlPort, webApiPort], 5000);
       } catch (error) {
         console.warn('Error stopping hub server:', error);
       }

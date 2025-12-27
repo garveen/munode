@@ -41,8 +41,7 @@ export class ClusterHandler implements IClusterHandler {
         id: edge.server_id,
         name: edge.name,
         host: edge.host,
-        port: edge.port,
-        voice_port: edge.port + 1,
+        port: edge.port, // 统一UDP/TCP端口
       }));
 
     // 生成加入令牌
@@ -73,8 +72,7 @@ export class ClusterHandler implements IClusterHandler {
         id: edge.server_id,
         name: edge.name,
         host: edge.host,
-        port: edge.port,
-        voicePort: edge.port + 1,
+        port: edge.port, // 统一UDP/TCP端口
       });
     }
 

@@ -12,8 +12,7 @@ export interface JoinRequest {
   serverId: number;
   name: string;
   host: string;
-  port: number;
-  voicePort: number;
+  port: number; // 统一端口（UDP/TCP）
   capacity: number;
 }
 
@@ -29,8 +28,7 @@ export interface PeerInfo {
   id: number;
   name: string;
   host: string;
-  port: number;
-  voicePort: number;
+  port: number; // 统一端口（UDP/TCP）
 }
 
 export interface JoinCompleteRequest {

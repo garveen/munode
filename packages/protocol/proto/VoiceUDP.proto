@@ -7,6 +7,15 @@ package voiceudp;
  * 
  * 定义 Edge 和 Edge 之间 UDP 语音传输的控制协议
  * 包括握手、心跳、身份验证等
+ * 
+ * 统一UDP入口架构:
+ * - Edge 使用单一 UDP 端口接收所有数据包（客户端 + Edge间）
+ * - 通过魔数 0x0000 区分包类型：
+ *   * Edge间控制包: [0x0000][protobuf VoiceUDPPacket]
+ *   * Edge间语音包: [0x0000][12字节header][语音数据]
+ *   * 客户端包: [mumble header][session varint][...] (前2字节不可能都是0x00)
+ * - lifecycle-manager 作为统一入口，根据魔数分发数据包
+ * - VoiceUDPTransport 通过回调函数发送，通过 handleIncomingPacket() 接收
  */
 
 // ============================================================================

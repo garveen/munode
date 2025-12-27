@@ -32,6 +32,7 @@ const HEARTBEAT_TIMEOUT_MS = 30000; // Connection timeout: 30 seconds without re
 const RECONNECT_DELAY_MS = 3000; // Delay before reconnect attempt
 const PROTOCOL_VERSION = 1; // UDP voice protocol version
 const NONCE_SIZE = 32; // Nonce size in bytes for authentication
+const EDGE_UDP_MAGIC = 0x0000; // Magic number to identify Edge-to-Edge UDP packets (2 bytes)
 
 export interface VoiceUDPConfig {
   port: number;
@@ -43,7 +44,7 @@ export interface VoiceUDPConfig {
 }
 
 export interface VoicePacketHeader {
-  senderId: number;    // 发送方 Edge ID
+  senderId: number;    // 发送方 Edge ID (0-65535)
   targetId: number;    // Mumble target (0=PTT, 1-30=whisper, 31=loopback)
   sequence: number;    // 序列号（用于丢包检测和网络质量统计）
 }
@@ -95,7 +96,6 @@ export interface VoiceUDPTransportEvents extends EventMap {
 }
 
 export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents> {
-  private socket: dgram.Socket | null = null;
   private config: VoiceUDPConfig;
   private encryptionConfig: VoiceEncryptionConfig | null = null;
   private remoteEndpoints = new Map<number, RemoteEndpoint>(); // edgeId -> endpoint
@@ -104,6 +104,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   private logger: Logger;
   private localEdgeId: number;
   private sharedSecret: Buffer | null = null; // Shared secret for HMAC authentication
+  private sendFunction: ((buffer: Buffer, host: string, port: number) => void) | null = null; // UDP发送回调函数
   private stats = {
     packetsSent: 0,
     packetsReceived: 0,
@@ -145,39 +146,28 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   }
 
   /**
-   * 启动UDP监听
+   * 设置UDP发送函数（用于统一入口模式）
+   * @param sendFunc 发送函数：(buffer, host, port) => void
    */
-  start(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      this.socket = dgram.createSocket('udp4');
-
-      this.socket.on('message', (msg, rinfo) => {
-        this.handleIncomingPacket(msg, rinfo);
-      });
-
-      this.socket.on('error', (error) => {
-        this.stats.errors++;
-        this.logger.error('Voice UDP error:', error);
-        this.emit('error', error);
-      });
-
-      this.socket.on('listening', () => {
-        const address = this.socket.address();
-        this.logger.info(`Voice UDP listening on ${address.address}:${address.port}`);
-        this.emit('listening', address);
-        resolve();
-      });
-
-      this.socket.bind(this.config.port, this.config.host || '0.0.0.0', () => {
-        // Binding complete
-      });
-
-      this.socket.once('error', reject);
-    });
+  setSendFunction(sendFunc: (buffer: Buffer, host: string, port: number) => void): void {
+    this.sendFunction = sendFunc;
+    this.logger.info('VoiceUDPTransport using external send function (unified entry mode)');
+    // 启动心跳和连接检查
+    this.startHeartbeatIfNeeded();
   }
 
   /**
-   * 停止UDP监听
+   * 启动UDP监听（独立端口模式，已废弃）
+   * 现在推荐使用 setSendFunction() 配合统一UDP入口
+   * @deprecated Use setSendFunction() with unified UDP entry instead
+   */
+  start(): Promise<void> {
+    this.logger.warn('VoiceUDPTransport.start() is deprecated, use setSendFunction() instead');
+    return Promise.resolve();
+  }
+
+  /**
+   * 停止UDP传输（清理定时器和状态）
    */
   stop(): void {
     // 停止心跳定时器
@@ -192,10 +182,8 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       this.connectionCheckTimer = undefined;
     }
     
-    if (this.socket) {
-      this.socket.close();
-      this.socket = null;
-    }
+    // 清除发送函数引用
+    this.sendFunction = null;
   }
 
   /**
@@ -354,7 +342,12 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       handshake_syn: handshakeSyn,
     };
     
-    return Buffer.from(VoiceUDPPacket.encode(packet).finish());
+    const encodedPacket = Buffer.from(VoiceUDPPacket.encode(packet).finish());
+    // 添加魔数标识 Edge 间包
+    const result = Buffer.allocUnsafe(2 + encodedPacket.length);
+    result.writeUInt16BE(EDGE_UDP_MAGIC, 0);
+    encodedPacket.copy(result, 2);
+    return result;
   }
   
   /**
@@ -391,7 +384,12 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       handshake_syn_ack: handshakeSynAck,
     };
     
-    return Buffer.from(VoiceUDPPacket.encode(packet).finish());
+    const encodedPacket = Buffer.from(VoiceUDPPacket.encode(packet).finish());
+    // 添加魔数标识 Edge 间包
+    const result = Buffer.allocUnsafe(2 + encodedPacket.length);
+    result.writeUInt16BE(EDGE_UDP_MAGIC, 0);
+    encodedPacket.copy(result, 2);
+    return result;
   }
   
   /**
@@ -425,7 +423,12 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       handshake_ack: handshakeAck,
     };
     
-    return Buffer.from(VoiceUDPPacket.encode(packet).finish());
+    const encodedPacket = Buffer.from(VoiceUDPPacket.encode(packet).finish());
+    // 添加魔数标识 Edge 间包
+    const result = Buffer.allocUnsafe(2 + encodedPacket.length);
+    result.writeUInt16BE(EDGE_UDP_MAGIC, 0);
+    encodedPacket.copy(result, 2);
+    return result;
   }
   
   /**
@@ -445,7 +448,12 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       heartbeat_ping: heartbeatPing,
     };
     
-    return Buffer.from(VoiceUDPPacket.encode(packet).finish());
+    const encodedPacket = Buffer.from(VoiceUDPPacket.encode(packet).finish());
+    // 添加魔数标识 Edge 间包
+    const result = Buffer.allocUnsafe(2 + encodedPacket.length);
+    result.writeUInt16BE(EDGE_UDP_MAGIC, 0);
+    encodedPacket.copy(result, 2);
+    return result;
   }
   
   /**
@@ -465,7 +473,12 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       heartbeat_pong: heartbeatPong,
     };
     
-    return Buffer.from(VoiceUDPPacket.encode(packet).finish());
+    const encodedPacket = Buffer.from(VoiceUDPPacket.encode(packet).finish());
+    // 添加魔数标识 Edge 间包
+    const result = Buffer.allocUnsafe(2 + encodedPacket.length);
+    result.writeUInt16BE(EDGE_UDP_MAGIC, 0);
+    encodedPacket.copy(result, 2);
+    return result;
   }
   
   /**
@@ -921,19 +934,22 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       cipher.final()
     ]);
 
-    // 返回格式: IV(16) + 加密数据
-    return Buffer.concat([iv, encryptedData]);
+    // 返回格式: Magic(2) + IV(16) + 加密数据
+    const magicBuffer = Buffer.allocUnsafe(2);
+    magicBuffer.writeUInt16BE(EDGE_UDP_MAGIC, 0);
+    return Buffer.concat([magicBuffer, iv, encryptedData]);
   }
 
   /**
    * 解码加密语音包（包含解密）
+   * 注意：传入的buffer已经移除了魔数
    */
   private decodeEncryptedPacket(buffer: Buffer): VoicePacket | null {
     if (!this.encryptionConfig) {
       throw new Error('Encryption not configured');
     }
 
-    if (buffer.length < 16 + 14) return null; // IV + 最小包头
+    if (buffer.length < 16 + 12) return null; // IV + 最小包头（12字节）
 
     try {
       const iv = buffer.slice(0, 16);
@@ -1061,10 +1077,20 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     this.stats.packetsReceived++;
     this.stats.bytesReceived += data.length;
 
+    // 验证并移除魔数（所有 Edge 间包前两字节都是 0x0000）
+    if (data.length < 2 || data.readUInt16BE(0) !== EDGE_UDP_MAGIC) {
+      this.logger.warn('Received packet without Edge magic number, ignoring');
+      this.stats.errors++;
+      return;
+    }
+    
+    // 移除魔数，获取实际数据
+    const actualData = data.slice(2);
+
     try {
       // 尝试解析为protobuf控制消息
       try {
-        const packet = VoiceUDPPacket.decode(data);
+        const packet = VoiceUDPPacket.decode(actualData);
         
         // 处理握手消息
         if (packet.type === UDPPacketType.UDP_PACKET_TYPE_HANDSHAKE_SYN ||
@@ -1090,7 +1116,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       
       // 解密（如果启用）
       if (this.encryptionConfig) {
-        const decrypted = this.decodeEncryptedPacket(data);
+        const decrypted = this.decodeEncryptedPacket(actualData);
         if (!decrypted) {
           this.logger.warn('Failed to decrypt voice packet');
           this.stats.errors++;
@@ -1110,7 +1136,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
         this.emit('voice-packet', packet, rinfo);
       } else {
         // 未加密的情况，需要解析
-        const decoded = this.decodePacket(data);
+        const decoded = this.decodePacket(actualData);
         if (!decoded) {
           this.logger.warn('Failed to parse voice packet');
           this.stats.errors++;
@@ -1134,23 +1160,25 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   }
 
   /**
-   * 编码包头（12字节）
+   * 编码包头（2字节魔数 + 12字节header）
    * 
    * 格式：
+   * - magic (2 bytes): 0x0000 魔数标识
    * - senderId (4 bytes): 发送方 Edge ID
    * - targetId (4 bytes): Mumble target
    * - sequence (4 bytes): 序列号
    */
   private encodePacketHeader(packet: VoicePacketHeader): Buffer {
-    const buffer = Buffer.allocUnsafe(12);
-    buffer.writeUInt32BE(packet.senderId, 0);
-    buffer.writeUInt32BE(packet.targetId, 4);
-    buffer.writeUInt32BE(packet.sequence, 8);
+    const buffer = Buffer.allocUnsafe(14); // 2 + 12
+    buffer.writeUInt16BE(EDGE_UDP_MAGIC, 0);
+    buffer.writeUInt32BE(packet.senderId, 2);
+    buffer.writeUInt32BE(packet.targetId, 6);
+    buffer.writeUInt32BE(packet.sequence, 10);
     return buffer;
   }
 
   /**
-   * 解码语音包
+   * 解码语音包（注意：传入的data已经移除了魔数）
    */
   private decodePacket(data: Buffer): {
     header: VoicePacketHeader;
@@ -1172,23 +1200,22 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   }
 
   /**
-   * 发送UDP包
+   * 发送UDP包（通过回调函数）
    */
   private sendPacket(data: Buffer, host: string, port: number): void {
-    if (!this.socket) {
-      this.logger.warn('UDP socket not initialized');
+    if (!this.sendFunction) {
+      this.logger.warn('UDP send function not set, call setSendFunction() first');
       return;
     }
 
-    this.socket.send(data, port, host, (error) => {
-      if (error) {
-        this.stats.errors++;
-        this.logger.error('Error sending voice packet:', error);
-      } else {
-        this.stats.packetsSent++;
-        this.stats.bytesSent += data.length;
-      }
-    });
+    try {
+      this.sendFunction(data, host, port);
+      this.stats.packetsSent++;
+      this.stats.bytesSent += data.length;
+    } catch (error) {
+      this.stats.errors++;
+      this.logger.error('Error sending voice packet:', error);
+    }
   }
 
   /**
@@ -1289,7 +1316,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
    * 检查是否已启动
    */
   isRunning(): boolean {
-    return this.socket !== null;
+    return this.sendFunction !== null;
   }
 
   /**

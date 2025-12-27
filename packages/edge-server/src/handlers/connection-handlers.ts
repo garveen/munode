@@ -94,14 +94,18 @@ export class ConnectionHandlers {
 
   /**
    * 处理 UDP 消息
-   * 实现类似Go版本的UDP地址匹配逻辑：
-   * 1. 首先查找精确的IP:Port映射
-   * 2. 如果没有，尝试用同一IP的所有客户端的密钥解密
-   * 3. 解密成功的就是正确的客户端，记录其UDP地址
+   * 
+   * UDP 包路由策略（基于前2字节判断）：
+   * 1. 0x00 0x00: Edge间语音包 -> 转发给 VoiceUDPTransport
+   * 2. Protobuf: VoiceUDPPacket控制消息 -> 转发给 VoiceUDPTransport
+   * 3. 其他: Mumble客户端包 -> 进行客户端地址匹配和解密
    */
   handleUDPMessage(msg: Buffer, rinfo: RemoteInfo): void {
     const addressKey = `${rinfo.address}:${rinfo.port}`;
     this.logger.debug(`[UDP] Received ${msg.length} bytes from ${addressKey}`);
+    
+    // 注意：Edge间包的路由已经在 lifecycle-manager.ts 的 startUDPServer() 中处理
+    // 通过魔数 0x0000 区分，这里只处理客户端的 Mumble UDP 包
     
     // 检查是否是 UDP ping 包（长度为 12 字节）
     if (msg.length === 12) {
@@ -109,6 +113,7 @@ export class ConnectionHandlers {
       return;
     }
     
+    // ===== 以下是 Mumble 客户端包的处理逻辑 =====
     let session_id: number | undefined;
     let needsUpdate = false;
     let decryptedData: Buffer | null = null; // 存储解密后的数据

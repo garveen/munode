@@ -64,17 +64,11 @@ export class ServerLifecycleManager {
         `Edge Server started successfully on ${this.config.network.host}:${this.config.network.port}`
       );
 
-      // 启动语音 UDP 传输（如果启用）
-      if (this.voiceTransport) {
-        await this.voiceTransport.start();
-        const voicePort = this.config.network.port + 1;
-        this.logger.info(`Voice UDP transport started on port ${voicePort}`);
-        
-        // 设置语音传输处理器（必须在启动后立即设置）
-        if (this.voiceManager) {
-          this.voiceManager.setupVoiceTransportHandlers();
-          this.logger.info('Voice transport handlers setup complete');
-        }
+      // 设置语音传输处理器（VoiceUDPTransport 使用统一入口模式）
+      if (this.voiceTransport && this.voiceManager) {
+        // 不需要调用 voiceTransport.start()，它通过 setSendFunction 使用统一的 UDP 入口
+        this.voiceManager.setupVoiceTransportHandlers();
+        this.logger.info('Voice transport handlers setup complete (unified entry mode)');
       }
 
       // 加入集群（如果是集群模式）
@@ -83,14 +77,16 @@ export class ServerLifecycleManager {
           await this.clusterManager.joinCluster();
           this.logger.info('Successfully joined cluster');
 
-          // 尝试注册已有 peers 的语音端点（非强制，允许部分失败）
+          // 尝试注册已有 peers 的语音端点（使用主UDP端口，非强制，允许部分失败）
           if (this.voiceTransport) {
             const peers = this.clusterManager.getPeers();
             for (const peer of peers) {
-              if (peer.id !== this.config.server_id && peer.voicePort) {
+              if (peer.id !== this.config.server_id) {
                 try {
-                  this.voiceTransport.registerEndpoint(peer.id, peer.host, peer.voicePort);
-                  this.logger.info(`Registered voice endpoint for peer ${peer.id}: ${peer.host}:${peer.voicePort}`);
+                  // 使用主UDP端口（不再使用 +1）
+                  const peerVoicePort = peer.voicePort || peer.port;
+                  this.voiceTransport.registerEndpoint(peer.id, peer.host, peerVoicePort);
+                  this.logger.info(`Registered voice endpoint for peer ${peer.id}: ${peer.host}:${peerVoicePort}`);
                 } catch (endpointError) {
                   // 单个端点注册失败不影响其他端点
                   this.logger.warn(`Failed to register voice endpoint for peer ${peer.id}:`, endpointError);
@@ -130,10 +126,11 @@ export class ServerLifecycleManager {
         this.tlsServer.close();
       }
 
-      // 停止语音 UDP 传输
+      // VoiceUDPTransport 不需要独立停止（使用统一入口模式）
+      // 只需要清理内部状态（定时器、连接状态等）
       if (this.voiceTransport) {
         this.voiceTransport.stop();
-        this.logger.info('Voice UDP transport stopped');
+        this.logger.info('Voice UDP transport stopped (timers and state cleared)');
       }
 
       // 停止集群管理器
@@ -160,7 +157,17 @@ export class ServerLifecycleManager {
       this.udpServer = createSocket('udp4');
 
       this.udpServer.on('message', (msg, rinfo) => {
-        this.handlerFactory.connectionHandlers.handleUDPMessage(msg, rinfo);
+        // 根据魔数区分客户端包和Edge间包
+        if (msg.length >= 2 && msg.readUInt16BE(0) === 0x0000) {
+          // Edge间通信包：前两字节是0x0000
+          if (this.voiceTransport) {
+            // 直接传递给VoiceUDPTransport处理（包含魔数）
+            this.voiceTransport['handleIncomingPacket'](msg, rinfo);
+          }
+        } else {
+          // 客户端Mumble包：前两字节不可能都是0x00
+          this.handlerFactory.connectionHandlers.handleUDPMessage(msg, rinfo);
+        }
       });
 
       this.udpServer.on('error', (error) => {
@@ -175,6 +182,19 @@ export class ServerLifecycleManager {
 
         // 设置 VoiceRouter 的 UDP 服务器引用
         this.handlerFactory.voiceRouter.setUDPServer(this.udpServer);
+        
+        // 设置 VoiceUDPTransport 使用发送回调（统一入口模式）
+        if (this.voiceTransport && this.udpServer) {
+          const udpServerRef = this.udpServer;
+          this.voiceTransport.setSendFunction((buffer, host, port) => {
+            udpServerRef.send(buffer, port, host, (error) => {
+              if (error) {
+                this.logger.error('Failed to send UDP packet:', error);
+              }
+            });
+          });
+          this.logger.info('VoiceUDPTransport configured with send function (unified entry mode)');
+        }
 
         resolve();
       });

@@ -11,6 +11,7 @@ import { validateHubConfig } from './config-validator.js';
 import { applyConfigDefaults } from './config-defaults.js';
 import { WebApiService } from './web-api-service.js';
 import { HubHandlerFactory } from './factory.js';
+import { createSocket, type Socket as UDPSocket } from 'dgram';
 
 /**
  * Hub Server 主类
@@ -26,6 +27,7 @@ export class HubServer {
   private database: HubDatabase;
   private blobStore?: BlobStore;
   private voiceTransport?: VoiceUDPTransport;
+  private udpSocket?: UDPSocket; // UDP socket for edge-to-edge voice transport
   private webApiService?: WebApiService;
   private factory: HubHandlerFactory;
   private started = false;
@@ -79,35 +81,32 @@ export class HubServer {
       );
     }
 
-    // 初始化语音 UDP 传输（如果配置了端口）
-    if (this.config.voicePort) {
-      this.voiceTransport = new VoiceUDPTransport(
-        {
-          port: this.config.voicePort,
-          host: this.config.host,
-          sharedSecret: this.config.voiceUdpSharedSecret 
-            ? Buffer.from(this.config.voiceUdpSharedSecret, 'utf-8') 
-            : undefined,
-        },
-        this.logger,
-      );
+    // 初始化语音 UDP 传输（使用统一端口架构）
+    this.voiceTransport = new VoiceUDPTransport(
+      {
+        port: this.config.port,
+        host: this.config.host,
+        sharedSecret: this.config.voiceUdpSharedSecret 
+          ? Buffer.from(this.config.voiceUdpSharedSecret, 'utf-8') 
+          : undefined,
+      },
+      this.logger,
+    );
 
-      // 监听语音包事件
-      this.voiceTransport.on('voice-packet', (packet) => {
-        // 根据 target_id 转发到对应的 Edge
-        this.handleVoicePacket(packet);
-      });
+    // 监听语音包事件
+    this.voiceTransport.on('voice-packet', (packet) => {
+      // 根据 target_id 转发到对应的 Edge
+      this.handleVoicePacket(packet);
+    });
 
-      this.voiceTransport.on('error', (error) => {
-    this.logger.error('Voice UDP transport error:', error);
-      });
-    }
+    this.voiceTransport.on('error', (error) => {
+  this.logger.error('Voice UDP transport error:', error);
+    });
 
     this.logger.debug('Hub Server initialized', {
        server_id: this.config.server_id,
       host: this.config.host,
-      port: this.config.port,
-      voicePort: this.config.voicePort,
+      port: this.config.port, // 统一UDP/TCP端口
       webApiPort: this.config.webApi?.enabled ? this.config.webApi.port : undefined,
     });
   }
@@ -132,11 +131,11 @@ export class HubServer {
       // 启动控制信道服务
       await this.controlService.start();
 
-      // 启动语音 UDP 传输
+      // 启动语音 UDP 传输（使用统一入口模式）
       if (this.voiceTransport) {
-        await this.voiceTransport.start(); 
-    this.logger.debug('Voice UDP transport started', {
-          port: this.config.voicePort,
+        await this.startUDPServer();
+        this.logger.debug('Voice UDP transport started', {
+          port: this.config.port,
         });
       }
 
@@ -189,6 +188,12 @@ export class HubServer {
     this.logger.debug('Voice UDP transport stopped');
       }
 
+      // 关闭 UDP socket
+      if (this.udpSocket) {
+        this.udpSocket.close();
+        this.udpSocket = undefined;
+      }
+
       // 停止控制信道服务（这会触发 Edge 断开连接）
       await this.controlService.stop();
 
@@ -212,6 +217,53 @@ export class HubServer {
     this.logger.error('Error stopping Hub Server:', error);
       throw error;
     }
+  }
+
+  /**
+   * 启动 UDP 服务器（用于 edge-to-edge 语音传输）
+   * 使用统一端口架构
+   */
+  private async startUDPServer(): Promise<void> {
+    if (!this.voiceTransport) {
+      return;
+    }
+
+    return new Promise((resolve, reject) => {
+      this.udpSocket = createSocket('udp4');
+
+      this.udpSocket.on('message', (msg, rinfo) => {
+        // Hub 接收所有 edge-to-edge 数据包（带魔数 0x0000）
+        if (this.voiceTransport) {
+          this.voiceTransport['handleIncomingPacket'](msg, rinfo);
+        }
+      });
+
+      this.udpSocket.on('error', (error) => {
+        this.logger.error('Hub UDP Server error:', error);
+        reject(error);
+      });
+
+      this.udpSocket.bind(this.config.port, this.config.host, () => {
+        this.logger.info(
+          `Hub UDP Server listening on ${this.config.host}:${this.config.port}`
+        );
+
+        // 设置 VoiceUDPTransport 使用发送回调
+        if (this.voiceTransport && this.udpSocket) {
+          const udpSocketRef = this.udpSocket;
+          this.voiceTransport.setSendFunction((buffer, host, port) => {
+            udpSocketRef.send(buffer, port, host, (error) => {
+              if (error) {
+                this.logger.error('Failed to send UDP packet:', error);
+              }
+            });
+          });
+          this.logger.info('VoiceUDPTransport configured with send function');
+        }
+
+        resolve();
+      });
+    });
   }
 
   /**

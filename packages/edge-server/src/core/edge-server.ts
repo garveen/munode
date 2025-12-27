@@ -100,13 +100,14 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
     // 使用 ClusterManager 已创建的 HubClient 实例（避免重复创建）
     this.hubClient = this.clusterManager.getHubClient();
 
-    // 初始化语音 UDP 传输（集群模式下启用）
-    const voicePort = this.config.network.port + 1; // 使用主端口+1作为语音端口
+    // 初始化语音 UDP 传输（使用与客户端相同的端口，通过魔数区分）
+    // 注意：VoiceUDPTransport 不再独立监听端口，而是复用主 UDP 端口
+    // 在 lifecycle-manager 中通过魔数 0x0000 区分 Edge 间包和客户端包
     this.voiceTransport = new VoiceUDPTransport(
       {
-        port: voicePort,
+        port: this.config.network.port, // 使用主UDP端口（不再+1）
         host: this.config.network.host,
-        localEdgeId: this.config.server_id, // Pass local edge ID for heartbeat role determination
+        localEdgeId: this.config.server_id,
         sharedSecret: this.config.voiceUdpSharedSecret 
           ? Buffer.from(this.config.voiceUdpSharedSecret, 'utf-8') 
           : undefined,

@@ -123,7 +123,7 @@ export class EdgeClusterManager {
         name: this.config.name,
         host: this.config.network.externalHost || this.config.network.host,
         port: this.config.network.externalPort ?? this.config.network.port,
-        voicePort: (this.config.network.externalPort ?? this.config.network.port) + 1, // Voice port is main port + 1 by convention
+        voicePort: this.config.network.externalPort ?? this.config.network.port, // Voice port is main port
         capacity: this.config.capacity,
       };
 
@@ -147,7 +147,7 @@ export class EdgeClusterManager {
           name: peer.name,
           host: peer.host,
           port: peer.port,
-          voicePort: peer.port + 1, // 语音端口 = 主端口 + 1
+          voicePort: peer.port, // 统一UDP端口：语音和控制使用同一端口
         });
         connectedPeers.push(peer.id);
         this.logger.info(`Registered peer ${peer.id} (${peer.name}) for voice UDP`);
@@ -209,7 +209,7 @@ export class EdgeClusterManager {
       name: params.name,
       host: params.host,
       port: params.port,
-      voicePort: params.voicePort || params.port + 1,
+      voicePort: params.voicePort || params.port,
     });
     
     // Edge之间不需要RPC连接

@@ -36,8 +36,7 @@ interface EdgeStatusInfo {
   id: number;
   name: string;
   host: string;
-  port: number;
-  voicePort: number;
+  port: number; // 统一端口（UDP/TCP）
   region?: string;
   capacity: number;
   currentLoad: number;
@@ -270,7 +269,7 @@ export class WebApiService {
       name: edge.name,
       host: edge.host,
       port: edge.port,
-      voicePort: edge.port + 1,
+      voicePort: edge.port, // 使用统一UDP端口
       region: edge.region,
       capacity: edge.capacity,
       currentLoad: edge.current_load,
@@ -310,8 +309,7 @@ export class WebApiService {
       id: edge.server_id,
       name: edge.name,
       host: edge.host,
-      port: edge.port,
-      voicePort: edge.port + 1,
+      port: edge.port, // 统一UDP/TCP端口
       region: edge.region,
       capacity: edge.capacity,
       currentLoad: edge.current_load,

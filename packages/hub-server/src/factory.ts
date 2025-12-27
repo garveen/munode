@@ -118,7 +118,9 @@ export class HubHandlerFactory {
         HubHandlerFactory.instance.blobStore = new BlobStore(config.blobStore.path, true, logger);
         await HubHandlerFactory.instance.blobStore.init();
         // 将BlobStore设置到DatabaseOperations中
-        HubHandlerFactory.instance.databaseOperations.setBlobStore(HubHandlerFactory.instance.blobStore);
+        if ('setBlobStore' in HubHandlerFactory.instance.databaseOperations) {
+          (HubHandlerFactory.instance.databaseOperations as any).setBlobStore(HubHandlerFactory.instance.blobStore);
+        }
         logger.info(`BlobStore initialized at ${config.blobStore.path}`);
       } else {
         logger.debug('BlobStore disabled');
