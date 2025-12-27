@@ -6,6 +6,7 @@ import type { Socket as UDPSocket } from 'dgram';
 import { LRUCache } from 'lru-cache';
 import type { ClientManager } from '../client/client-manager.js';
 import type { ChannelManager } from '../models/channel.js';
+import type { EdgeStateManager } from '../state/state-manager.js';
 
 /**
  * 路由缓存条目
@@ -66,6 +67,7 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
   private udpServer?: UDPSocket; // UDP 服务器引用，用于发送语音包
   private clientManager?: ClientManager; // ClientManager 引用，用于获取客户端信息
   private channelManager?: ChannelManager; // ChannelManager 引用，用于获取频道链接信息
+  private stateManager?: EdgeStateManager; // StateManager 引用，用于获取远程用户信息
   
   // 性能优化：路由缓存（事件驱动，主动重建）
   private routingCache: Map<string, RouteCacheEntry> = new Map(); // cacheKey -> RouteCacheEntry
@@ -113,6 +115,13 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
    */
   setChannelManager(channelManager: ChannelManager): void {
     this.channelManager = channelManager;
+  }
+
+  /**
+   * 设置 StateManager 引用（用于获取远程用户信息）
+   */
+  setStateManager(stateManager: EdgeStateManager): void {
+    this.stateManager = stateManager;
   }
 
   /**
@@ -472,6 +481,12 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
       const sender = this.clientManager?.getClient(sessionId);
       if (sender) {
         senderChannelId = sender.channel_id;
+      } else {
+        // 如果不是本地客户端，从StateManager获取远程用户频道
+        const remoteUser = this.stateManager?.getRemoteUserInfo(sessionId);
+        if (remoteUser) {
+          senderChannelId = remoteUser.channel_id;
+        }
       }
 
       // 构造语音包对象
