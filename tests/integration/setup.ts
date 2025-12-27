@@ -346,7 +346,7 @@ async function startEdgeServer(
 
   edgeConfig.server_id = serverId;
   edgeConfig.name = name;
-  edgeConfig.network = edgeConfig.network || { host: '127.0.0.1', port, externalHost: '127.0.0.1' };
+  edgeConfig.network = edgeConfig.network || { host: '127.0.0.' + serverId, port, externalHost: '127.0.0.' + serverId };
   edgeConfig.network.port = port;
   edgeConfig.logLevel = silent ? 'error' : 'debug';
   
@@ -828,6 +828,51 @@ export async function setupTestEnvironment(
     // 6. 启动 Edge 服务器 4
     if (finalOptions.startEdge4 === true && edgePort4 > 0) {
       edgeServer4 = await startEdgeServer(4, 'MuNode Edge Server 4 (Test)', edgePort4, hubPort, controlPort, silent);
+    }
+
+    // 7. 等待 Edge 服务器之间建立 UDP 连接
+    // 给予足够时间让所有 Edge 节点注册彼此的端点并完成 UDP 握手
+    // 这对跨 Edge 语音路由至关重要
+    const activeEdges: EdgeServer[] = [edgeServer, edgeServer2, edgeServer3, edgeServer4].filter(Boolean) as EdgeServer[];
+    if (activeEdges.length > 1) {
+      debugLog(`Waiting for ${activeEdges.length} Edge servers to establish UDP connections...`);
+      
+      // 等待每个 Edge 都注册了其他 Edge 的端点
+      await sleep(2000); // 基础等待时间让通知传递
+      
+      // 验证 UDP 连接
+      let attempts = 0;
+      const maxAttempts = 20;
+      while (attempts < maxAttempts) {
+        let allConnected = true;
+        
+        for (const edge of activeEdges) {
+          const voiceManager = edge.getVoiceManager();
+          const voiceTransport = voiceManager?.getVoiceTransport();
+          if (voiceTransport) {
+            const registeredIds = voiceTransport.getRegisteredEdgeIds();
+            const expectedCount = activeEdges.length - 1; // 不包括自己
+            
+            if (registeredIds.length < expectedCount) {
+              allConnected = false;
+              debugLog(`Edge ${edge.getConfig().server_id} has ${registeredIds.length}/${expectedCount} endpoints registered`);
+              break;
+            }
+          }
+        }
+        
+        if (allConnected) {
+          debugLog('All Edge servers have registered peer endpoints');
+          break;
+        }
+        
+        attempts++;
+        await sleep(200);
+      }
+      
+      if (attempts >= maxAttempts) {
+        console.warn('Warning: Not all Edge servers completed endpoint registration within timeout');
+      }
     }
 
     console.log('✓ All servers started successfully in single process!');

@@ -68,4 +68,10 @@ export default {
   hideCertHashes: false,
   channelNinja: false,
   logLevel: 'info',
+  voiceRouting: {
+    enabled: true,
+  },
+  hubRelay: {
+    enableTcpFallback: false, // use edge-hub tcp websocket link for voice relay as last choice
+  },
 };

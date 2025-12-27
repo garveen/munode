@@ -17,6 +17,7 @@ import {
   HubSyncVoiceTargetParams,
   HubPluginDataBroadcastParams,
   EdgePluginDataTransmissionParams,
+  HubRelayVoicePacketParams,
 } from '../generated/proto/HubEdgeRPC.js';
 import type { Logger } from '@munode/common';
 
@@ -143,6 +144,7 @@ interface NotificationDataType {
   sync_voice_target?: HubSyncVoiceTargetParams;
   plugin_data_broadcast?: HubPluginDataBroadcastParams;
   plugin_data_transmission?: EdgePluginDataTransmissionParams;
+  relay_voice_packet?: HubRelayVoicePacketParams;
   unknown_params_json?: string;
 }
 
@@ -246,7 +248,8 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
     let notification: TypedRPCNotification;
     
     // If params is already a TypedRPCNotification, use it directly
-    if (typeof params === 'object' && 'timestamp' in params && typeof params.timestamp === 'number') {
+    // TypedRPCNotification must have both method and timestamp at top level
+    if (typeof params === 'object' && 'method' in params && 'timestamp' in params && typeof params.timestamp === 'number') {
       notification = params as TypedRPCNotification;
       notification.method = method;
       notification.timestamp = Date.now();
@@ -416,6 +419,15 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
           dataID: p.dataID,
           data: p.data,
           receiver_sessions: p.receiver_sessions || [],
+        };
+        break;
+      }
+      case 'hub.relayVoicePacket': {
+        const p = params as { from_edge_id: number; voice_packet: Buffer; timestamp: number };
+        notificationData.relay_voice_packet = {
+          from_edge_id: p.from_edge_id,
+          voice_packet: p.voice_packet,
+          timestamp: p.timestamp,
         };
         break;
       }
@@ -643,6 +655,15 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
             raw_data: typedNotification.acl_response.raw_data ? new TextDecoder().decode(typedNotification.acl_response.raw_data) : undefined,
             error: typedNotification.acl_response.error,
             permission_denied: typedNotification.acl_response.permission_denied,
+          };
+        }
+        break;
+      case 'hub.relayVoicePacket':
+        if (typedNotification.relay_voice_packet) {
+          result.params = {
+            from_edge_id: typedNotification.relay_voice_packet.from_edge_id,
+            voice_packet: Buffer.from(typedNotification.relay_voice_packet.voice_packet),
+            timestamp: typedNotification.relay_voice_packet.timestamp,
           };
         }
         break;

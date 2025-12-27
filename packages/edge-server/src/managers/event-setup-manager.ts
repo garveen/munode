@@ -627,6 +627,11 @@ export class EventSetupManager {
           encryptionVersion: config.encryption?.version,
         });
         
+        // 设置语音路由启用状态
+        if (this.voiceManager) {
+          this.voiceManager.getVoiceRoutingManager().setEnabled(config.enabled);
+        }
+        
         // 更新加密密钥
         if (config.encryption && this.voiceManager) {
           this.voiceManager.updateEncryptionKey(
@@ -659,10 +664,12 @@ export class EventSetupManager {
             this.logger.info('Edge joined cluster:', data);
 
             // 尝试注册新Edge的语音端口（非强制，允许失败）
-            if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.voicePort && data.id !== this.config.server_id) {
+            // 在统一端口架构下，voice端口 = main端口
+            if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.port && data.id !== this.config.server_id) {
               try {
-                this.voiceManager.getVoiceTransport().registerEndpoint(data.id, data.host, data.voicePort);
-                this.logger.info(`Registered voice endpoint for new Edge ${data.id}: ${data.host}:${data.voicePort}`);
+                // 使用统一端口架构：port 字段既是 TCP 控制端口，也是 UDP 语音端口
+                this.voiceManager.getVoiceTransport().registerEndpoint(data.id, data.host, data.port);
+                this.logger.info(`Registered voice endpoint for new Edge ${data.id}: ${data.host}:${data.port}`);
               } catch (error) {
                 // 端点注册失败不影响其他功能
                 this.logger.warn(`Failed to register voice endpoint for Edge ${data.id}:`, error);
@@ -749,6 +756,19 @@ export class EventSetupManager {
             // ClusterManager 会处理此消息
             this.logger.debug('Received edge.forceDisconnect notification (handled by ClusterManager)');
             break;
+
+          case 'hub.relayVoicePacket': {
+            // 处理来自Hub的TCP降级语音包
+            const params = message.params as { from_edge_id: number; voice_packet: Buffer; timestamp: number };
+            this.logger.debug(
+              `[TCP-RELAY] Received voice packet from Edge ${params.from_edge_id} via Hub, ` +
+              `size=${params.voice_packet.length}, timestamp=${params.timestamp}`
+            );
+            
+            // 将语音包路由到本地客户端
+            this.handlerFactory.voiceRouter.handleTcpRelayVoicePacket(params.voice_packet);
+            break;
+          }
 
           case 'hub.routeTableUpdate': {
             // 处理来自Hub的路由表更新

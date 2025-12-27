@@ -652,6 +652,15 @@ message HubACLResponseParams {
 }
 
 // ---------------------------------------------------------------------------
+// hub.relayVoicePacket - Hub 转发语音包给 Edge (TCP降级)
+// ---------------------------------------------------------------------------
+message HubRelayVoicePacketParams {
+  required uint32 from_edge_id = 1;
+  required bytes voice_packet = 2;
+  required int64 timestamp = 3;
+}
+
+// ---------------------------------------------------------------------------
 // hub.userJoined - Hub 通知 Edge 有用户加入
 // ---------------------------------------------------------------------------
 message HubUserJoinedParams {
@@ -855,6 +864,7 @@ message TypedRPCNotification {
   optional HubSyncVoiceTargetParams sync_voice_target = 20;
   optional HubPluginDataBroadcastParams plugin_data_broadcast = 21;
   optional EdgePluginDataTransmissionParams plugin_data_transmission = 22;
+  optional HubRelayVoicePacketParams relay_voice_packet = 23;
   
   // For unknown notification types, store params as JSON string
   optional string unknown_params_json = 99;

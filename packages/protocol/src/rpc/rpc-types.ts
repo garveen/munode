@@ -1086,6 +1086,18 @@ export interface HubVoiceRoutingConfigNotification {
   };
 }
 
+/**
+ * Hub 通知 Edge TCP降级的语音包
+ */
+export interface HubRelayVoicePacketNotification {
+  method: 'hub.relayVoicePacket';
+  params: {
+    from_edge_id: number;
+    voice_packet: Buffer;
+    timestamp: number;
+  };
+}
+
 // ============================================================================
 // Type Union & Mapping
 // ============================================================================
@@ -1164,7 +1176,8 @@ export type HubToEdgeNotifications =
   | HubUserStateChangedNotification
   | HubSyncVoiceTargetNotification
   | HubRouteTableUpdateNotification
-  | HubVoiceRoutingConfigNotification;
+  | HubVoiceRoutingConfigNotification
+  | HubRelayVoicePacketNotification;
 
 /**
  * 方法名到类型的映射

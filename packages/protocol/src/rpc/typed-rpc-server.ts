@@ -451,6 +451,15 @@ export class TypedRPCServer {
         };
         break;
       }
+      case 'hub.relayVoicePacket': {
+        const p = params as NotificationParams<'hub.relayVoicePacket'>;
+        notification.relay_voice_packet = {
+          from_edge_id: p.from_edge_id,
+          voice_packet: p.voice_packet,
+          timestamp: p.timestamp,
+        };
+        break;
+      }
     }
 
     return notification;

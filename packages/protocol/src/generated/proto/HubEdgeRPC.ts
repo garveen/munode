@@ -724,6 +724,17 @@ export interface HubACLResponseParams {
 
 /**
  * ---------------------------------------------------------------------------
+ * hub.relayVoicePacket - Hub 转发语音包给 Edge (TCP降级)
+ * ---------------------------------------------------------------------------
+ */
+export interface HubRelayVoicePacketParams {
+  from_edge_id?: number | undefined;
+  voice_packet?: Buffer | undefined;
+  timestamp?: number | undefined;
+}
+
+/**
+ * ---------------------------------------------------------------------------
  * hub.userJoined - Hub 通知 Edge 有用户加入
  * ---------------------------------------------------------------------------
  */
@@ -951,8 +962,9 @@ export interface TypedRPCNotification {
   channel_updated?: HubChannelUpdatedParams | undefined;
   sync_voice_target?: HubSyncVoiceTargetParams | undefined;
   plugin_data_broadcast?: HubPluginDataBroadcastParams | undefined;
-  plugin_data_transmission?:
-    | EdgePluginDataTransmissionParams
+  plugin_data_transmission?: EdgePluginDataTransmissionParams | undefined;
+  relay_voice_packet?:
+    | HubRelayVoicePacketParams
     | undefined;
   /** For unknown notification types, store params as JSON string */
   unknown_params_json?: string | undefined;
@@ -9618,6 +9630,98 @@ export const HubACLResponseParams: MessageFns<HubACLResponseParams> = {
   },
 };
 
+function createBaseHubRelayVoicePacketParams(): HubRelayVoicePacketParams {
+  return { from_edge_id: undefined, voice_packet: undefined, timestamp: undefined };
+}
+
+export const HubRelayVoicePacketParams: MessageFns<HubRelayVoicePacketParams> = {
+  encode(message: HubRelayVoicePacketParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.from_edge_id !== undefined) {
+      writer.uint32(8).uint32(message.from_edge_id);
+    }
+    if (message.voice_packet !== undefined) {
+      writer.uint32(18).bytes(message.voice_packet);
+    }
+    if (message.timestamp !== undefined) {
+      writer.uint32(24).int64(message.timestamp);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): HubRelayVoicePacketParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseHubRelayVoicePacketParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.from_edge_id = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.voice_packet = Buffer.from(reader.bytes());
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.timestamp = longToNumber(reader.int64());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): HubRelayVoicePacketParams {
+    return {
+      from_edge_id: isSet(object.from_edge_id) ? globalThis.Number(object.from_edge_id) : undefined,
+      voice_packet: isSet(object.voice_packet) ? Buffer.from(bytesFromBase64(object.voice_packet)) : undefined,
+      timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
+    };
+  },
+
+  toJSON(message: HubRelayVoicePacketParams): unknown {
+    const obj: any = {};
+    if (message.from_edge_id !== undefined) {
+      obj.from_edge_id = Math.round(message.from_edge_id);
+    }
+    if (message.voice_packet !== undefined) {
+      obj.voice_packet = base64FromBytes(message.voice_packet);
+    }
+    if (message.timestamp !== undefined) {
+      obj.timestamp = Math.round(message.timestamp);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<HubRelayVoicePacketParams>, I>>(base?: I): HubRelayVoicePacketParams {
+    return HubRelayVoicePacketParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<HubRelayVoicePacketParams>, I>>(object: I): HubRelayVoicePacketParams {
+    const message = createBaseHubRelayVoicePacketParams();
+    message.from_edge_id = object.from_edge_id ?? undefined;
+    message.voice_packet = object.voice_packet ?? undefined;
+    message.timestamp = object.timestamp ?? undefined;
+    return message;
+  },
+};
+
 function createBaseHubUserJoinedParams(): HubUserJoinedParams {
   return {
     session_id: undefined,
@@ -12116,6 +12220,7 @@ function createBaseTypedRPCNotification(): TypedRPCNotification {
     sync_voice_target: undefined,
     plugin_data_broadcast: undefined,
     plugin_data_transmission: undefined,
+    relay_voice_packet: undefined,
     unknown_params_json: undefined,
   };
 }
@@ -12166,6 +12271,9 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
     }
     if (message.plugin_data_transmission !== undefined) {
       EdgePluginDataTransmissionParams.encode(message.plugin_data_transmission, writer.uint32(178).fork()).join();
+    }
+    if (message.relay_voice_packet !== undefined) {
+      HubRelayVoicePacketParams.encode(message.relay_voice_packet, writer.uint32(186).fork()).join();
     }
     if (message.unknown_params_json !== undefined) {
       writer.uint32(794).string(message.unknown_params_json);
@@ -12300,6 +12408,14 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
           message.plugin_data_transmission = EdgePluginDataTransmissionParams.decode(reader, reader.uint32());
           continue;
         }
+        case 23: {
+          if (tag !== 186) {
+            break;
+          }
+
+          message.relay_voice_packet = HubRelayVoicePacketParams.decode(reader, reader.uint32());
+          continue;
+        }
         case 99: {
           if (tag !== 794) {
             break;
@@ -12349,6 +12465,9 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
         : undefined,
       plugin_data_transmission: isSet(object.plugin_data_transmission)
         ? EdgePluginDataTransmissionParams.fromJSON(object.plugin_data_transmission)
+        : undefined,
+      relay_voice_packet: isSet(object.relay_voice_packet)
+        ? HubRelayVoicePacketParams.fromJSON(object.relay_voice_packet)
         : undefined,
       unknown_params_json: isSet(object.unknown_params_json)
         ? globalThis.String(object.unknown_params_json)
@@ -12402,6 +12521,9 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
     }
     if (message.plugin_data_transmission !== undefined) {
       obj.plugin_data_transmission = EdgePluginDataTransmissionParams.toJSON(message.plugin_data_transmission);
+    }
+    if (message.relay_voice_packet !== undefined) {
+      obj.relay_voice_packet = HubRelayVoicePacketParams.toJSON(message.relay_voice_packet);
     }
     if (message.unknown_params_json !== undefined) {
       obj.unknown_params_json = message.unknown_params_json;
@@ -12458,6 +12580,9 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
       (object.plugin_data_transmission !== undefined && object.plugin_data_transmission !== null)
         ? EdgePluginDataTransmissionParams.fromPartial(object.plugin_data_transmission)
         : undefined;
+    message.relay_voice_packet = (object.relay_voice_packet !== undefined && object.relay_voice_packet !== null)
+      ? HubRelayVoicePacketParams.fromPartial(object.relay_voice_packet)
+      : undefined;
     message.unknown_params_json = object.unknown_params_json ?? undefined;
     return message;
   },

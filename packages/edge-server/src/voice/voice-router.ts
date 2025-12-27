@@ -449,6 +449,8 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
    */
   handleTcpRelayVoicePacket(voiceData: Buffer): void {
     try {
+      this.logger.debug(`[TCP-RELAY] handleTcpRelayVoicePacket called, size=${voiceData.length}`);
+      
       // 解析语音包头部
       if (voiceData.length < 2) {
         this.logger.warn('TCP relay voice packet too small');
