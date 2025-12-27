@@ -61,6 +61,7 @@ RUN mkdir -p /app/config /app/data /app/logs /app/session
 # 8443: gRPC server for Edge servers
 # 64738: Mumble TCP/UDP (if needed)
 EXPOSE 8443
+EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
