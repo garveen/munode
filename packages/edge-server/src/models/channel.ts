@@ -123,7 +123,6 @@ export class ChannelManager extends TypedEventEmitter<ChannelManagerEvents> {
     if (existingChannel) {
       // 更新现有频道
       Object.assign(existingChannel, channelData);
-      this.logger.debug(`Channel updated: id=${channelData.id}, name=${channelData.name}`);
       this.emit('channelUpdated', existingChannel);
       return existingChannel;
     } else {
@@ -143,7 +142,6 @@ export class ChannelManager extends TypedEventEmitter<ChannelManagerEvents> {
         }
       }
       
-      this.logger.debug(`Channel added: id=${channelData.id}, name=${channelData.name}`);
       this.emit('channelCreated', channelData);
       return channelData;
     }
@@ -216,7 +214,6 @@ export class ChannelManager extends TypedEventEmitter<ChannelManagerEvents> {
     }
 
     Object.assign(channel, updates);
-    this.logger.info(`Channel updated: id=${channel_id}, name=${channel.name}`);
     this.emit('channelUpdated', channel);
     return true;
   }
