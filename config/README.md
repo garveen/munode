@@ -149,8 +149,7 @@ export default {
     },
     
     // Cache settings
-    cacheTTL: 300000,
-    allowCacheFallback: true,
+    // Edge forwards all auth to Hub, no local caching
   },
 };
 ```

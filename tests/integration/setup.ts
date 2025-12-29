@@ -277,19 +277,21 @@ class TestAuthServer {
   private authenticate(req: any): any {
     // Test users database
     const users = testUserPasswords;
-
+    
     const user = users[req.username];
     if (!user || user.password !== req.password) {
       return { success: false, reason: 'Invalid credentials' };
     }
 
-    return {
+    const result = {
       success: true,
       user_id: user.user_id,
       username: req.username,
       displayName: req.username,
       groups: user.groups || ['user'],
     };
+    
+    return result;
   }
 
   async start(): Promise<void> {
@@ -346,13 +348,17 @@ async function startEdgeServer(
 
   edgeConfig.server_id = serverId;
   edgeConfig.name = name;
-  edgeConfig.network = edgeConfig.network || { host: '127.0.0.' + serverId, port, externalHost: '127.0.0.' + serverId };
+  edgeConfig.network = edgeConfig.network || { host: '127.0.0.' + serverId, port, external_host: '127.0.0.' + serverId };
   edgeConfig.network.port = port;
-  edgeConfig.logLevel = silent ? 'error' : 'debug';
+  edgeConfig.log_level = silent ? 'error' : 'debug';
   
   // 配置UDP语音传输的共享密钥用于握手验证
-  if (!edgeConfig.voiceUdpSharedSecret) {
-    edgeConfig.voiceUdpSharedSecret = 'test-shared-secret-for-udp-voice-handshake';
+  edgeConfig.voice_routing = edgeConfig.voice_routing || {
+    enabled: true,
+    shared_secret: 'test-shared-secret-for-udp-voice-handshake'
+  };
+  if (!edgeConfig.voice_routing.shared_secret) {
+    edgeConfig.voice_routing.shared_secret = 'test-shared-secret-for-udp-voice-handshake';
   }
 
   const certsDir = join(__dirname, 'certs');
@@ -360,24 +366,24 @@ async function startEdgeServer(
     cert: join(certsDir, 'server.pem'),
     key: join(certsDir, 'server.key'),
     ca: join(certsDir, 'ca.pem'),
-    requireClientCert: false,
-    rejectUnauthorized: false
+    require_client_cert: false,
+    reject_unauthorized: false
   };
 
-  edgeConfig.hubServer = edgeConfig.hubServer || {
+  edgeConfig.hub_server = edgeConfig.hub_server || {
     host: '127.0.0.1',
     port: hubPort,
-    controlPort: controlPort,
-    tls: { rejectUnauthorized: false },
-    connectionType: 'websocket',
-    reconnectInterval: 5000,
-    heartbeatInterval: 30000
+    control_port: controlPort,
+    tls: { reject_unauthorized: false },
+    connection_type: 'websocket' as const,
+    reconnect_interval: 5000,
+    heartbeat_interval: 30000,
+    pool_size: 1,
+    reconnection_timeout: 10000
   };
-  edgeConfig.hubServer.host = '127.0.0.1';
-  edgeConfig.hubServer.port = hubPort;
-  edgeConfig.hubServer.controlPort = controlPort;
-
-  delete (edgeConfig.auth as any)?.apiUrl;
+  edgeConfig.hub_server.host = '127.0.0.1';
+  edgeConfig.hub_server.port = hubPort;
+  edgeConfig.hub_server.control_port = controlPort;
 
   const edgeServer = new EdgeServer(edgeConfig);
   await edgeServer.start();
@@ -670,34 +676,57 @@ export async function setupTestEnvironment(
       const hubConfigPath = join(PROJECT_ROOT, 'tests/config/hub-test.js');
       if (fs.existsSync(hubConfigPath)) {
         const hubConfigModule = await import(`file://${hubConfigPath}?v=${++importCounter}`);
-        // Deep clone to avoid shared references between test suites
-        const hubConfig: HubConfig = JSON.parse(JSON.stringify(hubConfigModule.default || hubConfigModule));
+        // 使用 structuredClone 来保留 callback 函数
+        const originalConfig = hubConfigModule.default || hubConfigModule;
+        const hubConfig: HubConfig = {
+          ...originalConfig,
+          tls: { ...originalConfig.tls },
+          connection: originalConfig.connection ? { ...originalConfig.connection } : undefined,
+          database: { ...originalConfig.database },
+          blob_store: originalConfig.blob_store ? { ...originalConfig.blob_store } : undefined,
+          registry: { ...originalConfig.registry },
+          web_api: originalConfig.web_api ? { ...originalConfig.web_api } : undefined,
+          auth: originalConfig.auth ? { ...originalConfig.auth } : undefined,
+          voice_routing: originalConfig.voice_routing ? { ...originalConfig.voice_routing } : undefined,
+        } as HubConfig;
         
         hubConfig.port = hubPort;
-        hubConfig.controlPort = controlPort;
-        hubConfig.webApi = hubConfig.webApi || { port: webApiPort, host: '127.0.0.1', cors: { enabled: true, origins: ['*'] } };
-        hubConfig.webApi.port = webApiPort;
+        hubConfig.control_port = controlPort;
+        hubConfig.web_api = hubConfig.web_api || { 
+          enabled: true,
+          port: webApiPort,
+          host: '127.0.0.1',
+          cors: true
+        };
+        hubConfig.web_api.port = webApiPort;
         // 不再设置 voicePort，使用统一端口
 
-        hubConfig.blobStore = hubConfig.blobStore || { enabled: true, path: join(PROJECT_ROOT, 'data/blobs-test') };
+        hubConfig.blob_store = hubConfig.blob_store || { enabled: true, path: join(PROJECT_ROOT, 'data/blobs-test') };
         
-        // 配置UDP语音传输的共享密钥用于握手验证
-        if (!hubConfig.voiceUdpSharedSecret) {
-          hubConfig.voiceUdpSharedSecret = 'test-shared-secret-for-udp-voice-handshake';
+        // 检查 hubConfig.auth 是否已经有 callback
+        // 如果有 callback，保持不变；否则使用 HTTP API 方式（主要用于 auth 测试）
+        if (!hubConfig.auth || !('callback' in hubConfig.auth)) {
+          // 只有在没有 callback 时才配置 HTTP API 认证
+          const existingAuth = hubConfig.auth || {};
+          hubConfig.auth = { 
+            ...existingAuth,
+            api_url: `http://127.0.0.1:${authPort}/auth`, 
+            api_key: '', 
+            timeout: 5000,
+            content_type: 'application/json',
+            method: 'POST' as const,
+            cache_ttl: 300000,
+            pull_interval: 300000,
+            track_sessions: false,
+            allow_cache_fallback: true,
+          };
+          console.log(`[SETUP] Configured Hub auth URL: http://127.0.0.1:${authPort}/auth`);
+        } else {
+          console.log(`[SETUP] Using callback-based authentication from config`);
         }
         
-        // Preserve existing auth config fields and merge with new values
-        const existingAuth = hubConfig.auth || {};
-        hubConfig.auth = { 
-          ...existingAuth,
-          apiUrl: `http://127.0.0.1:${authPort}/auth`, 
-          apiKey: '', 
-          timeout: 5000 
-        };
-        console.log(`[SETUP] Configured Hub auth URL: http://127.0.0.1:${authPort}/auth`);
-        
         // Set log level based on TEST_VERBOSE
-        hubConfig.logLevel = silent ? 'error' : 'debug';
+        hubConfig.log_level = silent ? 'error' : 'debug';
         
         if (finalOptions.hubConfig) {
           Object.assign(hubConfig, finalOptions.hubConfig);
@@ -772,7 +801,7 @@ export async function setupTestEnvironment(
         );
         
         // 创建 Hub 服务器实例
-        console.log(`[SETUP] Creating Hub server with auth URL: ${hubConfig.auth?.apiUrl || 'undefined'}`);
+        console.log(`[SETUP] Creating Hub server`);
         hubServer = new HubServer(hubConfig);
         await hubServer.start();
         debugLog('Hub server started successfully');
@@ -807,6 +836,27 @@ export async function setupTestEnvironment(
           100,
           'Hub control port to be listening'
         );
+        
+        // 为测试环境设置默认ACL：给所有用户MakeChannel权限（方便测试）
+        // 在生产环境中，这个权限应该只给特定的用户或组
+        if (hubServer) {
+          try {
+            const database = (hubServer as any).database; // Access private database
+            if (database) {
+              // 为Root频道(channel_id=0)的'all'组添加MakeChannel权限
+              // Permission.MakeChannel = 0x40 = 64
+              // 'all'是特殊组，匹配所有用户
+              await database.run(`
+                INSERT OR REPLACE INTO acls (
+                  channel_id, user_id, "group", apply_here, apply_subs, allow, deny
+                ) VALUES (0, -1, 'admin', 1, 1, 3607777, 0)
+              `);
+              debugLog('Set default MakeChannel permission for all users on Root channel');
+            }
+          } catch (error) {
+            console.warn('Failed to set default ACL for all users:', error);
+          }
+        }
       }
     }
 

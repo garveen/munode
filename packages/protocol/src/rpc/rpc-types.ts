@@ -719,6 +719,9 @@ export interface HubUserStateBroadcastNotification {
     listening_channel_remove?: number[];
     temporary_access_tokens?: string[];
     texture?: Buffer;
+    texture_hash?: string;
+    comment?: string;
+    comment_hash?: string;
     plugin_context?: Buffer;
     plugin_identity?: string;
     target_sessions?: number[]; // Optional: for Channel Ninja filtered broadcast

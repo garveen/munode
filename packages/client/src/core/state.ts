@@ -206,8 +206,10 @@ export class StateManager {
       recording: message.recording !== undefined ? message.recording : existingUser?.recording || false,
       priority_speaker: message.priority_speaker !== undefined ? message.priority_speaker : existingUser?.priority_speaker || false,
       hash: message.hash,
-      comment: message.comment,
-      texture: message.texture ? Buffer.from(message.texture) : undefined
+      comment: message.comment || existingUser?.comment,
+      comment_hash: message.comment_hash ? Buffer.from(message.comment_hash).toString('base64') : existingUser?.comment_hash,
+      texture: message.texture ? Buffer.from(message.texture) : existingUser?.texture,
+      texture_hash: message.texture_hash ? Buffer.from(message.texture_hash).toString('base64') : existingUser?.texture_hash
     };
 
     // 如果是当前用户，更新会话状态

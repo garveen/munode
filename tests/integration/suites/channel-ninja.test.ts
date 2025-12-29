@@ -40,9 +40,12 @@ describe('Channel Ninja Integration Tests', () => {
   beforeAll(async () => {
     // Create test environment with ninja enabled and channel 1 as ninja channel
     testEnv = await setupTestEnvironment(8100, {
+      reuse: false, // 禁用复用以确保配置生效
+      silent: false,
       hubConfig: {
-        channelNinja: true, // Enable Channel Ninja functionality
-        ninjaChannels: [NINJA_CHANNEL_ID], // Channel 1 (General) is the ninja channel
+        channel_ninja: true, // Enable Channel Ninja functionality
+        ninja_channels: [NINJA_CHANNEL_ID], // Channel 1 (General) is the ninja channel
+        log_level: 'info' as const,
       },
     });
     
@@ -359,8 +362,9 @@ describe('Channel Ninja Disabled Tests', () => {
   beforeAll(async () => {
     // Create test environment with ninja DISABLED
     testEnv = await setupTestEnvironment(8200, {
+      reuse: false, // 禁用复用以确保配置生效
       hubConfig: {
-        channelNinja: false, // Disable Channel Ninja
+        channel_ninja: false, // Disable Channel Ninja
       },
     });
 

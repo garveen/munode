@@ -21,7 +21,7 @@ describe('User Visibility Integration Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {
-    testEnv = await setupTestEnvironment(8095);
+    testEnv = await setupTestEnvironment(8115); // 使用不同的端口避免与acl-suppress冲突
   }, 60000);
 
   afterAll(async () => {

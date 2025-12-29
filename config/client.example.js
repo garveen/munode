@@ -1,3 +1,5 @@
+// @ts-check
+
 /**
  * Headless Mumble Client Configuration
  *

@@ -232,8 +232,8 @@ export class AuthHandlers {
       // Hub 会通过 hub.userJoined 通知所有 Edge（包括本 Edge），广播给其他客户端
       const serverSyncMessage = mumbleproto.ServerSync.encode({
         session: session_id,
-        max_bandwidth: this.config.max_bandwidth || 128000,
-        welcome_text: this.config.welcomeText || 'Welcome to Shitspeak Server',
+        max_bandwidth: this.config.server.max_bandwidth || 128000,
+        welcome_text: this.config.server.welcome_text || 'Welcome to Shitspeak Server',
         permissions: 0, // TODO: 计算权限
       }).finish();
 
@@ -247,16 +247,16 @@ export class AuthHandlers {
       } = {};
       let hasSuggestion = false;
 
-      if (this.config.suggestVersion !== undefined && this.config.suggestVersion > 0) {
-        suggestConfig.version = this.config.suggestVersion;
+      if (this.config.client.suggest_version !== undefined && this.config.client.suggest_version > 0) {
+        suggestConfig.version = this.config.client.suggest_version;
         hasSuggestion = true;
       }
-      if (this.config.suggestPositional !== undefined) {
-        suggestConfig.positional = this.config.suggestPositional;
+      if (this.config.client.suggest_positional !== undefined) {
+        suggestConfig.positional = this.config.client.suggest_positional;
         hasSuggestion = true;
       }
-      if (this.config.suggestPushToTalk !== undefined) {
-        suggestConfig.push_to_talk = this.config.suggestPushToTalk;
+      if (this.config.client.suggest_push_to_talk !== undefined) {
+        suggestConfig.push_to_talk = this.config.client.suggest_push_to_talk;
         hasSuggestion = true;
       }
 

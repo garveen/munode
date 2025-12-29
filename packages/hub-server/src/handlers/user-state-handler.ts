@@ -527,12 +527,12 @@ export class UserStateHandler implements IUserStateHandler {
       this.logger.info(`Hub: Broadcasting UserState for session ${targetSession} to all edges, fields: ${Object.keys(broadcastUserState).join(', ')}`);
 
       // Check if Channel Ninja feature is enabled and we have ninja channels configured
-      const channelNinjaEnabled = config.channelNinja ?? false;
-      const hasNinjaChannels = config.ninjaChannels?.length > 0;
+      const channelNinjaEnabled = config.channel_ninja ?? false;
+      const hasNinjaChannels = config.ninja_channels?.length > 0;
 
       if (channelNinjaEnabled && hasNinjaChannels) {
         // Ninja logic: Filter broadcast based on individual user visibility
-        const ninjaChannels = new Set(config.ninjaChannels);
+        const ninjaChannels = new Set(config.ninja_channels as number[]);
         const allSessions = sessionManager.getAllSessions();
         
         // Track which sessions can see this user state change
@@ -640,7 +640,7 @@ export class UserStateHandler implements IUserStateHandler {
     }
   }
 
-  async handleUserLeftNotification(params: EdgeNotificationParams<'edge.userLeftNotification'>): Promise<void> {
+  handleUserLeftNotification(params: EdgeNotificationParams<'edge.userLeftNotification'>): Promise<void> {
     const { edge_id, session_id } = params as { edge_id: number; session_id: number; reason?: string };
     const sessionManager = this.factory.getSessionManager();
     const controlService = this.factory.getControlService();
@@ -655,5 +655,7 @@ export class UserStateHandler implements IUserStateHandler {
       session: session_id,
       reason: params.reason,
     });
+    
+    return Promise.resolve();
   }
 }

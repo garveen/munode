@@ -46,8 +46,8 @@ export class SyncHandler implements ISyncHandler {
     let sessions: GlobalSession[] = this.factory.getSessionManager().getAllSessions();
 
     // If ninja channels are configured and user info is provided, filter sessions
-    const channelNinjaEnabled = this.factory.getConfig().channelNinja ?? false;
-    const hasNinjaChannels = (this.factory.getConfig().ninjaChannels?.length ?? 0) > 0;
+    const channelNinjaEnabled = this.factory.getConfig().channel_ninja ?? false;
+    const hasNinjaChannels = (this.factory.getConfig().ninja_channels?.length ?? 0) > 0;
 
     if (channelNinjaEnabled && hasNinjaChannels && this.factory.getPermissionChecker() &&
         params.for_user_id !== undefined && params.for_user_id > 0) {
@@ -69,7 +69,7 @@ export class SyncHandler implements ISyncHandler {
           requestingUserInfo,
           requestingUserInfo.channel_id,
           session.channel_id ?? 0,
-          new Set(this.factory.getConfig().ninjaChannels || [])
+          new Set(this.factory.getConfig().ninja_channels || [])
         );
 
         if (canSee) {
@@ -251,7 +251,7 @@ export class SyncHandler implements ISyncHandler {
 
     return {
       channel_id: channelId,
-      name: channelId === 0 ? (this.factory.getConfig().registerName || 'Root') : ch.name,
+      name: channelId === 0 ? (this.factory.getConfig().register_name || 'Root') : ch.name,
       parent_id: ch.parent_id >= 0 ? ch.parent_id : undefined, // Skip negative parent_ids (root channel)
       position: ch.position,
       max_users: ch.max_users,

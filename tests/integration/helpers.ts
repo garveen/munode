@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import { join } from 'path';
 import { mumbleproto } from '@munode/protocol';
 import { MessageType } from './fixtures';
-import { MumbleClient } from '../../../packages/client/src/index.js';
+import { MumbleClient } from '@munode/client';
 
 export interface MumbleConnection {
   socket: tls.TLSSocket;
@@ -160,7 +160,7 @@ export async function createAuthenticatedClient(
   password: string
 ): Promise<any> {
   // 动态导入以避免构建依赖问题
-  const { MumbleClient } = await import('../../../packages/client/dist/index.js');
+  const { MumbleClient } = await import('@munode/client');
   
   const client = new MumbleClient();
   
@@ -206,7 +206,7 @@ export async function authenticateConnection(
   password: string
 ): Promise<number> {
   // 创建认证消息
-  const auth = mumbleproto.Authenticate.fromObject({
+  const auth = mumbleproto.Authenticate.create({
     username,
     password,
     tokens: [],
@@ -215,7 +215,7 @@ export async function authenticateConnection(
   });
 
   // 发送认证消息
-  const authData = Buffer.from(auth.serialize());
+  const authData = Buffer.from(mumbleproto.Authenticate.encode(auth).finish());
   connection.send(MessageType.Authenticate, authData);
 
   // 等待服务器同步消息
@@ -224,6 +224,6 @@ export async function authenticateConnection(
     throw new Error(`Expected ServerSync, got message type ${response.type}`);
   }
 
-  const serverSync = mumbleproto.ServerSync.deserialize(response.data);
+  const serverSync = mumbleproto.ServerSync.decode(response.data);
   return serverSync.session;
 }

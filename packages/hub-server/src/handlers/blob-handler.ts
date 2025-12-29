@@ -143,7 +143,26 @@ export class BlobHandler implements IBlobHandler {
       const hash = await this.factory.getDatabaseOperations().putBlobData(params.data);
 
       // 保存 hash 到数据库
-      await this.factory.getDatabaseOperations().setUserTextureBlob(params.user_id, hash);      this.logger.info(`Set user texture for user ${params.user_id}: ${hash}`);
+      await this.factory.getDatabaseOperations().setUserTextureBlob(params.user_id, hash);
+      this.logger.info(`Set user texture for user ${params.user_id}: ${hash}`);
+      
+      // 广播 UserState 更新（对齐 C++ Mumble 服务器行为）
+      const sessionManager = this.factory.getSessionManager();
+      const controlService = this.factory.getControlService();
+      const userSessions = sessionManager.getUserSessions(params.user_id);
+      
+      if (userSessions.length > 0) {
+        // 广播给用户的所有会话
+        for (const userSession of userSessions) {
+          this.logger.debug(`Broadcasting texture_hash update for session ${userSession.session_id}`);
+          controlService.broadcast('hub.userStateBroadcast', {
+            session: userSession.session_id,
+            actor: userSession.session_id,
+            texture_hash: hash,
+          });
+        }
+      }
+      
       return { success: true, hash };
     } catch (error) {
       this.logger.error(`Error setting user texture for user ${params.user_id}:`, error);
@@ -168,7 +187,26 @@ export class BlobHandler implements IBlobHandler {
       const hash = await this.factory.getDatabaseOperations().putBlobData(params.data);
 
       // 保存 hash 到数据库
-      await this.factory.getDatabaseOperations().setUserCommentBlob(params.user_id, hash);      this.logger.info(`Set user comment for user ${params.user_id}: ${hash}`);
+      await this.factory.getDatabaseOperations().setUserCommentBlob(params.user_id, hash);
+      this.logger.info(`Set user comment for user ${params.user_id}: ${hash}`);
+      
+      // 广播 UserState 更新（对齐 C++ Mumble 服务器行为）
+      const sessionManager = this.factory.getSessionManager();
+      const controlService = this.factory.getControlService();
+      const userSessions = sessionManager.getUserSessions(params.user_id);
+      
+      if (userSessions.length > 0) {
+        // 广播给用户的所有会话
+        for (const userSession of userSessions) {
+          this.logger.debug(`Broadcasting comment_hash update for session ${userSession.session_id}`);
+          controlService.broadcast('hub.userStateBroadcast', {
+            session: userSession.session_id,
+            actor: userSession.session_id,
+            comment_hash: hash,
+          });
+        }
+      }
+      
       return { success: true, hash };
     } catch (error) {
       this.logger.error(`Error setting user comment for user ${params.user_id}:`, error);

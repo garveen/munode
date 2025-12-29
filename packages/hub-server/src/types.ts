@@ -3,165 +3,27 @@
 import type { ServerStats, EdgeInfo, RegisterRequest, RegisterResponse, HeartbeatRequest, HeartbeatResponse } from '@munode/protocol';
 export type { ServerStats, EdgeInfo, RegisterRequest, RegisterResponse, HeartbeatRequest, HeartbeatResponse };
 
+// 从 config-schema 导入配置类型（这些类型由 Zod schema 生成）
+export type {
+  HubConfig,
+  TLSConfig,
+  ConnectionConfig,
+  RegistryConfig,
+  DatabaseConfig,
+  BlobStoreConfig,
+  WebApiConfig,
+  HubAuthConfig,
+  AutoBanConfig,
+  ClientSuggestConfig,
+  VoiceRoutingConfig,
+  RoutingPolicy,
+} from './config-schema.js';
+
 // Edge连接状态
 export enum EdgeConnectionState {
   CONNECTED = 'connected',          // 正常连接
   DISCONNECTED_WAITING = 'disconnected_waiting',  // 断开但等待重连
   DISCONNECTED_TIMEOUT = 'disconnected_timeout',  // 超时，会话已清理
-}
-
-export interface HubConfig {
-   server_id: number;
-  name: string;
-  registerName?: string; // Root频道的显示名称（默认为"Root"）
-  host: string;
-  port: number; // 主端口（统一UDP/TCP端口）
-  controlPort?: number; // 控制信道端口
-  
-  // 基础网络配置
-  timeout?: number; // 客户端超时时间（秒），默认: 30
-  serverPassword?: string; // 服务器密码
-  
-  // 用户与频道限制
-  maxUsers?: number; // 最大用户数，默认: 1000
-  maxUsersPerChannel?: number; // 每频道最大用户数，默认: 0 (无限制)
-  channelNestingLimit?: number; // 频道嵌套深度限制，默认: 10
-  channelCountLimit?: number; // 频道总数限制，默认: 1000
-  
-  // 带宽与消息限制
-  bandwidth?: number; // 每用户最大带宽 (bps)，默认: 558000
-  textMessageLength?: number; // 文本消息最大长度，默认: 5000
-  imageMessageLength?: number; // 图片消息最大长度（字节），默认: 131072
-  messageLimit?: number; // 消息速率限制（消息/秒），默认: 1
-  messageBurst?: number; // 消息突发容量，默认: 5
-  pluginMessageLimit?: number; // 插件消息速率限制，默认: 4
-  pluginMessageBurst?: number; // 插件消息突发容量，默认: 15
-  
-  // 认证与安全
-  kdfIterations?: number; // PBKDF2迭代次数，默认: -1 (自动基准测试)
-  allowHTML?: boolean; // 允许HTML消息，默认: true
-  forceExternalAuth?: boolean; // 强制外部认证，默认: false
-  sslCiphers?: string; // SSL加密套件配置
-  
-  // 用户名与频道名验证
-  usernameRegex?: string; // 用户名正则表达式，默认: [ -=\w\[\]\{\}\(\)\@\|\.]+
-  channelNameRegex?: string; // 频道名正则表达式，默认: [ -=\w\#\[\]\{\}\(\)\@\|]+
-  
-  // 欢迎消息
-  welcomeText?: string; // 欢迎消息文本
-  welcomeTextFile?: string; // 欢迎消息文件路径
-  
-  // 自动封禁配置
-  autoBan?: AutoBanConfig;
-  
-  // 频道行为
-  defaultChannel?: number; // 默认频道ID，默认: 0 (Root)
-  rememberChannel?: boolean; // 记住用户上次频道，默认: true
-  rememberChannelDuration?: number; // 记住频道的时长（秒），默认: 0 (永久)
-  
-  // 客户端建议
-  suggest?: ClientSuggestConfig;
-  
-  // 服务器注册与发现
-  registerPassword?: string; // 注册到公开列表的密码
-  registerHostname?: string; // 注册主机名
-  registerLocation?: string; // 服务器位置
-  registerUrl?: string; // 服务器网站URL
-  bonjour?: boolean; // 启用Bonjour/Zeroconf本地网络发现，默认: false
-  
-  // 监听功能
-  listenersPerChannel?: number; // 每频道最大监听者数，默认: 0 (无限制)
-  listenersPerUser?: number; // 每用户最大监听代理数，默认: 0 (无限制)
-  broadcastListenerVolumeAdjustments?: boolean; // 广播监听者音量调整，默认: false
-  
-  // 高级功能
-  allowRecording?: boolean; // 允许录音，默认: true
-  sendVersion?: boolean; // 向客户端发送版本信息，默认: true
-  allowPing?: boolean; // 允许ping，默认: true
-  hideCertHashes?: boolean; // 混淆证书哈希，返回用户ID哈希代替真实证书哈希，默认: false
-  channelNinja?: boolean; // Enable channel Ninja functionality to hide users in channels without view permissions, default: false
-  ninjaChannels?: number[]; // Array of channel IDs that are ninja channels. Users without Enter/Listen permission cannot see users in these channels.
-  
-  // 日志配置
-  logDays?: number; // 数据库日志保留天数，默认: 31
-  
-  // 认证配置
-  auth?: HubAuthConfig;
-  
-  tls: TLSConfig;
-  registry: RegistryConfig;
-  database: DatabaseConfig;
-  blobStore: BlobStoreConfig; // Blob存储配置
-  webApi: WebApiConfig;
-  logLevel: string;
-  logFile?: string;
-  
-  // 语音路由配置（Edge间中转路由功能）
-  voiceRouting?: VoiceRoutingConfig;
-  
-  // UDP 语音传输握手认证密钥
-  voiceUdpSharedSecret?: string;
-}
-
-/**
- * 语音路由配置
- * Hub 启动时会将此配置推送给所有 Edge
- */
-export interface VoiceRoutingConfig {
-  // 全局功能开关
-  enabled: boolean;
-  
-  // 路由策略
-  policy?: RoutingPolicy;
-  
-  // 优选中转节点（可选，留空则自动选择）
-  preferredRelayEdges?: number[];
-  
-  // Hub 自身中转配置
-  hubRelay?: {
-    enableTcpFallback: boolean;   // 仅保留 TCP 降级功能（通过 WebSocket）
-  };
-  
-  // Edge间语音传输加密配置
-  encryption?: {
-    algorithm: 'aes-128-cbc' | 'aes-256-cbc';  // 加密算法
-    keyRotationInterval?: number;               // 密钥轮换间隔（秒），0表示不轮换
-  };
-  
-  // 路由优化调试
-  debug?: {
-    logRouteChanges: boolean;     // 记录路由变化
-    logQualityMetrics: boolean;   // 记录质量指标
-    logRelayStats: boolean;       // 记录中转统计
-  };
-}
-
-/**
- * 路由策略配置
- */
-export interface RoutingPolicy {
-  // 直连阈值
-  directRttThreshold?: number;        // 直连 RTT 上限 (ms), 默认 200
-  directLossThreshold?: number;       // 直连丢包率上限, 默认 0.05
-  
-  // 中转条件
-  enableRelay?: boolean;              // 是否启用中转, 默认 true
-  maxRelayHops?: number;              // 最大中转跳数, 默认 1
-  relayCostFactor?: number;           // 中转成本因子, 默认 1.2 (比直连高 20%)
-  
-  // 路由切换
-  routeSwitchHysteresis?: number;     // 切换滞后时间 (ms), 默认 5000
-  routeSwitchCostDelta?: number;      // 切换成本差异阈值, 默认 0.3 (30%)
-  
-  // 负载均衡
-  maxRelayLoadPerEdge?: number;       // 单 Edge 最大中转负载, 默认 0.7
-  
-  // 质量探测
-  probeInterval?: number;             // 探测间隔 (ms), 默认 10000
-  probeTimeout?: number;              // 探测超时 (ms), 默认 5000
-  
-  // 路由表更新
-  routeTableUpdateInterval?: number;  // Hub 推送路由表间隔 (ms), 默认 30000
 }
 
 /**
@@ -202,78 +64,6 @@ export type ExternalAuthCallback = (
   request: ExternalAuthRequest
 ) => Promise<ExternalAuthResult>;
 
-// Hub 认证配置
-export interface HubAuthConfig {
-  // 方式1: 使用回调函数进行认证（推荐）
-  callback?: ExternalAuthCallback;
-  
-  // 方式2: 使用HTTP API进行认证（向后兼容）
-  apiUrl?: string; // 外部认证 API 地址
-  apiKey?: string; // API 密钥
-  timeout?: number; // 超时时间（毫秒），默认 5000
-  contentType?: 'application/json' | 'application/x-www-form-urlencoded'; // 请求内容类型，默认 'application/json'
-  headers?: {
-    authHeaderName?: string; // 认证头名称，默认 'Authorization'
-    authHeaderFormat?: string; // 认证头格式，默认 'Bearer {apiKey}'
-  };
-  responseFields?: {
-    successField?: string; // 成功标志字段名，默认 'success'
-    userIdField?: string; // 用户ID字段名，默认 'user_id'
-    usernameField?: string; // 用户名字段名，默认 'username'
-    displayNameField?: string; // 显示名字段名，默认 'displayName'
-    groupsField?: string; // 用户组字段名，默认 'groups'
-    reasonField?: string; // 失败原因字段名，默认 'reason' 或 'message'
-  };
-  cacheTTL?: number; // 缓存TTL（毫秒），默认 300000 (5分钟)
-  allowCacheFallback?: boolean; // 是否允许缓存回退，默认 false
-}
-
-// TLS 配置
-export interface TLSConfig {
-  cert?: string;
-  key?: string;
-  ca?: string;
-  requireClientCert?: boolean;
-  rejectUnauthorized?: boolean;
-}
-
-// 注册表配置
-export interface RegistryConfig {
-  heartbeatInterval: number;
-  timeout: number;
-  maxEdges: number;
-  
-  // HMAC 挑战-响应认证
-  hmacSecret?: string; // HMAC 共享密钥
-  challengeTimeout?: number; // 挑战码超时时间 (ms)，默认: 60000 (60秒)
-  enableAuth?: boolean; // 是否启用认证，默认: true
-  
-  // Edge断开后的会话清理配置
-  edgeReconnectGracePeriod?: number; // Edge断开后等待重连的宽限期（毫秒），默认30000（30秒）
-}
-
-// 数据库配置
-export interface DatabaseConfig {
-  path: string;
-  backupDir: string;
-  backupInterval: number;
-  walMode?: boolean; // 启用SQLite WAL模式，默认: false
-}
-
-// Blob存储配置
-export interface BlobStoreConfig {
-  enabled: boolean;  // 是否启用blob存储
-  path: string;      // blob存储目录
-}
-
-// Web API 配置
-export interface WebApiConfig {
-  enabled: boolean;
-  host?: string;
-  port: number;
-  cors: boolean;
-}
-
 // 已注册的 Edge 服务器信息
 export interface RegisteredEdge {
    server_id: number;
@@ -301,21 +91,6 @@ export interface VoiceTargetConfig {
 
 // 导出 VoiceTarget 类型别名
 export type VoiceTarget = import('@munode/protocol').VoiceTarget;
-
-// 自动封禁配置
-export interface AutoBanConfig {
-  attempts: number; // 失败尝试次数，默认: 10
-  timeframe: number; // 时间窗口（秒），默认: 120
-  duration: number; // 封禁时长（秒），默认: 300
-  banSuccessfulConnections: boolean; // 成功连接后是否重置计数，默认: true
-}
-
-// 客户端建议配置
-export interface ClientSuggestConfig {
-  version?: string; // 建议客户端版本，格式: "1.4.0"
-  positional?: boolean | null; // 建议启用位置音频
-  pushToTalk?: boolean | null; // 建议使用按键说话
-}
 
 // 证书信息
 export interface CertificateInfo {

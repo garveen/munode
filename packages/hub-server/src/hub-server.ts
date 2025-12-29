@@ -8,7 +8,7 @@ import { HubControlService } from './control-service.js';
 import { HubDatabase } from './database.js';
 import { VoiceUDPTransport, type VoicePacket, type VoicePacketHeader } from '@munode/protocol';
 import { validateHubConfig } from './config-validator.js';
-import { applyConfigDefaults } from './config-defaults.js';
+import { validateAndParseHubConfig } from './config-schema.js';
 import { WebApiService } from './web-api-service.js';
 import { HubHandlerFactory } from './factory.js';
 import { createSocket, type Socket as UDPSocket } from 'dgram';
@@ -32,18 +32,19 @@ export class HubServer {
   private factory: HubHandlerFactory;
   private started = false;
   private stopping = false; // 跟踪是否正在停止
+  private cleanupIntervals: NodeJS.Timeout[] = []; // 存储清理任务的定时器引用
 
   constructor(config: HubConfig) {
-    // 应用默认值
-    this.config = applyConfigDefaults(config);
+    // 使用 Zod 验证并应用默认值
+    this.config = validateAndParseHubConfig(config);
     
-    // 验证配置
+    // 使用旧版验证器进行额外检查并显示警告
     validateHubConfig(this.config);
     
     // 创建logger实例
     this.logger = createLogger({ 
       service: `hub-${config.server_id}`,
-      level: config.logLevel || 'info'
+      level: config.log_level || 'info'
     });
     
     this.logger.debug('Hub Server configuration validated and initialized');
@@ -71,9 +72,9 @@ export class HubServer {
 
 
     // 初始化 Web API 服务
-    if (this.config.webApi?.enabled) {
+    if (this.config.web_api?.enabled) {
       this.webApiService = new WebApiService(
-        this.config.webApi,
+        this.config.web_api,
         this.config.server_id,
         this.registry,
         this.sessionManager,
@@ -86,8 +87,8 @@ export class HubServer {
       {
         port: this.config.port,
         host: this.config.host,
-        sharedSecret: this.config.voiceUdpSharedSecret 
-          ? Buffer.from(this.config.voiceUdpSharedSecret, 'utf-8') 
+        sharedSecret: this.config.voice_routing?.shared_secret 
+          ? Buffer.from(this.config.voice_routing.shared_secret, 'utf-8') 
           : undefined,
       },
       this.logger,
@@ -107,7 +108,7 @@ export class HubServer {
        server_id: this.config.server_id,
       host: this.config.host,
       port: this.config.port, // 统一UDP/TCP端口
-      webApiPort: this.config.webApi?.enabled ? this.config.webApi.port : undefined,
+      webApiPort: this.config.web_api?.enabled ? this.config.web_api.port : undefined,
     });
   }
 
@@ -318,14 +319,16 @@ export class HubServer {
    */
   private startCleanupTasks(): void {
     // 清理超时的 Edge 服务器
-    setInterval(() => {
+    const registryCleanupTimer = setInterval(() => {
       this.registry.cleanup();
     }, 60000); // 每分钟清理一次
+    this.cleanupIntervals.push(registryCleanupTimer);
 
     // 清理离线会话
-    setInterval(() => {
+    const sessionCleanupTimer = setInterval(() => {
       this.sessionManager.cleanup();
     }, 300000); // 每5分钟清理一次
+    this.cleanupIntervals.push(sessionCleanupTimer);
 
     this.logger.debug('Cleanup tasks started');
   }
@@ -334,8 +337,11 @@ export class HubServer {
    * 停止清理任务
    */
   private stopCleanupTasks(): void {
-    // 清理定时器
-    // 注意：实际实现中需要保存定时器引用
+    // 清理所有定时器
+    for (const timer of this.cleanupIntervals) {
+      clearInterval(timer);
+    }
+    this.cleanupIntervals = [];
     this.logger.debug('Cleanup tasks stopped');
   }
 

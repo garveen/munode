@@ -16,7 +16,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { TestEnvironment, setupTestEnvironment, sleep } from '../setup.js';
 import { MumbleClient } from '../../../packages/client/src/index.js';
 import { HubServer } from '../../../packages/hub-server/src/index.js';
-import type { HubConfig } from '../../../packages/hub-server/src/types.js';
+import { HubConfigSchema } from '../../../packages/hub-server/src/config-schema.js';
+import type { HubConfig } from '../../../packages/hub-server/src/config-schema.js';
 import * as fs from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -91,25 +92,22 @@ describe('Hub Restart User Sync Tests', () => {
 
     // Restart Hub with the same config
     console.log('Restarting Hub...');
-    const hubConfigPath = join(PROJECT_ROOT, `tests/config/hub-test-${TEST_BASE_PORT}.js`);
-    // Recreate the temp config file if it doesn't exist
-    if (!fs.existsSync(hubConfigPath)) {
-      const hubConfigSourcePath = join(PROJECT_ROOT, 'tests/config/hub-test.js');
-      const hubConfigModule = await import(`file://${hubConfigSourcePath}?v=${Date.now()}`);
-      const hubConfig = { ...(hubConfigModule.default || hubConfigModule) };
-      hubConfig.port = testEnv.hubPort;
-      hubConfig.controlPort = testEnv.hubPort + 1;
-      hubConfig.webApi = hubConfig.webApi || {};
-      hubConfig.webApi.port = testEnv.hubPort + 2;
-      hubConfig.voicePort = testEnv.hubPort + 3;
-      hubConfig.auth = hubConfig.auth || {};
-      hubConfig.auth.apiUrl = `http://127.0.0.1:${testEnv.authPort}/auth`;
-      fs.writeFileSync(hubConfigPath, `export default ${JSON.stringify(hubConfig, null, 2)};`);
-    }
     
-    // Load config and create new Hub server instance
-    const hubConfigModule = await import(`file://${hubConfigPath}?v=${Date.now()}`);
-    const hubConfig: HubConfig = { ...(hubConfigModule.default || hubConfigModule) };
+    // Load and parse config
+    const hubConfigSourcePath = join(PROJECT_ROOT, 'tests/config/hub-test.js');
+    const hubConfigModule = await import(`file://${hubConfigSourcePath}?v=${Date.now()}`);
+    const hubConfigInput = { ...(hubConfigModule.default || hubConfigModule) };
+    
+    // Override ports (auth config will use callback from hub-test.js)
+    hubConfigInput.port = testEnv.hubPort;
+    hubConfigInput.control_port = testEnv.hubPort + 1;
+    hubConfigInput.web_api = hubConfigInput.web_api || { enabled: true, host: '127.0.0.1', cors: true };
+    hubConfigInput.web_api.port = testEnv.hubPort + 2;
+    // auth 配置保留 hub-test.js 中的 callback
+    
+    // Parse config to apply defaults and validate
+    const hubConfig = HubConfigSchema.parse(hubConfigInput);
+    
     const newHubServer = new HubServer(hubConfig);
     await newHubServer.start();
     testEnv.hubServer = newHubServer;

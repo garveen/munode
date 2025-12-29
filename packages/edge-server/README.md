@@ -62,11 +62,9 @@ pnpm build
     "heartbeatInterval": 30000
   },
   "auth": {
-    "apiUrl": "https://auth.example.com/api",
-    "apiKey": "your-api-key",
     "timeout": 5000,
-    "cacheTTL": 3600000,
-    "pullInterval": 300000
+    "retry": 3,
+    "insecure": false
   },
   "features": {
     "geoip": true,

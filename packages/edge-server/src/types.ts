@@ -1,7 +1,19 @@
 import type { Socket as UDPSocket } from 'dgram';
-import type { TLSConfig } from '@munode/common';
 import { mumbleproto } from '@munode/protocol';
 import type { EdgeInfo, ChannelUserMap } from '@munode/protocol';
+
+// 从 config-schema 导入配置类型（这些类型由 Zod schema 生成）
+export type {
+  EdgeConfig,
+  NetworkConfig,
+  TLSConfig,
+  HubServerConfig,
+  SmuxOptions,
+  EdgeVoiceRoutingConfig,
+  ServerConfig,
+  ClientConfig,
+  FeatureConfig,
+} from './config-schema.js';
 
 // 从 protocol 包导入共享类型并重新导出供本地使用
 export type {
@@ -24,140 +36,18 @@ export type {
 } from '@munode/protocol';
 export { ClientState } from '@munode/protocol';
 
-// Edge Server 配置
-export interface EdgeConfig {
-   server_id: number;
-  name: string;
-  mode: 'cluster';
-  network: NetworkConfig;
-  tls: TLSConfig;
-  hubServer?: HubServerConfig;
-  voiceRouting?: EdgeVoiceRoutingConfig;  // 语音路由配置
-  voiceUdpSharedSecret?: string;  // UDP 语音传输握手认证密钥
-  auth: AuthConfig;
-  capacity: number;
-  max_bandwidth: number;
-  defaultChannel: number;
-  logLevel: string;
-  features: FeatureConfig;
-  welcomeText?: string;
-  maxTextMessageLength?: number;
-  maxImageMessageLength?: number;
-  suggestVersion?: number; // 建议的客户端版本号（例如：0x010203 代表 1.2.3）
-  suggestPositional?: boolean; // 建议启用位置音频
-  suggestPushToTalk?: boolean; // 建议启用按键发言
-}
-
-// 网络配置
-export interface NetworkConfig {
-  host: string;            // 实际监听的地址
-  port: number;            // 实际监听的端口
-  externalHost: string;    // 用于其它edge连接的地址（公网地址）
-  externalPort?: number;   // 用于其它edge连接的端口（公网端口），如果未指定则使用port
-  region?: string;
-}
-
-// Hub 服务器配置
-export interface HubServerConfig {
-  host: string;
-  port: number;
-  controlPort: number;
-  tls: {
-    ca?: string;
-    rejectUnauthorized: boolean;
-  };
-  connectionType: 'websocket' | 'grpc' | 'smux' | 'kcp';
-  reconnectInterval: number;
-  heartbeatInterval: number;
-  options?: SmuxOptions | GrpcOptions | KcpOptions;
-  
-  // HMAC 挑战-响应认证
-  hmacSecret?: string; // HMAC 共享密钥（需与 Hub 配置一致）
-  
-  // 连接池配置
-  poolSize?: number; // 连接池大小，默认2；设为1则使用单连接（向后兼容）
-  reconnectionTimeout?: number; // Edge全部连接断开后，等待重连的超时时间（毫秒），默认30000
-}
-
-// SMUX 连接选项
-export interface SmuxOptions {
-  maxStreamWindowSize: number;
-  maxSessionWindowSize: number;
-}
-
-// gRPC 连接选项
-export interface GrpcOptions {
-  keepaliveTimeMs: number;
-  keepaliveTimeoutMs: number;
-}
-
-// KCP 连接选项
-export interface KcpOptions {
-  mtu: number;
-  sndwnd: number;
-  rcvwnd: number;
-  nodelay: number;
-  interval: number;
-  resend: number;
-  nc: number;
-}
-
-// 语音路由配置 (Edge 侧)
-export interface EdgeVoiceRoutingConfig {
-  // 由 Hub 推送控制的配置
-  enabled?: boolean;                   // 功能总开关，由 Hub 控制
-  hubPolicy?: EdgeRoutingPolicy;       // Hub 推送的路由策略
-  
-  // 本地路由决策配置
-  localDecision?: {
-    enabled: boolean;                  // 启用本地决策
-    updateInterval: number;            // 本地路由更新间隔 (ms)
-    qualityCheckInterval: number;      // 质量检查间隔 (ms)
-    directRttThreshold: number;        // 本地直连 RTT 阈值
-    directLossThreshold: number;       // 本地直连丢包率阈值
-  };
-  
-  // 中转功能配置
-  relay?: {
-    enabled: boolean;                  // 允许作为中转节点
-    maxRelayCpuLoad: number;           // CPU 上限
-    maxRelayBandwidth: number;         // 带宽上限 (kbps)
-    softLimitThreshold: number;        // 软限制阈值
-    hardLimitThreshold: number;        // 硬限制阈值
-    recoveryThreshold: number;         // 恢复阈值
-    priority: number;                  // 中转优先级 (1-10)
-  };
-  
-  // 网络质量探测配置
-  probe?: {
-    enabled: boolean;
-    method: 'passive';                 // 被动探测
-    updateInterval: number;            // 质量指标更新间隔 (ms)
-    lossWindowSize: number;            // 丢包率统计窗口
-    rttSmoothFactor: number;           // RTT 平滑参数
-    metricsTTL: number;                // 质量指标过期时间 (ms)
-  };
-  
-  // 降级策略配置
-  fallback?: {
-    enableTcpFallback: boolean;        // 启用 TCP 降级
-    tcpFallbackDelay: number;          // 切换到 TCP 的延迟 (ms)
-    udpRecoveryCheckInterval: number;  // UDP 恢复检查间隔 (ms)
-  };
-}
-
-// Hub 推送的路由策略
+// EdgeRoutingPolicy 不在 config-schema 中，在此定义
 export interface EdgeRoutingPolicy {
-  directRttThreshold: number;
-  directLossThreshold: number;
-  enableRelay: boolean;
-  maxRelayHops: number;
-  relayCostFactor: number;
-  routeSwitchHysteresis: number;
-  routeSwitchCostDelta: number;
-  maxRelayLoadPerEdge: number;
-  probeInterval: number;
-  routeTableUpdateInterval: number;
+  direct_rtt_threshold: number;
+  direct_loss_threshold: number;
+  enable_relay: boolean;
+  max_relay_hops: number;
+  relay_cost_factor: number;
+  route_switch_hysteresis: number;
+  route_switch_cost_delta: number;
+  max_relay_load_per_edge: number;
+  probe_interval: number;
+  route_table_update_interval: number;
 }
 
 // 路由类型枚举
@@ -187,19 +77,6 @@ export interface EdgeConnectionQuality {
   samples: number;         // 样本数量
 }
 
-// 认证配置
-export interface AuthConfig {
-  apiUrl: string;
-  apiKey: string;
-  timeout: number;
-  retry: number;
-  insecure: boolean;
-  cacheTTL: number;
-  pullInterval: number;
-  trackSessions: boolean;
-  allowCacheFallback: boolean;
-}
-
 // 认证结果
 export interface AuthResult {
   success: boolean;
@@ -220,17 +97,6 @@ export interface AuthResult {
   self_deaf?: boolean;
   priority_speaker?: boolean;
   recording?: boolean;
-}
-
-// 功能开关配置
-export interface FeatureConfig {
-  geoip: boolean;
-  banSystem: boolean;
-  contextActions: boolean;
-  packetPool: boolean;
-  udpMonitor: boolean;
-  allowHtml?: boolean;
-  allowPing?: boolean; // 允许响应 UDP ping，默认 true
 }
 
 // 注意：ClientState, ClientInfo, ChannelGroup, ChannelInfo, VoicePacket, VoiceBroadcast 等共享类型

@@ -75,9 +75,10 @@ interface QualitySample {
  * 默认 Edge 语音路由配置（使用共享常量）
  */
 const DEFAULT_VOICE_ROUTING_CONFIG: Required<EdgeVoiceRoutingConfig> = {
-  enabled: false,
-  hubPolicy: { ...DEFAULT_ROUTING_POLICY },
-  localDecision: { ...DEFAULT_LOCAL_DECISION_CONFIG },
+  shared_secret: undefined,  // 默认不设置加密
+  enabled: true,
+  hub_policy: { ...DEFAULT_ROUTING_POLICY },
+  local_decision: { ...DEFAULT_LOCAL_DECISION_CONFIG },
   relay: { ...DEFAULT_EDGE_RELAY_CONFIG },
   probe: { ...DEFAULT_PROBE_CONFIG },
   fallback: { ...DEFAULT_FALLBACK_CONFIG },
@@ -150,7 +151,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     this.logger = logger;
     
     // 合并配置
-    this.voiceRoutingConfig = this.mergeConfig(this.config.voiceRouting);
+    this.voiceRoutingConfig = this.mergeConfig(this.config.voice_routing);
     
     // 初始化中转统计
     this.relayStats = this.initRelayStats();
@@ -167,13 +168,14 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     }
     
     return {
+      shared_secret: config.shared_secret,
       enabled: config.enabled ?? DEFAULT_VOICE_ROUTING_CONFIG.enabled,
-      hubPolicy: config.hubPolicy 
-        ? { ...DEFAULT_ROUTING_POLICY, ...config.hubPolicy }
+      hub_policy: config.hub_policy 
+        ? { ...DEFAULT_ROUTING_POLICY, ...config.hub_policy }
         : DEFAULT_ROUTING_POLICY,
-      localDecision: config.localDecision 
-        ? { ...DEFAULT_VOICE_ROUTING_CONFIG.localDecision, ...config.localDecision }
-        : DEFAULT_VOICE_ROUTING_CONFIG.localDecision,
+      local_decision: config.local_decision 
+        ? { ...DEFAULT_VOICE_ROUTING_CONFIG.local_decision, ...config.local_decision }
+        : DEFAULT_VOICE_ROUTING_CONFIG.local_decision,
       relay: config.relay 
         ? { ...DEFAULT_VOICE_ROUTING_CONFIG.relay, ...config.relay }
         : DEFAULT_VOICE_ROUTING_CONFIG.relay,
@@ -212,7 +214,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     }
     
     // 启动本地路由更新定时器
-    if (this.voiceRoutingConfig.localDecision.enabled) {
+    if (this.voiceRoutingConfig.local_decision.enabled) {
       this.startLocalRouteUpdate();
     }
     
@@ -316,7 +318,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
    * 更新 Hub 推送的路由策略
    */
   updateHubPolicy(policy: EdgeRoutingPolicy): void {
-    this.voiceRoutingConfig.hubPolicy = policy;
+    this.voiceRoutingConfig.hub_policy = policy;
     this.logger.debug('Hub routing policy updated', { policy });
     
     // 触发路由重新计算
@@ -327,19 +329,19 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
    * 更新策略配置的别名方法（用于 event-setup-manager）
    */
   updatePolicy(policy: Partial<EdgeRoutingPolicy>): void {
-    Object.assign(this.voiceRoutingConfig.hubPolicy, policy);
+    Object.assign(this.voiceRoutingConfig.hub_policy, policy);
     this.logger.debug('Hub routing policy updated', { policy });
-    this.emit('policy-updated', this.voiceRoutingConfig.hubPolicy);
+    this.emit('policy-updated', this.voiceRoutingConfig.hub_policy);
   }
 
   /**
    * 更新 TCP fallback 配置
    */
-  updateFallbackConfig(config: { enableTcpFallback?: boolean; tcpFallbackDelay?: number; udpRecoveryCheckInterval?: number }): void {
+  updateFallbackConfig(config: { enable_tcp_fallback?: boolean; tcp_fallback_delay?: number; udp_recovery_check_interval?: number }): void {
     Object.assign(this.voiceRoutingConfig.fallback, config);
     this.logger.info('TCP fallback config updated:', {
-      enableTcpFallback: this.voiceRoutingConfig.fallback.enableTcpFallback,
-      tcpFallbackDelay: this.voiceRoutingConfig.fallback.tcpFallbackDelay,
+      enable_tcp_fallback: this.voiceRoutingConfig.fallback.enable_tcp_fallback,
+      tcp_fallback_delay: this.voiceRoutingConfig.fallback.tcp_fallback_delay,
     });
     
     // 清除路由缓存，强制重新计算
@@ -347,7 +349,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     this.routingTable.clear();
     
     // 触发路由重新计算（fallback 状态变化可能影响路由选择）
-    this.emit('policy-updated', this.voiceRoutingConfig.hubPolicy);
+    this.emit('policy-updated', this.voiceRoutingConfig.hub_policy);
   }
 
   /**
@@ -593,7 +595,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     });
     
     // 限制样本数量
-    const maxSamples = this.voiceRoutingConfig.probe.lossWindowSize;
+    const maxSamples = this.voiceRoutingConfig.probe.loss_window_size;
     while (samples.length > maxSamples) {
       samples.shift();
     }
@@ -634,7 +636,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     }
     
     // 计算平滑 RTT（指数移动平均）
-    const smoothFactor = this.voiceRoutingConfig.probe.rttSmoothFactor;
+    const smoothFactor = this.voiceRoutingConfig.probe.rtt_smooth_factor;
     let smoothedRtt = samples[0].rtt;
     for (let i = 1; i < samples.length; i++) {
       smoothedRtt = smoothFactor * samples[i].rtt + (1 - smoothFactor) * smoothedRtt;
@@ -653,7 +655,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     // 计算丢包率
     let packetLoss = 0;
     if (tracking && tracking.expected > 0) {
-      const windowSize = this.voiceRoutingConfig.probe.lossWindowSize;
+      const windowSize = this.voiceRoutingConfig.probe.loss_window_size;
       const expectedPackets = Math.min(tracking.expected, windowSize);
       const receivedPackets = tracking.received.size;
       packetLoss = Math.max(0, (expectedPackets - receivedPackets) / expectedPackets);
@@ -687,7 +689,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
    * 启动本地路由更新定时器
    */
   private startLocalRouteUpdate(): void {
-    const interval = this.voiceRoutingConfig.localDecision.updateInterval;
+    const interval = this.voiceRoutingConfig.local_decision.update_interval;
     
     this.localRouteUpdateTimer = setInterval(() => {
       this.performLocalRouteDecision();
@@ -700,7 +702,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
    * 启动质量检查定时器
    */
   private startQualityCheck(): void {
-    const interval = this.voiceRoutingConfig.localDecision.qualityCheckInterval;
+    const interval = this.voiceRoutingConfig.local_decision.quality_check_interval;
     
     this.qualityCheckTimer = setInterval(() => {
       this.checkQualityThresholds();
@@ -713,7 +715,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
    * 启动指标清理定时器
    */
   private startMetricsCleanup(): void {
-    const ttl = this.voiceRoutingConfig.probe.metricsTTL;
+    const ttl = this.voiceRoutingConfig.probe.metrics_ttl;
     
     this.metricsCleanupTimer = setInterval(() => {
       this.cleanupExpiredMetrics();
@@ -754,7 +756,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     targetEdgeId: number, 
     quality: EdgeConnectionQuality
   ): RouteEntry | null {
-    const policy = this.voiceRoutingConfig.hubPolicy;
+    const policy = this.voiceRoutingConfig.hub_policy;
     
     // 检查直连是否可行
     if (this.isDirectRouteFeasible(quality)) {
@@ -768,7 +770,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     }
     
     // 尝试寻找中转路由
-    if (policy.enableRelay) {
+    if (policy.enable_relay) {
       const relayRoute = this.findBestRelayRoute(targetEdgeId);
       if (relayRoute) {
         return relayRoute;
@@ -776,7 +778,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     }
     
     // 降级到 TCP
-    if (this.voiceRoutingConfig.fallback.enableTcpFallback) {
+    if (this.voiceRoutingConfig.fallback.enable_tcp_fallback) {
       return {
         targetEdgeId,
         type: RouteType.FALLBACK,
@@ -797,10 +799,10 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
       return true; // 没有质量数据时默认使用直连
     }
     
-    const config = this.voiceRoutingConfig.localDecision;
+    const config = this.voiceRoutingConfig.local_decision;
     
-    return quality.rtt <= config.directRttThreshold &&
-           quality.packetLoss <= config.directLossThreshold;
+    return quality.rtt <= config.direct_rtt_threshold &&
+           quality.packetLoss <= config.direct_loss_threshold;
   }
 
   /**
@@ -816,7 +818,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
    * 寻找最佳中转路由
    */
   private findBestRelayRoute(targetEdgeId: number): RouteEntry | null {
-    const policy = this.voiceRoutingConfig.hubPolicy;
+    const policy = this.voiceRoutingConfig.hub_policy;
     let bestRoute: RouteEntry | null = null;
     let bestCost = Infinity;
     
@@ -833,7 +835,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
       
       // 计算经过此 Edge 中转的成本
       // 这里简化处理，假设中转 Edge 到目标的质量与到我们的质量相似
-      const relayCost = this.calculateDirectCost(relayQuality) * policy.relayCostFactor;
+      const relayCost = this.calculateDirectCost(relayQuality) * policy.relay_cost_factor;
       
       if (relayCost < bestCost) {
         bestCost = relayCost;
@@ -862,17 +864,17 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
       return true;
     }
     
-    const policy = this.voiceRoutingConfig.hubPolicy;
+    const policy = this.voiceRoutingConfig.hub_policy;
     
     // 检查成本差异是否超过阈值
     const costDelta = (currentRoute.cost - newRoute.cost) / currentRoute.cost;
-    if (Math.abs(costDelta) < policy.routeSwitchCostDelta) {
+    if (Math.abs(costDelta) < policy.route_switch_cost_delta) {
       return false;
     }
     
     // 检查滞后时间
     const timeSinceLastUpdate = Date.now() - currentRoute.timestamp;
-    if (timeSinceLastUpdate < policy.routeSwitchHysteresis) {
+    if (timeSinceLastUpdate < policy.route_switch_hysteresis) {
       return false;
     }
     
@@ -884,10 +886,10 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
    */
   private checkQualityThresholds(): void {
     for (const [edgeId, quality] of this.connectionQualities) {
-      const config = this.voiceRoutingConfig.localDecision;
+      const config = this.voiceRoutingConfig.local_decision;
       
-      if (quality.rtt > config.directRttThreshold ||
-          quality.packetLoss > config.directLossThreshold) {
+      if (quality.rtt > config.direct_rtt_threshold ||
+          quality.packetLoss > config.direct_loss_threshold) {
         this.logger.warn(`Quality degradation detected for Edge ${edgeId}:`, {
           rtt: quality.rtt,
           packetLoss: quality.packetLoss,
@@ -902,7 +904,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
    * 清理过期的质量指标
    */
   private cleanupExpiredMetrics(): void {
-    const ttl = this.voiceRoutingConfig.probe.metricsTTL;
+    const ttl = this.voiceRoutingConfig.probe.metrics_ttl;
     const now = Date.now();
     
     for (const [edgeId, quality] of this.connectionQualities) {
@@ -948,11 +950,11 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     }
     
     // 检查 CPU 和带宽限制
-    if (this.relayStats.cpuLoad >= relayConfig.hardLimitThreshold) {
+    if (this.relayStats.cpuLoad >= relayConfig.hard_limit_threshold) {
       return false;
     }
     
-    if (this.relayStats.bandwidthUsage >= relayConfig.maxRelayBandwidth * 0.9) {
+    if (this.relayStats.bandwidthUsage >= relayConfig.max_relay_bandwidth * 0.9) {
       return false;
     }
     

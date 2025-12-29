@@ -48,8 +48,10 @@ console.log(logLevel);
 import { HubServer } from '../../packages/hub-server/src/hub-server.js';
 
 import { EdgeServer } from '../../packages/edge-server/src/index.js';
-import type { HubConfig } from '../../packages/hub-server/src/types.js';
-import type { EdgeConfig } from '../../packages/edge-server/src/types.js';
+import type { HubConfig, HubConfigInput } from '../../packages/hub-server/src/config-schema.js';
+import { HubConfigSchema } from '../../packages/hub-server/src/config-schema.js';
+import type { EdgeConfig, EdgeConfigInput } from '../../packages/edge-server/src/config-schema.js';
+import { EdgeConfigSchema } from '../../packages/edge-server/src/config-schema.js';
 import { createLogger, setGlobalLogLevel } from '@munode/common';
 import * as http from 'http';
 import * as path from 'path';
@@ -260,114 +262,140 @@ class SimpleAuthServer {
 /**
  * 生成 Hub Server 配置
  */
-function createHubConfig(): HubConfig {
+function createHubConfig(): HubConfigInput {
   return {
     server_id: 0,
     name: 'Hub Server',
     host: '0.0.0.0',
     port: 50051,
-    controlPort: 8443, // 控制信道端口
+    control_port: 8443, // 控制信道端口
     database: {
       path: path.join(__dirname, 'data/hub-test.db'),
-      backupDir: path.join(__dirname, 'data/backups'),
-      backupInterval: 86400000, // 24 hours
+      backup_dir: path.join(__dirname, 'data/backups'),
+      backup_interval: 86400000, // 24 hours
+      wal_mode: true,
     },
     registry: {
-      heartbeatInterval: 30000,
+      heartbeat_interval: 30000,
       timeout: 30000,
-      maxEdges: 10,
+      max_edges: 10,
+      challenge_timeout: 30000,
+      enable_auth: true,
     },
     tls: {
       ca: path.join(__dirname, 'certs/ca.pem'),
       cert: path.join(__dirname, 'certs/server.pem'),
       key: path.join(__dirname, 'certs/server.key'),
-      requireClientCert: false,
-      rejectUnauthorized: false,
+      require_client_cert: false,
+      reject_unauthorized: false,
     },
     auth: {
-      apiUrl: 'http://localhost:8080/auth',
-      contentType: 'application/json',
+      api_url: 'http://localhost:8080/auth',
+      content_type: 'application/json',
+      method: 'POST' as const,
       timeout: 5000,
-      cacheTTL: 300000,
-      allowCacheFallback: false,
+      cache_ttl: 300000,
+      pull_interval: 60000,
+      track_sessions: true,
+      allow_cache_fallback: false,
     },
-    blobStore: {
+    blob_store: {
       enabled: false,
       path: path.join(__dirname, 'data/blobs'),
     },
-    webApi: {
+    web_api: {
       enabled: true,
+      host: '127.0.0.1',
       port: 8081,
       cors: false,
     },
-    voiceRouting: {
+    voice_routing: {
       enabled: true,
-      hubRelay: {
-        enableTcpFallback: false, // use edge-hub tcp websocket link for voice relay as last choice
+      hub_relay: {
+        enable_tcp_fallback: false, // use edge-hub tcp websocket link for voice relay as last choice
       },
     },
-    logLevel: 'info',
+    log_level: 'info',
   };
 }
 
 /**
  * 生成 Edge Server 配置
  */
-function createEdgeConfig(server_id: number, port: number): EdgeConfig {
+function createEdgeConfig(server_id: number, port: number): EdgeConfigInput {
   return {
     server_id: server_id,
     name: `Edge Server ${server_id}`,
     mode: 'cluster',
-    capacity: 100,
     network: {
-      host: '0.0.0.0',
+      host: '127.0.0.1',
       port,
-      externalHost: 'localhost',
+      external_host: '127.0.0.1',
       region: 'test',
     },
     tls: {
       ca: path.join(__dirname, 'certs/ca.pem'),
       cert: path.join(__dirname, 'certs/server.pem'),
       key: path.join(__dirname, 'certs/server.key'),
-      requireClientCert: false,
-      rejectUnauthorized: false,
+      require_client_cert: false,
+      reject_unauthorized: false,
     },
-    hubServer: {
+    hub_server: {
       host: '127.0.0.1',
       port: 50051,
-      controlPort: 8443,
+      control_port: 8443,
       tls: {
-        rejectUnauthorized: false,
+        reject_unauthorized: false,
       },
-      connectionType: 'websocket',
-      reconnectInterval: 5000,
-      heartbeatInterval: 10000,
+      connection_type: 'websocket',
+      reconnect_interval: 5000,
+      heartbeat_interval: 10000,
+      pool_size: 1,
+      reconnection_timeout: 10000,
     },
-    voiceUdpSharedSecret: 'change-this-to-a-secure-random-string', // Shared secret for UDP encryption
+    voice_routing: {
+      enabled: true,
+      shared_secret: 'change-this-to-a-secure-random-string', // UDP 语音传输加密密钥
+      local_decision: {
+        enabled: true,
+        update_interval: 5000,
+        quality_check_interval: 10000,
+        direct_rtt_threshold: 100,
+        direct_loss_threshold: 0.05,
+      },
+      relay: {
+        enabled: true,
+        max_relay_cpu_load: 0.8,
+        max_relay_bandwidth: 10000,
+        soft_limit_threshold: 0.7,
+        hard_limit_threshold: 0.9,
+        recovery_threshold: 0.5,
+        priority: 1,
+      },
+    },
 
-    auth: {
-      apiUrl: 'http://localhost:8080/auth',
-      apiKey: '',
-      timeout: 5000,
-      retry: 3,
-      insecure: true,
-      cacheTTL: 300000,
-      pullInterval: 60000,
-      trackSessions: true,
-      allowCacheFallback: true,
+    server: {
+      capacity: 1000,
+      max_bandwidth: 1000000,
+      default_channel: 0,
+      timeout: 30000,
+    },
+    
+    client: {
+      max_text_message_length: 5000,
+      max_image_message_length: 131072,
     },
     
     features: {
       geoip: false,
-      banSystem: false,
-      contextActions: false,
-      packetPool: false,
-      udpMonitor: false,
-      allowPing: true,
+      ban_system: false,
+      context_actions: false,
+      packet_pool: false,
+      udp_monitor: false,
+      allow_ping: true,
+      allow_html: false,
     },
-    max_bandwidth: 1000000,
-    defaultChannel: 0,
-    logLevel: 'debug',
+    log_level: 'debug',
   };
 }
 
@@ -426,7 +454,7 @@ async function runTestScenarios(
         server_id: 1
       }),
     });
-    const result = await response.json();
+    const result = await response.json() as { success: boolean; message?: string; reason?: string };
     const status = result.success === test.expected ? '✓' : '✗';
     logger.info(`  ${status} ${test.username}/${test.password}: ${result.message || result.reason}`);
   }
@@ -531,28 +559,32 @@ async function main() {
 
     // 2. 启动 Hub Server
     logger.info('[2/5] Starting Hub Server...');
-    const hubConfig = createHubConfig();
+    const hubConfigInput = createHubConfig();
+    const hubConfig = HubConfigSchema.parse(hubConfigInput);
     const hubServer = new HubServer(hubConfig);
     await hubServer.start();
     servers.push({ name: 'Hub Server', instance: hubServer });
 
     // 3. 启动 Edge Server 1
     logger.info('[3/5] Starting Edge Server 1...');
-    const edge1Config = createEdgeConfig(1, 63000);
+    const edge1ConfigInput = createEdgeConfig(1, 63000);
+    const edge1Config = EdgeConfigSchema.parse(edge1ConfigInput);
     const edgeServer1 = new EdgeServer(edge1Config);
     await edgeServer1.start();
     servers.push({ name: 'Edge Server 1', instance: edgeServer1 });
 
     // 4. 启动 Edge Server 2
     logger.info('[4/5] Starting Edge Server 2...');
-    const edge2Config = createEdgeConfig(2, 63002);
+    const edge2ConfigInput = createEdgeConfig(2, 63002);
+    const edge2Config = EdgeConfigSchema.parse(edge2ConfigInput);
     const edgeServer2 = new EdgeServer(edge2Config);
     await edgeServer2.start();
     servers.push({ name: 'Edge Server 2', instance: edgeServer2 });
 
     // 5. 启动 Edge Server 3
     logger.info('[5/5] Starting Edge Server 3...');
-    const edge3Config = createEdgeConfig(3, 63004);
+    const edge3ConfigInput = createEdgeConfig(3, 63004);
+    const edge3Config = EdgeConfigSchema.parse(edge3ConfigInput);
     const edgeServer3 = new EdgeServer(edge3Config);
     await edgeServer3.start();
     servers.push({ name: 'Edge Server 3', instance: edgeServer3 });

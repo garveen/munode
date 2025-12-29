@@ -139,10 +139,10 @@ describe('ACL Operations Integration Tests', () => {
 
       // 添加 ACL 条目
       await client.addACLEntry(channelId, {
-        applyHere: true,
-        applySubs: false,
+        apply_here: true,
+        apply_subs: false,
         group: 'user',
-        grant: PermissionFlag.Speak | PermissionFlag.Enter,
+        allow: PermissionFlag.Speak | PermissionFlag.Enter,
         deny: 0,
       });
 
@@ -175,10 +175,10 @@ describe('ACL Operations Integration Tests', () => {
 
       // 添加 ACL 条目
       await client.addACLEntry(channelId, {
-        applyHere: true,
-        applySubs: false,
+        apply_here: true,
+        apply_subs: false,
         group: 'test_group',
-        grant: PermissionFlag.Speak,
+        allow: PermissionFlag.Speak,
         deny: 0,
       });
 
@@ -220,10 +220,10 @@ describe('ACL Operations Integration Tests', () => {
 
       // 添加 ACL 条目
       await client.addACLEntry(channelId, {
-        applyHere: true,
-        applySubs: false,
+        apply_here: true,
+        apply_subs: false,
         group: 'user',
-        grant: PermissionFlag.Speak,
+        allow: PermissionFlag.Speak,
         deny: 0,
       });
 
@@ -231,7 +231,7 @@ describe('ACL Operations Integration Tests', () => {
 
       // 更新 ACL 条目
       await client.updateACLEntry(channelId, 0, {
-        grant: PermissionFlag.Speak | PermissionFlag.TextMessage,
+        allow: PermissionFlag.Speak | PermissionFlag.TextMessage,
       });
 
       await new Promise(resolve => setTimeout(resolve, 200));
@@ -423,10 +423,10 @@ describe('ACL Operations Integration Tests', () => {
 
       // 设置 ACL：拒绝所有人说话
       await adminClient.addACLEntry(channelId, {
-        applyHere: true,
-        applySubs: false,
+        apply_here: true,
+        apply_subs: false,
         group: 'all',
-        grant: PermissionFlag.Enter,
+        allow: PermissionFlag.Enter,
         deny: PermissionFlag.Speak,
       });
 
@@ -476,18 +476,18 @@ describe('ACL Operations Integration Tests', () => {
 
       // 设置 ACL：只允许管理员进入
       await adminClient.addACLEntry(channelId, {
-        applyHere: true,
-        applySubs: false,
+        apply_here: true,
+        apply_subs: false,
         group: 'admin',
-        grant: PermissionFlag.Enter | PermissionFlag.Speak,
+        allow: PermissionFlag.Enter | PermissionFlag.Speak,
         deny: 0,
       });
 
       await adminClient.addACLEntry(channelId, {
-        applyHere: true,
-        applySubs: false,
+        apply_here: true,
+        apply_subs: false,
         group: 'all',
-        grant: 0,
+        allow: 0,
         deny: PermissionFlag.Enter,
       });
 

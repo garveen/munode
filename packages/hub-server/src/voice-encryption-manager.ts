@@ -39,7 +39,7 @@ export class VoiceEncryptionManager {
     this.generateNewKey();
 
     // 启动密钥轮换定时器（如果配置了）
-    if (this.config?.keyRotationInterval && this.config.keyRotationInterval > 0) {
+    if (this.config?.key_rotation_interval && this.config.key_rotation_interval > 0) {
       this.startKeyRotation();
     }
   }
@@ -68,9 +68,9 @@ export class VoiceEncryptionManager {
    * 启动密钥轮换定时器
    */
   private startKeyRotation(): void {
-    if (!this.config?.keyRotationInterval) return;
+    if (!this.config?.key_rotation_interval) return;
 
-    const intervalMs = this.config.keyRotationInterval * 1000;
+    const intervalMs = this.config.key_rotation_interval * 1000;
 
     this.rotationTimer = setInterval(() => {
       this.logger.info('Rotating voice encryption key...');
@@ -79,7 +79,7 @@ export class VoiceEncryptionManager {
       // 这将由ControlService处理
     }, intervalMs);
 
-    this.logger.info(`Voice encryption key rotation enabled (interval: ${this.config.keyRotationInterval}s)`);
+    this.logger.info(`Voice encryption key rotation enabled (interval: ${this.config.key_rotation_interval}s)`);
   }
 
   /**

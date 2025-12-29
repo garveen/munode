@@ -33,8 +33,8 @@ program
       // 应用命令行选项
       if (options.port) config.network.port = parseInt(options.port);
       if (options.host) config.network.host = options.host;
-      if (options.hubHost) config.hubServer!.host = options.hubHost;
-      if (options.hubPort) config.hubServer!.port = parseInt(options.hubPort);
+      if (options.hubHost) config.hub_server!.host = options.hubHost;
+      if (options.hubPort) config.hub_server!.port = parseInt(options.hubPort);
 
       // 创建并启动服务器
       const server = new EdgeServer(config);

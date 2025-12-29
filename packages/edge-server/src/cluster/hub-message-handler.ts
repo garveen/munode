@@ -68,6 +68,9 @@ export class HubMessageHandlers {
       if (params.priority_speaker !== undefined) userStateInit.priority_speaker = params.priority_speaker;
       if (params.recording !== undefined) userStateInit.recording = params.recording;
       if (params.texture !== undefined) userStateInit.texture = params.texture;
+      if (params.texture_hash !== undefined) userStateInit.texture_hash = Buffer.from(params.texture_hash, 'base64');
+      if (params.comment !== undefined) userStateInit.comment = params.comment;
+      if (params.comment_hash !== undefined) userStateInit.comment_hash = Buffer.from(params.comment_hash, 'base64');
       if (params.plugin_context !== undefined) userStateInit.plugin_context = params.plugin_context;
       if (params.plugin_identity !== undefined) userStateInit.plugin_identity = params.plugin_identity;
       
@@ -269,8 +272,6 @@ export class HubMessageHandlers {
     try {
       const channelState = params;
 
-        this.logger.debug(`Received ChannelState broadcast from Hub: channel ${channelState.channel_id}`);
-
       // 更新本地频道状态镜像
       if (channelState.channel_id !== undefined) {
         const existingChannel = this.channelManager.getChannel(channelState.channel_id);
@@ -387,6 +388,7 @@ export class HubMessageHandlers {
 
       const channelStateMessage = mumbleproto.ChannelState.encode(channelStateInit).finish();
       const allClients = this.clientManager.getAllClients();
+      
       for (const client of allClients) {
         if (client.user_id > 0) {
           this.messageHandler.sendMessage(client.session, MessageType.ChannelState, Buffer.from(channelStateMessage));

@@ -459,12 +459,13 @@ describe('User Info Query Integration Tests', () => {
       ]);
 
       if (queryResult) {
-        // 不存在的用户应该返回空结果或 ID = -1
-        expect(queryResult.names).toContain('nonexistent_user_12345');
-        if (queryResult.ids && queryResult.ids.length > 0) {
-          // 如果返回了 ID，应该是 -1 或类似的值表示不存在
-          expect(queryResult.ids[0]).toBeLessThanOrEqual(0);
+        // 不存在的用户不应该出现在响应中（符合 Mumble 协议）
+        // 响应应该是空的或不包含该用户
+        if (queryResult.names.length > 0) {
+          expect(queryResult.names).not.toContain('nonexistent_user_12345');
         }
+        // ids 和 names 数组长度应该相等
+        expect(queryResult.ids.length).toBe(queryResult.names.length);
       }
 
       await client.disconnect();

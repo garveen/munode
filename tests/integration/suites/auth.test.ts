@@ -13,6 +13,16 @@ import { TestEnvironment, setupTestEnvironment } from '../setup';
 import { MumbleConnection } from '../helpers';
 import * as http from 'http';
 
+interface AuthResponse {
+  success: boolean;
+  user_id?: number;
+  username?: string;
+  displayName?: string;
+  groups?: string[];
+  message?: string;
+  reason?: string;
+}
+
 describe('Authentication Integration Tests', () => {
   let testEnv: TestEnvironment;
 
@@ -44,7 +54,7 @@ describe('Authentication Integration Tests', () => {
       });
 
       expect(response.status).toBe(200);
-      const result = await response.json();
+      const result = await response.json() as AuthResponse;
       expect(result.success).toBe(true);
       expect(result.user_id).toBe(1);
       expect(result.username).toBe('admin');
@@ -66,7 +76,7 @@ describe('Authentication Integration Tests', () => {
       });
 
       expect(response.status).toBe(401);
-      const result = await response.json();
+      const result = await response.json() as AuthResponse;
       expect(result.success).toBe(false);
     });
 
@@ -85,7 +95,7 @@ describe('Authentication Integration Tests', () => {
       });
 
       expect(response.status).toBe(401);
-      const result = await response.json();
+      const result = await response.json() as AuthResponse;
       expect(result.success).toBe(false);
     });
 
@@ -112,7 +122,7 @@ describe('Authentication Integration Tests', () => {
         });
 
         expect(response.status).toBe(200);
-        const result = await response.json();
+        const result = await response.json() as AuthResponse;
         expect(result.success).toBe(true);
         expect(result.user_id).toBe(user.expected_id);
         expect(result.username).toBe(user.username);
@@ -128,7 +138,7 @@ describe('Authentication Integration Tests', () => {
       });
 
       expect(response.status).toBe(400);
-      const result = await response.json();
+      const result = await response.json() as AuthResponse;
       expect(result.success).toBe(false);
     });
 
@@ -147,7 +157,7 @@ describe('Authentication Integration Tests', () => {
       });
 
       expect(response.status).toBe(401);
-      const result = await response.json();
+      const result = await response.json() as AuthResponse;
       expect(result.success).toBe(false);
     });
 
@@ -171,7 +181,7 @@ describe('Authentication Integration Tests', () => {
 
       for (const response of responses) {
         expect(response.status).toBe(200);
-        const result = await response.json();
+        const result = await response.json() as AuthResponse;
         expect(result.success).toBe(true);
       }
     });
@@ -277,7 +287,7 @@ describe('Authentication Integration Tests', () => {
       });
 
       expect(response.status).toBe(200);
-      const result = await response.json();
+      const result = await response.json() as AuthResponse;
       expect(result.success).toBe(true);
     });
 
@@ -297,7 +307,7 @@ describe('Authentication Integration Tests', () => {
       });
 
       expect(response.status).toBe(200);
-      const result = await response.json();
+      const result = await response.json() as AuthResponse;
       expect(result.success).toBe(true);
       expect(result.user_id).toBe(1);
       expect(result.username).toBe('admin');
@@ -320,7 +330,7 @@ describe('Authentication Integration Tests', () => {
       });
 
       expect(response.status).toBe(200);
-      const result = await response.json();
+      const result = await response.json() as AuthResponse;
       expect(result.success).toBe(true);
       expect(result.username).toBe('user1');
     });
@@ -345,7 +355,7 @@ describe('Authentication Integration Tests', () => {
       });
 
       expect(response.status).toBe(200);
-      const result = await response.json();
+      const result = await response.json() as AuthResponse;
       expect(result.success).toBe(true);
     });
   });

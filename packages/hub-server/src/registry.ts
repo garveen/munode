@@ -45,7 +45,7 @@ export class ServiceRegistry {
     // database参数保留以兼容旧代码，但不再使用
     
     // 启动挑战码清理定时器
-    if (this.config.enableAuth !== false && this.config.hmacSecret) {
+    if (this.config.enable_auth !== false && this.config.hmac_secret) {
       this.startChallengeCleanup();
     }
   }
@@ -61,8 +61,8 @@ export class ServiceRegistry {
     const server_id = reqserver_id || 1;
 
     // HMAC 挑战-响应认证
-    const enableAuth = this.config.enableAuth !== false;
-    const hasSecret = !!this.config.hmacSecret;
+    const enableAuth = this.config.enable_auth !== false;
+    const hasSecret = !!this.config.hmac_secret;
     
     if (enableAuth && hasSecret) {
       const challengeResponse = (request as { challenge_response?: string }).challenge_response;
@@ -71,7 +71,7 @@ export class ServiceRegistry {
       // 第一阶段：生成挑战码
       if (!challengeResponse) {
         const newChallenge = this.generateChallenge(server_id);
-        const challengeTimeout = this.config.challengeTimeout || 60000;
+        const challengeTimeout = this.config.challenge_timeout || 60000;
         
     this.logger.debug(`Generated challenge for Edge ${server_id}`);
         
@@ -284,7 +284,7 @@ export class ServiceRegistry {
     edge.connectionState = EdgeConnectionState.DISCONNECTED_WAITING;
     edge.disconnectedAt = Date.now();
 
-    const gracePeriod = this.config.edgeReconnectGracePeriod ?? 30000; // 默认30秒
+    const gracePeriod = 30000; // 默认30秒
     
     this.logger.info(`Edge Server ${server_id} disconnected, waiting ${gracePeriod}ms for reconnection...`);
 
@@ -504,7 +504,7 @@ export class ServiceRegistry {
     }
     
     // 检查是否超时
-    const challengeTimeout = this.config.challengeTimeout || 60000;
+    const challengeTimeout = this.config.challenge_timeout || 60000;
     if (Date.now() - challengeInfo.createdAt > challengeTimeout) {
     this.logger.warn(`Challenge expired for server ${serverId}`);
       this.challenges.delete(challenge);
@@ -528,12 +528,12 @@ export class ServiceRegistry {
    * 计算 HMAC 签名
    */
   private computeHmac(challenge: string, serverId: number): string {
-    if (!this.config.hmacSecret) {
+    if (!this.config.hmac_secret) {
       throw new Error('HMAC secret not configured');
     }
     
     const message = `${challenge}:${serverId}`;
-    const hmac = createHmac('sha256', this.config.hmacSecret);
+    const hmac = createHmac('sha256', this.config.hmac_secret);
     hmac.update(message);
     return hmac.digest('hex');
   }
@@ -570,7 +570,7 @@ export class ServiceRegistry {
    */
   private cleanupExpiredChallenges(): void {
     const now = Date.now();
-    const challengeTimeout = this.config.challengeTimeout || 60000;
+    const challengeTimeout = this.config.challenge_timeout || 60000;
     
     for (const [challenge, info] of this.challenges.entries()) {
       if (now - info.createdAt > challengeTimeout) {

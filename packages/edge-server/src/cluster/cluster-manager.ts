@@ -121,10 +121,10 @@ export class EdgeClusterManager {
       const joinRequest = {
          server_id: this.config.server_id,
         name: this.config.name,
-        host: this.config.network.externalHost || this.config.network.host,
-        port: this.config.network.externalPort ?? this.config.network.port,
-        voicePort: this.config.network.externalPort ?? this.config.network.port, // Voice port is main port
-        capacity: this.config.capacity,
+        host: this.config.network.external_host || this.config.network.host,
+        port: this.config.network.external_port ?? this.config.network.port,
+        voicePort: this.config.network.external_port ?? this.config.network.port, // Voice port is main port
+        capacity: this.config.server.capacity,
       };
 
       const joinResponse = await this.hubClient.call('edge.join', joinRequest);

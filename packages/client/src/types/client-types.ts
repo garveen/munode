@@ -259,7 +259,9 @@ export interface User {
   priority_speaker: boolean;
   hash?: string;
   comment?: string;
+  comment_hash?: string;  // 对齐 C++ 客户端：保存 hash 用于按需加载
   texture?: Buffer;
+  texture_hash?: string;  // 对齐 C++ 客户端：保存 hash 用于按需加载
 }
 
 /**

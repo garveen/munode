@@ -105,7 +105,7 @@ describe('Voice Target Permission Validation Tests', () => {
 
       // Remove Whisper permission from the channel
       await admin.setACL({
-        channelId: restrictedChannelId,
+        channel_id: restrictedChannelId,
         acls: [{
           applyHere: true,
           applySubs: false,
@@ -163,7 +163,7 @@ describe('Voice Target Permission Validation Tests', () => {
       // Set voice target to public channel (should succeed)
       try {
         await sender.setVoiceTarget(2, [{
-          channelId: publicChannelId,
+          channel_id: publicChannelId,
         }]);
         
         expect(true).toBe(true);
@@ -185,7 +185,7 @@ describe('Voice Target Permission Validation Tests', () => {
 
       // Remove Enter and Listen permissions for all users
       await admin.setACL({
-        channelId: restrictedChannelId,
+        channel_id: restrictedChannelId,
         acls: [{
           applyHere: true,
           applySubs: false,
@@ -207,7 +207,7 @@ describe('Voice Target Permission Validation Tests', () => {
       // Try to target the restricted channel (should fail)
       try {
         await sender.setVoiceTarget(3, [{
-          channelId: restrictedChannelId,
+          channel_id: restrictedChannelId,
         }]);
         
         // Should not reach here
@@ -349,7 +349,7 @@ describe('Voice Target Permission Validation Tests', () => {
         await sender.setVoiceTarget(8, [
           { session: [target1Session] },
           { session: [target2Session] },
-          { channelId: publicChannelId },
+          { channel_id: publicChannelId },
         ]);
         
         expect(true).toBe(true);
@@ -371,7 +371,7 @@ describe('Voice Target Permission Validation Tests', () => {
 
       // Deny access to the channel
       await admin.setACL({
-        channelId: restrictedChannelId,
+        channel_id: restrictedChannelId,
         acls: [{
           applyHere: true,
           applySubs: false,
@@ -396,7 +396,7 @@ describe('Voice Target Permission Validation Tests', () => {
       try {
         await sender.setVoiceTarget(9, [
           { session: [targetSession] }, // Accessible
-          { channelId: restrictedChannelId }, // Inaccessible
+          { channel_id: restrictedChannelId }, // Inaccessible
         ]);
         
         // Should not reach here

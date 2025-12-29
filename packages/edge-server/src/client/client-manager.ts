@@ -62,7 +62,7 @@ export class ClientManager extends TypedEventEmitter<ClientManagerEvents> {
       session: sessionId,
       user_id: 0,
       username: '',
-      channel_id: this.config.defaultChannel,
+      channel_id: this.config.server.default_channel,
       state: ClientState.Connected, // 初始状态：已连接
       // 状态字段初始化为 false（参考 Murmur/Grumble 实现）
       // 在 protobuf 消息中，只有值为 true 的字段才会被包含

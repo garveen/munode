@@ -125,20 +125,19 @@ export class NetworkTopologyManager extends TypedEventEmitter<NetworkTopologyMan
     super();
     this.logger = logger;
     this.policy = {
-      directRttThreshold: config?.policy?.directRttThreshold ?? DEFAULT_ROUTING_POLICY.directRttThreshold,
-      directLossThreshold: config?.policy?.directLossThreshold ?? DEFAULT_ROUTING_POLICY.directLossThreshold,
-      enableRelay: config?.policy?.enableRelay ?? DEFAULT_ROUTING_POLICY.enableRelay,
-      maxRelayHops: config?.policy?.maxRelayHops ?? DEFAULT_ROUTING_POLICY.maxRelayHops,
-      relayCostFactor: config?.policy?.relayCostFactor ?? DEFAULT_ROUTING_POLICY.relayCostFactor,
-      routeSwitchHysteresis: config?.policy?.routeSwitchHysteresis ?? DEFAULT_ROUTING_POLICY.routeSwitchHysteresis,
-      routeSwitchCostDelta: config?.policy?.routeSwitchCostDelta ?? DEFAULT_ROUTING_POLICY.routeSwitchCostDelta,
-      maxRelayLoadPerEdge: config?.policy?.maxRelayLoadPerEdge ?? DEFAULT_ROUTING_POLICY.maxRelayLoadPerEdge,
-      probeInterval: config?.policy?.probeInterval ?? DEFAULT_ROUTING_POLICY.probeInterval,
-      probeTimeout: 5000,
-      routeTableUpdateInterval: config?.policy?.routeTableUpdateInterval ?? DEFAULT_ROUTING_POLICY.routeTableUpdateInterval,
+      direct_rtt_threshold: config?.policy?.direct_rtt_threshold ?? DEFAULT_ROUTING_POLICY.direct_rtt_threshold,
+      direct_loss_threshold: config?.policy?.direct_loss_threshold ?? DEFAULT_ROUTING_POLICY.direct_loss_threshold,
+      enable_relay: config?.policy?.enable_relay ?? DEFAULT_ROUTING_POLICY.enable_relay,
+      max_relay_hops: config?.policy?.max_relay_hops ?? DEFAULT_ROUTING_POLICY.max_relay_hops,
+      relay_cost_factor: config?.policy?.relay_cost_factor ?? DEFAULT_ROUTING_POLICY.relay_cost_factor,
+      route_switch_hysteresis: config?.policy?.route_switch_hysteresis ?? DEFAULT_ROUTING_POLICY.route_switch_hysteresis,
+      route_switch_cost_delta: config?.policy?.route_switch_cost_delta ?? DEFAULT_ROUTING_POLICY.route_switch_cost_delta,
+      max_relay_load_per_edge: config?.policy?.max_relay_load_per_edge ?? DEFAULT_ROUTING_POLICY.max_relay_load_per_edge,
+      probe_interval: config?.policy?.probe_interval ?? DEFAULT_ROUTING_POLICY.probe_interval,
+      route_table_update_interval: config?.policy?.route_table_update_interval ?? DEFAULT_ROUTING_POLICY.route_table_update_interval,
     };
     
-    this.enableTcpFallback = config?.hubRelay?.enableTcpFallback ?? true;
+    this.enableTcpFallback = config?.hub_relay?.enable_tcp_fallback ?? true;
     this._isEnabled = config?.enabled ?? false;
     
     this.logger.info('NetworkTopologyManager initialized', {
@@ -160,10 +159,10 @@ export class NetworkTopologyManager extends TypedEventEmitter<NetworkTopologyMan
     // 启动定时路由表更新
     this.updateTimer = setInterval(() => {
       this.computeAndPushRouteTables();
-    }, this.policy.routeTableUpdateInterval);
+    }, this.policy.route_table_update_interval);
     
     this.logger.info('NetworkTopologyManager started', {
-      updateInterval: this.policy.routeTableUpdateInterval,
+      updateInterval: this.policy.route_table_update_interval,
     });
   }
 
@@ -331,8 +330,8 @@ export class NetworkTopologyManager extends TypedEventEmitter<NetworkTopologyMan
     }
     
     return (
-      quality.rtt <= this.policy.directRttThreshold &&
-      quality.packetLoss <= this.policy.directLossThreshold
+      quality.rtt <= this.policy.direct_rtt_threshold &&
+      quality.packetLoss <= this.policy.direct_loss_threshold
     );
   }
 
@@ -448,12 +447,12 @@ export class NetworkTopologyManager extends TypedEventEmitter<NetworkTopologyMan
       }
       
       // 尝试中转路由
-      if (this.policy.enableRelay) {
+      if (this.policy.enable_relay) {
         const pathResult = this.findBestPath(edgeId, targetEdgeId);
         
-        if (pathResult && pathResult.hops <= this.policy.maxRelayHops + 1) {
+        if (pathResult && pathResult.hops <= this.policy.max_relay_hops + 1) {
           // 应用中转成本因子
-          const adjustedCost = pathResult.totalCost * this.policy.relayCostFactor;
+          const adjustedCost = pathResult.totalCost * this.policy.relay_cost_factor;
           
           // 下一跳是路径中的第二个节点
           const nextHop = pathResult.path.length > 1 ? pathResult.path[1] : undefined;

@@ -185,7 +185,7 @@ export class EventSetupManager {
     // UserList 事件
     this.handlerFactory.messageHandler.on('userList', (session_id: number, data: Buffer) => {
       if (this.handlerFactory.adminHandlers) {
-        this.handlerFactory.adminHandlers.handleUserList(session_id, data);
+        void this.handlerFactory.adminHandlers.handleUserList(session_id, data);
       }
     });
 
@@ -216,20 +216,20 @@ export class EventSetupManager {
       'moveChannelMembers',
       (actorSession: number, fromChannel: number, toChannel: number) => {
         if (this.handlerFactory.adminHandlers) {
-          this.handlerFactory.adminHandlers.handleMoveChannelMembers(actorSession, fromChannel, toChannel);
+          void this.handlerFactory.adminHandlers.handleMoveChannelMembers(actorSession, fromChannel, toChannel);
         }
       }
     );
 
     this.handlerFactory.contextActions.on('setPromiscuousMode', (session_id: number, enabled: boolean) => {
       if (this.handlerFactory.adminHandlers) {
-        this.handlerFactory.adminHandlers.handleSetPromiscuousMode(session_id, enabled);
+        void this.handlerFactory.adminHandlers.handleSetPromiscuousMode(session_id, enabled);
       }
     });
 
     this.handlerFactory.contextActions.on('clearUserCache', (session_id: number) => {
       if (this.handlerFactory.adminHandlers) {
-        this.handlerFactory.adminHandlers.handleClearUserCache(session_id);
+        void this.handlerFactory.adminHandlers.handleClearUserCache(session_id);
       }
     });
 
@@ -650,12 +650,25 @@ export class EventSetupManager {
           
           // 更新 TCP fallback 配置
           if (config.hubRelay) {
-            routingManager.updateFallbackConfig(config.hubRelay);
+            routingManager.updateFallbackConfig({
+              enable_tcp_fallback: config.hubRelay.enableTcpFallback,
+            });
           }
           
           // 更新策略配置
           if (config.policy) {
-            routingManager.updatePolicy(config.policy);
+            routingManager.updatePolicy({
+              direct_rtt_threshold: config.policy.directRttThreshold,
+              direct_loss_threshold: config.policy.directLossThreshold,
+              enable_relay: config.policy.enableRelay,
+              max_relay_hops: config.policy.maxRelayHops,
+              relay_cost_factor: config.policy.relayCostFactor,
+              route_switch_hysteresis: config.policy.routeSwitchHysteresis,
+              route_switch_cost_delta: config.policy.routeSwitchCostDelta,
+              max_relay_load_per_edge: config.policy.maxRelayLoadPerEdge,
+              probe_interval: config.policy.probeInterval,
+              route_table_update_interval: config.policy.routeTableUpdateInterval,
+            });
           }
         }
         

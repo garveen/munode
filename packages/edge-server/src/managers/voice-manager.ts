@@ -114,7 +114,7 @@ export class VoiceManager {
    * 定期检查是否可以从 TCP 降级恢复到 UDP
    */
   private startTcpRecoveryCheck(): void {
-    const checkInterval = this.config.voiceRouting?.fallback?.udpRecoveryCheckInterval ?? 30000;
+    const checkInterval = this.config.voice_routing?.fallback?.udp_recovery_check_interval ?? 30000;
     
     this.tcpRecoveryTimer = setInterval(() => {
       this.checkTcpRecovery();

@@ -27,7 +27,8 @@
     "lru-cache": "^10.2.0",
     "protobufjs": "^7.2.0",
     "winston": "^3.11.0",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "zod": "^4.2.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

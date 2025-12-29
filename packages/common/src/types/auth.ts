@@ -1,17 +1,3 @@
-// 认证配置
-export interface AuthConfig {
-  apiUrl: string;
-  apiKey: string;
-  timeout: number;
-  retry: number;
-  insecure: boolean;
-  cacheTTL: number;
-  userCachePath?: string;
-  pullInterval: number;
-  trackSessions: boolean;
-  allowCacheFallback: boolean;
-}
-
 // 认证请求
 export interface AuthRequest {
   username: string;

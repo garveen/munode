@@ -47,6 +47,7 @@ export class HubDatabase {
   private manager: DatabaseWorkerManager;
   private config: DatabaseConfig;
   private logger: Logger;
+  private backupTimer?: NodeJS.Timeout; // 备份任务定时器引用
 
   constructor(config: DatabaseConfig, logger: Logger) {
     this.config = config;
@@ -580,13 +581,13 @@ export class HubDatabase {
       return;
     }
 
-    setInterval(async () => {
+    this.backupTimer = setInterval(async () => {
       try {
         await this.createBackup();
       } catch (error) {
         this.logger.error('Database backup failed:', error);
       }
-    }, this.config.backupInterval);
+    }, this.config.backup_interval);
   }
 
   /**
@@ -595,10 +596,10 @@ export class HubDatabase {
   private async createBackup(): Promise<void> {
     try {
       // 确保备份目录存在
-      await fs.mkdir(this.config.backupDir, { recursive: true });
+      await fs.mkdir(this.config.backup_dir, { recursive: true });
 
       const timestamp = new Date().toISOString().replace(/:/g, '-');
-      const backupPath = path.join(this.config.backupDir, `hub-${timestamp}.db`);
+      const backupPath = path.join(this.config.backup_dir, `hub-${timestamp}.db`);
 
       // 使用 VACUUM INTO 创建备份
       await this.exec(`VACUUM INTO '${backupPath}'`);
@@ -617,14 +618,14 @@ export class HubDatabase {
    */
   private async cleanupOldBackups(): Promise<void> {
     try {
-      const files = await fs.readdir(this.config.backupDir);
+      const files = await fs.readdir(this.config.backup_dir);
       const now = Date.now();
       const maxAge = 30 * 24 * 3600 * 1000; // 30天
 
       for (const file of files) {
         if (!file.endsWith('.db')) continue;
 
-        const filePath = path.join(this.config.backupDir, file);
+        const filePath = path.join(this.config.backup_dir, file);
         const stat = await fs.stat(filePath);
         const age = now - stat.mtimeMs;
 
@@ -1568,6 +1569,12 @@ export class HubDatabase {
    */
   async close(): Promise<void> {
     try {
+      // 清理备份定时器
+      if (this.backupTimer) {
+        clearInterval(this.backupTimer);
+        this.backupTimer = undefined;
+      }
+
       // 优化数据库并等待所有操作完成
       await this.run('PRAGMA optimize');
 

@@ -216,7 +216,7 @@ export class ConnectionHandlers {
    */
   private handleUDPPing(msg: Buffer, rinfo: RemoteInfo): void {
     // 检查是否启用 UDP ping 功能
-    if (!this.config.features.allowPing) {
+    if (!this.config.features.allow_ping) {
       this.logger.debug(`UDP ping from ${rinfo.address} ignored (allowPing disabled)`);
       return;
     }
@@ -267,12 +267,12 @@ export class ConnectionHandlers {
       offset += 4;
 
       // Maximum users (0xFFFFFFFF for unlimited)
-      const maxUsers = this.config.capacity || 0xFFFFFFFF;
+      const maxUsers = this.config.server.capacity || 0xFFFFFFFF;
       response.writeUInt32BE(maxUsers, offset);
       offset += 4;
 
       // Bandwidth (in bits per second)
-      const bandwidth = this.config.max_bandwidth || 0;
+      const bandwidth = this.config.server.max_bandwidth || 0;
       response.writeUInt32BE(bandwidth, offset);
 
       // 发送响应

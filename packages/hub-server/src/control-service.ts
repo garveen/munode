@@ -82,21 +82,21 @@ export class HubControlService {
 
 
     // Initialize ninja channels set from config
-    this.logger.info(`Channel Ninja config: channelNinja=${config.channelNinja}, ninjaChannels=${JSON.stringify(config.ninjaChannels)}`);
-    this._ninjaChannels = new Set(config.ninjaChannels || []);
+    this.logger.info(`Channel Ninja config: channel_ninja=${config.channel_ninja}, ninja_channels=${JSON.stringify(config.ninja_channels)}`);
+    this._ninjaChannels = new Set(config.ninja_channels || []);
     if (this._ninjaChannels.size > 0) {
       this.logger.info(`Channel Ninja enabled with ${this._ninjaChannels.size} ninja channels: [${Array.from(this._ninjaChannels).join(', ')}]`);
     }
 
     // 初始化网络拓扑管理器
-    this._networkTopologyManager = new NetworkTopologyManager(config.voiceRouting, factory.getLogger());
+    this._networkTopologyManager = new NetworkTopologyManager(config.voice_routing, factory.getLogger());
     this.setupNetworkTopologyEvents();
     
     // 初始化语音加密管理器
-    this._voiceEncryptionManager = new VoiceEncryptionManager(config.voiceRouting?.encryption, factory.getLogger());
+    this._voiceEncryptionManager = new VoiceEncryptionManager(config.voice_routing?.encryption, factory.getLogger());
 
     const controlConfig: ControlChannelConfig = {
-      port: config.controlPort || 8443,
+      port: config.control_port || 8443,
       host: config.host,
     };
 
@@ -156,7 +156,7 @@ export class HubControlService {
    * 推送路由表到指定 Edge
    */
   private pushRouteTable(edgeId: number, routes: RouteEntry[]): void {
-    if (!this.config.voiceRouting?.enabled) {
+    if (!this.config.voice_routing?.enabled) {
       return;
     }
     
@@ -374,7 +374,7 @@ export class HubControlService {
    * 推送语音路由配置给特定 Edge
    */
   private pushVoiceRoutingConfig(edgeId: number): void {
-    const voiceRoutingConfig = this.config.voiceRouting;
+    const voiceRoutingConfig = this.config.voice_routing;
     
     // 只在启用时推送配置
     if (!voiceRoutingConfig?.enabled) {
@@ -385,11 +385,32 @@ export class HubControlService {
     // 获取加密密钥
     const encryptionKey = this._voiceEncryptionManager.assignKeyToEdge(edgeId);
     
+    // 将 snake_case 的 policy 转换为 camelCase 以匹配 protocol 定义
+    const policy = voiceRoutingConfig.policy || DEFAULT_ROUTING_POLICY;
+    const policyForProtocol = {
+      directRttThreshold: policy.direct_rtt_threshold,
+      directLossThreshold: policy.direct_loss_threshold,
+      enableRelay: policy.enable_relay,
+      maxRelayHops: policy.max_relay_hops,
+      relayCostFactor: policy.relay_cost_factor,
+      routeSwitchHysteresis: policy.route_switch_hysteresis,
+      routeSwitchCostDelta: policy.route_switch_cost_delta,
+      maxRelayLoadPerEdge: policy.max_relay_load_per_edge,
+      probeInterval: policy.probe_interval,
+      routeTableUpdateInterval: policy.route_table_update_interval,
+    };
+    
+    const hubRelayForProtocol = voiceRoutingConfig.hub_relay ? {
+      enableTcpFallback: voiceRoutingConfig.hub_relay.enable_tcp_fallback,
+    } : {
+      enableTcpFallback: DEFAULT_HUB_RELAY_CONFIG.enable_tcp_fallback,
+    };
+    
     const configToPush = {
       enabled: voiceRoutingConfig.enabled,
-      policy: voiceRoutingConfig.policy || DEFAULT_ROUTING_POLICY,
-      preferredRelayEdges: voiceRoutingConfig.preferredRelayEdges || [],
-      hubRelay: voiceRoutingConfig.hubRelay || DEFAULT_HUB_RELAY_CONFIG,
+      policy: policyForProtocol,
+      preferredRelayEdges: voiceRoutingConfig.preferred_relay_edges || [],
+      hubRelay: hubRelayForProtocol,
       encryption: encryptionKey ? {
         algorithm: encryptionKey.algorithm,
         key: encryptionKey.key.toString('base64'), // 转换为base64字符串传输
@@ -414,7 +435,7 @@ export class HubControlService {
    * 广播语音路由配置给所有 Edge
    */
   broadcastVoiceRoutingConfig(): void {
-    const voiceRoutingConfig = this.config.voiceRouting;
+    const voiceRoutingConfig = this.config.voice_routing;
     
     if (!voiceRoutingConfig?.enabled) {
       this.logger.debug('Voice routing disabled, not broadcasting config');
@@ -433,7 +454,7 @@ export class HubControlService {
    * 必须在所有资源（数据库、频道树等）加载完成后调用
    */
   async start(): Promise<void> {
-    this.logger.info(`Starting Hub control channel server on port ${this.config.controlPort || 8443}`);
+    this.logger.info(`Starting Hub control channel server on port ${this.config.control_port || 8443}`);
     // 启动网络拓扑管理器
     this._networkTopologyManager.start();
     // 启动 WebSocket 服务器，开始接受 Edge 连接

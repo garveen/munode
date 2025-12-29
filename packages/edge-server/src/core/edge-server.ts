@@ -62,7 +62,7 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
     super();
     this.config = config;
     this.logger = createLogger({
-      level: config.logLevel || 'info',
+      level: config.log_level || 'info',
       service: `edge-${config.server_id}`,
     });
     this.startTime = new Date();
@@ -108,8 +108,8 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
         port: this.config.network.port, // 使用主UDP端口（不再+1）
         host: this.config.network.host,
         localEdgeId: this.config.server_id,
-        sharedSecret: this.config.voiceUdpSharedSecret 
-          ? Buffer.from(this.config.voiceUdpSharedSecret, 'utf-8') 
+        sharedSecret: this.config.voice_routing?.shared_secret 
+          ? Buffer.from(this.config.voice_routing.shared_secret, 'utf-8') 
           : undefined,
       }, 
       this.logger,
@@ -182,6 +182,15 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
       if (this.hubClient) {
         this.hubClient.disconnect();
         this.logger.info('Hub client disconnected');
+      }
+      
+      // 清理所有事件监听器，防止内存泄漏
+      this.removeAllListeners();
+      if (this.hubClient) {
+        this.hubClient.removeAllListeners();
+      }
+      if (this.handlerFactory?.messageHandler) {
+        this.handlerFactory.messageHandler.removeAllListeners();
       }
 
       this.logger.info('Edge Server stopped successfully');

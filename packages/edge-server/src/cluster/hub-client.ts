@@ -133,14 +133,14 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
       this.useExternalClient = true;
     } else {
       const clientConfig: ControlChannelClientConfig = {
-        host: config.hubServer?.host || 'localhost',
-        port: config.hubServer?.controlPort || 8443,
+        host: config.hub_server?.host || 'localhost',
+        port: config.hub_server?.control_port || 8443,
         // 默认启用 TLS，除非明确设置 rejectUnauthorized: false
-        tls: config.hubServer?.tls?.rejectUnauthorized ?? true,
-        poolSize: config.hubServer?.poolSize ?? 2, // Default to 2 connections
-        reconnectInterval: config.hubServer?.reconnectInterval || 5000,
+        tls: config.hub_server?.tls?.reject_unauthorized ?? true,
+        poolSize: config.hub_server?.pool_size ?? 2, // Default to 2 connections
+        reconnectInterval: config.hub_server?.reconnect_interval || 5000,
         heartbeat: {
-          interval: config.hubServer?.heartbeatInterval || 30000,
+          interval: config.hub_server?.heartbeat_interval || 30000,
           sendHeartbeat: async (connectionId: number, channel: RPCChannel) => {
             await this.sendHeartbeatForConnection(connectionId, channel);
           },
@@ -156,7 +156,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
    * 连接到 Hub 控制服务
    */
   async connect(): Promise<void> {
-    if (!this.config.hubServer) {
+    if (!this.config.hub_server) {
       throw new Error('Hub server configuration is required');
     }
 
@@ -227,10 +227,10 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
     const registerParams: RPCParams<'edge.register'> = {
       server_id: this.config.server_id || 1,
       name: this.config.name,
-      host: this.config.network.externalHost || this.config.network.host,
-      port: this.config.network.externalPort ?? this.config.network.port,
+      host: this.config.network.external_host || this.config.network.host,
+      port: this.config.network.external_port ?? this.config.network.port,
       region: this.config.network.region || '',
-      capacity: this.config.capacity,
+      capacity: this.config.server.capacity,
       certificate: '', // TODO: 获取证书
       cold_restart: isColdRestart, // 报告冷重启状态
       metadata: {
@@ -252,7 +252,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
         this.logger.debug('Received challenge, computing response...');
         
         // 计算 HMAC 签名
-        const hmacSecret = this.config.hubServer?.hmacSecret;
+        const hmacSecret = this.config.hub_server?.hmac_secret;
         if (!hmacSecret) {
           throw new Error('HMAC secret not configured in Edge config');
         }
@@ -378,7 +378,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
    */
   private scheduleReconnect(): void {
     // 如果正在停止，不要重连
-    if (this.isStopping || this.reconnectTimer || !this.config.hubServer) {
+    if (this.isStopping || this.reconnectTimer || !this.config.hub_server) {
       return;
     }
 
@@ -387,7 +387,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
       void this.connect().catch(() => {
         this.scheduleReconnect();
       });
-    }, this.config.hubServer.reconnectInterval || 5000);
+    }, this.config.hub_server.reconnect_interval || 5000);
   }
 
   /**
@@ -875,8 +875,8 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
     return {
       connected: this.isConnected(),
       registered: this.registered,
-      hubHost: this.config.hubServer?.host,
-      hubPort: this.config.hubServer?.controlPort,
+      hubHost: this.config.hub_server?.host,
+      hubPort: this.config.hub_server?.control_port,
     };
   }
 
@@ -885,9 +885,9 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
    */
   private get clientConfig(): ControlChannelClientConfig {
     return {
-      host: this.config.hubServer?.host || 'localhost',
-      port: this.config.hubServer?.controlPort || 8443,
-      tls: this.config.hubServer?.tls ? true : false,
+      host: this.config.hub_server?.host || 'localhost',
+      port: this.config.hub_server?.control_port || 8443,
+      tls: this.config.hub_server?.tls ? true : false,
     };
   }
 

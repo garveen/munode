@@ -332,9 +332,6 @@ export class StateHandlers {
   async handleChannelState(session_id: number, data: Buffer): Promise<void> {
     try {
       const channelState = mumbleproto.ChannelState.decode(data);
-        this.logger.debug(
-        `Decoded mumbleproto.ChannelState from session ${session_id}: ${JSON.stringify(channelState)}`
-      );
 
       // 获取执行操作的客户端
       const actor = this.clientManager.getClient(session_id);
@@ -360,7 +357,7 @@ export class StateHandlers {
         raw_data: data.toString('base64'),
       });
 
-        this.logger.debug(`Forwarded ChannelState from session ${session_id} to Hub`);
+        this.logger.info(`[CHANNEL-CREATE-DEBUG] Forwarded ChannelState from session ${session_id} to Hub`);
     } catch (error) {
         this.logger.error(`Error handling mumbleproto.ChannelState for session ${session_id}:`, error);
     }

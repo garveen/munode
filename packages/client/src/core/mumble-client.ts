@@ -796,6 +796,32 @@ export class MumbleClient extends EventEmitter {
   }
 
   /**
+   * 请求用户的完整评论（通过 comment_hash 获取）
+   * 对齐 C++ Mumble 客户端行为
+   */
+  async requestUserComment(session: number): Promise<void> {
+    const serialized = mumbleproto.RequestBlob.encode({
+      session_comment: [session],
+      session_texture: []
+    }).finish();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.RequestBlob, serialized);
+    await this.connection.sendTCP(wrappedMessage);
+  }
+
+  /**
+   * 请求用户的纹理（通过 texture_hash 获取）
+   * 对齐 C++ Mumble 客户端行为
+   */
+  async requestUserTexture(session: number): Promise<void> {
+    const serialized = mumbleproto.RequestBlob.encode({
+      session_comment: [],
+      session_texture: [session]
+    }).finish();
+    const wrappedMessage = this.connection.wrapMessage(MessageType.RequestBlob, serialized);
+    await this.connection.sendTCP(wrappedMessage);
+  }
+
+  /**
    * 移动到指定频道
    */
   async moveToChannel(channelId: number): Promise<void> {

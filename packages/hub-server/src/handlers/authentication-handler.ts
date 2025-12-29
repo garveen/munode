@@ -34,11 +34,11 @@ export class AuthenticationHandler implements IAuthenticationHandler {
     this.logger = factory.getLogger();
   }
 
-  async handleAllocateSessionId(params: RPCParams<'edge.allocateSessionId'>): Promise<RPCResult<'edge.allocateSessionId'>> {
+  handleAllocateSessionId(params: RPCParams<'edge.allocateSessionId'>): Promise<RPCResult<'edge.allocateSessionId'>> {
     const sessionManager = this.factory.getSessionManager();
     const session_id = sessionManager.allocateSessionId();
     this.logger.debug(`Allocated session ID ${session_id} for Edge ${params.edge_id}`);
-    return { session_id };
+    return Promise.resolve({ session_id });
   }
 
   async handleAuthenticateUser(params: RPCParams<'edge.authenticateUser'>): Promise<RPCResult<'edge.authenticateUser'>> {
@@ -84,7 +84,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       const db = this.factory.getDatabase();
 
       // 确定目标频道：优先使用 last channel，否则使用默认频道
-      let actualChannelId = config.defaultChannel ?? 0;
+      let actualChannelId = config.default_channel ?? 0;
       
       // 如果用户已注册，尝试获取上次登录的频道
       if (authResult.user_id && authResult.user_id > 0) {
@@ -122,11 +122,11 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       }
 
       // 检查 Channel Ninja
-      if (config.channelNinja && config.ninjaChannels?.length > 0 && permissionChecker) {
+      if (config.channel_ninja && config.ninja_channels?.length > 0 && permissionChecker) {
         const transitiveLinks = await permissionChecker.getTransitivelyLinkedChannels(actualChannelId);
         let isNinjaRelated = false;
         for (const chId of transitiveLinks) {
-          if (config.ninjaChannels.includes(chId)) {
+          if (config.ninja_channels.includes(chId)) {
             isNinjaRelated = true;
             break;
           }
@@ -150,7 +150,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           }
 
           if (!hasPermission) {
-            const defaultChannel = config.defaultChannel ?? 0;
+            const defaultChannel = config.default_channel ?? 0;
             this.logger.info(`Channel Ninja: User ${params.username} was in ninja channel ${actualChannelId} but has no permission, moving to default channel ${defaultChannel}`);
             actualChannelId = defaultChannel;
           }
@@ -300,7 +300,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
     permissionChecker: HubPermissionChecker,
     sessionManager: GlobalSessionManager
   ): Promise<void> {
-    if (config.channelNinja && config.ninjaChannels?.length > 0) {
+    if (config.channel_ninja && config.ninja_channels?.length > 0) {
       this.logger.debug(`Channel Ninja: Filtering userJoined broadcast for ${session.username}`);
       
       const allSessions = sessionManager.getAllSessions();
@@ -314,7 +314,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           otherUserInfo,
           otherSession.channel_id ?? 0,
           session.channel_id,
-          new Set(config.ninjaChannels)
+          new Set(config.ninja_channels)
         );
 
         if (canSee) {

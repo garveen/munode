@@ -354,7 +354,7 @@ export class NotificationHandler implements INotificationHandler {
 
           // 根据配置决定返回真实证书哈希还是用户ID哈希
           let certHash: Buffer;
-          if (this.factory.getConfig().hideCertHashes) {
+          if (this.factory.getConfig().hide_cert_hashes) {
             // 返回用户ID的哈希（如果有用户ID）
             if (targetSession.user_id !== undefined && targetSession.user_id !== null) {
               const hashStr = await this.hashUserId(targetSession.user_id);
@@ -433,7 +433,7 @@ export class NotificationHandler implements INotificationHandler {
 
   /**
    * 计算用户ID的SHA1哈希
-   * 用于在hideCertHashes=true时替代真实证书哈希
+   * 用于在hide_cert_hashes=true时替代真实证书哈希
    * @param userId - 用户ID
    * @returns SHA1哈希（40位十六进制字符串）
    */

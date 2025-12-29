@@ -170,7 +170,6 @@ export const testUserPasswords: Record<string, { password: string; user_id: numb
       'target_visible': { password: 'target_visible_pass', user_id: 709 },
       'sender_invalid': { password: 'sender_invalid_pass', user_id: 710 },
       'remover': { password: 'remover_pass', user_id: 711 },
-      'sender_edge1': { password: 'sender_edge1_pass', user_id: 712 },
       'target_edge2': { password: 'target_edge2_pass', user_id: 713 },
       'multi_sender': { password: 'multi_sender_pass', user_id: 714 },
       'target1': { password: 'target1_pass', user_id: 715 },

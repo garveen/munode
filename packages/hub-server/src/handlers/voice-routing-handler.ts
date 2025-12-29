@@ -1,6 +1,5 @@
 import type { Logger } from '@munode/common';
 import { HubHandlerFactory } from '../factory.js';
-import { type HubControlService } from '../control-service.js';
 import type { RPCParams, RPCResult } from '@munode/protocol';
 
 
@@ -32,21 +31,19 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
   private factory: HubHandlerFactory;
   private logger: Logger;
   private enableTcpFallback: boolean;
-  private controlService: HubControlService;
 
   constructor(factory: HubHandlerFactory) {
     this.factory = factory;
     this.logger = factory.getLogger();
-    this.controlService = factory.getControlService();
     
     // 缓存 TCP 降级配置开关，避免每次处理语音包时都读取
     const config = factory.getConfig();
-    this.enableTcpFallback = config.voiceRouting?.hubRelay?.enableTcpFallback ?? true;
+    this.enableTcpFallback = config.voice_routing?.hub_relay?.enable_tcp_fallback ?? true;
     
     this.logger.info(`VoiceRoutingHandler initialized, TCP fallback: ${this.enableTcpFallback}`);
   }
 
-  async handleSyncVoiceTarget(params: RPCParams<'edge.syncVoiceTarget'>): Promise<RPCResult<'edge.syncVoiceTarget'>> {
+  handleSyncVoiceTarget(params: RPCParams<'edge.syncVoiceTarget'>): Promise<RPCResult<'edge.syncVoiceTarget'>> {
     const voiceTargetSync = this.factory.getVoiceTargetSync();
 
     // 同步语音目标配置到本地存储（不进行权限验证）
@@ -71,12 +68,12 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
       target_id: params.target_id,
       config: params.config,
     };
-    this.controlService.broadcastExcept(params.edge_id, 'hub.syncVoiceTarget', notificationParams);
+    this.factory.getControlService().broadcastExcept(params.edge_id, 'hub.syncVoiceTarget', notificationParams);
     
-    return { success: true };
+    return Promise.resolve({ success: true });
   }
 
-  async handleGetVoiceTargets(params: RPCParams<'edge.getVoiceTargets'>): Promise<RPCResult<'edge.getVoiceTargets'>> {
+  handleGetVoiceTargets(params: RPCParams<'edge.getVoiceTargets'>): Promise<RPCResult<'edge.getVoiceTargets'>> {
     const voiceTargetSync = this.factory.getVoiceTargetSync();
 
     let configs;
@@ -88,14 +85,14 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
       configs = voiceTargetSync.getAllConfigs();
     }
 
-    return { voice_targets: configs };
+    return Promise.resolve({ voice_targets: configs });
   }
 
   /**
    * 处理 TCP 降级语音中转
    * 当 UDP 连接不可用时，Edge 通过 Hub 的 WebSocket 控制通道转发语音包
    */
-  async handleRelayVoiceViaTcp(params: RPCParams<'edge.relayVoiceViaTcp'>): Promise<RPCResult<'edge.relayVoiceViaTcp'>> {
+  handleRelayVoiceViaTcp(params: RPCParams<'edge.relayVoiceViaTcp'>): Promise<RPCResult<'edge.relayVoiceViaTcp'>> {
     const { from_edge_id, target_edge_id, voice_packet, timestamp } = params;
 
     // 检查 TCP 降级功能是否启用（使用缓存的配置）
@@ -103,10 +100,10 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
       this.logger.debug(
         `TCP fallback relay is disabled, rejecting relay request from Edge ${from_edge_id} to Edge ${target_edge_id}`
       );
-      return {
+      return Promise.resolve({
         success: false,
         error: 'TCP fallback relay is disabled'
-      };
+      });
     }
 
     try {
@@ -118,21 +115,20 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
 
       // 通过控制服务的 notify 方法发送给目标 Edge
       // 使用通知机制，不需要等待响应
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      this.controlService.notify(target_edge_id, 'hub.relayVoicePacket', {
+      this.factory.getControlService().notify(target_edge_id, 'hub.relayVoicePacket', {
         from_edge_id,
         voice_packet,
         timestamp,
       });
 
       this.logger.debug(`TCP relay successful: ${voice_packet.length} bytes to Edge ${target_edge_id}`);
-      return { success: true };
+      return Promise.resolve({ success: true });
     } catch (error) {
       this.logger.error(`TCP relay error from Edge ${from_edge_id} to ${target_edge_id}:`, error);
-      return { 
+      return Promise.resolve({ 
         success: false, 
         error: error instanceof Error ? error.message : 'Unknown error' 
-      };
+      });
     }
   }
 }

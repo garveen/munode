@@ -36,9 +36,7 @@ export class ChannelStateHandler implements IChannelStateHandler {
 
   async handleChannelStateNotification(params: EdgeNotificationParams<'edge.channelStateNotification'>): Promise<void> {
     try {
-      const { edge_id, actor_session, actor_username, channelState: channelStateObj } = params;
-
-      this.logger.info(`Hub received ChannelState from Edge ${edge_id}, actor: ${actor_username}(${actor_session}), channel_id: ${channelStateObj.channel_id}`);
+      const { edge_id, actor_session, channelState: channelStateObj } = params;
 
       const sessionManager = this.factory.getSessionManager();
       const permissionChecker = this.factory.getPermissionChecker();
@@ -311,8 +309,6 @@ export class ChannelStateHandler implements IChannelStateHandler {
       };
 
       this.factory.getControlService().broadcast('hub.channelStateBroadcast', typedBroadcastData);
-
-      this.logger.info(`Hub: Broadcasting ChannelState for channel ${channelId} to all edges`);
 
     } catch (error) {
       this.logger.error('Error handling channel state notification:', error);

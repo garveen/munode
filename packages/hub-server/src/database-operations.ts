@@ -46,6 +46,11 @@ export interface IDatabaseOperations {
   }>>;
 
   /**
+   * 设置 BlobStore（用于延迟初始化）
+   */
+  setBlobStore?(blobStore: BlobStore): void;
+
+  /**
    * 清理数据库
    */
   cleanup(): Promise<void>;

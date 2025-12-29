@@ -52,38 +52,38 @@ describe('Edge External Port Configuration Tests', () => {
     const hubConfig: HubConfig = { ...(hubConfigModule.default || hubConfigModule) };
     
     hubConfig.server_id = 1;
-    hubConfig.controlPort = controlPort;
-    hubConfig.webApi = hubConfig.webApi || { enabled: true, port: basePort + 4, cors: true };
-    hubConfig.webApi.port = basePort + 4;
-    hubConfig.logLevel = 'error';
+    hubConfig.control_port = controlPort;
+    hubConfig.web_api = hubConfig.web_api || { enabled: true, host: '127.0.0.1', port: basePort + 4, cors: true };
+    hubConfig.web_api.port = basePort + 4;
+    hubConfig.log_level = 'error';
     hubConfig.database = {
       path: join(tmpDataDir, 'hub-test.db'),
-      backupDir: join(tmpDataDir, 'backups'),
-      backupInterval: 86400,
-      walMode: false,
+      backup_dir: join(tmpDataDir, 'backups'),
+      backup_interval: 86400,
+      wal_mode: false,
     };
-    hubConfig.blobStore = {
+    hubConfig.blob_store = {
       enabled: true,
       path: join(tmpDataDir, 'blobs'),
     };
     // Ensure registry config exists with matching HMAC secret
     hubConfig.registry = hubConfig.registry || {
-      heartbeatInterval: 30,
+      heartbeat_interval: 30,
       timeout: 90,
-      maxEdges: 100,
-      hmacSecret: 'test-secret-key',
-      challengeTimeout: 60000,
-      enableAuth: true,
+      max_edges: 100,
+      hmac_secret: 'test-secret-key',
+      challenge_timeout: 60000,
+      enable_auth: true,
     };
-    hubConfig.registry.hmacSecret = 'test-secret-key';
+    hubConfig.registry.hmac_secret = 'test-secret-key';
     
     const certsDir = join(__dirname, '../certs');
     hubConfig.tls = {
       cert: join(certsDir, 'server.pem'),
       key: join(certsDir, 'server.key'),
       ca: join(certsDir, 'ca.pem'),
-      requireClientCert: false,
-      rejectUnauthorized: false
+      require_client_cert: false,
+      reject_unauthorized: false
     };
 
     hubServer = new HubServer(hubConfig);
@@ -100,27 +100,29 @@ describe('Edge External Port Configuration Tests', () => {
     edgeConfig.network = {
       host: '127.0.0.1',
       port: listenPort,
-      externalHost: '127.0.0.1',
-      externalPort: externalPort, // 设置与监听端口不同的外部端口
+      external_host: '127.0.0.1',
+      external_port: externalPort, // 设置与监听端口不同的外部端口
       region: 'test-region',
     };
-    edgeConfig.logLevel = 'error';
+    edgeConfig.log_level = 'error';
     edgeConfig.tls = {
       cert: join(certsDir, 'server.pem'),
       key: join(certsDir, 'server.key'),
       ca: join(certsDir, 'ca.pem'),
-      requireClientCert: false,
-      rejectUnauthorized: false
+      require_client_cert: false,
+      reject_unauthorized: false
     };
-    edgeConfig.hubServer = {
+    edgeConfig.hub_server = {
       host: '127.0.0.1',
       port: hubPort,
-      controlPort: controlPort,
-      tls: { rejectUnauthorized: false },
-      connectionType: 'websocket',
-      reconnectInterval: 5000,
-      heartbeatInterval: 30000,
-      hmacSecret: 'test-secret-key',
+      control_port: controlPort,
+      tls: { reject_unauthorized: false },
+      connection_type: 'websocket' as const,
+      reconnect_interval: 5000,
+      heartbeat_interval: 30000,
+      pool_size: 1,
+      reconnection_timeout: 10000,
+      hmac_secret: 'test-secret-key',
     };
 
     edgeServer = new EdgeServer(edgeConfig);
@@ -180,36 +182,34 @@ describe('Edge External Port Configuration Tests', () => {
       network: {
         host: '0.0.0.0',
         port: 64738,
-        externalHost: 'example.com',
-        externalPort: 12345,
+        external_host: 'example.com',
+        external_port: 12345,
       },
       tls: {
         cert: './cert.pem',
         key: './key.pem',
-        requireClientCert: false,
-        rejectUnauthorized: false,
+        require_client_cert: false,
+        reject_unauthorized: false,
       },
-      auth: {
-        apiUrl: 'http://example.com',
-        apiKey: 'key',
-        timeout: 5000,
-        retry: 3,
-        insecure: false,
-        cacheTTL: 3600000,
-        pullInterval: 300000,
-        trackSessions: true,
-        allowCacheFallback: true,
+      server: {
+        capacity: 1000,
+        max_bandwidth: 1000000,
+        default_channel: 0,
+        timeout: 30000,
       },
-      capacity: 1000,
-      max_bandwidth: 1000000,
-      defaultChannel: 0,
-      logLevel: 'info',
+      client: {
+        max_text_message_length: 5000,
+        max_image_message_length: 131072,
+      },
+      log_level: 'info',
       features: {
         geoip: false,
-        banSystem: false,
-        contextActions: false,
-        packetPool: false,
-        udpMonitor: false,
+        ban_system: false,
+        context_actions: false,
+        packet_pool: false,
+        udp_monitor: false,
+        allow_ping: true,
+        allow_html: false,
       },
     };
 
@@ -218,9 +218,9 @@ describe('Edge External Port Configuration Tests', () => {
   });
 
   it('should reject invalid externalPort in configuration', async () => {
-    const { validateConfig } = await import('../../../packages/edge-server/src/config.js');
+    const { validateAndParseEdgeConfig } = await import('../../../packages/edge-server/src/config-schema.js');
     
-    const invalidConfig: EdgeConfig = {
+    const invalidConfig = {
       server_id: 1,
       name: 'Test',
       mode: 'cluster',
@@ -236,20 +236,16 @@ describe('Edge External Port Configuration Tests', () => {
         requireClientCert: false,
         rejectUnauthorized: false,
       },
-      auth: {
-        apiUrl: 'http://example.com',
-        apiKey: 'key',
-        timeout: 5000,
-        retry: 3,
-        insecure: false,
-        cacheTTL: 3600000,
-        pullInterval: 300000,
-        trackSessions: true,
-        allowCacheFallback: true,
+      server: {
+        capacity: 1000,
+        max_bandwidth: 1000000,
+        default_channel: 0,
+        timeout: 30000,
       },
-      capacity: 1000,
-      max_bandwidth: 1000000,
-      defaultChannel: 0,
+      client: {
+        max_text_message_length: 5000,
+        max_image_message_length: 131072,
+      },
       logLevel: 'info',
       features: {
         geoip: false,
@@ -257,11 +253,13 @@ describe('Edge External Port Configuration Tests', () => {
         contextActions: false,
         packetPool: false,
         udpMonitor: false,
+        allowPing: true,
+        allowHtml: false,
       },
     };
 
-    const errors = validateConfig(invalidConfig);
-    expect(errors.length).toBeGreaterThan(0);
-    expect(errors.some(e => e.includes('externalPort'))).toBe(true);
+    // Zod validation should throw an error for invalid port
+    expect(() => validateAndParseEdgeConfig(invalidConfig)).toThrow();
+    expect(() => validateAndParseEdgeConfig(invalidConfig)).toThrow(/validation failed|externalPort/i);
   });
 });

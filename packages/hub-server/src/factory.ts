@@ -93,7 +93,7 @@ export class HubHandlerFactory {
     this.syncHandler = new SyncHandler(this);
     this.authenticationHandler = new AuthenticationHandler(this);
     this.permissionChecker = new HubPermissionChecker(this);
-    this.networkTopologyManager = new NetworkTopologyManager(this.config.voiceRouting, this.logger);
+    this.networkTopologyManager = new NetworkTopologyManager(this.config.voice_routing, this.logger);
     this.userStateHandler = new UserStateHandler(this);
     this.channelStateHandler = new ChannelStateHandler(this);
     this.databaseOperations = new DatabaseOperations(this.database, this.logger);
@@ -114,14 +114,14 @@ export class HubHandlerFactory {
       HubHandlerFactory.instance.controlService = controlService;
       
       // 初始化 BlobStore（如果启用）
-      if (config.blobStore.enabled) {
-        HubHandlerFactory.instance.blobStore = new BlobStore(config.blobStore.path, true, logger);
+      if (config.blob_store.enabled) {
+        HubHandlerFactory.instance.blobStore = new BlobStore(config.blob_store.path, true, logger);
         await HubHandlerFactory.instance.blobStore.init();
         // 将BlobStore设置到DatabaseOperations中
-        if ('setBlobStore' in HubHandlerFactory.instance.databaseOperations) {
-          (HubHandlerFactory.instance.databaseOperations as any).setBlobStore(HubHandlerFactory.instance.blobStore);
+        if (HubHandlerFactory.instance.databaseOperations.setBlobStore) {
+          HubHandlerFactory.instance.databaseOperations.setBlobStore(HubHandlerFactory.instance.blobStore);
         }
-        logger.info(`BlobStore initialized at ${config.blobStore.path}`);
+        logger.info(`BlobStore initialized at ${config.blob_store.path}`);
       } else {
         logger.debug('BlobStore disabled');
       }

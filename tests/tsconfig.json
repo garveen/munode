@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "module": "ESNext",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "downlevelIteration": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "strict": false,
+    "noEmit": true,
+    "isolatedModules": true,
+    "types": ["vitest/globals", "node"],
+    "baseUrl": ".",
+    "paths": {
+      "@munode/protocol": ["../packages/protocol/dist/index.d.ts"],
+      "@munode/protocol/*": ["../packages/protocol/dist/*"],
+      "@munode/common": ["../packages/common/dist/index.d.ts"],
+      "@munode/common/*": ["../packages/common/dist/*"],
+      "@munode/hub-server": ["../packages/hub-server/dist/index.d.ts"],
+      "@munode/hub-server/*": ["../packages/hub-server/dist/*"],
+      "@munode/edge-server": ["../packages/edge-server/dist/index.d.ts"],
+      "@munode/edge-server/*": ["../packages/edge-server/dist/*"],
+      "@munode/client": ["../packages/client/dist/index.d.ts"],
+      "@munode/client/*": ["../packages/client/dist/*"]
+    }
+  },
+  "include": [
+    "**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}

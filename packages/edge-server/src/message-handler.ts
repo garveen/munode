@@ -273,6 +273,7 @@ export class MessageHandler extends TypedEventEmitter<MessageHandlerEvents> {
    * 处理用户状态消息
    */
   private handleUserState( session_id: number, data: Buffer): void {
+    console.log(`[MSG] Received UserState from session ${session_id}`);
     this.emit('userState', session_id, data);
   }
 

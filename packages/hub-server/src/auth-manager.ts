@@ -5,33 +5,8 @@
 
 import type { Logger } from '@munode/common';
 import type { HubConfig, ExternalAuthRequest } from './types.js';
-
-
-/**
- * 认证配置
- */
-export interface AuthConfig {
-  callback?: import('./types.js').ExternalAuthCallback;
-  apiUrl?: string; // 外部认证 API 地址
-  apiKey?: string; // API 密钥
-  timeout?: number; // 超时时间（毫秒）
-  contentType?: 'application/json' | 'application/x-www-form-urlencoded'; // 请求内容类型，默认 'application/json'
-  headers?: {
-    authHeaderName?: string; // 认证头名称，默认 'Authorization'
-    authHeaderFormat?: string; // 认证头格式，默认 'Bearer {apiKey}'
-  };
-  responseFields?: {
-    successField?: string; // 成功标志字段名，默认 'success'
-    successValue?: boolean | number | string; // 成功标志的期望值，默认 true（可以是 true, 1, 'ok', 'success' 等）
-    userIdField?: string; // 用户ID字段名，默认 'user_id'
-    usernameField?: string; // 用户名字段名，默认 'username'
-    displayNameField?: string; // 显示名字段名，默认 'displayName'
-    groupsField?: string; // 用户组字段名，默认 'groups'
-    reasonField?: string; // 失败原因字段名，默认 'reason' 或 'message'
-  };
-  cacheTTL?: number; // 缓存TTL（毫秒），默认 300000 (5分钟)
-  allowCacheFallback?: boolean; // 是否允许缓存回退，默认 false
-}
+import type { HubAuthConfig } from './config-schema.js';
+import { isAuthConfigWithCallback, isAuthConfigWithApi } from './config-schema.js';
 
 /**
  * 认证缓存项
@@ -78,46 +53,26 @@ export interface AuthRequest {
  * Hub 认证管理器
  */
 export class HubAuthManager {
-  private config: AuthConfig;
+  private config: NonNullable<HubAuthConfig>;
   private authCache: Map<string, AuthCacheItem> = new Map();
 
-    private logger: Logger;
+  private logger: Logger;
 
   constructor(hubConfig: HubConfig, logger: Logger) {
     this.logger = logger;
     // 从 Hub 配置中提取认证配置
-    this.config = (hubConfig as { auth?: AuthConfig }).auth || {};
-    
-    // 设置默认值
-    this.config.timeout = this.config.timeout || 5000;
-    this.config.cacheTTL = this.config.cacheTTL || 300000;
-    this.config.allowCacheFallback = this.config.allowCacheFallback ?? false;
-    this.config.contentType = this.config.contentType || 'application/json';
-    
-    // 设置默认 header 配置
-    this.config.headers = this.config.headers || {};
-    this.config.headers.authHeaderName = this.config.headers.authHeaderName || 'Authorization';
-    this.config.headers.authHeaderFormat = this.config.headers.authHeaderFormat || 'Bearer {apiKey}';
-    
-    // 设置默认响应字段映射
-    this.config.responseFields = this.config.responseFields || {};
-    this.config.responseFields.successField = this.config.responseFields.successField || 'success';
-    this.config.responseFields.successValue = this.config.responseFields.successValue ?? true; // 默认期望 true
-    this.config.responseFields.userIdField = this.config.responseFields.userIdField || 'user_id';
-    this.config.responseFields.usernameField = this.config.responseFields.usernameField || 'username';
-    this.config.responseFields.displayNameField = this.config.responseFields.displayNameField || 'displayName';
-    this.config.responseFields.groupsField = this.config.responseFields.groupsField || 'groups';
-    this.config.responseFields.reasonField = this.config.responseFields.reasonField || 'reason';
+    this.config = (hubConfig as { auth?: HubAuthConfig }).auth || ({} as NonNullable<HubAuthConfig>);
 
-    if (this.config.callback) {
-    this.logger.debug('Hub Authentication Manager initialized with callback function');
-    } else if (this.config.apiUrl) {
-    this.logger.debug('Hub Authentication Manager initialized with API URL', { 
-        apiUrl: this.config.apiUrl,
-        contentType: this.config.contentType 
+    // 日志初始化信息
+    if (isAuthConfigWithCallback(this.config)) {
+      this.logger.debug('Hub Authentication Manager initialized with callback function');
+    } else if (isAuthConfigWithApi(this.config)) {
+      this.logger.debug('Hub Authentication Manager initialized with API URL', {
+        api_url: this.config.api_url,
+        content_type: this.config.content_type
       });
     } else {
-    this.logger.debug('Hub Authentication Manager initialized with local authentication');
+      this.logger.debug('Hub Authentication Manager initialized with local authentication');
     }
 
     // 定期清理过期缓存
@@ -131,15 +86,15 @@ export class HubAuthManager {
    */
   async authenticate(request: AuthRequest): Promise<AuthResult> {
     try {
-    this.logger.info(`Authenticating user: username=${request.username}, server_id=${request.server_id}`);
+      this.logger.info(`Authenticating user: username=${request.username}, server_id=${request.server_id}`);
 
       // 检查缓存 - 使用密码的哈希值而不是明文
       const crypto = await import('crypto');
       const passwordHash = crypto.createHash('sha256').update(request.password).digest('hex');
       const cacheKey = `${request.username}:${passwordHash}`;
       const cached = this.authCache.get(cacheKey);
-      if (cached && Date.now() - cached.timestamp < (this.config.cacheTTL || 300000)) {
-    this.logger.debug(`Auth cache hit for user: ${request.username}`);
+      if (cached && Date.now() - cached.timestamp < (this.config.cache_ttl || 300000)) {
+        this.logger.debug(`Auth cache hit for user: ${request.username}`);
         return cached.result;
       }
 
@@ -155,18 +110,18 @@ export class HubAuthManager {
       }
 
       if (authResult.success) {
-    this.logger.info(
+        this.logger.info(
           `Authentication successful: username=${request.username}, userId=${authResult.user_id}`
         );
       } else {
-    this.logger.warn(
+        this.logger.warn(
           `Authentication failed: username=${request.username}, reason=${authResult.reason}`
         );
       }
 
       return authResult;
     } catch (error) {
-    this.logger.error(`Authentication error for user ${request.username}:`, error);
+      this.logger.error(`Authentication error for user ${request.username}:`, error);
       return {
         success: false,
         reason: 'Internal authentication error',
@@ -179,7 +134,7 @@ export class HubAuthManager {
    */
   private async authenticateWithAPI(request: AuthRequest): Promise<AuthResult> {
     // 方式1: 如果配置了回调函数，优先使用回调
-    if (this.config.callback) {
+    if (isAuthConfigWithCallback(this.config)) {
       try {
         const externalRequest: ExternalAuthRequest = {
           username: request.username,
@@ -195,14 +150,14 @@ export class HubAuthManager {
           os_version: request.client_info.os_version,
           certificate_hash: request.client_info.certificate_hash,
         };
-        
-    this.logger.debug('Authenticating with callback function', { username: request.username });
+
+        this.logger.debug('Authenticating with callback function', { username: request.username });
         const result = await this.config.callback(externalRequest);
-        
-    this.logger.info(`Callback auth result for ${request.username}: success=${result.success}`);
+
+        this.logger.info(`Callback auth result for ${request.username}: success=${result.success}`);
         return result;
       } catch (error) {
-    this.logger.error('Callback authentication error:', error);
+        this.logger.error('Callback authentication error:', error);
         return {
           success: false,
           reason: 'Authentication callback error',
@@ -211,17 +166,18 @@ export class HubAuthManager {
     }
 
     // 方式2: 使用 HTTP API
-    const authUrl = this.config.apiUrl;
-
-    if (!authUrl) {
+    if (!isAuthConfigWithApi(this.config)) {
       // 如果没有配置外部 API，使用本地认证
       return this.authenticateLocally(request.username, request.password);
     }
 
+    // 类型守卫后，this.config 已经是 HubAuthConfigWithApi 类型
+    const authUrl = this.config.api_url;
+
     try {
       // 确定内容类型
-      const contentType = this.config.contentType || 'application/json';
-      
+      const contentType = this.config.content_type;
+
       // 构建请求头
       const headers: Record<string, string> = {
         'Content-Type': contentType,
@@ -229,10 +185,10 @@ export class HubAuthManager {
       };
 
       // 添加认证头
-      if (this.config.apiKey) {
-        const authHeaderName = this.config.headers?.authHeaderName || 'Authorization';
-        const authHeaderFormat = this.config.headers?.authHeaderFormat || 'Bearer {apiKey}';
-        headers[authHeaderName] = authHeaderFormat.replace('{apiKey}', this.config.apiKey);
+      if (this.config.api_key) {
+        const authHeaderName = this.config.headers?.auth_header_name || 'Authorization';
+        const authHeaderFormat = this.config.headers?.auth_header_format || 'Bearer {apiKey}';
+        headers[authHeaderName] = authHeaderFormat.replace('{apiKey}', this.config.api_key);
       }
 
       // 构建请求数据（使用标准字段名）
@@ -248,7 +204,7 @@ export class HubAuthManager {
         os: request.client_info.os,
         os_version: request.client_info.os_version,
       };
-      
+
       if (request.client_info.version !== undefined) {
         requestData.version = request.client_info.version;
       }
@@ -270,23 +226,23 @@ export class HubAuthManager {
           }
         }
         body = params.toString();
-    this.logger.debug(`Auth API request to ${authUrl} (form-urlencoded):`, { body });
+        this.logger.debug(`Auth API request to ${authUrl} (form-urlencoded):`, { body });
       } else {
         // JSON 编码（默认）
         body = JSON.stringify(requestData);
-    this.logger.debug(`Auth API request to ${authUrl} (json):`, requestData);
+        this.logger.debug(`Auth API request to ${authUrl} (json):`, requestData);
       }
 
       const response = await fetch(authUrl, {
         method: 'POST',
         headers,
         body,
-        signal: AbortSignal.timeout(this.config.timeout || 5000),
+        signal: AbortSignal.timeout(this.config.timeout),
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-    this.logger.error(`Auth API error: ${response.status} - ${errorText}`);
+        this.logger.error(`Auth API error: ${response.status} - ${errorText}`);
 
         // 根据 HTTP 状态码确定 reject 类型
         if (response.status === 401 || response.status === 403) {
@@ -312,17 +268,17 @@ export class HubAuthManager {
       }
 
       const result = await response.json();
-    this.logger.info(`Auth API response for user ${request.username}:`, result);
+      this.logger.info(`Auth API response for user ${request.username}:`, result);
 
-      // 使用配置的字段名提取响应数据
-      const fields = this.config.responseFields || {};
-      const successField = fields.successField || 'success';
-      const successValue = fields.successValue ?? true;
-      const userIdField = fields.userIdField || 'user_id';
-      const usernameField = fields.usernameField || 'username';
-      const displayNameField = fields.displayNameField || 'displayName';
-      const groupsField = fields.groupsField || 'groups';
-      const reasonField = fields.reasonField || 'reason';
+      // 使用配置的字段名提取响应数据（带默认值）
+      const fields = this.config.response_fields;
+      const successField = fields?.success_field ?? 'success';
+      const successValue = fields?.success_value ?? true;
+      const userIdField = fields?.user_id_field ?? 'user_id';
+      const usernameField = fields?.username_field ?? 'username';
+      const displayNameField = fields?.display_name_field ?? 'displayName';
+      const groupsField = fields?.groups_field ?? 'groups';
+      const reasonField = fields?.reason_field ?? 'reason';
 
       // 判断认证是否成功：比较响应中的成功字段值与配置的期望值
       const isSuccess = result[successField] === successValue;
@@ -342,17 +298,17 @@ export class HubAuthManager {
             : 0, // mumbleproto.Reject.RejectType.None
       };
 
-    this.logger.info(`Normalized auth result for ${request.username}: userId=${normalized.user_id}, groups=${JSON.stringify(normalized.groups)}`);
+      this.logger.info(`Normalized auth result for ${request.username}: userId=${normalized.user_id}, groups=${JSON.stringify(normalized.groups)}`);
       return normalized;
     } catch (error) {
-    this.logger.error('External auth API error:', error);
+      this.logger.error('External auth API error:', error);
 
       // 如果允许缓存回退，尝试从缓存认证
-      if (this.config.allowCacheFallback) {
+      if (this.config.allow_cache_fallback) {
         const cacheKey = `${request.username}:${request.password}`;
         const cached = this.authCache.get(cacheKey);
         if (cached) {
-    this.logger.warn(`Using cached auth for user ${request.username} due to API error`);
+          this.logger.warn(`Using cached auth for user ${request.username} due to API error`);
           return cached.result;
         }
       }
@@ -407,7 +363,7 @@ export class HubAuthManager {
     const toDelete: string[] = [];
 
     for (const [key, value] of this.authCache) {
-      if (now - value.timestamp > (this.config.cacheTTL || 300000)) {
+      if (now - value.timestamp > (this.config.cache_ttl || 300000)) {
         toDelete.push(key);
       }
     }
@@ -417,7 +373,7 @@ export class HubAuthManager {
     }
 
     if (toDelete.length > 0) {
-    this.logger.debug(`Cleaned up ${toDelete.length} expired auth cache entries`);
+      this.logger.debug(`Cleaned up ${toDelete.length} expired auth cache entries`);
     }
   }
 
