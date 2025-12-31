@@ -5,10 +5,14 @@
  * 
  * API 端点：
  * - GET /api/status - 获取 Hub 状态
- * - GET /api/edges - 获取连接的 Edge 列表及状态
- * - GET /api/edges/:id - 获取特定 Edge 的详细信息
+ * - GET /api/edges - 获取连接的 Edge 列表及状态（包含连接质量汇总）
+ * - GET /api/edges/:id - 获取特定 Edge 的详细信息（包含连接质量和路由）
  * - GET /api/stats - 获取 Hub 统计数据
- * - GET /api/topology - 获取网络拓扑信息
+ * - GET /api/topology - 获取网络拓扑信息（包含拓扑统计）
+ * - GET /api/routing-table - 获取路由表和连通数据
+ * - GET /api/connectivity - 获取所有 Edge 间的连接质量详情
+ * - GET /api/connectivity/matrix - 获取连接质量矩阵
+ * - GET /api/health - 健康检查
  */
 
 import * as http from 'http';
@@ -49,6 +53,48 @@ interface EdgeStatusInfo {
     packetsIn: number;
     packetsOut: number;
   };
+  connectivity?: {
+    totalLinks: number;
+    activeLinks: number;
+    avgRtt: number;
+    avgPacketLoss: number;
+    avgJitter: number;
+  };
+}
+
+/**
+ * 连接质量详情
+ */
+interface ConnectionQualityInfo {
+  targetEdgeId: number;
+  targetName: string;
+  rtt: number;
+  packetLoss: number;
+  jitter: number;
+  lastUpdate: number;
+  samples: number;
+  bidirectional: boolean;
+  status: 'excellent' | 'good' | 'fair' | 'poor';
+}
+
+/**
+ * 连接矩阵响应
+ */
+interface ConnectivityMatrixResponse {
+  edges: Array<{
+    id: number;
+    name: string;
+  }>;
+  matrix: Array<{
+    sourceId: number;
+    targetId: number;
+    rtt?: number;
+    packetLoss?: number;
+    jitter?: number;
+    lastUpdate?: number;
+    status?: 'excellent' | 'good' | 'fair' | 'poor' | 'unknown';
+  }>;
+  timestamp: number;
 }
 
 /**
@@ -230,6 +276,10 @@ export class WebApiService {
         this.handleTopology(res);
       } else if (pathname === '/api/routing-table') {
         this.handleRoutingTable(res);
+      } else if (pathname === '/api/connectivity') {
+        this.handleConnectivity(res);
+      } else if (pathname === '/api/connectivity/matrix') {
+        this.handleConnectivityMatrix(res);
       } else if (pathname === '/api/health') {
         this.handleHealth(res);
       } else {
@@ -264,25 +314,61 @@ export class WebApiService {
     const now = Date.now();
     const onlineThreshold = 30000; // 30秒无心跳视为离线
 
-    const edgeList: EdgeStatusInfo[] = edges.map((edge) => ({
-      id: edge.server_id,
-      name: edge.name,
-      host: edge.host,
-      port: edge.port,
-      voicePort: edge.port, // 使用统一UDP端口
-      region: edge.region,
-      capacity: edge.capacity,
-      currentLoad: edge.current_load,
-      lastSeen: edge.last_seen,
-      isOnline: now - edge.last_seen < onlineThreshold,
-      stats: edge.stats ? {
-        connectedClients: edge.stats.user_count || 0,
-        bytesIn: edge.stats.bandwidth?.in || 0,
-        bytesOut: edge.stats.bandwidth?.out || 0,
-        packetsIn: 0, // 不在 ServerStats 中
-        packetsOut: 0, // 不在 ServerStats 中
-      } : undefined,
-    }));
+    const edgeList: EdgeStatusInfo[] = edges.map((edge) => {
+      const edgeInfo: EdgeStatusInfo = {
+        id: edge.server_id,
+        name: edge.name,
+        host: edge.host,
+        port: edge.port,
+        region: edge.region,
+        capacity: edge.capacity,
+        currentLoad: edge.current_load,
+        lastSeen: edge.last_seen,
+        isOnline: now - edge.last_seen < onlineThreshold,
+        stats: edge.stats ? {
+          connectedClients: edge.stats.user_count || 0,
+          bytesIn: edge.stats.bandwidth?.in || 0,
+          bytesOut: edge.stats.bandwidth?.out || 0,
+          packetsIn: 0, // 不在 ServerStats 中
+          packetsOut: 0, // 不在 ServerStats 中
+        } : undefined,
+      };
+
+      // 添加连接质量统计
+      if (this.networkTopologyManager) {
+        const allEdges = this.networkTopologyManager.getAllEdges();
+        let totalLinks = 0;
+        let activeLinks = 0;
+        let totalRtt = 0;
+        let totalPacketLoss = 0;
+        let totalJitter = 0;
+
+        for (const targetId of allEdges) {
+          if (targetId !== edge.server_id) {
+            totalLinks++;
+            const link = this.networkTopologyManager.getLink(edge.server_id, targetId);
+            if (link) {
+              activeLinks++;
+              totalRtt += link.quality.rtt;
+              totalPacketLoss += link.quality.packetLoss;
+              totalJitter += link.quality.jitter;
+            }
+          }
+        }
+
+        if (activeLinks > 0) {
+          edgeInfo.connectivity = {
+            totalLinks,
+            activeLinks,
+            avgRtt: totalRtt / activeLinks,
+            avgPacketLoss: totalPacketLoss / activeLinks,
+            avgJitter: totalJitter / activeLinks,
+          };
+        }
+      }
+
+      return edgeInfo;
+    });
 
     this.sendJson(res, {
       total: edgeList.length,
@@ -327,25 +413,41 @@ export class WebApiService {
     // 如果有网络拓扑信息，添加链接质量
     if (this.networkTopologyManager) {
       const allEdges = this.networkTopologyManager.getAllEdges();
-      const links: Array<{ targetEdgeId: number; rtt: number; packetLoss: number; jitter: number }> = [];
+      const connections: ConnectionQualityInfo[] = [];
       
       for (const targetId of allEdges) {
         if (targetId !== edgeId) {
           const link = this.networkTopologyManager.getLink(edgeId, targetId);
           if (link) {
-            links.push({
+            const targetEdge = this.registry.getEdge(targetId);
+            connections.push({
               targetEdgeId: targetId,
+              targetName: targetEdge?.name || `Edge ${targetId}`,
               rtt: link.quality.rtt,
               packetLoss: link.quality.packetLoss,
               jitter: link.quality.jitter,
+              lastUpdate: link.quality.lastUpdate,
+              samples: link.quality.samples,
+              bidirectional: link.bidirectional,
+              status: this.evaluateConnectionStatus(link.quality.rtt, link.quality.packetLoss),
             });
           }
         }
       }
 
+      // 获取路由信息
+      const routes = this.networkTopologyManager.getRouteTableForEdge(edgeId);
+
       this.sendJson(res, {
         ...edgeInfo,
-        links,
+        connections,
+        routes: routes.map(route => ({
+          targetEdgeId: route.targetEdgeId,
+          type: route.type,
+          nextHop: route.nextHop,
+          cost: route.cost,
+          timestamp: route.timestamp,
+        })),
         timestamp: now,
       });
     } else {
@@ -421,8 +523,8 @@ export class WebApiService {
     }
 
     const allEdges = this.networkTopologyManager.getAllEdges();
-    const nodes: Array<{ id: number; name: string }> = [];
-    const links: Array<{ source: number; target: number; rtt: number; packetLoss: number }> = [];
+    const nodes: Array<{ id: number; name: string; region?: string }> = [];
+    const links: Array<{ source: number; target: number; rtt: number; packetLoss: number; jitter: number; bidirectional: boolean; status: string }> = [];
 
     // 获取节点信息
     for (const edgeId of allEdges) {
@@ -430,6 +532,7 @@ export class WebApiService {
       nodes.push({
         id: edgeId,
         name: edge?.name || `Edge ${edgeId}`,
+        region: edge?.region,
       });
     }
 
@@ -444,16 +547,28 @@ export class WebApiService {
               target: targetId,
               rtt: link.quality.rtt,
               packetLoss: link.quality.packetLoss,
+              jitter: link.quality.jitter,
+              bidirectional: link.bidirectional,
+              status: this.evaluateConnectionStatus(link.quality.rtt, link.quality.packetLoss),
             });
           }
         }
       }
     }
 
+    // 获取拓扑统计
+    const stats = this.networkTopologyManager.getTopologyStats();
+
     this.sendJson(res, {
       enabled: this.networkTopologyManager.isEnabled(),
       nodes,
       links,
+      stats: {
+        edgeCount: stats.edgeCount,
+        linkCount: stats.linkCount,
+        avgRtt: stats.avgRtt,
+        avgPacketLoss: stats.avgPacketLoss,
+      },
       timestamp: Date.now(),
     });
   }
@@ -524,6 +639,146 @@ export class WebApiService {
       connectivity,
       timestamp: Date.now(),
     });
+  }
+
+  /**
+   * GET /api/connectivity - 获取所有 Edge 间的连接质量
+   */
+  private handleConnectivity(res: http.ServerResponse): void {
+    if (!this.networkTopologyManager) {
+      this.sendJson(res, {
+        enabled: false,
+        message: 'Network topology manager not available',
+        edges: [],
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const allEdges = this.networkTopologyManager.getAllEdges();
+    const connectivityData: Array<{
+      sourceId: number;
+      sourceName: string;
+      targetId: number;
+      targetName: string;
+      rtt: number;
+      packetLoss: number;
+      jitter: number;
+      lastUpdate: number;
+      samples: number;
+      bidirectional: boolean;
+      status: string;
+    }> = [];
+
+    for (const sourceId of allEdges) {
+      for (const targetId of allEdges) {
+        if (sourceId !== targetId) {
+          const link = this.networkTopologyManager.getLink(sourceId, targetId);
+          if (link) {
+            const sourceEdge = this.registry.getEdge(sourceId);
+            const targetEdge = this.registry.getEdge(targetId);
+            connectivityData.push({
+              sourceId,
+              sourceName: sourceEdge?.name || `Edge ${sourceId}`,
+              targetId,
+              targetName: targetEdge?.name || `Edge ${targetId}`,
+              rtt: link.quality.rtt,
+              packetLoss: link.quality.packetLoss,
+              jitter: link.quality.jitter,
+              lastUpdate: link.quality.lastUpdate,
+              samples: link.quality.samples,
+              bidirectional: link.bidirectional,
+              status: this.evaluateConnectionStatus(link.quality.rtt, link.quality.packetLoss),
+            });
+          }
+        }
+      }
+    }
+
+    this.sendJson(res, {
+      enabled: this.networkTopologyManager.isEnabled(),
+      total: connectivityData.length,
+      connections: connectivityData,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * GET /api/connectivity/matrix - 获取连接质量矩阵
+   */
+  private handleConnectivityMatrix(res: http.ServerResponse): void {
+    if (!this.networkTopologyManager) {
+      this.sendJson(res, {
+        enabled: false,
+        message: 'Network topology manager not available',
+        edges: [],
+        matrix: [],
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    const allEdges = this.networkTopologyManager.getAllEdges();
+    const edges: Array<{ id: number; name: string }> = [];
+    const matrix: ConnectivityMatrixResponse['matrix'] = [];
+
+    // 获取 Edge 信息
+    for (const edgeId of allEdges) {
+      const edge = this.registry.getEdge(edgeId);
+      edges.push({
+        id: edgeId,
+        name: edge?.name || `Edge ${edgeId}`,
+      });
+    }
+
+    // 构建连接矩阵
+    for (const sourceId of allEdges) {
+      for (const targetId of allEdges) {
+        if (sourceId !== targetId) {
+          const link = this.networkTopologyManager.getLink(sourceId, targetId);
+          if (link) {
+            matrix.push({
+              sourceId,
+              targetId,
+              rtt: link.quality.rtt,
+              packetLoss: link.quality.packetLoss,
+              jitter: link.quality.jitter,
+              lastUpdate: link.quality.lastUpdate,
+              status: this.evaluateConnectionStatus(link.quality.rtt, link.quality.packetLoss),
+            });
+          } else {
+            matrix.push({
+              sourceId,
+              targetId,
+              status: 'unknown',
+            });
+          }
+        }
+      }
+    }
+
+    this.sendJson(res, {
+      enabled: this.networkTopologyManager.isEnabled(),
+      edges,
+      matrix,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * 评估连接状态
+   */
+  private evaluateConnectionStatus(rtt: number, packetLoss: number): 'excellent' | 'good' | 'fair' | 'poor' {
+    // 根据 RTT 和丢包率评估连接质量
+    if (rtt < 50 && packetLoss < 0.01) {
+      return 'excellent';
+    } else if (rtt < 100 && packetLoss < 0.02) {
+      return 'good';
+    } else if (rtt < 200 && packetLoss < 0.05) {
+      return 'fair';
+    } else {
+      return 'poor';
+    }
   }
 
   /**
