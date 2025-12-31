@@ -65,10 +65,10 @@ export class ClusterHandler implements IClusterHandler {
       `Edge ${params.server_id} completed join, connected peers: ${params.connectedPeers.join(',')}`
     );
 
-    // 广播新成员加入通知
+    // 广播新成员加入通知（排除新加入的 edge 自己，避免自连接）
     const edge = this.factory.getRegistry().getEdge(params.server_id);
     if (edge) {
-      this.factory.getControlService().broadcast('edge.peerJoined', {
+      this.factory.getControlService().broadcastExcept(edge.server_id, 'edge.peerJoined', {
         id: edge.server_id,
         name: edge.name,
         host: edge.host,

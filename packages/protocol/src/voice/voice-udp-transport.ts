@@ -154,6 +154,14 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     this.logger.info('VoiceUDPTransport using external send function (unified entry mode)');
     // 启动心跳和连接检查
     this.startHeartbeatIfNeeded();
+    
+    // 重新发起所有已注册端点的握手（因为之前可能没有 sendFunction 而失败）
+    for (const [edgeId, status] of this.connectionStatus) {
+      if (!status.handshakeComplete && !status.reconnecting) {
+        this.logger.info(`Re-initiating handshake for edge ${edgeId} after setSendFunction`);
+        this.initiateHandshake(edgeId);
+      }
+    }
   }
 
   /**
@@ -227,11 +235,13 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       `(role: ${isActiveSide ? 'active/initiator' : 'passive/responder'})`
     );
     
-    // Initiate handshake (both active and passive sides need handshake)
-    this.initiateHandshake(edgeId);
-    
-    // 启动心跳和连接检查（如果还没启动）
-    this.startHeartbeatIfNeeded();
+    // 仅在 sendFunction 已设置时发起握手，否则等待 setSendFunction() 时再发起
+    if (this.sendFunction) {
+      this.initiateHandshake(edgeId);
+      this.startHeartbeatIfNeeded();
+    } else {
+      this.logger.debug(`Handshake for edge ${edgeId} deferred until sendFunction is set`);
+    }
   }
 
   /**
@@ -258,8 +268,8 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     // 生成本地 nonce
     status.localNonce = crypto.randomBytes(NONCE_SIZE);
     
-    // 构造握手包
-    const handshakePacket = this.createHandshakeSyn(edgeId, status.localNonce);
+    // 构造握手包（使用本地 Edge ID，不是目标 Edge ID）
+    const handshakePacket = this.createHandshakeSyn(this.localEdgeId, status.localNonce);
     if (!handshakePacket) {
       this.logger.error(`Failed to create handshake SYN for edge ${edgeId}`);
       return;

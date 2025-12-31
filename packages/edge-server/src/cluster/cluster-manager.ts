@@ -203,6 +203,12 @@ export class EdgeClusterManager {
   private handlePeerJoined(params: HubNotificationParams<'edge.peerJoined'>): void {
     this.logger.info(`New peer joined: ${JSON.stringify(params)}`);
     
+    // 避免将自己加入到 peers 列表（防止自连接）
+    if (params.id === this.config.server_id) {
+      this.logger.debug(`Ignoring self in peerJoined notification (edge ${params.id})`);
+      return;
+    }
+    
     // 添加到 peers 列表
     this.peers.push({
       id: params.id,
