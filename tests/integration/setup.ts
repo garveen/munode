@@ -352,6 +352,15 @@ async function startEdgeServer(
   edgeConfig.network.port = port;
   edgeConfig.log_level = silent ? 'error' : 'debug';
   
+  // Enable Worker Thread Pool for tests
+  edgeConfig.workerThreads = edgeConfig.workerThreads || {
+    enabled: true,
+    count: 2, // Use 2 workers for tests
+    balanceStrategy: 'session-affinity',
+    workerTimeout: 5000,
+    maxQueueLength: 100
+  };
+  
   // 配置UDP语音传输的共享密钥用于握手验证
   edgeConfig.voice_routing = edgeConfig.voice_routing || {
     enabled: true,

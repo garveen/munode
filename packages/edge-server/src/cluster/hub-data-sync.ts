@@ -224,7 +224,7 @@ export class HubDataManager {
       }
 
       // 构建UserState消息，只包含变更的字段
-      const userState: any = {
+      const userState: mumbleproto.UserState = {
         session: params.session_id,
         actor: 0,
       };

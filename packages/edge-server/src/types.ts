@@ -13,6 +13,7 @@ export type {
   ServerConfig,
   ClientConfig,
   FeatureConfig,
+  VirtualHostConfig,
 } from './config-schema.js';
 
 // 从 protocol 包导入共享类型并重新导出供本地使用
@@ -158,4 +159,24 @@ export interface UDPConnection {
   localAddress: string;
   lastUsed: number;
   packetCount: number;
+}
+
+// ==================== 多租户相关类型 ====================
+
+// 导入 VirtualHostConfig（从 config-schema）
+import type { VirtualHostConfig as ImportedVirtualHostConfig } from './config-schema.js';
+
+/**
+ * 虚拟主机上下文
+ * 包含每个虚拟主机独立的管理器实例和状态
+ */
+export interface VirtualHostContext {
+  config: ImportedVirtualHostConfig;
+  // 核心管理器实例（每个虚拟主机独立）
+  clientManager: import('./client/client-manager.js').ClientManager;
+  channelManager: import('./models/channel.js').ChannelManager;
+  voiceRouter: import('./voice/voice-router.js').VoiceRouter;
+  // Hub 客户端（可选，每个虚拟主机可能连接不同的 Hub）
+  hubClient?: import('./cluster/hub-client.js').EdgeControlClient;
+  // 其他管理器根据需要添加
 }

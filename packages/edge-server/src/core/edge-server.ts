@@ -12,6 +12,8 @@ import { MessageManager } from '../managers/message-manager.js';
 import { VoiceManager } from '../managers/voice-manager.js';
 import { HubDataManager } from '../cluster/hub-data-sync.js';
 import { EventSetupManager } from '../managers/event-setup-manager.js';
+import { CryptoWorkerPool } from '../voice/crypto-worker-pool.js';
+import { cpus } from 'os';
 
 /**
  * EdgeServer 事件类型定义
@@ -44,6 +46,7 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
   private clusterManager?: EdgeClusterManager;
   private geoIPManager?: GeoIPManager;
   private voiceTransport?: VoiceUDPTransport; // 语音 UDP 传输
+  private cryptoWorkerPool?: CryptoWorkerPool; // 全局共享 Worker Pool
 
   // 服务器状态
   private isRunning = false;
@@ -161,6 +164,30 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
         await this.geoIPManager.initialize();
       }
 
+      // Initialize global Worker Pool if enabled
+      if (this.config.workerThreads?.enabled) {
+        const workerCount = this.config.workerThreads.count || cpus().length;
+        
+        this.cryptoWorkerPool = new CryptoWorkerPool(
+          {
+            workerCount,
+            workerTimeout: this.config.workerThreads.workerTimeout,
+            maxQueueLength: this.config.workerThreads.maxQueueLength,
+          },
+          this.logger
+        );
+        
+        await this.cryptoWorkerPool.initialize();
+        
+        this.logger.info(
+          `Shared CryptoWorkerPool initialized: ${workerCount} workers with session-affinity strategy`
+        );
+
+        // Set Worker Pool to VoiceRouter (single-tenant mode uses 'default' vhost)
+        const vhostName = this.config.virtualHosts?.[0]?.servername || 'default';
+        this.handlerFactory.voiceRouter.setCryptoWorkerPool(this.cryptoWorkerPool, vhostName);
+      }
+
       await this.serverLifecycleManager.start();
       this.isRunning = true;
     } catch (error) {
@@ -178,7 +205,13 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
 
       await this.serverLifecycleManager.stop();
 
-      // 断开 Hub 客户端连接
+      // Cleanup Worker Pool
+      if (this.cryptoWorkerPool) {
+        await this.cryptoWorkerPool.cleanup();
+        this.logger.info('CryptoWorkerPool cleaned up');
+      }
+
+      // Disconnect Hub client
       if (this.hubClient) {
         this.hubClient.disconnect();
         this.logger.info('Hub client disconnected');
@@ -353,14 +386,22 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
   }
 
   /**
-   * 获取 VoiceManager（用于测试监控语音路由）
+   * Get VoiceManager for testing voice routing monitoring
    */
   getVoiceManager() {
     return this.voiceManager;
   }
 
   /**
-   * 获取集群状态（用于测试）
+   * Get shared CryptoWorkerPool instance
+   * Used by VirtualHost/VoiceRouter for encryption operations
+   */
+  getCryptoWorkerPool(): CryptoWorkerPool | undefined {
+    return this.cryptoWorkerPool;
+  }
+
+  /**
+   * Get cluster status for testing
    */
   getClusterStatus() {
     if (!this.clusterManager) {

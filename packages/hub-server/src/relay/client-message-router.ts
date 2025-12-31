@@ -196,7 +196,7 @@ export class ClientMessageRouter extends TypedEventEmitter<ClientMessageRouterEv
     relay: hubedge.ClientMessageRelay,
     routing: hubedge.RelayRouting
   ): Promise<void> {
-    if (!routing !== undefined) {
+    if (routing.target_channel === undefined || routing.target_channel === 0) {
       this.logger.warn('Channel broadcast without target channel');
       return;
     }

@@ -84,7 +84,7 @@ function handleMessage(message: WorkerMessage): void {
         response.result = { executed: true };
         break;
 
-      case 'prepare':
+      case 'prepare': {
         if (!db) {
           throw new Error('Database not initialized');
         }
@@ -97,6 +97,7 @@ function handleMessage(message: WorkerMessage): void {
         response.success = true;
         response.result = { prepared: true };
         break;
+      }
 
       case 'run': {
         if (!db) {

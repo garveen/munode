@@ -122,6 +122,28 @@ export const FeatureConfigSchema = z.object({
   allow_html: z.boolean().default(true),
 }).strict();
 
+// ===== Worker Threads 配置 Schema =====
+export const WorkerThreadsConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  count: z.number().int().positive().optional(), // 默认使用 CPU 核心数
+  workerTimeout: z.number().int().positive().default(5000),
+  maxQueueLength: z.number().int().positive().default(10000),
+}).strict();
+
+// ===== 虚拟主机配置 Schema =====
+export const VirtualHostConfigSchema = z.object({
+  servername: z.string().min(1, 'servername cannot be empty'),
+  server_id: z.number().int().positive('server_id must be a positive integer'),
+  name: z.string().min(1, 'name cannot be empty'),
+  tls: TLSConfigSchema,
+  welcomeText: z.string().optional(),
+  maxUsers: z.number().int().positive().optional(),
+  defaultChannel: z.number().int().min(0).default(0),
+  hubServer: HubServerConfigSchema.optional(),
+  features: FeatureConfigSchema.optional(),
+  server: ServerConfigSchema.partial().optional(),
+}).strict();
+
 // ===== 主配置 Schema =====
 export const EdgeConfigSchema = z.object({
   server_id: z.number().int().positive('server_id must be a positive integer'),
@@ -135,6 +157,11 @@ export const EdgeConfigSchema = z.object({
   client: ClientConfigSchema,
   features: FeatureConfigSchema,
   log_level: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
+  // Worker Threads 配置（可选）
+  workerThreads: WorkerThreadsConfigSchema.optional(),
+  // 多租户配置（可选）
+  virtualHosts: z.array(VirtualHostConfigSchema).optional(),
+  defaultVirtualHost: z.string().optional(),
 }).strict();
 
 /**
@@ -192,5 +219,7 @@ export type EdgeVoiceRoutingConfig = z.infer<typeof EdgeVoiceRoutingConfigSchema
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 export type ClientConfig = z.infer<typeof ClientConfigSchema>;
 export type FeatureConfig = z.infer<typeof FeatureConfigSchema>;
+export type WorkerThreadsConfig = z.infer<typeof WorkerThreadsConfigSchema>;
+export type VirtualHostConfig = z.infer<typeof VirtualHostConfigSchema>;
 export type EdgeConfig = z.infer<typeof EdgeConfigSchema>;
 export type EdgeConfigInput = z.input<typeof EdgeConfigSchema>;

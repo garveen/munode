@@ -1,7 +1,7 @@
 import { build } from 'esbuild';
 
 await build({
-  entryPoints: ['src/index.ts', 'src/cli.ts'],
+  entryPoints: ['src/index.ts', 'src/cli.ts', 'src/voice/crypto-worker.ts'],
   outdir: 'dist',
   format: 'esm',
   target: 'node22',

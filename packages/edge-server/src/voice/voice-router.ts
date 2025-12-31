@@ -7,6 +7,7 @@ import { LRUCache } from 'lru-cache';
 import type { ClientManager } from '../client/client-manager.js';
 import type { ChannelManager } from '../models/channel.js';
 import type { EdgeStateManager } from '../state/state-manager.js';
+import type { CryptoWorkerPool } from './crypto-worker-pool.js';
 
 /**
  * 路由缓存条目
@@ -64,12 +65,14 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
   private logger: Logger;
   private clientCryptos: Map<number, OCB2AES128> = new Map(); // session_id -> OCB2AES128
   private voiceTargets: Map<number, Map<number, VoiceTargetData[]>> = new Map(); // session_id -> (target_id -> config array)
-  private udpServer?: UDPSocket; // UDP 服务器引用，用于发送语音包
-  private clientManager?: ClientManager; // ClientManager 引用，用于获取客户端信息
-  private channelManager?: ChannelManager; // ChannelManager 引用，用于获取频道链接信息
-  private stateManager?: EdgeStateManager; // StateManager 引用，用于获取远程用户信息
+  private udpServer?: UDPSocket; // UDP server reference for sending voice packets
+  private clientManager?: ClientManager; // ClientManager reference for getting client info
+  private channelManager?: ChannelManager; // ChannelManager reference for getting channel link info
+  private stateManager?: EdgeStateManager; // StateManager reference for getting remote user info
+  private cryptoWorkerPool?: CryptoWorkerPool; // Shared Worker Pool for encryption
+  private vhostName?: string; // Virtual host name for Worker Pool composite keys
   
-  // 性能优化：路由缓存（事件驱动，主动重建）
+  // Performance optimization: routing cache (event-driven, active rebuild)
   private routingCache: Map<string, RouteCacheEntry> = new Map(); // cacheKey -> RouteCacheEntry
   
   // 性能优化：使用 LRU 缓存替代 Map，自动淘汰旧条目
@@ -118,33 +121,56 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
   }
 
   /**
-   * 设置 StateManager 引用（用于获取远程用户信息）
+   * Set StateManager reference for getting remote user info
    */
   setStateManager(stateManager: EdgeStateManager): void {
     this.stateManager = stateManager;
   }
 
   /**
-   * 获取客户端的加密器（用于UDP地址匹配）
+   * Set shared CryptoWorkerPool and virtual host name for multi-tenant support
+   * When Worker Pool is set, encryption/decryption will use Worker threads
+   */
+  setCryptoWorkerPool(workerPool: CryptoWorkerPool, vhostName: string): void {
+    this.cryptoWorkerPool = workerPool;
+    this.vhostName = vhostName;
+    this.logger.info(`VoiceRouter using Worker Pool with vhost: ${vhostName}`);
+  }
+
+  /**
+   * Get client crypto for UDP address matching
    */
   getClientCrypto(session_id: number): OCB2AES128 | undefined {
     return this.clientCryptos.get(session_id);
   }
 
   /**
-   * 设置客户端的加密密钥
+   * Set client crypto key
+   * Initializes both local OCB2AES128 instance and Worker Pool session (if available)
    */
-  setClientCrypto(session_id: number, key: Buffer, encryptIV: Buffer, decryptIV: Buffer): void {
+  async setClientCrypto(session_id: number, key: Buffer, encryptIV: Buffer, decryptIV: Buffer): Promise<void> {
     const crypto = new OCB2AES128();
     crypto.setKey(key, encryptIV, decryptIV);
     this.clientCryptos.set(session_id, crypto);
     
-    // 同时更新 ClientInfo 中的 crypt 引用
+    // Update crypt reference in ClientInfo
     if (this.clientManager) {
       const client = this.clientManager.getClient(session_id);
       if (client) {
         client.crypt = crypto;
       }
+    }
+    
+    // Initialize Worker Pool session if available
+    if (this.cryptoWorkerPool && this.vhostName) {
+      const compositeKey = `${this.vhostName}:${session_id}`;
+      await this.cryptoWorkerPool.setKey(
+        compositeKey,
+        key,
+        encryptIV,
+        decryptIV
+      );
+      this.logger.debug(`Initialized Worker Pool session for ${compositeKey}`);
     }
     
     this.logger.debug(
@@ -156,38 +182,79 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
   }
 
   /**
-   * 移除客户端的加密状态
+   * Remove client crypto state
+   * Cleans up both local OCB2AES128 instance and Worker Pool session
    */
-  removeClientCrypto(session_id: number): void {
+  async removeClientCrypto(session_id: number): Promise<void> {
     this.clientCryptos.delete(session_id);
-    // 性能优化：同时清理错误处理器
+    // Performance optimization: also cleanup error handlers
     this.udpErrorHandlers.delete(session_id);
+    
+    // Remove Worker Pool session if available
+    if (this.cryptoWorkerPool && this.vhostName) {
+      const compositeKey = `${this.vhostName}:${session_id}`;
+      await this.cryptoWorkerPool.removeSession(compositeKey);
+      this.logger.debug(`Removed Worker Pool session for ${compositeKey}`);
+    }
+    
     this.logger.debug(`Removed crypto for client ${session_id}`);
   }
 
   /**
-   * 处理 UDP 语音包
-   * @param session_id 客户端会话 ID
-   * @param data 加密的 UDP 数据
-   * @param rinfo UDP 源地址信息
-   * @param alreadyDecrypted 是否已经解密过（用于地址匹配）
+   * Handle UDP voice packet
+   * @param session_id Client session ID
+   * @param data Encrypted UDP data
+   * @param rinfo UDP source address info
+   * @param alreadyDecrypted Whether already decrypted (for address matching)
    */
-  handleUDPPacket(session_id: number, data: Buffer, rinfo: RemoteInfo, alreadyDecrypted: boolean = false): void {
-    this.logger.debug(`[UDP] handleUDPPacket: session=${session_id}, size=${data.length}, alreadyDecrypted=${alreadyDecrypted}`);
+  async handleUDPPacket(session_id: number, data: Buffer, rinfo: RemoteInfo, alreadyDecrypted: boolean = false): Promise<void> {
     this.logger.debug(`[UDP] handleUDPPacket: session=${session_id}, size=${data.length}, alreadyDecrypted=${alreadyDecrypted}`);
     try {
-      let decrypted;
+      let decrypted: Buffer;
 
-      // 如果在地址匹配阶段已经解密过，crypto 的 decryptIV 已经被修改
-      // 不需要再次解密，直接使用数据
+      // If already decrypted during address matching, crypto's decryptIV has been modified
+      // No need to decrypt again, just use the data
       if (alreadyDecrypted) {
         decrypted = data;
       } else {
-        // 正常路径：需要解密
-        // 获取客户端的加密器
-        const crypto = this.clientCryptos.get(session_id);
-        if (crypto) {
-          // 解密UDP包
+        // Normal path: need to decrypt
+        // Try Worker Pool first, fallback to local crypto
+        if (this.cryptoWorkerPool && this.vhostName) {
+          try {
+            const compositeKey = `${this.vhostName}:${session_id}`;
+            const result = await this.cryptoWorkerPool.decrypt(compositeKey, data);
+            if (result.valid) {
+              decrypted = result.plain;
+            } else {
+              this.logger.warn(`Worker Pool decrypt failed for session ${session_id}, falling back to local crypto`);
+              const crypto = this.clientCryptos.get(session_id);
+              if (!crypto) {
+                this.logger.warn(`No crypto for client ${session_id}, cannot process UDP packet`);
+                return;
+              }
+              const cryptoDecrypted = crypto.decrypt(data);
+              if (!cryptoDecrypted.valid) {
+                this.logger.warn(
+                  `Failed to decrypt UDP packet from client ${session_id}: ` +
+                  `packet_size=${data.length}, ` +
+                  `packet_ivbyte=0x${data[0].toString(16)}, ` +
+                  `crypto_ready=${crypto.ready()}`
+                );
+                return;
+              }
+              decrypted = cryptoDecrypted.data;
+            }
+          } catch (error) {
+            this.logger.error(`Worker Pool decrypt error for session ${session_id}:`, error);
+            return;
+          }
+        } else {
+          // Fallback to local crypto
+          const crypto = this.clientCryptos.get(session_id);
+          if (!crypto) {
+            this.logger.warn(`No crypto for client ${session_id}, cannot process UDP packet`);
+            return;
+          }
           const cryptoDecrypted = crypto.decrypt(data);
           if (!cryptoDecrypted.valid) {
             this.logger.warn(
@@ -199,34 +266,31 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
             return;
           }
           decrypted = cryptoDecrypted.data;
-        } else {
-          this.logger.warn(`No crypto for client ${session_id}, cannot process UDP packet`);
-          return;
         }
       }
 
-      // 参考 Go 实现: 成功接收任何 UDP 包（包括 Ping）后，标记 client.udp = true
-      // 这告诉客户端可以使用 UDP 发送语音数据
-      // 注意：现在只在接收 UDP Ping 时才更新 UDP 地址信息
+      // Reference Go implementation: After successfully receiving any UDP packet (including Ping), mark client.udp = true
+      // This tells the client it can use UDP to send voice data
+      // Note: Now only update UDP address info when receiving UDP Ping
       // if (this.clientManager) {
       //   this.clientManager.updateClient(session_id, { udp: true });
       // }
 
-      // 检查是否是UDP Ping包 (type = 1)
+      // Check if it's a UDP Ping packet (type = 1)
       const header = decrypted.readUInt8(0);
       const type = (header >> 5) & 0x07;
       this.logger.debug(`[UDP] Packet type: ${type}, header: 0x${header.toString(16)}`);
       
       if (type === 1) {
-        // UDP Ping packet (type=1) - 回显明文数据（会在 handleUDPPing 中重新加密）
-        // 使用 rinfo 中的地址信息回复,不依赖存储的 client.udp_address
-        this.handleUDPPing(session_id, decrypted, rinfo);
+        // UDP Ping packet (type=1) - echo plaintext data (will be re-encrypted in handleUDPPing)
+        // Reply using address info from rinfo, not relying on stored client.udp_address
+        await this.handleUDPPing(session_id, decrypted, rinfo);
         return;
       }
 
-      // 处理语音包 (type=0,2,3,4)
+      // Process voice packets (type=0,2,3,4)
 
-      // 解析语音包
+      // Parse voice packet
       const packet = this.parseVoicePacket(decrypted);
       if (!packet) {
         return;
@@ -237,7 +301,7 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
         `Voice packet: sender=${session_id}, target=${packet.target}, codec=${packet.codec}`
       );
 
-      // 处理语音包路由
+      // Process voice packet routing
       this.routeVoicePacket(packet);
     } catch (error) {
       this.logger.error('Error handling UDP packet:', error);
@@ -245,21 +309,21 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
   }
 
   /**
-   * 处理 UDP Ping 包 - 回显给客户端
-   * 重要: 
-   * 1. 接收明文数据，重新加密后发送（类似 Go 的 client.SendUDP）
-   * 2. 使用 rinfo 中的地址回复，而不是依赖 client.udp_address
-   * 3. 只在接收 UDP Ping 时才更新客户端的 UDP 地址信息
-   * 这样可以在第一次 UDP Ping 时就建立 UDP 连接
+   * Handle UDP Ping packet - echo back to client
+   * Important: 
+   * 1. Receive plaintext data, re-encrypt before sending (like Go's client.SendUDP)
+   * 2. Reply using address from rinfo, not relying on client.udp_address
+   * 3. Only update client's UDP address info when receiving UDP Ping
+   * This allows UDP connection to be established on first UDP Ping
    */
-  private handleUDPPing(session_id: number, plaintextData: Buffer, rinfo: RemoteInfo): void {
+  private async handleUDPPing(session_id: number, plaintextData: Buffer, rinfo: RemoteInfo): Promise<void> {
     this.logger.debug(`[UDP] Handling ping from session ${session_id}, data size: ${plaintextData.length}`);
     if (!this.udpServer) {
       this.logger.warn('[UDP] No UDP server available for ping response');
       return;
     }
 
-    // 更新客户端的 UDP 地址信息（只在接收 ping 时更新）
+    // Update client's UDP address info (only update when receiving ping)
     if (this.clientManager) {
       this.clientManager.updateClient(session_id, {
         udp_ip: rinfo.address,
@@ -268,18 +332,34 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
       });
     }
 
-    // 获取客户端的加密器
-    const crypto = this.clientCryptos.get(session_id);
-    if (!crypto) {
-      this.logger.warn(`No crypto for session ${session_id}, cannot send UDP ping response`);
-      return;
-    }
-
     try {
-      // 重新加密明文数据
-      const encrypted = crypto.encrypt(plaintextData);
+      let encrypted: Buffer;
 
-      // 使用接收包的源地址回复
+      // Try Worker Pool first, fallback to local crypto
+      if (this.cryptoWorkerPool && this.vhostName) {
+        try {
+          const compositeKey = `${this.vhostName}:${session_id}`;
+          encrypted = await this.cryptoWorkerPool.encrypt(compositeKey, plaintextData);
+        } catch (error) {
+          this.logger.warn(`Worker Pool encrypt failed for session ${session_id}, falling back to local crypto:`, error);
+          const crypto = this.clientCryptos.get(session_id);
+          if (!crypto) {
+            this.logger.warn(`No crypto for session ${session_id}, cannot send UDP ping response`);
+            return;
+          }
+          encrypted = crypto.encrypt(plaintextData);
+        }
+      } else {
+        // Fallback to local crypto
+        const crypto = this.clientCryptos.get(session_id);
+        if (!crypto) {
+          this.logger.warn(`No crypto for session ${session_id}, cannot send UDP ping response`);
+          return;
+        }
+        encrypted = crypto.encrypt(plaintextData);
+      }
+
+      // Reply using source address from received packet
       const address = rinfo.address;
       const port = rinfo.port;
       
@@ -296,42 +376,72 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
   }
 
   /**
-   * 处理 TCP 语音隧道消息
+   * Handle TCP voice tunnel message
    */
-  handleVoiceTunnel(session_id: number, data: Buffer): void {
+  async handleVoiceTunnel(session_id: number, data: Buffer): Promise<void> {
     try {
       this.logger.debug(`[TCP-VOICE] Received voice tunnel from session ${session_id}, data length: ${data.length}`);
       
-      // 注意：根据 Mumble 协议，UDPTunnel 消息的 data 直接就是语音包数据
-      // 不像其他消息类型需要 protobuf 反序列化
-      // 这是一个性能优化，避免对高频语音数据进行不必要的 protobuf 包装
+      // Note: According to Mumble protocol, UDPTunnel message data is directly the voice packet data
+      // Unlike other message types that need protobuf deserialization
+      // This is a performance optimization to avoid unnecessary protobuf wrapping for high-frequency voice data
       
       if (data.length === 0) {
         this.logger.warn(`Empty voice packet from session ${session_id}`);
         return;
       }
       
-      // 关键修复：TCP隧道中的语音包也是加密的，需要先解密
-      // 参考 C 实现：mumble/ServerHandler.cpp 和 murmur/Server.cpp
-      // 参考 Go 实现：client.go handleUDPPacket
-      const crypto = this.clientCryptos.get(session_id);
-      if (!crypto) {
-        this.logger.warn(`[TCP-VOICE] No crypto for client ${session_id}, cannot process TCP voice tunnel`);
-        return;
-      }
+      // Critical fix: Voice packets in TCP tunnel are also encrypted, need to decrypt first
+      // Reference C implementation: mumble/ServerHandler.cpp and murmur/Server.cpp
+      // Reference Go implementation: client.go handleUDPPacket
 
       this.logger.debug(`[TCP-VOICE] Decrypting voice packet from session ${session_id}`);
-      // 解密语音包
-      const decrypted = crypto.decrypt(data);
-      if (!decrypted.valid) {
-        this.logger.warn(`[TCP-VOICE] Failed to decrypt TCP voice tunnel from session ${session_id}`);
-        return;
+      
+      let voicePacketData: Buffer;
+
+      // Try Worker Pool first, fallback to local crypto
+      if (this.cryptoWorkerPool && this.vhostName) {
+        try {
+          const compositeKey = `${this.vhostName}:${session_id}`;
+          const result = await this.cryptoWorkerPool.decrypt(compositeKey, data);
+          if (result.valid) {
+            voicePacketData = result.plain;
+          } else {
+            this.logger.warn(`Worker Pool decrypt failed for TCP tunnel session ${session_id}, falling back to local crypto`);
+            const crypto = this.clientCryptos.get(session_id);
+            if (!crypto) {
+              this.logger.warn(`[TCP-VOICE] No crypto for client ${session_id}, cannot process TCP voice tunnel`);
+              return;
+            }
+            const decrypted = crypto.decrypt(data);
+            if (!decrypted.valid) {
+              this.logger.warn(`[TCP-VOICE] Failed to decrypt TCP voice tunnel from session ${session_id}`);
+              return;
+            }
+            voicePacketData = decrypted.data;
+          }
+        } catch (error) {
+          this.logger.error(`Worker Pool decrypt error for TCP tunnel session ${session_id}:`, error);
+          return;
+        }
+      } else {
+        // Fallback to local crypto
+        const crypto = this.clientCryptos.get(session_id);
+        if (!crypto) {
+          this.logger.warn(`[TCP-VOICE] No crypto for client ${session_id}, cannot process TCP voice tunnel`);
+          return;
+        }
+        const decrypted = crypto.decrypt(data);
+        if (!decrypted.valid) {
+          this.logger.warn(`[TCP-VOICE] Failed to decrypt TCP voice tunnel from session ${session_id}`);
+          return;
+        }
+        voicePacketData = decrypted.data;
       }
 
-      const voicePacketData = decrypted.data;
       this.logger.debug(`[TCP-VOICE] Voice packet decrypted: ${data.length} -> ${voicePacketData.length} bytes`);
       
-      // 解析语音包
+      // Parse voice packet
       const packet = this.parseVoicePacket(voicePacketData);
       if (!packet) {
         this.logger.warn(`Failed to parse voice packet from session ${session_id}`);
@@ -343,7 +453,7 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
         `[TCP-VOICE] Voice tunnel: sender=${session_id}, target=${packet.target}, codec=${packet.codec}, packet_size=${voicePacketData.length}`
       );
 
-      // 处理语音包路由
+      // Process voice packet routing
       this.routeVoicePacket(packet);
     } catch (error) {
       this.logger.error('[TCP-VOICE] Error handling voice tunnel:', error);
@@ -1459,48 +1569,58 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
   }
 
   /**
-   * 通过UDP发送语音包到客户端
-   * 性能优化：复用错误处理器，避免为每个包创建新的回调函数
+   * Send voice packet to client via UDP
+   * Performance optimization: reuse error handlers, avoid creating new callback for each packet
    */
-  private sendVoicePacketViaUDP(client: ClientInfo, voiceData: Buffer): void {
+  private async sendVoicePacketViaUDP(client: ClientInfo, voiceData: Buffer): Promise<void> {
     if (!this.udpServer) {
       this.logger.warn('UDP server not set, cannot send voice packet via UDP');
       return;
     }
 
-    // 获取客户端的加密器
-    const crypto = this.clientCryptos.get(client.session);
-    if (!crypto) {
-      this.logger.warn(`No crypto for client ${client.session}, voice packet not sent`);
-      return;
-    }
-
-    // 加密语音数据
-    let encrypted: Buffer;
     try {
-      encrypted = crypto.encrypt(voiceData);
-    } catch (error) {
-      this.logger.error(`Failed to encrypt voice packet for client ${client.session}:`, error);
-      return;
-    }
+      let encrypted: Buffer;
 
-    // 性能优化：复用每个客户端的错误处理器，避免每次发送都创建新函数
-    let errorHandler = this.udpErrorHandlers.get(client.session);
-    if (!errorHandler) {
-      errorHandler = (err?: Error) => {
-        if (err) {
-          this.logger.error(`Failed to send voice packet via UDP to session ${client.session}:`, err);
-          // UDP发送失败，标记客户端UDP为不可用
-          if (this.clientManager) {
-            this.clientManager.updateClient(client.session, { udp: false });
+      // Try Worker Pool first, fallback to local crypto
+      if (this.cryptoWorkerPool && this.vhostName) {
+        try {
+          const compositeKey = `${this.vhostName}:${client.session}`;
+          encrypted = await this.cryptoWorkerPool.encrypt(compositeKey, voiceData);
+        } catch (error) {
+          this.logger.warn(`Worker Pool encrypt failed for session ${client.session}, falling back to local crypto:`, error);
+          const crypto = this.clientCryptos.get(client.session);
+          if (!crypto) {
+            this.logger.warn(`No crypto for client ${client.session}, voice packet not sent`);
+            return;
           }
+          encrypted = crypto.encrypt(voiceData);
         }
-      };
-      this.udpErrorHandlers.set(client.session, errorHandler);
-    }
+      } else {
+        // Fallback to local crypto
+        const crypto = this.clientCryptos.get(client.session);
+        if (!crypto) {
+          this.logger.warn(`No crypto for client ${client.session}, voice packet not sent`);
+          return;
+        }
+        encrypted = crypto.encrypt(voiceData);
+      }
 
-    // 发送UDP包
-    try {
+      // Performance optimization: reuse error handler for each client, avoid creating new function every send
+      let errorHandler = this.udpErrorHandlers.get(client.session);
+      if (!errorHandler) {
+        errorHandler = (err?: Error) => {
+          if (err) {
+            this.logger.error(`Failed to send voice packet via UDP to session ${client.session}:`, err);
+            // UDP send failed, mark client UDP as unavailable
+            if (this.clientManager) {
+              this.clientManager.updateClient(client.session, { udp: false });
+            }
+          }
+        };
+        this.udpErrorHandlers.set(client.session, errorHandler);
+      }
+
+      // Send UDP packet
       this.udpServer.send(encrypted, client.udp_port, client.udp_ip, errorHandler);
     } catch (error) {
       this.logger.error(`Error sending voice packet via UDP to ${client.username} (${client.session}):`, error);
@@ -1508,34 +1628,52 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
   }
 
   /**
-   * 通过TCP隧道发送语音包到客户端
+   * Send voice packet to client via TCP tunnel
    */
-  private sendVoicePacketViaTCP(client: ClientInfo, voiceData: Buffer): void {
-    // 语音数据不需要加密，因为TCP连接本身是TLS加密的
-    // 但我们仍需要对payload进行OCB2加密以保持协议一致性
-    const crypto = this.clientCryptos.get(client.session);
-    if (!crypto) {
-      this.logger.warn(`No crypto for client ${client.session}, voice packet not sent via TCP`);
-      return;
-    }
+  private async sendVoicePacketViaTCP(client: ClientInfo, voiceData: Buffer): Promise<void> {
+    // Voice data doesn't need encryption because TCP connection is TLS-encrypted
+    // But we still need to encrypt payload with OCB2 to maintain protocol consistency
 
     this.logger.debug(`[TCP-VOICE] Sending voice via TCP to ${client.username} (${client.session}), voice data size: ${voiceData.length}`);
 
-    // 加密语音数据
-    let encrypted: Buffer;
     try {
-      encrypted = crypto.encrypt(voiceData);
-      this.logger.debug(`[TCP-VOICE] Encrypted voice data size: ${encrypted.length}`);
+      let encrypted: Buffer;
+
+      // Try Worker Pool first, fallback to local crypto
+      if (this.cryptoWorkerPool && this.vhostName) {
+        try {
+          const compositeKey = `${this.vhostName}:${client.session}`;
+          encrypted = await this.cryptoWorkerPool.encrypt(compositeKey, voiceData);
+          this.logger.debug(`[TCP-VOICE] Encrypted voice data size: ${encrypted.length}`);
+        } catch (error) {
+          this.logger.warn(`Worker Pool encrypt failed for TCP session ${client.session}, falling back to local crypto:`, error);
+          const crypto = this.clientCryptos.get(client.session);
+          if (!crypto) {
+            this.logger.warn(`No crypto for client ${client.session}, voice packet not sent via TCP`);
+            return;
+          }
+          encrypted = crypto.encrypt(voiceData);
+          this.logger.debug(`[TCP-VOICE] Encrypted voice data size: ${encrypted.length}`);
+        }
+      } else {
+        // Fallback to local crypto
+        const crypto = this.clientCryptos.get(client.session);
+        if (!crypto) {
+          this.logger.warn(`No crypto for client ${client.session}, voice packet not sent via TCP`);
+          return;
+        }
+        encrypted = crypto.encrypt(voiceData);
+        this.logger.debug(`[TCP-VOICE] Encrypted voice data size: ${encrypted.length}`);
+      }
+
+      // Wrap encrypted voice data in UDPTunnel protobuf message
+      // So client can parse it correctly when receiving
+      this.logger.debug(`[TCP-VOICE] Emitting sendTCPVoicePacket event for ${client.username} (${client.session}), encrypted size: ${encrypted.length}`);
+      this.emit('sendTCPVoicePacket', client.session, encrypted);
+      this.logger.debug(`[TCP-VOICE] Event emitted successfully`);
     } catch (error) {
       this.logger.error(`Failed to encrypt voice packet for client ${client.session}:`, error);
-      return;
     }
-
-    // 将加密的语音数据包装到UDPTunnel protobuf消息中
-    // 这样客户端接收时可以正确解析
-    this.logger.debug(`[TCP-VOICE] Emitting sendTCPVoicePacket event for ${client.username} (${client.session}), encrypted size: ${encrypted.length}`);
-    this.emit('sendTCPVoicePacket', client.session, encrypted);
-    this.logger.debug(`[TCP-VOICE] Event emitted successfully`);
   }
   
   // ===== 缓存管理方法（事件驱动，主动重建） =====

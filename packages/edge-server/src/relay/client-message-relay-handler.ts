@@ -227,7 +227,7 @@ export class ClientMessageRelayHandler extends TypedEventEmitter<ClientMessageRe
     message: unknown,
     direction: hubedge.RelayDirection
   ): hubedge.ClientMessageRelay {
-    const relayData: any = {
+    const relayData: hubedge.ClientMessageRelay = {
       session_id: sessionId,
       edge_id: this.edgeId,
       direction: direction,

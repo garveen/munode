@@ -1,5 +1,6 @@
 import { Server as TCPServer } from 'net';
 import { createSocket, type Socket as UDPSocket } from 'dgram';
+import * as tls from 'tls';
 import { TLSSocket, createServer as createTLSServer, type Server as TLSServer } from 'tls';
 import type { Logger } from 'winston';
 import { EdgeConfig } from '../types.js';
@@ -7,6 +8,15 @@ import { EdgeClusterManager } from '../cluster/cluster-manager.js';
 import { VoiceUDPTransport } from '@munode/protocol';
 import { HandlerFactory } from './handler-factory.js';
 import { VoiceManager } from '../managers/voice-manager.js';
+import type { VirtualHostManager } from '../virtual-host/virtual-host-manager.js';
+import { SecureContextManager } from '../virtual-host/secure-context-manager.js';
+
+/**
+ * Extended TLSSocket with SNI servername
+ */
+interface TLSSocketWithSNI extends TLSSocket {
+  sniServername?: string;
+}
 
 /**
  * 服务器生命周期管理器
@@ -22,6 +32,11 @@ export class ServerLifecycleManager {
   private clusterManager?: EdgeClusterManager;
   private handlerFactory: HandlerFactory;
   private voiceManager?: VoiceManager;
+  // 多租户支持
+  private virtualHostManager?: VirtualHostManager;
+  private secureContextManager?: SecureContextManager;
+  // Store servername for TLS connections
+  private currentServername?: string;
 
   constructor(
     config: EdgeConfig,
@@ -29,7 +44,8 @@ export class ServerLifecycleManager {
     logger: Logger,
     clusterManager: EdgeClusterManager,
     voiceTransport: VoiceUDPTransport,
-    voiceManager?: VoiceManager
+    voiceManager?: VoiceManager,
+    virtualHostManager?: VirtualHostManager
   ) {
     this.config = config;
     this.handlerFactory = handlerFactory;
@@ -37,6 +53,12 @@ export class ServerLifecycleManager {
     this.clusterManager = clusterManager;
     this.voiceTransport = voiceTransport;
     this.voiceManager = voiceManager;
+    this.virtualHostManager = virtualHostManager;
+    
+    // 如果启用多租户，初始化 SecureContextManager
+    if (virtualHostManager) {
+      this.secureContextManager = new SecureContextManager(logger);
+    }
   }
 
   /**
@@ -210,6 +232,20 @@ export class ServerLifecycleManager {
       return;
     }
 
+    // 多租户模式：使用 SNI 回调
+    if (this.virtualHostManager && this.secureContextManager) {
+      await this.startMultiTenantTLSServer();
+      return;
+    }
+
+    // 单租户模式：使用默认证书
+    await this.startSingleTenantTLSServer();
+  }
+
+  /**
+   * 启动单租户 TLS 服务器（向后兼容）
+   */
+  private async startSingleTenantTLSServer(): Promise<void> {
     // 读取证书文件内容
     const fs = await import('fs/promises');
     const certData = await fs.readFile(this.config.tls.cert, 'utf8');
@@ -249,6 +285,85 @@ export class ServerLifecycleManager {
         this.logger.info(
           `TLS Server listening on ${this.config.network.host}:${this.config.network.port}`
         );
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * 启动多租户 TLS 服务器（支持 SNI）
+   */
+  private async startMultiTenantTLSServer(): Promise<void> {
+    if (!this.virtualHostManager || !this.secureContextManager) {
+      throw new Error('VirtualHostManager or SecureContextManager not initialized');
+    }
+
+    // 为所有虚拟主机加载证书
+    const hostNames = this.virtualHostManager.getHostNames();
+    for (const hostName of hostNames) {
+      const host = this.virtualHostManager.getHost(hostName);
+      await this.secureContextManager.createContext(host.config);
+    }
+
+    const defaultHost = this.virtualHostManager.getDefaultHost();
+    const fs = await import('fs/promises');
+    const defaultCertData = await fs.readFile(defaultHost.config.tls.cert, 'utf8');
+    const defaultKeyData = await fs.readFile(defaultHost.config.tls.key, 'utf8');
+    const defaultCaData = defaultHost.config.tls.ca 
+      ? await fs.readFile(defaultHost.config.tls.ca, 'utf8') 
+      : undefined;
+
+    return new Promise((resolve, reject) => {
+      const tlsOptions = {
+        cert: defaultCertData,
+        key: defaultKeyData,
+        ca: defaultCaData,
+        requestCert: true,
+        rejectUnauthorized: false,
+        // SNI 回调
+        SNICallback: (servername: string, callback: (err: Error | null, ctx?: tls.SecureContext) => void) => {
+          this.logger.debug(`SNI callback triggered for: ${servername}`);
+          
+          // Store servername for the next connection
+          this.currentServername = servername;
+          
+          const context = this.secureContextManager!.getContext(servername);
+          if (context) {
+            callback(null, context);
+          } else {
+            // 使用默认证书
+            this.logger.warn(`No certificate found for ${servername}, using default`);
+            callback(null);
+          }
+        },
+      };
+
+      this.tlsServer = createTLSServer(tlsOptions);
+
+      this.tlsServer.on('secureConnection', (socket: TLSSocketWithSNI) => {
+        // Get servername from SNI callback
+        const servername = this.currentServername;
+        this.logger.debug(`TLS connection from ${socket.remoteAddress}, SNI: ${servername || '(none)'}`);
+        
+        // Store servername in socket for handler access
+        socket.sniServername = servername;
+        
+        // Clear current servername
+        this.currentServername = undefined;
+        
+        void this.handlerFactory.connectionHandlers.handleTLSConnection(socket);
+      });
+
+      this.tlsServer.on('error', (error: Error) => {
+        this.logger.error('TLS Server error:', error);
+        reject(error);
+      });
+
+      this.tlsServer.listen(this.config.network.port, this.config.network.host, () => {
+        this.logger.info(
+          `Multi-tenant TLS Server listening on ${this.config.network.host}:${this.config.network.port}`
+        );
+        this.logger.info(`Loaded ${hostNames.length} virtual hosts: ${hostNames.join(', ')}`);
         resolve();
       });
     });

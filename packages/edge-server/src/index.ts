@@ -22,10 +22,13 @@ export type {
   CachedUser,
   UDPConnection,
   UDPStats,
+  VirtualHostConfig,
+  VirtualHostContext,
 } from './types.js';
 
 // 配置管理
 export { loadEdgeConfig, validateConfig } from './config.js';
+export { validateAndParseEdgeConfig } from './config-schema.js';
 
 // 核心组件
 export { ClientManager } from './client/client-manager.js';
@@ -40,3 +43,19 @@ export { GeoIPManager } from './util/geoip-manager.js';
 export { PacketConnPool } from './network/packet-pool.js';
 export { UDPMonitor } from './network/udp-monitor.js';
 export { ClientMessageRelayHandler } from './relay/client-message-relay-handler.js';
+
+// 多租户组件
+export { VirtualHostManager } from './virtual-host/virtual-host-manager.js';
+export { SecureContextManager } from './virtual-host/secure-context-manager.js';
+export { CryptoKeyRegistry, type CryptoKeyEntry } from './virtual-host/crypto-key-registry.js';
+export { makeCompositeKey, parseCompositeKey, isValidCompositeKey, makeCompositeKeyFromContext } from './virtual-host/composite-key.js';
+export { MultiTenantVoiceRouterSupport } from './voice/multi-tenant-voice-router.js';
+
+// Worker Thread 组件
+export { CryptoWorkerPool } from './voice/crypto-worker-pool.js';
+export type {
+  WorkerMessage,
+  WorkerResponse,
+  WorkerStats,
+  CryptoWorkerPoolConfig,
+} from './voice/crypto-worker-types.js';
