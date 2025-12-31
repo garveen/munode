@@ -70,10 +70,10 @@ export class AuthenticationHandler implements IAuthenticationHandler {
           success: authResult.success,
           user_id: authResult.user_id,
           username: authResult.username,
-          display_name: authResult.displayName,
+          display_name: authResult.display_name,
           groups: authResult.groups || [],
           reason: authResult.reason,
-          reject_type: authResult.rejectType,
+          reject_type: authResult.reject_type,
         };
       }
 
@@ -210,7 +210,7 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         session_id: params.session_id,
         edge_id: params.server_id,
         user_id: authResult.user_id || 0,
-        username: authResult.displayName || authResult.username || params.username,
+        username: authResult.display_name || authResult.username || params.username,
         ip_address: params.client_info.ip_address,
         cert_hash: params.client_info.certificate_hash || '',
         is_authenticated: true,
@@ -246,10 +246,10 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         success: authResult.success,
         user_id: authResult.user_id,
         username: authResult.username,
-        display_name: authResult.displayName,
+        display_name: authResult.display_name,
         groups: authResult.groups || [],
         reason: authResult.reason,
-        reject_type: authResult.rejectType,
+        reject_type: authResult.reject_type,
         channel_id: actualChannelId,
         // Initial state flags from session
         mute: session.mute,
