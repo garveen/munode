@@ -371,7 +371,7 @@ export class ClientManager extends TypedEventEmitter<ClientManagerEvents> {
     });
 
     // 设置超时
-    socket.setTimeout(300000); // 5 minutes
+    socket.setTimeout(20000); // 20 seconds
   }
 
   /**

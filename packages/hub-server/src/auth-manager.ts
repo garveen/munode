@@ -4,7 +4,7 @@
  */
 
 import type { Logger } from '@munode/common';
-import type { HubConfig, ExternalAuthRequest } from './types.js';
+import type { HubConfig, ExternalAuthRequest, ExternalAuthResult } from './types.js';
 import type { HubAuthConfig } from './config-schema.js';
 import { isAuthConfigWithCallback, isAuthConfigWithApi } from './config-schema.js';
 
@@ -12,21 +12,8 @@ import { isAuthConfigWithCallback, isAuthConfigWithApi } from './config-schema.j
  * 认证缓存项
  */
 interface AuthCacheItem {
-  result: AuthResult;
+  result: ExternalAuthResult;
   timestamp: number;
-}
-
-/**
- * 认证结果
- */
-export interface AuthResult {
-  success: boolean;
-  user_id?: number;
-  username?: string;
-  displayName?: string;
-  groups?: string[];
-  reason?: string;
-  rejectType?: number;
 }
 
 /**
@@ -84,7 +71,7 @@ export class HubAuthManager {
   /**
    * 认证用户
    */
-  async authenticate(request: AuthRequest): Promise<AuthResult> {
+  async authenticate(request: AuthRequest): Promise<ExternalAuthResult> {
     try {
       this.logger.info(`Authenticating user: username=${request.username}, server_id=${request.server_id}`);
 
@@ -132,7 +119,7 @@ export class HubAuthManager {
   /**
    * 调用外部认证 API 或回调
    */
-  private async authenticateWithAPI(request: AuthRequest): Promise<AuthResult> {
+  private async authenticateWithAPI(request: AuthRequest): Promise<ExternalAuthResult> {
     // 方式1: 如果配置了回调函数，优先使用回调
     if (isAuthConfigWithCallback(this.config)) {
       try {
@@ -259,7 +246,7 @@ export class HubAuthManager {
           return {
             success: false,
             reason: errorData?.message || errorData?.reason || 'Invalid username or password',
-            rejectType: 2, // mumbleproto.Reject.RejectType.WrongUserPW
+            reject_type: 2, // mumbleproto.Reject.RejectType.WrongUserPW
           };
         }
 
@@ -284,14 +271,14 @@ export class HubAuthManager {
       const isSuccess = result[successField] === successValue;
 
       // 规范化返回格式
-      const normalized: AuthResult = {
+      const normalized: ExternalAuthResult = {
         success: isSuccess,
         user_id: result[userIdField] || 0,
         username: result[usernameField] || request.username,
-        displayName: result[displayNameField] || result[usernameField] || request.username,
+        display_name: result[displayNameField] || result[usernameField] || request.username,
         groups: result[groupsField] || ['user'],
         reason: (result as { message?: string })[reasonField] || (result as { message?: string }).message,
-        rejectType: isSuccess
+        reject_type: isSuccess
           ? undefined
           : (typeof (result as { message?: string }).message === 'string' && (result as { message?: string }).message?.includes('Invalid password'))
             ? 2 // mumbleproto.Reject.RejectType.WrongUserPW
@@ -324,7 +311,7 @@ export class HubAuthManager {
   /**
    * 本地认证（备用方案）
    */
-  private authenticateLocally(username: string, password: string): AuthResult {
+  private authenticateLocally(username: string, password: string): ExternalAuthResult {
     // 简单的本地认证逻辑
     if (username && password) {
       return {
@@ -332,7 +319,7 @@ export class HubAuthManager {
         user_id: this.generateUserId(username),
         username,
         groups: ['user'],
-        displayName: username,
+        display_name: username,
       };
     }
 

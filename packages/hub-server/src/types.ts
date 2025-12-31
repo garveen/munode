@@ -44,18 +44,9 @@ export interface ExternalAuthRequest {
   certificate_hash?: string;
 }
 
-/**
- * 外部认证响应结果
- */
-export interface ExternalAuthResult {
-  success: boolean;
-  user_id?: number;
-  username?: string;
-  displayName?: string;
-  groups?: string[];
-  reason?: string;
-  rejectType?: number;
-}
+// 从 config-schema 导出认证结果类型（保持 snake_case 配置风格）
+import type { ExternalAuthResult } from './config-schema.js';
+export { ExternalAuthResult };
 
 /**
  * 外部认证回调函数

@@ -78,11 +78,14 @@ const AuthCallbackOutputSchema = z.object({
   success: z.boolean(),
   user_id: z.number().optional(),
   username: z.string().optional(),
-  displayName: z.string().optional(),
+  display_name: z.string().optional(),
   groups: z.array(z.string()).optional(),
   reason: z.string().optional(),
-  rejectType: z.number().optional(),
+  reject_type: z.number().optional(),
 });
+
+// 从 schema 导出认证结果类型
+export type ExternalAuthResult = z.infer<typeof AuthCallbackOutputSchema>;
 
 // 方案1: 使用 callback 函数
 const HubAuthConfigWithCallbackSchema = z.object({
