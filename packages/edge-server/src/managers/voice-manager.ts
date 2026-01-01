@@ -318,6 +318,17 @@ export class VoiceManager {
       }
     });
     
+    // 监听Edge间心跳测量到的RTT，用于网络质量统计
+    this.voiceTransport.on('quality-measured', (edgeId: number, rtt: number) => {
+      if (this.voiceRoutingManager.isEnabled()) {
+        // 使用心跳测量的RTT作为网络质量样本
+        // sequence使用当前时间戳的低位作为伪序列号
+        const sequence = Date.now() % 65536;
+        this.voiceRoutingManager.recordReceivedPacket(edgeId, sequence, Date.now() - rtt);
+        this.logger.debug(`Recorded quality from heartbeat: Edge ${edgeId}, RTT ${rtt}ms`);
+      }
+    });
+    
     // 监听Edge断开连接事件
     this.voiceTransport.on('edge-disconnected', (edgeId: number) => {
       this.logger.warn(`Edge ${edgeId} disconnected (heartbeat timeout)`);

@@ -52,6 +52,15 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
   private isRunning = false;
   private startTime: Date;
   private stats: ServerStats;
+  
+  // 带宽统计计数器
+  private bandwidthIn = 0;
+  private bandwidthOut = 0;
+  private lastStatsReset = Date.now();
+  
+  // CPU统计
+  private lastCpuUsage = process.cpuUsage();
+  private lastCpuCheck = Date.now();
 
   // 便捷访问器 - 从 HandlerFactory 获取组件
   private get clientManager() { return this.handlerFactory.clientManager; }
@@ -242,10 +251,45 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
     this.stats.memory_usage = memUsage.heapUsed / memUsage.heapTotal;
     this.stats.user_count = this.clientManager.getClientCount();
     this.stats.channel_count = this.channelManager.getChannelCount();
+    
+    // 计算CPU使用率（百分比）
+    const now = Date.now();
+    const currentCpuUsage = process.cpuUsage(this.lastCpuUsage);
+    const elapsedMs = now - this.lastCpuCheck;
+    if (elapsedMs > 0) {
+      // cpuUsage返回微秒，转换为CPU使用率百分比
+      const totalCpuTimeUs = currentCpuUsage.user + currentCpuUsage.system;
+      this.stats.cpu_usage = totalCpuTimeUs / (elapsedMs * 1000); // 转换为百分比(0-1)
+      this.lastCpuUsage = process.cpuUsage();
+      this.lastCpuCheck = now;
+    }
+    
+    // 计算带宽（bytes/s）
+    const elapsedSeconds = (now - this.lastStatsReset) / 1000;
+    if (elapsedSeconds > 0) {
+      this.stats.bandwidth.in = Math.round(this.bandwidthIn / elapsedSeconds);
+      this.stats.bandwidth.out = Math.round(this.bandwidthOut / elapsedSeconds);
+    }
 
     return { ...this.stats };
   }
 
+  /**
+   * 更新带宽统计
+   */
+  updateBandwidthStats(bytesIn: number, bytesOut: number): void {
+    this.bandwidthIn += bytesIn;
+    this.bandwidthOut += bytesOut;
+    
+    // 每60秒重置一次计数器，避免累积过大
+    const now = Date.now();
+    if (now - this.lastStatsReset > 60000) {
+      this.bandwidthIn = 0;
+      this.bandwidthOut = 0;
+      this.lastStatsReset = now;
+    }
+  }
+  
   /**
    * 获取客户端信息
    */
@@ -266,10 +310,27 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
   private setupEventHandlers(): void {
     this.eventSetupManager.setupEventHandlers();
     
+    // 监听客户端数据，统计入站带宽
+    this.clientManager.on('clientData', (_session_id: number, data: Buffer) => {
+      this.updateBandwidthStats(data.length, 0);
+    });
+    
+    // 监听消息发送，统计出站带宽
+    this.handlerFactory.messageHandler.on('sendMessage', (_session_id: number, _messageType: number, messageData: Buffer) => {
+      // 消息头部6字节（类型2字节+长度4字节）+ 消息体
+      this.updateBandwidthStats(0, 6 + messageData.length);
+    });
+    
     // 监听 Hub 拒绝重连事件（会话过期）
     if (this.hubClient) {
       this.hubClient.on('session-expired', () => {
         void this.handleSessionExpired();
+      });
+      
+      // 监听 getStats 事件，响应心跳请求
+      this.hubClient.on('getStats', (callback: (stats: ServerStats) => void) => {
+        const stats = this.getStats();
+        callback(stats);
       });
     }
     

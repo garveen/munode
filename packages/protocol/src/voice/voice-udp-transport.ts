@@ -80,6 +80,7 @@ export interface EdgeConnectionStatus {
   localNonce?: Buffer; // Local nonce for handshake
   remoteNonce?: Buffer; // Remote nonce received during handshake
   heartbeatSequence: number; // Heartbeat sequence number
+  heartbeatSentTime: Map<number, number>; // sequence -> timestamp for RTT calculation
 }
 
 /**
@@ -93,6 +94,7 @@ export interface VoiceUDPTransportEvents extends EventMap {
   'edge-disconnected': [edgeId: number];
   'reconnect-failed': [edgeId: number];
   'voice-packet': [packet: VoicePacket, rinfo: dgram.RemoteInfo];
+  'quality-measured': [edgeId: number, rtt: number];
 }
 
 export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents> {
@@ -228,6 +230,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       reconnectAttempts: 0,
       isActiveSide,
       heartbeatSequence: 0,
+      heartbeatSentTime: new Map(),
     });
     
     this.logger.info(
@@ -547,6 +550,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
           reconnectAttempts: 0,
           isActiveSide,
           heartbeatSequence: 0,
+          heartbeatSentTime: new Map(),
         });
       }
       
@@ -735,6 +739,24 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       const pong = packet.heartbeat_pong;
       this.logger.debug(`Received heartbeat PONG from edge ${edgeId}, sequence: ${pong.sequence}`);
       this.stats.heartbeatsReceived++;
+      
+      // 计算RTT
+      const sentTime = status.heartbeatSentTime.get(pong.sequence);
+      if (sentTime) {
+        const rtt = now - sentTime;
+        this.logger.debug(`Edge ${edgeId} RTT: ${rtt}ms`);
+        // 触发质量测量事件
+        this.emit('quality-measured', edgeId, rtt);
+        // 清理已使用的时间戳
+        status.heartbeatSentTime.delete(pong.sequence);
+        
+        // 清理过期的时间戳（超过30秒）
+        for (const [seq, time] of status.heartbeatSentTime) {
+          if (now - time > 30000) {
+            status.heartbeatSentTime.delete(seq);
+          }
+        }
+      }
     }
   }
   
@@ -778,6 +800,8 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
           const ping = this.createHeartbeatPing(this.localEdgeId, status.heartbeatSequence);
           this.sendPacket(ping, endpoint.host, endpoint.port);
           status.lastHeartbeatSent = now;
+          // 记录发送时间用于RTT计算
+          status.heartbeatSentTime.set(status.heartbeatSequence, now);
           this.stats.heartbeatsSent++;
           this.logger.debug(`Sent heartbeat PING to edge ${edgeId} (active side), sequence: ${status.heartbeatSequence}`);
         }
