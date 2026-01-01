@@ -1,6 +1,8 @@
 // Hub-Edge communication types
 // These types define the message structures for communication between Hub and Edge servers
 
+import type { EdgeServerStats } from './generated/proto/HubEdgeRPC.js';
+
 // Base RPC response interface
 export interface RPCResponse {
   success: boolean;
@@ -105,7 +107,7 @@ export interface EdgeInfo {
 // Heartbeat request/response types
 export interface HeartbeatRequest {
   server_id: number;
-  stats: ServerStats;
+  stats: EdgeServerStats;
 }
 
 export interface HeartbeatResponse extends RPCResponse {

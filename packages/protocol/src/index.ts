@@ -69,6 +69,7 @@ export type {
   TypedRPCRequest,
   TypedRPCResponse,
   TypedRPCNotification,
+  EdgeServerStats,
 } from './generated/proto/HubEdgeRPC.js';
 
 export {

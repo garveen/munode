@@ -340,6 +340,14 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
     try {
       const stats = await this.getServerStats();
 
+      this.logger?.debug('Sending heartbeat with stats:', {
+        user_count: stats.user_count,
+        channel_count: stats.channel_count,
+        cpu_usage: stats.cpu_usage,
+        memory_usage: stats.memory_usage,
+        bandwidth: stats.bandwidth,
+      });
+
       const request = hubedgeRpc.TypedRPCRequest.encode({
         request_id: '',
         method: 'edge.heartbeat',

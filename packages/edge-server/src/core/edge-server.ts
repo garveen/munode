@@ -330,6 +330,16 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
       // 监听 getStats 事件，响应心跳请求
       this.hubClient.on('getStats', (callback: (stats: ServerStats) => void) => {
         const stats = this.getStats();
+        this.logger.debug('Heartbeat getStats called, stats:', {
+          user_count: stats.user_count,
+          channel_count: stats.channel_count,
+          cpu_usage: stats.cpu_usage,
+          memory_usage: stats.memory_usage,
+          bandwidth: stats.bandwidth,
+          bandwidthIn: this.bandwidthIn,
+          bandwidthOut: this.bandwidthOut,
+          lastStatsReset: this.lastStatsReset,
+        });
         callback(stats);
       });
     }

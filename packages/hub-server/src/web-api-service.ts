@@ -327,8 +327,8 @@ export class WebApiService {
         isOnline: now - edge.last_seen < onlineThreshold,
         stats: edge.stats ? {
           connectedClients: edge.stats.user_count || 0,
-          bytesIn: edge.stats.bandwidth?.in || 0,
-          bytesOut: edge.stats.bandwidth?.out || 0,
+          bytesIn: edge.stats.bandwidth_in || 0,
+          bytesOut: edge.stats.bandwidth_out || 0,
           packetsIn: 0, // 不在 ServerStats 中
           packetsOut: 0, // 不在 ServerStats 中
         } : undefined,
@@ -403,8 +403,8 @@ export class WebApiService {
       isOnline: now - edge.last_seen < onlineThreshold,
       stats: edge.stats ? {
         connectedClients: edge.stats.user_count || 0,
-        bytesIn: edge.stats.bandwidth?.in || 0,
-        bytesOut: edge.stats.bandwidth?.out || 0,
+        bytesIn: edge.stats.bandwidth_in || 0,
+        bytesOut: edge.stats.bandwidth_out || 0,
         packetsIn: 0,
         packetsOut: 0,
       } : undefined,

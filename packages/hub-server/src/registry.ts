@@ -192,8 +192,9 @@ export class ServiceRegistry {
         user_count: 0,
         channel_count: 0,
         cpu_usage: 0,
-        memory_usage: 0,
-        bandwidth: { in: 0, out: 0 },
+        memory_usage_mb: 0,
+        bandwidth_in: 0,
+        bandwidth_out: 0,
       },
       connectionState: EdgeConnectionState.CONNECTED,
     };
@@ -238,6 +239,15 @@ export class ServiceRegistry {
     if (!edge) {
       return { success: false };
     }
+
+    this.logger.debug(`Received heartbeat from edge ${server_id} with stats:`, {
+      user_count: stats?.user_count,
+      channel_count: stats?.channel_count,
+      cpu_usage: stats?.cpu_usage,
+      memory_usage_mb: stats?.memory_usage_mb,
+      bandwidth_in: stats?.bandwidth_in,
+      bandwidth_out: stats?.bandwidth_out,
+    });
 
     // 更新状态（仅内存）
     edge.current_load = stats.user_count;

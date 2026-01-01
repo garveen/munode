@@ -1,7 +1,7 @@
 // Hub Server 配置
 // 导入共享类型
-import type { ServerStats, EdgeInfo, RegisterRequest, RegisterResponse, HeartbeatRequest, HeartbeatResponse } from '@munode/protocol';
-export type { ServerStats, EdgeInfo, RegisterRequest, RegisterResponse, HeartbeatRequest, HeartbeatResponse };
+import type { EdgeInfo, RegisterRequest, RegisterResponse, HeartbeatRequest, HeartbeatResponse, EdgeServerStats } from '@munode/protocol';
+export type { EdgeInfo, RegisterRequest, RegisterResponse, HeartbeatRequest, HeartbeatResponse, EdgeServerStats };
 
 // 从 config-schema 导入配置类型（这些类型由 Zod schema 生成）
 export type {
@@ -66,7 +66,7 @@ export interface RegisteredEdge {
    current_load: number;
   certificate: string;
    last_seen: number;
-  stats: ServerStats;
+  stats: EdgeServerStats;
   connectionState?: EdgeConnectionState;  // 连接状态
   disconnectedAt?: number;  // 断开时间戳（仅在DISCONNECTED_WAITING状态时有效）
   cleanupTimer?: NodeJS.Timeout;  // 清理定时器
