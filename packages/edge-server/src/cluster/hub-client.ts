@@ -349,9 +349,9 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
           user_count: stats.user_count,
           channel_count: stats.channel_count,
           cpu_usage: stats.cpu_usage,
-          memory_usage_mb: stats.memory_usage,
-          bandwidth_in: stats.bandwidth?.in,
-          bandwidth_out: stats.bandwidth?.out,
+          memory_usage_mb: Math.round((process.memoryUsage().heapUsed / 1024 / 1024)), // 转换为整数MB
+          bandwidth_in: stats.bandwidth?.in || 0,
+          bandwidth_out: stats.bandwidth?.out || 0,
         } : undefined,
         },
       }).finish();
