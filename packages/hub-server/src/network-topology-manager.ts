@@ -279,6 +279,7 @@ export class NetworkTopologyManager extends TypedEventEmitter<NetworkTopologyMan
       samples: link.quality.samples,
       age: now - link.quality.lastUpdate,
       totalLinks: this.links.size,
+      totalEdges: this.edges.size,
     });
     
     // 触发路由表重新计算

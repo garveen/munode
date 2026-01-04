@@ -13,6 +13,7 @@ import { BanManager } from './ban-manager.js';
 import { HubAuthManager } from './auth-manager.js';
 import { HubPermissionChecker } from './permission-checker.js';
 import { NetworkTopologyManager } from './network-topology-manager.js';
+import { VoiceEncryptionManager } from './voice-encryption-manager.js';
 import { UserStateHandler, type IUserStateHandler } from './handlers/user-state-handler.js';
 import { ChannelStateHandler, type IChannelStateHandler } from './handlers/channel-state-handler.js';
 import { AuthenticationHandler, type IAuthenticationHandler } from './handlers/authentication-handler.js';
@@ -54,6 +55,7 @@ export class HubHandlerFactory {
   // 处理器实例
   private permissionChecker: HubPermissionChecker;
   private networkTopologyManager: NetworkTopologyManager;
+  private voiceEncryptionManager: VoiceEncryptionManager;
   private userStateHandler: IUserStateHandler;
   private channelStateHandler: IChannelStateHandler;
   private databaseOperations: IDatabaseOperations;
@@ -94,6 +96,7 @@ export class HubHandlerFactory {
     this.authenticationHandler = new AuthenticationHandler(this);
     this.permissionChecker = new HubPermissionChecker(this);
     this.networkTopologyManager = new NetworkTopologyManager(this.config.voice_routing, this.logger);
+    this.voiceEncryptionManager = new VoiceEncryptionManager(this.config.voice_routing?.encryption, this.logger);
     this.userStateHandler = new UserStateHandler(this);
     this.channelStateHandler = new ChannelStateHandler(this);
     this.databaseOperations = new DatabaseOperations(this.database, this.logger);
@@ -261,5 +264,6 @@ export class HubHandlerFactory {
   getAuthManager(): HubAuthManager { return this.authManager; }
   getPermissionChecker(): HubPermissionChecker { return this.permissionChecker; }
   getNetworkTopologyManager(): NetworkTopologyManager { return this.networkTopologyManager; }
+  getVoiceEncryptionManager(): VoiceEncryptionManager { return this.voiceEncryptionManager; }
   getDatabaseOperations(): IDatabaseOperations { return this.databaseOperations; }
 }

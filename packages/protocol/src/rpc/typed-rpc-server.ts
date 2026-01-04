@@ -258,8 +258,22 @@ export class TypedRPCServer {
         }
         throw new Error('Missing edge.reportPeerDisconnect params');
       }
-      case 'edge.reportQuality':
-        return request.edge_report_quality as RPCParams<'edge.reportQuality'>;
+      case 'edge.reportQuality': {
+        const reportQuality = request.edge_report_quality;
+        if (reportQuality && reportQuality.quality) {
+          return {
+            edge_id: reportQuality.edge_id,
+            target_edge_id: reportQuality.target_edge_id,
+            quality: {
+              rtt: reportQuality.quality.rtt ?? 0,
+              packetLoss: reportQuality.quality.packet_loss ?? 0,
+              jitter: reportQuality.quality.jitter ?? 0,
+              samples: reportQuality.quality.samples ?? 0,
+            }
+          } as RPCParams<'edge.reportQuality'>;
+        }
+        throw new Error('Missing edge.reportQuality params');
+      }
       case 'cluster.getStatus':
         return {} as RPCParams<'cluster.getStatus'>;
       case 'blob.put':

@@ -88,12 +88,10 @@ export class HubControlService {
       this.logger.info(`Channel Ninja enabled with ${this._ninjaChannels.size} ninja channels: [${Array.from(this._ninjaChannels).join(', ')}]`);
     }
 
-    // 初始化网络拓扑管理器
-    this._networkTopologyManager = new NetworkTopologyManager(config.voice_routing, factory.getLogger());
+    // 从 factory 获取网络拓扑管理器和语音加密管理器
+    this._networkTopologyManager = factory.getNetworkTopologyManager();
+    this._voiceEncryptionManager = factory.getVoiceEncryptionManager();
     this.setupNetworkTopologyEvents();
-    
-    // 初始化语音加密管理器
-    this._voiceEncryptionManager = new VoiceEncryptionManager(config.voice_routing?.encryption, factory.getLogger());
 
     const controlConfig: ControlChannelConfig = {
       port: config.control_port || 8443,

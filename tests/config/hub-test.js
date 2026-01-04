@@ -116,7 +116,7 @@ export default {
   allow_recording: true,
   hide_cert_hashes: false,
   channel_ninja: false,
-  log_level: 'info',
+  log_level: 'debug',
   voice_routing: {
     enabled: true,
     shared_secret: 'test-shared-secret-for-udp-voice-handshake',

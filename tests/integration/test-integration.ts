@@ -13,7 +13,7 @@
  */
 
 // 必须在导入任何模块之前设置环境变量
-const logLevel = 'info';
+const logLevel = 'debug';
 process.env.LOG_LEVEL = logLevel;
 console.log(logLevel);
 
@@ -287,7 +287,7 @@ function createHubConfig(): HubConfigInput {
         enable_tcp_fallback: false, // use edge-hub tcp websocket link for voice relay as last choice
       },
     },
-    log_level: 'info',
+    log_level: logLevel,
   };
 }
 
