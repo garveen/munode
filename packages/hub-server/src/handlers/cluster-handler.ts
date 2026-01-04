@@ -120,7 +120,7 @@ export class ClusterHandler implements IClusterHandler {
    */
   async handleEdgeReportQuality(params: { edge_id: number; target_edge_id: number; quality: { rtt: number; packetLoss: number; jitter: number; samples: number } }): Promise<{ success: boolean }> {
     try {
-      this.logger.debug(`Edge ${params.edge_id} reported quality to Edge ${params.target_edge_id}:`, params.quality);
+      this.logger.info(`Edge ${params.edge_id} reported quality to Edge ${params.target_edge_id}:`, params.quality);
 
       // 更新网络拓扑中的链接质量
       this.factory.getNetworkTopologyManager().handleQualityReport(

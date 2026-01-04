@@ -206,7 +206,7 @@ export class NetworkTopologyManager extends TypedEventEmitter<NetworkTopologyMan
     if (!this.edges.has(edgeId)) {
       this.edges.add(edgeId);
       this.routingTables.set(edgeId, new Map());
-    this.logger.info(`Edge ${edgeId} added to topology`);
+      this.logger.info(`Edge ${edgeId} added to topology, total edges: ${this.edges.size}`);
       
       // 触发路由表重新计算
       if (this._isEnabled) {
@@ -255,6 +255,14 @@ export class NetworkTopologyManager extends TypedEventEmitter<NetworkTopologyMan
   updateLink(link: EdgeLink): void {
     const key = this.getLinkKey(link.sourceEdgeId, link.targetEdgeId);
     
+    // 自动添加 Edge 到拓扑（如果还未添加）
+    if (!this.edges.has(link.sourceEdgeId)) {
+      this.addEdge(link.sourceEdgeId);
+    }
+    if (!this.edges.has(link.targetEdgeId)) {
+      this.addEdge(link.targetEdgeId);
+    }
+    
     // Only use data within recent time window
     const now = Date.now();
     if (now - link.quality.lastUpdate > this.QUALITY_DATA_WINDOW_MS) {
@@ -264,10 +272,13 @@ export class NetworkTopologyManager extends TypedEventEmitter<NetworkTopologyMan
     
     this.links.set(key, link);
     
-    this.logger.debug(`Link updated: ${link.sourceEdgeId} -> ${link.targetEdgeId}`, {
+    this.logger.info(`Link updated: ${link.sourceEdgeId} -> ${link.targetEdgeId}`, {
       rtt: link.quality.rtt,
       packetLoss: link.quality.packetLoss,
+      jitter: link.quality.jitter,
+      samples: link.quality.samples,
       age: now - link.quality.lastUpdate,
+      totalLinks: this.links.size,
     });
     
     // 触发路由表重新计算

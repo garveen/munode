@@ -110,8 +110,8 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
   // 质量样本: targetEdgeId -> QualitySample[]
   private qualitySamples: Map<number, QualitySample[]> = new Map();
   
-  // 序列号追踪: targetEdgeId -> { expected: number, received: Set<number> }
-  private sequenceTracking: Map<number, { expected: number; received: Set<number> }> = new Map();
+  // 序列号追踪（滑动窗口）: targetEdgeId -> { minSeq: number, maxSeq: number, received: Set<number> }
+  private sequenceTracking: Map<number, { minSeq: number; maxSeq: number; received: Set<number> }> = new Map();
   
   // 中转统计
   private relayStats: RelayStats;
@@ -607,20 +607,42 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
   }
 
   /**
-   * 更新序列号追踪
+   * 更新序列号追踪（滑动窗口）
    */
   private updateSequenceTracking(sourceEdgeId: number, sequence: number): void {
     let tracking = this.sequenceTracking.get(sourceEdgeId);
     if (!tracking) {
-      tracking = { expected: sequence, received: new Set() };
+      tracking = { minSeq: sequence, maxSeq: sequence, received: new Set() };
       this.sequenceTracking.set(sourceEdgeId, tracking);
     }
     
+    // 添加接收到的序列号
     tracking.received.add(sequence);
     
-    // 更新期望序列号
-    if (sequence >= tracking.expected) {
-      tracking.expected = sequence + 1;
+    // 更新序列号范围
+    if (sequence > tracking.maxSeq) {
+      tracking.maxSeq = sequence;
+    }
+    if (sequence < tracking.minSeq) {
+      tracking.minSeq = sequence;
+    }
+    
+    // 使用滑动窗口：只保留最近的 loss_window_size 个序列号范围
+    const windowSize = this.voiceRoutingConfig.probe.loss_window_size;
+    const expectedMaxRange = tracking.maxSeq - tracking.minSeq + 1;
+    
+    if (expectedMaxRange > windowSize) {
+      // 窗口超出限制，移动窗口起点
+      const newMinSeq = tracking.maxSeq - windowSize + 1;
+      
+      // 清理旧的序列号
+      for (const seq of tracking.received) {
+        if (seq < newMinSeq) {
+          tracking.received.delete(seq);
+        }
+      }
+      
+      tracking.minSeq = newMinSeq;
     }
   }
 
@@ -652,13 +674,16 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
       jitter = totalDiff / (samples.length - 1);
     }
     
-    // 计算丢包率
+    // 计算丢包率（基于滑动窗口）
     let packetLoss = 0;
-    if (tracking && tracking.expected > 0) {
-      const windowSize = this.voiceRoutingConfig.probe.loss_window_size;
-      const expectedPackets = Math.min(tracking.expected, windowSize);
-      const receivedPackets = tracking.received.size;
-      packetLoss = Math.max(0, (expectedPackets - receivedPackets) / expectedPackets);
+    if (tracking && tracking.received.size > 0) {
+      const windowRange = tracking.maxSeq - tracking.minSeq + 1;
+      const receivedInWindow = tracking.received.size;
+      
+      // 确保有足够的样本才计算丢包率
+      if (windowRange > 0) {
+        packetLoss = Math.max(0, Math.min(1, (windowRange - receivedInWindow) / windowRange));
+      }
     }
     
     // 更新质量信息

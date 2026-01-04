@@ -3,36 +3,8 @@
  * 集成测试入口文件
  * 
  * 启动组件：
- * - 1 个 Hub Server (WebSocket 控制信道端口 8443, UDP 语音端口 8444)
- * - 3 个 Edge Server (WebSocket 控制信道端口 8543, 8544, 8545; UDP 语音端口 8544, 8545, 8546)
- * - 1 个简单的认证服务器 (端口 8080)
- * 
- * 当前实现状态：
- * ✅ Hub 控制服务 RPC 处理器 (所有方法完成)
- * ✅ Edge 控制通道客户端 (WebSocket + MessagePack)
- * ✅ RPC 通道实现 (MessagePack 编码)
- * ✅ 语音包编解码 (14字节头部 + 数据)
- * ✅ 语音 UDP 传输层 (Hub-Edge, Edge-Edge)
- * ✅ 语音路由器 (本地路由)
- * ✅ 控制信道服务端/客户端 (WebSocket)
- * ✅ Edge 加入流程 (串行化，60秒超时)
- * ✅ 心跳管理器 (1秒间隔，3秒超时)
- * ✅ 消息缓存 (FIFO, 1000条/edge, 10分钟过期)
- * ✅ 重连管理器 (Hub重连: 10秒超时, Peer重连: 3秒超时)
- * ✅ Peer 连接管理器 (Edge-Edge 全连接)
- * ✅ Edge 连接管理器 (Hub端管理)
- * ✅ 集群管理器 (统一管理 Hub、Peer 连接)
- * ✅ Voice UDP Transport 集成 (Hub & Edge)
- * 
- * 测试覆盖：
- * ✅ Hub 服务器启动和状态查询
- * ✅ Edge 服务器启动和集群加入
- * ✅ 认证服务器集成
- * ✅ RPC 通信测试
- * ❌ Edge 加入流程完整测试 (需要实际触发)
- * ❌ 语音包转发测试 (需要客户端连接)
- * ❌ 重连机制测试 (需要模拟断线)
- * ❌ 消息缓存测试 (需要跨 Edge 通信)
+ * - 1 个 Hub Server
+ * - 3 个 Edge Server
  * 
  * 运行方式:
  *   npm run test:integration
@@ -489,55 +461,6 @@ async function runTestScenarios(
   
   channels.forEach(ch => displayChannel(ch));
 
-  // 场景 5: 测试组管理功能
-  logger.info('\n[Scenario 5] Testing group management...');
-  logger.info('Group features:');
-  logger.info('  ✅ Group inheritance from parent channels');
-  logger.info('  ✅ Add/Remove members in groups');
-  logger.info('  ✅ Inheritable groups (can be inherited by sub-channels)');
-  logger.info('  ✅ Special groups: all, auth, in, out, $<cert_hash>');
-  logger.info('  ✅ Group-based ACL permissions');
-  logger.info('  ✅ Inherited members tracking');
-  
-  logger.info('\nExample group configuration:');
-  logger.info('  {');
-  logger.info('    name: "moderators",');
-  logger.info('    inherited: false,');
-  logger.info('    inherit: true,        // Inherit members from parent');
-  logger.info('    inheritable: true,    // Can be inherited by children');
-  logger.info('    add: [1, 2, 3],       // User IDs added to this group');
-  logger.info('    remove: [4],          // User IDs removed (if inherited)');
-  logger.info('    inheritedMembers: [5, 6] // Calculated inherited members');
-  logger.info('  }');
-
-  logger.info('\n[Test] You can now connect with Mumble client:');
-  logger.info('  Server: localhost');
-  logger.info('  Port: 63000, 63002, or 63004');
-  logger.info('  Username: admin, user1, user2, user3, or guest');
-  logger.info('  Password: See users list above');
-
-  logger.info('\n[Implementation Status] All cluster communication features completed:');
-  logger.info('  ✅ Hub control service RPC handlers (all methods)');
-  logger.info('  ✅ Edge control channel client (WebSocket + MessagePack)');
-  logger.info('  ✅ Voice UDP transport (14-byte header protocol)');
-  logger.info('  ✅ Edge join flow with serialization (60s timeout)');
-  logger.info('  ✅ Heartbeat mechanism (1s interval, 3s timeout)');
-  logger.info('  ✅ Message cache (FIFO, 1000 msgs/edge, 10min expiry)');
-  logger.info('  ✅ Reconnect manager (Hub: 10s, Peer: 3s timeout)');
-  logger.info('  ✅ Peer connection management (Edge-Edge full mesh)');
-  logger.info('  ✅ Edge connection manager (Hub-side management)');
-  logger.info('  ✅ Cluster manager integration (unified lifecycle)');
-  logger.info('  ✅ Voice router integration (local + remote forwarding)');
-  logger.info('  ✅ Full ACL system with inheritance');
-  logger.info('  ✅ Complete group management with inheritance');
-  logger.info('');
-  logger.info('[Architecture] Based on technical specification document:');
-  logger.info('  • Control Channel: MessagePack over WebSocket');
-  logger.info('  • Voice Channel: Custom UDP protocol (version+sender+target+seq+codec)');
-  logger.info('  • Cluster Topology: Hub-and-spoke with Edge-to-Edge direct connections');
-  logger.info('  • Join Flow: Serialized (one Edge at a time, token-based)');
-  logger.info('  • Reliability: Auto-reconnect, message cache, heartbeat monitoring');
-  logger.info('');
 }
 
 // ==================

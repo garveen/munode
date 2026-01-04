@@ -94,7 +94,7 @@ export interface VoiceUDPTransportEvents extends EventMap {
   'edge-disconnected': [edgeId: number];
   'reconnect-failed': [edgeId: number];
   'voice-packet': [packet: VoicePacket, rinfo: dgram.RemoteInfo];
-  'quality-measured': [edgeId: number, rtt: number];
+  'quality-measured': [edgeId: number, rtt: number, sequence: number];
 }
 
 export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents> {
@@ -745,8 +745,8 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       if (sentTime) {
         const rtt = now - sentTime;
         this.logger.debug(`Edge ${edgeId} RTT: ${rtt}ms`);
-        // 触发质量测量事件
-        this.emit('quality-measured', edgeId, rtt);
+        // 触发质量测量事件，传递序列号
+        this.emit('quality-measured', edgeId, rtt, pong.sequence);
         // 清理已使用的时间戳
         status.heartbeatSentTime.delete(pong.sequence);
         
