@@ -22,13 +22,7 @@ program
       console.log('Starting Mumble Edge Server...');
 
       // 加载配置
-      let config;
-      try {
-        config = await loadEdgeConfig(options.config);
-      } catch (_error) {
-        console.log('Using default configuration...');
-        config = await loadEdgeConfig();
-      }
+      const config = await loadEdgeConfig(options.config);
 
       // 应用命令行选项
       if (options.port) config.network.port = parseInt(options.port);
