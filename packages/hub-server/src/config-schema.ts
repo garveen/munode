@@ -170,7 +170,7 @@ const VoiceRoutingConfigSchema = z.object({
     route_switch_hysteresis: z.number().positive().default(5000),
     route_switch_cost_delta: z.number().positive().default(0.3),
     max_relay_load_per_edge: z.number().min(0).max(1).default(0.7),
-    probe_interval: z.number().int().positive().default(10000),
+    network_probe_interval: z.number().int().positive().default(10000),
     route_table_update_interval: z.number().int().positive().default(30000),
   }).strict().optional(),
   preferred_relay_edges: z.array(z.number().int()).optional(),
@@ -228,6 +228,7 @@ export const HubConfigSchema = z.object({
   server_password: z.string().optional(),
   kdf_iterations: z.number().int().default(-1), // -1 = auto-benchmark
   obfuscate: z.boolean().default(false),
+  cert_required: z.boolean().default(false),
   
   // 验证正则
   username_regex: z.string().default('[ -=\\w\\[\\]\\{\\}\\(\\)\\@\\|\\.]+'),

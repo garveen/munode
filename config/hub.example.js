@@ -83,6 +83,7 @@ export default {
   allow_html: true,
   force_external_auth: false,
   obfuscate: false,
+  cert_required: false, // Require client certificate to connect (enforced by Edge servers after first auth)
 
   // Username and channel name validation
   username_regex: '[ -=\\w\\[\\]\\{\\}\\(\\)\\@\\|\\.]+',
@@ -215,7 +216,7 @@ export default {
       max_relay_load_per_edge: 0.7, // Maximum relay load per Edge, default: 0.7
 
       // Quality probing
-      probe_interval: 10000, // Probe interval (ms), default: 10000
+      network_probe_interval: 10000, // Hub-side network probe interval (ms), default: 10000
 
       // Route table updates
       route_table_update_interval: 30000, // Hub pushes route table interval (ms), default: 30000

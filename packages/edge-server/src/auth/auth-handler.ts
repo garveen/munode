@@ -27,6 +27,7 @@ export class AuthHandlers {
   private get authManager() { return this.factory.authManager; }
   private get config() { return this.factory.config; }
   private get stateHandlers() { return this.factory.stateHandlers; }
+  private get edgeServer() { return this.factory.edgeServer; }
 
   /**
    * 处理认证请求
@@ -117,6 +118,11 @@ export class AuthHandlers {
     authMessage: mumbleproto.Authenticate
   ): Promise<void> {
     try {
+      // 保存从 Hub 接收的 cert_required 配置
+      if (authResult.cert_required !== undefined) {
+        this.edgeServer.setCertRequired(authResult.cert_required);
+      }
+      
       // 更新客户端信息，并更新状态为 Authenticated
       this.clientManager.updateClient(session_id, {
         user_id: authResult.user_id,
@@ -239,7 +245,20 @@ export class AuthHandlers {
 
       this.messageHandler.sendMessage(session_id, MessageType.ServerSync, Buffer.from(serverSyncMessage));
 
-      // 9.5. 发送 SuggestConfig 消息（如果配置了建议）
+      // 9.5. 发送 ServerConfig 消息
+      // 注意：cert_required 配置不发送给客户端，由服务器端在连接时强制执行
+      const serverConfigMessage = mumbleproto.ServerConfig.encode({
+        max_bandwidth: this.config.server.max_bandwidth,
+        welcome_text: this.config.server.welcome_text,
+        allow_html: true, // TODO: 从Hub配置获取
+        message_length: 5000, // TODO: 从Hub配置获取
+        image_message_length: 131072, // TODO: 从Hub配置获取
+        max_users: this.config.server.capacity,
+        recording_allowed: true, // TODO: 从Hub配置获取
+      }).finish();
+      this.messageHandler.sendMessage(session_id, MessageType.ServerConfig, Buffer.from(serverConfigMessage));
+
+      // 9.6. 发送 SuggestConfig 消息（如果配置了建议）
       const suggestConfig: {
         version?: number;
         positional?: boolean;

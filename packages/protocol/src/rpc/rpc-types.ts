@@ -1069,7 +1069,7 @@ export interface HubVoiceRoutingConfigNotification {
       routeSwitchHysteresis?: number;
       routeSwitchCostDelta?: number;
       maxRelayLoadPerEdge?: number;
-      probeInterval?: number;
+      networkProbeInterval?: number;
       probeTimeout?: number;
       routeTableUpdateInterval?: number;
     };

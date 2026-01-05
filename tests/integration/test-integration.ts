@@ -319,7 +319,6 @@ function createEdgeConfig(server_id: number, port: number): EdgeConfigInput {
       tls: {
         reject_unauthorized: false,
       },
-      connection_type: 'websocket',
       reconnect_interval: 5000,
       heartbeat_interval: 10000,
       pool_size: 1,

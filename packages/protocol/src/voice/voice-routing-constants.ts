@@ -16,7 +16,7 @@ export const DEFAULT_ROUTING_POLICY = {
   route_switch_hysteresis: 5000,    // 切换滞后时间 (ms)
   route_switch_cost_delta: 0.3,      // 切换成本差异阈值
   max_relay_load_per_edge: 0.7,       // 单 Edge 最大中转负载
-  probe_interval: 10000,           // 探测间隔 (ms)
+  network_probe_interval: 10000,      // Hub 端网络质量探测间隔 (ms)
   route_table_update_interval: 30000, // Hub 推送路由表间隔 (ms)
 } as const;
 

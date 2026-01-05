@@ -53,6 +53,9 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
   private startTime: Date;
   private stats: ServerStats;
   
+  // 从 Hub 接收的服务器配置
+  private certRequired = false; // Hub 要求客户端证书
+  
   // 带宽统计计数器
   private bandwidthIn = 0;
   private bandwidthOut = 0;
@@ -68,6 +71,12 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
   
   // 公开属性访问器
   get serverId() { return this.config.server_id; }
+  get isCertRequired() { return this.certRequired; }
+  
+  setCertRequired(value: boolean) {
+    this.certRequired = value;
+    this.logger.info(`Server cert_required config updated: ${value}`);
+  }
 
 
   constructor(config: EdgeConfig) {
@@ -134,6 +143,9 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
       this.hubClient,
       this.logger
     );
+    
+    // 设置 EdgeServer 引用（用于访问服务器级别状态）
+    this.handlerFactory.edgeServer = this;
 
     // 初始化管理器（注意：VoiceManager必须在ServerLifecycleManager之前创建）
     this.banHandler = new BanHandler(this.handlerFactory);

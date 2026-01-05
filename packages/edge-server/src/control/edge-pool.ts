@@ -76,9 +76,15 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
    * Initialize and connect all connections in the pool
    */
   async connect(): Promise<void> {
+    // 如果已经有连接，先清理
     if (this.connections.length > 0) {
-      this.logger.warn('Connection pool already initialized');
-      return;
+      this.logger.warn(`Connection pool already has ${this.connections.length} connections, cleaning up before reconnecting`);
+      // 清理所有现有连接
+      for (const conn of this.connections) {
+        this.cleanupConnection(conn);
+      }
+      this.connections = []; // 清空数组，准备重新创建
+      this.connectionIdCounter = 0; // 重置计数器
     }
 
     this.isStopping = false;
@@ -121,11 +127,15 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
 
   /**
    * Connect a single connection
+   * 复用连接对象，每次重连前彻底清理旧资源
    */
   private async connectSingle(conn: PooledConnection): Promise<void> {
     if (this.isStopping) {
       return;
     }
+
+    // 彻底清理旧资源，确保干净的重连
+    this.cleanupConnection(conn);
 
     const protocol = this.config.tls ? 'wss' : 'ws';
     const url = `${protocol}://${this.config.host}:${this.config.port}`;
@@ -176,6 +186,40 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
   }
 
   /**
+   * 彻底清理连接的所有资源
+   */
+  private cleanupConnection(conn: PooledConnection): void {
+    // 停止心跳
+    if (conn.heartbeatManager) {
+      conn.heartbeatManager.stop(conn.id.toString());
+      conn.heartbeatManager = undefined;
+    }
+
+    // 清理定时器
+    if (conn.reconnectTimer) {
+      clearTimeout(conn.reconnectTimer);
+      conn.reconnectTimer = null;
+    }
+
+    // 关闭channel
+    if (conn.channel) {
+      conn.channel.close();
+      conn.channel = null;
+    }
+
+    // 关闭WebSocket
+    if (conn.ws) {
+      conn.ws.removeAllListeners();
+      conn.ws.close();
+      conn.ws = null;
+    }
+
+    // 重置状态
+    conn.isConnected = false;
+    conn.isReconnecting = false;
+  }
+
+  /**
    * Setup handlers for a channel
    */
   private setupChannelHandlers(conn: PooledConnection): void {
@@ -210,25 +254,20 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
     const callbacks: HeartbeatCallbacks = {
       onTimeout: (connectionId: string) => {
         this.logger.warn(`Heartbeat timeout for connection ${connectionId}`);
-        // Close the connection to trigger reconnection
+        // 关闭连接会自动触发清理和重连
         if (conn.ws) {
           conn.ws.close();
         }
       },
       onHeartbeat: (connectionId: string, latency: number) => {
-        this.logger.debug(`Heartbeat received for connection ${connectionId}, latency: ${latency}ms`);
+        this.logger.debug(`Heartbeat for connection ${connectionId}, latency: ${latency}ms`);
       },
     };
 
     conn.heartbeatManager = new HeartbeatManager(callbacks, heartbeatConfig);
 
     conn.heartbeatManager.startSending(conn.id.toString(), async () => {
-      try {
-        await this.config.heartbeat!.sendHeartbeat(conn.id, conn.channel!);
-      } catch (error) {
-        this.logger.error(`Failed to send heartbeat for connection ${conn.id}:`, error);
-        throw error;
-      }
+      await this.config.heartbeat!.sendHeartbeat(conn.id, conn.channel!);
     });
   }
 
@@ -236,6 +275,14 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
    * Handle connection close
    */
   private handleConnectionClose(conn: PooledConnection): void {
+    this.logger.info(`Connection ${conn.id} closed (isStopping: ${this.isStopping})`);
+    
+    // 如果连接池正在停止，直接返回，不做任何处理
+    if (this.isStopping) {
+      this.logger.debug(`Ignoring close event for connection ${conn.id} - pool is stopping`);
+      return;
+    }
+    
     conn.isConnected = false;
     conn.channel = null;
     conn.ws = null;
@@ -246,7 +293,6 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
       conn.heartbeatManager = undefined;
     }
 
-    this.logger.info(`Connection ${conn.id} closed`);
     this.emit('connection-closed', conn.id);
 
     // Check if all connections are closed
@@ -265,7 +311,19 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
    * Schedule reconnection for a single connection with exponential backoff
    */
   private scheduleReconnect(conn: PooledConnection): void {
-    if (conn.reconnectTimer || conn.isReconnecting || this.isStopping) {
+    // 多重检查确保不会在已停止或已在重连中的连接上调度
+    if (this.isStopping) {
+      this.logger.debug(`Not scheduling reconnect for connection ${conn.id} - pool is stopping`);
+      return;
+    }
+    
+    if (conn.reconnectTimer) {
+      this.logger.debug(`Connection ${conn.id} already has pending reconnect timer`);
+      return;
+    }
+    
+    if (conn.isReconnecting) {
+      this.logger.debug(`Connection ${conn.id} is already reconnecting`);
       return;
     }
 
@@ -285,6 +343,13 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
     );
 
     conn.reconnectTimer = setTimeout(() => {
+      // 再次检查是否已停止
+      if (this.isStopping) {
+        this.logger.debug(`Aborting reconnect for connection ${conn.id} - pool stopped`);
+        conn.reconnectTimer = null;
+        return;
+      }
+      
       conn.reconnectTimer = null;
       conn.isReconnecting = true;
       
@@ -396,60 +461,35 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
 
   /**
    * Disconnect all connections
+   * 只清理连接资源，保留连接对象用于未来重连
    */
   disconnect(): void {
+    this.logger.info(`Disconnecting connection pool (${this.connections.length} connections)`);
     this.isStopping = true;
 
+    // 清理所有连接但保留对象
     for (const conn of this.connections) {
-      if (conn.reconnectTimer) {
-        clearTimeout(conn.reconnectTimer);
-        conn.reconnectTimer = null;
-      }
-
-      // Stop heartbeat
-      if (conn.heartbeatManager) {
-        conn.heartbeatManager.stop(conn.id.toString());
-        conn.heartbeatManager = undefined;
-      }
-
-      if (conn.channel) {
-        conn.channel.close();
-        conn.channel = null;
-      }
-
-      if (conn.ws) {
-        conn.ws.removeAllListeners();
-        conn.ws.close();
-        conn.ws = null;
-      }
-
-      conn.isConnected = false;
-      conn.isReconnecting = false;
+      this.cleanupConnection(conn);
     }
 
-    this.connections = [];
     this.removeAllListeners();
-    
-    this.logger.info('Connection pool disconnected');
+    this.logger.info('Connection pool disconnected (connections preserved for reuse)');
   }
 
   /**
    * Force reconnect all connections
+   * 复用现有连接对象进行重连
    */
   async reconnectAll(): Promise<void> {
     this.logger.info('Forcing reconnect of all connections');
+    this.isStopping = false; // 允许重连
     
-    // Disconnect all
+    // 关闭所有现有连接
     for (const conn of this.connections) {
-      if (conn.ws) {
-        conn.ws.close();
-      }
+      this.cleanupConnection(conn);
     }
 
-    // Wait a bit for clean shutdown
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    // Reconnect all
+    // 重连所有连接（复用对象）
     const reconnectPromises = this.connections.map(conn => 
       this.connectSingle(conn).catch(error => {
         this.logger.error(`Reconnection failed for connection ${conn.id}:`, error);
@@ -457,5 +497,6 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
     );
 
     await Promise.allSettled(reconnectPromises);
+    this.logger.info(`Reconnected ${this.getConnectedCount()}/${this.connections.length} connections`);
   }
 }

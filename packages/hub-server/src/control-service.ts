@@ -220,9 +220,9 @@ export class HubControlService {
       }
       
       if (message.params) {
-        this.typedServer.handleRequest(channel, message.params, respond);
+        void this.typedServer.handleRequest(channel, message.params, respond);
       } else {
-        respond({ request_id: message.id || '0' }), { code: -32600, message: 'Invalid request: missing params', method: message.method || "" };
+        respond({ request_id: message.id || '0' }, { code: -32600, message: `Invalid request: missing params: method: ${message.method || ""}` });
       }
     });
 
@@ -394,7 +394,7 @@ export class HubControlService {
       routeSwitchHysteresis: policy.route_switch_hysteresis,
       routeSwitchCostDelta: policy.route_switch_cost_delta,
       maxRelayLoadPerEdge: policy.max_relay_load_per_edge,
-      probeInterval: policy.probe_interval,
+      networkProbeInterval: policy.network_probe_interval,
       routeTableUpdateInterval: policy.route_table_update_interval,
     };
     

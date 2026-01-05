@@ -195,6 +195,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
 
   /**
    * 断开连接
+   * 保留client对象以便复用
    */
   disconnect(): void {
     this.isStopping = true; // 设置停止标志，阻止重连
@@ -208,9 +209,9 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
 
     this.client.disconnect();
     
-    // 移除所有事件监听器以防止内存泄漏
-    this.client.removeAllListeners();
-    this.removeAllListeners();
+    // 不移除事件监听器，保留用于重连
+    // this.client.removeAllListeners();
+    // this.removeAllListeners();
     
     this.emit('disconnected');
   }
@@ -334,7 +335,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
    */
   private async sendHeartbeatForConnection(connectionId: number, channel: RPCChannel): Promise<void> {
     if (!this.connected || !this.registered) {
-      return;
+      throw new Error('Not connected or registered');
     }
 
     try {
@@ -378,6 +379,8 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
     } catch (error) {
       this.logger.error(`Heartbeat failed on connection ${connectionId}:`, error);
       this.emit('heartbeatFailed', error);
+      // 重新抛出错误，让 HeartbeatManager 检测到失败并触发超时处理
+      throw error;
     }
   }
 

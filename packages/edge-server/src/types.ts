@@ -8,7 +8,6 @@ export type {
   NetworkConfig,
   TLSConfig,
   HubServerConfig,
-  SmuxOptions,
   EdgeVoiceRoutingConfig,
   ServerConfig,
   ClientConfig,
@@ -47,7 +46,7 @@ export interface EdgeRoutingPolicy {
   route_switch_hysteresis: number;
   route_switch_cost_delta: number;
   max_relay_load_per_edge: number;
-  probe_interval: number;
+  network_probe_interval: number;
   route_table_update_interval: number;
 }
 
@@ -98,6 +97,8 @@ export interface AuthResult {
   self_deaf?: boolean;
   priority_speaker?: boolean;
   recording?: boolean;
+  // Server configuration
+  cert_required?: boolean; // Hub 要求客户端证书
 }
 
 // 注意：ClientState, ClientInfo, ChannelGroup, ChannelInfo, VoicePacket, VoiceBroadcast 等共享类型

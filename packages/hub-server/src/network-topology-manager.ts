@@ -133,7 +133,7 @@ export class NetworkTopologyManager extends TypedEventEmitter<NetworkTopologyMan
       route_switch_hysteresis: config?.policy?.route_switch_hysteresis ?? DEFAULT_ROUTING_POLICY.route_switch_hysteresis,
       route_switch_cost_delta: config?.policy?.route_switch_cost_delta ?? DEFAULT_ROUTING_POLICY.route_switch_cost_delta,
       max_relay_load_per_edge: config?.policy?.max_relay_load_per_edge ?? DEFAULT_ROUTING_POLICY.max_relay_load_per_edge,
-      probe_interval: config?.policy?.probe_interval ?? DEFAULT_ROUTING_POLICY.probe_interval,
+      network_probe_interval: config?.policy?.network_probe_interval ?? DEFAULT_ROUTING_POLICY.network_probe_interval,
       route_table_update_interval: config?.policy?.route_table_update_interval ?? DEFAULT_ROUTING_POLICY.route_table_update_interval,
     };
     

@@ -46,6 +46,9 @@ export class HandlerFactory {
   public readonly hubClient: EdgeControlClient;
   public readonly stateManager: EdgeStateManager;
   public readonly aclMap: Map<number, ACLEntry[]>;
+  
+  // EdgeServer 引用（用于访问服务器级别的状态）
+  public edgeServer?: any; // 使用 any 避免循环依赖
 
   // Logger实例
   public readonly logger: Logger;

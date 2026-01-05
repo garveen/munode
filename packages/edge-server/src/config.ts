@@ -37,17 +37,11 @@ export async function loadEdgeConfig(configPath?: string, logger?: Logger): Prom
  * 验证配置（旧版 API，保留以保持向后兼容）
  * 现在使用 Zod schema 进行验证，该函数仅用于附加验证
  */
-export function validateConfig(config: EdgeConfig): string[] {
+export function validateConfig(_config: EdgeConfig): string[] {
   const errors: string[] = [];
 
   // Zod 已经验证了大部分字段，这里只增加一些附加检查
-  if (config.network.external_port && config.network.external_port === config.network.port) {
-    // 这不是错误，只是一个提醒
-  }
-
-  if (config.tls.require_client_cert && !config.tls.ca) {
-    errors.push('tls.ca is required when tls.requireClientCert is true');
-  }
+  // 目前没有需要额外验证的配置项
 
   return errors;
 }

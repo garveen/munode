@@ -25,6 +25,7 @@ export class ConnectionHandlers {
   private get hubClient() { return this.factory.hubClient; }
   private get config() { return this.factory.config; }
   private get udpServer() { return this.voiceRouter.getUDPServer(); }
+  private get edgeServer() { return this.factory.edgeServer; }
 
   /**
    * 处理 TLS 连接
@@ -50,6 +51,16 @@ export class ConnectionHandlers {
       } catch (error) {
         // 证书获取失败，继续处理
         this.logger.debug('Failed to get peer certificate:', error);
+      }
+      
+      // 检查是否要求证书（在第一次认证后 cert_required 将被设置）
+      if (this.edgeServer.isCertRequired && !cert_hash) {
+        this.logger.warn(
+          `Rejected connection from ${socket.remoteAddress}: server requires client certificate`
+        );
+        clearTimeout(connectionTimeout);
+        socket.destroy();
+        return;
       }
 
       // 检查封禁

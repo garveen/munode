@@ -623,7 +623,7 @@ export class EventSetupManager {
           routeSwitchHysteresis: number;
           routeSwitchCostDelta: number;
           maxRelayLoadPerEdge: number;
-          probeInterval: number;
+          networkProbeInterval: number;
           routeTableUpdateInterval: number;
         };
         preferredRelayEdges?: number[];
@@ -666,7 +666,7 @@ export class EventSetupManager {
               route_switch_hysteresis: config.policy.routeSwitchHysteresis,
               route_switch_cost_delta: config.policy.routeSwitchCostDelta,
               max_relay_load_per_edge: config.policy.maxRelayLoadPerEdge,
-              probe_interval: config.policy.probeInterval,
+              network_probe_interval: config.policy.networkProbeInterval,
               route_table_update_interval: config.policy.routeTableUpdateInterval,
             });
           }

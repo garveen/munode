@@ -70,9 +70,19 @@ export class ControlChannelClient extends TypedEventEmitter<ControlChannelClient
 
   /**
    * Connect using connection pool
+   * 复用现有pool，避免创建多个实例
    */
   private async connectWithPool(): Promise<void> {
     try {
+      // 如果已经有pool，直接使用（可能是重连）
+      if (this.pool) {
+        this.logger?.debug('Reusing existing connection pool');
+        await this.pool.connect();
+        this.isConnecting = false;
+        return;
+      }
+
+      // 首次创建pool
       const poolConfig: ClientConnectionPoolConfig = {
         host: this.config.host,
         port: this.config.port,
@@ -214,6 +224,7 @@ export class ControlChannelClient extends TypedEventEmitter<ControlChannelClient
 
   /**
    * 断开连接
+   * 对于pool模式，保留pool对象以便复用
    */
   disconnect(): void {
     if (this.reconnectTimer) {
@@ -224,7 +235,7 @@ export class ControlChannelClient extends TypedEventEmitter<ControlChannelClient
     if (this.usePool) {
       if (this.pool) {
         this.pool.disconnect();
-        this.pool = null;
+        // 不设置为null，保留pool对象用于重连
       }
     } else {
       if (this.channel) {
@@ -241,8 +252,7 @@ export class ControlChannelClient extends TypedEventEmitter<ControlChannelClient
       }
     }
     
-    // 移除所有EventEmitter监听器
-    this.removeAllListeners();
+    // 不移除EventEmitter监听器，因为可能需要重连
   }
 
   /**
@@ -258,10 +268,17 @@ export class ControlChannelClient extends TypedEventEmitter<ControlChannelClient
 
   /**
    * 重新连接
+   * 对于pool模式，connect会复用现有pool
    */
   async reconnect(): Promise<void> {
-    this.disconnect();
-    await this.connect();
+    if (this.usePool) {
+      // Pool模式：直接重连，pool.connect会处理清理
+      await this.connect();
+    } else {
+      // 单连接模式：需要先断开
+      this.disconnect();
+      await this.connect();
+    }
   }
 
   /**

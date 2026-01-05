@@ -137,7 +137,11 @@ export interface EdgeAuthenticateUserResult {
   self_mute?: boolean | undefined;
   self_deaf?: boolean | undefined;
   priority_speaker?: boolean | undefined;
-  recording?: boolean | undefined;
+  recording?:
+    | boolean
+    | undefined;
+  /** Server configuration */
+  cert_required?: boolean | undefined;
 }
 
 export interface EdgeReportSessionResult {
@@ -2414,6 +2418,7 @@ function createBaseEdgeAuthenticateUserResult(): EdgeAuthenticateUserResult {
     self_deaf: undefined,
     priority_speaker: undefined,
     recording: undefined,
+    cert_required: undefined,
   };
 }
 
@@ -2465,6 +2470,9 @@ export const EdgeAuthenticateUserResult: MessageFns<EdgeAuthenticateUserResult> 
     }
     if (message.recording !== undefined) {
       writer.uint32(120).bool(message.recording);
+    }
+    if (message.cert_required !== undefined) {
+      writer.uint32(128).bool(message.cert_required);
     }
     return writer;
   },
@@ -2599,6 +2607,14 @@ export const EdgeAuthenticateUserResult: MessageFns<EdgeAuthenticateUserResult> 
           message.recording = reader.bool();
           continue;
         }
+        case 16: {
+          if (tag !== 128) {
+            break;
+          }
+
+          message.cert_required = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2625,6 +2641,7 @@ export const EdgeAuthenticateUserResult: MessageFns<EdgeAuthenticateUserResult> 
       self_deaf: isSet(object.self_deaf) ? globalThis.Boolean(object.self_deaf) : undefined,
       priority_speaker: isSet(object.priority_speaker) ? globalThis.Boolean(object.priority_speaker) : undefined,
       recording: isSet(object.recording) ? globalThis.Boolean(object.recording) : undefined,
+      cert_required: isSet(object.cert_required) ? globalThis.Boolean(object.cert_required) : undefined,
     };
   },
 
@@ -2675,6 +2692,9 @@ export const EdgeAuthenticateUserResult: MessageFns<EdgeAuthenticateUserResult> 
     if (message.recording !== undefined) {
       obj.recording = message.recording;
     }
+    if (message.cert_required !== undefined) {
+      obj.cert_required = message.cert_required;
+    }
     return obj;
   },
 
@@ -2698,6 +2718,7 @@ export const EdgeAuthenticateUserResult: MessageFns<EdgeAuthenticateUserResult> 
     message.self_deaf = object.self_deaf ?? undefined;
     message.priority_speaker = object.priority_speaker ?? undefined;
     message.recording = object.recording ?? undefined;
+    message.cert_required = object.cert_required ?? undefined;
     return message;
   },
 };

@@ -837,7 +837,7 @@ export class HubMessageHandlers {
       routeSwitchHysteresis: number;
       routeSwitchCostDelta: number;
       maxRelayLoadPerEdge: number;
-      probeInterval: number;
+      networkProbeInterval: number;
       routeTableUpdateInterval: number;
     };
     preferredRelayEdges?: number[];

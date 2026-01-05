@@ -259,6 +259,8 @@ export class AuthenticationHandler implements IAuthenticationHandler {
         self_deaf: session.self_deaf,
         priority_speaker: session.priority_speaker,
         recording: session.recording,
+        // Server configuration
+        cert_required: config.cert_required,
       } satisfies RPCResult<'edge.authenticateUser'>;
     } catch (error) {
       this.logger.error(`Authentication error for user ${params.username}:`, error);

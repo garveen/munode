@@ -18,7 +18,7 @@ MuNode 是一个基于 Node.js/TypeScript 的 Mumble 服务器实现，采用 Hu
 - **风格**: ESModule，不是 CommonJS
 - **运行时**: Node.js 22 , 使用 npx tsx 运行 TypeScript 代码
 - **包管理**: pnpm workspace
-- **协议**: Protocol Buffers, Mumble Protocol
+- **协议**: Protocol Buffers, Mumble Protocol **注意 Mumble.proto 文件不得修改，其作用是与外部系统互操作**
 - **通信**: gRPC, TCP, UDP, WebSocket
 - **加密**: OCB2-AES128, TLS
 - **数据库**: SQLite (Hub), JSON (配置/数据)

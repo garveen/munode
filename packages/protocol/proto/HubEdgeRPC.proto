@@ -127,6 +127,8 @@ message EdgeAuthenticateUserResult {
   optional bool self_deaf = 13;
   optional bool priority_speaker = 14;
   optional bool recording = 15;
+  // Server configuration
+  optional bool cert_required = 16;  // Hub 告诉 Edge 是否要求客户端证书
 }
 
 message EdgeReportSessionResult {
