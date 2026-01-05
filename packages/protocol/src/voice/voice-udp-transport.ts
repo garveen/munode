@@ -79,7 +79,7 @@ export interface EdgeConnectionStatus {
   isActiveSide: boolean; // true if this edge is the active side (initiator) for heartbeat
   localNonce?: Buffer; // Local nonce for handshake
   remoteNonce?: Buffer; // Remote nonce received during handshake
-  heartbeatSequence: number; // Heartbeat sequence number
+  unifiedSequence: number; // 统一序列号发生器（心跳和语音包共用，用于准确的丢包率统计）
   heartbeatSentTime: Map<number, number>; // sequence -> timestamp for RTT calculation
 }
 
@@ -229,7 +229,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       reconnecting: false,
       reconnectAttempts: 0,
       isActiveSide,
-      heartbeatSequence: 0,
+      unifiedSequence: 0,
       heartbeatSentTime: new Map(),
     });
     
@@ -549,7 +549,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
           reconnecting: false,
           reconnectAttempts: 0,
           isActiveSide,
-          heartbeatSequence: 0,
+          unifiedSequence: 0,
           heartbeatSentTime: new Map(),
         });
       }
@@ -796,14 +796,14 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       if (status.handshakeComplete && !status.reconnecting && status.isActiveSide) {
         const endpoint = this.remoteEndpoints.get(edgeId);
         if (endpoint) {
-          status.heartbeatSequence++;
-          const ping = this.createHeartbeatPing(this.localEdgeId, status.heartbeatSequence);
+          status.unifiedSequence++;
+          const ping = this.createHeartbeatPing(this.localEdgeId, status.unifiedSequence);
           this.sendPacket(ping, endpoint.host, endpoint.port);
           status.lastHeartbeatSent = now;
           // 记录发送时间用于RTT计算
-          status.heartbeatSentTime.set(status.heartbeatSequence, now);
+          status.heartbeatSentTime.set(status.unifiedSequence, now);
           this.stats.heartbeatsSent++;
-          this.logger.debug(`Sent heartbeat PING to edge ${edgeId} (active side), sequence: ${status.heartbeatSequence}`);
+          this.logger.debug(`Sent heartbeat PING to edge ${edgeId} (active side), sequence: ${status.unifiedSequence}`);
         }
       }
     }
@@ -1046,6 +1046,12 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       return;
     }
 
+    // 使用统一序列号发生器
+    if (status) {
+      status.unifiedSequence++;
+      packet.sequence = status.unifiedSequence;
+    }
+
     // 加密（如果启用）
     let finalPacket: Buffer;
     if (this.encryptionConfig) {
@@ -1066,31 +1072,13 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
 
   /**
    * 广播语音包到所有Edge（除了excludeEdge）
-   * 注意：Edge间broadcast不需要缓存，因为每次都是实时数据
-   * 优化：如果发送给多个Edge，复用加密后的数据（但不持久化缓存）
+   * 注意：由于使用统一序列号，每个 Edge 需要独立的序列号，因此不能复用加密数据
    */
   broadcast(
     packet: VoicePacketHeader,
     voiceData: Buffer,
     excludeEdge?: number
   ): void {
-    // 编码包头（自定义12字节header，用于Edge间通信）
-    const headerBuffer = this.encodePacketHeader(packet);
-    // voiceData 是完整的 Mumble 语音包格式：[header][session][sequence][voice_data]
-    const fullPacket = Buffer.concat([headerBuffer, voiceData]);
-
-    // 加密（如果启用）- 为本次broadcast加密一次，所有edge复用同一个加密结果
-    // 不缓存加密结果，因为语音包是实时流数据，不会重复发送
-    let finalPacket: Buffer;
-    if (this.encryptionConfig) {
-      finalPacket = this.encodePacket({
-        ...packet,
-        data: fullPacket,
-      });
-    } else {
-      finalPacket = fullPacket;
-    }
-
     // 发送给所有端点
     let sentCount = 0;
     for (const [edgeId, endpoint] of this.remoteEndpoints) {
@@ -1106,15 +1094,36 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
         continue;
       }
       
-      this.sendPacket(finalPacket, endpoint.host, endpoint.port);
-      sentCount++;
+      // 为每个 Edge 使用独立的序列号
+      if (status) {
+        status.unifiedSequence++;
+        const edgePacket = { ...packet, sequence: status.unifiedSequence };
+        
+        // 编码包头（自定义12字节header，用于Edge间通信）
+        const headerBuffer = this.encodePacketHeader(edgePacket);
+        // voiceData 是完整的 Mumble 语音包格式：[header][session][sequence][voice_data]
+        const fullPacket = Buffer.concat([headerBuffer, voiceData]);
+
+        // 加密（如果启用）
+        let finalPacket: Buffer;
+        if (this.encryptionConfig) {
+          finalPacket = this.encodePacket({
+            ...edgePacket,
+            data: fullPacket,
+          });
+        } else {
+          finalPacket = fullPacket;
+        }
+        
+        this.sendPacket(finalPacket, endpoint.host, endpoint.port);
+        sentCount++;
+      }
     }
     
     if (sentCount > 0) {
       this.logger.debug(
         `Broadcasted voice packet to ${sentCount} peers: ` +
-        `sender=${packet.senderId}, target=${packet.targetId}, ` +
-        `seq=${packet.sequence}, total_size=${finalPacket.length}`
+        `sender=${packet.senderId}, target=${packet.targetId}`
       );
     }
   }
