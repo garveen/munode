@@ -19,6 +19,7 @@ import {
   DEFAULT_FALLBACK_CONFIG,
   RouteValidator,
   type ValidationResult,
+  VoiceUDPTransport,
 } from '@munode/protocol';
 import type {
   EdgeConfig,
@@ -100,6 +101,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
   private voiceRoutingConfig: Required<EdgeVoiceRoutingConfig>;
   private serverId: number;
   private logger: Logger;
+  private voiceTransport?: VoiceUDPTransport; // VoiceUDPTransport引用，用于获取传输层丢包率
   
   // 路由表: targetEdgeId -> RouteEntry
   private routingTable: Map<number, RouteEntry> = new Map();
@@ -109,9 +111,6 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
   
   // 质量样本: targetEdgeId -> QualitySample[]
   private qualitySamples: Map<number, QualitySample[]> = new Map();
-  
-  // 序列号追踪（滑动窗口）: targetEdgeId -> { minSeq: number, maxSeq: number, received: Set<number> }
-  private sequenceTracking: Map<number, { minSeq: number; maxSeq: number; received: Set<number> }> = new Map();
   
   // 中转统计
   private relayStats: RelayStats;
@@ -144,10 +143,11 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
   private statsCache: { stats: RouteStats; timestamp: number } | null = null;
   private readonly STATS_CACHE_TTL = 3000; // 3秒缓存
 
-  constructor(config: EdgeConfig, logger: Logger) {
+  constructor(config: EdgeConfig, logger: Logger, voiceTransport?: VoiceUDPTransport) {
     super();
     this.config = config;
     this.serverId = config.server_id;
+    this.voiceTransport = voiceTransport;
     this.logger = logger;
     
     // 合并配置
@@ -275,8 +275,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     // 移除质量样本
     this.qualitySamples.delete(edgeId);
     
-    // 移除序列号追踪
-    this.sequenceTracking.delete(edgeId);
+    // 注意：序列号追踪由VoiceUDPTransport管理，无需在此清理
     
     // 清除相关缓存
     this.routeCache.delete(edgeId);
@@ -561,6 +560,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
 
   /**
    * 记录收到的语音包（用于被动探测）
+   * 注意：序列号跟踪和丢包率计算已移至VoiceUDPTransport（传输层）
    */
   recordReceivedPacket(
     sourceEdgeId: number, 
@@ -579,8 +579,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
       this.updateRttSample(sourceEdgeId, rtt, sequence);
     }
     
-    // 更新序列号追踪（用于丢包率计算）
-    this.updateSequenceTracking(sourceEdgeId, sequence);
+    // 序列号跟踪已由VoiceUDPTransport处理，这里不再重复
   }
 
   /**
@@ -607,51 +606,10 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
   }
 
   /**
-   * 更新序列号追踪（滑动窗口）
-   */
-  private updateSequenceTracking(sourceEdgeId: number, sequence: number): void {
-    let tracking = this.sequenceTracking.get(sourceEdgeId);
-    if (!tracking) {
-      tracking = { minSeq: sequence, maxSeq: sequence, received: new Set() };
-      this.sequenceTracking.set(sourceEdgeId, tracking);
-    }
-    
-    // 添加接收到的序列号
-    tracking.received.add(sequence);
-    
-    // 更新序列号范围
-    if (sequence > tracking.maxSeq) {
-      tracking.maxSeq = sequence;
-    }
-    if (sequence < tracking.minSeq) {
-      tracking.minSeq = sequence;
-    }
-    
-    // 使用滑动窗口：只保留最近的 loss_window_size 个序列号范围
-    const windowSize = this.voiceRoutingConfig.probe.loss_window_size;
-    const expectedMaxRange = tracking.maxSeq - tracking.minSeq + 1;
-    
-    if (expectedMaxRange > windowSize) {
-      // 窗口超出限制，移动窗口起点
-      const newMinSeq = tracking.maxSeq - windowSize + 1;
-      
-      // 清理旧的序列号
-      for (const seq of tracking.received) {
-        if (seq < newMinSeq) {
-          tracking.received.delete(seq);
-        }
-      }
-      
-      tracking.minSeq = newMinSeq;
-    }
-  }
-
-  /**
    * 更新网络质量指标
    */
   private updateQualityMetrics(sourceEdgeId: number): void {
     const samples = this.qualitySamples.get(sourceEdgeId) || [];
-    const tracking = this.sequenceTracking.get(sourceEdgeId);
     
     if (samples.length === 0) {
       return;
@@ -674,15 +632,23 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
       jitter = totalDiff / (samples.length - 1);
     }
     
-    // 计算丢包率（基于滑动窗口）
+    // 从VoiceUDPTransport获取丢包率（传输层已经计算好）
     let packetLoss = 0;
-    if (tracking && tracking.received.size > 0) {
-      const windowRange = tracking.maxSeq - tracking.minSeq + 1;
-      const receivedInWindow = tracking.received.size;
-      
-      // 确保有足够的样本才计算丢包率
-      if (windowRange > 0) {
-        packetLoss = Math.max(0, Math.min(1, (windowRange - receivedInWindow) / windowRange));
+    if (this.voiceTransport) {
+      const status = this.voiceTransport.getConnectionStatus(sourceEdgeId);
+      if (status && status.receivedSequences.size > 1) {
+        // 计算丢包率（与VoiceUDPTransport中的算法一致）
+        const seqArray = Array.from(status.receivedSequences) as number[];
+        const sortedSeqs = seqArray.sort((a, b) => a - b);
+        let totalGaps = 0;
+        for (let i = 1; i < sortedSeqs.length; i++) {
+          const gap = sortedSeqs[i] - sortedSeqs[i - 1] - 1;
+          if (gap > 0) totalGaps += gap;
+        }
+        const totalExpected = status.receivedSequences.size + totalGaps;
+        if (totalExpected > 0) {
+          packetLoss = totalGaps / totalExpected;
+        }
       }
     }
     
@@ -936,7 +902,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
       if (now - quality.lastUpdate > ttl) {
         this.connectionQualities.delete(edgeId);
         this.qualitySamples.delete(edgeId);
-        this.sequenceTracking.delete(edgeId);
+        // sequenceTracking已移至VoiceUDPTransport，不再需要清理
         
         this.logger.debug(`Expired quality metrics for Edge ${edgeId}`);
       }

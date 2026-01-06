@@ -39,8 +39,8 @@ export class VoiceManager {
     this.voiceTransport = voiceTransport;
     this.logger = handlerFactory.logger;
     
-    // 初始化语音路由管理器
-    this.voiceRoutingManager = new VoiceRoutingManager(config, this.logger);
+    // 初始化语音路由管理器，传入voiceTransport引用
+    this.voiceRoutingManager = new VoiceRoutingManager(config, this.logger, this.voiceTransport);
     this.setupRoutingManagerEvents();
     
     // 启动 TCP 恢复检查
@@ -318,12 +318,16 @@ export class VoiceManager {
       }
     });
     
-    // 监听Edge间心跳测量到的RTT，用于网络质量统计
-    this.voiceTransport.on('quality-measured', (edgeId: number, rtt: number, sequence: number) => {
+    // 监听Edge间心跳测量到的RTT和丢包率，用于网络质量统计
+    this.voiceTransport.on('quality-measured', (edgeId: number, rtt: number, packetLoss: number, sequence: number) => {
       if (this.voiceRoutingManager.isEnabled()) {
-        // 使用心跳测量的RTT作为网络质量样本，使用真实的心跳序列号
+        // VoiceUDPTransport已经计算好了丢包率，直接使用
+        // 注意：这里保留recordReceivedPacket是为了维持RTT的平滑计算
         this.voiceRoutingManager.recordReceivedPacket(edgeId, sequence, Date.now() - rtt);
-        this.logger.debug(`Recorded quality from heartbeat: Edge ${edgeId}, RTT ${rtt}ms, sequence ${sequence}`);
+        this.logger.debug(
+          `Recorded quality from heartbeat: Edge ${edgeId}, RTT ${rtt}ms, ` +
+          `packetLoss ${(packetLoss * 100).toFixed(2)}%, sequence ${sequence}`
+        );
       }
     });
     

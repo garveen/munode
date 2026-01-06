@@ -81,6 +81,9 @@ export interface EdgeConnectionStatus {
   remoteNonce?: Buffer; // Remote nonce received during handshake
   unifiedSequence: number; // 统一序列号发生器（心跳和语音包共用，用于准确的丢包率统计）
   heartbeatSentTime: Map<number, number>; // sequence -> timestamp for RTT calculation
+  // 序列号跟踪（用于丢包率计算）
+  receivedSequences: Set<number>; // 收到的序列号集合（滑动窗口）
+  maxWindowSize: number; // 滑动窗口最大大小
 }
 
 /**
@@ -94,7 +97,7 @@ export interface VoiceUDPTransportEvents extends EventMap {
   'edge-disconnected': [edgeId: number];
   'reconnect-failed': [edgeId: number];
   'voice-packet': [packet: VoicePacket, rinfo: dgram.RemoteInfo];
-  'quality-measured': [edgeId: number, rtt: number, sequence: number];
+  'quality-measured': [edgeId: number, rtt: number, packetLoss: number, sequence: number];
 }
 
 export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents> {
@@ -231,6 +234,8 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       isActiveSide,
       unifiedSequence: 0,
       heartbeatSentTime: new Map(),
+      receivedSequences: new Set(),
+      maxWindowSize: 100, // 默认窗口大小100
     });
     
     this.logger.info(
@@ -551,6 +556,8 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
           isActiveSide,
           unifiedSequence: 0,
           heartbeatSentTime: new Map(),
+          receivedSequences: new Set(),
+          maxWindowSize: 100,
         });
       }
       
@@ -740,13 +747,16 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       this.logger.debug(`Received heartbeat PONG from edge ${edgeId}, sequence: ${pong.sequence}`);
       this.stats.heartbeatsReceived++;
       
+      // 记录序列号并计算丢包率
+      const packetLoss = this.recordSequenceAndCalculatePacketLoss(edgeId, pong.sequence);
+      
       // 计算RTT
       const sentTime = status.heartbeatSentTime.get(pong.sequence);
       if (sentTime) {
         const rtt = now - sentTime;
-        this.logger.debug(`Edge ${edgeId} RTT: ${rtt}ms`);
-        // 触发质量测量事件，传递序列号
-        this.emit('quality-measured', edgeId, rtt, pong.sequence);
+        this.logger.debug(`Edge ${edgeId} RTT: ${rtt}ms, packetLoss: ${(packetLoss * 100).toFixed(2)}%`);
+        // 触发质量测量事件，传递RTT、丢包率和序列号
+        this.emit('quality-measured', edgeId, rtt, packetLoss, pong.sequence);
         // 清理已使用的时间戳
         status.heartbeatSentTime.delete(pong.sequence);
         
@@ -1190,6 +1200,9 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
           data: decrypted.data, // 已经是去除了 header 的 Mumble 包
         };
 
+        // 记录序列号用于丢包率统计
+        this.recordSequenceAndCalculatePacketLoss(packet.senderId, packet.sequence);
+
         // 发出事件
         this.emit('voice-packet', packet, rinfo);
       } else {
@@ -1207,6 +1220,9 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
           sequence: decoded.header.sequence,
           data: decoded.voiceData,
         };
+
+        // 记录序列号用于丢包率统计
+        this.recordSequenceAndCalculatePacketLoss(packet.senderId, packet.sequence);
 
         // 发出事件
         this.emit('voice-packet', packet, rinfo);
@@ -1302,6 +1318,49 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     };
   }
   
+  /**
+   * 记录收到的序列号并计算丢包率
+   * @private
+   */
+  private recordSequenceAndCalculatePacketLoss(edgeId: number, sequence: number): number {
+    const status = this.connectionStatus.get(edgeId);
+    if (!status) return 0;
+    
+    // 添加序列号到集合
+    status.receivedSequences.add(sequence);
+    
+    // 滑动窗口：保持最近的 maxWindowSize 个序列号
+    if (status.receivedSequences.size > status.maxWindowSize) {
+      const sortedSeqs = Array.from(status.receivedSequences).sort((a, b) => a - b);
+      const toRemove = sortedSeqs.length - status.maxWindowSize;
+      for (let i = 0; i < toRemove; i++) {
+        status.receivedSequences.delete(sortedSeqs[i]);
+      }
+    }
+    
+    // 计算丢包率（基于序列号间隙）
+    if (status.receivedSequences.size > 1) {
+      const sortedSeqs = Array.from(status.receivedSequences).sort((a, b) => a - b);
+      
+      // 计算序列号间的实际gaps（丢包）
+      let totalGaps = 0;
+      for (let i = 1; i < sortedSeqs.length; i++) {
+        const gap = sortedSeqs[i] - sortedSeqs[i-1] - 1;
+        if (gap > 0) {
+          totalGaps += gap;
+        }
+      }
+      
+      // 丢包率 = gaps / (收到的包数 + gaps)
+      const totalExpected = status.receivedSequences.size + totalGaps;
+      if (totalExpected > 0) {
+        return totalGaps / totalExpected;
+      }
+    }
+    
+    return 0;
+  }
+
   /**
    * 获取Edge连接状态
    */
