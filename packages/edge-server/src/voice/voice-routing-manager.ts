@@ -632,22 +632,18 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
       jitter = totalDiff / (samples.length - 1);
     }
     
-    // 从VoiceUDPTransport获取丢包率（传输层已经计算好）
+    // 从VoiceUDPTransport获取质量指标（传输层已经计算好）
     let packetLoss = 0;
     if (this.voiceTransport) {
-      const status = this.voiceTransport.getConnectionStatus(sourceEdgeId);
-      if (status && status.receivedSequences.size > 1) {
-        // 计算丢包率（与VoiceUDPTransport中的算法一致）
-        const seqArray = Array.from(status.receivedSequences) as number[];
-        const sortedSeqs = seqArray.sort((a, b) => a - b);
-        let totalGaps = 0;
-        for (let i = 1; i < sortedSeqs.length; i++) {
-          const gap = sortedSeqs[i] - sortedSeqs[i - 1] - 1;
-          if (gap > 0) totalGaps += gap;
+      const metrics = this.voiceTransport.getQualityMetrics(sourceEdgeId);
+      if (metrics) {
+        packetLoss = metrics.packetLoss;
+        // 如果传输层已经计算了RTT和抖动，可以直接使用
+        if (metrics.rtt > 0) {
+          smoothedRtt = metrics.rtt;
         }
-        const totalExpected = status.receivedSequences.size + totalGaps;
-        if (totalExpected > 0) {
-          packetLoss = totalGaps / totalExpected;
+        if (metrics.jitter > 0) {
+          jitter = metrics.jitter;
         }
       }
     }
