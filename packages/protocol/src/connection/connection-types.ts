@@ -112,3 +112,28 @@ export interface DataReceivedData extends ConnectionEventData {
   data: Buffer;
   sequence?: number;
 }
+
+/**
+ * 连接质量指标
+ * 
+ * 由连接层收集和计算，暴露给上层使用
+ */
+export interface ConnectionQualityMetrics {
+  /** Edge ID */
+  edgeId: number;
+  /** 往返时间（毫秒） */
+  rtt: number;
+  /** 丢包率（0-1） */
+  packetLoss: number;
+  /** 抖动（毫秒） */
+  jitter: number;
+  /** 最后更新时间 */
+  lastUpdate: number;
+  /** 样本数量 */
+  samples: number;
+  /** 带宽（bytes/sec） */
+  bandwidth: {
+    upload: number;
+    download: number;
+  };
+}

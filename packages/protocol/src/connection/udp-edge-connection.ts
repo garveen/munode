@@ -58,6 +58,22 @@ interface HeartbeatState {
 }
 
 /**
+ * 质量监控状态
+ */
+interface QualityTrackingState {
+  rttSamples: number[]; // RTT样本
+  maxRttSamples: number; // 最大样本数
+  receivedSequences: Set<number>; // 接收到的序列号
+  maxWindowSize: number; // 滑动窗口大小
+  lastRtt: number;
+  lastPacketLoss: number;
+  lastJitter: number;
+  bandwidthStart: number;
+  bandwidthBytesIn: number;
+  bandwidthBytesOut: number;
+}
+
+/**
  * UDP Edge连接实现
  */
 export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> implements IEdgeConnection {
@@ -70,6 +86,7 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
   private state: ConnectionState = ConnectionState.DISCONNECTED;
   private handshakeState: HandshakeState;
   private heartbeatState: HeartbeatState;
+  private qualityTracking: QualityTrackingState;
   private stats = {
     packetsSent: 0,
     packetsReceived: 0,
@@ -108,6 +125,20 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
       isActiveSide,
       unifiedSequence: 0,
       sentTime: new Map(),
+    };
+
+    // 初始化质量监控
+    this.qualityTracking = {
+      rttSamples: [],
+      maxRttSamples: 10,
+      receivedSequences: new Set(),
+      maxWindowSize: 100,
+      lastRtt: 0,
+      lastPacketLoss: 0,
+      lastJitter: 0,
+      bandwidthStart: now,
+      bandwidthBytesIn: 0,
+      bandwidthBytesOut: 0,
     };
   }
 
@@ -158,6 +189,7 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
     this.sendFunction(packet, this.config.host, this.config.port);
     this.stats.packetsSent++;
     this.stats.bytesSent += packet.length;
+    this.qualityTracking.bandwidthBytesOut += packet.length;
     this.updateLastSeen();
   }
 
@@ -266,6 +298,7 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
     this.updateLastSeen();
     this.stats.packetsReceived++;
     this.stats.bytesReceived += data.length;
+    this.qualityTracking.bandwidthBytesIn += data.length;
     this.emit('data', data, Date.now());
   }
 
@@ -460,13 +493,95 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
     this.logger.debug(`Received heartbeat pong from edge ${this.edgeId}, sequence: ${pong.sequence}`);
     this.heartbeatState.lastReceived = Date.now();
 
-    // 计算RTT
+    // 计算RTT并更新质量指标
     const sentTime = this.heartbeatState.sentTime.get(pong.sequence);
     if (sentTime) {
       const rtt = Date.now() - sentTime;
       this.logger.debug(`RTT to edge ${this.edgeId}: ${rtt}ms`);
       this.heartbeatState.sentTime.delete(pong.sequence);
+      
+      // 更新质量追踪
+      this.updateQualityMetrics(rtt, pong.sequence);
     }
+  }
+
+  /**
+   * 更新质量指标
+   */
+  private updateQualityMetrics(rtt: number, sequence: number): void {
+    const tracking = this.qualityTracking;
+    
+    // 记录序列号用于丢包率计算
+    tracking.receivedSequences.add(sequence);
+    if (tracking.receivedSequences.size > tracking.maxWindowSize) {
+      const sorted = Array.from(tracking.receivedSequences).sort((a, b) => a - b);
+      const toRemove = sorted.slice(0, tracking.receivedSequences.size - tracking.maxWindowSize);
+      toRemove.forEach(seq => tracking.receivedSequences.delete(seq));
+    }
+    
+    // 计算丢包率
+    const packetLoss = this.calculatePacketLoss();
+    tracking.lastPacketLoss = packetLoss;
+    
+    // 更新RTT样本
+    tracking.rttSamples.push(rtt);
+    if (tracking.rttSamples.length > tracking.maxRttSamples) {
+      tracking.rttSamples.shift();
+    }
+    tracking.lastRtt = rtt;
+    
+    // 计算抖动
+    if (tracking.rttSamples.length >= 2) {
+      let totalDiff = 0;
+      for (let i = 1; i < tracking.rttSamples.length; i++) {
+        totalDiff += Math.abs(tracking.rttSamples[i] - tracking.rttSamples[i - 1]);
+      }
+      tracking.lastJitter = totalDiff / (tracking.rttSamples.length - 1);
+    }
+  }
+
+  /**
+   * 计算丢包率
+   */
+  private calculatePacketLoss(): number {
+    const sequences = this.qualityTracking.receivedSequences;
+    if (sequences.size < 2) {
+      return 0;
+    }
+    
+    const sorted = Array.from(sequences).sort((a, b) => a - b);
+    let gaps = 0;
+    for (let i = 1; i < sorted.length; i++) {
+      const gap = sorted[i] - sorted[i - 1] - 1;
+      if (gap > 0) {
+        gaps += gap;
+      }
+    }
+    
+    const totalExpected = sequences.size + gaps;
+    return totalExpected > 0 ? gaps / totalExpected : 0;
+  }
+
+  /**
+   * 获取连接质量指标
+   */
+  getQualityMetrics(): import('./connection-types.js').ConnectionQualityMetrics {
+    const tracking = this.qualityTracking;
+    const now = Date.now();
+    const elapsedSec = (now - tracking.bandwidthStart) / 1000;
+    
+    return {
+      edgeId: this.edgeId,
+      rtt: tracking.lastRtt,
+      packetLoss: tracking.lastPacketLoss,
+      jitter: tracking.lastJitter,
+      lastUpdate: now,
+      samples: tracking.rttSamples.length,
+      bandwidth: {
+        upload: elapsedSec > 0 ? tracking.bandwidthBytesOut / elapsedSec : 0,
+        download: elapsedSec > 0 ? tracking.bandwidthBytesIn / elapsedSec : 0,
+      },
+    };
   }
 
   /**

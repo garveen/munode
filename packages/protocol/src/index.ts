@@ -302,4 +302,5 @@ export {
   type ConnectionEventData,
   type ConnectionErrorData,
   type DataReceivedData,
+  type ConnectionQualityMetrics,
 } from './connection/connection-types.js';

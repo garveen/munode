@@ -220,6 +220,35 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
   }
 
   /**
+   * 获取连接质量指标
+   */
+  getQualityMetrics(edgeId: number): import('./connection-types.js').ConnectionQualityMetrics | undefined {
+    const connection = this.connections.get(edgeId);
+    if (!connection || connection.type !== 'udp') {
+      return undefined;
+    }
+    
+    // UDP连接有质量指标方法
+    return (connection as import('./udp-edge-connection.js').UDPEdgeConnection).getQualityMetrics();
+  }
+
+  /**
+   * 获取所有连接的质量指标
+   */
+  getAllQualityMetrics(): Map<number, import('./connection-types.js').ConnectionQualityMetrics> {
+    const metrics = new Map<number, import('./connection-types.js').ConnectionQualityMetrics>();
+    
+    for (const [edgeId, connection] of this.connections) {
+      if (connection.type === 'udp') {
+        const quality = (connection as import('./udp-edge-connection.js').UDPEdgeConnection).getQualityMetrics();
+        metrics.set(edgeId, quality);
+      }
+    }
+    
+    return metrics;
+  }
+
+  /**
    * 处理接收到的UDP数据包
    * 根据包内容路由到对应的连接
    */
