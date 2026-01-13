@@ -299,6 +299,7 @@ export type {
 export {
   ConnectionState,
   ConnectionType,
+  ConnectionStrategy,
   type ConnectionStats,
   type ConnectionStatus,
   type ConnectionConfig,

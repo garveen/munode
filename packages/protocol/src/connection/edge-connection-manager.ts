@@ -53,6 +53,17 @@ export interface EdgeConnectionManagerConfig {
   maxReconnectAttempts?: number;
   /** 重连延迟（毫秒） */
   reconnectDelay?: number;
+  /** 连接策略：udp_only, tcp_only, 或 auto_fallback（默认: udp_only） */
+  connectionStrategy?: import('./connection-types.js').ConnectionStrategy;
+  /** 自动降级的质量阈值（仅在auto_fallback模式下使用） */
+  fallbackThresholds?: {
+    /** RTT阈值（毫秒），超过此值考虑降级 */
+    maxRtt?: number;
+    /** 丢包率阈值（0-1），超过此值考虑降级 */
+    maxPacketLoss?: number;
+    /** 连续失败次数，达到此值触发降级 */
+    maxConsecutiveFailures?: number;
+  };
 }
 
 /**
@@ -66,11 +77,19 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
   private connections = new Map<number, IEdgeConnection>();
   private endpoints = new Map<number, EndpointInfo>();
   private udpSendFunction?: UDPSendFunction;
+  private connectionFailures = new Map<number, number>(); // Track connection failures
+  private connectionStrategy: import('./connection-types.js').ConnectionStrategy;
 
   constructor(config: EdgeConnectionManagerConfig, logger: Logger) {
     super();
     this.config = config;
     this.logger = logger;
+    
+    // Import and set connection strategy
+    const { ConnectionStrategy } = require('./connection-types.js');
+    this.connectionStrategy = config.connectionStrategy || ConnectionStrategy.UDP_ONLY;
+    
+    this.logger.info(`EdgeConnectionManager initialized with strategy: ${this.connectionStrategy}`);
   }
 
   /**
@@ -94,28 +113,36 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
 
   /**
    * 注册并连接到远程端点
+   * 
+   * @param edgeId Edge ID
+   * @param host 主机地址
+   * @param port 端口
+   * @param type 连接类型（可选，将根据策略自动决定）
    */
   async registerEndpoint(
     edgeId: number,
     host: string,
     port: number,
-    type: ConnectionType = ConnectionType.UDP
+    type?: ConnectionType
   ): Promise<void> {
     // 规范化主机名
     const normalizedHost = host === 'localhost' ? '127.0.0.1' : host;
 
+    // 根据策略决定连接类型
+    const effectiveType = type || this.determineConnectionType();
+    
     // 保存端点信息
     this.endpoints.set(edgeId, {
       edgeId,
       host: normalizedHost,
       port,
-      type,
+      type: effectiveType,
     });
 
-    this.logger.info(`Registering endpoint for edge ${edgeId}: ${normalizedHost}:${port} (${type})`);
+    this.logger.info(`Registering endpoint for edge ${edgeId}: ${normalizedHost}:${port} (${effectiveType}, strategy: ${this.connectionStrategy})`);
 
     // 创建连接
-    const connection = await this.createConnection(edgeId, normalizedHost, port, type);
+    const connection = await this.createConnection(edgeId, normalizedHost, port, effectiveType);
     if (!connection) {
       throw new Error(`Failed to create connection to edge ${edgeId}`);
     }
@@ -125,6 +152,22 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
 
     // 发起连接
     await connection.connect();
+  }
+
+  /**
+   * 根据策略决定初始连接类型
+   */
+  private determineConnectionType(): ConnectionType {
+    const { ConnectionStrategy } = require('./connection-types.js');
+    
+    switch (this.connectionStrategy) {
+      case ConnectionStrategy.TCP_ONLY:
+        return ConnectionType.TCP;
+      case ConnectionStrategy.UDP_ONLY:
+      case ConnectionStrategy.AUTO_FALLBACK:
+      default:
+        return ConnectionType.UDP; // AUTO_FALLBACK starts with UDP
+    }
   }
 
   /**
@@ -344,18 +387,26 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
    */
   private setupConnectionEvents(connection: IEdgeConnection): void {
     connection.on('connected', () => {
-      this.logger.info(`Edge ${connection.edgeId} connected`);
+      this.logger.info(`Edge ${connection.edgeId} connected via ${connection.type.toUpperCase()}`);
+      // 重置失败计数
+      this.connectionFailures.set(connection.edgeId, 0);
       this.emit('edge-connected', connection.edgeId);
     });
 
     connection.on('disconnected', (reason) => {
       this.logger.warn(`Edge ${connection.edgeId} disconnected: ${reason || 'unknown'}`);
       this.emit('edge-disconnected', connection.edgeId, reason);
+      
+      // 处理自动降级
+      void this.handleConnectionFailure(connection.edgeId);
     });
 
     connection.on('error', (error) => {
       this.logger.error(`Edge ${connection.edgeId} error:`, error);
       this.emit('edge-error', connection.edgeId, error);
+      
+      // 处理自动降级
+      void this.handleConnectionFailure(connection.edgeId);
     });
 
     connection.on('data', (data, timestamp) => {
@@ -367,5 +418,63 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
       this.logger.info(`Edge ${connection.edgeId} reconnecting (attempt ${attempt})`);
       this.emit('edge-reconnecting', connection.edgeId, attempt);
     });
+  }
+
+  /**
+   * 处理连接失败，实现自动降级逻辑
+   */
+  private async handleConnectionFailure(edgeId: number): Promise<void> {
+    const { ConnectionStrategy } = require('./connection-types.js');
+    
+    // 只在AUTO_FALLBACK模式下处理降级
+    if (this.connectionStrategy !== ConnectionStrategy.AUTO_FALLBACK) {
+      return;
+    }
+    
+    const connection = this.connections.get(edgeId);
+    const endpoint = this.endpoints.get(edgeId);
+    
+    if (!connection || !endpoint) {
+      return;
+    }
+    
+    // 增加失败计数
+    const failures = (this.connectionFailures.get(edgeId) || 0) + 1;
+    this.connectionFailures.set(edgeId, failures);
+    
+    // 检查是否需要降级
+    const thresholds = this.config.fallbackThresholds || {};
+    const maxFailures = thresholds.maxConsecutiveFailures || 3;
+    
+    if (failures >= maxFailures && connection.type === 'udp') {
+      this.logger.warn(
+        `Edge ${edgeId} UDP connection failed ${failures} times, falling back to TCP`
+      );
+      
+      // 关闭UDP连接
+      connection.close();
+      connection.removeAllListeners();
+      
+      // 创建TCP连接
+      try {
+        const tcpConnection = await this.createConnection(
+          edgeId,
+          endpoint.host,
+          endpoint.port,
+          ConnectionType.TCP
+        );
+        
+        if (tcpConnection) {
+          this.connections.set(edgeId, tcpConnection);
+          this.endpoints.set(edgeId, { ...endpoint, type: ConnectionType.TCP });
+          this.setupConnectionEvents(tcpConnection);
+          await tcpConnection.connect();
+          
+          this.logger.info(`Edge ${edgeId} successfully fell back to TCP`);
+        }
+      } catch (error) {
+        this.logger.error(`Failed to fallback to TCP for edge ${edgeId}:`, error);
+      }
+    }
   }
 }

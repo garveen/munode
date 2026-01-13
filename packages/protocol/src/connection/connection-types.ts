@@ -24,6 +24,18 @@ export enum ConnectionType {
 }
 
 /**
+ * 连接策略
+ */
+export enum ConnectionStrategy {
+  /** 只使用UDP */
+  UDP_ONLY = 'udp_only',
+  /** 只使用TCP */
+  TCP_ONLY = 'tcp_only',
+  /** 优先UDP，失败时降级到TCP */
+  AUTO_FALLBACK = 'auto_fallback',
+}
+
+/**
  * 连接统计信息
  */
 export interface ConnectionStats {
