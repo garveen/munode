@@ -14,7 +14,7 @@ import crypto from 'crypto';
 import type dgram from 'dgram';
 import { type Logger, TypedEventEmitter, type EventMap } from '@munode/common';
 import { EdgeConnectionManager, type EdgeConnectionManagerConfig } from '../connection/edge-connection-manager.js';
-import type { ConnectionStatus } from '../connection/connection-types.js';
+import type { ConnectionStatus, ConnectionQualityMetrics } from '../connection/connection-types.js';
 
 // 保持原有导出以维持向后兼容
 export interface VoiceUDPConfig {
@@ -64,20 +64,9 @@ export interface VoiceUDPTransportEvents extends EventMap {
 }
 
 /**
- * 质量监控数据
- */
-interface QualityMetrics {
-  rtt: number;
-  packetLoss: number;
-  jitter: number;
-  lastUpdate: number;
-  samples: number;
-}
-
-/**
  * 语音UDP传输层
  * 
- * Phase 2: 使用 EdgeConnectionManager 管理连接，专注于数据传输
+ * Phase 3: 使用 EdgeConnectionManager 管理连接，质量监控移至连接层
  */
 export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents> {
   private config: VoiceUDPConfig;
@@ -85,12 +74,6 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   private logger: Logger;
   private localEdgeId: number;
   private connectionManager: EdgeConnectionManager;
-  
-  // 质量监控
-  private qualityMetrics = new Map<number, QualityMetrics>();
-  private receivedSequences = new Map<number, Set<number>>();
-  private sequenceTimestamps = new Map<number, Map<number, number>>();
-  private readonly MAX_WINDOW_SIZE = 100;
   
   // 性能优化：加密包缓存
   private encryptedPacketCache = new Map<string, Buffer>();
@@ -159,9 +142,6 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
    */
   stop(): void {
     this.connectionManager.stop();
-    this.qualityMetrics.clear();
-    this.receivedSequences.clear();
-    this.sequenceTimestamps.clear();
     this.encryptedPacketCache.clear();
     this.logger.info('VoiceUDPTransport stopped');
   }
@@ -179,9 +159,6 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
    */
   unregisterEndpoint(edgeId: number): void {
     this.connectionManager.unregisterEndpoint(edgeId);
-    this.qualityMetrics.delete(edgeId);
-    this.receivedSequences.delete(edgeId);
-    this.sequenceTimestamps.delete(edgeId);
     this.logger.info(`Unregistered endpoint for edge ${edgeId}`);
   }
 
@@ -200,8 +177,6 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       
       this.stats.packetsSent++;
       this.stats.bytesSent += data.length;
-      
-      this.recordSentPacket(targetEdgeId, packet.sequence);
     } catch (error) {
       this.stats.errors++;
       this.logger.error(`Failed to send voice packet to edge ${targetEdgeId}:`, error);
@@ -295,10 +270,10 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   }
 
   /**
-   * 获取质量指标
+   * 获取质量指标（委托给连接层）
    */
-  getQualityMetrics(edgeId: number): QualityMetrics | undefined {
-    return this.qualityMetrics.get(edgeId);
+  getQualityMetrics(edgeId: number): ConnectionQualityMetrics | undefined {
+    return this.connectionManager.getQualityMetrics(edgeId);
   }
 
   /**
@@ -359,10 +334,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       this.logger.warn(`Edge ${edgeId} disconnected (transport layer): ${reason || 'unknown'}`);
       this.emit('edge-disconnected', edgeId);
       
-      // 清理质量监控数据
-      this.qualityMetrics.delete(edgeId);
-      this.receivedSequences.delete(edgeId);
-      this.sequenceTimestamps.delete(edgeId);
+      // 质量监控数据由连接层管理，这里不需要清理
     });
 
     this.connectionManager.on('edge-error', (edgeId, error) => {
@@ -402,9 +374,6 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       // 更新统计
       this.stats.packetsReceived++;
       this.stats.bytesReceived += data.length;
-      
-      // 更新质量指标
-      this.updateQualityMetrics(edgeId, packet.sequence, timestamp);
       
       // 触发事件（保持向后兼容，不提供rinfo）
       this.emit('voice-packet', packet);
@@ -517,101 +486,4 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     return Buffer.concat([decipher.update(data), decipher.final()]);
   }
 
-  /**
-   * 记录发送的包（用于RTT计算）
-   */
-  private recordSentPacket(edgeId: number, sequence: number): void {
-    let timestamps = this.sequenceTimestamps.get(edgeId);
-    if (!timestamps) {
-      timestamps = new Map();
-      this.sequenceTimestamps.set(edgeId, timestamps);
-    }
-    
-    timestamps.set(sequence, Date.now());
-    
-    // 限制大小
-    if (timestamps.size > this.MAX_WINDOW_SIZE) {
-      const oldestSeq = Math.min(...timestamps.keys());
-      timestamps.delete(oldestSeq);
-    }
-  }
-
-  /**
-   * 更新质量指标
-   */
-  private updateQualityMetrics(edgeId: number, sequence: number, receiveTime: number): void {
-    // 记录接收的序列号
-    let sequences = this.receivedSequences.get(edgeId);
-    if (!sequences) {
-      sequences = new Set();
-      this.receivedSequences.set(edgeId, sequences);
-    }
-    sequences.add(sequence);
-    
-    // 限制窗口大小
-    if (sequences.size > this.MAX_WINDOW_SIZE) {
-      const sorted = Array.from(sequences).sort((a, b) => a - b);
-      const toRemove = sorted.slice(0, sequences.size - this.MAX_WINDOW_SIZE);
-      toRemove.forEach(seq => sequences!.delete(seq));
-    }
-    
-    // 计算丢包率
-    const packetLoss = this.calculatePacketLoss(edgeId);
-    
-    // 计算RTT
-    let rtt = 0;
-    const timestamps = this.sequenceTimestamps.get(edgeId);
-    if (timestamps) {
-      const sentTime = timestamps.get(sequence);
-      if (sentTime) {
-        rtt = receiveTime - sentTime;
-        timestamps.delete(sequence);
-      }
-    }
-    
-    // 计算抖动
-    const currentMetrics = this.qualityMetrics.get(edgeId);
-    let jitter = 0;
-    if (currentMetrics && rtt > 0) {
-      jitter = Math.abs(rtt - currentMetrics.rtt);
-    }
-    
-    // 更新指标
-    const metrics: QualityMetrics = {
-      rtt: rtt || (currentMetrics?.rtt ?? 0),
-      packetLoss,
-      jitter,
-      lastUpdate: Date.now(),
-      samples: (currentMetrics?.samples ?? 0) + 1,
-    };
-    
-    this.qualityMetrics.set(edgeId, metrics);
-    
-    // 触发质量测量事件
-    if (rtt > 0) {
-      this.emit('quality-measured', edgeId, rtt, packetLoss, sequence);
-    }
-  }
-
-  /**
-   * 计算丢包率
-   */
-  private calculatePacketLoss(edgeId: number): number {
-    const sequences = this.receivedSequences.get(edgeId);
-    if (!sequences || sequences.size < 2) {
-      return 0;
-    }
-    
-    const sorted = Array.from(sequences).sort((a, b) => a - b);
-    let gaps = 0;
-    for (let i = 1; i < sorted.length; i++) {
-      const gap = sorted[i] - sorted[i - 1] - 1;
-      if (gap > 0) {
-        gaps += gap;
-      }
-    }
-    
-    const totalExpected = sequences.size + gaps;
-    return totalExpected > 0 ? gaps / totalExpected : 0;
-  }
 }
