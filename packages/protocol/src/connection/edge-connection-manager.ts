@@ -224,12 +224,18 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
    */
   getQualityMetrics(edgeId: number): import('./connection-types.js').ConnectionQualityMetrics | undefined {
     const connection = this.connections.get(edgeId);
-    if (!connection || connection.type !== 'udp') {
+    if (!connection) {
       return undefined;
     }
     
-    // UDP连接有质量指标方法
-    return (connection as import('./udp-edge-connection.js').UDPEdgeConnection).getQualityMetrics();
+    // Both UDP and TCP connections have quality metrics
+    if (connection.type === 'udp') {
+      return (connection as unknown as import('./udp-edge-connection.js').UDPEdgeConnection).getQualityMetrics();
+    } else if (connection.type === 'tcp') {
+      return (connection as unknown as import('./tcp-edge-connection.js').TCPEdgeConnection).getQualityMetrics();
+    }
+    
+    return undefined;
   }
 
   /**
@@ -240,7 +246,10 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
     
     for (const [edgeId, connection] of this.connections) {
       if (connection.type === 'udp') {
-        const quality = (connection as import('./udp-edge-connection.js').UDPEdgeConnection).getQualityMetrics();
+        const quality = (connection as unknown as import('./udp-edge-connection.js').UDPEdgeConnection).getQualityMetrics();
+        metrics.set(edgeId, quality);
+      } else if (connection.type === 'tcp') {
+        const quality = (connection as unknown as import('./tcp-edge-connection.js').TCPEdgeConnection).getQualityMetrics();
         metrics.set(edgeId, quality);
       }
     }
@@ -320,9 +329,9 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
         return new UDPEdgeConnection(connectionConfig, this.udpSendFunction, this.logger);
 
       case ConnectionType.TCP:
-        // TCP实现预留
-        this.logger.error(`TCP connection not implemented yet for edge ${edgeId}`);
-        return null;
+        // Import TCPEdgeConnection dynamically
+        const { TCPEdgeConnection } = await import('./tcp-edge-connection.js');
+        return new TCPEdgeConnection(connectionConfig, this.logger);
 
       default:
         this.logger.error(`Unknown connection type: ${type}`);

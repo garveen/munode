@@ -289,6 +289,9 @@ export {
 export {
   UDPEdgeConnection,
 } from './connection/udp-edge-connection.js';
+export {
+  TCPEdgeConnection,
+} from './connection/tcp-edge-connection.js';
 export type {
   IEdgeConnection,
   EdgeConnectionEvents,
