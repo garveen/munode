@@ -8,8 +8,8 @@ import type { Logger } from '@munode/common';
 import { TypedEventEmitter, type EventMap } from '@munode/common';
 import type { IEdgeConnection } from './edge-connection-interface.js';
 import { UDPEdgeConnection } from './udp-edge-connection.js';
-import type { ConnectionConfig, ConnectionStatus } from './connection-types.js';
-import { ConnectionType } from './connection-types.js';
+import type { ConnectionConfig, ConnectionStatus, ConnectionQualityMetrics } from './connection-types.js';
+import { ConnectionType, ConnectionStrategy } from './connection-types.js';
 
 /**
  * UDP发送函数类型
@@ -54,7 +54,7 @@ export interface EdgeConnectionManagerConfig {
   /** 重连延迟（毫秒） */
   reconnectDelay?: number;
   /** 连接策略：udp_only, tcp_only, 或 auto_fallback（默认: udp_only） */
-  connectionStrategy?: import('./connection-types.js').ConnectionStrategy;
+  connectionStrategy?: ConnectionStrategy;
   /** 自动降级的质量阈值（仅在auto_fallback模式下使用） */
   fallbackThresholds?: {
     /** RTT阈值（毫秒），超过此值考虑降级 */
@@ -78,15 +78,14 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
   private endpoints = new Map<number, EndpointInfo>();
   private udpSendFunction?: UDPSendFunction;
   private connectionFailures = new Map<number, number>(); // Track connection failures
-  private connectionStrategy: import('./connection-types.js').ConnectionStrategy;
+  private connectionStrategy: ConnectionStrategy;
 
   constructor(config: EdgeConnectionManagerConfig, logger: Logger) {
     super();
     this.config = config;
     this.logger = logger;
     
-    // Import and set connection strategy
-    const { ConnectionStrategy } = require('./connection-types.js');
+    // Set connection strategy
     this.connectionStrategy = config.connectionStrategy || ConnectionStrategy.UDP_ONLY;
     
     this.logger.info(`EdgeConnectionManager initialized with strategy: ${this.connectionStrategy}`);
@@ -158,8 +157,6 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
    * 根据策略决定初始连接类型
    */
   private determineConnectionType(): ConnectionType {
-    const { ConnectionStrategy } = require('./connection-types.js');
-    
     switch (this.connectionStrategy) {
       case ConnectionStrategy.TCP_ONLY:
         return ConnectionType.TCP;
@@ -265,7 +262,7 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
   /**
    * 获取连接质量指标
    */
-  getQualityMetrics(edgeId: number): import('./connection-types.js').ConnectionQualityMetrics | undefined {
+  getQualityMetrics(edgeId: number): ConnectionQualityMetrics | undefined {
     const connection = this.connections.get(edgeId);
     if (!connection) {
       return undefined;
@@ -273,9 +270,13 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
     
     // Both UDP and TCP connections have quality metrics
     if (connection.type === 'udp') {
-      return (connection as unknown as import('./udp-edge-connection.js').UDPEdgeConnection).getQualityMetrics();
+      return (connection as unknown as UDPEdgeConnection).getQualityMetrics();
     } else if (connection.type === 'tcp') {
-      return (connection as unknown as import('./tcp-edge-connection.js').TCPEdgeConnection).getQualityMetrics();
+      // Import TCPEdgeConnection type dynamically
+      const tcpConn = connection as any;
+      if (typeof tcpConn.getQualityMetrics === 'function') {
+        return tcpConn.getQualityMetrics();
+      }
     }
     
     return undefined;
@@ -284,15 +285,12 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
   /**
    * 获取所有连接的质量指标
    */
-  getAllQualityMetrics(): Map<number, import('./connection-types.js').ConnectionQualityMetrics> {
-    const metrics = new Map<number, import('./connection-types.js').ConnectionQualityMetrics>();
+  getAllQualityMetrics(): Map<number, ConnectionQualityMetrics> {
+    const metrics = new Map<number, ConnectionQualityMetrics>();
     
     for (const [edgeId, connection] of this.connections) {
-      if (connection.type === 'udp') {
-        const quality = (connection as unknown as import('./udp-edge-connection.js').UDPEdgeConnection).getQualityMetrics();
-        metrics.set(edgeId, quality);
-      } else if (connection.type === 'tcp') {
-        const quality = (connection as unknown as import('./tcp-edge-connection.js').TCPEdgeConnection).getQualityMetrics();
+      const quality = this.getQualityMetrics(edgeId);
+      if (quality) {
         metrics.set(edgeId, quality);
       }
     }
@@ -424,8 +422,6 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
    * 处理连接失败，实现自动降级逻辑
    */
   private async handleConnectionFailure(edgeId: number): Promise<void> {
-    const { ConnectionStrategy } = require('./connection-types.js');
-    
     // 只在AUTO_FALLBACK模式下处理降级
     if (this.connectionStrategy !== ConnectionStrategy.AUTO_FALLBACK) {
       return;

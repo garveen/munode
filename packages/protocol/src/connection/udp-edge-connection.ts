@@ -8,7 +8,7 @@ import crypto from 'crypto';
 import type { Logger } from '@munode/common';
 import { TypedEventEmitter } from '@munode/common';
 import type { IEdgeConnection, EdgeConnectionEvents } from './edge-connection-interface.js';
-import type { ConnectionStatus, ConnectionConfig } from './connection-types.js';
+import type { ConnectionStatus, ConnectionConfig, ConnectionQualityMetrics } from './connection-types.js';
 import { ConnectionState, ConnectionType } from './connection-types.js';
 import {
   VoiceUDPPacket,
@@ -565,7 +565,7 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
   /**
    * 获取连接质量指标
    */
-  getQualityMetrics(): import('./connection-types.js').ConnectionQualityMetrics {
+  getQualityMetrics(): ConnectionQualityMetrics {
     const tracking = this.qualityTracking;
     const now = Date.now();
     const elapsedSec = (now - tracking.bandwidthStart) / 1000;
