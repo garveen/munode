@@ -78,6 +78,10 @@ interface QualitySample {
 const DEFAULT_VOICE_ROUTING_CONFIG: Required<EdgeVoiceRoutingConfig> = {
   shared_secret: undefined,  // 默认不设置加密
   enabled: true,
+  connection_strategy: 'auto_fallback' as const,
+  fallback_thresholds: {
+    max_consecutive_failures: 3,
+  },
   hub_policy: { ...DEFAULT_ROUTING_POLICY },
   local_decision: { ...DEFAULT_LOCAL_DECISION_CONFIG },
   relay: { ...DEFAULT_EDGE_RELAY_CONFIG },
@@ -170,6 +174,10 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     return {
       shared_secret: config.shared_secret,
       enabled: config.enabled ?? DEFAULT_VOICE_ROUTING_CONFIG.enabled,
+      connection_strategy: config.connection_strategy ?? DEFAULT_VOICE_ROUTING_CONFIG.connection_strategy,
+      fallback_thresholds: config.fallback_thresholds 
+        ? { ...DEFAULT_VOICE_ROUTING_CONFIG.fallback_thresholds, ...config.fallback_thresholds }
+        : DEFAULT_VOICE_ROUTING_CONFIG.fallback_thresholds,
       hub_policy: config.hub_policy 
         ? { ...DEFAULT_ROUTING_POLICY, ...config.hub_policy }
         : DEFAULT_ROUTING_POLICY,

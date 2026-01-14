@@ -53,7 +53,7 @@ export interface EdgeConnectionManagerConfig {
   maxReconnectAttempts?: number;
   /** 重连延迟（毫秒） */
   reconnectDelay?: number;
-  /** 连接策略：udp_only, tcp_only, 或 auto_fallback（默认: udp_only） */
+  /** 连接策略：tcp_only 或 auto_fallback（默认: auto_fallback） */
   connectionStrategy?: ConnectionStrategy;
   /** 自动降级的质量阈值（仅在auto_fallback模式下使用） */
   fallbackThresholds?: {
@@ -86,7 +86,7 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
     this.logger = logger;
     
     // Set connection strategy
-    this.connectionStrategy = config.connectionStrategy || ConnectionStrategy.UDP_ONLY;
+    this.connectionStrategy = config.connectionStrategy || ConnectionStrategy.AUTO_FALLBACK;
     
     this.logger.info(`EdgeConnectionManager initialized with strategy: ${this.connectionStrategy}`);
   }
@@ -160,7 +160,6 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
     switch (this.connectionStrategy) {
       case ConnectionStrategy.TCP_ONLY:
         return ConnectionType.TCP;
-      case ConnectionStrategy.UDP_ONLY:
       case ConnectionStrategy.AUTO_FALLBACK:
       default:
         return ConnectionType.UDP; // AUTO_FALLBACK starts with UDP

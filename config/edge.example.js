@@ -52,6 +52,15 @@ export default {
   voice_routing: {
     enabled: true,
     shared_secret: 'change-this-to-a-secure-random-string', // UDP 语音传输加密密钥（所有 Edge 必须相同）
+    
+    // Edge间连接策略配置
+    connection_strategy: 'auto_fallback', // 'auto_fallback' (默认，先UDP后TCP) 或 'tcp_only' (仅TCP)
+    fallback_thresholds: {
+      max_consecutive_failures: 3, // 连续失败3次后从UDP降级到TCP
+      // max_rtt: 200,              // RTT超过200ms时考虑降级（未来功能）
+      // max_packet_loss: 0.05,     // 丢包率超过5%时考虑降级（未来功能）
+    },
+    
     local_decision: {
       enabled: true,
       update_interval: 5000,
