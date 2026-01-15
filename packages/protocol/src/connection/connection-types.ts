@@ -34,6 +34,23 @@ export enum ConnectionStrategy {
 }
 
 /**
+ * 连接用途
+ * 
+ * 定义连接的使用场景，影响协议选择：
+ * - DIRECT_VOICE: 直接语音传输，可使用UDP优先（低延迟）
+ * - RELAY_ROUTING: 中转路由（包括控制信道中转），强制使用TCP（可靠性）
+ * - FALLBACK: UDP失败后的降级连接，使用TCP
+ */
+export enum ConnectionPurpose {
+  /** 直接语音传输 */
+  DIRECT_VOICE = 'direct_voice',
+  /** 中转路由（强制TCP以确保可靠性） */
+  RELAY_ROUTING = 'relay_routing',
+  /** 降级连接 */
+  FALLBACK = 'fallback',
+}
+
+/**
  * 连接统计信息
  */
 export interface ConnectionStats {

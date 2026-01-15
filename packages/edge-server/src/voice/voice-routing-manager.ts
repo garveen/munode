@@ -20,6 +20,7 @@ import {
   RouteValidator,
   type ValidationResult,
   VoiceUDPTransport,
+  ConnectionPurpose,
 } from '@munode/protocol';
 import type {
   EdgeConfig,
@@ -761,6 +762,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
         cost: this.calculateDirectCost(quality),
         timestamp: Date.now(),
         source: 'local',
+        connectionPurpose: ConnectionPurpose.DIRECT_VOICE, // 直连语音
       };
     }
     
@@ -768,6 +770,8 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     if (policy.enable_relay) {
       const relayRoute = this.findBestRelayRoute(targetEdgeId);
       if (relayRoute) {
+        // 中转路由强制使用TCP（包括控制信道中转）
+        relayRoute.connectionPurpose = ConnectionPurpose.RELAY_ROUTING;
         return relayRoute;
       }
     }
@@ -780,6 +784,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
         cost: 1000, // TCP 成本很高
         timestamp: Date.now(),
         source: 'local',
+        connectionPurpose: ConnectionPurpose.FALLBACK, // 降级连接
       };
     }
     

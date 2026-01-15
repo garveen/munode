@@ -9,7 +9,7 @@ import { TypedEventEmitter, type EventMap } from '@munode/common';
 import type { IEdgeConnection } from './edge-connection-interface.js';
 import { UDPEdgeConnection } from './udp-edge-connection.js';
 import type { ConnectionConfig, ConnectionStatus, ConnectionQualityMetrics } from './connection-types.js';
-import { ConnectionType, ConnectionStrategy } from './connection-types.js';
+import { ConnectionType, ConnectionStrategy, ConnectionPurpose } from './connection-types.js';
 
 /**
  * UDP发送函数类型
@@ -116,19 +116,37 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
    * @param edgeId Edge ID
    * @param host 主机地址
    * @param port 端口
-   * @param type 连接类型（可选，将根据策略自动决定）
+   * @param purposeOrType 连接用途或连接类型（可选）
+   *   - 若为ConnectionPurpose: 根据用途和策略决定连接类型
+   *   - 若为ConnectionType: 直接使用指定类型（向后兼容）
+   *   - 若未指定: 默认DIRECT_VOICE，根据策略决定
    */
   async registerEndpoint(
     edgeId: number,
     host: string,
     port: number,
-    type?: ConnectionType
+    purposeOrType?: ConnectionPurpose | ConnectionType
   ): Promise<void> {
     // 规范化主机名
     const normalizedHost = host === 'localhost' ? '127.0.0.1' : host;
 
-    // 根据策略决定连接类型
-    const effectiveType = type || this.determineConnectionType();
+    // 确定连接用途和类型
+    let purpose: ConnectionPurpose = ConnectionPurpose.DIRECT_VOICE;
+    let effectiveType: ConnectionType;
+    
+    if (purposeOrType) {
+      // 检查是ConnectionPurpose还是ConnectionType
+      if (Object.values(ConnectionPurpose).includes(purposeOrType as ConnectionPurpose)) {
+        purpose = purposeOrType as ConnectionPurpose;
+        effectiveType = this.determineConnectionType(purpose);
+      } else {
+        // 直接指定了ConnectionType（向后兼容）
+        effectiveType = purposeOrType as ConnectionType;
+      }
+    } else {
+      // 未指定，使用默认
+      effectiveType = this.determineConnectionType(purpose);
+    }
     
     // 保存端点信息
     this.endpoints.set(edgeId, {
@@ -138,7 +156,7 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
       type: effectiveType,
     });
 
-    this.logger.info(`Registering endpoint for edge ${edgeId}: ${normalizedHost}:${port} (${effectiveType}, strategy: ${this.connectionStrategy})`);
+    this.logger.info(`Registering endpoint for edge ${edgeId}: ${normalizedHost}:${port} (${effectiveType}, purpose: ${purpose}, strategy: ${this.connectionStrategy})`);
 
     // 创建连接
     const connection = await this.createConnection(edgeId, normalizedHost, port, effectiveType);
@@ -154,9 +172,20 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
   }
 
   /**
-   * 根据策略决定初始连接类型
+   * 根据连接用途和策略决定连接类型
+   * 
+   * 规则：
+   * 1. RELAY_ROUTING 强制使用 TCP（确保中转路由的可靠性）
+   * 2. 否则根据 connectionStrategy 决定
    */
-  private determineConnectionType(): ConnectionType {
+  private determineConnectionType(purpose: ConnectionPurpose = ConnectionPurpose.DIRECT_VOICE): ConnectionType {
+    // RELAY_ROUTING 强制使用 TCP
+    if (purpose === ConnectionPurpose.RELAY_ROUTING) {
+      this.logger.info('RELAY_ROUTING purpose detected, forcing TCP connection');
+      return ConnectionType.TCP;
+    }
+    
+    // 根据策略决定
     switch (this.connectionStrategy) {
       case ConnectionStrategy.TCP_ONLY:
         return ConnectionType.TCP;

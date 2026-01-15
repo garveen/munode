@@ -300,6 +300,7 @@ export {
   ConnectionState,
   ConnectionType,
   ConnectionStrategy,
+  ConnectionPurpose,
   type ConnectionStats,
   type ConnectionStatus,
   type ConnectionConfig,
