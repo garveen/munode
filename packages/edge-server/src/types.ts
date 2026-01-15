@@ -1,5 +1,5 @@
 import type { Socket as UDPSocket } from 'dgram';
-import { mumbleproto } from '@munode/protocol';
+import { mumbleproto, ConnectionPurpose } from '@munode/protocol';
 import type { EdgeInfo, ChannelUserMap } from '@munode/protocol';
 
 // 从 config-schema 导入配置类型（这些类型由 Zod schema 生成）
@@ -66,6 +66,7 @@ export interface RouteEntry {
   timestamp: number;       // 更新时间戳
   source: 'hub' | 'local'; // 路由来源
   ttl?: number;            // 生存时间 (ms)
+  connectionPurpose?: ConnectionPurpose; // 连接用途（决定是否强制TCP）
 }
 
 // Edge 间连接质量

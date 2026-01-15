@@ -279,3 +279,33 @@ export {
   type ValidationResult,
   type RouteValidatorOptions,
 } from './routing/route-validator.js';
+
+// Connection layer
+export {
+  EdgeConnectionManager,
+  type EdgeConnectionManagerConfig,
+  type EdgeConnectionManagerEvents,
+} from './connection/edge-connection-manager.js';
+export {
+  UDPEdgeConnection,
+} from './connection/udp-edge-connection.js';
+export {
+  TCPEdgeConnection,
+} from './connection/tcp-edge-connection.js';
+export type {
+  IEdgeConnection,
+  EdgeConnectionEvents,
+} from './connection/edge-connection-interface.js';
+export {
+  ConnectionState,
+  ConnectionType,
+  ConnectionStrategy,
+  ConnectionPurpose,
+  type ConnectionStats,
+  type ConnectionStatus,
+  type ConnectionConfig,
+  type ConnectionEventData,
+  type ConnectionErrorData,
+  type DataReceivedData,
+  type ConnectionQualityMetrics,
+} from './connection/connection-types.js';

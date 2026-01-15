@@ -20,6 +20,7 @@ import {
   RouteValidator,
   type ValidationResult,
   VoiceUDPTransport,
+  ConnectionPurpose,
 } from '@munode/protocol';
 import type {
   EdgeConfig,
@@ -78,6 +79,10 @@ interface QualitySample {
 const DEFAULT_VOICE_ROUTING_CONFIG: Required<EdgeVoiceRoutingConfig> = {
   shared_secret: undefined,  // 默认不设置加密
   enabled: true,
+  connection_strategy: 'auto_fallback' as const,
+  fallback_thresholds: {
+    max_consecutive_failures: 3,
+  },
   hub_policy: { ...DEFAULT_ROUTING_POLICY },
   local_decision: { ...DEFAULT_LOCAL_DECISION_CONFIG },
   relay: { ...DEFAULT_EDGE_RELAY_CONFIG },
@@ -170,6 +175,10 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     return {
       shared_secret: config.shared_secret,
       enabled: config.enabled ?? DEFAULT_VOICE_ROUTING_CONFIG.enabled,
+      connection_strategy: config.connection_strategy ?? DEFAULT_VOICE_ROUTING_CONFIG.connection_strategy,
+      fallback_thresholds: config.fallback_thresholds 
+        ? { ...DEFAULT_VOICE_ROUTING_CONFIG.fallback_thresholds, ...config.fallback_thresholds }
+        : DEFAULT_VOICE_ROUTING_CONFIG.fallback_thresholds,
       hub_policy: config.hub_policy 
         ? { ...DEFAULT_ROUTING_POLICY, ...config.hub_policy }
         : DEFAULT_ROUTING_POLICY,
@@ -632,22 +641,18 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
       jitter = totalDiff / (samples.length - 1);
     }
     
-    // 从VoiceUDPTransport获取丢包率（传输层已经计算好）
+    // 从VoiceUDPTransport获取质量指标（传输层已经计算好）
     let packetLoss = 0;
     if (this.voiceTransport) {
-      const status = this.voiceTransport.getConnectionStatus(sourceEdgeId);
-      if (status && status.receivedSequences.size > 1) {
-        // 计算丢包率（与VoiceUDPTransport中的算法一致）
-        const seqArray = Array.from(status.receivedSequences) as number[];
-        const sortedSeqs = seqArray.sort((a, b) => a - b);
-        let totalGaps = 0;
-        for (let i = 1; i < sortedSeqs.length; i++) {
-          const gap = sortedSeqs[i] - sortedSeqs[i - 1] - 1;
-          if (gap > 0) totalGaps += gap;
+      const metrics = this.voiceTransport.getQualityMetrics(sourceEdgeId);
+      if (metrics) {
+        packetLoss = metrics.packetLoss;
+        // 如果传输层已经计算了RTT和抖动，可以直接使用
+        if (metrics.rtt > 0) {
+          smoothedRtt = metrics.rtt;
         }
-        const totalExpected = status.receivedSequences.size + totalGaps;
-        if (totalExpected > 0) {
-          packetLoss = totalGaps / totalExpected;
+        if (metrics.jitter > 0) {
+          jitter = metrics.jitter;
         }
       }
     }
@@ -757,6 +762,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
         cost: this.calculateDirectCost(quality),
         timestamp: Date.now(),
         source: 'local',
+        connectionPurpose: ConnectionPurpose.DIRECT_VOICE, // 直连语音
       };
     }
     
@@ -764,6 +770,8 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     if (policy.enable_relay) {
       const relayRoute = this.findBestRelayRoute(targetEdgeId);
       if (relayRoute) {
+        // 中转路由强制使用TCP（包括控制信道中转）
+        relayRoute.connectionPurpose = ConnectionPurpose.RELAY_ROUTING;
         return relayRoute;
       }
     }
@@ -776,6 +784,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
         cost: 1000, // TCP 成本很高
         timestamp: Date.now(),
         source: 'local',
+        connectionPurpose: ConnectionPurpose.FALLBACK, // 降级连接
       };
     }
     
