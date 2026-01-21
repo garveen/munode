@@ -137,14 +137,17 @@ export class ServerLifecycleManager {
 
       // 停止服务器
       if (this.tcpServer) {
+        this.tcpServer.removeAllListeners();
         this.tcpServer.close();
       }
 
       if (this.udpServer) {
+        this.udpServer.removeAllListeners();
         this.udpServer.close();
       }
 
       if (this.tlsServer) {
+        this.tlsServer.removeAllListeners();
         this.tlsServer.close();
       }
 

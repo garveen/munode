@@ -123,6 +123,7 @@ export class PacketConnPool extends TypedEventEmitter<PacketConnPoolEvents> {
   removeConnection(connectionId: string): void {
     const connection = this.connections.get(connectionId);
     if (connection) {
+      connection.socket.removeAllListeners();
       connection.socket.close();
       this.connections.delete(connectionId);
       this.emit('connectionRemoved', connection);

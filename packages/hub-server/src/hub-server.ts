@@ -191,6 +191,7 @@ export class HubServer {
 
       // 关闭 UDP socket
       if (this.udpSocket) {
+        this.udpSocket.removeAllListeners();
         this.udpSocket.close();
         this.udpSocket = undefined;
       }

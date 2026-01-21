@@ -215,6 +215,7 @@ export class WebApiService {
   async stop(): Promise<void> {
     if (this.server) {
       return new Promise((resolve) => {
+        this.server.removeAllListeners();
         this.server.close(() => {
           this.logger.info('Web API service stopped');
           this.server = null;

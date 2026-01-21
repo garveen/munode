@@ -122,6 +122,7 @@ export class MumbleWebSocketServer {
 
     // 关闭服务器
     return new Promise((resolve, reject) => {
+      this.wss.removeAllListeners();
       this.wss.close((error) => {
         if (error) reject(error);
         else resolve();

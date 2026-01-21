@@ -855,6 +855,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
   close(): void {
     this.cleanup();
     if (this.ws.readyState === WebSocket.OPEN) {
+      this.ws.removeAllListeners();
       this.ws.close();
     }
   }

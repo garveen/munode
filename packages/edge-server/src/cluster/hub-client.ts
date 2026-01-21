@@ -166,6 +166,9 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
       return;
     }
 
+    // 重置停止标志，允许连接和重连
+    this.isStopping = false;
+
     try {
       this.logger.info(`Connecting to Hub control service at ${this.clientConfig.host}:${this.clientConfig.port}`);
 

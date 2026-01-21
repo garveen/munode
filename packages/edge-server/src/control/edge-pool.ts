@@ -76,6 +76,9 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
    * Initialize and connect all connections in the pool
    */
   async connect(): Promise<void> {
+    // 重置停止标志，允许连接和重连
+    this.isStopping = false;
+    
     // 如果已经有连接，先清理
     if (this.connections.length > 0) {
       this.logger.warn(`Connection pool already has ${this.connections.length} connections, cleaning up before reconnecting`);
@@ -86,8 +89,6 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
       this.connections = []; // 清空数组，准备重新创建
       this.connectionIdCounter = 0; // 重置计数器
     }
-
-    this.isStopping = false;
     const poolSize = this.config.poolSize!;
 
     this.logger.info(`Initializing connection pool with ${poolSize} connections`);
@@ -179,7 +180,9 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
       ws.once('open', onOpen);
       ws.once('error', onError);
 
-      ws.on('close', () => {
+      // 使用 once 避免事件监听器累积（close 只会触发一次）
+      // 注意：虽然 close 只触发一次，但重连时会创建新的 ws 对象，所以这里改用 once 更安全
+      ws.once('close', () => {
         this.handleConnectionClose(conn);
       });
     });
@@ -195,26 +198,37 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
       conn.heartbeatManager = undefined;
     }
 
-    // 清理定时器
+    // 清理定时器（必须在状态重置前清理，避免定时器回调访问错误状态）
     if (conn.reconnectTimer) {
       clearTimeout(conn.reconnectTimer);
       conn.reconnectTimer = null;
     }
 
-    // 关闭channel
+    // 关闭channel（先移除事件监听器，再关闭）
     if (conn.channel) {
-      conn.channel.close();
+      try {
+        conn.channel.removeAllListeners();
+        conn.channel.close();
+      } catch (error) {
+        this.logger?.debug(`Error closing channel ${conn.id}:`, error);
+      }
       conn.channel = null;
     }
 
-    // 关闭WebSocket
+    // 关闭WebSocket（先移除所有监听器，避免 close 事件触发重连）
     if (conn.ws) {
-      conn.ws.removeAllListeners();
-      conn.ws.close();
+      try {
+        conn.ws.removeAllListeners();
+        if (conn.ws.readyState === WebSocket.OPEN || conn.ws.readyState === WebSocket.CONNECTING) {
+          conn.ws.close();
+        }
+      } catch (error) {
+        this.logger?.debug(`Error closing WebSocket ${conn.id}:`, error);
+      }
       conn.ws = null;
     }
 
-    // 重置状态
+    // 重置所有状态标志
     conn.isConnected = false;
     conn.isReconnecting = false;
   }
@@ -283,7 +297,10 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
       return;
     }
     
+    // 标记连接已断开
     conn.isConnected = false;
+    
+    // 清理资源（但不清理 ws，因为已经关闭了）
     conn.channel = null;
     conn.ws = null;
 
@@ -301,8 +318,8 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
       this.emit('disconnect');
     }
 
-    // Schedule reconnection if not stopping
-    if (!this.isStopping) {
+    // Schedule reconnection if not stopping and not already scheduled
+    if (!this.isStopping && !conn.isReconnecting && !conn.reconnectTimer) {
       this.scheduleReconnect(conn);
     }
   }
@@ -472,7 +489,8 @@ export class ClientConnectionPool extends TypedEventEmitter<ClientConnectionPool
       this.cleanupConnection(conn);
     }
 
-    this.removeAllListeners();
+    // 不移除 EventEmitter 监听器，因为可能需要重连
+    // 上层代码（如 EdgeControlClient）依赖这些事件
     this.logger.info('Connection pool disconnected (connections preserved for reuse)');
   }
 

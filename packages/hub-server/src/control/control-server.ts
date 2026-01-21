@@ -161,6 +161,7 @@ export class ControlChannelServer extends TypedEventEmitter<ControlChannelServer
       channel.close();
     }
     this.channels.clear();
+    this.wss.removeAllListeners();
     this.wss.close();
     this.started = false;
   }

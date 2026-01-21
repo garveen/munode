@@ -175,6 +175,7 @@ export class EdgeHubWebSocketServer extends TypedEventEmitter<EdgeHubWebSocketSe
     this.edgeClients.clear();
 
     return new Promise((resolve, reject) => {
+      this.wss.removeAllListeners();
       this.wss.close((error) => {
         if (error) {
           this.logger.error('Error closing WebSocket server', error);

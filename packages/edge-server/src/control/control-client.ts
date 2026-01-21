@@ -236,6 +236,8 @@ export class ControlChannelClient extends TypedEventEmitter<ControlChannelClient
       if (this.pool) {
         this.pool.disconnect();
         // 不设置为null，保留pool对象用于重连
+        // pool.disconnect() 会设置 isStopping=true
+        // 下次 connect() 时会重置 isStopping=false
       }
     } else {
       if (this.channel) {
