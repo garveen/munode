@@ -118,25 +118,47 @@ export class ClientManager extends TypedEventEmitter<ClientManagerEvents> {
    */
   removeClient(sessionId: number): void {
     const client = this.clients.get(sessionId);
-    if (client) {
-      // 清理频道索引
-      this.removeClientFromChannelIndex(sessionId, client.channel_id);
+    if (!client) {
+      // 客户端已经被移除，避免重复处理
+      return;
+    }
+
+    // 获取 socket 并清理事件监听器
+    const socket = this.sockets.get(sessionId);
+    if (socket) {
+      // 移除所有事件监听器，防止后续事件再次触发 removeClient
+      socket.removeAllListeners('data');
+      socket.removeAllListeners('close');
+      socket.removeAllListeners('error');
+      socket.removeAllListeners('timeout');
       
-      // 清理监听索引
-      if (client.listeningChannels) {
-        for (const channelId of client.listeningChannels) {
-          this.removeClientFromListeningIndex(sessionId, channelId);
+      // 如果 socket 还连接着，关闭它
+      if (!socket.destroyed) {
+        try {
+          socket.destroy();
+        } catch (error) {
+          this.logger.debug(`Error destroying socket for session ${sessionId}: ${error}`);
         }
       }
-      
-      this.clients.delete(sessionId);
-      this.sockets.delete(sessionId); // 删除 socket 引用
-      this.rateLimiters.delete(sessionId); // 删除速率限制器
-      this.statisticsCollectors.delete(sessionId); // 删除统计收集器
-      this.volumeManager.clearUserAdjustments(sessionId); // 清理音量调节设置
-      this.logger.info(`Client disconnected: session=${sessionId}, username=${client.username}`);
-      this.emit('clientDisconnected', client);
     }
+
+    // 清理频道索引
+    this.removeClientFromChannelIndex(sessionId, client.channel_id);
+    
+    // 清理监听索引
+    if (client.listeningChannels) {
+      for (const channelId of client.listeningChannels) {
+        this.removeClientFromListeningIndex(sessionId, channelId);
+      }
+    }
+    
+    this.clients.delete(sessionId);
+    this.sockets.delete(sessionId); // 删除 socket 引用
+    this.rateLimiters.delete(sessionId); // 删除速率限制器
+    this.statisticsCollectors.delete(sessionId); // 删除统计收集器
+    this.volumeManager.clearUserAdjustments(sessionId); // 清理音量调节设置
+    this.logger.info(`Client disconnected: session=${sessionId}, username=${client.username}`);
+    this.emit('clientDisconnected', client);
   }
 
   /**
@@ -281,6 +303,12 @@ export class ClientManager extends TypedEventEmitter<ClientManagerEvents> {
       // 发送断开连接事件
       this.emit('clientForceDisconnected', client, reason);
 
+      // 先移除所有事件监听器，防止在 destroy 时触发事件
+      socket.removeAllListeners('data');
+      socket.removeAllListeners('close');
+      socket.removeAllListeners('error');
+      socket.removeAllListeners('timeout');
+
       // 关闭socket连接
       try {
         socket.destroy();
@@ -351,23 +379,33 @@ export class ClientManager extends TypedEventEmitter<ClientManagerEvents> {
    * 设置 socket 事件处理器
    */
   private setupSocketHandlers(socket: Socket | TLSSocket, sessionId: number): void {
+    // 使用标志防止多个事件（close/error/timeout）重复调用 removeClient
+    let isRemoving = false;
+    const safeRemoveClient = () => {
+      if (isRemoving) {
+        return;
+      }
+      isRemoving = true;
+      this.removeClient(sessionId);
+    };
+
     socket.on('data', (data: Buffer) => {
       this.logger.debug(`[CLIENT-MANAGER] Received data from client: sessionId=${sessionId}, length=${data.length}`);
       this.handleClientData(sessionId, data);
     });
 
     socket.on('close', () => {
-      this.removeClient(sessionId);
+      safeRemoveClient();
     });
 
     socket.on('error', (error) => {
       this.logger.error(`Client socket error: session=${sessionId}, error=${error.message}`);
-      this.removeClient(sessionId);
+      safeRemoveClient();
     });
 
     socket.on('timeout', () => {
       this.logger.warn(`Client timeout: session=${sessionId}`);
-      this.removeClient(sessionId);
+      safeRemoveClient();
     });
 
     // 设置超时
