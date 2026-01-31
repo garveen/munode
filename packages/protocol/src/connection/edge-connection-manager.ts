@@ -132,6 +132,15 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
     port: number,
     purposeOrType?: ConnectionPurpose | ConnectionType
   ): Promise<void> {
+    // 检查是否已有到该Edge的连接
+    const existing = this.connections.get(edgeId);
+    if (existing) {
+      this.logger.debug(
+        `Connection to edge ${edgeId} already exists (state: ${existing.getStatus().state}), skipping registration`
+      );
+      return;
+    }
+
     // 规范化主机名
     const normalizedHost = host === 'localhost' ? '127.0.0.1' : host;
 
