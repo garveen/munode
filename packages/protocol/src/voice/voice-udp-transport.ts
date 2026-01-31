@@ -24,6 +24,9 @@ export interface VoiceUDPConfig {
   encryptionAlgorithm?: string;
   localEdgeId?: number;
   sharedSecret?: Buffer;
+  // Edge间连接使用的客户端证书
+  clientCert?: Buffer;
+  clientKey?: Buffer;
 }
 
 export interface VoicePacketHeader {
@@ -111,6 +114,8 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     const connConfig: EdgeConnectionManagerConfig = {
       localEdgeId: this.localEdgeId,
       sharedSecret: config.sharedSecret,
+      clientCert: config.clientCert,
+      clientKey: config.clientKey,
     };
     this.connectionManager = new EdgeConnectionManager(connConfig, logger);
     

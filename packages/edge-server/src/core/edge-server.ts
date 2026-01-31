@@ -15,6 +15,7 @@ import { EventSetupManager } from '../managers/event-setup-manager.js';
 import { CryptoWorkerPool } from '../voice/crypto-worker-pool.js';
 import { cpus } from 'os';
 import { TLSSocket } from 'tls';
+import fs from 'fs';
 
 /**
  * EdgeServer 事件类型定义
@@ -146,6 +147,37 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
     // 使用 ClusterManager 已创建的 HubClient 实例（避免重复创建）
     this.hubClient = this.clusterManager.getHubClient();
 
+    // 读取Edge间连接证书（同步读取）
+    // 优先使用独立的edge_cert/edge_key，未配置时复用服务器证书
+    let clientCert: Buffer | undefined;
+    let clientKey: Buffer | undefined;
+    if (this.config.mode === 'cluster') {
+      try {
+        
+        // 检查是否配置了独立的Edge间连接证书
+        if (this.config.tls.edge_cert && this.config.tls.edge_key) {
+          // 使用独立的Edge证书
+          clientCert = fs.readFileSync(this.config.tls.edge_cert);
+          clientKey = fs.readFileSync(this.config.tls.edge_key);
+          this.logger.info(
+            `Using dedicated Edge client certificates: cert=${this.config.tls.edge_cert}, key=${this.config.tls.edge_key}`
+          );
+        } else {
+          // 复用服务器证书作为客户端证书
+          clientCert = fs.readFileSync(this.config.tls.cert);
+          clientKey = fs.readFileSync(this.config.tls.key);
+          this.logger.info(
+            `Reusing server certificates for Edge-to-Edge authentication: cert=${this.config.tls.cert}, key=${this.config.tls.key}`
+          );
+        }
+        
+        this.logger.info('Edge client certificates loaded successfully');
+      } catch (error) {
+        this.logger.error('Failed to load Edge client certificates:', error);
+        throw new Error(`Failed to load Edge certificates: ${error}`);
+      }
+    }
+
     // 初始化语音 UDP 传输（使用与客户端相同的端口，通过魔数区分）
     // 注意：VoiceUDPTransport 不再独立监听端口，而是复用主 UDP 端口
     // 在 lifecycle-manager 中通过魔数 0x0000 区分 Edge 间包和客户端包
@@ -157,6 +189,8 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
         sharedSecret: this.config.voice_routing?.shared_secret 
           ? Buffer.from(this.config.voice_routing.shared_secret, 'utf-8') 
           : undefined,
+        clientCert,
+        clientKey,
       }, 
       this.logger,
     );

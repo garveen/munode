@@ -28,6 +28,12 @@ export default {
     cert: './data/certs/edge-cert.pem',
     key: './data/certs/edge-key.pem',
     ca: './data/certs/ca.pem',
+    
+    // Edge间连接的客户端证书（可选）
+    // 如果未配置，将自动复用上面的服务器证书作为客户端证书
+    // 在内部集群环境中，复用服务器证书是安全且方便的
+    // edge_cert: './data/certs/edge-client-cert.pem',
+    // edge_key: './data/certs/edge-client-key.pem',
   },
 
   // ===== Hub 服务器连接配置 =====

@@ -18,6 +18,9 @@ export const TLSConfigSchema = z.object({
   cert: z.string(),
   key: z.string(),
   ca: z.string().optional(),
+  // Edge间连接使用的客户端证书（集群模式下必需）
+  edge_cert: z.string().optional(),
+  edge_key: z.string().optional(),
 }).strict();
 
 // ===== Hub 服务器配置 Schema =====
