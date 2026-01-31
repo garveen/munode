@@ -53,7 +53,25 @@ export class ConnectionHandlers {
         this.logger.debug('Failed to get peer certificate:', error);
       }
       
-      // 检查是否要求证书（在第一次认证后 cert_required 将被设置）
+      // 检查是否为Edge连接
+      // 如果客户端提供了证书，且该证书hash在knownEdgeCertHashes中
+      // 则认为这是来自其他Edge的连接，不应该作为普通客户端处理
+      // Edge间连接必须使用客户端证书，与普通客户端的certRequired配置无关
+      if (cert_hash) {
+        const edgeId = this.edgeServer.getEdgeIdByCertHash(cert_hash);
+        if (edgeId !== undefined) {
+          this.logger.info(
+            `Detected Edge-to-Edge connection from Edge ${edgeId} (cert: ${cert_hash.substring(0, 16)}...)`
+          );
+          clearTimeout(connectionTimeout);
+          // 这是一个Edge连接，统一交给EdgeServer处理
+          this.edgeServer.acceptIncomingEdgeConnection(socket, edgeId);
+          return;
+        }
+      }
+      
+      // 以下是普通客户端的处理
+      // 检查是否要求普通客户端提供证书（certRequired只针对普通客户端）
       if (this.edgeServer.isCertRequired && !cert_hash) {
         this.logger.warn(
           `Rejected connection from ${socket.remoteAddress}: server requires client certificate`

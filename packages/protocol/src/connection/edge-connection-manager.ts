@@ -10,6 +10,7 @@ import type { IEdgeConnection } from './edge-connection-interface.js';
 import { UDPEdgeConnection } from './udp-edge-connection.js';
 import type { ConnectionConfig, ConnectionStatus, ConnectionQualityMetrics } from './connection-types.js';
 import { ConnectionType, ConnectionStrategy, ConnectionPurpose } from './connection-types.js';
+import { TCPEdgeConnection } from './tcp-edge-connection.js';
 
 /**
  * UDP发送函数类型
@@ -64,6 +65,10 @@ export interface EdgeConnectionManagerConfig {
     /** 连续失败次数，达到此值触发降级 */
     maxConsecutiveFailures?: number;
   };
+  /** 客户端证书（用于Edge间连接身份验证） */
+  clientCert?: Buffer;
+  /** 客户端私钥（用于Edge间连接身份验证） */
+  clientKey?: Buffer;
 }
 
 /**
@@ -196,6 +201,49 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
   }
 
   /**
+   * 接受被动的Edge连接（incoming connection）
+   * @param socket 已建立的TLS socket
+   * @param edgeId 对端Edge的ID
+   */
+  acceptIncomingConnection(socket: import('tls').TLSSocket, edgeId: number): void {
+    // 检查是否已有到该Edge的连接
+    const existing = this.connections.get(edgeId);
+    if (existing) {
+      this.logger.warn(
+        `Already have connection to edge ${edgeId}, closing incoming connection`
+      );
+      socket.destroy();
+      return;
+    }
+
+    this.logger.info(
+      `Accepting incoming connection from edge ${edgeId} (${socket.remoteAddress}:${socket.remotePort})`
+    );
+    
+    const connection = TCPEdgeConnection.fromSocket(
+      socket,
+      edgeId,
+      {
+        localEdgeId: this.config.localEdgeId,
+        sharedSecret: this.config.sharedSecret,
+        heartbeatInterval: this.config.heartbeatInterval,
+        connectionTimeout: this.config.connectionTimeout,
+        maxReconnectAttempts: this.config.maxReconnectAttempts,
+        reconnectDelay: this.config.reconnectDelay,
+        clientCert: this.config.clientCert,
+        clientKey: this.config.clientKey,
+      },
+      this.logger
+    );
+
+    // 保存连接并设置事件监听
+    this.connections.set(edgeId, connection);
+    this.setupConnectionEvents(connection);
+
+    this.logger.info(`Incoming connection from edge ${edgeId} accepted and managed`);
+  }
+
+  /**
    * 移除端点
    */
   unregisterEndpoint(edgeId: number): void {
@@ -296,18 +344,7 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
       return undefined;
     }
     
-    // Both UDP and TCP connections have quality metrics
-    if (connection.type === 'udp') {
-      return (connection as unknown as UDPEdgeConnection).getQualityMetrics();
-    } else if (connection.type === 'tcp') {
-      // Import TCPEdgeConnection type dynamically
-      const tcpConn = connection as any;
-      if (typeof tcpConn.getQualityMetrics === 'function') {
-        return tcpConn.getQualityMetrics();
-      }
-    }
-    
-    return undefined;
+    return connection.getQualityMetrics();
   }
 
   /**
@@ -316,7 +353,7 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
   getAllQualityMetrics(): Map<number, ConnectionQualityMetrics> {
     const metrics = new Map<number, ConnectionQualityMetrics>();
     
-    for (const [edgeId, connection] of this.connections) {
+    for (const [edgeId, _connection] of this.connections) {
       const quality = this.getQualityMetrics(edgeId);
       if (quality) {
         metrics.set(edgeId, quality);
@@ -382,6 +419,8 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
       connectionTimeout: this.config.connectionTimeout,
       maxReconnectAttempts: this.config.maxReconnectAttempts,
       reconnectDelay: this.config.reconnectDelay,
+      clientCert: this.config.clientCert,
+      clientKey: this.config.clientKey,
     };
 
     switch (type) {
@@ -398,8 +437,6 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
         return new UDPEdgeConnection(connectionConfig, this.udpSendFunction, this.logger);
 
       case ConnectionType.TCP:
-        // Import TCPEdgeConnection dynamically
-        const { TCPEdgeConnection } = await import('./tcp-edge-connection.js');
         return new TCPEdgeConnection(connectionConfig, this.logger);
 
       default:

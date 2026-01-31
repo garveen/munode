@@ -5,7 +5,7 @@
  */
 
 import type { EventMap, TypedEventEmitter } from '@munode/common';
-import type { ConnectionStatus } from './connection-types.js';
+import type { ConnectionStatus, ConnectionQualityMetrics } from './connection-types.js';
 
 /**
  * Edge连接事件类型
@@ -53,6 +53,11 @@ export interface IEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents>
    * 获取连接状态
    */
   getStatus(): ConnectionStatus;
+  
+  /**
+   * 获取连接质量指标
+   */
+  getQualityMetrics(): ConnectionQualityMetrics;
   
   /**
    * 更新最后活跃时间

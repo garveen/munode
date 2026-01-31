@@ -668,6 +668,7 @@ export interface HubPeerJoinedNotification {
     host: string;
     port: number;
     voicePort: number;
+    certHash?: string;
   };
 }
 

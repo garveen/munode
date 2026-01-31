@@ -14,6 +14,7 @@ import { HubDataManager } from '../cluster/hub-data-sync.js';
 import { EventSetupManager } from '../managers/event-setup-manager.js';
 import { CryptoWorkerPool } from '../voice/crypto-worker-pool.js';
 import { cpus } from 'os';
+import { TLSSocket } from 'tls';
 
 /**
  * EdgeServer 事件类型定义
@@ -47,6 +48,9 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
   private geoIPManager?: GeoIPManager;
   private voiceTransport?: VoiceUDPTransport; // 语音 UDP 传输
   private cryptoWorkerPool?: CryptoWorkerPool; // 全局共享 Worker Pool
+  
+  // Edge证书hash映射，用于识别其他Edge的TLS连接
+  private knownEdgeCertHashes: Map<string, number> = new Map(); // cert_hash -> edge_id
 
   // 服务器状态
   private isRunning = false;
@@ -76,6 +80,27 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
   setCertRequired(value: boolean) {
     this.certRequired = value;
     this.logger.info(`Server cert_required config updated: ${value}`);
+  }
+  
+  /**
+   * 添加已知Edge的证书hash
+   * @param edgeId Edge ID
+   * @param certHash 证书hash（SHA256，小写hex，无冒号）
+   */
+  addKnownEdgeCertHash(edgeId: number, certHash: string): void {
+    const normalized = certHash.replace(/:/g, '').toLowerCase();
+    this.knownEdgeCertHashes.set(normalized, edgeId);
+    this.logger.debug(`Added known Edge cert hash: ${normalized.substring(0, 16)}... -> Edge ${edgeId}`);
+  }
+  
+  /**
+   * 根据证书hash查询Edge ID
+   * @param certHash 证书hash
+   * @returns Edge ID，如果不是已知Edge返回undefined
+   */
+  getEdgeIdByCertHash(certHash: string): number | undefined {
+    const normalized = certHash.replace(/:/g, '').toLowerCase();
+    return this.knownEdgeCertHashes.get(normalized);
   }
 
 
@@ -473,6 +498,41 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
    */
   getVoiceManager() {
     return this.voiceManager;
+  }
+
+  /**
+   * 接受被动的Edge连接（incoming connection）
+   * 统一处理来自其他Edge的连接
+   * @param socket 已建立的TLS socket
+   * @param edgeId 对端Edge的ID
+   */
+  acceptIncomingEdgeConnection(socket: TLSSocket, edgeId: number): void {
+    this.logger.info(
+      `Accepting incoming Edge connection from Edge ${edgeId} (${socket.remoteAddress}:${socket.remotePort})`
+    );
+
+    // 转发到VoiceTransport的ConnectionManager
+    const voiceTransport = this.voiceManager.getVoiceTransport();
+    if (!voiceTransport) {
+      this.logger.error(
+        `Cannot accept Edge connection: VoiceTransport not available`
+      );
+      socket.destroy();
+      return;
+    }
+
+    try {
+      voiceTransport.acceptIncomingEdgeConnection(socket, edgeId);
+      this.logger.info(
+        `Successfully accepted incoming Edge connection from Edge ${edgeId}`
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to accept incoming Edge connection from Edge ${edgeId}:`,
+        error
+      );
+      socket.destroy();
+    }
   }
 
   /**

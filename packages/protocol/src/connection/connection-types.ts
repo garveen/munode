@@ -114,6 +114,10 @@ export interface ConnectionConfig {
   maxReconnectAttempts?: number;
   /** 重连延迟（毫秒） */
   reconnectDelay?: number;
+  /** 客户端证书（用于Edge间连接身份验证） */
+  clientCert?: Buffer;
+  /** 客户端私钥（用于Edge间连接身份验证） */
+  clientKey?: Buffer;
 }
 
 /**

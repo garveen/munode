@@ -169,12 +169,28 @@ export class TCPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
         reject(new Error('Connection timeout'));
       }, CONNECT_TIMEOUT_MS);
 
-      // 创建TLS连接
-      this.socket = tls.connect({
+      // 读取客户端证书（如果提供）
+      const tlsOptions: {
+        host: string;
+        port: number;
+        rejectUnauthorized: boolean;
+        cert?: Buffer;
+        key?: Buffer;
+      } = {
         host: this.config.host,
         port: this.config.port,
         rejectUnauthorized: false, // 对于edge-to-edge连接，先不严格验证证书
-      });
+      };
+
+      // 如果配置了客户端证书，添加到TLS选项
+      if (this.config.clientCert && this.config.clientKey) {
+        this.logger.debug(`Using client certificate for edge ${this.edgeId}`);
+        tlsOptions.cert = this.config.clientCert;
+        tlsOptions.key = this.config.clientKey;
+      }
+
+      // 创建TLS连接
+      this.socket = tls.connect(tlsOptions);
 
       this.socket.on('secureConnect', () => {
         if (this.connectTimeout) {
@@ -633,5 +649,74 @@ export class TCPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
    */
   updateLastSeen(): void {
     this.stats.lastActive = Date.now();
+  }
+
+  /**
+   * 从已建立的socket创建连接（用于被动接收的连接）
+   * @param socket 已建立的TLS socket
+   * @param edgeId 对端Edge的ID
+   * @param config 连接配置
+   * @param logger 日志记录器
+   */
+  static fromSocket(
+    socket: TLSSocket,
+    edgeId: number,
+    config: Partial<ConnectionConfig>,
+    logger: Logger
+  ): TCPEdgeConnection {
+    // 构造完整的配置对象
+    const fullConfig: ConnectionConfig = {
+      remoteEdgeId: edgeId,
+      host: socket.remoteAddress || 'unknown',
+      port: socket.remotePort || 0,
+      localEdgeId: config.localEdgeId || 0,
+      type: ConnectionType.TCP, // incoming连接总是TCP
+      sharedSecret: config.sharedSecret,
+      heartbeatInterval: config.heartbeatInterval || HEARTBEAT_INTERVAL_MS,
+      connectionTimeout: config.connectionTimeout || HEARTBEAT_TIMEOUT_MS,
+      maxReconnectAttempts: config.maxReconnectAttempts || 5,
+      reconnectDelay: config.reconnectDelay || 5000,
+      clientCert: config.clientCert,
+      clientKey: config.clientKey,
+    };
+
+    const connection = new TCPEdgeConnection(fullConfig, logger);
+    
+    // 将socket设置为已连接状态
+    connection.socket = socket;
+    connection.state = ConnectionState.CONNECTED;
+    connection.connectedAt = Date.now();
+    connection.reconnectAttempts = 0;
+
+    logger.info(
+      `Accepted incoming TCP connection from edge ${edgeId} (${socket.remoteAddress}:${socket.remotePort})`
+    );
+
+    // 设置socket事件处理器
+    socket.on('data', (data: Buffer) => {
+      connection.handleIncomingData(data);
+    });
+
+    socket.on('error', (error: Error) => {
+      connection.stats.errors++;
+      logger.error(`Socket error for edge ${edgeId}:`, error);
+      connection.emit('error', error);
+    });
+
+    socket.on('close', () => {
+      connection['handleDisconnect']('socket closed'); // 使用bracket notation访问private方法
+    });
+
+    socket.on('timeout', () => {
+      logger.warn(`TCP connection from edge ${edgeId} timed out`);
+      socket.destroy();
+    });
+
+    // 启动心跳
+    connection['startHeartbeat'](); // 使用bracket notation访问private方法
+    
+    connection.emit('connected');
+
+    return connection;
   }
 }

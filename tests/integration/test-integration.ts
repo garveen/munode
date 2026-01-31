@@ -309,8 +309,6 @@ function createEdgeConfig(server_id: number, port: number): EdgeConfigInput {
       ca: path.join(__dirname, 'certs/ca.pem'),
       cert: path.join(__dirname, 'certs/server.pem'),
       key: path.join(__dirname, 'certs/server.key'),
-      require_client_cert: false,
-      reject_unauthorized: false,
     },
     hub_server: {
       host: '127.0.0.1',
@@ -322,7 +320,6 @@ function createEdgeConfig(server_id: number, port: number): EdgeConfigInput {
       reconnect_interval: 5000,
       heartbeat_interval: 10000,
       pool_size: 1,
-      reconnection_timeout: 10000,
     },
     voice_routing: {
       enabled: true,
@@ -349,22 +346,14 @@ function createEdgeConfig(server_id: number, port: number): EdgeConfigInput {
       capacity: 1000,
       max_bandwidth: 1000000,
       default_channel: 0,
-      timeout: 30000,
     },
     
     client: {
-      max_text_message_length: 5000,
-      max_image_message_length: 131072,
     },
     
     features: {
       geoip: false,
-      ban_system: false,
-      context_actions: false,
-      packet_pool: false,
-      udp_monitor: false,
       allow_ping: true,
-      allow_html: false,
     },
     log_level: 'debug',
   };

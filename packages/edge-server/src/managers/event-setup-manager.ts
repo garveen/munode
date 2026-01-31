@@ -172,7 +172,7 @@ export class EventSetupManager {
     // UDPTunnel 事件 - TCP语音传输
     this.handlerFactory.messageHandler.on('udpTunnel', (session_id: number, data: Buffer) => {
       // 将TCP隧道语音包路由到voiceRouter处理
-      this.handlerFactory.voiceRouter.handleVoiceTunnel(session_id, data);
+      void this.handlerFactory.voiceRouter.handleVoiceTunnel(session_id, data);
     });
 
     // RequestBlob 事件
@@ -257,7 +257,7 @@ export class EventSetupManager {
       }
 
       // 清理语音路由器的客户端加密状态
-      this.handlerFactory.voiceRouter.removeClientCrypto(client.session);
+      void this.handlerFactory.voiceRouter.removeClientCrypto(client.session);
 
       // 清理UDP地址映射
       if (this.handlerFactory.connectionHandlers) {
@@ -703,16 +703,29 @@ export class EventSetupManager {
             const data = message.params;
             this.logger.info('Edge joined cluster:', data);
 
+            // 如果提供了证书hash，保存以便识别该Edge的连接
+            if (data.certHash) {
+              this.handlerFactory.edgeServer.addKnownEdgeCertHash(data.id, data.certHash);
+              this.logger.debug(`Saved cert hash for Edge ${data.id}: ${data.certHash.substring(0, 16)}...`);
+            }
+
             // 尝试注册新Edge的语音端口（非强制，允许失败）
             // 在统一端口架构下，voice端口 = main端口
             if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.port && data.id !== this.config.server_id) {
               try {
+                const voiceTransport = this.voiceManager.getVoiceTransport();
                 // 使用统一端口架构：port 字段既是 TCP 控制端口，也是 UDP 语音端口
-                this.voiceManager.getVoiceTransport().registerEndpoint(data.id, data.host, data.port);
+                voiceTransport.registerEndpoint(data.id, data.host, data.port);
                 this.logger.info(`Registered voice endpoint for new Edge ${data.id}: ${data.host}:${data.port}`);
+                
+                // 已有Edge主动连接到新Edge
+                // 这样新Edge就不需要提前知道已有Edge的证书
+                // 已有Edge带着客户端证书连接，新Edge通过证书hash识别
+                void voiceTransport.connectToEdge(data.id);
+                this.logger.info(`Initiated connection to new Edge ${data.id}`);
               } catch (error) {
-                // 端点注册失败不影响其他功能
-                this.logger.warn(`Failed to register voice endpoint for Edge ${data.id}:`, error);
+                // 端口注册失败不影响其他功能
+                this.logger.warn(`Failed to connect to new Edge ${data.id}:`, error);
               }
             }
             break;

@@ -161,7 +161,23 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     this.connectionManager.unregisterEndpoint(edgeId);
     this.logger.info(`Unregistered endpoint for edge ${edgeId}`);
   }
+  /**
+   * 主动连接到指定Edge（已有Edge连接新Edge时使用）
+   */
+  async connectToEdge(edgeId: number): Promise<void> {
+    this.logger.info(`Initiating connection to edge ${edgeId}`);
+    // registerEndpoint已经会触发连接，这里不需要额外操作
+    // 只是提供一个显式的API供调用者使用
+  }
 
+  /**
+   * 接受被动的Edge连接（incoming connection）
+   * @param socket 已建立的TLS socket
+   * @param edgeId 对端Edge的ID
+   */
+  acceptIncomingEdgeConnection(socket: import('tls').TLSSocket, edgeId: number): void {
+    this.connectionManager.acceptIncomingConnection(socket, edgeId);
+  }
   /**
    * 发送语音包到指定Edge (Edge模式)
    */

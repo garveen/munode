@@ -228,6 +228,26 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
     // 注意：第一次启动时也会标记为冷重启，这是正确的行为
     const isColdRestart = true; // Edge 进程启动/重启时，所有旧连接都已断开
     
+    // 读取证书文件并计算hash
+    let certHash = '';
+    try {
+      if (this.config.tls?.cert) {
+        const fs = await import('fs/promises');
+        const crypto = await import('crypto');
+        const certPem = await fs.readFile(this.config.tls.cert, 'utf8');
+        // 计算SHA256指纹
+        const certDer = certPem.replace(/-----BEGIN CERTIFICATE-----/, '')
+          .replace(/-----END CERTIFICATE-----/, '')
+          .replace(/\s/g, '');
+        const certBuffer = Buffer.from(certDer, 'base64');
+        const hash = crypto.createHash('sha256').update(certBuffer).digest('hex');
+        certHash = hash.toLowerCase();
+        this.logger.debug(`Computed certificate hash: ${certHash.substring(0, 16)}...`);
+      }
+    } catch (error) {
+      this.logger.warn('Failed to read/compute certificate hash:', error);
+    }
+    
     const registerParams: RPCParams<'edge.register'> = {
       server_id: this.config.server_id || 1,
       name: this.config.name,
@@ -235,7 +255,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
       port: this.config.network.external_port ?? this.config.network.port,
       region: this.config.network.region || '',
       capacity: this.config.server.capacity,
-      certificate: '', // TODO: 获取证书
+      certificate: certHash, // 发送证书hash而不是完整PEM
       cold_restart: isColdRestart, // 报告冷重启状态
       metadata: {
         version: '1.0.0',

@@ -73,6 +73,7 @@ export class ClusterHandler implements IClusterHandler {
         name: edge.name,
         host: edge.host,
         port: edge.port, // 统一UDP/TCP端口
+        certHash: edge.certificate, // 发送新Edge的证书hash
       });
     }
 

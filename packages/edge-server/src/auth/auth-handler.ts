@@ -151,7 +151,7 @@ export class AuthHandlers {
       this.messageHandler.sendMessage(session_id, MessageType.CryptSetup, Buffer.from(cryptSetupMessage));
 
       // 设置客户端的 OCB2-AES128 加密密钥
-      this.voiceRouter.setClientCrypto(session_id, cryptKey, serverEncryptIV, serverDecryptIV);
+      await this.voiceRouter.setClientCrypto(session_id, cryptKey, serverEncryptIV, serverDecryptIV);
 
       // 2. 发送 CodecVersion
       const codecVersionMessage = mumbleproto.CodecVersion.encode({

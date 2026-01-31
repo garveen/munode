@@ -38,7 +38,7 @@ export const HubServerConfigSchema = z.object({
 export const EdgeVoiceRoutingConfigSchema = z.object({
   shared_secret: z.string().optional(),
   enabled: z.boolean().default(true),
-  connection_strategy: z.enum(['tcp_only', 'auto_fallback']).default('auto_fallback'),
+  connection_strategy: z.enum(['tcp_only', 'auto_fallback']).optional().default('auto_fallback'),
   fallback_thresholds: z.object({
     max_rtt: z.number().positive().optional(),
     max_packet_loss: z.number().min(0).max(1).optional(),
