@@ -233,7 +233,7 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
     let packet: VoiceUDPPacket;
     try {
       packet = VoiceUDPPacket.decode(payload);
-    } catch (error) {
+    } catch (_error) {
       // 不是协议包，可能是数据包
       this.handleDataPacket(payload);
       return;
@@ -599,7 +599,10 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
    * 处理断开连接
    */
   private handleDisconnect(reason: string): void {
-    if (this.state === ConnectionState.DISCONNECTED) {
+    if (this.state === ConnectionState.DISCONNECTED || 
+        this.state === ConnectionState.RECONNECTING || 
+        this.state === ConnectionState.FAILED) {
+      this.logger.debug(`Already handling disconnect for edge ${this.edgeId}, state: ${this.state}`);
       return;
     }
 
@@ -617,6 +620,12 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
    * 安排重连
    */
   private scheduleReconnect(): void {
+    // 如果已经在重连中，不要重复调度
+    if (this.reconnectTimer) {
+      this.logger.debug(`Reconnect already scheduled for edge ${this.edgeId}`);
+      return;
+    }
+    
     const maxAttempts = this.config.maxReconnectAttempts ?? 10;
     if (this.reconnectAttempts >= maxAttempts) {
       this.logger.error(`Max reconnect attempts reached for edge ${this.edgeId}`);
@@ -747,7 +756,7 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
     });
   }
 
-  private createHeartbeatPong(sequence: number, requestTimestamp: number): Buffer | null {
+  private createHeartbeatPong(sequence: number, _requestTimestamp: number): Buffer | null {
     const heartbeatPong: HeartbeatPong = {
       edge_id: this.config.localEdgeId,
       sequence,

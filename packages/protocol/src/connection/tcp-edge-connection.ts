@@ -215,7 +215,7 @@ export class TCPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
       });
 
       this.socket.on('close', () => {
-        this.logger.info(`TCP connection to edge ${this.edgeId} closed`);
+        // handleDisconnect 会记录日志，这里不重复记录
         this.handleDisconnect('socket closed');
       });
 
@@ -553,14 +553,17 @@ export class TCPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
    * 处理断开连接
    */
   private handleDisconnect(reason: string): void {
-    if (this.state === ConnectionState.DISCONNECTED) {
+    if (this.state === ConnectionState.DISCONNECTED || this.state === ConnectionState.RECONNECTING || this.state === ConnectionState.FAILED) {
+      this.logger.debug(`Already handling disconnect for edge ${this.edgeId}, state: ${this.state}`);
       return;
     }
     
     this.state = ConnectionState.DISCONNECTED;
     this.stopTimers();
     
+    // 移除所有 socket 事件监听器，防止 destroy() 触发 close 事件导致级联调用
     if (this.socket) {
+      this.socket.removeAllListeners();
       this.socket.destroy();
       this.socket = undefined;
     }
@@ -575,6 +578,12 @@ export class TCPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
    * 安排重连
    */
   private scheduleReconnect(): void {
+    // 如果已经在重连中，不要重复调度
+    if (this.reconnectTimer) {
+      this.logger.debug(`Reconnect already scheduled for edge ${this.edgeId}`);
+      return;
+    }
+    
     const maxAttempts = this.config.maxReconnectAttempts || 5;
     
     if (this.reconnectAttempts >= maxAttempts) {

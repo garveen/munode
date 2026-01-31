@@ -333,8 +333,6 @@ export class VoiceManager {
     
     // 监听Edge断开连接事件
     this.voiceTransport.on('edge-disconnected', (edgeId: number) => {
-      this.logger.warn(`Edge ${edgeId} disconnected (heartbeat timeout)`);
-      
       // 清理路由信息
       if (this.voiceRoutingManager.isEnabled()) {
         this.voiceRoutingManager.removeEdge(edgeId);

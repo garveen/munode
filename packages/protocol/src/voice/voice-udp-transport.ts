@@ -330,8 +330,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       this.emit('edge-connected', edgeId);
     });
 
-    this.connectionManager.on('edge-disconnected', (edgeId, reason) => {
-      this.logger.warn(`Edge ${edgeId} disconnected (transport layer): ${reason || 'unknown'}`);
+    this.connectionManager.on('edge-disconnected', (edgeId, _reason) => {
       this.emit('edge-disconnected', edgeId);
       
       // 质量监控数据由连接层管理，这里不需要清理
@@ -356,7 +355,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   /**
    * 处理接收到的语音数据
    */
-  private handleVoiceData(edgeId: number, data: Buffer, timestamp: number): void {
+  private handleVoiceData(edgeId: number, data: Buffer, _timestamp: number): void {
     try {
       // 解密
       let decrypted = data;

@@ -420,7 +420,7 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
     });
 
     connection.on('disconnected', (reason) => {
-      this.logger.warn(`Edge ${connection.edgeId} disconnected: ${reason || 'unknown'}`);
+      // 底层连接已经记录了日志，这里只转发事件
       this.emit('edge-disconnected', connection.edgeId, reason);
       
       // 处理自动降级
