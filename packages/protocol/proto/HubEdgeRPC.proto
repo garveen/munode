@@ -418,6 +418,7 @@ message PeerInfoProto {
   required string host = 3;
   required uint32 port = 4;
   required uint32 voice_port = 5;
+  optional string cert_hash = 6;
 }
 
 // ---------------------------------------------------------------------------

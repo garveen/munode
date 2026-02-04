@@ -464,6 +464,7 @@ export interface PeerInfoProto {
   host?: string | undefined;
   port?: number | undefined;
   voice_port?: number | undefined;
+  cert_hash?: string | undefined;
 }
 
 /**
@@ -6717,7 +6718,14 @@ export const EdgeJoinResult: MessageFns<EdgeJoinResult> = {
 };
 
 function createBasePeerInfoProto(): PeerInfoProto {
-  return { id: undefined, name: undefined, host: undefined, port: undefined, voice_port: undefined };
+  return {
+    id: undefined,
+    name: undefined,
+    host: undefined,
+    port: undefined,
+    voice_port: undefined,
+    cert_hash: undefined,
+  };
 }
 
 export const PeerInfoProto: MessageFns<PeerInfoProto> = {
@@ -6736,6 +6744,9 @@ export const PeerInfoProto: MessageFns<PeerInfoProto> = {
     }
     if (message.voice_port !== undefined) {
       writer.uint32(40).uint32(message.voice_port);
+    }
+    if (message.cert_hash !== undefined) {
+      writer.uint32(50).string(message.cert_hash);
     }
     return writer;
   },
@@ -6787,6 +6798,14 @@ export const PeerInfoProto: MessageFns<PeerInfoProto> = {
           message.voice_port = reader.uint32();
           continue;
         }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.cert_hash = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -6803,6 +6822,7 @@ export const PeerInfoProto: MessageFns<PeerInfoProto> = {
       host: isSet(object.host) ? globalThis.String(object.host) : undefined,
       port: isSet(object.port) ? globalThis.Number(object.port) : undefined,
       voice_port: isSet(object.voice_port) ? globalThis.Number(object.voice_port) : undefined,
+      cert_hash: isSet(object.cert_hash) ? globalThis.String(object.cert_hash) : undefined,
     };
   },
 
@@ -6823,6 +6843,9 @@ export const PeerInfoProto: MessageFns<PeerInfoProto> = {
     if (message.voice_port !== undefined) {
       obj.voice_port = Math.round(message.voice_port);
     }
+    if (message.cert_hash !== undefined) {
+      obj.cert_hash = message.cert_hash;
+    }
     return obj;
   },
 
@@ -6836,6 +6859,7 @@ export const PeerInfoProto: MessageFns<PeerInfoProto> = {
     message.host = object.host ?? undefined;
     message.port = object.port ?? undefined;
     message.voice_port = object.voice_port ?? undefined;
+    message.cert_hash = object.cert_hash ?? undefined;
     return message;
   },
 };

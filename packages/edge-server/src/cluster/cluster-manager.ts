@@ -28,6 +28,7 @@ export class EdgeClusterManager {
   private logger: Logger;
   private onDisconnectAllClients?: () => void;
   private onClearState?: () => void;
+  private onRegisterEdgeCertHash?: (edgeId: number, certHash: string) => void;
   private peers: Array<{ id: number; name: string; host: string; port: number; voicePort?: number }> = [];
 
   constructor(
@@ -36,12 +37,14 @@ export class EdgeClusterManager {
     callbacks?: {
       onDisconnectAllClients?: () => void;
       onClearState?: () => void;
+      onRegisterEdgeCertHash?: (edgeId: number, certHash: string) => void;
     }
   ) {
     this.config = config;
     this.logger = logger;
     this.onDisconnectAllClients = callbacks?.onDisconnectAllClients;
     this.onClearState = callbacks?.onClearState;
+    this.onRegisterEdgeCertHash = callbacks?.onRegisterEdgeCertHash;
 
     // 初始化 Hub 客户端（EdgeControlClient 封装了连接、注册、认证等完整功能）
     this.hubClient = new EdgeControlClient(this.config, this.logger);
@@ -150,7 +153,14 @@ export class EdgeClusterManager {
           voicePort: peer.port, // 统一UDP端口：语音和控制使用同一端口
         });
         connectedPeers.push(peer.id);
-        this.logger.info(`Registered peer ${peer.id} (${peer.name}) for voice UDP`);
+        
+        // 注册peer的证书哈希（用于识别Edge间TLS连接）
+        if (peer.cert_hash && this.onRegisterEdgeCertHash) {
+          this.onRegisterEdgeCertHash(peer.id, peer.cert_hash);
+          this.logger.info(`Registered peer ${peer.id} (${peer.name}) certificate hash: ${peer.cert_hash.substring(0, 16)}...`);
+        } else {
+          this.logger.info(`Registered peer ${peer.id} (${peer.name}) for voice UDP`);
+        }
       }
 
       // 5. 确认加入完成
@@ -218,8 +228,14 @@ export class EdgeClusterManager {
       voicePort: params.voicePort || params.port,
     });
     
+    // 注册新peer的证书哈希（用于识别Edge间TLS连接）
+    if (params.certHash && this.onRegisterEdgeCertHash) {
+      this.onRegisterEdgeCertHash(params.id, params.certHash);
+      this.logger.info(`Registered new peer ${params.id} (${params.name}) certificate hash: ${params.certHash.substring(0, 16)}...`);
+    }
+    
     // Edge之间不需要RPC连接
-    // Peer的语音端口会在EdgeServer中注册到VoiceUDPTransport
+    // Peer的语音端点会在EdgeServer中注册到VoiceUDPTransport
     this.logger.info(`Peer ${params.id} ready for voice UDP communication`);
   }
 

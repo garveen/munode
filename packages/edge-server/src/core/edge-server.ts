@@ -143,6 +143,10 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
         // 清理状态，但保留配置
         // 状态管理器会自动清理
       },
+      onRegisterEdgeCertHash: (edgeId: number, certHash: string) => {
+        // 注册Edge证书哈希，用于识别Edge间TLS连接
+        this.addKnownEdgeCertHash(edgeId, certHash);
+      },
     });
     // 使用 ClusterManager 已创建的 HubClient 实例（避免重复创建）
     this.hubClient = this.clusterManager.getHubClient();
