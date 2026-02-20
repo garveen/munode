@@ -49,8 +49,8 @@ export class ClusterHandler implements IClusterHandler {
         name: e.name,
         host: e.host,
         port: e.port,                        // 客户端主端口
-        voicePort: e.edge_port || e.port,    // Edge 间 TCP 专用端口
-        certHash: e.certificate,
+        voice_port: e.edge_port || e.port,   // Edge 间 TCP 专用端口（匹配 PeerInfoProto 类型）
+        cert_hash: e.certificate,            // 证书哈希（匹配 PeerInfoProto 类型）
       }));
 
     // 生成加入令牌
@@ -82,7 +82,7 @@ export class ClusterHandler implements IClusterHandler {
         name: edge.name,
         host: edge.host,
         port: edge.port,                          // 客户端主端口
-        voicePort: edge.edge_port || edge.port,   // Edge 间 TCP 专用端口
+        voicePort: edge.edge_port || edge.port,   // Edge 间 TCP 专用端口（匹配 HubPeerJoinedNotification camelCase）
         certHash: edge.certificate,
       });
     }

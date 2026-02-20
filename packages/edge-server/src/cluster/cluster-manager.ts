@@ -147,12 +147,13 @@ export class EdgeClusterManager {
       this.peers = []; // 清空旧的 peers
       for (const peer of joinResponse.peers) {
         // 保存 peer 信息，包含 voicePort
+        // peer.voice_port 是 Hub 返回的 Edge 间 TCP 专用端口（edge_port）
         this.peers.push({
           id: peer.id,
           name: peer.name,
           host: peer.host,
           port: peer.port,
-          voicePort: peer.port, // 统一UDP端口：语音和控制使用同一端口
+          voicePort: peer.voice_port || peer.port, // 使用 Hub 返回的 voice_port（Edge 间 TLS 专用端口）
         });
         connectedPeers.push(peer.id);
         
