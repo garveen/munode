@@ -8,8 +8,12 @@ import { z } from 'zod';
 export const NetworkConfigSchema = z.object({
   host: z.string().min(1, 'host cannot be empty'),
   port: z.number().int().min(1).max(65535, 'port must be between 1 and 65535'),
+  // Edge 间连接专用 TCP 端口（不得与客户端端口共用），未配置时默认为 port+1
+  edge_port: z.number().int().min(1).max(65535).optional(),
   external_host: z.string().min(1, 'externalHost cannot be empty'),
   external_port: z.number().int().min(1).max(65535).optional(),
+  // Edge 间连接对外广播的端口（公网映射时使用），未配置时使用 edge_port
+  external_edge_port: z.number().int().min(1).max(65535).optional(),
   region: z.string().optional(),
 }).strict();
 

@@ -292,64 +292,64 @@ export class ClientMessageRouter extends TypedEventEmitter<ClientMessageRouterEv
     target: hubedge.ClientMessageRelay
   ): void {
     // 检查并复制每个可能的 Mumble 消息字段
-    if (source !== undefined) target.version = source.version;
-    if (source !== undefined) target.udp_tunnel = source.udp_tunnel;
-    if (source !== undefined) target.authenticate = source.authenticate;
-    if (source !== undefined) target.ping = source.ping;
-    if (source !== undefined) target.reject = source.reject;
-    if (source !== undefined) target.server_sync = source.server_sync;
-    if (source !== undefined) target.channel_remove = source.channel_remove;
-    if (source !== undefined) target.channel_state = source.channel_state;
-    if (source !== undefined) target.user_remove = source.user_remove;
-    if (source !== undefined) target.user_state = source.user_state;
-    if (source !== undefined) target.ban_list = source.ban_list;
-    if (source !== undefined) target.text_message = source.text_message;
-    if (source !== undefined) target.permission_denied = source.permission_denied;
-    if (source !== undefined) target.acl = source.acl;
-    if (source !== undefined) target.query_users = source.query_users;
-    if (source !== undefined) target.crypt_setup = source.crypt_setup;
-    if (source !== undefined) target.context_action_modify = source.context_action_modify;
-    if (source !== undefined) target.context_action = source.context_action;
-    if (source !== undefined) target.user_list = source.user_list;
-    if (source !== undefined) target.voice_target = source.voice_target;
-    if (source !== undefined) target.permission_query = source.permission_query;
-    if (source !== undefined) target.codec_version = source.codec_version;
-    if (source !== undefined) target.user_stats = source.user_stats;
-    if (source !== undefined) target.request_blob = source.request_blob;
-    if (source !== undefined) target.server_config = source.server_config;
-    if (source !== undefined) target.suggest_config = source.suggest_config;
+    if (source.version !== undefined) target.version = source.version;
+    if (source.udp_tunnel !== undefined) target.udp_tunnel = source.udp_tunnel;
+    if (source.authenticate !== undefined) target.authenticate = source.authenticate;
+    if (source.ping !== undefined) target.ping = source.ping;
+    if (source.reject !== undefined) target.reject = source.reject;
+    if (source.server_sync !== undefined) target.server_sync = source.server_sync;
+    if (source.channel_remove !== undefined) target.channel_remove = source.channel_remove;
+    if (source.channel_state !== undefined) target.channel_state = source.channel_state;
+    if (source.user_remove !== undefined) target.user_remove = source.user_remove;
+    if (source.user_state !== undefined) target.user_state = source.user_state;
+    if (source.ban_list !== undefined) target.ban_list = source.ban_list;
+    if (source.text_message !== undefined) target.text_message = source.text_message;
+    if (source.permission_denied !== undefined) target.permission_denied = source.permission_denied;
+    if (source.acl !== undefined) target.acl = source.acl;
+    if (source.query_users !== undefined) target.query_users = source.query_users;
+    if (source.crypt_setup !== undefined) target.crypt_setup = source.crypt_setup;
+    if (source.context_action_modify !== undefined) target.context_action_modify = source.context_action_modify;
+    if (source.context_action !== undefined) target.context_action = source.context_action;
+    if (source.user_list !== undefined) target.user_list = source.user_list;
+    if (source.voice_target !== undefined) target.voice_target = source.voice_target;
+    if (source.permission_query !== undefined) target.permission_query = source.permission_query;
+    if (source.codec_version !== undefined) target.codec_version = source.codec_version;
+    if (source.user_stats !== undefined) target.user_stats = source.user_stats;
+    if (source.request_blob !== undefined) target.request_blob = source.request_blob;
+    if (source.server_config !== undefined) target.server_config = source.server_config;
+    if (source.suggest_config !== undefined) target.suggest_config = source.suggest_config;
   }
 
   /**
    * 获取 Relay 中的消息类型
    */
   private getMessageType(relay: hubedge.ClientMessageRelay): MessageType | null {
-    if (relay !== undefined) return MessageType.Version;
-    if (relay !== undefined) return MessageType.UDPTunnel;
-    if (relay !== undefined) return MessageType.Authenticate;
-    if (relay !== undefined) return MessageType.Ping;
-    if (relay !== undefined) return MessageType.Reject;
-    if (relay !== undefined) return MessageType.ServerSync;
-    if (relay !== undefined) return MessageType.ChannelRemove;
-    if (relay !== undefined) return MessageType.ChannelState;
-    if (relay !== undefined) return MessageType.UserRemove;
-    if (relay !== undefined) return MessageType.UserState;
-    if (relay !== undefined) return MessageType.BanList;
-    if (relay !== undefined) return MessageType.TextMessage;
-    if (relay !== undefined) return MessageType.PermissionDenied;
-    if (relay !== undefined) return MessageType.ACL;
-    if (relay !== undefined) return MessageType.QueryUsers;
-    if (relay !== undefined) return MessageType.CryptSetup;
-    if (relay !== undefined) return MessageType.ContextActionModify;
-    if (relay !== undefined) return MessageType.ContextAction;
-    if (relay !== undefined) return MessageType.UserList;
-    if (relay !== undefined) return MessageType.VoiceTarget;
-    if (relay !== undefined) return MessageType.PermissionQuery;
-    if (relay !== undefined) return MessageType.CodecVersion;
-    if (relay !== undefined) return MessageType.UserStats;
-    if (relay !== undefined) return MessageType.RequestBlob;
-    if (relay !== undefined) return MessageType.ServerConfig;
-    if (relay !== undefined) return MessageType.SuggestConfig;
+    if (relay.version !== undefined) return MessageType.Version;
+    if (relay.udp_tunnel !== undefined) return MessageType.UDPTunnel;
+    if (relay.authenticate !== undefined) return MessageType.Authenticate;
+    if (relay.ping !== undefined) return MessageType.Ping;
+    if (relay.reject !== undefined) return MessageType.Reject;
+    if (relay.server_sync !== undefined) return MessageType.ServerSync;
+    if (relay.channel_remove !== undefined) return MessageType.ChannelRemove;
+    if (relay.channel_state !== undefined) return MessageType.ChannelState;
+    if (relay.user_remove !== undefined) return MessageType.UserRemove;
+    if (relay.user_state !== undefined) return MessageType.UserState;
+    if (relay.ban_list !== undefined) return MessageType.BanList;
+    if (relay.text_message !== undefined) return MessageType.TextMessage;
+    if (relay.permission_denied !== undefined) return MessageType.PermissionDenied;
+    if (relay.acl !== undefined) return MessageType.ACL;
+    if (relay.query_users !== undefined) return MessageType.QueryUsers;
+    if (relay.crypt_setup !== undefined) return MessageType.CryptSetup;
+    if (relay.context_action_modify !== undefined) return MessageType.ContextActionModify;
+    if (relay.context_action !== undefined) return MessageType.ContextAction;
+    if (relay.user_list !== undefined) return MessageType.UserList;
+    if (relay.voice_target !== undefined) return MessageType.VoiceTarget;
+    if (relay.permission_query !== undefined) return MessageType.PermissionQuery;
+    if (relay.codec_version !== undefined) return MessageType.CodecVersion;
+    if (relay.user_stats !== undefined) return MessageType.UserStats;
+    if (relay.request_blob !== undefined) return MessageType.RequestBlob;
+    if (relay.server_config !== undefined) return MessageType.ServerConfig;
+    if (relay.suggest_config !== undefined) return MessageType.SuggestConfig;
     return null;
   }
 

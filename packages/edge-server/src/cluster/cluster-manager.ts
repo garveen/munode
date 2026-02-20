@@ -121,12 +121,14 @@ export class EdgeClusterManager {
       // 也不需要再次调用 registerToHub()，因为 hubClient.connect() 已经完成了注册
 
       // 2. 发起 join 请求
+      const edgeLocalPort = this.config.network.edge_port ?? (this.config.network.port + 1);
+      const edgeExternalPort = this.config.network.external_edge_port ?? edgeLocalPort;
       const joinRequest = {
          server_id: this.config.server_id,
         name: this.config.name,
         host: this.config.network.external_host || this.config.network.host,
         port: this.config.network.external_port ?? this.config.network.port,
-        voicePort: this.config.network.external_port ?? this.config.network.port, // Voice port is main port
+        voicePort: edgeExternalPort, // Edge 间 TCP/TLS 专用端口（edge_port）
         capacity: this.config.server.capacity,
       };
 

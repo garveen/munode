@@ -61,6 +61,7 @@ export interface RegisteredEdge {
   name: string;
   host: string;
   port: number;
+  edge_port?: number; // Edge 间连接专用端口
   region?: string;
   capacity: number;
    current_load: number;

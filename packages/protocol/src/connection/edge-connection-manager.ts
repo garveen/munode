@@ -23,7 +23,8 @@ type UDPSendFunction = (buffer: Buffer, host: string, port: number) => void;
 interface EndpointInfo {
   edgeId: number;
   host: string;
-  port: number;
+  port: number;      // UDP 端口（应对大多数 Edge UDP 流量）
+  tcpPort: number;   // TCP/TLS 端口（Edge 间独立端口）
   type: ConnectionType;
 }
 
@@ -117,20 +118,22 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
 
   /**
    * 注册并连接到远程端点
-   * 
+   *
    * @param edgeId Edge ID
    * @param host 主机地址
-   * @param port 端口
+   * @param port UDP 端口（应对大多数 UDP 流量）
    * @param purposeOrType 连接用途或连接类型（可选）
    *   - 若为ConnectionPurpose: 根据用途和策略决定连接类型
    *   - 若为ConnectionType: 直接使用指定类型（向后兼容）
    *   - 若未指定: 默认DIRECT_VOICE，根据策略决定
+   * @param tcpPort TCP/TLS 端口（Edge 间独立端口），未指定时使用 port
    */
   async registerEndpoint(
     edgeId: number,
     host: string,
     port: number,
-    purposeOrType?: ConnectionPurpose | ConnectionType
+    purposeOrType?: ConnectionPurpose | ConnectionType,
+    tcpPort?: number
   ): Promise<void> {
     // 检查是否已有到该Edge的连接
     const existing = this.connections.get(edgeId);
@@ -167,10 +170,11 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
       edgeId,
       host: normalizedHost,
       port,
+      tcpPort: tcpPort ?? port, // 未指定 TCP 端口时回退到 UDP 端口
       type: effectiveType,
     });
 
-    this.logger.info(`Registering endpoint for edge ${edgeId}: ${normalizedHost}:${port} (${effectiveType}, purpose: ${purpose}, strategy: ${this.connectionStrategy})`);
+    this.logger.info(`Registering endpoint for edge ${edgeId}: ${normalizedHost}:${port} (UDP), TCP:${tcpPort ?? port} (${effectiveType}, purpose: ${purpose}, strategy: ${this.connectionStrategy})`);
 
     // 创建连接
     const connection = await this.createConnection(edgeId, normalizedHost, port, effectiveType);
@@ -445,8 +449,14 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
         }
         return new UDPEdgeConnection(connectionConfig, this.udpSendFunction, this.logger);
 
-      case ConnectionType.TCP:
-        return new TCPEdgeConnection(connectionConfig, this.logger);
+      case ConnectionType.TCP: {
+        // TCP 连接使用専用 TCP 端口（即 edge_port）
+        const endpoint = this.endpoints.get(edgeId);
+        const tcpConnectionConfig = endpoint && endpoint.tcpPort !== port
+          ? { ...connectionConfig, port: endpoint.tcpPort }
+          : connectionConfig;
+        return new TCPEdgeConnection(tcpConnectionConfig, this.logger);
+      }
 
       default:
         this.logger.error(`Unknown connection type: ${type}`);
@@ -525,12 +535,12 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
       connection.close();
       connection.removeAllListeners();
       
-      // 创建TCP连接
+      // 创建TCP连接（使用 tcpPort 即 edge_port）
       try {
         const tcpConnection = await this.createConnection(
           edgeId,
           endpoint.host,
-          endpoint.port,
+          endpoint.tcpPort, // 使用 TCP 专用端口
           ConnectionType.TCP
         );
         
@@ -540,7 +550,7 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
           this.setupConnectionEvents(tcpConnection);
           await tcpConnection.connect();
           
-          this.logger.info(`Edge ${edgeId} successfully fell back to TCP`);
+          this.logger.info(`Edge ${edgeId} successfully fell back to TCP (port ${endpoint.tcpPort})`);
         }
       } catch (error) {
         this.logger.error(`Failed to fallback to TCP for edge ${edgeId}:`, error);

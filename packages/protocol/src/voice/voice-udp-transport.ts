@@ -153,10 +153,15 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
 
   /**
    * 注册远程端点
+   * @param edgeId Edge ID
+   * @param host 主机地址
+   * @param port UDP 端口（客户端主端口）
+   * @param purposeOrType 连接类型
+   * @param tcpPort TCP 独立端口（edge_port），未指定时使用 port
    */
-  registerEndpoint(edgeId: number, host: string, port: number): void {
-    this.logger.info(`Registering endpoint for edge ${edgeId}: ${host}:${port}`);
-    void this.connectionManager.registerEndpoint(edgeId, host, port);
+  registerEndpoint(edgeId: number, host: string, port: number, purposeOrType?: import('../connection/connection-types.js').ConnectionPurpose | import('../connection/connection-types.js').ConnectionType, tcpPort?: number): void {
+    this.logger.info(`Registering endpoint for edge ${edgeId}: ${host}:${port} (UDP), TCP:${tcpPort ?? port}`);
+    void this.connectionManager.registerEndpoint(edgeId, host, port, purposeOrType, tcpPort);
   }
 
   /**

@@ -33,16 +33,24 @@ export class ClusterHandler implements IClusterHandler {
   async handleEdgeJoin(params: RPCParams<'edge.join'>): Promise<RPCResult<'edge.join'>> {
     this.logger.info(`Edge ${params.server_id} requesting to join cluster`);
 
+    // 将 voicePort（即 edge_port）存入注册表中，以便在 peer 列表中返回
+    const edge = this.factory.getRegistry().getEdge(params.server_id);
+    if (edge && params.voicePort) {
+      edge.edge_port = params.voicePort;
+      this.logger.info(`Stored edge_port=${params.voicePort} for Edge ${params.server_id}`);
+    }
+
     // 获取所有已注册的Edge作为Peer列表
     const allEdges = this.factory.getRegistry().getEdgeList();
     const peers = allEdges
-      .filter((edge) => edge.server_id !== params.server_id)
-      .map((edge) => ({
-        id: edge.server_id,
-        name: edge.name,
-        host: edge.host,
-        port: edge.port, // 统一UDP/TCP端口
-        certHash: edge.certificate, // 包含证书哈希用于Edge间TLS连接识别
+      .filter((e) => e.server_id !== params.server_id)
+      .map((e) => ({
+        id: e.server_id,
+        name: e.name,
+        host: e.host,
+        port: e.port,                        // 客户端主端口
+        voicePort: e.edge_port || e.port,    // Edge 间 TCP 专用端口
+        certHash: e.certificate,
       }));
 
     // 生成加入令牌
@@ -73,8 +81,9 @@ export class ClusterHandler implements IClusterHandler {
         id: edge.server_id,
         name: edge.name,
         host: edge.host,
-        port: edge.port, // 统一UDP/TCP端口
-        certHash: edge.certificate, // 发送新Edge的证书hash
+        port: edge.port,                          // 客户端主端口
+        voicePort: edge.edge_port || edge.port,   // Edge 间 TCP 专用端口
+        certHash: edge.certificate,
       });
     }
 

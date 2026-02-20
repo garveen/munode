@@ -17,9 +17,11 @@ export default {
   // ===== 网络配置 =====
   network: {
     host: '0.0.0.0',           // 实际监听的地址
-    port: 64738,                // 实际监听的端口
+    port: 64738,                // 客户端连接端口（Mumble 默认端口）
+    edge_port: 64739,           // Edge 间连接专用 TCP 端口（不得与 port 相同）
     external_host: 'edge.example.com', // 用于其它edge连接的地址（公网地址/域名）
-    external_port: 64738,        // 用于其它edge连接的端口（公网端口），如果未指定则使用port
+    external_port: 64738,        // 客户端连接对外端口（公网映射）
+    external_edge_port: 64739,   // Edge 间连接对外端口（公网映射）
     region: 'asia-east',        // Server region identifier
   },
 

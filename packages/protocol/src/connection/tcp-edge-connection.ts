@@ -599,25 +599,34 @@ export class TCPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
       this.logger.debug(`Reconnect already scheduled for edge ${this.edgeId}`);
       return;
     }
-    
-    const maxAttempts = this.config.maxReconnectAttempts || 5;
-    
-    if (this.reconnectAttempts >= maxAttempts) {
+
+    // maxReconnectAttempts = 0 表示无限重连（默认）
+    const maxAttempts = this.config.maxReconnectAttempts ?? 0;
+
+    if (maxAttempts > 0 && this.reconnectAttempts >= maxAttempts) {
       this.logger.error(`Max reconnect attempts (${maxAttempts}) reached for edge ${this.edgeId}`);
       this.state = ConnectionState.FAILED;
       return;
     }
-    
+
     this.reconnectAttempts++;
+    // 指数退避：1s, 2s, 4s, 8s, 16s, 30s, 30s...最大 30 秒
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000);
-    
-    this.logger.info(`Scheduling reconnect to edge ${this.edgeId} in ${delay}ms (attempt ${this.reconnectAttempts}/${maxAttempts})`);
-    
+
+    const attemptStr = maxAttempts > 0 ? `${this.reconnectAttempts}/${maxAttempts}` : `${this.reconnectAttempts}/无限`;
+    this.logger.info(`Scheduling reconnect to edge ${this.edgeId} in ${delay}ms (attempt ${attemptStr})`);
+
     this.state = ConnectionState.RECONNECTING;
     this.emit('reconnecting', this.reconnectAttempts);
-    
+
+    // 定期清理 sentTime map ，防止内存泄漏
+    if (this.heartbeatState.sentTime.size > 100) {
+      this.heartbeatState.sentTime.clear();
+    }
+
     this.reconnectTimer = setTimeout(() => {
-      this.logger.info(`Attempting to reconnect to edge ${this.edgeId} (attempt ${this.reconnectAttempts}/${maxAttempts})`);
+      this.reconnectTimer = undefined;
+      this.logger.info(`Attempting to reconnect to edge ${this.edgeId} (attempt ${attemptStr})`);
       void this.connect().catch((error) => {
         this.logger.error(`Reconnect attempt failed:`, error);
       });

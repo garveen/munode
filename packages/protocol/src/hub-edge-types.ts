@@ -97,6 +97,7 @@ export interface EdgeInfo {
   name: string;
   host: string;
   port: number;
+  edge_port?: number; // Edge 间连接专用端口（TCP/TLS）
   region?: string;
   current_load: number;
   capacity: number;

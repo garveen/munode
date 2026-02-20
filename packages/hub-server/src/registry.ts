@@ -370,6 +370,7 @@ export class ServiceRegistry {
       name: edge.name,
       host: edge.host,
       port: edge.port,
+      edge_port: edge.edge_port,
       region: edge.region,
        current_load: edge.current_load,
       capacity: edge.capacity,

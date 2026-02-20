@@ -41,7 +41,7 @@ export class ConnectionHandlers {
     }, 30000);
 
     try {
-      // 获取证书哈希
+      // 获取证书哈希（仅用于普通客户端的 certRequired 检查和封禁检查）
       let cert_hash: string | undefined;
       try {
         const cert = socket.getPeerCertificate();
@@ -52,24 +52,10 @@ export class ConnectionHandlers {
         // 证书获取失败，继续处理
         this.logger.debug('Failed to get peer certificate:', error);
       }
-      
-      // 检查是否为Edge连接
-      // 如果客户端提供了证书，且该证书hash在knownEdgeCertHashes中
-      // 则认为这是来自其他Edge的连接，不应该作为普通客户端处理
-      // Edge间连接必须使用客户端证书，与普通客户端的certRequired配置无关
-      if (cert_hash) {
-        const edgeId = this.edgeServer.getEdgeIdByCertHash(cert_hash);
-        if (edgeId !== undefined) {
-          this.logger.info(
-            `Detected Edge-to-Edge connection from Edge ${edgeId} (cert: ${cert_hash.substring(0, 16)}...)`
-          );
-          clearTimeout(connectionTimeout);
-          // 这是一个Edge连接，统一交给EdgeServer处理
-          this.edgeServer.acceptIncomingEdgeConnection(socket, edgeId);
-          return;
-        }
-      }
-      
+
+      // 注意：Edge 间连接走独立的 edge_port TLS 服务器，不会到达这里
+      // 此处只处理普通 Mumble 客户端连接
+
       // 以下是普通客户端的处理
       // 检查是否要求普通客户端提供证书（certRequired只针对普通客户端）
       if (this.edgeServer.isCertRequired && !cert_hash) {
