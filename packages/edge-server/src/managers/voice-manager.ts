@@ -314,8 +314,8 @@ export class VoiceManager {
     });
     
     // 监听Edge连接事件
-    this.voiceTransport.on('edge-connected', (edgeId: number) => {
-      this.logger.info(`UDP connection established with Edge ${edgeId}`);
+    this.voiceTransport.on('edge-connected', (edgeId: number, connectionType: 'tcp' | 'udp') => {
+      this.logger.info(`Edge ${edgeId} connected via ${connectionType.toUpperCase()}`);
     });
     
     // 监听Edge连接失败事件

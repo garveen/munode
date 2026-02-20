@@ -714,9 +714,10 @@ export class EventSetupManager {
             if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.port && data.id !== this.config.server_id) {
               try {
                 const voiceTransport = this.voiceManager.getVoiceTransport();
-                const tcpPort = data.voicePort ?? data.port;
-                voiceTransport.registerEndpoint(data.id, data.host, data.port, undefined, tcpPort);
-                this.logger.info(`Registered edge endpoint for new Edge ${data.id}: UDP=${data.host}:${data.port}, TCP=${data.host}:${tcpPort}`);
+                // UDP 和 TCP 都使用 voicePort（即 edge_port），不再复用客户端主端口
+                const edgePort = data.voicePort ?? data.port;
+                voiceTransport.registerEndpoint(data.id, data.host, edgePort, undefined, edgePort);
+                this.logger.info(`Registered edge endpoint for new Edge ${data.id}: ${data.host}:${edgePort} (UDP+TCP on edge_port)`);
 
                 // 已有 Edge 主动连接到新 Edge
                 void voiceTransport.connectToEdge(data.id);

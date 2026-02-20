@@ -27,6 +27,7 @@ export class ServerLifecycleManager {
   private logger: Logger;
   private tcpServer?: TCPServer;
   private udpServer?: UDPSocket;
+  private edgeUDPServer?: UDPSocket;  // Edge 间专用 UDP 服务器
   private tlsServer?: TLSServer;
   private edgeTLSServer?: TLSServer; // Edge 间连接专用 TLS 服务器
   private voiceTransport?: VoiceUDPTransport;
@@ -74,8 +75,11 @@ export class ServerLifecycleManager {
         await this.handlerFactory.banManager.initialize();
       }
 
-      // 启动 UDP 服务器
+      // 启动 UDP 服务器（主端口，供 Mumble 客户端使用）
       await this.startUDPServer();
+
+      // 启动 Edge 间专用 UDP 服务器（edge_port，与客户端完全隔离）
+      await this.startEdgeUDPServer();
 
       // 启动 TLS 服务器（主端口 - 专供 Mumble 客户端连接）
       await this.startTLSServer();
@@ -109,11 +113,10 @@ export class ServerLifecycleManager {
             for (const peer of peers) {
               if (peer.id !== this.config.server_id) {
                 try {
-                  // UDP 使用主端口，TCP 使用 voicePort（即 edge_port）
-                  const peerUdpPort = peer.port;
-                  const peerTcpPort = peer.voicePort || peer.port;
-                  this.voiceTransport.registerEndpoint(peer.id, peer.host, peerUdpPort, undefined, peerTcpPort);
-                  this.logger.info(`Registered edge peer ${peer.id}: UDP=${peer.host}:${peerUdpPort}, TCP=${peer.host}:${peerTcpPort}`);
+                  // UDP 和 TCP 都使用 voicePort（即 edge_port），不再复用客户端主端口
+                  const peerEdgePort = peer.voicePort || peer.port;
+                  this.voiceTransport.registerEndpoint(peer.id, peer.host, peerEdgePort, undefined, peerEdgePort);
+                  this.logger.info(`Registered edge peer ${peer.id}: ${peer.host}:${peerEdgePort} (UDP+TCP on edge_port)`);
                 } catch (endpointError) {
                   // 单个端点注册失败不影响其他端点
                   this.logger.warn(`Failed to register voice endpoint for peer ${peer.id}:`, endpointError);
@@ -149,6 +152,12 @@ export class ServerLifecycleManager {
       if (this.udpServer) {
         this.udpServer.removeAllListeners();
         this.udpServer.close();
+      }
+
+      if (this.edgeUDPServer) {
+        this.edgeUDPServer.removeAllListeners();
+        this.edgeUDPServer.close();
+        this.logger.info('Edge UDP server stopped');
       }
 
       if (this.tlsServer) {
@@ -193,17 +202,8 @@ export class ServerLifecycleManager {
       this.udpServer = createSocket('udp4');
 
       this.udpServer.on('message', (msg, rinfo) => {
-        // 根据魔数区分客户端包和Edge间包
-        if (msg.length >= 2 && msg.readUInt16BE(0) === 0x0000) {
-          // Edge间通信包：前两字节是0x0000
-          if (this.voiceTransport) {
-            // 直接传递给VoiceUDPTransport处理（包含魔数）
-            this.voiceTransport['handleIncomingPacket'](msg, rinfo);
-          }
-        } else {
-          // 客户端Mumble包：前两字节不可能都是0x00
-          this.handlerFactory.connectionHandlers.handleUDPMessage(msg, rinfo);
-        }
+        // 客户端 Mumble 包，直接交给客户端处理器
+        this.handlerFactory.connectionHandlers.handleUDPMessage(msg, rinfo);
       });
 
       this.udpServer.on('error', (error) => {
@@ -218,18 +218,50 @@ export class ServerLifecycleManager {
 
         // 设置 VoiceRouter 的 UDP 服务器引用
         this.handlerFactory.voiceRouter.setUDPServer(this.udpServer);
-        
-        // 设置 VoiceUDPTransport 使用发送回调（统一入口模式）
-        if (this.voiceTransport && this.udpServer) {
-          const udpServerRef = this.udpServer;
+
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * 启动 Edge 间专用 UDP 服务器
+   * 使用 edge_port，与 Mumble 客户端 UDP 完全隔离，无需魔数区分
+   */
+  private async startEdgeUDPServer(): Promise<void> {
+    const edgePort = this.config.network.edge_port ?? (this.config.network.port + 1);
+
+    return new Promise((resolve, reject) => {
+      this.edgeUDPServer = createSocket('udp4');
+
+      this.edgeUDPServer.on('message', (msg, rinfo) => {
+        // 所有包都是 Edge 间通信包，直接交给 VoiceUDPTransport
+        if (this.voiceTransport) {
+          this.voiceTransport['handleIncomingPacket'](msg, rinfo);
+        }
+      });
+
+      this.edgeUDPServer.on('error', (error) => {
+        this.logger.error('Edge UDP Server error:', error);
+        reject(error);
+      });
+
+      this.edgeUDPServer.bind(edgePort, this.config.network.host, () => {
+        this.logger.info(
+          `Edge UDP Server listening on ${this.config.network.host}:${edgePort} (dedicated Edge-to-Edge port)`
+        );
+
+        // 设置 VoiceUDPTransport 使用 Edge 专用 UDP socket 发送
+        if (this.voiceTransport && this.edgeUDPServer) {
+          const edgeUDPRef = this.edgeUDPServer;
           this.voiceTransport.setSendFunction((buffer, host, port) => {
-            udpServerRef.send(buffer, port, host, (error) => {
+            edgeUDPRef.send(buffer, port, host, (error) => {
               if (error) {
-                this.logger.error('Failed to send UDP packet:', error);
+                this.logger.error('Failed to send Edge UDP packet:', error);
               }
             });
           });
-          this.logger.info('VoiceUDPTransport configured with send function (unified entry mode)');
+          this.logger.info('VoiceUDPTransport configured with Edge-dedicated UDP socket');
         }
 
         resolve();
@@ -275,7 +307,7 @@ export class ServerLifecycleManager {
       this.edgeTLSServer = createTLSServer(tlsOptions);
 
       this.edgeTLSServer.on('secureConnection', (socket: TLSSocket) => {
-        try {
+        void (async () => { try {
           // 获取客户端证书哈希
           let certHash: string | undefined;
           try {
@@ -296,11 +328,35 @@ export class ServerLifecycleManager {
           }
 
           // 通过证书哈希识别对端 Edge
-          const edgeId = this.handlerFactory.edgeServer?.getEdgeIdByCertHash(certHash);
+          // 允许最多 2 秒的等待，处理 peerJoined 通知比 TLS 连接晚到的竞态场景
+          const resolveEdgeId = (): number | undefined =>
+            this.handlerFactory.edgeServer?.getEdgeIdByCertHash(certHash);
+
+          let edgeId = resolveEdgeId();
+          if (edgeId === undefined) {
+            this.logger.debug(
+              `cert hash ${certHash.substring(0, 16)}... not yet registered, waiting up to 2s...`
+            );
+            // 轮询等待，最多 2000ms，每 100ms 查一次
+            const WAIT_INTERVAL_MS = 100;
+            const WAIT_MAX_MS = 2000;
+            let waited = 0;
+            await new Promise<void>((resolve) => {
+              const poll = setInterval(() => {
+                edgeId = resolveEdgeId();
+                waited += WAIT_INTERVAL_MS;
+                if (edgeId !== undefined || waited >= WAIT_MAX_MS) {
+                  clearInterval(poll);
+                  resolve();
+                }
+              }, WAIT_INTERVAL_MS);
+            });
+          }
+
           if (edgeId === undefined) {
             this.logger.warn(
               `Rejected Edge connection from ${socket.remoteAddress}: ` +
-              `unknown cert hash ${certHash.substring(0, 16)}... (peer not registered yet?)`
+              `unknown cert hash ${certHash.substring(0, 16)}... (peer not registered after 2s wait)`
             );
             socket.destroy();
             return;
@@ -316,7 +372,7 @@ export class ServerLifecycleManager {
         } catch (error) {
           this.logger.error('Error handling Edge TLS connection:', error);
           socket.destroy();
-        }
+        } })();
       });
 
       this.edgeTLSServer.on('error', (error: Error) => {

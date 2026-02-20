@@ -68,7 +68,7 @@ export interface VoiceUDPTransportEvents extends EventMap {
   'error': [error: Error];
   'listening': [address: ReturnType<typeof dgram.Socket.prototype.address>];
   'handshake-failed': [edgeId: number];
-  'edge-connected': [edgeId: number];
+  'edge-connected': [edgeId: number, connectionType: 'tcp' | 'udp'];
   'edge-disconnected': [edgeId: number];
   'reconnect-failed': [edgeId: number];
   'voice-packet': [packet: VoicePacket, rinfo?: dgram.RemoteInfo];
@@ -361,10 +361,10 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
    * 设置连接管理器事件监听
    */
   private setupConnectionManagerEvents(): void {
-    this.connectionManager.on('edge-connected', (edgeId) => {
-      this.logger.info(`Edge ${edgeId} connected (transport layer)`);
+    this.connectionManager.on('edge-connected', (edgeId, connectionType) => {
+      this.logger.info(`Edge ${edgeId} connected via ${connectionType.toUpperCase()} (transport layer)`);
       this.stats.handshakeReceived++; // 兼容统计
-      this.emit('edge-connected', edgeId);
+      this.emit('edge-connected', edgeId, connectionType);
     });
 
     this.connectionManager.on('edge-disconnected', (edgeId, _reason) => {

@@ -32,7 +32,7 @@ interface EndpointInfo {
  * EdgeConnectionManager 事件类型
  */
 export interface EdgeConnectionManagerEvents extends EventMap {
-  'edge-connected': [edgeId: number];
+  'edge-connected': [edgeId: number, connectionType: 'tcp' | 'udp'];
   'edge-disconnected': [edgeId: number, reason?: string];
   'edge-error': [edgeId: number, error: Error];
   'edge-data': [edgeId: number, data: Buffer, timestamp: number];
@@ -503,7 +503,7 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
       this.logger.info(`Edge ${connection.edgeId} connected via ${connection.type.toUpperCase()}`);
       // 重置失败计数
       this.connectionFailures.set(connection.edgeId, 0);
-      this.emit('edge-connected', connection.edgeId);
+      this.emit('edge-connected', connection.edgeId, connection.type as 'tcp' | 'udp');
     });
 
     connection.on('disconnected', (reason) => {

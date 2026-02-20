@@ -27,7 +27,6 @@ const HEARTBEAT_INTERVAL_MS = 10000;
 const HEARTBEAT_TIMEOUT_MS = 30000;
 const PROTOCOL_VERSION = 1;
 const NONCE_SIZE = 32;
-const EDGE_UDP_MAGIC = 0x0000;
 
 /**
  * UDP发送函数类型
@@ -183,15 +182,10 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
       throw new Error(`Cannot send data: connection to edge ${this.edgeId} is not established`);
     }
 
-    // 添加魔数前缀
-    const packet = Buffer.allocUnsafe(2 + data.length);
-    packet.writeUInt16BE(EDGE_UDP_MAGIC, 0);
-    data.copy(packet, 2);
-
-    this.sendFunction(packet, this.config.host, this.config.port);
+    this.sendFunction(data, this.config.host, this.config.port);
     this.stats.packetsSent++;
-    this.stats.bytesSent += packet.length;
-    this.qualityTracking.bandwidthBytesOut += packet.length;
+    this.stats.bytesSent += data.length;
+    this.qualityTracking.bandwidthBytesOut += data.length;
     this.updateLastSeen();
   }
 
@@ -222,22 +216,13 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
    * 处理接收到的原始数据包（包含魔数）
    */
   handleIncomingPacket(data: Buffer): void {
-    // 验证魔数
-    if (data.length < 2 || data.readUInt16BE(0) !== EDGE_UDP_MAGIC) {
-      this.logger.warn(`Invalid magic number in packet from edge ${this.edgeId}`);
-      return;
-    }
-
-    // 去除魔数
-    const payload = data.slice(2);
-
     // 尝试解析为协议包
     let packet: VoiceUDPPacket;
     try {
-      packet = VoiceUDPPacket.decode(payload);
+      packet = VoiceUDPPacket.decode(data);
     } catch (_error) {
       // 不是协议包，可能是数据包
-      this.handleDataPacket(payload);
+      this.handleDataPacket(data);
       return;
     }
 
@@ -778,11 +763,7 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
   }
 
   private encodePacket(packet: VoiceUDPPacket): Buffer {
-    const encodedPacket = Buffer.from(VoiceUDPPacket.encode(packet).finish());
-    const result = Buffer.allocUnsafe(2 + encodedPacket.length);
-    result.writeUInt16BE(EDGE_UDP_MAGIC, 0);
-    encodedPacket.copy(result, 2);
-    return result;
+    return Buffer.from(VoiceUDPPacket.encode(packet).finish());
   }
 
   // ===== 签名验证方法 =====
