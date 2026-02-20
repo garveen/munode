@@ -15,6 +15,7 @@ import type dgram from 'dgram';
 import { type Logger, TypedEventEmitter, type EventMap } from '@munode/common';
 import { EdgeConnectionManager, type EdgeConnectionManagerConfig } from '../connection/edge-connection-manager.js';
 import type { ConnectionStatus, ConnectionQualityMetrics } from '../connection/connection-types.js';
+import { ConnectionStrategy } from '../connection/connection-types.js';
 
 // 保持原有导出以维持向后兼容
 export interface VoiceUDPConfig {
@@ -27,6 +28,14 @@ export interface VoiceUDPConfig {
   // Edge间连接使用的客户端证书
   clientCert?: Buffer;
   clientKey?: Buffer;
+  /** 连接策略：tcp_only 或 auto_fallback（默认: auto_fallback） */
+  connectionStrategy?: ConnectionStrategy;
+  /** 自动降级的质量阈值（仅在 auto_fallback 模式下使用） */
+  fallbackThresholds?: {
+    maxRtt?: number;
+    maxPacketLoss?: number;
+    maxConsecutiveFailures?: number;
+  };
 }
 
 export interface VoicePacketHeader {
@@ -116,6 +125,8 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       sharedSecret: config.sharedSecret,
       clientCert: config.clientCert,
       clientKey: config.clientKey,
+      connectionStrategy: config.connectionStrategy,
+      fallbackThresholds: config.fallbackThresholds,
     };
     this.connectionManager = new EdgeConnectionManager(connConfig, logger);
     

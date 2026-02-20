@@ -531,9 +531,9 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
         `Edge ${edgeId} UDP connection failed ${failures} times, falling back to TCP`
       );
       
-      // 关闭UDP连接
-      connection.close();
+      // 先移除监听器，再关闭连接，防止 close() 触发 disconnected 事件导致重入
       connection.removeAllListeners();
+      connection.close();
       
       // 创建TCP连接（使用 tcpPort 即 edge_port）
       try {

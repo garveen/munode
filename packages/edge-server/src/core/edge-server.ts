@@ -3,7 +3,7 @@ import type { Logger } from 'winston';
 import { EdgeConfig, ClientInfo, ChannelInfo, ServerStats } from '../types.js';
 import { GeoIPManager } from '../util/geoip-manager.js';
 import { EdgeClusterManager } from '../cluster/cluster-manager.js';
-import { VoiceUDPTransport } from '@munode/protocol';
+import { VoiceUDPTransport, ConnectionStrategy } from '@munode/protocol';
 import { HandlerFactory } from './handler-factory.js';
 import { EdgeControlClient } from '../cluster/hub-client.js';
 import { ServerLifecycleManager } from './lifecycle-manager.js';
@@ -195,6 +195,14 @@ export class EdgeServer extends TypedEventEmitter<EdgeServerEvents> {
           : undefined,
         clientCert,
         clientKey,
+        connectionStrategy: this.config.voice_routing?.connection_strategy as ConnectionStrategy | undefined,
+        fallbackThresholds: this.config.voice_routing?.fallback_thresholds
+          ? {
+              maxRtt: this.config.voice_routing.fallback_thresholds.max_rtt,
+              maxPacketLoss: this.config.voice_routing.fallback_thresholds.max_packet_loss,
+              maxConsecutiveFailures: this.config.voice_routing.fallback_thresholds.max_consecutive_failures,
+            }
+          : undefined,
       }, 
       this.logger,
     );

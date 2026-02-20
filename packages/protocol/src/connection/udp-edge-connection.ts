@@ -98,6 +98,7 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
   private connectedAt?: number;
   private reconnectAttempts = 0;
   private reconnectTimer?: NodeJS.Timeout;
+  private closed = false; // 标记是否已被外部显式关闭，防止关闭后仍触发重连
 
   constructor(
     config: ConnectionConfig,
@@ -167,6 +168,7 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
    * 关闭连接
    */
   close(): void {
+    this.closed = true;
     this.state = ConnectionState.DISCONNECTED;
     this.stopTimers();
     this.emit('disconnected', 'closed by user');
@@ -620,6 +622,12 @@ export class UDPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
    * 安排重连
    */
   private scheduleReconnect(): void {
+    // 如果连接已被外部显式关闭，不再重连
+    if (this.closed) {
+      this.logger.debug(`Connection to edge ${this.edgeId} was explicitly closed, skipping reconnect`);
+      return;
+    }
+    
     // 如果已经在重连中，不要重复调度
     if (this.reconnectTimer) {
       this.logger.debug(`Reconnect already scheduled for edge ${this.edgeId}`);
