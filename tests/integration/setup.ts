@@ -74,13 +74,17 @@ export interface TestEnvironment {
   hubPort: number;
   controlPort: number; // Hub 控制端口
   webApiPort: number; // Hub Web API 端口
-  edgePort: number;
+  edgePort: number;       // Mumble 客户端 TLS 端口
+  edgeEdgePort: number;   // Edge 间专用 TLS 端口
   edgeUdpPort: number;
   edgePort2: number;
+  edgeEdgePort2: number;
   edgeUdpPort2: number;
   edgePort3: number;
+  edgeEdgePort3: number;
   edgeUdpPort3: number;
   edgePort4: number;
+  edgeEdgePort4: number;
   edgeUdpPort4: number;
   cleanup: () => Promise<void>;
 }
@@ -334,6 +338,7 @@ async function startEdgeServer(
   serverId: number,
   name: string,
   port: number,
+  edgeEdgePort: number,
   hubPort: number,
   controlPort: number,
   silent: boolean
@@ -350,6 +355,7 @@ async function startEdgeServer(
   edgeConfig.name = name;
   edgeConfig.network = edgeConfig.network || { host: '127.0.0.' + serverId, port, external_host: '127.0.0.' + serverId };
   edgeConfig.network.port = port;
+  edgeConfig.network.edge_port = edgeEdgePort;  // Edge 间专用 TLS 端口
   edgeConfig.log_level = silent ? 'error' : 'debug';
   
   // Enable Worker Thread Pool for tests
@@ -476,7 +482,7 @@ export async function setupTestEnvironment(
       try {
         await oldEnv.edgeServer4.stop();
         debugLog('Edge server 4 stopped');
-        await waitForPortsAvailable([oldEnv.edgePort4, oldEnv.edgeUdpPort4], 3000);
+        await waitForPortsAvailable([oldEnv.edgePort4, oldEnv.edgeEdgePort4, oldEnv.edgeUdpPort4], 3000);
       } catch (error) {
         console.warn('Error stopping edge server 4:', error);
       }
@@ -485,7 +491,7 @@ export async function setupTestEnvironment(
       try {
         await oldEnv.edgeServer3.stop();
         debugLog('Edge server 3 stopped');
-        await waitForPortsAvailable([oldEnv.edgePort3, oldEnv.edgeUdpPort3], 3000);
+        await waitForPortsAvailable([oldEnv.edgePort3, oldEnv.edgeEdgePort3, oldEnv.edgeUdpPort3], 3000);
       } catch (error) {
         console.warn('Error stopping edge server 3:', error);
       }
@@ -494,7 +500,7 @@ export async function setupTestEnvironment(
       try {
         await oldEnv.edgeServer2.stop();
         debugLog('Edge server 2 stopped');
-        await waitForPortsAvailable([oldEnv.edgePort2, oldEnv.edgeUdpPort2], 3000);
+        await waitForPortsAvailable([oldEnv.edgePort2, oldEnv.edgeEdgePort2, oldEnv.edgeUdpPort2], 3000);
       } catch (error) {
         console.warn('Error stopping edge server 2:', error);
       }
@@ -503,7 +509,7 @@ export async function setupTestEnvironment(
       try {
         await oldEnv.edgeServer.stop();
         debugLog('Edge server 1 stopped');
-        await waitForPortsAvailable([oldEnv.edgePort, oldEnv.edgeUdpPort], 3000);
+        await waitForPortsAvailable([oldEnv.edgePort, oldEnv.edgeEdgePort, oldEnv.edgeUdpPort], 3000);
       } catch (error) {
         console.warn('Error stopping edge server:', error);
       }
@@ -531,8 +537,8 @@ export async function setupTestEnvironment(
     }
     
     // Verify all old ports are released
-    const oldPorts = [oldEnv.authPort, oldEnv.hubPort, oldEnv.edgePort, oldEnv.edgePort2, 
-                      oldEnv.edgePort3, oldEnv.edgePort4, oldEnv.controlPort, oldEnv.webApiPort].filter(p => p > 0);
+    const oldPorts = [oldEnv.authPort, oldEnv.hubPort, oldEnv.edgePort, oldEnv.edgeEdgePort, oldEnv.edgePort2, oldEnv.edgeEdgePort2,
+                      oldEnv.edgePort3, oldEnv.edgeEdgePort3, oldEnv.edgePort4, oldEnv.edgeEdgePort4, oldEnv.controlPort, oldEnv.webApiPort].filter(p => p > 0);
     await waitForPortsAvailable(oldPorts, 5000);
     debugLog('Old environment cleaned up');
   }
@@ -564,7 +570,7 @@ export async function setupTestEnvironment(
         try {
           await oldEnv.edgeServer4.stop();
           debugLog('Edge server 4 stopped');
-          await waitForPortsAvailable([oldEnv.edgePort4, oldEnv.edgeUdpPort4], 3000);
+          await waitForPortsAvailable([oldEnv.edgePort4, oldEnv.edgeEdgePort4, oldEnv.edgeUdpPort4], 3000);
         } catch (error) {
           console.warn('Error stopping edge server 4:', error);
         }
@@ -573,7 +579,7 @@ export async function setupTestEnvironment(
         try {
           await oldEnv.edgeServer3.stop();
           debugLog('Edge server 3 stopped');
-          await waitForPortsAvailable([oldEnv.edgePort3, oldEnv.edgeUdpPort3], 3000);
+          await waitForPortsAvailable([oldEnv.edgePort3, oldEnv.edgeEdgePort3, oldEnv.edgeUdpPort3], 3000);
         } catch (error) {
           console.warn('Error stopping edge server 3:', error);
         }
@@ -582,7 +588,7 @@ export async function setupTestEnvironment(
         try {
           await oldEnv.edgeServer2.stop();
           debugLog('Edge server 2 stopped');
-          await waitForPortsAvailable([oldEnv.edgePort2, oldEnv.edgeUdpPort2], 3000);
+          await waitForPortsAvailable([oldEnv.edgePort2, oldEnv.edgeEdgePort2, oldEnv.edgeUdpPort2], 3000);
         } catch (error) {
           console.warn('Error stopping edge server 2:', error);
         }
@@ -591,7 +597,7 @@ export async function setupTestEnvironment(
         try {
           await oldEnv.edgeServer.stop();
           debugLog('Edge server 1 stopped');
-          await waitForPortsAvailable([oldEnv.edgePort, oldEnv.edgeUdpPort], 3000);
+          await waitForPortsAvailable([oldEnv.edgePort, oldEnv.edgeEdgePort, oldEnv.edgeUdpPort], 3000);
         } catch (error) {
           console.warn('Error stopping edge server:', error);
         }
@@ -619,8 +625,8 @@ export async function setupTestEnvironment(
       }
       
       // Verify all old ports are released
-      const oldPorts = [oldEnv.authPort, oldEnv.hubPort, oldEnv.edgePort, oldEnv.edgePort2, 
-                        oldEnv.edgePort3, oldEnv.edgePort4, oldEnv.controlPort, oldEnv.webApiPort].filter(p => p > 0);
+      const oldPorts = [oldEnv.authPort, oldEnv.hubPort, oldEnv.edgePort, oldEnv.edgeEdgePort, oldEnv.edgePort2, oldEnv.edgeEdgePort2,
+                        oldEnv.edgePort3, oldEnv.edgeEdgePort3, oldEnv.edgePort4, oldEnv.edgeEdgePort4, oldEnv.controlPort, oldEnv.webApiPort].filter(p => p > 0);
       await waitForPortsAvailable(oldPorts, 5000);
       debugLog('Incomplete environment cleaned up');
     }
@@ -644,20 +650,28 @@ export async function setupTestEnvironment(
   const webApiPort = finalOptions.startHub !== false ? await findAvailablePort(controlPort + 1) : 0;
   
   const edgeBasePort = Math.max(webApiPort, basePort - 1);
+  // Edge1: Mumble 客户端端口 + Edge 间专用 TLS 端口
   const edgePort = finalOptions.startEdge !== false ? await findAvailablePort(edgeBasePort + 2) : 0;
+  const edgeEdgePort = (finalOptions.startEdge !== false && edgePort > 0) ? await findAvailablePort(edgePort + 1) : 0;
   const edgeUdpPort = edgePort; // 统一UDP端口：与TLS端口相同
-  
-  const edgePort2 = (finalOptions.startEdge2 === true && edgePort > 0) ? await findAvailablePort(edgePort + 2) : 0;
+
+  // Edge2
+  const edgePort2 = (finalOptions.startEdge2 === true && edgeEdgePort > 0) ? await findAvailablePort(edgeEdgePort + 1) : 0;
+  const edgeEdgePort2 = (finalOptions.startEdge2 === true && edgePort2 > 0) ? await findAvailablePort(edgePort2 + 1) : 0;
   const edgeUdpPort2 = edgePort2; // 统一UDP端口：与TLS端口相同
-  
-  const edgePort3 = (finalOptions.startEdge3 === true && edgePort2 > 0) ? await findAvailablePort(edgePort2 + 2) : 0;
+
+  // Edge3
+  const edgePort3 = (finalOptions.startEdge3 === true && edgeEdgePort2 > 0) ? await findAvailablePort(edgeEdgePort2 + 1) : 0;
+  const edgeEdgePort3 = (finalOptions.startEdge3 === true && edgePort3 > 0) ? await findAvailablePort(edgePort3 + 1) : 0;
   const edgeUdpPort3 = edgePort3; // 统一UDP端口：与TLS端口相同
-  
-  const edgePort4 = (finalOptions.startEdge4 === true && edgePort3 > 0) ? await findAvailablePort(edgePort3 + 2) : 0;
+
+  // Edge4
+  const edgePort4 = (finalOptions.startEdge4 === true && edgeEdgePort3 > 0) ? await findAvailablePort(edgeEdgePort3 + 1) : 0;
+  const edgeEdgePort4 = (finalOptions.startEdge4 === true && edgePort4 > 0) ? await findAvailablePort(edgePort4 + 1) : 0;
   const edgeUdpPort4 = edgePort4; // 统一UDP端口：与TLS端口相同
-  
+
   console.log(`Allocated ports - Auth: ${authPort}, Hub: ${hubPort}(Unified UDP/TCP), Control: ${controlPort}, WebAPI: ${webApiPort}`);
-  console.log(`Edge ports - Edge1: ${edgePort}(TLS)/${edgeUdpPort}(UDP), Edge2: ${edgePort2}(TLS)/${edgeUdpPort2}(UDP), Edge3: ${edgePort3}(TLS)/${edgeUdpPort3}(UDP), Edge4: ${edgePort4}(TLS)/${edgeUdpPort4}(UDP)`);
+  console.log(`Edge ports - Edge1: ${edgePort}(Client)/${edgeEdgePort}(Edge-Edge)/${edgeUdpPort}(UDP), Edge2: ${edgePort2}(Client)/${edgeEdgePort2}(Edge-Edge)/${edgeUdpPort2}(UDP), Edge3: ${edgePort3}(Client)/${edgeEdgePort3}(Edge-Edge)/${edgeUdpPort3}(UDP), Edge4: ${edgePort4}(Client)/${edgeEdgePort4}(Edge-Edge)/${edgeUdpPort4}(UDP)`);
 
   try {
     // 1. 启动认证服务器
@@ -871,22 +885,22 @@ export async function setupTestEnvironment(
 
     // 3. 启动 Edge 服务器 1
     if (finalOptions.startEdge !== false && edgePort > 0) {
-      edgeServer = await startEdgeServer(1, 'MuNode Edge Server 1 (Test)', edgePort, hubPort, controlPort, silent);
+      edgeServer = await startEdgeServer(1, 'MuNode Edge Server 1 (Test)', edgePort, edgeEdgePort, hubPort, controlPort, silent);
     }
 
     // 4. 启动 Edge 服务器 2
     if (finalOptions.startEdge2 !== false && edgePort2 > 0) {
-      edgeServer2 = await startEdgeServer(2, 'MuNode Edge Server 2 (Test)', edgePort2, hubPort, controlPort, silent);
+      edgeServer2 = await startEdgeServer(2, 'MuNode Edge Server 2 (Test)', edgePort2, edgeEdgePort2, hubPort, controlPort, silent);
     }
 
     // 5. 启动 Edge 服务器 3
     if (finalOptions.startEdge3 === true && edgePort3 > 0) {
-      edgeServer3 = await startEdgeServer(3, 'MuNode Edge Server 3 (Test)', edgePort3, hubPort, controlPort, silent);
+      edgeServer3 = await startEdgeServer(3, 'MuNode Edge Server 3 (Test)', edgePort3, edgeEdgePort3, hubPort, controlPort, silent);
     }
 
     // 6. 启动 Edge 服务器 4
     if (finalOptions.startEdge4 === true && edgePort4 > 0) {
-      edgeServer4 = await startEdgeServer(4, 'MuNode Edge Server 4 (Test)', edgePort4, hubPort, controlPort, silent);
+      edgeServer4 = await startEdgeServer(4, 'MuNode Edge Server 4 (Test)', edgePort4, edgeEdgePort4, hubPort, controlPort, silent);
     }
 
     // 7. 等待 Edge 服务器之间建立 UDP 连接
@@ -957,7 +971,7 @@ export async function setupTestEnvironment(
         await edgeServer4.stop();
         debugLog('Edge server 4 stopped');
         // Wait for Edge 4 ports to be released
-        await waitForPortsAvailable([edgePort4, edgeUdpPort4], 3000);
+        await waitForPortsAvailable([edgePort4, edgeEdgePort4, edgeUdpPort4], 3000);
       } catch (error) {
         console.warn('Error stopping edge server 4:', error);
       }
@@ -968,7 +982,7 @@ export async function setupTestEnvironment(
         await edgeServer3.stop();
         debugLog('Edge server 3 stopped');
         // Wait for Edge 3 ports to be released
-        await waitForPortsAvailable([edgePort3, edgeUdpPort3], 3000);
+        await waitForPortsAvailable([edgePort3, edgeEdgePort3, edgeUdpPort3], 3000);
       } catch (error) {
         console.warn('Error stopping edge server 3:', error);
       }
@@ -979,7 +993,7 @@ export async function setupTestEnvironment(
         await edgeServer2.stop();
         debugLog('Edge server 2 stopped');
         // Wait for Edge 2 ports to be released
-        await waitForPortsAvailable([edgePort2, edgeUdpPort2], 3000);
+        await waitForPortsAvailable([edgePort2, edgeEdgePort2, edgeUdpPort2], 3000);
       } catch (error) {
         console.warn('Error stopping edge server 2:', error);
       }
@@ -990,7 +1004,7 @@ export async function setupTestEnvironment(
         await edgeServer.stop();
         debugLog('Edge server 1 stopped');
         // Wait for Edge 1 ports to be released
-        await waitForPortsAvailable([edgePort, edgeUdpPort], 3000);
+        await waitForPortsAvailable([edgePort, edgeEdgePort, edgeUdpPort], 3000);
       } catch (error) {
         console.warn('Error stopping edge server 1:', error);
       }
@@ -1020,7 +1034,7 @@ export async function setupTestEnvironment(
     }
 
     // Final verification that all ports are released
-    const portsToCheck = [authPort, hubPort, edgePort, edgePort2, edgePort3, edgePort4, controlPort, webApiPort].filter(p => p > 0);
+    const portsToCheck = [authPort, hubPort, edgePort, edgeEdgePort, edgePort2, edgeEdgePort2, edgePort3, edgeEdgePort3, edgePort4, edgeEdgePort4, controlPort, webApiPort].filter(p => p > 0);
     const allPortsAvailable = await waitForPortsAvailable(portsToCheck, 5000);
     
     if (!allPortsAvailable) {
@@ -1043,12 +1057,16 @@ export async function setupTestEnvironment(
     controlPort,
     webApiPort,
     edgePort,
+    edgeEdgePort,
     edgeUdpPort,
     edgePort2,
+    edgeEdgePort2,
     edgeUdpPort2,
     edgePort3,
+    edgeEdgePort3,
     edgeUdpPort3,
     edgePort4,
+    edgeEdgePort4,
     edgeUdpPort4,
     cleanup: async () => {
       refCount--;

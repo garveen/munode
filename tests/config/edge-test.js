@@ -12,8 +12,10 @@ export default {
   // ===== 网络配置 =====
   network: {
     host: '0.0.0.0',
-    port: 10080,
+    port: 10080,         // Mumble 客户端连接端口
     external_host: 'localhost',
+    // edge_port 由 setup.ts 中的 startEdgeServer 动态设置（edgeEdgePort）
+    // edge_port: 10081,  // Edge 间专用 TLS 端口（默认 port+1）
     region: 'test',
   },
   

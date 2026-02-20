@@ -30,6 +30,7 @@ describe('Edge External Port Configuration Tests', () => {
   let controlPort: number;
   let listenPort: number;
   let externalPort: number;
+  let edgeEdgePort: number;
 
   beforeAll(async () => {
     // 找到可用的端口
@@ -38,6 +39,7 @@ describe('Edge External Port Configuration Tests', () => {
     controlPort = basePort + 1;
     listenPort = basePort + 2;
     externalPort = basePort + 3; // 模拟外部端口与监听端口不同的场景
+    edgeEdgePort = basePort + 5; // Edge 间专用 TLS 端口（跳过 +4 的 webApiPort）
 
     console.log(`[TEST] Using ports - Hub: ${hubPort}, Control: ${controlPort}, Listen: ${listenPort}, External: ${externalPort}`);
 
@@ -102,6 +104,8 @@ describe('Edge External Port Configuration Tests', () => {
       port: listenPort,
       external_host: '127.0.0.1',
       external_port: externalPort, // 设置与监听端口不同的外部端口
+      edge_port: edgeEdgePort,         // Edge 间专用 TLS 端口
+      external_edge_port: edgeEdgePort, // Edge 间外部端口
       region: 'test-region',
     };
     edgeConfig.log_level = 'error';
