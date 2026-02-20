@@ -94,6 +94,8 @@ export class TCPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
   private reconnectAttempts = 0;
   private reconnectTimer?: NodeJS.Timeout;
   private connectTimeout?: NodeJS.Timeout;
+  /** 被动连接（fromSocket创建），不主动发起重连（重连由对端负责）*/
+  private passive = false;
 
   constructor(config: ConnectionConfig, logger: Logger) {
     super();
@@ -506,8 +508,15 @@ export class TCPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
 
   /**
    * 启动心跳
+   * 注意：每次调用均重置 lastReceived，防止重连后旧的过期时间戳导致立即超时
    */
   private startHeartbeat(): void {
+    // 重置心跳状态，确保重连后不会因 lastReceived 过期而立即触发超时
+    const now = Date.now();
+    this.heartbeatState.lastReceived = now;
+    this.heartbeatState.lastSent = now;
+    this.heartbeatState.sentTime.clear();
+
     this.heartbeatState.timer = setInterval(() => {
       this.sendHeartbeat();
       this.checkHeartbeatTimeout();
@@ -594,6 +603,12 @@ export class TCPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
    * 安排重连
    */
   private scheduleReconnect(): void {
+    // 被动连接（incoming）不主动重连，重连由对端（主动连接方）负责
+    if (this.passive) {
+      this.logger.debug(`Passive connection to edge ${this.edgeId} disconnected, not reconnecting (peer will reconnect)`);
+      return;
+    }
+
     // 如果已经在重连中，不要重复调度
     if (this.reconnectTimer) {
       this.logger.debug(`Reconnect already scheduled for edge ${this.edgeId}`);
@@ -696,6 +711,8 @@ export class TCPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
     connection.state = ConnectionState.CONNECTED;
     connection.connectedAt = Date.now();
     connection.reconnectAttempts = 0;
+    // 标记为被动连接，不主动重连（由对端发起重连）
+    connection.passive = true;
 
     logger.info(
       `Accepted incoming TCP connection from edge ${edgeId} (${socket.remoteAddress}:${socket.remotePort})`

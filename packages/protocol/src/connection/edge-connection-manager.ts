@@ -222,11 +222,21 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
     // 检查是否已有到该Edge的连接
     const existing = this.connections.get(edgeId);
     if (existing) {
-      this.logger.warn(
-        `Already have connection to edge ${edgeId}, closing incoming connection`
+      if (existing.isConnected) {
+        this.logger.warn(
+          `Already have active connection to edge ${edgeId}, closing incoming connection`
+        );
+        socket.destroy();
+        return;
+      }
+      // 已有连接但未处于connected状态（FAILED/DISCONNECTED），清理旧连接后接受新连接
+      this.logger.info(
+        `Replacing stale (non-connected) connection to edge ${edgeId} with new incoming connection`
       );
-      socket.destroy();
-      return;
+      existing.removeAllListeners();
+      existing.close();
+      this.connections.delete(edgeId);
+      this.connectionFailures.delete(edgeId);
     }
 
     this.logger.info(
