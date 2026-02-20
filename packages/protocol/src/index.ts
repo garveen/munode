@@ -127,6 +127,7 @@ export type {
 } from './shared-types.js';
 // 导出 ClientState 和 RouteType 枚举（既作为类型也作为值）
 export { ClientState, RouteType } from './shared-types.js';
+export type { RouteEntry } from './shared-types.js';
 
 // RPC Channel
 export { RPCChannel } from './rpc/rpc-channel.js';
@@ -275,7 +276,6 @@ export {
 // Route validation utilities
 export {
   RouteValidator,
-  type RouteEntry as ValidatorRouteEntry,
   type ValidationResult,
   type RouteValidatorOptions,
 } from './routing/route-validator.js';

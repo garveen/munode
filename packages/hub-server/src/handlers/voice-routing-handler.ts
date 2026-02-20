@@ -39,8 +39,8 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
     // 缓存 TCP 降级配置开关，避免每次处理语音包时都读取
     const config = factory.getConfig();
     this.enableTcpFallback = config.voice_routing?.hub_relay?.enable_tcp_fallback ?? true;
-    
-    this.logger.info(`VoiceRoutingHandler initialized, TCP fallback: ${this.enableTcpFallback}`);
+
+    this.logger.info(`VoiceRoutingHandler initialized, Hub relay (TCP fallback via Hub): ${this.enableTcpFallback}`);
   }
 
   handleSyncVoiceTarget(params: RPCParams<'edge.syncVoiceTarget'>): Promise<RPCResult<'edge.syncVoiceTarget'>> {
@@ -95,21 +95,22 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
   handleRelayVoiceViaTcp(params: RPCParams<'edge.relayVoiceViaTcp'>): Promise<RPCResult<'edge.relayVoiceViaTcp'>> {
     const { from_edge_id, target_edge_id, voice_packet, timestamp } = params;
 
-    // 检查 TCP 降级功能是否启用（使用缓存的配置）
+    // 检查 Hub 中转降级功能是否启用（使用缓存的配置）
     if (!this.enableTcpFallback) {
       this.logger.debug(
-        `TCP fallback relay is disabled, rejecting relay request from Edge ${from_edge_id} to Edge ${target_edge_id}`
+        `[HUB-RELAY] Hub relay (TCP fallback via Hub) is disabled, ` +
+        `rejecting relay request from Edge ${from_edge_id} to Edge ${target_edge_id}`
       );
       return Promise.resolve({
         success: false,
-        error: 'TCP fallback relay is disabled'
+        error: 'Hub relay (TCP fallback) is disabled'
       });
     }
 
     try {
-      // 记录 TCP 降级转发
+      // 记录 Hub 中转降级转发
       this.logger.debug(
-        `TCP fallback relay: Edge ${from_edge_id} -> Edge ${target_edge_id}, ` +
+        `[HUB-RELAY] Relaying voice via Hub: Edge ${from_edge_id} -> Hub -> Edge ${target_edge_id}, ` +
         `packet_size=${voice_packet.length}, timestamp=${timestamp}`
       );
 
@@ -121,10 +122,12 @@ export class VoiceRoutingHandler implements IVoiceRoutingHandler {
         timestamp,
       });
 
-      this.logger.debug(`TCP relay successful: ${voice_packet.length} bytes to Edge ${target_edge_id}`);
+      this.logger.debug(
+        `[HUB-RELAY] Hub relay successful: ${voice_packet.length} bytes Edge ${from_edge_id} -> Hub -> Edge ${target_edge_id}`
+      );
       return Promise.resolve({ success: true });
     } catch (error) {
-      this.logger.error(`TCP relay error from Edge ${from_edge_id} to ${target_edge_id}:`, error);
+      this.logger.error(`[HUB-RELAY] Hub relay error from Edge ${from_edge_id} to ${target_edge_id}:`, error);
       return Promise.resolve({ 
         success: false, 
         error: error instanceof Error ? error.message : 'Unknown error' 

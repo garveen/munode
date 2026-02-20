@@ -5,19 +5,7 @@
  */
 
 import { RouteType } from '../shared-types.js';
-
-/**
- * 路由条目接口（最小化版本）
- */
-export interface RouteEntry {
-  targetEdgeId: number;
-  type: RouteType;
-  nextHop?: number;
-  cost: number;
-  timestamp: number;
-  source: 'hub' | 'local';
-  ttl?: number;
-}
+import type { RouteEntry } from '../shared-types.js';
 
 /**
  * 验证结果

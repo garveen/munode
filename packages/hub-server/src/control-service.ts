@@ -17,7 +17,8 @@ import { ControlChannelServer, type ControlChannelConfig } from './control/contr
 import { type VirtualEdgeChannel } from './control/hub-pool.js';
 import type { HubConfig } from './types.js';
 import type { ServiceRegistry } from './registry.js';
-import { NetworkTopologyManager, type RouteEntry } from './network-topology-manager.js';
+import { NetworkTopologyManager } from './network-topology-manager.js';
+import type { RouteEntry } from '@munode/protocol';
 import { VoiceEncryptionManager } from './voice-encryption-manager.js';
 import { HubHandlerFactory as HubFactory } from './factory.js';
 import { type IUserStateHandler } from './handlers/user-state-handler.js';

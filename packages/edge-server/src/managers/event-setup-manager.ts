@@ -825,7 +825,7 @@ export class EventSetupManager {
             // 处理来自Hub的路由表更新
             const params = message.params as { routes: Array<{
               targetEdgeId: number;
-              type: 'direct' | 'relay' | 'fallback';
+              type: 'direct' | 'relay' | 'hub_relay';
               nextHop?: number;
               cost: number;
               timestamp: number;

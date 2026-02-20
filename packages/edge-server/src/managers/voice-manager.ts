@@ -9,9 +9,10 @@ import type { RemoteInfo } from 'dgram';
 type VoicePacketHeader = ProtocolVoicePacketHeader;
 
 /**
- * TCP 降级状态跟踪
+ * Hub 中转降级状态跟踪
+ * 当路由为 RouteType.FALLBACK 时，语音包通过 Hub 控制通道中转
  */
-interface TcpFallbackState {
+interface HubRelayState {
   edgeId: number;
   activeSince: number;
   packetsSent: number;
@@ -29,8 +30,8 @@ export class VoiceManager {
   private voiceRoutingManager: VoiceRoutingManager;
   private logger: Logger;
   
-  // TCP 降级状态跟踪
-  private tcpFallbackStates: Map<number, TcpFallbackState> = new Map();
+  // Hub 中转降级状态跟踪
+  private hubRelayStates: Map<number, HubRelayState> = new Map();
   private tcpRecoveryTimer?: NodeJS.Timeout;
 
   constructor(config: EdgeConfig, handlerFactory: HandlerFactory, voiceTransport?: VoiceUDPTransport) {
@@ -53,11 +54,20 @@ export class VoiceManager {
   private setupRoutingManagerEvents(): void {
     // 监听路由变更事件
     this.voiceRoutingManager.on('route-changed', (targetEdgeId: number, newRoute: RouteEntry, oldRoute: RouteEntry | null) => {
-        this.logger.info(`Voice route changed for Edge ${targetEdgeId}: ${oldRoute?.type || 'none'} -> ${newRoute.type}`);
-      
-      // 如果从 FALLBACK 切换回 UDP 模式，清除降级状态
+      this.logger.info(`Voice route changed for Edge ${targetEdgeId}: ${oldRoute?.type || 'none'} -> ${newRoute.type}`);
+
+      if (newRoute.type === RouteType.FALLBACK) {
+        this.logger.warn(
+          `[HUB-RELAY] Edge ${targetEdgeId} entered Hub relay mode (TCP fallback via Hub control channel)`
+        );
+      }
+
+      // 如果从 Hub 中转降级恢复，清除状态并记录
       if (oldRoute?.type === RouteType.FALLBACK && newRoute.type !== RouteType.FALLBACK) {
-        this.clearTcpFallbackState(targetEdgeId);
+        this.logger.info(
+          `[HUB-RELAY] Edge ${targetEdgeId} recovered from Hub relay, now using: ${newRoute.type}`
+        );
+        this.clearHubRelayState(targetEdgeId);
       }
     });
 
@@ -125,7 +135,7 @@ export class VoiceManager {
    * 检查 TCP 降级状态，尝试恢复 UDP
    */
   private checkTcpRecovery(): void {
-    for (const [edgeId, state] of this.tcpFallbackStates) {
+    for (const [edgeId, state] of this.hubRelayStates) {
       const now = Date.now();
       const fallbackDuration = now - state.activeSince;
       
@@ -146,29 +156,32 @@ export class VoiceManager {
   }
   
   /**
-   * 设置 TCP 降级状态
+   * 设置 Hub 中转降级状态
    */
-  private setTcpFallbackState(edgeId: number): void {
-    if (!this.tcpFallbackStates.has(edgeId)) {
-      this.tcpFallbackStates.set(edgeId, {
+  private setHubRelayState(edgeId: number): void {
+    if (!this.hubRelayStates.has(edgeId)) {
+      this.hubRelayStates.set(edgeId, {
         edgeId,
         activeSince: Date.now(),
         packetsSent: 0,
         lastCheck: Date.now(),
       });
-        this.logger.info(`TCP fallback activated for Edge ${edgeId}`);
+      this.logger.info(`[HUB-RELAY] Hub relay (TCP fallback via Hub) activated for Edge ${edgeId}`);
     }
   }
   
   /**
-   * 清除 TCP 降级状态
+   * 清除 Hub 中转降级状态
    */
-  private clearTcpFallbackState(edgeId: number): void {
-    if (this.tcpFallbackStates.has(edgeId)) {
-      const state = this.tcpFallbackStates.get(edgeId);
+  private clearHubRelayState(edgeId: number): void {
+    if (this.hubRelayStates.has(edgeId)) {
+      const state = this.hubRelayStates.get(edgeId)!;
       const duration = Date.now() - state.activeSince;
-        this.logger.info(`TCP fallback deactivated for Edge ${edgeId} after ${duration}ms, ${state.packetsSent} packets sent`);
-      this.tcpFallbackStates.delete(edgeId);
+      this.logger.info(
+        `[HUB-RELAY] Hub relay (TCP fallback via Hub) deactivated for Edge ${edgeId} ` +
+        `after ${duration}ms, ${state.packetsSent} packets relayed via Hub`
+      );
+      this.hubRelayStates.delete(edgeId);
     }
   }
 
@@ -567,34 +580,34 @@ export class VoiceManager {
     packetData: Buffer
   ): Promise<void> {
     try {
-      // 设置 TCP 降级状态
-      this.setTcpFallbackState(targetEdgeId);
-      
+      // 设置 Hub 中转降级状态
+      this.setHubRelayState(targetEdgeId);
+
       // 更新统计
-      const state = this.tcpFallbackStates.get(targetEdgeId);
+      const state = this.hubRelayStates.get(targetEdgeId);
       if (state) {
         state.packetsSent++;
       }
-      
+
       // 通过 Hub 控制通道发送语音数据
       const hubClient = this.handlerFactory.hubClient;
       if (!hubClient || !hubClient.isConnected()) {
-        this.logger.warn(`Cannot use TCP fallback: Hub client not connected`);
+        this.logger.warn(`[HUB-RELAY] Cannot use Hub relay: Hub client not connected (Edge ${targetEdgeId})`);
         return;
       }
-      
-      // TCP 降级：将语音包通过控制通道转发
-      this.logger.debug(`Sending voice via TCP fallback to Edge ${targetEdgeId}, size=${packetData.length}`);
-      
+
+      // Hub 中转降级：将语音包通过 Hub 控制通道转发到目标 Edge
+      this.logger.debug(`[HUB-RELAY] Relaying voice via Hub to Edge ${targetEdgeId}, size=${packetData.length}`);
+
       const success = await hubClient.relayVoiceViaTcp(targetEdgeId, packetData);
-      
+
       if (success) {
-        this.logger.debug(`TCP fallback successful for Edge ${targetEdgeId}`);
+        this.logger.debug(`[HUB-RELAY] Hub relay successful for Edge ${targetEdgeId}`);
       } else {
-        this.logger.warn(`TCP fallback failed for Edge ${targetEdgeId}`);
+        this.logger.warn(`[HUB-RELAY] Hub relay failed for Edge ${targetEdgeId}`);
       }
     } catch (error) {
-      this.logger.error(`Error in TCP fallback for Edge ${targetEdgeId}:`, error);
+      this.logger.error(`[HUB-RELAY] Error in Hub relay for Edge ${targetEdgeId}:`, error);
     }
   }
 }

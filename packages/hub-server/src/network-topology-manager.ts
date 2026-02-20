@@ -10,7 +10,8 @@
 
 import type { Logger } from '@munode/common';
 import { TypedEventEmitter, type EventMap } from '@munode/common';
-import { DEFAULT_ROUTING_POLICY, RouteValidator, type ValidationResult } from '@munode/protocol';
+import { DEFAULT_ROUTING_POLICY, RouteValidator, type ValidationResult, RouteType } from '@munode/protocol';
+import type { RouteEntry } from '@munode/protocol';
 import type { RoutingPolicy, VoiceRoutingConfig } from './types.js';
 
 /**
@@ -45,28 +46,6 @@ export interface EdgeLink {
   targetEdgeId: number;
   quality: EdgeConnectionQuality;
   bidirectional: boolean;  // 是否双向测量
-}
-
-/**
- * 路由类型
- */
-export enum RouteType {
-  DIRECT = 'direct',       // 直连
-  RELAY = 'relay',         // Edge 中转
-  FALLBACK = 'fallback',   // TCP 降级
-}
-
-/**
- * 路由表条目
- */
-export interface RouteEntry {
-  targetEdgeId: number;
-  type: RouteType;
-  nextHop?: number;        // 中转时的下一跳 Edge ID
-  cost: number;            // 路由成本
-  timestamp: number;       // 更新时间戳
-  source: 'hub' | 'local'; // 路由来源
-  ttl?: number;            // 生存时间 (ms)
 }
 
 /**

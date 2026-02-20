@@ -4,6 +4,7 @@
  */
 
 import type { OCB2AES128 } from '@munode/common';
+import type { ConnectionPurpose } from './connection/connection-types.js';
 
 /**
  * 客户端状态枚举
@@ -15,7 +16,21 @@ import type { OCB2AES128 } from '@munode/common';
 export enum RouteType {
   DIRECT = 'direct',       // 直连
   RELAY = 'relay',         // Edge 中转
-  FALLBACK = 'fallback',   // TCP 降级
+  FALLBACK = 'hub_relay',  // Hub 中转降级（通过 Hub 控制通道中转语音）
+}
+
+/**
+ * 路由表条目（权威定义，供 Edge 和 Hub 共同使用）
+ */
+export interface RouteEntry {
+  targetEdgeId: number;
+  type: RouteType;
+  nextHop?: number;                    // 中转时的下一跳 Edge ID
+  cost: number;                        // 路由成本
+  timestamp: number;                   // 更新时间戳
+  source: 'hub' | 'local';             // 路由来源
+  ttl?: number;                        // 生存时间 (ms)
+  connectionPurpose?: ConnectionPurpose; // 连接用途（决定是否强制TCP，Edge 侧使用）
 }
 
 export enum ClientState {

@@ -1,5 +1,5 @@
 import type { Socket as UDPSocket } from 'dgram';
-import { mumbleproto, ConnectionPurpose } from '@munode/protocol';
+import { mumbleproto } from '@munode/protocol';
 import type { EdgeInfo, ChannelUserMap } from '@munode/protocol';
 
 // 从 config-schema 导入配置类型（这些类型由 Zod schema 生成）
@@ -50,24 +50,9 @@ export interface EdgeRoutingPolicy {
   route_table_update_interval: number;
 }
 
-// 路由类型枚举
-export enum RouteType {
-  DIRECT = 'direct',       // 直连
-  RELAY = 'relay',         // Edge 中转
-  FALLBACK = 'fallback',   // TCP 降级
-}
-
-// 路由表条目
-export interface RouteEntry {
-  targetEdgeId: number;
-  type: RouteType;
-  nextHop?: number;        // 中转时的下一跳 Edge ID
-  cost: number;            // 路由成本
-  timestamp: number;       // 更新时间戳
-  source: 'hub' | 'local'; // 路由来源
-  ttl?: number;            // 生存时间 (ms)
-  connectionPurpose?: ConnectionPurpose; // 连接用途（决定是否强制TCP）
-}
+// RouteType 和 RouteEntry 从 @munode/protocol 导入并在此重新导出
+export { RouteType } from '@munode/protocol';
+export type { RouteEntry } from '@munode/protocol';
 
 // Edge 间连接质量
 export interface EdgeConnectionQuality {

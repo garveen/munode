@@ -876,7 +876,7 @@ export class HubMessageHandlers {
   handleRouteTableUpdateFromHub(params: {
     routes: Array<{
       targetEdgeId: number;
-      type: 'direct' | 'relay' | 'fallback';
+      type: 'direct' | 'relay' | 'hub_relay';
       nextHop?: number;
       cost: number;
       timestamp: number;
