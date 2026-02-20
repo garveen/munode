@@ -9,15 +9,9 @@ import { Server as HTTPSServer } from 'https';
 import WebSocket, { WebSocketServer } from 'ws';
 import type { ServerOptions } from 'ws';
 import { TypedEventEmitter, type EventMap } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { EdgeHubPacket } from '../generated/proto/HubEdge.js';
 import { PacketCodec } from './packet-codec.js';
-
-export type Logger = {
-  info(message: string, ...args: unknown[]): void;
-  warn(message: string, ...args: unknown[]): void;
-  error(message: string, ...args: unknown[]): void;
-  debug?(message: string, ...args: unknown[]): void;
-};
 
 export interface WebSocketServerConfig {
   port?: number;
@@ -118,7 +112,7 @@ export class EdgeHubWebSocketServer extends TypedEventEmitter<EdgeHubWebSocketSe
     this.config = {
       port: 9000,
       path: '/hub',
-      logger: console as Logger,
+      logger: console as unknown as Logger,
       ...config,
     } as Required<WebSocketServerConfig>;
     this.logger = this.config.logger;

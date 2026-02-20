@@ -223,20 +223,41 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
     const existing = this.connections.get(edgeId);
     if (existing) {
       if (existing.isConnected) {
-        this.logger.warn(
-          `Already have active connection to edge ${edgeId}, closing incoming connection`
+        // 双边同时主动连接时（split-brain），使用 edge ID 仲裁：
+        // localEdgeId > remoteEdgeId 的一方保留入站连接（关闭自己的出站），
+        // localEdgeId < remoteEdgeId 的一方保留自己的出站连接（关闭入站）。
+        // 这样两端会达成一致：都使用同一条连接（由 ID 较小的一方主动发起）。
+        const localId = this.config.localEdgeId;
+        if (localId > edgeId) {
+          // 本端 ID 较大，用入站连接替换已有的主动连接
+          this.logger.info(
+            `Split-brain resolution (local=${localId} > remote=${edgeId}): ` +
+            `replacing outgoing connection with incoming connection from edge ${edgeId}`
+          );
+          existing.removeAllListeners();
+          existing.close();
+          this.connections.delete(edgeId);
+          this.connectionFailures.delete(edgeId);
+          // 继续往下接受入站连接
+        } else {
+          // 本端 ID 较小，保留自己的主动连接，关闭入站
+          this.logger.info(
+            `Split-brain resolution (local=${localId} < remote=${edgeId}): ` +
+            `keeping existing outgoing connection, closing incoming from edge ${edgeId}`
+          );
+          socket.destroy();
+          return;
+        }
+      } else {
+        // 已有连接但未处于connected状态（FAILED/DISCONNECTED），清理旧连接后接受新连接
+        this.logger.info(
+          `Replacing stale (non-connected) connection to edge ${edgeId} with new incoming connection`
         );
-        socket.destroy();
-        return;
+        existing.removeAllListeners();
+        existing.close();
+        this.connections.delete(edgeId);
+        this.connectionFailures.delete(edgeId);
       }
-      // 已有连接但未处于connected状态（FAILED/DISCONNECTED），清理旧连接后接受新连接
-      this.logger.info(
-        `Replacing stale (non-connected) connection to edge ${edgeId} with new incoming connection`
-      );
-      existing.removeAllListeners();
-      existing.close();
-      this.connections.delete(edgeId);
-      this.connectionFailures.delete(edgeId);
     }
 
     this.logger.info(

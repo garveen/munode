@@ -148,6 +148,12 @@ export class TCPEdgeConnection extends TypedEventEmitter<EdgeConnectionEvents> i
     this.state = ConnectionState.CONNECTING;
     this.logger.info(`Connecting to edge ${this.edgeId} via TCP at ${this.config.host}:${this.config.port}`);
 
+    // 重置接收缓冲区，清除前一个连接的残留数据
+    this.receiveBuffer = {
+      buffer: Buffer.alloc(0),
+      expectedLength: 0,
+    };
+
     try {
       await this.establishConnection();
     } catch (error) {

@@ -6,15 +6,9 @@
 
 import WebSocket from 'ws';
 import { TypedEventEmitter, type EventMap } from '@munode/common';
+import type { Logger } from '@munode/common';
 import type { EdgeHubPacket } from '../generated/proto/HubEdge.js';
 import { PacketCodec } from './packet-codec.js';
-
-export type Logger = {
-  info(message: string, ...args: unknown[]): void;
-  warn(message: string, ...args: unknown[]): void;
-  error(message: string, ...args: unknown[]): void;
-  debug?(message: string, ...args: unknown[]): void;
-};
 
 export interface WebSocketClientConfig {
   url: string;
@@ -54,7 +48,7 @@ export class EdgeHubWebSocketClient extends TypedEventEmitter<EdgeHubWebSocketCl
       reconnectInterval: 5000,
       reconnectMaxAttempts: 10,
       heartbeatInterval: 30000,
-      logger: console as Logger,
+      logger: console as unknown as Logger,
       ...config,
     };
     this.logger = this.config.logger;

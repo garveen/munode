@@ -64,7 +64,7 @@ export interface ACLEntry {
 /**
  * 用户信息（用于权限检查）
  */
-export interface UserInfo {
+export interface PermissionUserInfo {
   session_id: number;
   user_id: number;
   cert_hash?: string;
@@ -105,7 +105,7 @@ export class HubPermissionChecker {
    */
   async hasPermission(
     channelId: number,
-    user: UserInfo,
+    user: PermissionUserInfo,
     permission: Permission
   ): Promise<boolean> {
     const granted = await this.calculatePermission(channelId, user);
@@ -121,7 +121,7 @@ export class HubPermissionChecker {
   /**
    * 计算用户在频道中的权限
    */
-  async calculatePermission(channelId: number, user: UserInfo): Promise<Permission> {
+  async calculatePermission(channelId: number, user: PermissionUserInfo): Promise<Permission> {
     // 如果有临时令牌，不使用缓存（临时令牌可能随时改变）
     const hasTemporaryTokens = user.temporary_tokens && user.temporary_tokens.length > 0;
     
@@ -225,7 +225,7 @@ export class HubPermissionChecker {
     origChannel: PermissionChannelInfo,
     ctx: PermissionChannelInfo,
     group: string,
-    user: UserInfo
+    user: PermissionUserInfo
   ): Promise<boolean> {
     // 特殊组处理
     if (group === 'all') {
@@ -288,7 +288,7 @@ export class HubPermissionChecker {
   /**
    * 检查是否是超级用户
    */
-  isSuperUser(user: UserInfo): boolean {
+  isSuperUser(user: PermissionUserInfo): boolean {
     // 基于用户组检查
     const isSuperUser = user.groups?.includes('admin') || user.groups?.includes('superuser') || false;
     this.logger.debug(`isSuperUser check for user ${user.user_id}: groups=${JSON.stringify(user.groups)}, result=${isSuperUser}`);
@@ -488,7 +488,7 @@ export class HubPermissionChecker {
   /**
    * 从GlobalSession创建UserInfo
    */
-  sessionToUserInfo(session: GlobalSession, channelId?: number, temporaryTokens?: string[]): UserInfo {
+  sessionToUserInfo(session: GlobalSession, channelId?: number, temporaryTokens?: string[]): PermissionUserInfo {
     return {
       session_id: session.session_id,
       user_id: session.user_id,
@@ -505,7 +505,7 @@ export class HubPermissionChecker {
    * @param user - User info
    * @returns Whether the user can access the channel
    */
-  async canUserAccessChannel(channelId: number, user: UserInfo): Promise<boolean> {
+  async canUserAccessChannel(channelId: number, user: PermissionUserInfo): Promise<boolean> {
     const hasEnter = await this.hasPermission(channelId, user, Permission.Enter);
     if (hasEnter) {
       return true;
@@ -558,7 +558,7 @@ export class HubPermissionChecker {
    * @param user - User info
    * @returns Whether the user can see users in this ninja channel
    */
-  async canUserSeeNinjaChannel(ninjaChannelId: number, user: UserInfo): Promise<boolean> {
+  async canUserSeeNinjaChannel(ninjaChannelId: number, user: PermissionUserInfo): Promise<boolean> {
     // Check permissions on the ninja channel itself
     if (await this.canUserAccessChannel(ninjaChannelId, user)) {
       return true;
@@ -597,7 +597,7 @@ export class HubPermissionChecker {
    */
   async canUserSeeChannel(
     channelId: number, 
-    user: UserInfo, 
+    user: PermissionUserInfo, 
     ninjaChannels?: Set<number>,
     userCurrentChannelId?: number
   ): Promise<boolean> {
@@ -669,7 +669,7 @@ export class HubPermissionChecker {
    * @returns Whether the observer can see the target user
    */
   async canUserSeeOtherUser(
-    observerUser: UserInfo,
+    observerUser: PermissionUserInfo,
     observerChannelId: number,
     targetChannelId: number,
     ninjaChannels?: Set<number>
