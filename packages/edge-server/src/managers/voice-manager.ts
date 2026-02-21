@@ -3,7 +3,6 @@ import { VoiceUDPTransport, type VoicePacketHeader as ProtocolVoicePacketHeader 
 import { HandlerFactory } from '../core/handler-factory.js';
 import { EdgeConfig, RouteType, RouteEntry, EdgeConnectionQuality, VoiceBroadcast } from '../types.js';
 import { VoiceRoutingManager } from '../voice/voice-routing-manager.js';
-import type { RemoteInfo } from 'dgram';
 
 // 使用 protocol 包中的 VoicePacketHeader 类型
 type VoicePacketHeader = ProtocolVoicePacketHeader;
@@ -280,20 +279,21 @@ export class VoiceManager {
     });
 
     // 监听接收到的UDP语音包（来自其他Edge）
-    this.voiceTransport.on('voice-packet', (packet, _rinfo: RemoteInfo) => {
-      // packet 是 VoicePacket 类型
+    this.voiceTransport.on('voice-packet', (packet, sourceEdgeId: number) => {
+      // packet 是 VoicePacket 类型，sourceEdgeId 是发送此包的 Edge ID
         this.logger.debug(
         `[VOICE-REMOTE] Received voice packet: ` +
-        `sender_edge=${packet.senderId}, target=${packet.targetId}, ` +
+        `sender_edge=${sourceEdgeId}, mumble_session=${packet.senderId}, target=${packet.targetId}, ` +
         `seq=${packet.sequence}, data_size=${packet.data.length}`
       );
 
       // 记录收到的包用于网络质量统计（被动探测）
+      // 必须使用 sourceEdgeId（Edge ID），而不是 packet.senderId（Mumble session ID）
       if (this.voiceRoutingManager.isEnabled()) {
         this.voiceRoutingManager.recordReceivedPacket(
-          packet.senderId,
+          sourceEdgeId,
           packet.sequence || 0,
-          Date.now() // 使用当前时间戳
+          Date.now()
         );
       }
 
@@ -334,11 +334,10 @@ export class VoiceManager {
       }
     });
     
-    // 监听Edge间心跳测量到的RTT和丢包率，用于网络质量统计
+    // 监听Edge间连接层测量到的RTT和丢包率
+    // 注：quality-measured 由 EdgeConnectionManager 的心跳机制触发
     this.voiceTransport.on('quality-measured', (edgeId: number, rtt: number, packetLoss: number, sequence: number) => {
       if (this.voiceRoutingManager.isEnabled()) {
-        // VoiceUDPTransport已经计算好了丢包率，直接使用
-        // 注意：这里保留recordReceivedPacket是为了维持RTT的平滑计算
         this.voiceRoutingManager.recordReceivedPacket(edgeId, sequence, Date.now() - rtt);
         this.logger.debug(
           `Recorded quality from heartbeat: Edge ${edgeId}, RTT ${rtt}ms, ` +

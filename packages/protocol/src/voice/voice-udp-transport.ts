@@ -71,7 +71,7 @@ export interface VoiceUDPTransportEvents extends EventMap {
   'edge-connected': [edgeId: number, connectionType: 'tcp' | 'udp'];
   'edge-disconnected': [edgeId: number];
   'reconnect-failed': [edgeId: number];
-  'voice-packet': [packet: VoicePacket, rinfo?: dgram.RemoteInfo];
+  'voice-packet': [packet: VoicePacket, sourceEdgeId: number, rinfo?: dgram.RemoteInfo];
   'quality-measured': [edgeId: number, rtt: number, packetLoss: number, sequence: number];
 }
 
@@ -411,8 +411,8 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
       this.stats.packetsReceived++;
       this.stats.bytesReceived += data.length;
       
-      // 触发事件（保持向后兼容，不提供rinfo）
-      this.emit('voice-packet', packet);
+      // 触发事件，附带 sourceEdgeId 供路由质量统计使用
+      this.emit('voice-packet', packet, edgeId);
     } catch (error) {
       this.stats.errors++;
       this.logger.error(`Error handling voice data from edge ${edgeId}:`, error);
