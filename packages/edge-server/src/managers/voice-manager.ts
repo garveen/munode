@@ -56,7 +56,8 @@ export class VoiceManager {
     this.voiceRoutingManager.on('route-changed', (targetEdgeId: number, newRoute: RouteEntry, oldRoute: RouteEntry | null) => {
       this.logger.info(`Voice route changed for Edge ${targetEdgeId}: ${oldRoute?.type || 'none'} -> ${newRoute.type}`);
 
-      if (newRoute.type === RouteType.FALLBACK) {
+      // 仅在路由从非降级状态切换到降级状态时警告
+      if (newRoute.type === RouteType.FALLBACK && oldRoute?.type !== RouteType.FALLBACK) {
         this.logger.warn(
           `[HUB-RELAY] Edge ${targetEdgeId} entered Hub relay mode (TCP fallback via Hub control channel)`
         );
@@ -316,6 +317,8 @@ export class VoiceManager {
     // 监听Edge连接事件
     this.voiceTransport.on('edge-connected', (edgeId: number, connectionType: 'tcp' | 'udp') => {
       this.logger.info(`Edge ${edgeId} connected via ${connectionType.toUpperCase()}`);
+      // 连接建立时立即设置临时直连路由，避免因无质量数据而降级到 Hub 中转
+      this.voiceRoutingManager.setProvisionalDirectRoute(edgeId);
     });
     
     // 监听Edge连接失败事件

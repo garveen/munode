@@ -370,7 +370,20 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     for (const route of routes) {
       if (route.targetEdgeId !== this.serverId) {
         this.hubRouteTable.set(route.targetEdgeId, route);
-        // 更新本地路由表（Hub 路由优先）
+        
+        // 不允许 Hub 的 FALLBACK 路由覆盖本地已知的直连/中转路由
+        // 直接的 TCP/UDP 连接始终优于经由 Hub 控制通道中转
+        if (route.type === RouteType.FALLBACK) {
+          const existing = this.routingTable.get(route.targetEdgeId);
+          if (existing && existing.type !== RouteType.FALLBACK && existing.source === 'local') {
+            this.logger.debug(
+              `Hub suggests FALLBACK for Edge ${route.targetEdgeId}, ` +
+              `keeping local ${existing.type} route`
+            );
+            continue;
+          }
+        }
+        
         this.updateRoute(route);
       }
     }
@@ -436,8 +449,32 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
                   `type: ${route.type}, cost: ${route.cost.toFixed(2)}`);
     }
     
-    // 触发事件
-    this.emit('route-changed', route.targetEdgeId, route, oldRoute);
+    // 仅在路由类型改变时触发事件，避免 Hub 定期推送引起的噪音
+    if (!oldRoute || oldRoute.type !== route.type) {
+      this.emit('route-changed', route.targetEdgeId, route, oldRoute);
+    }
+  }
+
+  /**
+   * 在 Edge 连接建立时设置临时直连路由
+   * 当 TCP/UDP 连接建立但质量数据尚未收集时使用
+   * 避免因无质量数据而被 Hub 降级为 hub_relay
+   */
+  setProvisionalDirectRoute(edgeId: number): void {
+    const existing = this.routingTable.get(edgeId);
+    if (existing && existing.type !== RouteType.FALLBACK) {
+      return; // 已有直连/中转路由，无需覆盖
+    }
+    
+    this.logger.debug(`Setting provisional direct route for Edge ${edgeId} (connection established)`);
+    this.updateRoute({
+      targetEdgeId: edgeId,
+      type: RouteType.DIRECT,
+      cost: 500, // 临时成本，待质量数据收集后由本地决策更新
+      timestamp: Date.now(),
+      source: 'local',
+      connectionPurpose: ConnectionPurpose.DIRECT_VOICE,
+    });
   }
 
   /**
@@ -728,8 +765,8 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
       const currentRoute = this.routingTable.get(targetEdgeId);
       const hubRoute = this.hubRouteTable.get(targetEdgeId);
       
-      // 如果有 Hub 路由，优先使用
-      if (hubRoute && hubRoute.source === 'hub') {
+      // Hub 路由优先，但不允许 Hub 的 FALLBACK 路由阻止本地升级决策
+      if (hubRoute && hubRoute.source === 'hub' && hubRoute.type !== RouteType.FALLBACK) {
         continue;
       }
       
