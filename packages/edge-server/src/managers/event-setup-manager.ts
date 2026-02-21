@@ -524,113 +524,29 @@ export class EventSetupManager {
       });
 
       // 监听来自 Hub 的 VoiceTarget 同步
-      this.hubClient.on('syncVoiceTarget', (params: {
-        edge_id: number;
-        client_session: number;
-        target_id: number;
-        config: {
-          sessions?: Array<{ session: number }>;
-          channels?: Array<{
-            channel_id: number;
-            include_subchannels?: boolean;
-            include_links?: boolean;
-            group?: string;
-          }>;
-        } | null;
-      }) => {
+      this.hubClient.on('syncVoiceTarget', (params) => {
         this.logger.info(
           `Received VoiceTarget sync from Hub: Edge ${params.edge_id}, Session ${params.client_session}, Target ${params.target_id}`
         );
         
-        // 更新本地 VoiceRouter 的配置
         if (params.config === null) {
           // 删除 VoiceTarget
-        this.logger.info(`Removing VoiceTarget: session=${params.client_session}, target=${params.target_id}`);
+          this.logger.info(`Removing VoiceTarget: session=${params.client_session}, target=${params.target_id}`);
           this.handlerFactory.voiceRouter.removeVoiceTarget(params.client_session, params.target_id);
         } else if (params.config) {
-          // Hub 可能以两种格式发送 VoiceTarget 配置：
-          // 格式1 (VoiceTarget): { targets: [{session?: number[], channel_id?: number, links?, children?, group?}] }
-          // 格式2 (Protobuf): { sessions: [{session: number}], channels: [{channel_id, children?, links?, group?}] }
-          // 同时兼容两种格式，确保跨 Edge 的 VoiceTarget 同步正确
-          interface VoiceTargetTarget {
-            session?: number[];
-            channel_id?: number;
-            group?: string;
-            links?: boolean;
-            children?: boolean;
-          }
-          interface ConfigWithTargets {
-            id?: number;
-            targets?: VoiceTargetTarget[];
-          }
-          interface ConfigWithSessionsChannels {
-            sessions?: Array<{ session: number }>;
-            channels?: Array<{
-              channel_id: number;
-              children?: boolean;
-              links?: boolean;
-              group?: string;
-            }>;
-          }
-          interface VoiceTargetItem {
-            session?: number[];
-            channel_id?: number;
-            links?: boolean;
-            children?: boolean;
-            group?: string;
-          }
-          const targets: VoiceTargetItem[] = [];
-          const configAsVT = params.config as ConfigWithTargets;
-          const configAsProto = params.config as ConfigWithSessionsChannels;
-
-          if (configAsVT.targets && configAsVT.targets.length > 0) {
-            // 格式1: VoiceTarget.targets 数组
-            for (const target of configAsVT.targets) {
-              if (target.session && target.session.length > 0) {
-                targets.push({ session: target.session });
-              }
-              if (target.channel_id !== undefined && target.channel_id !== 0) {
-                targets.push({
-                  channel_id: target.channel_id,
-                  children: target.children || false,
-                  links: target.links || false,
-                  group: target.group,
-                });
-              }
-            }
-          } else {
-            // 格式2: protobuf sessions/channels 格式
-            if (configAsProto.sessions && configAsProto.sessions.length > 0) {
-              targets.push({
-                session: configAsProto.sessions.map((s) => s.session),
-              });
-            }
-            if (configAsProto.channels && configAsProto.channels.length > 0) {
-              for (const channel of configAsProto.channels) {
-                if (channel.channel_id !== undefined && channel.channel_id !== 0) {
-                  targets.push({
-                    channel_id: channel.channel_id,
-                    children: channel.children || false,
-                    links: channel.links || false,
-                    group: channel.group,
-                  });
-                }
-              }
-            }
-          }
-          
+          const targets = params.config.targets ?? [];
           if (targets.length > 0) {
-        this.logger.info(`Setting VoiceTarget: session=${params.client_session}, target=${params.target_id}, targets count=${targets.length}`);
+            this.logger.info(`Setting VoiceTarget: session=${params.client_session}, target=${params.target_id}, targets count=${targets.length}`);
             this.handlerFactory.voiceRouter.setVoiceTarget(
               params.client_session,
               params.target_id,
               targets
             );
           } else {
-        this.logger.warn(`VoiceTarget has no targets: ${JSON.stringify(params)}`);
+            this.logger.warn(`VoiceTarget has no targets: ${JSON.stringify(params)}`);
           }
         } else {
-        this.logger.warn(`Invalid VoiceTarget config: ${JSON.stringify(params)}`);
+          this.logger.warn(`Invalid VoiceTarget config: ${JSON.stringify(params)}`);
         }
       });
 

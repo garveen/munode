@@ -8,6 +8,7 @@
 
 import type {
   VoiceTargetConfig,
+  VoiceTarget,
   ServerStats,
 } from '../hub-edge-types.js';
 
@@ -1024,15 +1025,7 @@ export interface HubSyncVoiceTargetNotification {
     edge_id: number;
     client_session: number;
     target_id: number;
-    config: {
-      sessions?: Array<{ session: number }>;
-      channels?: Array<{
-        channel_id: number;
-        include_subchannels?: boolean;
-        include_links?: boolean;
-        group?: string;
-      }>;
-    } | null;
+    config: VoiceTarget | null;
   };
 }
 

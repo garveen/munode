@@ -303,8 +303,8 @@ export class ProtocolHandlers {
         if (target.session && target.session.length > 0) {
           converted.session = target.session;
         }
-        // ts-proto: channel_id defaults to 0, only add if non-zero (channel 0 is root, but voice targets shouldn't target root implicitly)
-        if (target.channel_id !== undefined && target.channel_id !== 0) {
+        // ts-proto: channel_id is optional, undefined means not set; 0 is valid (root channel)
+        if (target.channel_id !== undefined) {
           converted.channel_id = target.channel_id;
         }
         // ts-proto: string fields default to "", only add if non-empty
@@ -328,47 +328,14 @@ export class ProtocolHandlers {
         this.logger.debug(`Set voice target ${voiceTarget.id} for session ${session_id}: ${voiceTarget.targets.length} targets`);
       
       // 向 Hub 同步 VoiceTarget 配置
-      // 将Mumble protocol格式转换为Hub-Edge proto格式
+      // 直接复用 convertedTargets（已过滤掉 ts-proto 默认值），确保发送给 Hub 的格式干净
       if (this.hubClient) {
-        // 收集所有session targets和channel targets
-        const sessions: number[] = [];
-        const channels: Array<{
-          channel_id: number;
-          include_subchannels: boolean;
-          include_links: boolean;
-          group?: string;
-        }> = [];
-        
-        for (const target of voiceTarget.targets) {
-          // 如果有session数组，添加到sessions
-          if (target.session && target.session.length > 0) {
-            sessions.push(...target.session);
-          }
-          
-          // 如果有channel_id，添加到channels
-          // ts-proto: channel_id defaults to 0, only add if explicitly set (non-zero)
-          if (target.channel_id !== undefined && target.channel_id !== 0) {
-            channels.push({
-              channel_id: target.channel_id,
-              include_subchannels: !!target.children,
-              include_links: !!target.links,
-              group: target.group,
-            });
-          }
-        }
-        
         this.hubClient.syncVoiceTarget({
           client_session: session_id,
           target_id: voiceTarget.id,
           config: {
             id: voiceTarget.id,
-            targets: voiceTarget.targets.map(t => ({
-              session: t.session || [],
-              channel_id: t.channel_id,
-              group: t.group,
-              links: t.links,
-              children: t.children,
-            })),
+            targets: convertedTargets,
           },
         }).catch((err) => {
         this.logger.error(`Failed to sync voice target to Hub:`, err);

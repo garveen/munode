@@ -14,6 +14,7 @@ import type {
   HubToEdgeNotifications,
   HubNotificationParams,
 } from './rpc-types.js';
+import type { VoiceTargetTarget } from '../hub-edge-types.js';
 
 // Use generic version for type-safe notifications
 type NotificationParams<M extends HubToEdgeNotifications['method']> = HubNotificationParams<M>;
@@ -167,8 +168,36 @@ export class TypedRPCServer {
         return request.edge_allocate_session_id as RPCParams<'edge.allocateSessionId'>;
       case 'edge.authenticateUser':
         return request.edge_authenticate_user as RPCParams<'edge.authenticateUser'>;
-      case 'edge.syncVoiceTarget':
-        return request.edge_sync_voice_target as RPCParams<'edge.syncVoiceTarget'>;
+      case 'edge.syncVoiceTarget': {
+        const p = request.edge_sync_voice_target;
+        if (!p) throw new Error('Missing edge.syncVoiceTarget params');
+        let config: RPCParams<'edge.syncVoiceTarget'>['config'] = null;
+        if (p.config) {
+          const targets: VoiceTargetTarget[] = [];
+          // sessions → 一个包含所有 session 的 target 条目
+          if (p.config.sessions && p.config.sessions.length > 0) {
+            targets.push({ session: p.config.sessions.map(s => s.session) });
+          }
+          // 每个 channel → 独立的 target 条目（channel_id = 0 代表 root channel，合法）
+          for (const channel of p.config.channels ?? []) {
+            if (channel.channel_id !== undefined) {
+              targets.push({
+                channel_id: channel.channel_id,
+                children: channel.children || undefined,
+                links: channel.links || undefined,
+                group: channel.group || undefined,
+              });
+            }
+          }
+          config = { targets };
+        }
+        return {
+          edge_id: p.edge_id,
+          client_session: p.client_session,
+          target_id: p.target_id,
+          config,
+        } as RPCParams<'edge.syncVoiceTarget'>;
+      }
       case 'edge.getVoiceTargets':
         return request.edge_get_voice_targets as RPCParams<'edge.getVoiceTargets'>;
       case 'edge.relayVoiceViaTcp': {
