@@ -29,6 +29,7 @@ import type { Logger } from '@munode/common';
 import type {
   HubToEdgeNotifications,
   EdgeToHubNotifications,
+  HubNotificationParams,
 } from './rpc-types.js';
 
 // Import ChannelData from hub-edge-types
@@ -45,14 +46,6 @@ interface VoiceDataParams {
 
 interface ForceDisconnectParams {
   reason: string;
-}
-
-interface PeerJoinedParams {
-  id: number;
-  name: string;
-  host: string;
-  port: number;
-  voicePort: number;
 }
 
 interface ACLResponseParams {
@@ -112,7 +105,6 @@ interface SyncVoiceTargetParams {
 type InternalNotificationParams =
   | VoiceDataParams
   | ForceDisconnectParams
-  | PeerJoinedParams
   | ACLResponseParams
   | UserJoinedParams
   | UserMovedParams
@@ -295,13 +287,14 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
         break;
       }
       case 'edge.peerJoined': {
-        const p = params as PeerJoinedParams;
+        const p = params as HubNotificationParams<'edge.peerJoined'>;
         notificationData.peer_joined = {
           id: p.id,
           name: p.name,
           host: p.host,
           port: p.port,
           voice_port: p.voicePort,
+          cert_hash: p.certHash,
         };
         break;
       }
@@ -642,6 +635,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
             host: typedNotification.peer_joined.host,
             port: typedNotification.peer_joined.port,
             voicePort: typedNotification.peer_joined.voice_port,
+            certHash: typedNotification.peer_joined.cert_hash,
           };
         }
         break;

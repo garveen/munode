@@ -99,13 +99,8 @@ export interface EdgeControlClientEvents extends EventMap {
   'deleteChannel': [params: { channelId: number }];
   'syncVoiceTarget': [params: SyncVoiceTargetParams];
   'notification': [message: HubNotificationMessage];
-  'edgeJoined': [params: { edgeId: number; host: string; port: number; voicePort: number }];
-  'edgeLeft': [params: { edgeId: number }];
-  'sessionUpdate': [params: { session: number; updates: ServerStats }];
-  'voiceTargetUpdate': [params: SyncVoiceTargetParams];
   'voiceData': [data: VoiceDataParams, respond: (response: { success: boolean }) => void];
   'voiceRoutingConfig': [config: VoiceRoutingConfigParams];
-  'relayVoicePacket': [params: { from_edge_id: number; voice_packet: Buffer; timestamp: number }];
 }
 
 /**
@@ -510,64 +505,7 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
    */
   private handleIncomingNotification(message: { method: string; params: unknown }): void {
     try {
-      // 首先触发通用的notification事件，供上层直接处理
-      // 使用类型断言来确保类型安全，因为通知消息结构是固定的
       this.emit('notification', message as HubNotificationMessage);
-
-      // 然后根据特定方法触发特定事件（向后兼容）
-      // 这些特定事件保留是为了兼容旧代码，新代码应使用 notification 事件
-      switch (message.method) {
-        case 'hub.edgeJoined': {
-          const params = message.params as { edgeId: number; host: string; port: number; voicePort: number };
-          this.emit('edgeJoined', params);
-          break;
-        }
-
-        case 'hub.edgeLeft': {
-          const params = message.params as { edgeId: number };
-          this.emit('edgeLeft', params);
-          break;
-        }
-
-        case 'hub.sessionUpdate': {
-          const params = message.params as { session: number; updates: ServerStats };
-          this.emit('sessionUpdate', params);
-          break;
-        }
-
-        case 'hub.voiceTargetUpdate': {
-          const params = message.params as SyncVoiceTargetParams;
-          this.emit('voiceTargetUpdate', params);
-          break;
-        }
-
-        case 'hub.syncVoiceTarget': {
-          const params = message.params as SyncVoiceTargetParams;
-          this.emit('syncVoiceTarget', params);
-          break;
-        }
-
-        case 'hub.voiceRoutingConfig': {
-          const params = message.params as VoiceRoutingConfigParams;
-          this.emit('voiceRoutingConfig', params);
-          break;
-        }
-
-        case 'hub.relayVoicePacket': {
-          // 接收来自 Hub 的 TCP 降级语音包
-          const params = message.params as { from_edge_id: number; voice_packet: Buffer; timestamp: number };
-          this.emit('relayVoicePacket', params);
-          break;
-        }
-
-        case 'hub.routeTableUpdate':
-          // 路由表更新通知
-          this.emit('routeTableUpdate', message.params);
-          break;
-
-        default:
-          this.logger.debug('Notification forwarded to upper layer:', message.method);
-      }
     } catch (error) {
       this.logger.error('Error handling incoming notification:', error);
     }

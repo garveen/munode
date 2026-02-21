@@ -58,14 +58,6 @@ interface HubVoiceDataParamsTS {
   timestamp: number;
 }
 
-interface HubPeerJoinedParamsTS {
-  id: number;
-  name: string;
-  host: string;
-  port: number;
-  voicePort: number;
-}
-
 interface HubACLResponseParamsTS {
   edge_id: number;
   actor_session: number;
@@ -440,13 +432,14 @@ export class TypedRPCServer {
         break;
       }
       case 'edge.peerJoined': {
-        const p = params as HubPeerJoinedParamsTS;
+        const p = params as HubNotificationParams<'edge.peerJoined'>;
         notification.peer_joined = {
           id: p.id,
           name: p.name,
           host: p.host,
           port: p.port,
           voice_port: p.voicePort,
+          cert_hash: p.certHash,
         };
         break;
       }
