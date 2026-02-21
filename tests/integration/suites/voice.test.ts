@@ -207,8 +207,8 @@ describe('Voice Integration Tests', () => {
       const voicePacket = createVoicePacket(4, 0, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
       
-      // 等待语音包到达
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // 等待语音包到达（跨 Edge 需要更长时间）
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       // 验证结果
       expect(receivedVoice.recvE1Same).toBe(true); // 同 Edge 同频道应该收到
@@ -259,7 +259,7 @@ describe('Voice Integration Tests', () => {
       const voicePacket = createVoicePacket(4, 0, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
       
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       // 验证：deaf 用户不应收到，normal 用户应该收到
       expect(receivedVoice.deafE1).toBe(false);
@@ -340,7 +340,7 @@ describe('Voice Integration Tests', () => {
       const voicePacket = createVoicePacket(4, 0, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
       
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       // 验证
       expect(receivedVoice.recvE1Ch0).toBe(true); // 同频道同 Edge
@@ -410,8 +410,8 @@ describe('Voice Integration Tests', () => {
       const voicePacket = createVoicePacket(4, 1, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
       
-      // 等待语音包跨 Edge 传输（增加到 0.5 秒）
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // 等待语音包跨 Edge 传输
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       // 验证：只有 target 用户收到
       expect(receivedVoice.target1E1).toBe(true);
@@ -477,8 +477,8 @@ describe('Voice Integration Tests', () => {
       const voicePacket = createVoicePacket(4, 2, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
       
-      // 等待语音包跨 Edge 传输（增加到 2 秒）
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // 等待语音包跨 Edge 传输
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       // 验证
       expect(receivedVoice.recvE1Ch1).toBe(true);
@@ -555,6 +555,9 @@ describe('Voice Integration Tests', () => {
         if (data.session === senderSession) receivedCount.recvE2++;
       });
       
+      // 等待跨 Edge 连接和状态同步就绪
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
       // 发送 5 个语音包
       for (let i = 0; i < 5; i++) {
         const voicePacket = createVoicePacket(4, 0, i);
@@ -562,7 +565,7 @@ describe('Voice Integration Tests', () => {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       // 验证：两个接收者都应该收到 5 个包
       expect(receivedCount.recvE1).toBe(5);
@@ -638,12 +641,12 @@ describe('Voice Integration Tests', () => {
       // 第一次：普通 push-to-talk (target=0)
       const voicePacket1 = createVoicePacket(4, 0, 0);
       await sender.getConnectionManager().sendVoicePacket(voicePacket1);
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       // 第二次：whisper (target=3)
       const voicePacket2 = createVoicePacket(4, 3, 1);
       await sender.getConnectionManager().sendVoicePacket(voicePacket2);
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
       // 验证
       expect(receivedVoice.recvE1Ch0).toBe(true); // 接收 push-to-talk

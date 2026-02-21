@@ -336,6 +336,13 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   }
 
   /**
+   * 检查到指定Edge的连接是否已建立（包括双向连接）
+   */
+  isEdgeConnected(edgeId: number): boolean {
+    return this.connectionManager.isConnected(edgeId);
+  }
+
+  /**
    * 处理接收到的UDP数据包（由外部UDP监听器调用）
    * 保持向后兼容的私有方法签名
    */

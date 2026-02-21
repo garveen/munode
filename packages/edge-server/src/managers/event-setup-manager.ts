@@ -548,9 +548,30 @@ export class EventSetupManager {
         this.logger.info(`Removing VoiceTarget: session=${params.client_session}, target=${params.target_id}`);
           this.handlerFactory.voiceRouter.removeVoiceTarget(params.client_session, params.target_id);
         } else if (params.config) {
-          // 将Hub-Edge格式转换回 Mumble protocol格式
-          // Hub-Edge格式: { sessions: VoiceTargetSession[], channels: ChannelTarget[] }
-          // Mumble格式: targets数组，每个target有session/channel_id/links/children/group
+          // Hub 可能以两种格式发送 VoiceTarget 配置：
+          // 格式1 (VoiceTarget): { targets: [{session?: number[], channel_id?: number, links?, children?, group?}] }
+          // 格式2 (Protobuf): { sessions: [{session: number}], channels: [{channel_id, children?, links?, group?}] }
+          // 同时兼容两种格式，确保跨 Edge 的 VoiceTarget 同步正确
+          interface VoiceTargetTarget {
+            session?: number[];
+            channel_id?: number;
+            group?: string;
+            links?: boolean;
+            children?: boolean;
+          }
+          interface ConfigWithTargets {
+            id?: number;
+            targets?: VoiceTargetTarget[];
+          }
+          interface ConfigWithSessionsChannels {
+            sessions?: Array<{ session: number }>;
+            channels?: Array<{
+              channel_id: number;
+              children?: boolean;
+              links?: boolean;
+              group?: string;
+            }>;
+          }
           interface VoiceTargetItem {
             session?: number[];
             channel_id?: number;
@@ -559,26 +580,41 @@ export class EventSetupManager {
             group?: string;
           }
           const targets: VoiceTargetItem[] = [];
-          
-          // 转换sessions - 从 VoiceTargetSession对象数组提取session ID
-          if (params.config.sessions && params.config.sessions.length > 0) {
-            const sessionIds = params.config.sessions.map((s: { session: number }) => s.session);
-            targets.push({
-              session: sessionIds,
-            });
-          }
-          
-          // 转换channels
-          if (params.config.channels && params.config.channels.length > 0) {
-            for (const channel of params.config.channels) {
-              // Only add channel targets with valid channel_id (non-zero)
-              if (channel.channel_id !== undefined && channel.channel_id !== 0) {
+          const configAsVT = params.config as ConfigWithTargets;
+          const configAsProto = params.config as ConfigWithSessionsChannels;
+
+          if (configAsVT.targets && configAsVT.targets.length > 0) {
+            // 格式1: VoiceTarget.targets 数组
+            for (const target of configAsVT.targets) {
+              if (target.session && target.session.length > 0) {
+                targets.push({ session: target.session });
+              }
+              if (target.channel_id !== undefined && target.channel_id !== 0) {
                 targets.push({
-                  channel_id: channel.channel_id,
-                  children: channel.include_subchannels || false,
-                  links: channel.include_links || false,
-                  group: channel.group,
+                  channel_id: target.channel_id,
+                  children: target.children || false,
+                  links: target.links || false,
+                  group: target.group,
                 });
+              }
+            }
+          } else {
+            // 格式2: protobuf sessions/channels 格式
+            if (configAsProto.sessions && configAsProto.sessions.length > 0) {
+              targets.push({
+                session: configAsProto.sessions.map((s) => s.session),
+              });
+            }
+            if (configAsProto.channels && configAsProto.channels.length > 0) {
+              for (const channel of configAsProto.channels) {
+                if (channel.channel_id !== undefined && channel.channel_id !== 0) {
+                  targets.push({
+                    channel_id: channel.channel_id,
+                    children: channel.children || false,
+                    links: channel.links || false,
+                    group: channel.group,
+                  });
+                }
               }
             }
           }

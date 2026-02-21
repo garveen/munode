@@ -117,6 +117,9 @@ export class ServerLifecycleManager {
                   const peerEdgePort = peer.voicePort || peer.port;
                   this.voiceTransport.registerEndpoint(peer.id, peer.host, peerEdgePort, undefined, peerEdgePort);
                   this.logger.info(`Registered edge peer ${peer.id}: ${peer.host}:${peerEdgePort} (UDP+TCP on edge_port)`);
+                  // 主动建立与已有 peer 的连接（避免等待对方的 peerJoined 事件）
+                  void this.voiceTransport.connectToEdge(peer.id);
+                  this.logger.info(`Initiated connection to existing peer ${peer.id}`);
                 } catch (endpointError) {
                   // 单个端点注册失败不影响其他端点
                   this.logger.warn(`Failed to register voice endpoint for peer ${peer.id}:`, endpointError);

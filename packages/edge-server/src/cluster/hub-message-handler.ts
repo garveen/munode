@@ -143,7 +143,18 @@ export class HubMessageHandlers {
           if (Object.keys(updates).length > 0) {
             this.clientManager.updateClient(targetSession, updates);
           }
+      } else if (params.channel_id !== undefined) {
+        // 用户不在本Edge上，但本Edge持有其远端状态镜像
+        // 需要同步更新 stateManager 中的远端用户频道，否则 PTT 路由会一直使用旧频道
+        // （hub.userStateChanged 从未被 Hub 发送，updateRemoteUserChannel 只能在此处触发）
+        const remoteUser = this.stateManager.getRemoteUserInfo(targetSession);
+        if (remoteUser) {
+          this.logger.debug(
+            `[USERSTATE-DEBUG] Moving remote user session ${targetSession} from channel ${remoteUser.channel_id} to ${params.channel_id} in stateManager`
+          );
+          this.stateManager.updateRemoteUserChannel(targetSession, params.channel_id);
         }
+      }
 
       // Broadcast to all local authenticated clients (if target_sessions provided, only broadcast to these clients)
       // userStateMessage already encoded above

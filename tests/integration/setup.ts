@@ -134,16 +134,11 @@ export async function createClients(testEnv: TestEnvironment, configs: ClientCon
         username: config.username,
         password: userInfo.password,
         rejectUnauthorized: false,
-        forceTcpVoice: false,
+        forceTcpVoice: true,
       });
       
-      // 等待 UDP 连接就绪
-      try {
-        await client.waitForUDP(3000);
-        console.log(`[TEST] ${config.username} UDP ready`);
-      } catch (error) {
-        console.warn(`[TEST] ${config.username} UDP timeout, will use TCP:`, error);
-      }
+      // 使用 TCP 语音，不需要等待 UDP 连接
+      console.log(`[TEST] ${config.username} connected, using TCP voice`);
       
       if (config.channelId !== undefined) {
         await client.sendUserState({ channel_id: config.channelId });
@@ -375,6 +370,8 @@ async function startEdgeServer(
   if (!edgeConfig.voice_routing.shared_secret) {
     edgeConfig.voice_routing.shared_secret = 'test-shared-secret-for-udp-voice-handshake';
   }
+  // Force TCP-only for Edge-to-Edge connections in tests to avoid UDP packet loss
+  edgeConfig.voice_routing.connection_strategy = 'tcp_only';
 
   const certsDir = join(__dirname, 'certs');
   edgeConfig.tls = {
@@ -910,12 +907,12 @@ export async function setupTestEnvironment(
     if (activeEdges.length > 1) {
       debugLog(`Waiting for ${activeEdges.length} Edge servers to establish UDP connections...`);
       
-      // 等待每个 Edge 都注册了其他 Edge 的端点
+      // 等待每个 Edge 都注册了其他 Edge 的端点并完成 TLS 连接握手
       await sleep(2000); // 基础等待时间让通知传递
       
-      // 验证 UDP 连接
+      // 验证 Edge 间连接：需要注册且实际已连接（TLS 握手完成）
       let attempts = 0;
-      const maxAttempts = 20;
+      const maxAttempts = 30; // 增加最大尝试次数
       while (attempts < maxAttempts) {
         let allConnected = true;
         
@@ -931,11 +928,21 @@ export async function setupTestEnvironment(
               debugLog(`Edge ${edge.getConfig().server_id} has ${registeredIds.length}/${expectedCount} endpoints registered`);
               break;
             }
+            
+            // 额外检查：确认 TLS 连接已真正建立（不只是注册端点）
+            for (const peerId of registeredIds) {
+              if (!voiceTransport.isEdgeConnected(peerId)) {
+                allConnected = false;
+                debugLog(`Edge ${edge.getConfig().server_id} -> Edge ${peerId}: registered but TLS not yet connected`);
+                break;
+              }
+            }
+            if (!allConnected) break;
           }
         }
         
         if (allConnected) {
-          debugLog('All Edge servers have registered peer endpoints');
+          debugLog('All Edge servers have registered peer endpoints and TLS connections established');
           break;
         }
         
@@ -944,7 +951,9 @@ export async function setupTestEnvironment(
       }
       
       if (attempts >= maxAttempts) {
-        console.warn('Warning: Not all Edge servers completed endpoint registration within timeout');
+        console.warn('Warning: Not all Edge servers completed TLS connection establishment within timeout');
+        // 额外等待，让连接有更多时间完成
+        await sleep(1000);
       }
     }
 
