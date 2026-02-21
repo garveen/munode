@@ -229,20 +229,22 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
     const isColdRestart = true; // Edge 进程启动/重启时，所有旧连接都已断开
     
     // 读取证书文件并计算hash
+    // 优先使用 edge_cert（Edge 间连接专用证书），未配置时回退到 cert（服务器证书）
     let certHash = '';
     try {
-      if (this.config.tls?.cert) {
+      const certFile = this.config.tls?.edge_cert || this.config.tls?.cert;
+      if (certFile) {
         const fs = await import('fs/promises');
         const crypto = await import('crypto');
-        const certPem = await fs.readFile(this.config.tls.cert, 'utf8');
-        // 计算SHA256指纹
+        const certPem = await fs.readFile(certFile, 'utf8');
+        // 计算SHA256指纹（DER格式）
         const certDer = certPem.replace(/-----BEGIN CERTIFICATE-----/, '')
           .replace(/-----END CERTIFICATE-----/, '')
           .replace(/\s/g, '');
         const certBuffer = Buffer.from(certDer, 'base64');
         const hash = crypto.createHash('sha256').update(certBuffer).digest('hex');
         certHash = hash.toLowerCase();
-        this.logger.debug(`Computed certificate hash: ${certHash.substring(0, 16)}...`);
+        this.logger.debug(`Computed certificate hash (${this.config.tls?.edge_cert ? 'edge_cert' : 'cert'}): ${certHash.substring(0, 16)}...`);
       }
     } catch (error) {
       this.logger.warn('Failed to read/compute certificate hash:', error);

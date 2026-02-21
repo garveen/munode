@@ -80,7 +80,10 @@ export interface EdgeConnectionManagerConfig {
 export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManagerEvents> {
   private config: EdgeConnectionManagerConfig;
   private logger: Logger;
+  /** 出向连接（本端主动发起），发送数据优先使用 */
   private connections = new Map<number, IEdgeConnection>();
+  /** 入向连接（对端主动发起被我方接受），作为备用通道和接收通道 */
+  private incomingConnections = new Map<number, IEdgeConnection>();
   private endpoints = new Map<number, EndpointInfo>();
   private udpSendFunction?: UDPSendFunction;
   private connectionFailures = new Map<number, number>(); // Track connection failures
@@ -215,55 +218,63 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
 
   /**
    * 接受被动的Edge连接（incoming connection）
+   * 如果出向连接已存在并连通，将入向连接保存到 incomingConnections 中并存（并不关闭出向）。
+   * 如果出向连接不存在或未连通，则将入向连接作为主驱连接使用。
    * @param socket 已建立的TLS socket
    * @param edgeId 对端Edge的ID
    */
   acceptIncomingConnection(socket: import('tls').TLSSocket, edgeId: number): void {
-    // 检查是否已有到该Edge的连接
-    const existing = this.connections.get(edgeId);
-    if (existing) {
-      if (existing.isConnected) {
-        // 双边同时主动连接时（split-brain），使用 edge ID 仲裁：
-        // localEdgeId > remoteEdgeId 的一方保留入站连接（关闭自己的出站），
-        // localEdgeId < remoteEdgeId 的一方保留自己的出站连接（关闭入站）。
-        // 这样两端会达成一致：都使用同一条连接（由 ID 较小的一方主动发起）。
-        const localId = this.config.localEdgeId;
-        if (localId > edgeId) {
-          // 本端 ID 较大，用入站连接替换已有的主动连接
-          this.logger.info(
-            `Split-brain resolution (local=${localId} > remote=${edgeId}): ` +
-            `replacing outgoing connection with incoming connection from edge ${edgeId}`
-          );
-          existing.removeAllListeners();
-          existing.close();
-          this.connections.delete(edgeId);
-          this.connectionFailures.delete(edgeId);
-          // 继续往下接受入站连接
-        } else {
-          // 本端 ID 较小，保留自己的主动连接，关闭入站
-          this.logger.info(
-            `Split-brain resolution (local=${localId} < remote=${edgeId}): ` +
-            `keeping existing outgoing connection, closing incoming from edge ${edgeId}`
-          );
-          socket.destroy();
-          return;
-        }
-      } else {
-        // 已有连接但未处于connected状态（FAILED/DISCONNECTED），清理旧连接后接受新连接
-        this.logger.info(
-          `Replacing stale (non-connected) connection to edge ${edgeId} with new incoming connection`
-        );
-        existing.removeAllListeners();
-        existing.close();
-        this.connections.delete(edgeId);
-        this.connectionFailures.delete(edgeId);
-      }
+    // 替换任何已有的入向连接（新的更年轻，直接替换）
+    const existingIncoming = this.incomingConnections.get(edgeId);
+    if (existingIncoming) {
+      this.logger.debug(`Replacing existing incoming connection from edge ${edgeId}`);
+      existingIncoming.removeAllListeners();
+      existingIncoming.close();
+      this.incomingConnections.delete(edgeId);
+    }
+
+    const existingOutgoing = this.connections.get(edgeId);
+
+    if (existingOutgoing && existingOutgoing.isConnected) {
+      // 出向连接已连通：将入向连接存入 incomingConnections，两条并存
+      this.logger.info(
+        `Accepting incoming connection from edge ${edgeId} as secondary ` +
+        `(outgoing already connected → keeping both)`
+      );
+      const incoming = TCPEdgeConnection.fromSocket(
+        socket,
+        edgeId,
+        {
+          localEdgeId: this.config.localEdgeId,
+          sharedSecret: this.config.sharedSecret,
+          heartbeatInterval: this.config.heartbeatInterval,
+          connectionTimeout: this.config.connectionTimeout,
+          maxReconnectAttempts: this.config.maxReconnectAttempts,
+          reconnectDelay: this.config.reconnectDelay,
+          clientCert: this.config.clientCert,
+          clientKey: this.config.clientKey,
+        },
+        this.logger
+      );
+      this.incomingConnections.set(edgeId, incoming);
+      this.setupIncomingConnectionEvents(incoming);
+      return;
+    }
+
+    // 出向连接不存在或未连通：将入向连接升格为主驱连接
+    if (existingOutgoing) {
+      this.logger.debug(`Replacing stale outgoing connection to edge ${edgeId} with incoming`);
+      existingOutgoing.removeAllListeners();
+      existingOutgoing.close();
+      this.connections.delete(edgeId);
+      this.connectionFailures.delete(edgeId);
     }
 
     this.logger.info(
-      `Accepting incoming connection from edge ${edgeId} (${socket.remoteAddress}:${socket.remotePort})`
+      `Accepting incoming connection from edge ${edgeId} as primary ` +
+      `(${socket.remoteAddress}:${socket.remotePort})`
     );
-    
+
     const connection = TCPEdgeConnection.fromSocket(
       socket,
       edgeId,
@@ -280,11 +291,10 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
       this.logger
     );
 
-    // 保存连接并设置事件监听
     this.connections.set(edgeId, connection);
     this.setupConnectionEvents(connection);
 
-    this.logger.info(`Incoming connection from edge ${edgeId} accepted and managed`);
+    this.logger.info(`Incoming connection from edge ${edgeId} accepted as primary`);
   }
 
   /**
@@ -298,6 +308,13 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
       this.connections.delete(edgeId);
     }
 
+    const incoming = this.incomingConnections.get(edgeId);
+    if (incoming) {
+      incoming.close();
+      incoming.removeAllListeners();
+      this.incomingConnections.delete(edgeId);
+    }
+
     this.endpoints.delete(edgeId);
     this.logger.info(`Unregistered endpoint for edge ${edgeId}`);
   }
@@ -306,16 +323,19 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
    * 向指定Edge发送数据
    */
   async send(edgeId: number, data: Buffer): Promise<void> {
-    const connection = this.connections.get(edgeId);
-    if (!connection) {
-      throw new Error(`No connection to edge ${edgeId}`);
+    const outgoing = this.connections.get(edgeId);
+    if (outgoing?.isConnected) {
+      await outgoing.send(data);
+      return;
     }
 
-    if (!connection.isConnected) {
-      throw new Error(`Connection to edge ${edgeId} is not established`);
+    const incoming = this.incomingConnections.get(edgeId);
+    if (incoming?.isConnected) {
+      await incoming.send(data);
+      return;
     }
 
-    await connection.send(data);
+    throw new Error(`No connected connection to edge ${edgeId}`);
   }
 
   /**
@@ -324,14 +344,27 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
   async broadcast(data: Buffer, excludeEdges: Set<number> = new Set()): Promise<void> {
     const promises: Promise<void>[] = [];
 
-    for (const [edgeId, connection] of this.connections) {
-      if (excludeEdges.has(edgeId)) {
+    // 收集所有已知 edgeId
+    const allEdgeIds = new Set<number>([
+      ...this.connections.keys(),
+      ...this.incomingConnections.keys(),
+    ]);
+
+    for (const edgeId of allEdgeIds) {
+      if (excludeEdges.has(edgeId)) continue;
+
+      const outgoing = this.connections.get(edgeId);
+      if (outgoing?.isConnected) {
+        promises.push(outgoing.send(data).catch(error => {
+          this.logger.error(`Failed to broadcast to edge ${edgeId} via outgoing:`, error);
+        }));
         continue;
       }
 
-      if (connection.isConnected) {
-        promises.push(connection.send(data).catch(error => {
-          this.logger.error(`Failed to broadcast to edge ${edgeId}:`, error);
+      const incoming = this.incomingConnections.get(edgeId);
+      if (incoming?.isConnected) {
+        promises.push(incoming.send(data).catch(error => {
+          this.logger.error(`Failed to broadcast to edge ${edgeId} via incoming:`, error);
         }));
       }
     }
@@ -362,8 +395,8 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
    * 检查是否已连接到指定Edge
    */
   isConnected(edgeId: number): boolean {
-    const connection = this.connections.get(edgeId);
-    return connection?.isConnected ?? false;
+    return (this.connections.get(edgeId)?.isConnected ?? false) ||
+           (this.incomingConnections.get(edgeId)?.isConnected ?? false);
   }
 
   /**
@@ -371,10 +404,13 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
    */
   getConnectedCount(): number {
     let count = 0;
-    for (const connection of this.connections.values()) {
-      if (connection.isConnected) {
-        count++;
-      }
+    // 收集所有已知 edgeId
+    const allEdgeIds = new Set<number>([
+      ...this.connections.keys(),
+      ...this.incomingConnections.keys(),
+    ]);
+    for (const edgeId of allEdgeIds) {
+      if (this.isConnected(edgeId)) count++;
     }
     return count;
   }
@@ -438,8 +474,14 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
       connection.close();
       connection.removeAllListeners();
     }
-
     this.connections.clear();
+
+    for (const connection of this.incomingConnections.values()) {
+      connection.close();
+      connection.removeAllListeners();
+    }
+    this.incomingConnections.clear();
+
     this.endpoints.clear();
   }
 
@@ -507,9 +549,12 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
     });
 
     connection.on('disconnected', (reason) => {
-      // 底层连接已经记录了日志，这里只转发事件
-      this.emit('edge-disconnected', connection.edgeId, reason);
-      
+      // 如果入向连接仍连通，不发 edge-disconnected（不触发降级逻辑）
+      const incoming = this.incomingConnections.get(connection.edgeId);
+      if (!incoming?.isConnected) {
+        this.emit('edge-disconnected', connection.edgeId, reason);
+      }
+
       // 处理自动降级
       void this.handleConnectionFailure(connection.edgeId);
     });
@@ -530,6 +575,40 @@ export class EdgeConnectionManager extends TypedEventEmitter<EdgeConnectionManag
     connection.on('reconnecting', (attempt) => {
       this.logger.info(`Edge ${connection.edgeId} reconnecting (attempt ${attempt})`);
       this.emit('edge-reconnecting', connection.edgeId, attempt);
+    });
+  }
+
+  /**
+   * 设置入向连接（被动方）的事件监听
+   * 入向连接断开后不重连，仅清理自身；转发数据事件
+   */
+  private setupIncomingConnectionEvents(connection: IEdgeConnection): void {
+    connection.on('connected', () => {
+      this.logger.info(`Edge ${connection.edgeId} incoming connection established via TCP`);
+      // 仅当出向连接未连通时发出 edge-connected（避免重复触发路由建立逻辑）
+      const outgoing = this.connections.get(connection.edgeId);
+      if (!outgoing?.isConnected) {
+        this.emit('edge-connected', connection.edgeId, connection.type as 'tcp' | 'udp');
+      }
+    });
+
+    connection.on('disconnected', (reason) => {
+      this.logger.info(`Edge ${connection.edgeId} incoming connection closed: ${reason}`);
+      this.incomingConnections.delete(connection.edgeId);
+      // 仅当出向也断开时发出 edge-disconnected
+      const outgoing = this.connections.get(connection.edgeId);
+      if (!outgoing?.isConnected) {
+        this.emit('edge-disconnected', connection.edgeId, reason);
+      }
+    });
+
+    connection.on('error', (error) => {
+      this.logger.warn(`Edge ${connection.edgeId} incoming connection error:`, error);
+      this.incomingConnections.delete(connection.edgeId);
+    });
+
+    connection.on('data', (data, timestamp) => {
+      this.emit('edge-data', connection.edgeId, data, timestamp);
     });
   }
 

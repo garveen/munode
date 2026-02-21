@@ -308,12 +308,13 @@ export class ServerLifecycleManager {
 
       this.edgeTLSServer.on('secureConnection', (socket: TLSSocket) => {
         void (async () => { try {
-          // 获取客户端证书哈希
+          // 获取客户端证书哈希（SHA-256 of DER，与 hub-client.ts 注册时保持一致）
           let certHash: string | undefined;
           try {
             const cert = socket.getPeerCertificate();
-            if (cert && cert.fingerprint) {
-              certHash = cert.fingerprint.replace(/:/g, '').toLowerCase();
+            if (cert && cert.raw) {
+              const { createHash } = await import('crypto');
+              certHash = createHash('sha256').update(cert.raw).digest('hex').toLowerCase();
             }
           } catch {
             // 证书获取失败不影响后续处理
