@@ -441,20 +441,17 @@ export class HubPermissionChecker {
 
   /**
    * 清除特定频道的权限缓存
+   *
+   * 权限计算是累积的：子频道的结果依赖整条父链的 ACL。
+   * 因此修改任何频道的 ACL 都可能使所有子孙频道的计算结果失效。
+   * 这里采用最安全的策略：清除全部权限计算缓存（aclCache），
+   * 只针对性地清除该频道的原始 ACL 条目缓存（channelACLCache）。
    */
   clearCacheForChannel(channelId: number): void {
-    // 清除权限计算缓存
-    const keysToDelete: string[] = [];
-    for (const key of this.aclCache.keys()) {
-      if (key.endsWith(`:${channelId}`)) {
-        keysToDelete.push(key);
-      }
-    }
-    for (const key of keysToDelete) {
-      this.aclCache.delete(key);
-    }
+    // 清除所有权限计算结果缓存（因为该频道是其他频道的父链节点，修改后所有子孙均受影响）
+    this.aclCache.clear();
 
-    // 清除ACL缓存
+    // 只清除该频道的原始 ACL 条目缓存
     this.channelACLCache.delete(channelId);
 
     // 清除频道树缓存（因为频道结构可能改变）

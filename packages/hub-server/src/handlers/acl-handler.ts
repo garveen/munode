@@ -429,6 +429,9 @@ export class ACLHandler implements IACLHandler {
     // Use ACLManager to save ACLs
     const aclIds = await this.factory.getAclManager().saveACLs(channel_id, aclData);
 
+    // 清除该频道的权限缓存（含所有用户的计算结果，因为父链变化会影响子孙频道）
+    this.hubPermissionChecker.clearCacheForChannel(channel_id);
+
     return { success: true, acl_ids: aclIds };
   }
 }
