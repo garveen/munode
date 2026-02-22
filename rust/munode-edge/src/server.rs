@@ -403,9 +403,9 @@ async fn handle_user_state_update(
         if let Some(channel_id) = user_state.channel_id {
             if client.channel_id != channel_id {
                 debug!("User {} moving to channel {}", session_id, channel_id);
-                // Remove from old channel and add to new
-                edge_state.client_manager.remove_client(session_id).await;
+                // Get sender before removing (remove clears sender too)
                 let sender = edge_state.client_manager.get_sender(session_id).await;
+                edge_state.client_manager.remove_client(session_id).await;
                 client.channel_id = channel_id;
                 if let Some(sender) = sender {
                     edge_state.client_manager.add_client(client.clone(), sender).await;
@@ -472,7 +472,7 @@ async fn hub_event_listener(
         match event_rx.recv().await {
             Ok(event) => {
                 match event {
-                    EdgeEvent::RemoteUserJoined { session_id, username, channel_id: _ } => {
+                    EdgeEvent::RemoteUserJoined { session_id, username, channel_id } => {
                         if let Some(user) = state.channel_manager.get_remote_user(session_id).await {
                             let msg = mumbleproto::UserState {
                                 session: Some(user.session_id),
@@ -491,7 +491,7 @@ async fn hub_event_listener(
                             };
                             state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
                         }
-                        debug!("Broadcast remote user joined: {} (session {})", username, session_id);
+                        debug!("Broadcast remote user joined: {} (session {}, channel {})", username, session_id, channel_id);
                     }
                     EdgeEvent::RemoteUserLeft { session_id } => {
                         let msg = handler::build_user_remove_msg(session_id, None);

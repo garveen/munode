@@ -75,7 +75,7 @@ impl HubClient {
     async fn next_request_id(&self) -> String {
         let mut counter = self.request_counter.lock().await;
         *counter += 1;
-        format!("{}-{}", chrono_millis(), *counter)
+        format!("{}-{}", current_millis(), *counter)
     }
 
     /// Connect to the Hub and run the main communication loop with reconnection.
@@ -608,7 +608,7 @@ impl HubClient {
 }
 
 /// Simple timestamp in millis (no external dependency needed).
-fn chrono_millis() -> u64 {
+fn current_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
