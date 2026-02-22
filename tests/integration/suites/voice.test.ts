@@ -74,7 +74,7 @@ async function linkChannels(adminClient: MumbleClient, channelId1: number, chann
   });
   console.log(`[TEST] linkChannels sent, waiting for sync...`);
   // 等待链接广播到所有 Edge（增加到 2 秒确保完全同步）
-  await new Promise(resolve => setTimeout(resolve, 500));
+  await new Promise(resolve => setTimeout(resolve, 1000));
   console.log(`[TEST] linkChannels wait completed`);
 }
 
@@ -272,31 +272,35 @@ describe('Voice Integration Tests', () => {
 
   describe('Channel Linking', () => {
     it('should broadcast voice to linked channels on same and cross edge, but not unlinked channels', async () => {
-      // 测试频道链接
-      // Channel 0 (Root) 链接到 Channel 1
-      // - sender: Edge 1, Channel 0
-      // - recv_e1_ch0: Edge 1, Channel 0 - 应该收到
-      // - recv_e2_ch0: Edge 2, Channel 0 - 应该收到（跨 Edge）
-      // - recv_e1_ch1: Edge 1, Channel 1 - 应该收到（链接）
-      // - recv_e2_ch1: Edge 2, Channel 1 - 应该收到（跨 Edge + 链接）
-      // - recv_e1_ch2: Edge 1, Channel 2 - 不应收到（未链接）
+      // 测试频道链接：Channel 0 (Root) 链接到 Channel 1
+      // 4 个在链接频道的 client 全部同时发送语音，每个 client 都应收到其他 3 个的语音
+      // Channel 2 的 client 不应收到任何语音
+      //
+      // linked clients（索引 0-3）：
+      //   [0] voice_sender3:     Edge 1, Channel 0
+      //   [1] voice_recv_e2_ch0: Edge 2, Channel 0（跨 Edge 同频道）
+      //   [2] voice_recv_e1_ch1: Edge 1, Channel 1（链接）
+      //   [3] voice_recv_e2_ch1: Edge 2, Channel 1（链接，跨 Edge）
+      // unlinked clients（索引 4-5）：
+      //   [4] voice_recv_e1_ch2: Edge 1, Channel 2 - 不应收到任何语音
+      //   [5] voice_recv_e2_ch2: Edge 2, Channel 2 - 不应收到任何语音
       
       const admin = await createAdminClient(testEnv);
       await linkChannels(admin, 0, 1);
       
       const clients = await createClients(testEnv, [
         { username: 'voice_sender3', edge: 1, channelId: 0 },
-        { username: 'voice_recv_e1_ch0', edge: 1, channelId: 0 },
         { username: 'voice_recv_e2_ch0', edge: 2, channelId: 0 },
         { username: 'voice_recv_e1_ch1', edge: 1, channelId: 1 },
         { username: 'voice_recv_e2_ch1', edge: 2, channelId: 1 },
         { username: 'voice_recv_e1_ch2', edge: 1, channelId: 2 },
+        { username: 'voice_recv_e2_ch2', edge: 2, channelId: 2 },
       ]);
       
-      // 等待所有客户端完全初始化并接收频道链接信息（增加到 0.5 秒）
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // 等待所有客户端完全初始化并接收频道链接信息
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
-      const [sender, recvE1Ch0, recvE2Ch0, recvE1Ch1, recvE2Ch1, recvE1Ch2] = clients;
+      const [sender, recvE2Ch0, recvE1Ch1, recvE2Ch1, recvE1Ch2, recvE2Ch2] = clients;
       
       // 验证频道链接是否正确同步
       const channelsE1 = sender.getChannels();
@@ -304,52 +308,135 @@ describe('Voice Integration Tests', () => {
       const ch0E1 = channelsE1.find((ch: ChannelInfo) => ch.channel_id === 0);
       const ch0E2 = channelsE2.find((ch: ChannelInfo) => ch.channel_id === 0);
       
-      console.log(`[TEST-DEBUG] Edge 1 Channel 0 links: [${(ch0E1?.links || []).join(', ')}]`);
-      console.log(`[TEST-DEBUG] Edge 2 Channel 0 links: [${(ch0E2?.links || []).join(', ')}]`);
+      console.log(`[TEST] Edge 1 Channel 0 links: [${(ch0E1?.links || []).join(', ')}]`);
+      console.log(`[TEST] Edge 2 Channel 0 links: [${(ch0E2?.links || []).join(', ')}]`);
       
-      // 断言：确保链接已同步
       expect(ch0E1?.links).toContain(1);
       expect(ch0E2?.links).toContain(1);
       
-      const receivedVoice = {
-        recvE1Ch0: false,
-        recvE2Ch0: false,
-        recvE1Ch1: false,
-        recvE2Ch1: false,
-        recvE1Ch2: false,
-      };
+      // 获取 4 个 linked client 的 session（按索引对应）
+      const linkedClients = [sender, recvE2Ch0, recvE1Ch1, recvE2Ch1];
+      const linkedSessions = linkedClients.map(c => c.getStateManager().getSession()?.session ?? 0);
+      const linkedSessionSet = new Set(linkedSessions);
       
-      const senderSession = sender.getStateManager().getSession()?.session || 0;
+      // receivedFrom[i] = 客户端 i 收到了哪些 sender session 的语音
+      const receivedFrom: Set<number>[] = clients.map(() => new Set<number>());
       
-      recvE1Ch0.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.recvE1Ch0 = true;
-      });
-      recvE2Ch0.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.recvE2Ch0 = true;
-      });
-      recvE1Ch1.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.recvE1Ch1 = true;
-      });
-      recvE2Ch1.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.recvE2Ch1 = true;
-      });
-      recvE1Ch2.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.recvE1Ch2 = true;
+      clients.forEach((client, idx) => {
+        client.on('voice', (data: VoiceData) => {
+          if (linkedSessionSet.has(data.session)) {
+            receivedFrom[idx].add(data.session);
+          }
+        });
       });
       
-      const voicePacket = createVoicePacket(4, 0, 0);
-      await sender.getConnectionManager().sendVoicePacket(voicePacket);
+      // 4 个 linked client 同时发送语音
+      await Promise.all(
+        linkedClients.map(c => c.getConnectionManager().sendVoicePacket(createVoicePacket(4, 0, 0)))
+      );
       
       await new Promise(resolve => setTimeout(resolve, 2000));
       
-      // 验证
-      expect(receivedVoice.recvE1Ch0).toBe(true); // 同频道同 Edge
-      expect(receivedVoice.recvE2Ch0).toBe(true); // 同频道跨 Edge
-      expect(receivedVoice.recvE1Ch1).toBe(true); // 链接频道同 Edge
-      expect(receivedVoice.recvE2Ch1).toBe(true); // 链接频道跨 Edge
-      expect(receivedVoice.recvE1Ch2).toBe(false); // 未链接频道
+      // 验证：每个 linked client 都应收到其他 3 个 client 的语音（按 session 匹配）
+      const clientNames = ['voice_sender3', 'voice_recv_e2_ch0', 'voice_recv_e1_ch1', 'voice_recv_e2_ch1'];
+      for (let i = 0; i < linkedClients.length; i++) {
+        for (let j = 0; j < linkedClients.length; j++) {
+          if (i !== j) {
+            expect(
+              receivedFrom[i].has(linkedSessions[j]),
+              `${clientNames[i]} 应收到来自 ${clientNames[j]} (session=${linkedSessions[j]}) 的语音`
+            ).toBe(true);
+          }
+        }
+      }
+      
+      // 验证：Channel 2 的两个 client 不应收到任何 linked client 的语音
+      expect(receivedFrom[4].size, 'voice_recv_e1_ch2 不应收到任何语音').toBe(0);
+      expect(receivedFrom[5].size, 'voice_recv_e2_ch2 不应收到任何语音').toBe(0);
       
       await unlinkChannels(admin, 0, 1);
+      await cleanupClients(clients);
+      await admin.disconnect();
+    });
+
+    it('should broadcast voice correctly in a->b<-c chain linked channel topology', async () => {
+      // 测试链式频道链接：Ch0 (A) ↔ Ch1 (B) ↔ Ch2 (C)
+      // 链接操作：A↔B 和 C↔B 分别建立——这正是 "a->b<-c" 拓扑
+      // Murmur allLinks() 图遍历：任意频道的所有链接可达频道 = {A, B, C}
+      // 因此 A、B、C 三个频道的用户全部互相可听
+      //
+      // 客户端分布：
+      //   [0] chain_a_e1:  Edge 1, Ch0 (A 端, E1)
+      //   [1] chain_b_e1:  Edge 1, Ch1 (B 中间, E1)
+      //   [2] chain_b_e2:  Edge 2, Ch1 (B 中间, 跨Edge)
+      //   [3] chain_c_e1:  Edge 1, Ch2 (C 端, E1)
+      //   [4] chain_c_e2:  Edge 2, Ch2 (C 端, 跨Edge)
+
+      const admin = await createAdminClient(testEnv);
+      // 建立 A↔B 和 C↔B 链接
+      await linkChannels(admin, 0, 1);  // ch0 ↔ ch1
+      await linkChannels(admin, 2, 1);  // ch2 ↔ ch1
+
+      const clients = await createClients(testEnv, [
+        { username: 'chain_a_e1', edge: 1, channelId: 0 },
+        { username: 'chain_b_e1', edge: 1, channelId: 1 },
+        { username: 'chain_b_e2', edge: 2, channelId: 1 },
+        { username: 'chain_c_e1', edge: 1, channelId: 2 },
+        { username: 'chain_c_e2', edge: 2, channelId: 2 },
+      ]);
+
+      // 等待所有客户端完全初始化并接收频道链接信息
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // 验证链接已同步到客户端
+      // ch0.links 应包含 ch1，ch1.links 应包含 ch0 和 ch2，ch2.links 应包含 ch1
+      const chA = clients[0].getChannels().find((ch: ChannelInfo) => ch.channel_id === 0);
+      const chB = clients[1].getChannels().find((ch: ChannelInfo) => ch.channel_id === 1);
+      const chC = clients[3].getChannels().find((ch: ChannelInfo) => ch.channel_id === 2);
+
+      console.log(`[TEST] a->b<-c: ch0.links=[${chA?.links?.join(',')}], ch1.links=[${chB?.links?.join(',')}], ch2.links=[${chC?.links?.join(',')}]`);
+
+      expect(chA?.links, 'ch0 应链接到 ch1').toContain(1);
+      expect(chB?.links, 'ch1 应链接到 ch0').toContain(0);
+      expect(chB?.links, 'ch1 应链接到 ch2').toContain(2);
+      expect(chC?.links, 'ch2 应链接到 ch1').toContain(1);
+
+      // 全部 5 个客户端的 session
+      const sessions = clients.map(c => c.getStateManager().getSession()?.session ?? 0);
+      const sessionSet = new Set(sessions);
+
+      // receivedFrom[i] = 客户端 i 收到了哪些 session 的语音
+      const receivedFrom: Set<number>[] = clients.map(() => new Set<number>());
+      clients.forEach((client, idx) => {
+        client.on('voice', (data: VoiceData) => {
+          if (sessionSet.has(data.session)) {
+            receivedFrom[idx].add(data.session);
+          }
+        });
+      });
+
+      // 5 个客户端全部同时发送语音
+      await Promise.all(
+        clients.map(c => c.getConnectionManager().sendVoicePacket(createVoicePacket(4, 0, 0)))
+      );
+
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // 验证：各客户端应收到其他全部 4 个客户端的语音
+      const names = ['chain_a_e1', 'chain_b_e1', 'chain_b_e2', 'chain_c_e1', 'chain_c_e2'];
+      for (let i = 0; i < clients.length; i++) {
+        for (let j = 0; j < clients.length; j++) {
+          if (i !== j) {
+            expect(
+              receivedFrom[i].has(sessions[j]),
+              `${names[i]} 应收到来自 ${names[j]} (session=${sessions[j]}) 的语音`
+            ).toBe(true);
+          }
+        }
+      }
+
+      await unlinkChannels(admin, 0, 1);
+      await unlinkChannels(admin, 2, 1);
       await cleanupClients(clients);
       await admin.disconnect();
     });

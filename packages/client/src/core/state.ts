@@ -103,11 +103,14 @@ export class StateManager {
     const existingChannel = this.channels.get(channelId);
 
     // 处理频道链接
-    // 如果提供了 links_add 或 links_remove，进行增量更新
-    // 否则使用 links 字段（可能为空数组）
+    // ts-proto 解码时 repeated 字段永远是数组（不会是 undefined），
+    // 所以需要通过内容是否有效来区分三种情况：
+    //   1. links_add 或 links_remove 非空 → 增量更新
+    //   2. links 非空 → 完整替换（初始频道树同步）
+    //   3. 三者均为空数组 → 本消息不含链接信息（如权限更新），保留现有 links
     let channelLinks: number[];
-    if (message.links_add !== undefined && message.links_add.length > 0 ||
-        message.links_remove !== undefined && message.links_remove.length > 0) {
+    if ((message.links_add && message.links_add.length > 0) ||
+        (message.links_remove && message.links_remove.length > 0)) {
       // 增量更新模式
       channelLinks = [...(existingChannel?.links || [])];
       if (message.links_add) {
@@ -120,11 +123,11 @@ export class StateManager {
       if (message.links_remove) {
         channelLinks = channelLinks.filter(id => !message.links_remove.includes(id));
       }
-    } else if (message.links !== undefined) {
-      // 完整替换模式
+    } else if (message.links && message.links.length > 0) {
+      // 完整替换模式：仅当 links 非空时才替换
       channelLinks = message.links;
     } else {
-      // links 字段未提供，保留现有值
+      // 三者皆为空数组，本消息不携带链接信息，保留现有值
       channelLinks = existingChannel?.links || [];
     }
 

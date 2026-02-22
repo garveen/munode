@@ -1034,9 +1034,9 @@ export class HubMessageHandlers {
           channel_id,
           can_enter,
           is_enter_restricted,
-          links: [],
-          links_add: [],
-          links_remove: [],
+          // 不传 links/links_add/links_remove，避免覆盖客户端已有的频道链接信息
+          // ts-proto 对未传字段编码为空（wire 格式中不存在），客户端解码后为空数组，
+          // 但 state.ts 已修正为：三者全为空数组时保留现有 links，不执行替换
         }).finish();
 
         this.messageHandler.sendMessage(

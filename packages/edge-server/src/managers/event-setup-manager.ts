@@ -301,26 +301,24 @@ export class EventSetupManager {
     
     // 频道管理器事件 - 主动重建缓存
     this.handlerFactory.channelManager.on('channelsLinked', (channel_id1: number, channel_id2: number) => {
-      // 频道链接变化，重建相关的PTT缓存
-        this.logger.debug(`Channels linked: ${channel_id1} <-> ${channel_id2}, rebuilding cache`);
-      this.handlerFactory.voiceRouter.rebuildChannelCache(channel_id1);
-      this.handlerFactory.voiceRouter.rebuildChannelCache(channel_id2);
-      // 由于链接是传递的，需要重建所有相关频道的缓存
-      // 为简化起见，可以考虑重建所有PTT缓存
-      // this.handlerFactory.voiceRouter.rebuildAllPTTCache();
+      // 频道链接变化，由于链接是传递的（A↔B, C↔B → A/B/C 三者互通），
+      // 需要重建所有 PTT 缓存才能反映完整的传递链接关系
+        this.logger.debug(`Channels linked: ${channel_id1} <-> ${channel_id2}, rebuilding all PTT cache`);
+      this.handlerFactory.voiceRouter.rebuildAllPTTCache();
     });
     
     this.handlerFactory.channelManager.on('channelsUnlinked', (channel_id1: number, channel_id2: number) => {
-      // 频道链接取消，重建相关的PTT缓存
-        this.logger.debug(`Channels unlinked: ${channel_id1} <-> ${channel_id2}, rebuilding cache`);
-      this.handlerFactory.voiceRouter.rebuildChannelCache(channel_id1);
-      this.handlerFactory.voiceRouter.rebuildChannelCache(channel_id2);
+      // 频道链接取消，同样需要重建所有 PTT 缓存
+        this.logger.debug(`Channels unlinked: ${channel_id1} <-> ${channel_id2}, rebuilding all PTT cache`);
+      this.handlerFactory.voiceRouter.rebuildAllPTTCache();
     });
     
     this.handlerFactory.channelManager.on('channelUpdated', (channel: ChannelInfo) => {
-      // 频道更新可能包括链接变化，重建该频道的PTT缓存
+      // 频道更新可能包括链接变化，由于链接具有传递性，需要重建所有 PTT 缓存
+      // 例如：A↔B 已建立，再建立 C↔B 时 ch1 的 channelUpdated 触发，
+      // 但 ch0 的 ptt_0 缓存也需要更新以包含 ch2 的会话
       if (channel && channel.id !== undefined) {
-        this.handlerFactory.voiceRouter.rebuildChannelCache(channel.id);
+        this.handlerFactory.voiceRouter.rebuildAllPTTCache();
       }
     });
     

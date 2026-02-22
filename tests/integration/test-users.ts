@@ -179,4 +179,11 @@ export const testUserPasswords: Record<string, { password: string; user_id: numb
       // ACL actual operation test users
       'acl_op_user': { password: 'acl_op_pass', user_id: 750, groups: ['acl_testers'] },
       'acl_op_observer': { password: 'acl_op_obs_pass', user_id: 751, groups: ['acl_testers'] },
+      // Channel Linking test users
+      'voice_recv_e2_ch2': { password: 'pass1', user_id: 760 },
+      'chain_a_e1': { password: 'pass1', user_id: 761 },
+      'chain_b_e1': { password: 'pass1', user_id: 762 },
+      'chain_b_e2': { password: 'pass1', user_id: 763 },
+      'chain_c_e1': { password: 'pass1', user_id: 764 },
+      'chain_c_e2': { password: 'pass1', user_id: 765 },
     };

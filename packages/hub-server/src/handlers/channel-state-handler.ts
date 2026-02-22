@@ -310,6 +310,28 @@ export class ChannelStateHandler implements IChannelStateHandler {
 
       this.factory.getControlService().broadcast('hub.channelStateBroadcast', typedBroadcastData);
 
+      // 对于链接变化，还需要广播每个对端频道的最新完整 links，
+      // 确保 Edge 侧 channelLinks Map 双向都被更新（Edge 只会按 channel_id 更新单个方向）
+      if (channelStateObj.links_add || channelStateObj.links_remove) {
+        const database = this.factory.getDatabase();
+        const peerIds = new Set<number>([
+          ...(channelStateObj.links_add || []),
+          ...(channelStateObj.links_remove || []),
+        ]);
+        for (const peerId of peerIds) {
+          try {
+            const peerLinks = await database.getChannelLinks(peerId);
+            this.logger.info(`Broadcasting peer channel ${peerId} links: [${peerLinks.join(', ')}]`);
+            this.factory.getControlService().broadcast('hub.channelStateBroadcast', {
+              channel_id: peerId,
+              links: peerLinks,
+            });
+          } catch (error) {
+            this.logger.error(`Failed to get/broadcast peer channel ${peerId} links:`, error);
+          }
+        }
+      }
+
     } catch (error) {
       this.logger.error('Error handling channel state notification:', error);
       this.factory.getControlService().notify(params.edge_id, 'hub.channelStateResponse', {
