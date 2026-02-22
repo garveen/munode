@@ -1488,7 +1488,7 @@ export class HubDatabase {
         SELECT c.id, c.parent_id, ch.depth + 1
         FROM channels c
         JOIN channel_hierarchy ch ON c.id = ch.parent_id
-        WHERE ch.parent_id > 0 AND ch.depth < 100
+        WHERE ch.parent_id >= 0 AND ch.depth < 100
       )
       SELECT id FROM channel_hierarchy ORDER BY depth DESC
     `;
