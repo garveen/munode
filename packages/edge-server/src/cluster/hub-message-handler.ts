@@ -185,14 +185,19 @@ export class HubMessageHandlers {
    */
   handleUserStateResponseFromHub(params: HubNotificationParams<'hub.userStateResponse'>): void {
     try {
-      const { success, actor_session, error, permission_denied, userState } = params;
+      const { success, actor_session, error, permission_denied, permission_type, denied_channel_id, userState } = params;
 
       if (!success) {
         this.logger.warn(`UserState request from session ${actor_session} failed: ${error}`);
         
         // 如果是权限拒绝，发送PermissionDenied消息给客户端
         if (permission_denied) {
-          this.factory.messageHandlers.sendPermissionDenied(actor_session, 'userstate', error || 'Permission denied');
+          this.factory.messageHandlers.sendPermissionDenied(
+            actor_session,
+            permission_type || 'permission',
+            error || 'Permission denied',
+            denied_channel_id,  // 传递发生拒绝的频道，客户端显示正确的目标频道而非根频道
+          );
         } else {
         this.logger.debug(`Sending error notification to session ${actor_session}`);
         }

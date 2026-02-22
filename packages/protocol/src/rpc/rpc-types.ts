@@ -742,6 +742,7 @@ export interface HubUserStateResponseNotification {
     error?: string;
     permission_denied?: boolean;
     permission_type?: string;
+    denied_channel_id?: number;  // 权限被拒绝发生的频道（用于发送正确的 PermissionDenied 消息）
     // The actual UserState data to send back to the client
     userState?: {
       session: number;

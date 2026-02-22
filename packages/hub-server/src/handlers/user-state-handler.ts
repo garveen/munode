@@ -149,6 +149,7 @@ export class UserStateHandler implements IUserStateHandler {
                 error: 'Permission denied: MovePermission required',
                 permission_denied: true,
                 permission_type: 'Move',
+                denied_channel_id: oldChannelId,  // actor 需要在目标当前频道有 Move 权限
               });
               return;
             }
@@ -167,6 +168,7 @@ export class UserStateHandler implements IUserStateHandler {
                   error: 'Permission denied: MovePermission required in destination channel',
                   permission_denied: true,
                   permission_type: 'Move',
+                  denied_channel_id: newChannelId,  // actor 需要在目标频道有 Move 权限
                 });
                 return;
               }
@@ -185,6 +187,7 @@ export class UserStateHandler implements IUserStateHandler {
                 error: 'Permission denied: target lacks TraversePermission',
                 permission_denied: true,
                 permission_type: 'Traverse',
+                denied_channel_id: newChannelId,  // 目标用户缺少目标频道的 Traverse 权限
               });
               return;
             }
@@ -206,6 +209,7 @@ export class UserStateHandler implements IUserStateHandler {
               error: 'Permission denied: EnterPermission required',
               permission_denied: true,
               permission_type: 'Enter',
+              denied_channel_id: newChannelId,  // 用户缺少目标频道的 Enter 权限
             });
             return;
           }
