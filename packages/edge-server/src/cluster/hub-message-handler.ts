@@ -1008,4 +1008,45 @@ export class HubMessageHandlers {
       throw error;
     }
   }
+
+  /**
+   * 处理来自 Hub 的频道进入权限批量推送
+   *
+   * Hub 在用户认证完成后异步计算该用户对全部频道的 can_enter / is_enter_restricted，
+   * 并通过此通知推送给所在 Edge。Edge 将结果以独立的 ChannelState 消息发送给客户端，
+   * 客户端据此在 UI 上显示哪些频道被限制进入。
+   */
+  handleChannelEnterPermissionsFromHub(params: HubNotificationParams<'hub.channelEnterPermissions'>): void {
+    try {
+      const { session_id, permissions } = params;
+
+      // 只处理本 Edge 上的会话
+      const client = this.clientManager.getClient(session_id);
+      if (!client) {
+        this.logger.debug(`handleChannelEnterPermissionsFromHub: session ${session_id} not on this edge, ignoring`);
+        return;
+      }
+
+      this.logger.debug(`Sending channelEnterPermissions for session ${session_id}: ${permissions.length} channels`);
+
+      for (const { channel_id, can_enter, is_enter_restricted } of permissions) {
+        const channelStateMsg = mumbleproto.ChannelState.encode({
+          channel_id,
+          can_enter,
+          is_enter_restricted,
+          links: [],
+          links_add: [],
+          links_remove: [],
+        }).finish();
+
+        this.messageHandler.sendMessage(
+          session_id,
+          MessageType.ChannelState,
+          Buffer.from(channelStateMsg),
+        );
+      }
+    } catch (error) {
+      this.logger.error('Error handling channelEnterPermissions from Hub:', error);
+    }
+  }
 }

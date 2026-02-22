@@ -22,6 +22,7 @@ export interface CreateACLRequest {
 export class ACLManager {
   private database: HubDatabase;
   private aclCache: Map<number, ACLData[]> = new Map(); // key: channel_id
+  private allACLsCache: ACLData[] | null = null;  // 全量 ACL 缓存
 
     private logger: Logger;
 
@@ -46,6 +47,17 @@ export class ACLManager {
       this.aclCache.set(channel_id, acls);
     }
     return this.aclCache.get(channel_id);
+  }
+
+  /**
+   * 获取全部频道的 ACL（带全量缓存）
+   * 每次任意频道 ACL 发生变更时，缓存会被清除，下次调用时重新从 DB 加载。
+   */
+  async getAllChannelACLs(): Promise<ACLData[]> {
+    if (this.allACLsCache === null) {
+      this.allACLsCache = await this.database.getAllChannelACLs();
+    }
+    return this.allACLsCache;
   }
 
   /**
@@ -137,6 +149,7 @@ export class ACLManager {
    */
   private invalidateCache( channel_id: number): void {
     this.aclCache.delete(channel_id);
+    this.allACLsCache = null;  // 全量缓存同步失效
   }
 
   /**

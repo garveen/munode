@@ -29,6 +29,7 @@ import { ChannelHandler, type IChannelHandler } from './handlers/channel-handler
 import { ClusterHandler, type IClusterHandler } from './handlers/cluster-handler.js';
 import { BlobHandler, type IBlobHandler } from './handlers/blob-handler.js';
 import { HubControlService } from './control-service.js';
+import { PermissionWorkerManager } from './permission-worker-manager.js';
 
 
 /**
@@ -54,6 +55,7 @@ export class HubHandlerFactory {
 
   // 处理器实例
   private permissionChecker: HubPermissionChecker;
+  private permissionWorkerManager: PermissionWorkerManager;
   private networkTopologyManager: NetworkTopologyManager;
   private voiceEncryptionManager: VoiceEncryptionManager;
   private userStateHandler: IUserStateHandler;
@@ -95,6 +97,7 @@ export class HubHandlerFactory {
     this.syncHandler = new SyncHandler(this);
     this.authenticationHandler = new AuthenticationHandler(this);
     this.permissionChecker = new HubPermissionChecker(this);
+    this.permissionWorkerManager = new PermissionWorkerManager(this.logger, { workerCount: 2 });
     this.networkTopologyManager = new NetworkTopologyManager(this.config.voice_routing, this.logger);
     this.voiceEncryptionManager = new VoiceEncryptionManager(this.config.voice_routing?.encryption, this.logger);
     this.userStateHandler = new UserStateHandler(this);
@@ -129,6 +132,7 @@ export class HubHandlerFactory {
         logger.debug('BlobStore disabled');
       }
       
+      await HubHandlerFactory.instance.permissionWorkerManager.initialize();
       await HubHandlerFactory.instance.channelManager.init();
       await HubHandlerFactory.instance.aclManager.init();
       await HubHandlerFactory.instance.channelGroupManager.init();
@@ -263,6 +267,7 @@ export class HubHandlerFactory {
   getBlobStore(): BlobStore { return this.blobStore; }
   getAuthManager(): HubAuthManager { return this.authManager; }
   getPermissionChecker(): HubPermissionChecker { return this.permissionChecker; }
+  getPermissionWorkerManager(): PermissionWorkerManager { return this.permissionWorkerManager; }
   getNetworkTopologyManager(): NetworkTopologyManager { return this.networkTopologyManager; }
   getVoiceEncryptionManager(): VoiceEncryptionManager { return this.voiceEncryptionManager; }
   getDatabaseOperations(): IDatabaseOperations { return this.databaseOperations; }

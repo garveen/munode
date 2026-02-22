@@ -722,6 +722,10 @@ export class EventSetupManager {
             this.handlerFactory.hubMessageHandlers.handlePermissionDeniedFromHub(message.params);
             break;
 
+          case 'hub.channelEnterPermissions':
+            this.handlerFactory.hubMessageHandlers.handleChannelEnterPermissionsFromHub(message.params);
+            break;
+
           case 'hub.userStatsResponse':
             this.handlerFactory.hubMessageHandlers.handleUserStatsResponseFromHub(message.params);
             break;

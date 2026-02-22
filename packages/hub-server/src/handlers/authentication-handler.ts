@@ -4,6 +4,7 @@ import { HubHandlerFactory } from '../factory.js';
 import type { RPCParams, RPCResult } from '@munode/protocol';
 import type { GlobalSessionManager } from '../session-manager.js';
 import type { HubConfig } from '../types.js';
+import type { PermWorkerChannel, PermWorkerACLEntry, PermWorkerUserInfo } from '../permission-worker.js';
 
 
 /**
@@ -241,6 +242,16 @@ export class AuthenticationHandler implements IAuthenticationHandler {
       // 广播 userJoined（处理 Channel Ninja 可见性）
       await this.broadcastUserJoined(session, config, permissionChecker, sessionManager);
 
+      // 异步计算该用户对所有频道的进入权限，完成后通知对应 Edge
+      this.triggerChannelEnterPermissions(
+        params.server_id,
+        params.session_id,
+        session.user_id,
+        params.client_info.certificate_hash || '',
+        actualChannelId,
+        session.groups,
+      ).catch(err => this.logger.error('triggerChannelEnterPermissions failed:', err));
+
       // Return authentication result, including target channel and initial state flags
       return {
         success: authResult.success,
@@ -273,6 +284,72 @@ export class AuthenticationHandler implements IAuthenticationHandler {
   }
 
 
+
+  /**
+   * 在独立 Worker 线程中批量计算用户对全部频道的进入权限，
+   * 计算完成后通过 Hub→Edge 通知推送给对应 Edge，
+   * Edge 再以独立 ChannelState 消息更新客户端。
+   */
+  private async triggerChannelEnterPermissions(
+    edgeId: number,
+    sessionId: number,
+    userId: number,
+    certHash: string,
+    channelId: number,
+    groups: string[],
+  ): Promise<void> {
+    const channelManager = this.factory.getChannelManager();
+    const aclManager = this.factory.getAclManager();
+    const workerManager = this.factory.getPermissionWorkerManager();
+    const controlService = this.factory.getControlService();
+
+    // 从缓存取全部频道
+    const allChannels = channelManager.getAllChannels();
+
+    // 将 HubChannelData 转换为 PermWorkerChannel
+    const workerChannels: PermWorkerChannel[] = allChannels.map(ch => ({
+      id: ch.channel_id,
+      parent_id: ch.parent_id ?? 0,
+      inherit_acl: ch.inherit_acl ?? true,
+    }));
+
+    // 通过 ACLManager 读取全量 ACL（带缓存，acl 更新时自动失效）
+    const allACLs = await aclManager.getAllChannelACLs();
+    const aclMap = new Map<number, PermWorkerACLEntry[]>();
+    for (const acl of allACLs) {
+      const list = aclMap.get(acl.channel_id) ?? [];
+      list.push({
+        channel_id: acl.channel_id,
+        user_id: acl.user_id,
+        group: acl.group,
+        apply_here: acl.apply_here,
+        apply_subs: acl.apply_subs,
+        allow: acl.allow,
+        deny: acl.deny,
+      });
+      aclMap.set(acl.channel_id, list);
+    }
+
+    const userInfo: PermWorkerUserInfo = {
+      session_id: sessionId,
+      user_id: userId,
+      cert_hash: certHash,
+      channel_id: channelId,
+      groups,
+    };
+
+    const results = await workerManager.calculateBulkEnterPermissions(workerChannels, aclMap, userInfo);
+
+    // 通知对应 Edge，Edge 侧再将其转化为 ChannelState 消息推送给客户端
+    controlService.notify(edgeId, 'hub.channelEnterPermissions', {
+      session_id: sessionId,
+      permissions: results,
+    });
+
+    this.logger.debug(
+      `Sent channelEnterPermissions for session ${sessionId} to edge ${edgeId}: ${results.length} channels`,
+    );
+  }
 
   /**
    * 广播用户加入通知（处理 Channel Ninja 可见性）

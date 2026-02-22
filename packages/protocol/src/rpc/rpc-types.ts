@@ -1096,6 +1096,22 @@ export interface HubRelayVoicePacketNotification {
   };
 }
 
+/**
+ * Hub 通知 Edge 用户的频道进入权限（认证完成后异步推送）
+ * 每条记录对应一个频道
+ */
+export interface HubChannelEnterPermissionsNotification {
+  method: 'hub.channelEnterPermissions';
+  params: {
+    session_id: number;
+    permissions: Array<{
+      channel_id: number;
+      can_enter: boolean;
+      is_enter_restricted: boolean;
+    }>;
+  };
+}
+
 // ============================================================================
 // Type Union & Mapping
 // ============================================================================
@@ -1175,7 +1191,8 @@ export type HubToEdgeNotifications =
   | HubSyncVoiceTargetNotification
   | HubRouteTableUpdateNotification
   | HubVoiceRoutingConfigNotification
-  | HubRelayVoicePacketNotification;
+  | HubRelayVoicePacketNotification
+  | HubChannelEnterPermissionsNotification;
 
 /**
  * 方法名到类型的映射
