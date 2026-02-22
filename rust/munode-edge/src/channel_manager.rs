@@ -226,3 +226,141 @@ impl ChannelManager {
         self.remote_users.read().await.values().cloned().collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use munode_protocol::hubedge::{ChannelDataProto, ChannelLinkProto, GlobalSessionProto};
+
+    fn make_channel_proto(id: u32, parent_id: Option<u32>, name: &str, pos: i32) -> ChannelDataProto {
+        ChannelDataProto {
+            channel_id: id,
+            name: name.to_string(),
+            parent_id,
+            description: None,
+            position: Some(pos),
+            max_users: Some(100),
+            temporary: Some(false),
+            inherit_acl: Some(true),
+            links: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_load_channels() {
+        let mgr = ChannelManager::new();
+        let channels = vec![
+            make_channel_proto(0, None, "Root", 0),
+            make_channel_proto(1, Some(0), "General", 0),
+            make_channel_proto(2, Some(0), "AFK", 1),
+            make_channel_proto(3, Some(1), "Sub-channel", 0),
+        ];
+        mgr.load_channels(&channels, &[]).await;
+
+        assert_eq!(mgr.get_all_channels().await.len(), 4);
+        assert!(mgr.get_channel(0).await.is_some());
+        assert!(mgr.get_channel(3).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_bfs_order() {
+        let mgr = ChannelManager::new();
+        let channels = vec![
+            make_channel_proto(0, None, "Root", 0),
+            make_channel_proto(1, Some(0), "A", 0),
+            make_channel_proto(2, Some(0), "B", 1),
+            make_channel_proto(3, Some(1), "A-sub", 0),
+        ];
+        mgr.load_channels(&channels, &[]).await;
+
+        let bfs = mgr.get_channels_bfs().await;
+        assert_eq!(bfs.len(), 4);
+        assert_eq!(bfs[0].id, 0); // Root first
+        assert_eq!(bfs[1].id, 1); // A (position 0)
+        assert_eq!(bfs[2].id, 2); // B (position 1)
+        assert_eq!(bfs[3].id, 3); // A-sub (child of A)
+    }
+
+    #[tokio::test]
+    async fn test_channel_links() {
+        let mgr = ChannelManager::new();
+        let channels = vec![
+            make_channel_proto(0, None, "Root", 0),
+            make_channel_proto(1, Some(0), "A", 0),
+            make_channel_proto(2, Some(0), "B", 1),
+        ];
+        let links = vec![
+            ChannelLinkProto { channel_id: 1, target_id: 2 },
+        ];
+        mgr.load_channels(&channels, &links).await;
+
+        let ch1 = mgr.get_channel(1).await.unwrap();
+        assert!(ch1.links.contains(&2));
+    }
+
+    #[tokio::test]
+    async fn test_remote_users() {
+        let mgr = ChannelManager::new();
+        let sessions = vec![
+            GlobalSessionProto {
+                session_id: 100,
+                edge_id: 1,
+                user_id: 10,
+                username: "alice".to_string(),
+                channel_id: 0,
+                cert_hash: None,
+                groups: vec![],
+                mute: None,
+                deaf: None,
+                suppress: None,
+                self_mute: None,
+                self_deaf: None,
+                priority_speaker: None,
+                recording: None,
+                ip_address: None,
+                connected_at: None,
+            },
+        ];
+        mgr.load_remote_users(&sessions).await;
+
+        let user = mgr.get_remote_user(100).await.unwrap();
+        assert_eq!(user.username, "alice");
+
+        mgr.remove_remote_user(100).await;
+        assert!(mgr.get_remote_user(100).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_upsert_and_remove_channel() {
+        let mgr = ChannelManager::new();
+        mgr.upsert_channel(ChannelData {
+            id: 0,
+            name: "Root".to_string(),
+            parent_id: None,
+            description: None,
+            position: 0,
+            max_users: 0,
+            temporary: false,
+            inherit_acl: true,
+            links: vec![],
+        }).await;
+
+        mgr.upsert_channel(ChannelData {
+            id: 1,
+            name: "Test".to_string(),
+            parent_id: Some(0),
+            description: None,
+            position: 0,
+            max_users: 0,
+            temporary: true,
+            inherit_acl: true,
+            links: vec![],
+        }).await;
+
+        assert_eq!(mgr.get_children(0).await.len(), 1);
+
+        mgr.remove_channel(1).await;
+        assert!(mgr.get_channel(1).await.is_none());
+        assert_eq!(mgr.get_children(0).await.len(), 0);
+    }
+}

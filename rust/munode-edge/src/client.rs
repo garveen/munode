@@ -219,3 +219,124 @@ impl ClientManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use munode_protocol::mumbleproto;
+
+    fn make_test_client(session: u32, channel: u32) -> ClientInfo {
+        ClientInfo {
+            session,
+            user_id: session * 10,
+            username: format!("user{}", session),
+            channel_id: channel,
+            state: ClientState::Ready,
+            mute: false,
+            deaf: false,
+            suppress: false,
+            self_mute: false,
+            self_deaf: false,
+            priority_speaker: false,
+            recording: false,
+            ip_address: "127.0.0.1".to_string(),
+            connected_at: Instant::now(),
+            last_active: Instant::now(),
+            cert_hash: None,
+            groups: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_remove_client() {
+        let mgr = ClientManager::new();
+        let (tx, _rx) = mpsc::channel(16);
+        let sender = ClientSender::new(tx);
+
+        let client = make_test_client(1, 0);
+        mgr.add_client(client, sender).await;
+        assert_eq!(mgr.client_count().await, 1);
+        assert!(mgr.get_client(1).await.is_some());
+
+        let removed = mgr.remove_client(1).await;
+        assert!(removed.is_some());
+        assert_eq!(mgr.client_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_channel_sessions() {
+        let mgr = ClientManager::new();
+        let (tx1, _rx1) = mpsc::channel(16);
+        let (tx2, _rx2) = mpsc::channel(16);
+
+        mgr.add_client(make_test_client(1, 0), ClientSender::new(tx1)).await;
+        mgr.add_client(make_test_client(2, 0), ClientSender::new(tx2)).await;
+
+        let sessions = mgr.get_channel_sessions(0).await;
+        assert_eq!(sessions.len(), 2);
+        assert!(sessions.contains(&1));
+        assert!(sessions.contains(&2));
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_sends_to_ready_clients() {
+        let mgr = ClientManager::new();
+        let (tx1, mut rx1) = mpsc::channel(16);
+        let (tx2, mut rx2) = mpsc::channel(16);
+
+        let mut c1 = make_test_client(1, 0);
+        c1.state = ClientState::Ready;
+        let mut c2 = make_test_client(2, 0);
+        c2.state = ClientState::Ready;
+
+        mgr.add_client(c1, ClientSender::new(tx1)).await;
+        mgr.add_client(c2, ClientSender::new(tx2)).await;
+
+        let ping = mumbleproto::Ping {
+            timestamp: Some(12345),
+            ..Default::default()
+        };
+        mgr.broadcast(MessageType::Ping, &ping, Some(1)).await;
+
+        // rx1 should not receive (excluded)
+        assert!(rx1.try_recv().is_err());
+        // rx2 should receive
+        let data = rx2.try_recv().unwrap();
+        assert!(!data.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_send_to_specific_client() {
+        let mgr = ClientManager::new();
+        let (tx, mut rx) = mpsc::channel(16);
+
+        let client = make_test_client(1, 0);
+        mgr.add_client(client, ClientSender::new(tx)).await;
+
+        let ping = mumbleproto::Ping {
+            timestamp: Some(42),
+            ..Default::default()
+        };
+        let sent = mgr.send_to(1, MessageType::Ping, &ping).await;
+        assert!(sent);
+
+        let data = rx.try_recv().unwrap();
+        assert!(!data.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_update_client() {
+        let mgr = ClientManager::new();
+        let (tx, _rx) = mpsc::channel(16);
+        let sender = ClientSender::new(tx);
+
+        let mut client = make_test_client(1, 0);
+        mgr.add_client(client.clone(), sender).await;
+
+        client.self_mute = true;
+        mgr.update_client(client).await;
+
+        let updated = mgr.get_client(1).await.unwrap();
+        assert!(updated.self_mute);
+    }
+}

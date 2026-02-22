@@ -342,3 +342,116 @@ pub fn build_channel_state_msg(channel: &ChannelData) -> mumbleproto::ChannelSta
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost::Message;
+    use munode_protocol::transport::decode_frame;
+    use crate::client::ClientState;
+    use bytes::BytesMut;
+
+    #[test]
+    fn test_encode_version_response() {
+        let version = mumbleproto::Version {
+            version: Some(0x0001_0300),
+            release: Some("test-client".into()),
+            os: Some("linux".into()),
+            os_version: Some("6.0".into()),
+        };
+        let payload = version.encode_to_vec();
+        let response = encode_version_response(&payload, "127.0.0.1:12345").unwrap();
+
+        let mut buf = BytesMut::from(&response[..]);
+        let frame = decode_frame(&mut buf).unwrap().unwrap();
+        assert_eq!(frame.message_type, MessageType::Version);
+
+        let server_version = mumbleproto::Version::decode(&frame.payload[..]).unwrap();
+        assert!(server_version.release().contains("MuNode-Rust"));
+    }
+
+    #[test]
+    fn test_encode_ping_response() {
+        let ping = mumbleproto::Ping {
+            timestamp: Some(12345),
+            ..Default::default()
+        };
+        let payload = ping.encode_to_vec();
+        let response = encode_ping_response(&payload).unwrap();
+
+        let mut buf = BytesMut::from(&response[..]);
+        let frame = decode_frame(&mut buf).unwrap().unwrap();
+        assert_eq!(frame.message_type, MessageType::Ping);
+
+        let decoded = mumbleproto::Ping::decode(&frame.payload[..]).unwrap();
+        assert_eq!(decoded.timestamp(), 12345);
+    }
+
+    #[test]
+    fn test_encode_reject() {
+        let data = encode_reject(
+            Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
+            "Test rejection",
+        );
+
+        let mut buf = BytesMut::from(&data[..]);
+        let frame = decode_frame(&mut buf).unwrap().unwrap();
+        assert_eq!(frame.message_type, MessageType::Reject);
+
+        let reject = mumbleproto::Reject::decode(&frame.payload[..]).unwrap();
+        assert_eq!(reject.reason(), "Test rejection");
+    }
+
+    #[test]
+    fn test_build_user_state_msg() {
+        let client = ClientInfo {
+            session: 42,
+            user_id: 100,
+            username: "testuser".to_string(),
+            channel_id: 1,
+            state: ClientState::Ready,
+            mute: false,
+            deaf: false,
+            suppress: false,
+            self_mute: true,
+            self_deaf: false,
+            priority_speaker: false,
+            recording: false,
+            ip_address: "127.0.0.1".to_string(),
+            connected_at: std::time::Instant::now(),
+            last_active: std::time::Instant::now(),
+            cert_hash: Some("abc123".to_string()),
+            groups: vec![],
+        };
+
+        let msg = build_user_state_msg(&client);
+        assert_eq!(msg.session(), 42);
+        assert_eq!(msg.user_id(), 100);
+        assert_eq!(msg.name(), "testuser");
+        assert_eq!(msg.channel_id(), 1);
+        assert_eq!(msg.self_mute(), true);
+        assert_eq!(msg.hash(), "abc123");
+    }
+
+    #[test]
+    fn test_build_channel_state_msg() {
+        let ch = ChannelData {
+            id: 5,
+            name: "Test Channel".to_string(),
+            parent_id: Some(0),
+            description: Some("A test channel".to_string()),
+            position: 3,
+            max_users: 50,
+            temporary: true,
+            inherit_acl: true,
+            links: vec![],
+        };
+
+        let msg = build_channel_state_msg(&ch);
+        assert_eq!(msg.channel_id(), 5);
+        assert_eq!(msg.name(), "Test Channel");
+        assert_eq!(msg.parent(), 0);
+        assert_eq!(msg.position(), 3);
+        assert_eq!(msg.temporary(), true);
+    }
+}
