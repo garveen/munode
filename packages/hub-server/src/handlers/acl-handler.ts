@@ -245,6 +245,10 @@ export class ACLHandler implements IACLHandler {
           this.logger.info(`ACL updated for channel ${channel_id}: ${aclData.length} entries`);
         }
 
+        // 保存后立即清除该频道的 ACL 条目缓存和所有用户的权限结果缓存，
+        // 确保后续权限计算（包括下方的 hasWrite 自检）使用最新规则
+        this.hubPermissionChecker.clearCacheForChannel(channel_id);
+
         // 如果用户不是SuperUser且修改后没有Write权限，自动添加Write+Traverse ACL（与Murmur一致）
         if (this.factory.getPermissionChecker() && this.factory.getSessionManager() && this.factory.getAclManager()) {
           const actorGlobalSession = this.factory.getSessionManager().getSession(actor_session);
@@ -253,10 +257,7 @@ export class ACLHandler implements IACLHandler {
             
             // 检查是否是SuperUser
             if (!this.hubPermissionChecker.isSuperUser(actorUserInfo)) {
-              // 清除缓存以获取最新权限
-              this.hubPermissionChecker.clearCacheForUser(actorUserInfo.session_id);
-              
-              // 检查用户是否有Write权限
+              // 检查用户是否有Write权限（缓存已在上方清除，此处直接计算）
               const hasWrite = await this.hubPermissionChecker.hasPermission(
                 channel_id,
                 actorUserInfo,
@@ -291,8 +292,8 @@ export class ACLHandler implements IACLHandler {
                   await this.factory.getAclManager().saveACLs(channel_id, [...aclData, autoGrantACL]);
                   this.logger.info(`Auto-granted Write+Traverse permission to user ${actorUserInfo.user_id || actorUserInfo.cert_hash} on channel ${channel_id}`);
                   
-                  // 再次清除缓存
-                  this.hubPermissionChecker.clearCacheForUser(actorUserInfo.session_id);
+                  // 再次清除该频道所有缓存（ACL条目 + 所有用户权限结果）
+                  this.hubPermissionChecker.clearCacheForChannel(channel_id);
                 }
               }
             }

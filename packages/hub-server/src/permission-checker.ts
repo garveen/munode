@@ -189,6 +189,8 @@ export class HubPermissionChecker {
         // 检查是否匹配用户或组
         const matchUser = acl.user_id !== undefined && acl.user_id > 0 && acl.user_id === user.user_id;
         const matchGroup = acl.group && (await this.groupMemberCheck(origChannel, ctx, acl.group, user));
+        this.logger.debug(`[Permission] matchUser: ${matchUser} ${acl.user_id} - ${user.user_id} matchGroup: ${matchGroup} ${acl.group} - ${JSON.stringify(user.groups)}`);
+        this.logger.debug(`[Permission] ${acl.allow}, ${acl.deny}, applyFromSelf: ${applyFromSelf}, applyInherited: ${applyInherited}, apply: ${apply}, applyTraverse: ${applyTraverse}`);
 
         if (matchUser || matchGroup) {
           // --- Traverse：使用 applyTraverse 条件（比 apply 更宽松）---
@@ -318,7 +320,14 @@ export class HubPermissionChecker {
   }
 
   /**
-   * 构建频道链（从当前频道到根频道）
+   * 构建频道链（从根频道到目标频道，与 C++ murmur 一致）
+   *
+   * C++ 中使用栈：从目标向上压栈直到 cParent==nullptr（根频道），
+   * 然后弹栈处理，等价于 [root, ..., target]。
+   *
+   * 关键：根频道 id=0 / parent_id=-1，其直接子频道 parent_id=0。
+   * 终止条件应为"当前节点已是根（id===0）"或"没有有效父节点（parent_id<0）"，
+   * 而 **不能** 在 parent_id===0 时提前 break，否则根频道本身永远不会进链。
    */
   private async buildChannelChain(channel: PermissionChannelInfo): Promise<PermissionChannelInfo[]> {
     const chain: PermissionChannelInfo[] = [];
@@ -326,7 +335,8 @@ export class HubPermissionChecker {
 
     while (current) {
       chain.unshift(current);
-      if (current.parent_id === undefined || current.parent_id === -1 || current.parent_id === 0) {
+      // 已到达根频道，停止向上
+      if (current.id === 0 || current.parent_id === undefined || current.parent_id < 0) {
         break;
       }
       current = await this.getChannelInfo(current.parent_id);
