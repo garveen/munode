@@ -723,6 +723,24 @@ export class HubMessageHandlers {
   }
 
   /**
+   * 处理来自 Hub 的权限拒绝通知，转发给对应客户端
+   */
+  handlePermissionDeniedFromHub(params: HubNotificationParams<'hub.permissionDenied'>): void {
+    try {
+      const { actor_session, permission, channel_id, reason } = params;
+      this.logger.warn(`Hub denied permission for session ${actor_session}: permission=0x${permission.toString(16)}, channel=${channel_id}, reason=${reason}`);
+      this.factory.messageHandlers.sendPermissionDenied(
+        actor_session,
+        'permission',
+        reason,
+        channel_id,
+      );
+    } catch (error) {
+      this.logger.error('Error handling permissionDenied from Hub:', error);
+    }
+  }
+
+  /**
    * 处理来自Hub的UserStats响应
    */
   handleUserStatsResponseFromHub(params: HubNotificationParams<'hub.userStatsResponse'>): void {

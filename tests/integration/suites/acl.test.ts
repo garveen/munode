@@ -9,9 +9,27 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { TestEnvironment, setupTestEnvironment } from '../setup';
+import { TestEnvironment, setupTestEnvironment, sleep } from '../setup';
 import { MumbleConnection } from '../helpers';
 import { PermissionFlag } from '../fixtures';
+import { MumbleClient } from '../../../packages/client/src/index.js';
+import * as crypto from 'crypto';
+
+interface VoiceData {
+  session: number;
+  codec: number;
+  target: number;
+  sequence: number;
+  data: Buffer;
+}
+
+function createVoicePacket(codec: number = 4, target: number = 0, sequence: number = 0): Buffer {
+  const header = Buffer.alloc(1);
+  header.writeUInt8((codec << 5) | (target & 0x1F), 0);
+  const sequenceVarint = Buffer.from([sequence & 0x7F]);
+  const voiceData = crypto.randomBytes(20);
+  return Buffer.concat([header, sequenceVarint, voiceData]);
+}
 
 describe('ACL and Permissions Integration Tests', () => {
   let testEnv: TestEnvironment;
@@ -209,5 +227,331 @@ describe('ACL and Permissions Integration Tests', () => {
       expect(effectivePerms & PermissionFlag.Traverse).toBeTruthy();
       expect(effectivePerms & PermissionFlag.Enter).toBeTruthy();
     });
+  });
+
+  describe('User Actual Operations Tests', () => {
+    it('should allow second user to enter, speak and listen in permitted channel', async () => {
+      const adminClient = new MumbleClient();
+      const userClient = new MumbleClient();   // acl_op_user - 第二个用户
+      const observerClient = new MumbleClient(); // acl_op_observer - 用于接收语音
+
+      try {
+        await adminClient.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'admin',
+          password: 'admin123',
+          rejectUnauthorized: false,
+          forceTcpVoice: true,
+        });
+
+        await userClient.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'acl_op_user',
+          password: 'acl_op_pass',
+          rejectUnauthorized: false,
+          forceTcpVoice: true,
+        });
+
+        await observerClient.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'acl_op_observer',
+          password: 'acl_op_obs_pass',
+          rejectUnauthorized: false,
+          forceTcpVoice: true,
+        });
+
+        await sleep(500);
+
+        // 创建允许频道，对所有人开放 Enter + Traverse + Speak + Listen + Whisper
+        const allowedName = 'ACLAllowed_' + Date.now();
+        const allowedId = await adminClient.createChannel(allowedName, 0);
+        await sleep(300);
+
+        await adminClient.addACLEntry(allowedId, {
+          apply_here: true,
+          apply_subs: false,
+          group: 'acl_testers',
+          allow: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak
+            | PermissionFlag.Listen | PermissionFlag.Whisper | PermissionFlag.TextMessage,
+          deny: 0,
+        });
+        await sleep(500);
+
+        // 同时移动 observer 到 allowed 频道（提前，避免监听到历史事件）
+        await observerClient.moveToChannel(allowedId);
+        await sleep(300);
+
+        // ---- 测试 1: 第二个用户可以进入被允许的频道 ----
+        let enterPermDenied = false;
+        const onEnterPermDenied = () => { enterPermDenied = true; };
+        userClient.on('permissionDenied', onEnterPermDenied);
+
+        await userClient.moveToChannel(allowedId);
+        await sleep(600);
+
+        userClient.off('permissionDenied', onEnterPermDenied);
+
+        const userStateAfterEnter = userClient.getStateManager().getSession();
+        expect(enterPermDenied).toBe(false);
+        expect(userStateAfterEnter?.channel_id).toBe(allowedId);
+        expect(userStateAfterEnter?.suppress).toBe(false); // 有 Speak 权限，不应被 suppress
+
+        // ---- 测试 2: 第二个用户可以在被允许的频道中说话（observer 能收到语音）----
+        const userSession = userClient.getStateManager().getSession()?.session ?? 0;
+        let voiceReceived = false;
+        const onVoice = (data: VoiceData) => {
+          if (data.session === userSession) voiceReceived = true;
+        };
+        observerClient.on('voice', onVoice);
+
+        const voicePacket = createVoicePacket(4, 0, 0);
+        await userClient.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(1500);
+
+        observerClient.off('voice', onVoice);
+        expect(voiceReceived).toBe(true);
+
+        // ---- 测试 3: 第二个用户可以监听被允许的频道 ----
+        // 让第二个用户先移回根频道，然后监听 allowed 频道
+        await userClient.moveToChannel(0);
+        await sleep(300);
+
+        let listenPermDenied = false;
+        const onListenPermDenied = () => { listenPermDenied = true; };
+        userClient.on('permissionDenied', onListenPermDenied);
+
+        await userClient.addListeningChannel(allowedId);
+        await sleep(600);
+
+        userClient.off('permissionDenied', onListenPermDenied);
+
+        expect(listenPermDenied).toBe(false);
+        const sessionAfterListen = userClient.getStateManager().getSession();
+        expect(sessionAfterListen?.listeningChannels).toContain(allowedId);
+
+        // 清理
+        await userClient.removeListeningChannel(allowedId);
+        await adminClient.deleteChannel(allowedId);
+        await sleep(200);
+      } finally {
+        await adminClient.disconnect();
+        await userClient.disconnect();
+        await observerClient.disconnect();
+      }
+    }, 30000);
+
+    it('should deny second user from entering restricted channel', async () => {
+      const adminClient = new MumbleClient();
+      const userClient = new MumbleClient();
+
+      try {
+        await adminClient.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'admin',
+          password: 'admin123',
+          rejectUnauthorized: false,
+        });
+
+        await userClient.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'acl_op_user',
+          password: 'acl_op_pass',
+          rejectUnauthorized: false,
+        });
+
+        await sleep(500);
+
+        // 创建禁止频道：拒绝所有用户进入
+        const deniedName = 'ACLDenied_' + Date.now();
+        const deniedId = await adminClient.createChannel(deniedName, 0);
+        await sleep(300);
+
+        await adminClient.addACLEntry(deniedId, {
+          apply_here: true,
+          apply_subs: false,
+          group: 'acl_testers',
+          allow: 0,
+          deny: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak
+            | PermissionFlag.Listen | PermissionFlag.Whisper | PermissionFlag.TextMessage,
+        });
+        await sleep(500);
+
+        const channelBeforeAttempt = userClient.getStateManager().getSession()?.channel_id ?? 0;
+
+        // 监听 permissionDenied 事件
+        let enterDeniedReceived = false;
+        const onPermDenied = () => { enterDeniedReceived = true; };
+        userClient.on('permissionDenied', onPermDenied);
+
+        await userClient.moveToChannel(deniedId);
+        await sleep(800);
+
+        userClient.off('permissionDenied', onPermDenied);
+
+        // 第二个用户应该收到 permissionDenied，且仍在原频道
+        expect(enterDeniedReceived).toBe(true);
+        const channelAfterAttempt = userClient.getStateManager().getSession()?.channel_id ?? 0;
+        expect(channelAfterAttempt).toBe(channelBeforeAttempt);
+
+        // 清理
+        await adminClient.deleteChannel(deniedId);
+        await sleep(200);
+      } finally {
+        await adminClient.disconnect();
+        await userClient.disconnect();
+      }
+    }, 30000);
+
+    it('should suppress second user when speaking in channel without Speak permission', async () => {
+      const adminClient = new MumbleClient();
+      const userClient = new MumbleClient();
+      const observerClient = new MumbleClient();
+
+      try {
+        await adminClient.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'admin',
+          password: 'admin123',
+          rejectUnauthorized: false,
+          forceTcpVoice: true,
+        });
+
+        await userClient.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'acl_op_user',
+          password: 'acl_op_pass',
+          rejectUnauthorized: false,
+          forceTcpVoice: true,
+        });
+
+        await observerClient.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'acl_op_observer',
+          password: 'acl_op_obs_pass',
+          rejectUnauthorized: false,
+          forceTcpVoice: true,
+        });
+
+        await sleep(500);
+
+        // 创建允许进入但禁止说话的频道
+        const noSpeakName = 'ACLNoSpeak_' + Date.now();
+        const noSpeakId = await adminClient.createChannel(noSpeakName, 0);
+        await sleep(300);
+
+        await adminClient.addACLEntry(noSpeakId, {
+          apply_here: true,
+          apply_subs: false,
+          group: 'acl_testers',
+          allow: PermissionFlag.Enter | PermissionFlag.Traverse,
+          deny: PermissionFlag.Speak | PermissionFlag.Whisper,
+        });
+        await sleep(500);
+
+        // observer 进入该频道
+        await observerClient.moveToChannel(noSpeakId);
+        await sleep(300);
+
+        // 第二个用户进入无说话权限的频道，应被 suppress
+        await userClient.moveToChannel(noSpeakId);
+        await sleep(800);
+
+        const userStateAfterMove = userClient.getStateManager().getSession();
+        expect(userStateAfterMove?.channel_id).toBe(noSpeakId);
+        expect(userStateAfterMove?.suppress).toBe(true); // 没有 Speak 权限，应被自动 suppress
+
+        // 被 suppress 的用户发送语音，observer 不应收到
+        const userSession = userClient.getStateManager().getSession()?.session ?? 0;
+        let voiceReceivedWhileSuppressed = false;
+        const onVoice = (data: VoiceData) => {
+          if (data.session === userSession) voiceReceivedWhileSuppressed = true;
+        };
+        observerClient.on('voice', onVoice);
+
+        const voicePacket = createVoicePacket(4, 0, 0);
+        await userClient.getConnectionManager().sendVoicePacket(voicePacket);
+        await sleep(1500);
+
+        observerClient.off('voice', onVoice);
+        expect(voiceReceivedWhileSuppressed).toBe(false);
+
+        // 清理
+        await adminClient.deleteChannel(noSpeakId);
+        await sleep(200);
+      } finally {
+        await adminClient.disconnect();
+        await userClient.disconnect();
+        await observerClient.disconnect();
+      }
+    }, 30000);
+
+    it('should deny second user from listening to restricted channel', async () => {
+      const adminClient = new MumbleClient();
+      const userClient = new MumbleClient();
+
+      try {
+        await adminClient.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'admin',
+          password: 'admin123',
+          rejectUnauthorized: false,
+        });
+
+        await userClient.connect({
+          host: 'localhost',
+          port: testEnv.edgePort,
+          username: 'acl_op_user',
+          password: 'acl_op_pass',
+          rejectUnauthorized: false,
+        });
+
+        await sleep(500);
+
+        // 创建禁止监听的频道（禁止 Listen 权限）
+        const noListenName = 'ACLNoListen_' + Date.now();
+        const noListenId = await adminClient.createChannel(noListenName, 0);
+        await sleep(300);
+
+        await adminClient.addACLEntry(noListenId, {
+          apply_here: true,
+          apply_subs: false,
+          group: 'acl_testers',
+          allow: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak,
+          deny: PermissionFlag.Listen,
+        });
+        await sleep(500);
+
+        // 第二个用户尝试监听被限制的频道
+        let listenDeniedReceived = false;
+        const onPermDenied = () => { listenDeniedReceived = true; };
+        userClient.on('permissionDenied', onPermDenied);
+
+        await userClient.addListeningChannel(noListenId);
+        await sleep(800);
+
+        userClient.off('permissionDenied', onPermDenied);
+
+        // 应收到 permissionDenied，且监听列表中不包含该频道
+        expect(listenDeniedReceived).toBe(true);
+        const sessionAfterAttempt = userClient.getStateManager().getSession();
+        expect(sessionAfterAttempt?.listeningChannels).not.toContain(noListenId);
+
+        // 清理
+        await adminClient.deleteChannel(noListenId);
+        await sleep(200);
+      } finally {
+        await adminClient.disconnect();
+        await userClient.disconnect();
+      }
+    }, 30000);
   });
 });

@@ -472,9 +472,9 @@ export class UserStateHandler implements IUserStateHandler {
             this.logger.warn(`User ${actor_username} denied Listen permission for channel ${channelId}`);
             // 发送权限被拒绝的消息给客户端
             controlService.notify(edge_id, 'hub.permissionDenied', {
-              session_id: actor_session,
+              actor_session,
+              permission: 0x800, // Permission.Listen
               channel_id: channelId,
-              permission_type: 'Listen',
               reason: 'No Listen permission for this channel',
             });
           }

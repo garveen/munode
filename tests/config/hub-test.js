@@ -1,4 +1,5 @@
 // @ts-check
+import { testUserPasswords } from '../integration/test-users.ts';
 
 /**
  * Hub Server Test Configuration
@@ -62,46 +63,44 @@ export default {
   auth: {
     // 使用 callback 进行认证，避免依赖外部 auth 服务器
     callback: async (request) => {
-      const { username, password } = request;
-      
-      // admin 用户具有管理员权限
-      if (username === 'admin') {
+      const { username } = request;
+
+      // 1. 优先使用 test-users.ts 中的预定义用户（user_id 和 groups 均以此为准）
+      if (testUserPasswords[username]) {
+        const u = testUserPasswords[username];
         return {
           success: true,
-          user_id: 1,
-          username: 'admin',
-          displayName: 'admin',
-          name: 'admin',
-          groups: ['admin', 'user'],
+          user_id: u.user_id,
+          username,
+          displayName: username,
+          groups: u.groups || ['user'],
         };
       }
-      
-      // ninja用户特殊处理
+
+      // 2. invalid_ 开头的用户拒绝登录
+      if (username.startsWith('invalid_')) {
+        return {
+          success: false,
+          reason: 'Invalid username or password',
+          rejectType: 2, // WrongUserPW
+        };
+      }
+
+      // 3. 其他未预定义的用户：哈希 user_id（偏移 +1000 避免与预定义用户冲突）
+      const user_id = username.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % 10000 + 1000;
+
       if (username.startsWith('ninja_')) {
-        const user_id = username.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % 10000 + 100;
-        return {
-          success: true,
-          user_id,
-          username,
-          displayName: username,
-          groups: ['ninja', 'user'],
-        };
+        return { success: true, user_id, username, displayName: username, groups: ['ninja', 'user'] };
       }
-      
-      // 其他用户作为普通用户
+
+      if (username.startsWith('acl_op_')) {
+        return { success: true, user_id, username, displayName: username, groups: ['acl_testers', 'user'] };
+      }
+
       if (username && username.length > 0) {
-        // 使用用户名的哈希作为 user_id
-        const user_id = username.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % 10000 + 100;
-        return {
-          success: true,
-          user_id,
-          username,
-          displayName: username,
-          groups: ['user'],
-        };
+        return { success: true, user_id, username, displayName: username, groups: ['user'] };
       }
-      
-      // 认证失败
+
       return {
         success: false,
         reason: 'Invalid username or password',

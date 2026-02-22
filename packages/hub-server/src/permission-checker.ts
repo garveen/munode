@@ -227,6 +227,7 @@ export class HubPermissionChecker {
     group: string,
     user: PermissionUserInfo
   ): Promise<boolean> {
+    this.logger.debug(`groupMemberCheck: group=${group}, user_id=${user.user_id}, user.groups=${JSON.stringify(user.groups)}, origChannel=${origChannel.id}, ctx=${ctx.id}`);
     // 特殊组处理
     if (group === 'all') {
       return true;

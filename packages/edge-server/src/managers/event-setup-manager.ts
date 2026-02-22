@@ -718,6 +718,10 @@ export class EventSetupManager {
             this.handlerFactory.hubMessageHandlers.handleACLUpdatedNotification(message.params);
             break;
 
+          case 'hub.permissionDenied':
+            this.handlerFactory.hubMessageHandlers.handlePermissionDeniedFromHub(message.params);
+            break;
+
           case 'hub.userStatsResponse':
             this.handlerFactory.hubMessageHandlers.handleUserStatsResponseFromHub(message.params);
             break;

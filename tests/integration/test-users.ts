@@ -176,4 +176,7 @@ export const testUserPasswords: Record<string, { password: string; user_id: numb
       'target2': { password: 'target2_pass', user_id: 716 },
       'partial_sender': { password: 'partial_sender_pass', user_id: 717 },
       'accessible_target': { password: 'accessible_target_pass', user_id: 718 },
+      // ACL actual operation test users
+      'acl_op_user': { password: 'acl_op_pass', user_id: 750, groups: ['acl_testers'] },
+      'acl_op_observer': { password: 'acl_op_obs_pass', user_id: 751, groups: ['acl_testers'] },
     };
