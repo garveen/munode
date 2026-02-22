@@ -168,11 +168,21 @@ export class HubPermissionChecker {
       const acls = await this.getChannelACLs(ctx.id);
 
       for (const acl of acls) {
-        // 检查 ACL 是否应用于当前频道
-        if (
-          (origChannel.id === ctx.id && !acl.apply_here) ||
-          (origChannel.id !== ctx.id && !acl.apply_subs)
-        ) {
+        // 对照 C++ murmur effectivePermissions 逻辑：
+        //   applyFromSelf  = (ctx == origChannel) && apply_here
+        //   applyInherited = (ctx != origChannel) && apply_subs
+        //   apply          = applyFromSelf || applyInherited  （常规权限：write/granted）
+        //   applyTraverse  = applyInherited || apply_here     （Traverse 更宽松）
+        //
+        // 关键区别：即使父频道 ACL 设了 apply_here=true 但 apply_subs=false，
+        // 它对 Traverse 的影响依然有效——因为用户必须先穿越父频道才能到达子频道。
+        const applyFromSelf  = (ctx.id === origChannel.id) && acl.apply_here;
+        const applyInherited = (ctx.id !== origChannel.id) && acl.apply_subs;
+        const apply          = applyFromSelf || applyInherited;
+        const applyTraverse  = applyInherited || acl.apply_here;
+
+        // 两个条件都为 false 时，此 ACL 对本次计算无任何影响，跳过（含昂贵的 groupMemberCheck）
+        if (!apply && !applyTraverse) {
           continue;
         }
 
@@ -181,25 +191,36 @@ export class HubPermissionChecker {
         const matchGroup = acl.group && (await this.groupMemberCheck(origChannel, ctx, acl.group, user));
 
         if (matchUser || matchGroup) {
-          // 处理 traverse 权限
-          if (this.isPermissionSet(acl.allow, Permission.Traverse)) {
-            traverse = true;
-          }
-          if (this.isPermissionSet(acl.deny, Permission.Traverse)) {
-            traverse = false;
-          }
-
-          // 处理 write 权限
-          if (this.isPermissionSet(acl.allow, Permission.Write)) {
-            write = true;
-          }
-          if (this.isPermissionSet(acl.deny, Permission.Write)) {
-            write = false;
+          // --- Traverse：使用 applyTraverse 条件（比 apply 更宽松）---
+          if (applyTraverse) {
+            if (this.isPermissionSet(acl.allow, Permission.Traverse)) {
+              traverse = true;
+            }
+            if (this.isPermissionSet(acl.deny, Permission.Traverse)) {
+              traverse = false;
+            }
           }
 
-          // 应用允许和拒绝的权限
-          granted |= acl.allow;
-          granted &= ~acl.deny;
+          // --- 其余权限：只在 apply=true 时处理 ---
+          if (apply) {
+            // Write 标志（用于防止提前终止循环）
+            if (this.isPermissionSet(acl.allow, Permission.Write)) {
+              write = true;
+            }
+            if (this.isPermissionSet(acl.deny, Permission.Write)) {
+              write = false;
+            }
+
+            // 根频道专属权限（Kick/Ban/Register/SelfRegister 只能在根频道的 applyHere ACL 中授予）
+            const rootOnlyPerms = Permission.Kick | Permission.Ban | Permission.Register | Permission.SelfRegister;
+            if (ctx.id === 0 && applyFromSelf) {
+              granted |= (acl.allow & rootOnlyPerms);
+            }
+
+            // 常规权限（排除根频道专属权限）
+            granted |= (acl.allow & ~rootOnlyPerms);
+            granted &= ~acl.deny;
+          }
         }
       }
 
