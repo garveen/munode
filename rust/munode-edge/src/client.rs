@@ -93,6 +93,16 @@ impl ClientManager {
             .unwrap_or_default()
     }
 
+    /// Get all connected clients.
+    pub async fn get_all_clients(&self) -> Vec<ClientInfo> {
+        self.clients.read().await.values().cloned().collect()
+    }
+
+    /// Get all session IDs.
+    pub async fn get_all_sessions(&self) -> Vec<u32> {
+        self.clients.read().await.keys().copied().collect()
+    }
+
     /// Update client state.
     pub async fn set_client_state(&self, session: u32, state: ClientState) {
         if let Some(client) = self.clients.write().await.get_mut(&session) {

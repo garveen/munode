@@ -16,6 +16,7 @@ repository = "https://github.com/garveen/munode"
 [workspace.dependencies]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
 
 # Protobuf
 prost = "0.13"
