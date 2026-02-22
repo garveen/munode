@@ -2,6 +2,7 @@ import type { TLSSocket } from 'tls';
 import type { RemoteInfo } from 'dgram';
 import type { Logger } from 'winston';
 import type { ClientInfo } from '../types.js';
+import { ClientState } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
 
 /**
@@ -144,8 +145,10 @@ export class ConnectionHandlers {
       let matchedClient: ClientInfo | null = null;
 
       for (const client of clients) {
-        // 只尝试已认证且来自同一IP的客户端
-        if (client.user_id <= 0 || client.ip_address !== rinfo.address) {
+        // 只尝试已认证（包括匿名用户）且来自同一IP的客户端
+        // 注意：匿名客户端 user_id=0，不能用 user_id>0 判断认证状态
+        // 对齐 C 实现（Server.cpp qhHostUsers）：所有完成认证的客户端都应尝试解密
+        if (client.state < ClientState.Authenticated || client.ip_address !== rinfo.address) {
           continue;
         }
 
@@ -173,7 +176,9 @@ export class ConnectionHandlers {
       }
 
       if (!matchedClient) {
-        this.logger.warn(`Unable to match any client for UDP address: ${addressKey}`);
+        // 对齐 C 实现（Server.cpp）：无法匹配客户端时静默丢弃，不产生警告
+        // 这会发生在：服务器状态查询包、NAT 重绑定后的过期包、或来自未知来源的包
+        this.logger.debug(`Unable to match any client for UDP address: ${addressKey}, dropping packet`);
         return;
       }
 

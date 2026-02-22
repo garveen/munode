@@ -6,6 +6,9 @@
 
 import { parentPort } from 'node:worker_threads';
 import { DatabaseSync } from 'node:sqlite';
+import { createLogger } from '@munode/common';
+
+const logger = createLogger({ service: 'hub-database-worker' });
 
 interface WorkerMessage {
   id: number;
@@ -197,6 +200,6 @@ function handleMessage(message: WorkerMessage): void {
 if (parentPort) {
   parentPort.on('message', handleMessage);
 } else {
-  console.error('Worker started without parentPort');
+  logger.error('Worker started without parentPort');
   process.exit(1);
 }

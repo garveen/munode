@@ -412,7 +412,7 @@ export class ACLHandler implements IACLHandler {
 
     const { channel_id, acls } = params;
 
-    console.log(acls)
+    this.logger.debug('saveACL acls', { acls });
 
     // Convert RPC ACL format to ACLManager format
     const aclData = acls.map((acl) => ({

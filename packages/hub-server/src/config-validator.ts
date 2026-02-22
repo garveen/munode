@@ -3,6 +3,7 @@
  * 验证配置项的合法性
  */
 
+import type { Logger } from '@munode/common';
 import type { HubConfig } from './types.js';
 
 /**
@@ -20,7 +21,7 @@ export class ConfigValidationError extends Error {
  * @param config Hub 配置对象
  * @throws {ConfigValidationError} 如果配置无效
  */
-export function validateHubConfig(config: HubConfig): void {
+export function validateHubConfig(config: HubConfig, logger?: Logger): void {
   const errors: string[] = [];
   
   // 验证基础配置
@@ -237,6 +238,6 @@ export function validateHubConfig(config: HubConfig): void {
   }
   
   if (warnings.length > 0) {
-    warnings.forEach(warning => console.warn('[config-validator]', warning));
+    warnings.forEach(warning => logger?.warn(`[config-validator] ${warning}`));
   }
 }

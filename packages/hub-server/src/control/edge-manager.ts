@@ -8,6 +8,7 @@
  * - 提供连接监控和统计
  */
 
+import type { Logger } from '@munode/common';
 import { RPCChannel, ChannelNotificationParams } from '@munode/protocol';
 import { MessageCache } from './message-cache.js';
 
@@ -46,10 +47,12 @@ export class EdgeManager {
   private connections = new Map<number, EdgeConnection>();
   private messageCache: MessageCache;
   private callbacks: EdgeManagerCallbacks;
+  private logger: Logger;
 
-  constructor(messageCache: MessageCache, callbacks: EdgeManagerCallbacks) {
+  constructor(messageCache: MessageCache, callbacks: EdgeManagerCallbacks, logger: Logger) {
     this.messageCache = messageCache;
     this.callbacks = callbacks;
+    this.logger = logger;
   }
 
   /**
@@ -166,7 +169,7 @@ export class EdgeManager {
         connection.channel.notify(message.method, message.params);
         this.updateStats(edgeId, true, this.estimateSize(message));
       } catch (error) {
-        console.warn(`Failed to send message to edge ${edgeId}:`, error);
+        this.logger.warn(`Failed to send message to edge ${edgeId}:`, { error });
       }
     }
 
@@ -194,7 +197,7 @@ export class EdgeManager {
       this.updateStats(edgeId, true, this.estimateSize(message));
       return true;
     } catch (error) {
-      console.warn(`Failed to send message to edge ${edgeId}:`, error);
+      this.logger.warn(`Failed to send message to edge ${edgeId}:`, { error });
       return false;
     }
   }
@@ -214,14 +217,14 @@ export class EdgeManager {
     const cachedMessages = this.messageCache.getAndClearCache(edgeId);
 
     if (cachedMessages.length > 0) {
-      console.info(`Sending ${cachedMessages.length} cached messages to edge ${edgeId}`);
+      this.logger.info(`Sending ${cachedMessages.length} cached messages to edge ${edgeId}`);
 
       for (const message of cachedMessages) {
         try {
           channel.notify(message.method, message.params as ChannelNotificationParams);
           this.updateStats(edgeId, true, 100); // Estimate size
         } catch (error) {
-          console.warn(`Failed to send cached message to edge ${edgeId}:`, error);
+          this.logger.warn(`Failed to send cached message to edge ${edgeId}:`, { error });
         }
       }
     }

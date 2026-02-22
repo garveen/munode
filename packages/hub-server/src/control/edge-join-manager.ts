@@ -8,6 +8,8 @@
  * - 处理加入完成确认
  */
 
+import type { Logger } from '@munode/common';
+
 export interface JoinRequest {
   serverId: number;
   name: string;
@@ -66,9 +68,11 @@ export class EdgeJoinManager {
 
   private callbacks: JoinCallbacks;
   private joinTimeout: number = 60000; // 60秒
+  private logger: Logger;
 
-  constructor(callbacks: JoinCallbacks) {
+  constructor(callbacks: JoinCallbacks, logger: Logger) {
     this.callbacks = callbacks;
+    this.logger = logger;
   }
 
   /**
@@ -174,7 +178,7 @@ export class EdgeJoinManager {
    */
   private handleJoinTimeout(edgeId: number): void {
     if (this.joinLock && this.joinLock.edgeId === edgeId) {
-      console.warn(`Edge ${edgeId} join timeout, releasing lock`);
+      this.logger.warn(`Edge ${edgeId} join timeout, releasing lock`);
 
       // 通知加入失败
       this.callbacks.onJoinFailed(edgeId, 'Join timeout');

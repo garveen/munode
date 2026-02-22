@@ -38,14 +38,14 @@ export class HubServer {
     // 使用 Zod 验证并应用默认值
     this.config = validateAndParseHubConfig(config);
     
-    // 使用旧版验证器进行额外检查并显示警告
-    validateHubConfig(this.config);
-    
     // 创建logger实例
     this.logger = createLogger({ 
       service: `hub-${config.server_id}`,
       level: config.log_level || 'info'
     });
+    
+    // 使用旧版验证器进行额外检查并显示警告
+    validateHubConfig(this.config, this.logger);
     
     this.logger.debug('Hub Server configuration validated and initialized');
   }

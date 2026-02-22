@@ -5,7 +5,9 @@
  */
 
 import { parentPort } from 'worker_threads';
-import { OCB2AES128 } from '@munode/common';
+import { OCB2AES128, createLogger } from '@munode/common';
+
+const logger = createLogger({ service: 'edge-crypto-worker' });
 import type {
   WorkerMessage,
   WorkerResponse,
@@ -286,7 +288,7 @@ if (parentPort) {
     try {
       // 验证消息格式
       if (!msg || !msg.type || !msg.requestId) {
-        console.error('[Worker] Invalid message format:', msg);
+        logger.error('[Worker] Invalid message format:', { msg });
         return;
       }
       
@@ -297,7 +299,7 @@ if (parentPort) {
         sendError(msg.requestId, `Unknown message type: ${msg.type}`);
       }
     } catch (error) {
-      console.error('[Worker] Error handling message:', error);
+      logger.error('[Worker] Error handling message:', { error });
       if (msg && msg.requestId) {
         sendError(
           msg.requestId,
@@ -308,7 +310,7 @@ if (parentPort) {
   });
   
   parentPort.on('error', (error) => {
-    console.error('[Worker] Port error:', error);
+    logger.error('[Worker] Port error:', { error });
   });
   
   // 通知主线程 Worker 已就绪

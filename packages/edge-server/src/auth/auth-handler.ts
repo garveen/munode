@@ -247,9 +247,9 @@ export class AuthHandlers {
 
       // 9.5. 发送 ServerConfig 消息
       // 注意：cert_required 配置不发送给客户端，由服务器端在连接时强制执行
+      // welcome_text 已在 ServerSync 中发送，此处不再重复发送
       const serverConfigMessage = mumbleproto.ServerConfig.encode({
         max_bandwidth: this.config.server.max_bandwidth,
-        welcome_text: this.config.server.welcome_text,
         allow_html: true, // TODO: 从Hub配置获取
         message_length: 5000, // TODO: 从Hub配置获取
         image_message_length: 131072, // TODO: 从Hub配置获取
