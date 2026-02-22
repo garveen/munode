@@ -199,15 +199,42 @@ function calculatePermission(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// is_enter_restricted：该频道是否有任何 deny Enter 的 ACL 条目
+// is_enter_restricted：该频道是否有任何 deny Enter 的 ACL 条目（包含继承链）
+// 对目标频道本身：检查所有直接 ACL（无需过滤 apply_here，与 C++ 行为一致）
+// 对父频道：只检查 apply_subs=true 的 ACL；遍到 inherit_acl=false 时重置
 // ────────────────────────────────────────────────────────────────────────────
 
 function isEnterRestricted(
   channelId: number,
+  channelMap: Map<number, PermWorkerChannel>,
   aclMap: Map<number, PermWorkerACLEntry[]>
 ): boolean {
-  const acls = aclMap.get(channelId) ?? [];
-  return acls.some(acl => (acl.deny & PERM_ENTER) !== 0);
+  const chain = buildChannelChain(channelId, channelMap);
+  let hasRestriction = false;
+
+  for (const ctx of chain) {
+    // 如果该频道设置了 inherit_acl=false，则其上方所有父频道的 ACL 对它不生效 —— 重置
+    if (!ctx.inherit_acl) {
+      hasRestriction = false;
+    }
+
+    const acls = aclMap.get(ctx.id) ?? [];
+    const isTarget = ctx.id === channelId;
+
+    if (isTarget) {
+      // 目标频道自身：检查所有直接 ACL（与 C++ isChannelEnterRestricted 一致，不过滤 apply_here）
+      if (acls.some(acl => (acl.deny & PERM_ENTER) !== 0)) {
+        hasRestriction = true;
+      }
+    } else {
+      // 父频道：只有 apply_subs=true 的 ACL 才会影响子频道
+      if (acls.some(acl => acl.apply_subs && (acl.deny & PERM_ENTER) !== 0)) {
+        hasRestriction = true;
+      }
+    }
+  }
+
+  return hasRestriction;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -232,7 +259,7 @@ parentPort.on('message', (req: PermWorkerRequest) => {
       return {
         channel_id: ch.id,
         can_enter:            (perms & PERM_ENTER) !== 0,
-        is_enter_restricted:  isEnterRestricted(ch.id, aclMap),
+        is_enter_restricted:  isEnterRestricted(ch.id, channelMap, aclMap),
       };
     });
 
