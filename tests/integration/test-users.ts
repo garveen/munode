@@ -186,4 +186,7 @@ export const testUserPasswords: Record<string, { password: string; user_id: numb
       'chain_b_e2': { password: 'pass1', user_id: 763 },
       'chain_c_e1': { password: 'pass1', user_id: 764 },
       'chain_c_e2': { password: 'pass1', user_id: 765 },
+      // Hub restart channel linking test users
+      'restart_ch0_e1': { password: 'pass1', user_id: 766 },
+      'restart_ch1_e1': { password: 'pass1', user_id: 767 },
     };

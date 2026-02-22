@@ -26,7 +26,6 @@ export class ChannelManager extends TypedEventEmitter<ChannelManagerEvents> {
   private logger: Logger;
   private channels: Map<number, ChannelInfo> = new Map();
   private channelCounter = 1;
-  private channelLinks: Map<number, Set<number>> = new Map(); // 频道链接映射
   
   // 缓存：用于语音路由优化
   private transitiveLinksCache: Map<number, Set<number>> = new Map(); // 频道的所有传递链接（包括自己的链接和链接频道的链接）
@@ -118,6 +117,10 @@ export class ChannelManager extends TypedEventEmitter<ChannelManagerEvents> {
    * 不会自动分配ID，使用提供的频道数据中的ID
    */
   addOrUpdateChannel(channelData: ChannelInfo): ChannelInfo {
+    if (channelData.links !== undefined) {
+      this.invalidateCache();
+    }
+
     const existingChannel = this.channels.get(channelData.id);
     
     if (existingChannel) {
@@ -198,18 +201,7 @@ export class ChannelManager extends TypedEventEmitter<ChannelManagerEvents> {
     
     // 处理频道链接变更
     if (updates.links !== undefined) {
-      // 重要：更新内部 channelLinks Map，确保 getAllLinkedChannels() 能正确工作
-      // 注意：Hub已经负责双向链接，这里只需要更新单向链接即可
-      const newLinks = new Set(updates.links);
-      
-      // 直接替换此频道的链接集合
-      if (newLinks.size > 0) {
-        this.channelLinks.set(channel_id, newLinks);
-      } else {
-        this.channelLinks.delete(channel_id);
-      }
-      
-      this.logger.debug(`Updated channelLinks Map for channel ${channel_id}: [${Array.from(newLinks).join(', ')}]`);
+      this.logger.debug(`Updated channel ${channel_id} links to: [${updates.links.join(', ')}]`);
       this.invalidateCache(); // 链接变化时使缓存失效
     }
 
@@ -252,29 +244,17 @@ export class ChannelManager extends TypedEventEmitter<ChannelManagerEvents> {
       }
     }
 
-    // 更新频道链接
-    const links = this.channelLinks.get(oldId);
-    if (links) {
-      this.channelLinks.delete(oldId);
-      this.channelLinks.set(newId, links);
-
-      // 更新所有链接频道的引用
-      for (const linkedId of links) {
-        const linkedChannelLinks = this.channelLinks.get(linkedId);
-        if (linkedChannelLinks) {
-          linkedChannelLinks.delete(oldId);
-          linkedChannelLinks.add(newId);
-
-          // 更新ChannelInfo的links字段
-          const linkedChannel = this.channels.get(linkedId);
-          if (linkedChannel) {
-            linkedChannel.links = Array.from(linkedChannelLinks);
+    // 更新所有链接频道中对这个频道 ID 的引用
+    if (channel.links && channel.links.length > 0) {
+      for (const linkedId of channel.links) {
+        const linkedChannel = this.channels.get(linkedId);
+        if (linkedChannel && linkedChannel.links) {
+          const idx = linkedChannel.links.indexOf(oldId);
+          if (idx !== -1) {
+            linkedChannel.links[idx] = newId;
           }
         }
       }
-
-      // 更新当前频道的links字段
-      channel.links = Array.from(links);
     }
 
     this.logger.debug(`Channel ID updated: ${oldId} -> ${newId}, name=${channel.name}`);
@@ -380,27 +360,15 @@ export class ChannelManager extends TypedEventEmitter<ChannelManagerEvents> {
       return false;
     }
 
-    // 初始化链接集合
-    if (!this.channelLinks.has(channel_id1)) {
-      this.channelLinks.set(channel_id1, new Set());
+    // 添加双向链接（去重）
+    if (!channel1.links.includes(channel_id2)) {
+      channel1.links = [...channel1.links, channel_id2];
     }
-    if (!this.channelLinks.has(channel_id2)) {
-      this.channelLinks.set(channel_id2, new Set());
-    }
-
-    // 添加双向链接
-    const links1Set = this.channelLinks.get(channel_id1);
-    const links2Set = this.channelLinks.get(channel_id2);
-    if (links1Set && links2Set) {
-      links1Set.add(channel_id2);
-      links2Set.add(channel_id1);
-
-      // 更新 ChannelInfo 的 links 字段
-      channel1.links = Array.from(links1Set);
-      channel2.links = Array.from(links2Set);
+    if (!channel2.links.includes(channel_id1)) {
+      channel2.links = [...channel2.links, channel_id1];
     }
 
-    this.invalidateCache(); // 使缓存失效
+    this.invalidateCache();
     this.logger.info(`Channels linked: ${channel_id1} <-> ${channel_id2}`);
     this.emit('channelsLinked', channel_id1, channel_id2);
     return true;
@@ -412,21 +380,15 @@ export class ChannelManager extends TypedEventEmitter<ChannelManagerEvents> {
   unlinkChannels(channel_id1: number, channel_id2: number): boolean {
     const channel1 = this.channels.get(channel_id1);
     const channel2 = this.channels.get(channel_id2);
-    const links1 = this.channelLinks.get(channel_id1);
-    const links2 = this.channelLinks.get(channel_id2);
 
-    if (!links1 || !links2 || !channel1 || !channel2) {
+    if (!channel1 || !channel2) {
       return false;
     }
 
-    links1.delete(channel_id2);
-    links2.delete(channel_id1);
+    channel1.links = channel1.links.filter(id => id !== channel_id2);
+    channel2.links = channel2.links.filter(id => id !== channel_id1);
 
-    // 更新 ChannelInfo 的 links 字段
-    channel1.links = Array.from(links1);
-    channel2.links = Array.from(links2);
-
-    this.invalidateCache(); // 使缓存失效
+    this.invalidateCache();
     this.logger.info(`Channels unlinked: ${channel_id1} <-> ${channel_id2}`);
     this.emit('channelsUnlinked', channel_id1, channel_id2);
     return true;
@@ -436,8 +398,7 @@ export class ChannelManager extends TypedEventEmitter<ChannelManagerEvents> {
    * 获取频道的所有链接
    */
   getChannelLinks(channel_id: number): number[] {
-    const links = this.channelLinks.get(channel_id);
-    return links ? Array.from(links) : [];
+    return this.channels.get(channel_id)?.links || [];
   }
 
   /**
@@ -569,15 +530,13 @@ export class ChannelManager extends TypedEventEmitter<ChannelManagerEvents> {
     }
     visited.add(channel_id);
 
-    const links = this.channelLinks.get(channel_id);
-    if (!links) {
+    const channel = this.channels.get(channel_id);
+    if (!channel || !channel.links || channel.links.length === 0) {
       return;
     }
 
-    for (const linkedId of links) {
-      // 添加到结果集（不包括起始频道自己）
+    for (const linkedId of channel.links) {
       result.add(linkedId);
-      // 递归收集链接频道的链接（但不重复添加已访问的）
       if (!visited.has(linkedId)) {
         this.collectTransitiveLinks(linkedId, result, visited);
       }
@@ -621,9 +580,7 @@ export class ChannelManager extends TypedEventEmitter<ChannelManagerEvents> {
   clearChannels(): void {
     this.logger.info('Clearing all channel data...');
     
-    // 清空所有非根频道
     this.channels.clear();
-    this.channelLinks.clear();
     this.transitiveLinksCache.clear();
     this.descendantsCache.clear();
     

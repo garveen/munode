@@ -440,6 +440,80 @@ describe('Voice Integration Tests', () => {
       await cleanupClients(clients);
       await admin.disconnect();
     });
+
+    it('should route PTT voice correctly after Hub restart (links reloaded from DB)', async () => {
+      // 验证 Hub 重启后从 DB 加载的频道链接能正确驱动语音路由
+      // 客户端能看到链接（ChannelState.links 已同步）且语音 PTT 也能正确路由
+      //
+      // 场景：Ch0 ↔ Ch1，每侧各 1 个客户端
+      //   [0] restart_ch0_e1: Edge 1, Ch0
+      //   [1] restart_ch1_e1: Edge 1, Ch1（链接）
+
+      const admin = await createAdminClient(testEnv);
+      await linkChannels(admin, 0, 1);
+      await admin.disconnect();
+
+      // ── Hub 重启 ──
+      if (!testEnv.hubServer) throw new Error('hubServer not available in testEnv');
+      await testEnv.hubServer.stop();
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      await testEnv.hubServer.start();
+      // 等待 Edge 重连 Hub 并完成频道同步
+      // Edge 检测到 Hub 断开 → 重连 → joinCluster → loadDataFromHub，整个流程约需 5 秒
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      // 用 admin 探测 Edge 是否已恢复（admin 连接成功 = Edge 已完成 Hub 重连和认证服务恢复）
+      const adminAfterRestart = await createAdminClient(testEnv);
+      await adminAfterRestart.disconnect();
+
+      // 重启后连接客户端
+      const clients = await createClients(testEnv, [
+        { username: 'restart_ch0_e1', edge: 1, channelId: 0 },
+        { username: 'restart_ch1_e1', edge: 1, channelId: 1 },
+      ]);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      const [clientCh0, clientCh1] = clients;
+
+      // 验证链接已同步到客户端
+      const ch0 = clientCh0.getChannels().find((ch: ChannelInfo) => ch.channel_id === 0);
+      const ch1 = clientCh1.getChannels().find((ch: ChannelInfo) => ch.channel_id === 1);
+      console.log(`[TEST] After Hub restart: ch0.links=[${ch0?.links?.join(',')}], ch1.links=[${ch1?.links?.join(',')}]`);
+      expect(ch0?.links, 'Hub 重启后 ch0 链接应同步到客户端').toContain(1);
+      expect(ch1?.links, 'Hub 重启后 ch1 链接应同步到客户端').toContain(0);
+
+      const sessions = clients.map(c => c.getStateManager().getSession()?.session ?? 0);
+      const sessionSet = new Set(sessions);
+      const receivedFrom: Set<number>[] = clients.map(() => new Set<number>());
+
+      clients.forEach((client, idx) => {
+        client.on('voice', (data: VoiceData) => {
+          if (sessionSet.has(data.session)) receivedFrom[idx].add(data.session);
+        });
+      });
+
+      // 双向同时发送
+      await Promise.all(
+        clients.map(c => c.getConnectionManager().sendVoicePacket(createVoicePacket(4, 0, 0)))
+      );
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // ch0 应收到 ch1 的语音，ch1 应收到 ch0 的语音
+      expect(
+        receivedFrom[0].has(sessions[1]),
+        `restart_ch0_e1 应收到来自 restart_ch1_e1 (session=${sessions[1]}) 的语音（Hub 重启后 PTT 路由应正常）`
+      ).toBe(true);
+      expect(
+        receivedFrom[1].has(sessions[0]),
+        `restart_ch1_e1 应收到来自 restart_ch0_e1 (session=${sessions[0]}) 的语音（Hub 重启后 PTT 路由应正常）`
+      ).toBe(true);
+
+      // 清理
+      const adminCleanup = await createAdminClient(testEnv);
+      await unlinkChannels(adminCleanup, 0, 1);
+      await cleanupClients(clients);
+      await adminCleanup.disconnect();
+    });
   });
 
   describe('Voice Target (Whisper)', () => {
