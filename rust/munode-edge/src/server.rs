@@ -17,10 +17,10 @@ use munode_protocol::mumbleproto;
 use munode_protocol::transport::decode_frame;
 
 use crate::channel_manager::ChannelManager;
-use crate::client::{ClientInfo, ClientManager, ClientState};
+use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
 use crate::handler::{self, LoginHandler};
 use crate::hub_client::{HubClient, HubConnectionState};
-use crate::state::EdgeState;
+use crate::state::{EdgeEvent, EdgeState};
 use crate::tls::create_tls_acceptor;
 use crate::udp::UdpServer;
 
@@ -62,6 +62,15 @@ impl EdgeServer {
                 if let Err(e) = hub_client.connect_and_run().await {
                     error!("Hub client error: {}", e);
                 }
+            }
+        });
+
+        // Event listener: broadcast Hub notifications to local clients
+        let event_handle = tokio::spawn({
+            let state = edge_state.clone();
+            let mut event_rx = edge_state.subscribe_events();
+            async move {
+                hub_event_listener(state, &mut event_rx).await;
             }
         });
 
@@ -109,6 +118,7 @@ impl EdgeServer {
 
         udp_handle.abort();
         hub_handle.abort();
+        event_handle.abort();
 
         Ok(())
     }
@@ -130,10 +140,24 @@ async fn handle_client_connection(
 
     info!("TLS handshake complete with {}", peer_addr);
 
+    // Create per-client message sender channel
+    let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(256);
+    let client_sender = ClientSender::new(send_tx);
+
+    // Writer task: forwards messages from send_rx to TLS socket
+    let writer_handle = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        while let Some(data) = send_rx.recv().await {
+            if let Err(e) = writer.write_all(&data).await {
+                debug!("Write error to client: {}", e);
+                break;
+            }
+        }
+    });
+
     let mut buf = BytesMut::with_capacity(8192);
     let mut session_id: Option<u32> = None;
     let mut client_state = ClientState::Connected;
-    let mut _version_received = false;
 
     loop {
         // Read data from TLS stream
@@ -147,8 +171,8 @@ async fn handle_client_connection(
         while let Some(frame) = decode_frame(&mut buf)? {
             match frame.message_type {
                 MessageType::Version => {
-                    handler::handle_version(&mut writer, &frame.payload, &peer_addr.to_string()).await?;
-                    _version_received = true;
+                    let response = handler::encode_version_response(&frame.payload, &peer_addr.to_string())?;
+                    client_sender.send_raw(response).await;
                 }
                 MessageType::Authenticate if client_state == ClientState::Connected => {
                     let auth = mumbleproto::Authenticate::decode(&frame.payload[..])?;
@@ -162,11 +186,11 @@ async fn handle_client_connection(
                     // Check Hub connectivity
                     if hub_client.state().await != HubConnectionState::Registered {
                         warn!("Hub not connected, rejecting client {}", peer_addr);
-                        handler::send_reject(
-                            &mut writer,
+                        client_sender.send_raw(handler::encode_reject(
                             Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
                             "Server not ready, please try again later",
-                        ).await?;
+                        )).await;
+                        writer_handle.abort();
                         return Ok(());
                     }
 
@@ -175,11 +199,11 @@ async fn handle_client_connection(
                         Ok(sid) => sid,
                         Err(e) => {
                             error!("Failed to allocate session ID: {}", e);
-                            handler::send_reject(
-                                &mut writer,
+                            client_sender.send_raw(handler::encode_reject(
                                 Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
                                 "Internal server error",
-                            ).await?;
+                            )).await;
+                            writer_handle.abort();
                             return Ok(());
                         }
                     };
@@ -202,11 +226,11 @@ async fn handle_client_connection(
                         Ok(result) => result,
                         Err(e) => {
                             error!("Authentication RPC failed: {}", e);
-                            handler::send_reject(
-                                &mut writer,
+                            client_sender.send_raw(handler::encode_reject(
                                 Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
                                 "Authentication failed",
-                            ).await?;
+                            )).await;
+                            writer_handle.abort();
                             return Ok(());
                         }
                     };
@@ -214,11 +238,11 @@ async fn handle_client_connection(
                     if !auth_result.success {
                         let reason = auth_result.reason.clone().unwrap_or_else(|| "Authentication denied".to_string());
                         info!("Authentication failed for {}: {}", username, reason);
-                        handler::send_reject(
-                            &mut writer,
+                        client_sender.send_raw(handler::encode_reject(
                             auth_result.reject_type.map(|t| t as i32),
                             &reason,
-                        ).await?;
+                        )).await;
+                        writer_handle.abort();
                         return Ok(());
                     }
 
@@ -238,7 +262,7 @@ async fn handle_client_connection(
                     let client = ClientInfo {
                         session: sid,
                         user_id: auth_result.user_id.unwrap_or(0),
-                        username: auth_result.username.clone().unwrap_or(username),
+                        username: auth_result.username.clone().unwrap_or(username.clone()),
                         channel_id,
                         state: ClientState::Authenticated,
                         mute: auth_result.mute.unwrap_or(false),
@@ -254,20 +278,30 @@ async fn handle_client_connection(
                         cert_hash: None,
                         groups: vec![],
                     };
-                    edge_state.client_manager.add_client(client).await;
+                    edge_state.client_manager.add_client(client.clone(), client_sender.clone()).await;
 
                     // Execute full login sequence
-                    let mut login = LoginHandler::new(
-                        &mut writer, config, &edge_state, &hub_client,
+                    let login = LoginHandler::new(
+                        &client_sender, config, &edge_state, &hub_client,
                     );
                     login.execute_login(sid, &auth_result, opus).await?;
 
                     client_state = ClientState::Ready;
                     edge_state.client_manager.set_client_state(sid, ClientState::Ready).await;
+
+                    // Broadcast new user to all other clients
+                    let user_state_msg = handler::build_user_state_msg(&client);
+                    edge_state.client_manager.broadcast(
+                        MessageType::UserState,
+                        &user_state_msg,
+                        Some(sid),
+                    ).await;
+
                     info!("Client {} is now Ready (session={})", peer_addr, sid);
                 }
                 MessageType::Ping => {
-                    handler::handle_ping(&mut writer, &frame.payload).await?;
+                    let response = handler::encode_ping_response(&frame.payload)?;
+                    client_sender.send_raw(response).await;
                 }
                 MessageType::UserState if client_state == ClientState::Ready => {
                     let user_state = mumbleproto::UserState::decode(&frame.payload[..])?;
@@ -279,15 +313,31 @@ async fn handle_client_connection(
                     let text_msg = mumbleproto::TextMessage::decode(&frame.payload[..])?;
                     if let Some(sid) = session_id {
                         debug!("TextMessage from session {}: {:?}", sid, text_msg.message);
-                        // TODO: Forward to Hub for broadcast to other edges
-                        // For now, broadcast to local clients
                         broadcast_text_message(&edge_state, sid, &text_msg).await;
                     }
                 }
                 MessageType::UdpTunnel if client_state == ClientState::Ready => {
-                    // Voice data tunneled through TCP
-                    debug!("TCP voice packet from {} ({} bytes)", peer_addr, frame.payload.len());
-                    // TODO: Route through VoiceRouter
+                    // Voice data tunneled through TCP - forward to all users in the same channel
+                    if let Some(sid) = session_id {
+                        if let Some(client) = edge_state.client_manager.get_client(sid).await {
+                            // Forward voice data to all clients in the same channel
+                            let mut buf = BytesMut::new();
+                            bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
+                            bytes::BufMut::put_u32(&mut buf, frame.payload.len() as u32);
+                            bytes::BufMut::put_slice(&mut buf, &frame.payload);
+                            let data = buf.to_vec();
+
+                            let sessions = edge_state.client_manager.get_channel_sessions(client.channel_id).await;
+                            for target_session in sessions {
+                                if target_session == sid {
+                                    continue;
+                                }
+                                if let Some(sender) = edge_state.client_manager.get_sender(target_session).await {
+                                    sender.send_raw(data.clone()).await;
+                                }
+                            }
+                        }
+                    }
                 }
                 MessageType::VoiceTarget if client_state == ClientState::Ready => {
                     let vt = mumbleproto::VoiceTarget::decode(&frame.payload[..])?;
@@ -313,10 +363,20 @@ async fn handle_client_connection(
     // Cleanup
     if let Some(sid) = session_id {
         edge_state.client_manager.remove_client(sid).await;
+
+        // Broadcast UserRemove to all remaining clients
+        let remove_msg = handler::build_user_remove_msg(sid, None);
+        edge_state.client_manager.broadcast(
+            MessageType::UserRemove,
+            &remove_msg,
+            None,
+        ).await;
+
         // TODO: Notify Hub that user disconnected
         info!("Cleaned up session {} for {}", sid, peer_addr);
     }
 
+    writer_handle.abort();
     Ok(())
 }
 
@@ -326,48 +386,161 @@ async fn handle_user_state_update(
     session_id: u32,
     user_state: &mumbleproto::UserState,
 ) {
-    // Self-mute/self-deaf updates
-    if let Some(self_mute) = user_state.self_mute {
-        if let Some(mut client) = edge_state.client_manager.get_client(session_id).await {
-            client.self_mute = self_mute;
-            edge_state.client_manager.add_client(client).await;
-        }
-    }
-    if let Some(self_deaf) = user_state.self_deaf {
-        if let Some(mut client) = edge_state.client_manager.get_client(session_id).await {
-            client.self_deaf = self_deaf;
-            edge_state.client_manager.add_client(client).await;
-        }
-    }
+    let mut needs_broadcast = false;
 
-    // Channel move
-    if let Some(channel_id) = user_state.channel_id {
-        if let Some(mut client) = edge_state.client_manager.get_client(session_id).await {
+    if let Some(mut client) = edge_state.client_manager.get_client(session_id).await {
+        // Self-mute/self-deaf updates
+        if let Some(self_mute) = user_state.self_mute {
+            client.self_mute = self_mute;
+            needs_broadcast = true;
+        }
+        if let Some(self_deaf) = user_state.self_deaf {
+            client.self_deaf = self_deaf;
+            needs_broadcast = true;
+        }
+
+        // Channel move
+        if let Some(channel_id) = user_state.channel_id {
             if client.channel_id != channel_id {
                 debug!("User {} moving to channel {}", session_id, channel_id);
-                // TODO: Check permission via Hub
-                // TODO: Notify Hub of channel move
-                let _old_channel = client.channel_id;
-                client.channel_id = channel_id;
+                // Remove from old channel and add to new
                 edge_state.client_manager.remove_client(session_id).await;
-                edge_state.client_manager.add_client(client).await;
+                let sender = edge_state.client_manager.get_sender(session_id).await;
+                client.channel_id = channel_id;
+                if let Some(sender) = sender {
+                    edge_state.client_manager.add_client(client.clone(), sender).await;
+                }
+                needs_broadcast = true;
             }
         }
-    }
 
-    // TODO: Forward state changes to Hub for broadcast
+        if needs_broadcast {
+            edge_state.client_manager.update_client(client.clone()).await;
+            // Broadcast updated UserState to all clients
+            let msg = handler::build_user_state_msg(&client);
+            edge_state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+        }
+    }
 }
 
 /// Broadcast a text message to local clients.
 async fn broadcast_text_message(
-    _edge_state: &Arc<EdgeState>,
+    edge_state: &Arc<EdgeState>,
     sender_session: u32,
     text_msg: &mumbleproto::TextMessage,
 ) {
-    // TODO: Implement proper message routing (channel, tree, session targets)
-    // For now, just log
-    debug!(
-        "TextMessage from session {}: channels={:?}, sessions={:?}, tree={:?}",
-        sender_session, text_msg.channel_id, text_msg.session, text_msg.tree_id
-    );
+    // Route based on target: channel, tree, or specific sessions
+    let mut msg = text_msg.clone();
+    msg.actor = Some(sender_session);
+
+    if !text_msg.channel_id.is_empty() {
+        // Send to users in specified channels
+        for &channel_id in &text_msg.channel_id {
+            edge_state.client_manager.broadcast_to_channel(
+                channel_id,
+                MessageType::TextMessage,
+                &msg,
+                Some(sender_session),
+            ).await;
+        }
+    } else if !text_msg.session.is_empty() {
+        // Send to specific sessions
+        for &target_session in &text_msg.session {
+            edge_state.client_manager.send_to(target_session, MessageType::TextMessage, &msg).await;
+        }
+    } else if !text_msg.tree_id.is_empty() {
+        // Send to channel trees (for now, treat as broadcast)
+        for &channel_id in &text_msg.tree_id {
+            edge_state.client_manager.broadcast_to_channel(
+                channel_id,
+                MessageType::TextMessage,
+                &msg,
+                Some(sender_session),
+            ).await;
+        }
+    }
+}
+
+/// Listen for events from the Hub and broadcast them to local clients.
+async fn hub_event_listener(
+    state: Arc<EdgeState>,
+    event_rx: &mut tokio::sync::broadcast::Receiver<EdgeEvent>,
+) {
+    use tokio::sync::broadcast::error::RecvError;
+
+    loop {
+        match event_rx.recv().await {
+            Ok(event) => {
+                match event {
+                    EdgeEvent::RemoteUserJoined { session_id, username, channel_id: _ } => {
+                        if let Some(user) = state.channel_manager.get_remote_user(session_id).await {
+                            let msg = mumbleproto::UserState {
+                                session: Some(user.session_id),
+                                user_id: Some(user.user_id),
+                                name: Some(user.username.clone()),
+                                channel_id: Some(user.channel_id),
+                                mute: Some(user.mute),
+                                deaf: Some(user.deaf),
+                                suppress: Some(user.suppress),
+                                self_mute: Some(user.self_mute),
+                                self_deaf: Some(user.self_deaf),
+                                priority_speaker: Some(user.priority_speaker),
+                                recording: Some(user.recording),
+                                hash: user.cert_hash.clone(),
+                                ..Default::default()
+                            };
+                            state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                        }
+                        debug!("Broadcast remote user joined: {} (session {})", username, session_id);
+                    }
+                    EdgeEvent::RemoteUserLeft { session_id } => {
+                        let msg = handler::build_user_remove_msg(session_id, None);
+                        state.client_manager.broadcast(MessageType::UserRemove, &msg, None).await;
+                        debug!("Broadcast remote user left: session {}", session_id);
+                    }
+                    EdgeEvent::RemoteUserMoved { session_id, channel_id } => {
+                        let msg = mumbleproto::UserState {
+                            session: Some(session_id),
+                            channel_id: Some(channel_id),
+                            ..Default::default()
+                        };
+                        state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                        debug!("Broadcast remote user moved: session {} -> channel {}", session_id, channel_id);
+                    }
+                    EdgeEvent::ChannelCreated { channel_id } => {
+                        if let Some(ch) = state.channel_manager.get_channel(channel_id).await {
+                            let msg = handler::build_channel_state_msg(&ch);
+                            state.client_manager.broadcast(MessageType::ChannelState, &msg, None).await;
+                        }
+                        debug!("Broadcast channel created: {}", channel_id);
+                    }
+                    EdgeEvent::ChannelRemoved { channel_id } => {
+                        let msg = mumbleproto::ChannelRemove { channel_id };
+                        state.client_manager.broadcast(MessageType::ChannelRemove, &msg, None).await;
+                        debug!("Broadcast channel removed: {}", channel_id);
+                    }
+                    EdgeEvent::ChannelUpdated { channel_id } => {
+                        if let Some(ch) = state.channel_manager.get_channel(channel_id).await {
+                            let msg = handler::build_channel_state_msg(&ch);
+                            state.client_manager.broadcast(MessageType::ChannelState, &msg, None).await;
+                        }
+                        debug!("Broadcast channel updated: {}", channel_id);
+                    }
+                    EdgeEvent::HubRegistered => {
+                        info!("Hub registered event received");
+                    }
+                    EdgeEvent::HubDisconnected => {
+                        warn!("Hub disconnected - local clients will continue but some features unavailable");
+                    }
+                }
+            }
+            Err(RecvError::Lagged(count)) => {
+                warn!("Event listener lagged behind by {} events", count);
+            }
+            Err(RecvError::Closed) => {
+                info!("Event channel closed");
+                break;
+            }
+        }
+    }
 }

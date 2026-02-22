@@ -3,7 +3,6 @@ use std::sync::Arc;
 use anyhow::Result;
 use bytes::BytesMut;
 use prost::Message;
-use tokio::io::AsyncWriteExt;
 use tracing::{debug, info};
 
 use munode_common::config::EdgeConfig;
@@ -12,7 +11,7 @@ use munode_protocol::mumbleproto;
 use munode_protocol::transport::encode_message;
 
 use crate::channel_manager::ChannelData;
-use crate::client::ClientInfo;
+use crate::client::{ClientInfo, ClientSender};
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 
@@ -26,26 +25,26 @@ use crate::state::EdgeState;
 /// 5. Self UserState
 /// 6. ServerSync
 /// 7. ServerConfig
-pub struct LoginHandler<'a, W: AsyncWriteExt + Unpin> {
-    writer: &'a mut W,
+pub struct LoginHandler<'a> {
+    sender: &'a ClientSender,
     config: &'a EdgeConfig,
     edge_state: &'a Arc<EdgeState>,
     _hub_client: &'a Arc<HubClient>,
 }
 
-impl<'a, W: AsyncWriteExt + Unpin> LoginHandler<'a, W> {
+impl<'a> LoginHandler<'a> {
     pub fn new(
-        writer: &'a mut W,
+        sender: &'a ClientSender,
         config: &'a EdgeConfig,
         edge_state: &'a Arc<EdgeState>,
         hub_client: &'a Arc<HubClient>,
     ) -> Self {
-        Self { writer, config, edge_state, _hub_client: hub_client }
+        Self { sender, config, edge_state, _hub_client: hub_client }
     }
 
     /// Execute the full login sequence after authentication.
     pub async fn execute_login(
-        &mut self,
+        &self,
         session_id: u32,
         auth_result: &munode_protocol::hubedge::EdgeAuthenticateUserResult,
         opus_supported: bool,
@@ -75,12 +74,11 @@ impl<'a, W: AsyncWriteExt + Unpin> LoginHandler<'a, W> {
     }
 
     /// Send CryptSetup with random encryption keys.
-    async fn send_crypt_setup(&mut self) -> Result<()> {
+    async fn send_crypt_setup(&self) -> Result<()> {
         let mut key = [0u8; 16];
         let mut client_nonce = [0u8; 16];
         let mut server_nonce = [0u8; 16];
 
-        // Generate random keys using ring
         use ring::rand::{SecureRandom, SystemRandom};
         let rng = SystemRandom::new();
         rng.fill(&mut key).map_err(|_| anyhow::anyhow!("RNG failed"))?;
@@ -98,7 +96,7 @@ impl<'a, W: AsyncWriteExt + Unpin> LoginHandler<'a, W> {
     }
 
     /// Send CodecVersion.
-    async fn send_codec_version(&mut self, opus: bool) -> Result<()> {
+    async fn send_codec_version(&self, opus: bool) -> Result<()> {
         let msg = mumbleproto::CodecVersion {
             alpha: -2147483637, // CELT 0.7.0
             beta: -2147483632,  // CELT 0.11.0
@@ -111,7 +109,7 @@ impl<'a, W: AsyncWriteExt + Unpin> LoginHandler<'a, W> {
     }
 
     /// Send the full channel tree in BFS order.
-    async fn send_channel_tree(&mut self) -> Result<()> {
+    async fn send_channel_tree(&self) -> Result<()> {
         let channels = self.edge_state.channel_manager.get_channels_bfs().await;
 
         // Pass 1: Send all channels with their basic info
@@ -146,14 +144,13 @@ impl<'a, W: AsyncWriteExt + Unpin> LoginHandler<'a, W> {
     }
 
     /// Send UserState for all remote users.
-    async fn send_remote_users(&mut self, self_session: u32) -> Result<()> {
+    async fn send_remote_users(&self, self_session: u32) -> Result<()> {
         let remote_users = self.edge_state.channel_manager.get_all_remote_users().await;
         let local_clients = self.edge_state.client_manager.get_all_clients().await;
 
-        // Send remote users from other edges
         for user in &remote_users {
             if user.session_id == self_session {
-                continue; // Skip self
+                continue;
             }
             let msg = mumbleproto::UserState {
                 session: Some(user.session_id),
@@ -173,10 +170,9 @@ impl<'a, W: AsyncWriteExt + Unpin> LoginHandler<'a, W> {
             self.send(MessageType::UserState, &msg).await?;
         }
 
-        // Send local clients
         for client in &local_clients {
             if client.session == self_session {
-                continue; // Skip self
+                continue;
             }
             let msg = mumbleproto::UserState {
                 session: Some(client.session),
@@ -202,7 +198,7 @@ impl<'a, W: AsyncWriteExt + Unpin> LoginHandler<'a, W> {
 
     /// Send the self UserState.
     async fn send_self_user_state(
-        &mut self,
+        &self,
         session_id: u32,
         auth_result: &munode_protocol::hubedge::EdgeAuthenticateUserResult,
     ) -> Result<()> {
@@ -227,12 +223,12 @@ impl<'a, W: AsyncWriteExt + Unpin> LoginHandler<'a, W> {
     }
 
     /// Send ServerSync.
-    async fn send_server_sync(&mut self, session_id: u32) -> Result<()> {
+    async fn send_server_sync(&self, session_id: u32) -> Result<()> {
         let msg = mumbleproto::ServerSync {
             session: Some(session_id),
             max_bandwidth: Some(self.config.server.max_bandwidth),
             welcome_text: self.config.server.welcome_text.clone(),
-            permissions: Some(0), // TODO: Calculate actual permissions
+            permissions: Some(0),
         };
         self.send(MessageType::ServerSync, &msg).await?;
         debug!("Sent ServerSync for session {}", session_id);
@@ -240,7 +236,7 @@ impl<'a, W: AsyncWriteExt + Unpin> LoginHandler<'a, W> {
     }
 
     /// Send ServerConfig.
-    async fn send_server_config(&mut self) -> Result<()> {
+    async fn send_server_config(&self) -> Result<()> {
         let msg = mumbleproto::ServerConfig {
             max_bandwidth: Some(self.config.server.max_bandwidth),
             welcome_text: self.config.server.welcome_text.clone(),
@@ -255,33 +251,25 @@ impl<'a, W: AsyncWriteExt + Unpin> LoginHandler<'a, W> {
         Ok(())
     }
 
-    /// Encode and send a Mumble protocol message.
-    async fn send<M: Message>(&mut self, msg_type: MessageType, message: &M) -> Result<()> {
-        let mut buf = BytesMut::new();
-        encode_message(msg_type, message, &mut buf);
-        self.writer.write_all(&buf).await?;
+    /// Encode and send a Mumble protocol message via the client sender.
+    async fn send<M: Message>(&self, msg_type: MessageType, message: &M) -> Result<()> {
+        if !self.sender.send_message(msg_type, message).await {
+            anyhow::bail!("Failed to send message to client");
+        }
         Ok(())
     }
 }
 
-/// Handle a Ping message: echo it back.
-pub async fn handle_ping<W: AsyncWriteExt + Unpin>(
-    writer: &mut W,
-    payload: &[u8],
-) -> Result<()> {
+/// Handle a Ping message: encode response and send via sender.
+pub fn encode_ping_response(payload: &[u8]) -> Result<Vec<u8>> {
     let ping = mumbleproto::Ping::decode(payload)?;
     let mut buf = BytesMut::new();
     encode_message(MessageType::Ping, &ping, &mut buf);
-    writer.write_all(&buf).await?;
-    Ok(())
+    Ok(buf.to_vec())
 }
 
-/// Handle a Version message from client: log it and respond with server version.
-pub async fn handle_version<W: AsyncWriteExt + Unpin>(
-    writer: &mut W,
-    payload: &[u8],
-    peer_addr: &str,
-) -> Result<()> {
+/// Encode a Version response.
+pub fn encode_version_response(payload: &[u8], peer_addr: &str) -> Result<Vec<u8>> {
     let version = mumbleproto::Version::decode(payload)?;
     info!(
         "Client {} version: {:?} release={:?}",
@@ -298,32 +286,23 @@ pub async fn handle_version<W: AsyncWriteExt + Unpin>(
     };
     let mut buf = BytesMut::new();
     encode_message(MessageType::Version, &server_version, &mut buf);
-    writer.write_all(&buf).await?;
-    Ok(())
+    Ok(buf.to_vec())
 }
 
-/// Send a Reject message and return.
-pub async fn send_reject<W: AsyncWriteExt + Unpin>(
-    writer: &mut W,
-    reject_type: Option<i32>,
-    reason: &str,
-) -> Result<()> {
+/// Encode a Reject message.
+pub fn encode_reject(reject_type: Option<i32>, reason: &str) -> Vec<u8> {
     let msg = mumbleproto::Reject {
         r#type: reject_type,
         reason: Some(reason.to_string()),
     };
     let mut buf = BytesMut::new();
     encode_message(MessageType::Reject, &msg, &mut buf);
-    writer.write_all(&buf).await?;
-    Ok(())
+    buf.to_vec()
 }
 
-/// Send a UserState broadcast to a writer.
-pub async fn send_user_state<W: AsyncWriteExt + Unpin>(
-    writer: &mut W,
-    client: &ClientInfo,
-) -> Result<()> {
-    let msg = mumbleproto::UserState {
+/// Build a UserState message from a ClientInfo.
+pub fn build_user_state_msg(client: &ClientInfo) -> mumbleproto::UserState {
+    mumbleproto::UserState {
         session: Some(client.session),
         user_id: Some(client.user_id),
         name: Some(client.username.clone()),
@@ -337,39 +316,22 @@ pub async fn send_user_state<W: AsyncWriteExt + Unpin>(
         recording: Some(client.recording),
         hash: client.cert_hash.clone(),
         ..Default::default()
-    };
-    let mut buf = BytesMut::new();
-    encode_message(MessageType::UserState, &msg, &mut buf);
-    writer.write_all(&buf).await?;
-    Ok(())
+    }
 }
 
-/// Send a UserRemove message.
-pub async fn send_user_remove<W: AsyncWriteExt + Unpin>(
-    writer: &mut W,
-    session: u32,
-    actor: Option<u32>,
-    reason: Option<&str>,
-    ban: Option<bool>,
-) -> Result<()> {
-    let msg = mumbleproto::UserRemove {
+/// Build a UserRemove message.
+pub fn build_user_remove_msg(session: u32, reason: Option<&str>) -> mumbleproto::UserRemove {
+    mumbleproto::UserRemove {
         session,
-        actor,
+        actor: None,
         reason: reason.map(|s| s.to_string()),
-        ban,
-    };
-    let mut buf = BytesMut::new();
-    encode_message(MessageType::UserRemove, &msg, &mut buf);
-    writer.write_all(&buf).await?;
-    Ok(())
+        ban: None,
+    }
 }
 
-/// Send a ChannelState message.
-pub async fn send_channel_state<W: AsyncWriteExt + Unpin>(
-    writer: &mut W,
-    channel: &ChannelData,
-) -> Result<()> {
-    let msg = mumbleproto::ChannelState {
+/// Build a ChannelState message from ChannelData.
+pub fn build_channel_state_msg(channel: &ChannelData) -> mumbleproto::ChannelState {
+    mumbleproto::ChannelState {
         channel_id: Some(channel.id),
         parent: channel.parent_id,
         name: Some(channel.name.clone()),
@@ -378,9 +340,5 @@ pub async fn send_channel_state<W: AsyncWriteExt + Unpin>(
         temporary: Some(channel.temporary),
         max_users: Some(channel.max_users),
         ..Default::default()
-    };
-    let mut buf = BytesMut::new();
-    encode_message(MessageType::ChannelState, &msg, &mut buf);
-    writer.write_all(&buf).await?;
-    Ok(())
+    }
 }
