@@ -127,8 +127,9 @@ export class ACLHandler implements IACLHandler {
           
           channelsInChain.unshift({ id: channelId, inherit_acl: inheritAcl, parent_id: parentId });
 
-          // 如果是当前频道或者继承ACL，且有父频道，继续向上
-          if ((channelId === channel_id || inheritAcl) && parentId > 0) {
+          // 如果是当前频道或者继承ACL，且有父频道（parent_id >= 0 表示父亲是根频道，-1 表示自身就是根），继续向上
+          // 注意：不能用 parentId > 0，否则直接子频道的父节点（根，id=0）会被跳过
+          if ((channelId === channel_id || inheritAcl) && parentId >= 0) {
             currentChannelId = parentId;
           } else {
             break;
