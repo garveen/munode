@@ -5,6 +5,13 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let out_dir = manifest_dir.join("src/generated");
 
+    // If generated files already exist, skip regeneration.
+    // This allows building without protoc when generated files are committed.
+    let expected = out_dir.join("mumbleproto.rs");
+    if expected.exists() {
+        return Ok(());
+    }
+
     // Determine proto directory:
     // 1. MUNODE_PROTO_DIR env var (used in Docker builds)
     // 2. Default: relative path to packages/protocol/proto/
@@ -19,14 +26,7 @@ fn main() -> Result<()> {
             .join("packages/protocol/proto")
     };
 
-    // If proto dir does not exist and generated files already exist, skip regeneration.
-    // This allows building without protoc when generated files are committed.
     if !proto_dir.exists() {
-        let expected = out_dir.join("mumbleproto.rs");
-        if expected.exists() {
-            println!("cargo:warning=Proto dir not found at {:?}, using pre-generated files", proto_dir);
-            return Ok(());
-        }
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!(

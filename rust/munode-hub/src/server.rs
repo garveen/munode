@@ -10,6 +10,7 @@ use tracing::{error, info};
 use munode_common::config::HubConfig;
 use munode_protocol::hubedge::*;
 
+use crate::acl_manager::AclManager;
 use crate::channel_store::ChannelStore;
 use crate::database::Database;
 use crate::edge_connection::EdgeConnection;
@@ -20,8 +21,9 @@ use crate::session_manager::SessionManager;
 pub struct HubState {
     pub config: HubConfig,
     pub session_manager: SessionManager,
-    pub channel_store: ChannelStore,
-    pub database: Database,
+    pub channel_store: Arc<ChannelStore>,
+    pub database: Arc<Database>,
+    pub acl_manager: AclManager,
     pub edge_connections: RwLock<HashMap<u32, EdgeSender>>,
 }
 
@@ -38,14 +40,17 @@ impl HubServer {
     /// Start the Hub server and listen for edge connections.
     pub async fn run(&self) -> Result<()> {
         // Open database
-        let database = Database::open(&self.config.database.path)
-            .context("Failed to open database")?;
+        let database = Arc::new(Database::open(&self.config.database.path)
+            .context("Failed to open database")?);
+
+        let channel_store = Arc::new(ChannelStore::new());
 
         // Create shared state
         let state = Arc::new(HubState {
             config: self.config.clone(),
             session_manager: SessionManager::new(),
-            channel_store: ChannelStore::new(),
+            channel_store: channel_store.clone(),
+            acl_manager: AclManager::new(database.clone(), channel_store.clone()),
             database,
             edge_connections: RwLock::new(HashMap::new()),
         });

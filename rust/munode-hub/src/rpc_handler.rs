@@ -528,15 +528,28 @@ impl RpcHandler {
         request: &TypedRpcRequest,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        let _params = request.edge_handle_permission_query.as_ref()
+        let params = request.edge_handle_permission_query.as_ref()
             .context("Missing edge_handle_permission_query params")?;
 
-        // TODO: Implement proper ACL-based permission checks.
-        // Currently grants all permissions (0x7FFFFFFF) as a stub.
-        // Production use requires checking user groups, channel ACLs, and inheritance.
+        // Look up user groups from the session
+        let groups: Vec<String> = match self.state.session_manager
+            .get_session(params.actor_session).await {
+            Some(s) => s.groups.clone(),
+            None => Vec::new(),
+        };
+
+        // Calculate effective permissions using the ACL manager
+        let permissions = self.state.acl_manager
+            .calculate_permissions(
+                params.actor_user_id as i32,
+                params.channel_id,
+                &groups,
+            )
+            .await;
+
         let result = EdgeHandlePermissionQueryResult {
             success: true,
-            permissions: Some(0x7FFFFFFF),
+            permissions: Some(permissions),
             error: None,
         };
 

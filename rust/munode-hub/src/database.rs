@@ -27,6 +27,19 @@ pub struct DbChannelRecord {
     pub inherit_acl: bool,
 }
 
+/// A ban record from the database.
+#[derive(Debug, Clone)]
+pub struct BanRecord {
+    pub id: i64,
+    pub address: [u8; 16],
+    pub mask: u32,
+    pub name: String,
+    pub cert_hash: String,
+    pub reason: String,
+    pub start_time: i64,
+    pub duration: u32,
+}
+
 /// SQLite database wrapper for the Hub server.
 pub struct Database {
     conn: Mutex<Connection>,
@@ -113,6 +126,9 @@ impl Database {
             )?;
             info!("Created root channel (id=0)");
         }
+
+        // Create bans table
+        Self::init_bans_table(&conn)?;
 
         Ok(())
     }
@@ -217,6 +233,194 @@ impl Database {
             params![channel_id, user_id],
         )?;
         Ok(())
+    }
+
+    /// Load ACL entries for a specific channel.
+    pub fn load_acls(&self, channel_id: u32) -> Result<Vec<crate::acl_manager::AclEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT channel_id, user_id, group_name, apply_here, apply_subs, allow, deny
+             FROM acls WHERE channel_id = ?1"
+        )?;
+
+        let rows = stmt.query_map(params![channel_id], |row| {
+            Ok(crate::acl_manager::AclEntry {
+                channel_id: row.get(0)?,
+                user_id: row.get(1)?,
+                group_name: row.get(2)?,
+                apply_here: row.get::<_, i32>(3)? != 0,
+                apply_subs: row.get::<_, i32>(4)? != 0,
+                allow: row.get::<_, u32>(5)?,
+                deny: row.get::<_, u32>(6)?,
+            })
+        })?;
+
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row?);
+        }
+        Ok(entries)
+    }
+
+    /// Save ACL entries for a channel (replaces all existing entries for that channel).
+    pub fn save_acls(&self, channel_id: u32, entries: &[crate::acl_manager::AclEntry]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM acls WHERE channel_id = ?1", params![channel_id])?;
+
+        let mut stmt = conn.prepare(
+            "INSERT INTO acls (channel_id, user_id, group_name, apply_here, apply_subs, allow, deny)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        )?;
+
+        for entry in entries {
+            stmt.execute(params![
+                channel_id,
+                entry.user_id,
+                entry.group_name,
+                entry.apply_here as i32,
+                entry.apply_subs as i32,
+                entry.allow,
+                entry.deny,
+            ])?;
+        }
+
+        Ok(())
+    }
+
+    /// Load all ACL entries from the database.
+    pub fn load_all_acls(&self) -> Result<Vec<crate::acl_manager::AclEntry>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT channel_id, user_id, group_name, apply_here, apply_subs, allow, deny FROM acls"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::acl_manager::AclEntry {
+                channel_id: row.get(0)?,
+                user_id: row.get(1)?,
+                group_name: row.get(2)?,
+                apply_here: row.get::<_, i32>(3)? != 0,
+                apply_subs: row.get::<_, i32>(4)? != 0,
+                allow: row.get::<_, u32>(5)?,
+                deny: row.get::<_, u32>(6)?,
+            })
+        })?;
+
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row?);
+        }
+        Ok(entries)
+    }
+
+    // ==================== Ban Management ====================
+
+    /// Create bans table if not exists (called from init_tables).
+    fn init_bans_table(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS bans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                address BLOB NOT NULL,
+                mask INTEGER NOT NULL DEFAULT 128,
+                name TEXT NOT NULL DEFAULT '',
+                cert_hash TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL DEFAULT '',
+                start_time INTEGER NOT NULL,
+                duration INTEGER NOT NULL DEFAULT 0
+            );"
+        )?;
+        Ok(())
+    }
+
+    /// Load all ban records.
+    pub fn load_bans(&self) -> Result<Vec<BanRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, address, mask, name, cert_hash, reason, start_time, duration FROM bans"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let addr_blob: Vec<u8> = row.get(1)?;
+            let mut address = [0u8; 16];
+            let copy_len = addr_blob.len().min(16);
+            address[..copy_len].copy_from_slice(&addr_blob[..copy_len]);
+
+            Ok(BanRecord {
+                id: row.get(0)?,
+                address,
+                mask: row.get(2)?,
+                name: row.get(3)?,
+                cert_hash: row.get(4)?,
+                reason: row.get(5)?,
+                start_time: row.get(6)?,
+                duration: row.get(7)?,
+            })
+        })?;
+
+        let mut bans = Vec::new();
+        for row in rows {
+            bans.push(row?);
+        }
+        Ok(bans)
+    }
+
+    /// Add a ban record.
+    pub fn add_ban(&self, ban: &BanRecord) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO bans (address, mask, name, cert_hash, reason, start_time, duration)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                ban.address.to_vec(),
+                ban.mask,
+                ban.name,
+                ban.cert_hash,
+                ban.reason,
+                ban.start_time,
+                ban.duration,
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Replace all bans (used for ban list updates from clients).
+    pub fn replace_bans(&self, bans: &[BanRecord]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM bans", [])?;
+
+        let mut stmt = conn.prepare(
+            "INSERT INTO bans (address, mask, name, cert_hash, reason, start_time, duration)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+        )?;
+
+        for ban in bans {
+            stmt.execute(params![
+                ban.address.to_vec(),
+                ban.mask,
+                ban.name,
+                ban.cert_hash,
+                ban.reason,
+                ban.start_time,
+                ban.duration,
+            ])?;
+        }
+
+        Ok(())
+    }
+
+    /// Remove expired bans.
+    pub fn cleanup_expired_bans(&self) -> Result<u32> {
+        let conn = self.conn.lock().unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let count = conn.execute(
+            "DELETE FROM bans WHERE duration > 0 AND (start_time + duration) < ?1",
+            params![now],
+        )?;
+        Ok(count as u32)
     }
 }
 
