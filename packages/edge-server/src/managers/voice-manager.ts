@@ -287,13 +287,13 @@ export class VoiceManager {
         `seq=${packet.sequence}, data_size=${packet.data.length}`
       );
 
-      // 记录收到的包用于网络质量统计（被动探测）
+      // 记录收到的包用于网络质量统计（被动探测，仅更新序列号，不计算RTT）
+      // 注意：不传 sendTimestamp，因为语音包不携带发送时间，RTT 由心跳 quality-measured 事件提供
       // 必须使用 sourceEdgeId（Edge ID），而不是 packet.senderId（Mumble session ID）
       if (this.voiceRoutingManager.isEnabled()) {
         this.voiceRoutingManager.recordReceivedPacket(
           sourceEdgeId,
-          packet.sequence || 0,
-          Date.now()
+          packet.sequence || 0
         );
       }
 

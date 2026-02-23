@@ -148,6 +148,9 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
   private statsCache: { stats: RouteStats; timestamp: number } | null = null;
   private readonly STATS_CACHE_TTL = 3000; // 3秒缓存
 
+  // 质量上报节流：记录每个 edge 上次向 Hub 上报的时间
+  private lastQualityReportTime: Map<number, number> = new Map();
+
   constructor(config: EdgeConfig, logger: Logger, voiceTransport?: VoiceUDPTransport) {
     super();
     this.config = config;
@@ -705,10 +708,17 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     
     this.connectionQualities.set(sourceEdgeId, quality);
     
-    // 触发质量更新事件
-    this.emit('quality-updated', sourceEdgeId, quality);
-    
-    this.logger.debug(`Quality updated for Edge ${sourceEdgeId}:`, quality);
+    // 触发质量更新事件（节流：每 network_probe_interval 最多上报一次）
+    const now2 = Date.now();
+    const reportInterval = this.voiceRoutingConfig.hub_policy.network_probe_interval;
+    const lastReport = this.lastQualityReportTime.get(sourceEdgeId) ?? 0;
+    if (now2 - lastReport >= reportInterval) {
+      this.lastQualityReportTime.set(sourceEdgeId, now2);
+      this.emit('quality-updated', sourceEdgeId, quality);
+      this.logger.debug(`Quality reported to Hub for Edge ${sourceEdgeId}:`, quality);
+    } else {
+      this.logger.debug(`Quality updated for Edge ${sourceEdgeId} (throttled, next report in ${reportInterval - (now2 - lastReport)}ms):`, quality);
+    }
   }
 
   /**
