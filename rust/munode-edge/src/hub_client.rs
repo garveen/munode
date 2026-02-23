@@ -71,6 +71,11 @@ impl HubClient {
         *self.state.read().await
     }
 
+    /// Get the current edge ID (our registered ID from Hub, or fallback to server_id).
+    async fn edge_id(&self) -> u32 {
+        self.edge_state.edge_id.read().await.unwrap_or(self.server_id)
+    }
+
     /// Generate a unique request ID.
     async fn next_request_id(&self) -> String {
         let mut counter = self.request_counter.lock().await;
@@ -547,7 +552,7 @@ impl HubClient {
             let packet = EdgeHubPacket {
                 r#type: PacketType::Heartbeat as i32,
                 heartbeat: Some(hubedge::Heartbeat {
-                    edge_id: self.edge_state.edge_id.read().await.unwrap_or(self.server_id),
+                    edge_id: self.edge_id().await,
                     sequence,
                     stats: Some(hubedge::ServerStats {
                         user_count,
@@ -611,7 +616,7 @@ impl HubClient {
 
     /// Notify the Hub that a local user has disconnected.
     pub async fn notify_user_left(&self, session_id: u32, reason: Option<&str>) {
-        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let edge_id = self.edge_id().await;
         let params_json = serde_json::json!({
             "session_id": session_id,
             "edge_id": edge_id,
@@ -643,7 +648,7 @@ impl HubClient {
         reason: &str,
         ban: bool,
     ) {
-        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let edge_id = self.edge_id().await;
         let params_json = serde_json::json!({
             "edge_id": edge_id,
             "actor_session": actor_session,
@@ -671,7 +676,7 @@ impl HubClient {
 
     /// Notify the Hub about a user channel move.
     pub async fn notify_user_moved(&self, session_id: u32, channel_id: u32) {
-        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let edge_id = self.edge_id().await;
         let params_json = serde_json::json!({
             "session_id": session_id,
             "edge_id": edge_id,
@@ -695,7 +700,7 @@ impl HubClient {
 
     /// Notify the Hub about a user state change (self-mute/deaf etc).
     pub async fn notify_user_state_changed(&self, session_id: u32, user_state_json: serde_json::Value) {
-        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let edge_id = self.edge_id().await;
         let mut params = user_state_json;
         params["session_id"] = serde_json::json!(session_id);
         params["edge_id"] = serde_json::json!(edge_id);
@@ -722,7 +727,7 @@ impl HubClient {
         channel_id: u32,
     ) -> Result<hubedge::EdgeHandlePermissionQueryResult> {
         let request_id = self.next_request_id().await;
-        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let edge_id = self.edge_id().await;
 
         // Get actor info from client
         let (user_id, username) = if let Some(client) = self.edge_state.client_manager.get_client(session_id).await {
@@ -758,7 +763,7 @@ impl HubClient {
         config: Option<hubedge::VoiceTargetConfigProto>,
     ) -> Result<hubedge::EdgeSyncVoiceTargetResult> {
         let request_id = self.next_request_id().await;
-        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let edge_id = self.edge_id().await;
         let request = TypedRpcRequest {
             request_id,
             method: "edge.syncVoiceTarget".to_string(),
@@ -780,7 +785,7 @@ impl HubClient {
     /// Allocate a session ID from the Hub.
     pub async fn allocate_session_id(&self) -> Result<u32> {
         let request_id = self.next_request_id().await;
-        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let edge_id = self.edge_id().await;
         let request = TypedRpcRequest {
             request_id,
             method: "edge.allocateSessionId".to_string(),
@@ -837,7 +842,7 @@ impl HubClient {
 
     /// Notify Hub about a channel removal request.
     pub async fn notify_channel_remove(&self, channel_id: u32) {
-        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let edge_id = self.edge_id().await;
         let params_json = serde_json::json!({
             "edge_id": edge_id,
             "channel_id": channel_id,
@@ -860,7 +865,7 @@ impl HubClient {
 
     /// Forward a text message to Hub for cross-edge delivery.
     pub async fn notify_text_message(&self, sender_session: u32, text_msg: &munode_protocol::mumbleproto::TextMessage) {
-        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let edge_id = self.edge_id().await;
         let params_json = serde_json::json!({
             "edge_id": edge_id,
             "actor": sender_session,

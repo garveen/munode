@@ -861,6 +861,7 @@ impl RpcHandler {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
                 let actor = v["actor"].as_u64().unwrap_or(0) as u32;
                 if actor == 0 {
+                    debug!("Ignoring text message with invalid actor=0");
                     return;
                 }
 

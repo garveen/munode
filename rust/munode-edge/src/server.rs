@@ -523,20 +523,25 @@ async fn handle_client_connection(
                 MessageType::QueryUsers if client_state == ClientState::Ready => {
                     let query = mumbleproto::QueryUsers::decode(&frame.payload[..])?;
                     debug!("QueryUsers from {}: ids={:?}, names={:?}", peer_addr, query.ids, query.names);
-                    // Return matching users from local clients
+                    // Return matching users from local clients (deduplicated)
                     let mut result_ids = Vec::new();
                     let mut result_names = Vec::new();
+                    let mut seen = std::collections::HashSet::new();
                     let all_clients = edge_state.client_manager.get_all_clients().await;
                     for req_id in &query.ids {
                         if let Some(client) = all_clients.iter().find(|c| c.user_id == *req_id) {
-                            result_ids.push(client.user_id);
-                            result_names.push(client.username.clone());
+                            if seen.insert(client.user_id) {
+                                result_ids.push(client.user_id);
+                                result_names.push(client.username.clone());
+                            }
                         }
                     }
                     for req_name in &query.names {
                         if let Some(client) = all_clients.iter().find(|c| c.username == *req_name) {
-                            result_ids.push(client.user_id);
-                            result_names.push(client.username.clone());
+                            if seen.insert(client.user_id) {
+                                result_ids.push(client.user_id);
+                                result_names.push(client.username.clone());
+                            }
                         }
                     }
                     let response = mumbleproto::QueryUsers {
