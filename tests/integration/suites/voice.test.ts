@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { TestEnvironment, setupTestEnvironment, createClients, cleanupClients } from '../setup';
+import { TestEnvironment, setupTestEnvironment, createClients, cleanupClients, sleep, waitForCondition } from '../setup';
 import { MumbleClient } from '../../../packages/client/src/index.js';
 import * as crypto from 'crypto';
 
@@ -129,7 +129,7 @@ describe('Voice Integration Tests', () => {
   let adminForCleanup: MumbleClient | null = null;
 
   beforeAll(async () => {
-    testEnv = await setupTestEnvironment(8089, { silent: false }); // 启用日志输出用于调试
+    testEnv = await setupTestEnvironment(8089, { reuse: false }); // 使用独立环境，避免与其他测试冲突
   }, 60000);
 
   afterAll(async () => {
@@ -140,22 +140,17 @@ describe('Voice Integration Tests', () => {
   });
 
   beforeEach(async () => {
-    if (!adminForCleanup) {
+    // 检查 adminForCleanup 是否仍然连接（例如 Hub 重启后可能断开）
+    if (!adminForCleanup || !adminForCleanup.isConnected()) {
+      if (adminForCleanup) {
+        try { await adminForCleanup.disconnect(); } catch { /* ignore */ }
+      }
       adminForCleanup = await createAdminClient(testEnv);
     }
-    const tempClient = new MumbleClient();
-    await tempClient.connect({
-      host: 'localhost',
-      port: testEnv.edgePort,
-      username: 'user1',
-      password: 'password1',
-      rejectUnauthorized: false,
-    });
-    const channels = tempClient.getChannels();
+    // 直接从已连接的 adminForCleanup 获取频道列表，无需额外创建 tempClient
+    const channels = adminForCleanup.getChannels();
     await clearAllChannelLinks(adminForCleanup, channels);
-    await tempClient.disconnect();
-    // Increase cleanup wait time to ensure full disconnection
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await sleep(300);
   });
 
   describe('Basic Voice Broadcasting (target=0)', () => {
@@ -458,13 +453,29 @@ describe('Voice Integration Tests', () => {
       await testEnv.hubServer.stop();
       await new Promise(resolve => setTimeout(resolve, 1000));
       await testEnv.hubServer.start();
-      // 等待 Edge 重连 Hub 并完成频道同步
-      // Edge 检测到 Hub 断开 → 重连 → joinCluster → loadDataFromHub，整个流程约需 5 秒
-      await new Promise(resolve => setTimeout(resolve, 5000));
-
-      // 用 admin 探测 Edge 是否已恢复（admin 连接成功 = Edge 已完成 Hub 重连和认证服务恢复）
-      const adminAfterRestart = await createAdminClient(testEnv);
-      await adminAfterRestart.disconnect();
+      // 等待 Edge 重连 Hub 并完成频道同步（主动检测而非固定等待）
+      // Edge 检测到 Hub 断开 → 重连 → joinCluster → loadDataFromHub
+      await waitForCondition(
+        async () => {
+          try {
+            const probe = new MumbleClient();
+            await probe.connect({
+              host: 'localhost',
+              port: testEnv.edgePort,
+              username: 'admin',
+              password: 'admin123',
+              rejectUnauthorized: false,
+            });
+            await probe.disconnect();
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        15000, // 最多等 15 秒
+        500,
+        'Edge to reconnect to Hub after restart'
+      );
 
       // 重启后连接客户端
       const clients = await createClients(testEnv, [

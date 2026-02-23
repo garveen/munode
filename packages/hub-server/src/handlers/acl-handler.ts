@@ -311,8 +311,8 @@ export class ACLHandler implements IACLHandler {
           this.logger.info(`Channel ${channel_id} inherit_acl updated to ${acl.inherit_acls}`);
         }
 
-        // 处理频道组更新
-        if (this.factory.getChannelGroupManager() && acl.groups && acl.groups.length > 0) {
+        // 处理频道组更新（acl.groups 为空数组时表示清除所有组）
+        if (this.factory.getChannelGroupManager() && acl.groups !== undefined && acl.groups !== null) {
           this.logger.info(`Channel ${channel_id} channel groups update requested: ${acl.groups.length} groups`);
 
           // 只保存非继承的组

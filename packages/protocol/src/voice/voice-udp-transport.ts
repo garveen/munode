@@ -91,6 +91,9 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   private encryptedPacketCache = new Map<string, Buffer>();
   private readonly CACHE_MAX_SIZE = 500;
   
+  // 运行状态
+  private stopped = false;
+  
   // 统计
   private stats = {
     packetsSent: 0,
@@ -157,6 +160,7 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
    * 停止传输层
    */
   stop(): void {
+    this.stopped = true;
     this.connectionManager.stop();
     this.encryptedPacketCache.clear();
     this.logger.info('VoiceUDPTransport stopped');
@@ -300,10 +304,39 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
   }
 
   /**
+   * 获取所有连接状态列表（兼容旧测试 API）
+   */
+  getAllConnectionStatus(): Array<{ edgeId: number; connected: boolean; handshakeComplete: boolean }> {
+    const statuses = this.connectionManager.getAllConnectionStatuses();
+    return Array.from(statuses.entries()).map(([edgeId, status]) => ({
+      edgeId,
+      connected: status.isConnected,
+      handshakeComplete: status.isConnected,
+    }));
+  }
+
+  /**
+   * 检查传输层是否处于运行状态
+   */
+  isRunning(): boolean {
+    return !this.stopped;
+  }
+
+  /**
+   * 获取当前加密配置
+   */
+  getEncryptionConfig(): VoiceEncryptionConfig | null {
+    return this.encryptionConfig;
+  }
+
+  /**
    * 获取统计信息
    */
   getStats() {
-    return { ...this.stats };
+    return {
+      ...this.stats,
+      registeredEndpoints: this.connectionManager.getAllConnectionStatuses().size,
+    };
   }
 
   /**

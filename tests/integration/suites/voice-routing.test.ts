@@ -518,12 +518,13 @@ describe('4-Edge Voice Routing Tests', () => {
     it('should record network quality metrics with simulated degradation', async () => {
       const clients = await createClients(testEnv, [
         { username: 'network_sim_sender', edge: 1, channelId: 0 },
-        { username: 'network_sim_receiver', edge: 2, channelId: 0 },
+        // 接收方使用 UDP 语音，这样 Edge 2 的 UDP socket 模拟才能影响语音包下发
+        { username: 'network_sim_receiver', edge: 2, channelId: 0, useUdpVoice: true },
       ]);
       
       const [sender, receiver] = clients;
       
-      // 为 Edge 2 应用网络劣化
+      // 为 Edge 2 应用网络劣化（在客户端 UDP 连接建立后再应用，避免干扰握手包）
       const edge2Socket = testEnv.edgeServer2?.getUDPSocket();
       
       if (!edge2Socket) {
@@ -586,7 +587,8 @@ describe('4-Edge Voice Routing Tests', () => {
     it('should handle severe network degradation', async () => {
       const clients = await createClients(testEnv, [
         { username: 'severe_sender', edge: 1, channelId: 0 },
-        { username: 'severe_receiver', edge: 2, channelId: 0 },
+        // 接收方使用 UDP 语音，这样严重丢包模拟才能真正影响语音包接收
+        { username: 'severe_receiver', edge: 2, channelId: 0, useUdpVoice: true },
       ]);
       
       const [sender, receiver] = clients;

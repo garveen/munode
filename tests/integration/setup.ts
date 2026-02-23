@@ -96,6 +96,11 @@ export interface ClientConfig {
   username: string;
   edge: 1 | 2 | 3 | 4;
   channelId?: number;
+  /**
+   * 使用 UDP 语音而非 TCP。启用后 createClients 会等待 UDP 握手完成。
+   * 用于测试需要真实 UDP 路径（如网络质量模拟）的场景。
+   */
+  useUdpVoice?: boolean;
 }
 
 /**
@@ -134,12 +139,18 @@ export async function createClients(testEnv: TestEnvironment, configs: ClientCon
         username: config.username,
         password: userInfo.password,
         rejectUnauthorized: false,
-        forceTcpVoice: true,
+        forceTcpVoice: !config.useUdpVoice,
       });
-      
-      // 使用 TCP 语音，不需要等待 UDP 连接
-      console.log(`[TEST] ${config.username} connected, using TCP voice`);
-      
+
+      if (config.useUdpVoice) {
+        // 等待 UDP 握手完成（handleCryptSetup 异步运行，connect() 返回后才发送 UDP ping）
+        console.log(`[TEST] ${config.username} connected, waiting for UDP handshake...`);
+        await client.waitForUDP(8000);
+        console.log(`[TEST] ${config.username} UDP connection established`);
+      } else {
+        console.log(`[TEST] ${config.username} connected, using TCP voice`);
+      }
+
       if (config.channelId !== undefined) {
         await client.sendUserState({ channel_id: config.channelId });
         await new Promise(resolve => setTimeout(resolve, 200));

@@ -16,8 +16,6 @@ export default {
   tls: {
     cert: 'tests/integration/certs/server.pem',
     key: 'tests/integration/certs/server.key',
-    require_client_cert: false,
-    reject_unauthorized: false,
   },
   
   hub_server: {
@@ -27,7 +25,6 @@ export default {
     tls: {
       reject_unauthorized: false,
     },
-    connection_type: 'websocket',
     reconnect_interval: 5000,
     heartbeat_interval: 30000,
     pool_size: 2,
@@ -41,22 +38,14 @@ export default {
     capacity: 100,
     max_bandwidth: 558000,
     default_channel: 0,
-    timeout: 30,
   },
   
   client: {
-    max_text_message_length: 5000,
-    max_image_message_length: 131072,
   },
   
   features: {
     geoip: false,
-    ban_system: false,
-    context_actions: false,
-    packet_pool: true,
-    udp_monitor: false,
     allow_ping: true,
-    allow_html: true,
   },
   
   log_level: 'debug',
@@ -70,8 +59,6 @@ export default {
       tls: {
         cert: 'tests/integration/certs/server.pem',
         key: 'tests/integration/certs/server.key',
-        require_client_cert: false,
-        reject_unauthorized: false,
       },
       welcomeText: 'Welcome to Test Server 1',
       maxUsers: 50,
@@ -84,8 +71,6 @@ export default {
       tls: {
         cert: 'tests/integration/certs/server2.pem',
         key: 'tests/integration/certs/server2.key',
-        require_client_cert: false,
-        reject_unauthorized: false,
       },
       welcomeText: 'Welcome to Test Server 2',
       maxUsers: 50,
@@ -98,8 +83,6 @@ export default {
       tls: {
         cert: 'tests/integration/certs/server3.pem',
         key: 'tests/integration/certs/server3.key',
-        require_client_cert: false,
-        reject_unauthorized: false,
       },
       welcomeText: 'Welcome to Test Server 3',
       maxUsers: 50,
