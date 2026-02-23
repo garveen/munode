@@ -118,13 +118,13 @@ impl RpcHandler {
                 self.on_user_state_changed(&notification).await;
             }
             "hub.handleTextMessage" => {
-                debug!("Text message forwarding (not yet implemented)");
+                self.on_text_message(&notification, edge_server_id).await;
             }
             "hub.handleChannelState" => {
-                debug!("Channel state notification (not yet implemented)");
+                self.on_channel_state(&notification).await;
             }
             "hub.handleChannelRemove" => {
-                debug!("Channel remove notification (not yet implemented)");
+                self.on_channel_remove(&notification).await;
             }
             _ => {
                 debug!("Unhandled notification: {}", method);
@@ -850,6 +850,119 @@ impl RpcHandler {
                         session.recording = rec;
                     }
                     sessions.add_session(session).await;
+                }
+            }
+        }
+    }
+
+    /// Handle text message forwarding: relay to all other edges (not the sender).
+    async fn on_text_message(&self, notification: &TypedRpcNotification, source_edge_id: u32) {
+        if let Some(json_str) = &notification.unknown_params_json {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+                let actor = v["actor"].as_u64().unwrap_or(0) as u32;
+                if actor == 0 {
+                    return;
+                }
+
+                debug!("Forwarding text message from actor {} (edge {}) to other edges", actor, source_edge_id);
+
+                // Forward to all edges except the source
+                let forward_notification = TypedRpcNotification {
+                    method: "hub.textMessageForward".to_string(),
+                    timestamp: Some(current_millis() as i64),
+                    unknown_params_json: Some(json_str.clone()),
+                    ..Default::default()
+                };
+
+                let packet = EdgeHubPacket {
+                    r#type: PacketType::RpcNotification as i32,
+                    rpc_notification: Some(forward_notification),
+                    ..Default::default()
+                };
+                let data = packet.encode_to_vec();
+
+                let edges = self.state.edge_connections.read().await;
+                for (edge_id, sender) in edges.iter() {
+                    if *edge_id == source_edge_id {
+                        continue;
+                    }
+                    if let Err(e) = sender.try_send(data.clone()) {
+                        warn!("Failed to forward text message to edge {}: {}", edge_id, e);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle channel state notification from an edge (channel create/edit request).
+    async fn on_channel_state(&self, notification: &TypedRpcNotification) {
+        if let Some(json_str) = &notification.unknown_params_json {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+                let channel_id = v["channel_id"].as_u64().map(|n| n as u32);
+                let name = v["name"].as_str().map(String::from);
+                let parent_id = v["parent_id"].as_u64().map(|n| n as u32);
+
+                if let Some(ch_id) = channel_id {
+                    // Update existing channel
+                    if let Some(mut ch) = self.state.channel_store.get_channel(ch_id).await {
+                        if let Some(n) = &name {
+                            ch.name = n.clone();
+                        }
+                        if let Some(pid) = parent_id {
+                            ch.parent_id = Some(pid);
+                        }
+                        if let Some(pos) = v["position"].as_i64() {
+                            ch.position = pos as i32;
+                        }
+                        if let Some(desc) = v["description"].as_str() {
+                            ch.description = desc.to_string();
+                        }
+                        self.state.channel_store.update_channel(ch).await;
+
+                        // Broadcast to all edges
+                        if let Some(ch) = self.state.channel_store.get_channel(ch_id).await {
+                            let proto = ChannelDataProto {
+                                channel_id: ch.id,
+                                name: ch.name,
+                                parent_id: ch.parent_id,
+                                description: Some(ch.description),
+                                position: Some(ch.position),
+                                max_users: if ch.max_users > 0 { Some(ch.max_users) } else { None },
+                                temporary: Some(ch.temporary),
+                                inherit_acl: Some(ch.inherit_acl),
+                                links: ch.links.iter().copied().collect(),
+                            };
+                            self.broadcast_notification("hub.channelUpdated", |n| {
+                                n.channel_updated = Some(HubChannelUpdatedParams { channel: proto });
+                            }).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle channel removal notification from an edge.
+    async fn on_channel_remove(&self, notification: &TypedRpcNotification) {
+        if let Some(json_str) = &notification.unknown_params_json {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+                let channel_id = v["channel_id"].as_u64().unwrap_or(0) as u32;
+                if channel_id == 0 {
+                    return; // Don't allow removing root channel
+                }
+
+                if let Some(removed) = self.state.channel_store.remove_channel(channel_id).await {
+                    info!("Channel removed: {} (id={})", removed.name, channel_id);
+
+                    // Delete from database
+                    if let Err(e) = self.state.database.delete_channel(channel_id) {
+                        warn!("Failed to delete channel {} from database: {}", channel_id, e);
+                    }
+
+                    // Broadcast to all edges
+                    self.broadcast_notification("hub.channelRemoved", |n| {
+                        n.channel_removed = Some(HubChannelRemovedParams { channel_id });
+                    }).await;
                 }
             }
         }

@@ -313,7 +313,10 @@ async fn handle_client_connection(
                     let text_msg = mumbleproto::TextMessage::decode(&frame.payload[..])?;
                     if let Some(sid) = session_id {
                         debug!("TextMessage from session {}: {:?}", sid, text_msg.message);
+                        // Local broadcast to clients on this edge
                         broadcast_text_message(&edge_state, sid, &text_msg).await;
+                        // Forward to Hub for cross-edge delivery
+                        hub_client.notify_text_message(sid, &text_msg).await;
                     }
                 }
                 MessageType::UdpTunnel if client_state == ClientState::Ready => {
@@ -476,10 +479,92 @@ async fn handle_client_connection(
                     }
                 }
                 MessageType::ChannelState if client_state == ClientState::Ready => {
-                    // Client requesting channel create/edit - forward to Hub
+                    // Client requesting channel create/edit - forward to Hub via saveChannel RPC
                     let ch_state = mumbleproto::ChannelState::decode(&frame.payload[..])?;
                     debug!("ChannelState from {}: channel_id={:?}, name={:?}", peer_addr, ch_state.channel_id, ch_state.name);
-                    // TODO: Forward to Hub for channel create/edit
+
+                    let hub = hub_client.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = hub.save_channel(
+                            ch_state.channel_id,
+                            ch_state.parent,
+                            ch_state.name.as_deref(),
+                            ch_state.description.as_deref(),
+                            ch_state.position,
+                            ch_state.max_users,
+                        ).await {
+                            warn!("Failed to forward ChannelState to Hub: {}", e);
+                        }
+                    });
+                }
+                MessageType::ChannelRemove if client_state == ClientState::Ready => {
+                    // Client requesting channel removal - forward to Hub
+                    let ch_remove = mumbleproto::ChannelRemove::decode(&frame.payload[..])?;
+                    debug!("ChannelRemove from {}: channel_id={}", peer_addr, ch_remove.channel_id);
+
+                    let hub = hub_client.clone();
+                    tokio::spawn(async move {
+                        hub.notify_channel_remove(ch_remove.channel_id).await;
+                    });
+                }
+                MessageType::BanList if client_state == ClientState::Ready => {
+                    // BanList query/update - log and acknowledge
+                    let ban_list = mumbleproto::BanList::decode(&frame.payload[..])?;
+                    debug!("BanList from {}: query={:?}, {} entries", peer_addr, ban_list.query, ban_list.bans.len());
+                    if ban_list.query.unwrap_or(false) {
+                        // Return empty ban list for now
+                        let response = mumbleproto::BanList {
+                            bans: vec![],
+                            query: Some(false),
+                        };
+                        client_sender.send_message(MessageType::BanList, &response).await;
+                    }
+                }
+                MessageType::QueryUsers if client_state == ClientState::Ready => {
+                    let query = mumbleproto::QueryUsers::decode(&frame.payload[..])?;
+                    debug!("QueryUsers from {}: ids={:?}, names={:?}", peer_addr, query.ids, query.names);
+                    // Return matching users from local clients
+                    let mut result_ids = Vec::new();
+                    let mut result_names = Vec::new();
+                    let all_clients = edge_state.client_manager.get_all_clients().await;
+                    for req_id in &query.ids {
+                        if let Some(client) = all_clients.iter().find(|c| c.user_id == *req_id) {
+                            result_ids.push(client.user_id);
+                            result_names.push(client.username.clone());
+                        }
+                    }
+                    for req_name in &query.names {
+                        if let Some(client) = all_clients.iter().find(|c| c.username == *req_name) {
+                            result_ids.push(client.user_id);
+                            result_names.push(client.username.clone());
+                        }
+                    }
+                    let response = mumbleproto::QueryUsers {
+                        ids: result_ids,
+                        names: result_names,
+                    };
+                    client_sender.send_message(MessageType::QueryUsers, &response).await;
+                }
+                MessageType::RequestBlob if client_state == ClientState::Ready => {
+                    // RequestBlob - request for user textures/comments or channel descriptions
+                    let blob = mumbleproto::RequestBlob::decode(&frame.payload[..])?;
+                    debug!("RequestBlob from {}: session_textures={:?}, session_comments={:?}, channel_descriptions={:?}",
+                           peer_addr, blob.session_texture, blob.session_comment, blob.channel_description);
+                    // Send empty responses for channel descriptions that were requested
+                    for &channel_id in &blob.channel_description {
+                        if let Some(ch) = edge_state.channel_manager.get_channel(channel_id).await {
+                            if let Some(desc) = &ch.description {
+                                if !desc.is_empty() {
+                                    let msg = mumbleproto::ChannelState {
+                                        channel_id: Some(channel_id),
+                                        description: Some(desc.clone()),
+                                        ..Default::default()
+                                    };
+                                    client_sender.send_message(MessageType::ChannelState, &msg).await;
+                                }
+                            }
+                        }
+                    }
                 }
                 other => {
                     debug!("Unhandled message type {:?} from {} (state={:?})", other, peer_addr, client_state);
@@ -675,6 +760,30 @@ async fn hub_event_listener(
                     }
                     EdgeEvent::HubDisconnected => {
                         warn!("Hub disconnected - local clients will continue but some features unavailable");
+                    }
+                    EdgeEvent::TextMessageForward { actor, message, channel_id, tree_id, session } => {
+                        let msg = mumbleproto::TextMessage {
+                            actor: Some(actor),
+                            message,
+                            channel_id,
+                            tree_id,
+                            session,
+                        };
+                        // Send to targeted sessions on this edge, or broadcast to channels
+                        if !msg.session.is_empty() {
+                            for &target_session in &msg.session {
+                                state.client_manager.send_to(target_session, MessageType::TextMessage, &msg).await;
+                            }
+                        } else if !msg.channel_id.is_empty() {
+                            for &ch_id in &msg.channel_id {
+                                state.client_manager.broadcast_to_channel(ch_id, MessageType::TextMessage, &msg, None).await;
+                            }
+                        } else if !msg.tree_id.is_empty() {
+                            for &ch_id in &msg.tree_id {
+                                state.client_manager.broadcast_to_channel(ch_id, MessageType::TextMessage, &msg, None).await;
+                            }
+                        }
+                        debug!("Forwarded text message from remote actor {}", actor);
                     }
                 }
             }

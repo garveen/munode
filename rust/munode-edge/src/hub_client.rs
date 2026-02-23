@@ -364,6 +364,32 @@ impl HubClient {
                     info!("Peer edge joined: {} (id {})", params.name, params.id);
                 }
             }
+            "hub.textMessageForward" => {
+                // Text message forwarded from another edge via Hub
+                if let Some(json_str) = &notification.unknown_params_json {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        let actor = v["actor"].as_u64().unwrap_or(0) as u32;
+                        let message = v["message"].as_str().unwrap_or_default().to_string();
+                        let channel_id: Vec<u32> = v["channel_id"].as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
+                            .unwrap_or_default();
+                        let tree_id: Vec<u32> = v["tree_id"].as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
+                            .unwrap_or_default();
+                        let session: Vec<u32> = v["session"].as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
+                            .unwrap_or_default();
+
+                        self.edge_state.emit(EdgeEvent::TextMessageForward {
+                            actor,
+                            message,
+                            channel_id,
+                            tree_id,
+                            session,
+                        });
+                    }
+                }
+            }
             _ => {
                 debug!("Unhandled notification: {}", method);
             }
@@ -772,6 +798,91 @@ impl HubClient {
             .ok_or_else(|| anyhow::anyhow!("No edge_allocate_session_id in response"))?;
 
         Ok(result.session_id)
+    }
+
+    /// Forward a channel create/edit request to Hub via saveChannel RPC.
+    pub async fn save_channel(
+        &self,
+        channel_id: Option<u32>,
+        parent_id: Option<u32>,
+        name: Option<&str>,
+        description: Option<&str>,
+        position: Option<i32>,
+        max_users: Option<u32>,
+    ) -> Result<hubedge::EdgeSaveChannelResult> {
+        let request_id = self.next_request_id().await;
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.saveChannel".to_string(),
+            timeout_ms: Some(10000),
+            edge_save_channel: Some(hubedge::EdgeSaveChannelParams {
+                id: channel_id,
+                parent_id,
+                name: name.map(String::from),
+                description: description.map(String::from),
+                description_blob: None,
+                position,
+                max_users,
+                inherit_acl: None,
+            }),
+            ..Default::default()
+        };
+
+        let response = self.rpc_call(request).await
+            .context("edge.saveChannel RPC failed")?;
+
+        response.edge_save_channel
+            .ok_or_else(|| anyhow::anyhow!("No edge_save_channel in response"))
+    }
+
+    /// Notify Hub about a channel removal request.
+    pub async fn notify_channel_remove(&self, channel_id: u32) {
+        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let params_json = serde_json::json!({
+            "edge_id": edge_id,
+            "channel_id": channel_id,
+        });
+        let notification = TypedRpcNotification {
+            method: "hub.handleChannelRemove".to_string(),
+            timestamp: Some(current_millis() as i64),
+            unknown_params_json: Some(params_json.to_string()),
+            ..Default::default()
+        };
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+        if let Err(e) = self.send_packet(&packet).await {
+            warn!("Failed to notify Hub of channel remove: {}", e);
+        }
+    }
+
+    /// Forward a text message to Hub for cross-edge delivery.
+    pub async fn notify_text_message(&self, sender_session: u32, text_msg: &munode_protocol::mumbleproto::TextMessage) {
+        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let params_json = serde_json::json!({
+            "edge_id": edge_id,
+            "actor": sender_session,
+            "message": text_msg.message,
+            "channel_id": text_msg.channel_id,
+            "tree_id": text_msg.tree_id,
+            "session": text_msg.session,
+        });
+        let notification = TypedRpcNotification {
+            method: "hub.handleTextMessage".to_string(),
+            timestamp: Some(current_millis() as i64),
+            unknown_params_json: Some(params_json.to_string()),
+            ..Default::default()
+        };
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+        if let Err(e) = self.send_packet(&packet).await {
+            warn!("Failed to forward text message to Hub: {}", e);
+        }
     }
 }
 

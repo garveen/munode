@@ -24,6 +24,14 @@ pub enum EdgeEvent {
     ChannelRemoved { channel_id: u32 },
     /// A channel was updated.
     ChannelUpdated { channel_id: u32 },
+    /// A text message forwarded from another edge via Hub.
+    TextMessageForward {
+        actor: u32,
+        message: String,
+        channel_id: Vec<u32>,
+        tree_id: Vec<u32>,
+        session: Vec<u32>,
+    },
 }
 
 /// Shared state accessible by all components of the Edge server.
