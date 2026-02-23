@@ -18,7 +18,7 @@ COPY munode-hub/ munode-hub/
 COPY ../packages/protocol/proto/ /proto/
 
 # Build in release mode
-RUN cargo build --release --bin munode-edge
+RUN cargo build --release --bin munode-edge --bin munode-hub
 
 # Stage 2: Minimal runtime image
 FROM debian:bookworm-slim AS runtime
@@ -30,8 +30,9 @@ RUN groupadd -r munode && useradd -r -g munode munode
 
 WORKDIR /app
 
-# Copy the binary from the builder stage
+# Copy the binaries from the builder stage
 COPY --from=builder /build/target/release/munode-edge /app/munode-edge
+COPY --from=builder /build/target/release/munode-hub /app/munode-hub
 
 # Create directories for config, certs, and logs
 RUN mkdir -p /app/config /app/certs /app/logs && chown -R munode:munode /app

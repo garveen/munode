@@ -219,3 +219,72 @@ impl Database {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_db() -> Database {
+        Database::open(":memory:").unwrap()
+    }
+
+    #[test]
+    fn test_init_creates_root_channel() {
+        let db = temp_db();
+        let channels = db.load_channels().unwrap();
+        assert!(channels.iter().any(|c| c.id == 0 && c.name == "Root"));
+    }
+
+    #[test]
+    fn test_save_and_load_channel() {
+        let db = temp_db();
+        let ch = DbChannelRecord {
+            id: 1,
+            parent_id: Some(0),
+            name: "General".to_string(),
+            description: "A general channel".to_string(),
+            position: 0,
+            max_users: 50,
+            temporary: false,
+            inherit_acl: true,
+        };
+        db.save_channel(&ch).unwrap();
+
+        let channels = db.load_channels().unwrap();
+        assert!(channels.iter().any(|c| c.id == 1 && c.name == "General"));
+    }
+
+    #[test]
+    fn test_delete_channel() {
+        let db = temp_db();
+        let ch = DbChannelRecord {
+            id: 5,
+            parent_id: Some(0),
+            name: "ToDelete".to_string(),
+            description: String::new(),
+            position: 0,
+            max_users: 0,
+            temporary: true,
+            inherit_acl: true,
+        };
+        db.save_channel(&ch).unwrap();
+        db.delete_channel(5).unwrap();
+
+        let channels = db.load_channels().unwrap();
+        assert!(!channels.iter().any(|c| c.id == 5));
+    }
+
+    #[test]
+    fn test_find_user_not_found() {
+        let db = temp_db();
+        let user = db.find_user("nonexistent").unwrap();
+        assert!(user.is_none());
+    }
+
+    #[test]
+    fn test_load_channel_links() {
+        let db = temp_db();
+        let links = db.load_channel_links().unwrap();
+        assert!(links.is_empty());
+    }
+}

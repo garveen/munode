@@ -628,7 +628,7 @@ impl RpcHandler {
                 inherit_acl: params.inherit_acl.unwrap_or(true),
                 links: std::collections::HashSet::new(),
             };
-            let id = self.state.channel_store.create_channel(ch.clone()).await;
+            let id = self.state.channel_store.create_channel_auto_id(ch.clone()).await;
 
             // Save to database
             let db_ch = DbChannelRecord {

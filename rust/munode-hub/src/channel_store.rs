@@ -129,10 +129,16 @@ impl ChannelStore {
     }
 
     /// Create a new channel and return its ID.
-    pub async fn create_channel(&self, mut ch: ChannelRecord) -> u32 {
-        if ch.id == 0 {
-            ch.id = self.next_channel_id();
-        }
+    /// If `auto_id` is true and `ch.id == 0`, a new ID is auto-assigned.
+    pub async fn create_channel(&self, ch: ChannelRecord) -> u32 {
+        let id = ch.id;
+        self.channels.write().await.insert(id, ch);
+        id
+    }
+
+    /// Create a new channel with an auto-assigned ID. Returns the new ID.
+    pub async fn create_channel_auto_id(&self, mut ch: ChannelRecord) -> u32 {
+        ch.id = self.next_channel_id();
         let id = ch.id;
         self.channels.write().await.insert(id, ch);
         id
@@ -167,5 +173,90 @@ impl ChannelStore {
     /// Allocate the next channel ID.
     pub fn next_channel_id(&self) -> u32 {
         self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn make_channel(id: u32, parent_id: Option<u32>, name: &str, pos: i32) -> ChannelRecord {
+        ChannelRecord {
+            id,
+            name: name.to_string(),
+            parent_id,
+            description: String::new(),
+            position: pos,
+            max_users: 100,
+            temporary: false,
+            inherit_acl: true,
+            links: HashSet::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_and_get_channel() {
+        let store = ChannelStore::new();
+        let ch = make_channel(0, None, "Root", 0);
+        store.create_channel(ch).await;
+
+        let result = store.get_channel(0).await;
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().name, "Root");
+    }
+
+    #[tokio::test]
+    async fn test_update_channel() {
+        let store = ChannelStore::new();
+        store.create_channel(make_channel(1, Some(0), "Test", 0)).await;
+
+        let mut ch = store.get_channel(1).await.unwrap();
+        ch.name = "Updated".to_string();
+        assert!(store.update_channel(ch).await);
+
+        let result = store.get_channel(1).await.unwrap();
+        assert_eq!(result.name, "Updated");
+    }
+
+    #[tokio::test]
+    async fn test_remove_channel_cleans_links() {
+        let store = ChannelStore::new();
+        let mut ch1 = make_channel(1, Some(0), "A", 0);
+        ch1.links.insert(2);
+        let mut ch2 = make_channel(2, Some(0), "B", 1);
+        ch2.links.insert(1);
+
+        store.create_channel(ch1).await;
+        store.create_channel(ch2).await;
+
+        store.remove_channel(2).await;
+
+        let ch1 = store.get_channel(1).await.unwrap();
+        assert!(!ch1.links.contains(&2));
+    }
+
+    #[tokio::test]
+    async fn test_bfs_order() {
+        let store = ChannelStore::new();
+        store.create_channel(make_channel(0, None, "Root", 0)).await;
+        store.create_channel(make_channel(1, Some(0), "A", 0)).await;
+        store.create_channel(make_channel(2, Some(0), "B", 1)).await;
+        store.create_channel(make_channel(3, Some(1), "A-sub", 0)).await;
+
+        let bfs = store.get_channels_bfs().await;
+        assert_eq!(bfs.len(), 4);
+        assert_eq!(bfs[0].id, 0);
+        assert_eq!(bfs[1].id, 1);
+        assert_eq!(bfs[2].id, 2);
+        assert_eq!(bfs[3].id, 3);
+    }
+
+    #[tokio::test]
+    async fn test_next_channel_id() {
+        let store = ChannelStore::new();
+        let id1 = store.next_channel_id();
+        let id2 = store.next_channel_id();
+        assert_ne!(id1, id2);
     }
 }

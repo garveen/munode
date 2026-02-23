@@ -83,3 +83,78 @@ impl SessionManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_session(sid: u32, edge_id: u32, username: &str, channel_id: u32) -> SessionInfo {
+        SessionInfo {
+            session_id: sid,
+            edge_id,
+            user_id: sid * 10,
+            username: username.to_string(),
+            channel_id,
+            groups: vec![],
+            cert_hash: String::new(),
+            mute: false,
+            deaf: false,
+            suppress: false,
+            self_mute: false,
+            self_deaf: false,
+            priority_speaker: false,
+            recording: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_allocate_session_id() {
+        let mgr = SessionManager::new();
+        let id1 = mgr.allocate_session_id(1);
+        let id2 = mgr.allocate_session_id(1);
+        let id3 = mgr.allocate_session_id(2);
+        assert_ne!(id1, id2);
+        assert_ne!(id2, id3);
+    }
+
+    #[tokio::test]
+    async fn test_add_remove_session() {
+        let mgr = SessionManager::new();
+        let session = make_session(1, 1, "alice", 0);
+        mgr.add_session(session).await;
+
+        assert!(mgr.get_session(1).await.is_some());
+        assert_eq!(mgr.get_all_sessions().await.len(), 1);
+
+        let removed = mgr.remove_session(1).await;
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().username, "alice");
+        assert!(mgr.get_session(1).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_sessions_by_edge() {
+        let mgr = SessionManager::new();
+        mgr.add_session(make_session(1, 1, "alice", 0)).await;
+        mgr.add_session(make_session(2, 1, "bob", 0)).await;
+        mgr.add_session(make_session(3, 2, "charlie", 0)).await;
+
+        let edge1 = mgr.get_sessions_by_edge(1).await;
+        assert_eq!(edge1.len(), 2);
+
+        let edge2 = mgr.get_sessions_by_edge(2).await;
+        assert_eq!(edge2.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_move_user_to_channel() {
+        let mgr = SessionManager::new();
+        mgr.add_session(make_session(1, 1, "alice", 0)).await;
+
+        assert!(mgr.move_user_to_channel(1, 5).await);
+        let session = mgr.get_session(1).await.unwrap();
+        assert_eq!(session.channel_id, 5);
+
+        assert!(!mgr.move_user_to_channel(99, 5).await);
+    }
+}

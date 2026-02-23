@@ -2,26 +2,27 @@
 # Uses the TypeScript Hub server with the Rust Edge server
 
 services:
-  # Hub Server - TypeScript (central management node)
+  # Hub Server - Rust (central management node)
   hub:
     build:
-      context: ..
-      dockerfile: packages/hub-server/Dockerfile
+      context: .
+      dockerfile: Dockerfile
     container_name: munode-hub
     restart: unless-stopped
+    entrypoint: ["/app/munode-hub"]
+    command: ["config/hub.json"]
     ports:
       - "8443:8443"
     volumes:
-      - ../config/hub.js:/app/config/hub.js:ro
+      - ./config/hub.json:/app/config/hub.json:ro
       - hub-data:/app/data
       - hub-logs:/app/logs
     environment:
-      - NODE_ENV=production
-      - LOG_LEVEL=info
+      - RUST_LOG=info
     networks:
       - munode-network
     healthcheck:
-      test: ["CMD", "node", "-e", "require('net').connect(8443, 'localhost').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
+      test: ["CMD", "timeout", "3", "bash", "-c", "</dev/tcp/localhost/8443"]
       interval: 30s
       timeout: 5s
       retries: 3
