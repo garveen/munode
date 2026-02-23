@@ -47,7 +47,7 @@ impl EdgeServer {
         // Start UDP server
         let udp_addr: SocketAddr = format!("{}:{}", self.config.network.host, self.config.network.port)
             .parse()?;
-        let udp_server = UdpServer::new(udp_addr).await?;
+        let udp_server = UdpServer::new(udp_addr, edge_state.clone()).await?;
         let udp_handle = tokio::spawn(async move {
             if let Err(e) = udp_server.run().await {
                 error!("UDP server error: {}", e);
@@ -306,7 +306,7 @@ async fn handle_client_connection(
                 MessageType::UserState if client_state == ClientState::Ready => {
                     let user_state = mumbleproto::UserState::decode(&frame.payload[..])?;
                     if let Some(sid) = session_id {
-                        handle_user_state_update(&edge_state, sid, &user_state).await;
+                        handle_user_state_update(&edge_state, &hub_client, sid, &user_state).await;
                     }
                 }
                 MessageType::TextMessage if client_state == ClientState::Ready => {
@@ -341,17 +341,145 @@ async fn handle_client_connection(
                 }
                 MessageType::VoiceTarget if client_state == ClientState::Ready => {
                     let vt = mumbleproto::VoiceTarget::decode(&frame.payload[..])?;
-                    debug!("VoiceTarget from {}: id={:?}", peer_addr, vt.id);
-                    // TODO: Sync voice target to Hub
+                    if let Some(sid) = session_id {
+                        let target_id = vt.id.unwrap_or(0);
+                        debug!("VoiceTarget from session {}: id={}", sid, target_id);
+
+                        // Convert Mumble VoiceTarget to Hub config
+                        if target_id >= 1 && target_id <= 30 {
+                            let config = if vt.targets.is_empty() {
+                                // Empty targets = delete the voice target
+                                None
+                            } else {
+                                let mut sessions = Vec::new();
+                                let mut channels = Vec::new();
+                                for target in &vt.targets {
+                                    if !target.session.is_empty() {
+                                        for &s in &target.session {
+                                            sessions.push(hubedge::VoiceTargetSession {
+                                                session: s,
+                                            });
+                                        }
+                                    }
+                                    if let Some(ch_id) = target.channel_id {
+                                        channels.push(hubedge::VoiceTargetChannel {
+                                            channel_id: ch_id,
+                                            links: Some(target.links.unwrap_or(false)),
+                                            children: Some(target.children.unwrap_or(false)),
+                                            group: target.group.clone(),
+                                        });
+                                    }
+                                }
+                                Some(hubedge::VoiceTargetConfigProto { sessions, channels })
+                            };
+
+                            // Sync to Hub (fire-and-forget)
+                            let hub = hub_client.clone();
+                            tokio::spawn(async move {
+                                if let Err(e) = hub.sync_voice_target(sid, target_id as u32, config).await {
+                                    warn!("Failed to sync VoiceTarget: {}", e);
+                                }
+                            });
+                        }
+                    }
                 }
                 MessageType::UserStats if client_state == ClientState::Ready => {
-                    debug!("UserStats request from {}", peer_addr);
-                    // TODO: Return user statistics
+                    let stats = mumbleproto::UserStats::decode(&frame.payload[..])?;
+                    if let Some(_sid) = session_id {
+                        debug!("UserStats request for session {:?}", stats.session);
+                        // Forward basic stats response back
+                        if let Some(target_session) = stats.session {
+                            if let Some(target) = edge_state.client_manager.get_client(target_session).await {
+                                let response = mumbleproto::UserStats {
+                                    session: Some(target_session),
+                                    stats_only: Some(true),
+                                    from_client: Some(mumbleproto::user_stats::Stats {
+                                        good: Some(0),
+                                        late: Some(0),
+                                        lost: Some(0),
+                                        resync: Some(0),
+                                    }),
+                                    from_server: Some(mumbleproto::user_stats::Stats {
+                                        good: Some(0),
+                                        late: Some(0),
+                                        lost: Some(0),
+                                        resync: Some(0),
+                                    }),
+                                    address: Some(target.ip_address.as_bytes().to_vec()),
+                                    ..Default::default()
+                                };
+                                client_sender.send_message(MessageType::UserStats, &response).await;
+                            }
+                        }
+                    }
                 }
                 MessageType::PermissionQuery if client_state == ClientState::Ready => {
                     let pq = mumbleproto::PermissionQuery::decode(&frame.payload[..])?;
-                    debug!("PermissionQuery from {} for channel {:?}", peer_addr, pq.channel_id);
-                    // TODO: Forward to Hub for permission check
+                    if let Some(sid) = session_id {
+                        let channel_id = pq.channel_id.unwrap_or(0);
+                        debug!("PermissionQuery from session {} for channel {}", sid, channel_id);
+
+                        // Forward to Hub
+                        let hub = hub_client.clone();
+                        let sender = client_sender.clone();
+                        tokio::spawn(async move {
+                            match hub.handle_permission_query(sid, channel_id).await {
+                                Ok(result) => {
+                                    let response = mumbleproto::PermissionQuery {
+                                        channel_id: Some(channel_id),
+                                        permissions: result.permissions,
+                                        flush: Some(false),
+                                    };
+                                    sender.send_message(MessageType::PermissionQuery, &response).await;
+                                }
+                                Err(e) => {
+                                    debug!("PermissionQuery failed: {}", e);
+                                    // Return default permissions
+                                    let response = mumbleproto::PermissionQuery {
+                                        channel_id: Some(channel_id),
+                                        permissions: Some(0),
+                                        flush: Some(false),
+                                    };
+                                    sender.send_message(MessageType::PermissionQuery, &response).await;
+                                }
+                            }
+                        });
+                    }
+                }
+                MessageType::CryptSetup if client_state == ClientState::Ready => {
+                    // Client is sending updated nonce for CryptSetup resync
+                    let crypt = mumbleproto::CryptSetup::decode(&frame.payload[..])?;
+                    debug!("CryptSetup resync from {}: has_client_nonce={}", peer_addr, crypt.client_nonce.is_some());
+                    // Acknowledge with empty CryptSetup
+                    let response = mumbleproto::CryptSetup {
+                        key: None,
+                        client_nonce: None,
+                        server_nonce: None,
+                    };
+                    client_sender.send_message(MessageType::CryptSetup, &response).await;
+                }
+                MessageType::UserRemove if client_state == ClientState::Ready => {
+                    // User-initiated kick/ban - forward to Hub
+                    let user_remove = mumbleproto::UserRemove::decode(&frame.payload[..])?;
+                    if let Some(sid) = session_id {
+                        if let Some(client) = edge_state.client_manager.get_client(sid).await {
+                            debug!("UserRemove from session {} targeting session {}", sid, user_remove.session);
+                            hub_client.notify_user_remove(
+                                sid,
+                                client.user_id,
+                                &client.username,
+                                user_remove.session,
+                                user_remove.reason.as_deref().unwrap_or(""),
+                                user_remove.ban.unwrap_or(false),
+                            ).await;
+                        }
+                    }
+                }
+                MessageType::ChannelState if client_state == ClientState::Ready => {
+                    // Client requesting channel create/edit - forward to Hub
+                    let ch_state = mumbleproto::ChannelState::decode(&frame.payload[..])?;
+                    debug!("ChannelState from {}: channel_id={:?}, name={:?}", peer_addr, ch_state.channel_id, ch_state.name);
+                    // TODO: Forward to Hub for channel create/edit
                 }
                 other => {
                     debug!("Unhandled message type {:?} from {} (state={:?})", other, peer_addr, client_state);
@@ -372,7 +500,9 @@ async fn handle_client_connection(
             None,
         ).await;
 
-        // TODO: Notify Hub that user disconnected
+        // Notify Hub that user disconnected
+        hub_client.notify_user_left(sid, None).await;
+
         info!("Cleaned up session {} for {}", sid, peer_addr);
     }
 
@@ -383,10 +513,12 @@ async fn handle_client_connection(
 /// Handle a UserState update from a local client.
 async fn handle_user_state_update(
     edge_state: &Arc<EdgeState>,
+    hub_client: &Arc<HubClient>,
     session_id: u32,
     user_state: &mumbleproto::UserState,
 ) {
     let mut needs_broadcast = false;
+    let mut channel_moved = false;
 
     if let Some(mut client) = edge_state.client_manager.get_client(session_id).await {
         // Self-mute/self-deaf updates
@@ -411,6 +543,7 @@ async fn handle_user_state_update(
                     edge_state.client_manager.add_client(client.clone(), sender).await;
                 }
                 needs_broadcast = true;
+                channel_moved = true;
             }
         }
 
@@ -419,6 +552,17 @@ async fn handle_user_state_update(
             // Broadcast updated UserState to all clients
             let msg = handler::build_user_state_msg(&client);
             edge_state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+
+            // Notify Hub of state change
+            if channel_moved {
+                hub_client.notify_user_moved(session_id, client.channel_id).await;
+            } else {
+                let state_json = serde_json::json!({
+                    "self_mute": client.self_mute,
+                    "self_deaf": client.self_deaf,
+                });
+                hub_client.notify_user_state_changed(session_id, state_json).await;
+            }
         }
     }
 }

@@ -583,6 +583,174 @@ impl HubClient {
             .ok_or_else(|| anyhow::anyhow!("No edge_authenticate_user in response"))
     }
 
+    /// Notify the Hub that a local user has disconnected.
+    pub async fn notify_user_left(&self, session_id: u32, reason: Option<&str>) {
+        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let params_json = serde_json::json!({
+            "session_id": session_id,
+            "edge_id": edge_id,
+            "reason": reason,
+        });
+        let notification = TypedRpcNotification {
+            method: "hub.handleUserLeft".to_string(),
+            timestamp: Some(current_millis() as i64),
+            unknown_params_json: Some(params_json.to_string()),
+            ..Default::default()
+        };
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+        if let Err(e) = self.send_packet(&packet).await {
+            warn!("Failed to notify Hub of user disconnect: {}", e);
+        }
+    }
+
+    /// Notify the Hub about a user-initiated kick/ban (UserRemove).
+    pub async fn notify_user_remove(
+        &self,
+        actor_session: u32,
+        actor_user_id: u32,
+        actor_username: &str,
+        target_session: u32,
+        reason: &str,
+        ban: bool,
+    ) {
+        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let params_json = serde_json::json!({
+            "edge_id": edge_id,
+            "actor_session": actor_session,
+            "actor_user_id": actor_user_id,
+            "actor_username": actor_username,
+            "target_session": target_session,
+            "reason": reason,
+            "ban": ban,
+        });
+        let notification = TypedRpcNotification {
+            method: "hub.handleUserRemove".to_string(),
+            timestamp: Some(current_millis() as i64),
+            unknown_params_json: Some(params_json.to_string()),
+            ..Default::default()
+        };
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+        if let Err(e) = self.send_packet(&packet).await {
+            warn!("Failed to notify Hub of user remove: {}", e);
+        }
+    }
+
+    /// Notify the Hub about a user channel move.
+    pub async fn notify_user_moved(&self, session_id: u32, channel_id: u32) {
+        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let params_json = serde_json::json!({
+            "session_id": session_id,
+            "edge_id": edge_id,
+            "channel_id": channel_id,
+        });
+        let notification = TypedRpcNotification {
+            method: "hub.handleUserMoved".to_string(),
+            timestamp: Some(current_millis() as i64),
+            unknown_params_json: Some(params_json.to_string()),
+            ..Default::default()
+        };
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+        if let Err(e) = self.send_packet(&packet).await {
+            warn!("Failed to notify Hub of user move: {}", e);
+        }
+    }
+
+    /// Notify the Hub about a user state change (self-mute/deaf etc).
+    pub async fn notify_user_state_changed(&self, session_id: u32, user_state_json: serde_json::Value) {
+        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let mut params = user_state_json;
+        params["session_id"] = serde_json::json!(session_id);
+        params["edge_id"] = serde_json::json!(edge_id);
+        let notification = TypedRpcNotification {
+            method: "hub.handleUserStateChanged".to_string(),
+            timestamp: Some(current_millis() as i64),
+            unknown_params_json: Some(params.to_string()),
+            ..Default::default()
+        };
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+        if let Err(e) = self.send_packet(&packet).await {
+            warn!("Failed to notify Hub of user state change: {}", e);
+        }
+    }
+
+    /// Forward a PermissionQuery to the Hub.
+    pub async fn handle_permission_query(
+        &self,
+        session_id: u32,
+        channel_id: u32,
+    ) -> Result<hubedge::EdgeHandlePermissionQueryResult> {
+        let request_id = self.next_request_id().await;
+        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+
+        // Get actor info from client
+        let (user_id, username) = if let Some(client) = self.edge_state.client_manager.get_client(session_id).await {
+            (client.user_id, client.username.clone())
+        } else {
+            (0, String::new())
+        };
+
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.handlePermissionQuery".to_string(),
+            timeout_ms: Some(10000),
+            edge_handle_permission_query: Some(hubedge::EdgeHandlePermissionQueryParams {
+                edge_id,
+                actor_session: session_id,
+                actor_user_id: user_id,
+                actor_username: username,
+                channel_id,
+            }),
+            ..Default::default()
+        };
+        let response = self.rpc_call(request).await
+            .context("edge.handlePermissionQuery RPC failed")?;
+        response.edge_handle_permission_query
+            .ok_or_else(|| anyhow::anyhow!("No edge_handle_permission_query in response"))
+    }
+
+    /// Sync a VoiceTarget to the Hub.
+    pub async fn sync_voice_target(
+        &self,
+        client_session: u32,
+        target_id: u32,
+        config: Option<hubedge::VoiceTargetConfigProto>,
+    ) -> Result<hubedge::EdgeSyncVoiceTargetResult> {
+        let request_id = self.next_request_id().await;
+        let edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.syncVoiceTarget".to_string(),
+            timeout_ms: Some(10000),
+            edge_sync_voice_target: Some(hubedge::EdgeSyncVoiceTargetParams {
+                edge_id,
+                client_session,
+                target_id,
+                config,
+            }),
+            ..Default::default()
+        };
+        let response = self.rpc_call(request).await
+            .context("edge.syncVoiceTarget RPC failed")?;
+        response.edge_sync_voice_target
+            .ok_or_else(|| anyhow::anyhow!("No edge_sync_voice_target in response"))
+    }
+
     /// Allocate a session ID from the Hub.
     pub async fn allocate_session_id(&self) -> Result<u32> {
         let request_id = self.next_request_id().await;
