@@ -172,7 +172,7 @@ export class EventSetupManager {
     // UDPTunnel 事件 - TCP语音传输
     this.handlerFactory.messageHandler.on('udpTunnel', (session_id: number, data: Buffer) => {
       // 将TCP隧道语音包路由到voiceRouter处理
-      void this.handlerFactory.voiceRouter.handleVoiceTunnel(session_id, data);
+      this.handlerFactory.voiceRouter.handleVoiceTunnel(session_id, data);
     });
 
     // RequestBlob 事件

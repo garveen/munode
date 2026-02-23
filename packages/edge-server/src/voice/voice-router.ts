@@ -378,7 +378,7 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
   /**
    * Handle TCP voice tunnel message
    */
-  async handleVoiceTunnel(session_id: number, data: Buffer): Promise<void> {
+  handleVoiceTunnel(session_id: number, data: Buffer): void {
     try {
       this.logger.debug(`[TCP-VOICE] Received voice tunnel from session ${session_id}, data length: ${data.length}`);
       
@@ -391,55 +391,13 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
         return;
       }
       
-      // Critical fix: Voice packets in TCP tunnel are also encrypted, need to decrypt first
-      // Reference C implementation: mumble/ServerHandler.cpp and murmur/Server.cpp
-      // Reference Go implementation: client.go handleUDPPacket
-
-      this.logger.debug(`[TCP-VOICE] Decrypting voice packet from session ${session_id}`);
-      
-      let voicePacketData: Buffer;
-
-      // Try Worker Pool first, fallback to local crypto
-      if (this.cryptoWorkerPool && this.vhostName) {
-        try {
-          const compositeKey = `${this.vhostName}:${session_id}`;
-          const result = await this.cryptoWorkerPool.decrypt(compositeKey, data);
-          if (result.valid) {
-            voicePacketData = result.plain;
-          } else {
-            this.logger.warn(`Worker Pool decrypt failed for TCP tunnel session ${session_id}, falling back to local crypto`);
-            const crypto = this.clientCryptos.get(session_id);
-            if (!crypto) {
-              this.logger.warn(`[TCP-VOICE] No crypto for client ${session_id}, cannot process TCP voice tunnel`);
-              return;
-            }
-            const decrypted = crypto.decrypt(data);
-            if (!decrypted.valid) {
-              this.logger.warn(`[TCP-VOICE] Failed to decrypt TCP voice tunnel from session ${session_id}`);
-              return;
-            }
-            voicePacketData = decrypted.data;
-          }
-        } catch (error) {
-          this.logger.error(`Worker Pool decrypt error for TCP tunnel session ${session_id}:`, error);
-          return;
-        }
-      } else {
-        // Fallback to local crypto
-        const crypto = this.clientCryptos.get(session_id);
-        if (!crypto) {
-          this.logger.warn(`[TCP-VOICE] No crypto for client ${session_id}, cannot process TCP voice tunnel`);
-          return;
-        }
-        const decrypted = crypto.decrypt(data);
-        if (!decrypted.valid) {
-          this.logger.warn(`[TCP-VOICE] Failed to decrypt TCP voice tunnel from session ${session_id}`);
-          return;
-        }
-        voicePacketData = decrypted.data;
-      }
-
-      this.logger.debug(`[TCP-VOICE] Voice packet decrypted: ${data.length} -> ${voicePacketData.length} bytes`);
+      // TCP tunnel voice packets are NOT encrypted with OCB2-AES128.
+      // The TCP connection is already protected by TLS, so the voice data
+      // is sent in plaintext directly within the UDPTunnel message payload.
+      // Only actual UDP packets need OCB2 decryption.
+      // Reference Go implementation: client.go tlsRecvLoop() puts msg.buf directly
+      // into udprecv without any decryption; only server.handleUDPPacket() (UDP path) decrypts.
+      const voicePacketData: Buffer = data;
       
       // Parse voice packet
       const packet = this.parseVoicePacket(voicePacketData);
