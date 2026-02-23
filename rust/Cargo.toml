@@ -1,0 +1,55 @@
+[workspace]
+members = [
+    "munode-protocol",
+    "munode-common",
+    "munode-edge",
+    "munode-hub",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/garveen/munode"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
+
+# Protobuf
+prost = "0.13"
+prost-build = "0.13"
+
+# TLS
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-pemfile = "2"
+webpki-roots = "0.26"
+
+# WebSocket (for Hub control channel)
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Utilities
+bytes = "1"
+uuid = { version = "1", features = ["v4"] }
+
+# Crypto
+ring = "0.17"
+
+# Workspace crates
+munode-protocol = { path = "munode-protocol" }
+munode-common = { path = "munode-common" }

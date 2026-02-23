@@ -1,0 +1,95 @@
+# Docker Compose for MuNode Rust servers
+# Build context is the repo root (parent of rust/) so proto files are accessible.
+
+services:
+  # Hub Server - Rust (central management node)
+  hub:
+    build:
+      context: ..
+      dockerfile: rust/Dockerfile
+    container_name: munode-hub
+    restart: unless-stopped
+    entrypoint: ["/app/munode-hub"]
+    command: ["config/hub.json"]
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./config/hub.json:/app/config/hub.json:ro
+      - hub-data:/app/data
+      - hub-logs:/app/logs
+    environment:
+      - RUST_LOG=info
+    networks:
+      - munode-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8443"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Edge Server 1 - Rust (edge node handling client connections)
+  edge-1:
+    build:
+      context: ..
+      dockerfile: rust/Dockerfile
+    container_name: munode-rust-edge-1
+    restart: unless-stopped
+    ports:
+      - "64738:64738/tcp"
+      - "64738:64738/udp"
+    volumes:
+      - ./config/edge.json:/app/config/edge.json:ro
+      - ../certs/:/app/certs:ro
+      - edge-1-logs:/app/logs
+    environment:
+      - RUST_LOG=info
+      - HUB_HOST=hub
+      - HUB_PORT=8443
+    depends_on:
+      hub:
+        condition: service_healthy
+    networks:
+      - munode-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "64738"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Edge Server 2 - Rust (optional, for load balancing)
+  edge-2:
+    build:
+      context: ..
+      dockerfile: rust/Dockerfile
+    container_name: munode-rust-edge-2
+    restart: unless-stopped
+    ports:
+      - "64740:64738/tcp"
+      - "64740:64738/udp"
+    volumes:
+      - ./config/edge-2.json:/app/config/edge.json:ro
+      - ../certs/:/app/certs:ro
+      - edge-2-logs:/app/logs
+    environment:
+      - RUST_LOG=info
+      - HUB_HOST=hub
+      - HUB_PORT=8443
+    depends_on:
+      hub:
+        condition: service_healthy
+    networks:
+      - munode-network
+    profiles:
+      - full
+
+networks:
+  munode-network:
+    driver: bridge
+
+volumes:
+  hub-data:
+  hub-logs:
+  edge-1-logs:
+  edge-2-logs:

@@ -1,0 +1,25 @@
+[package]
+name = "munode-hub"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "munode-hub"
+path = "src/main.rs"
+
+[dependencies]
+munode-protocol = { workspace = true }
+munode-common = { workspace = true }
+tokio = { workspace = true }
+futures-util = { workspace = true }
+tokio-tungstenite = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+ring = { workspace = true }
+rusqlite = { version = "0.33", features = ["bundled"] }

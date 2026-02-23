@@ -1,0 +1,7 @@
+rust/target/
+node_modules/
+*.log
+.git
+tmp/
+dist/
+coverage/

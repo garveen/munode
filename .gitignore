@@ -7,6 +7,11 @@ dist/
 build/
 *.tsbuildinfo
 
+# Rust build artifacts
+/target/
+rust/target/
+rust/*/target/
+
 # Environment
 .env
 .env.local
