@@ -209,7 +209,7 @@ pnpm test:integration:watch
 # 运行集成测试并查看覆盖率
 pnpm test:integration -- --coverage
 
-# 运行特定的测试文件
+# 运行特定的测试文件，注意完全不需要 -- 连接
 pnpm test:integration tests/integration/suites/auth.test.ts
 ```
 

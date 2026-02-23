@@ -93,7 +93,7 @@ impl Database {
                 id INTEGER PRIMARY KEY,
                 parent_id INTEGER,
                 name TEXT NOT NULL,
-                description TEXT NOT NULL DEFAULT '',
+                description_blob TEXT,
                 position INTEGER NOT NULL DEFAULT 0,
                 max_users INTEGER NOT NULL DEFAULT 0,
                 temporary INTEGER NOT NULL DEFAULT 0,
@@ -108,15 +108,148 @@ impl Database {
 
             CREATE TABLE IF NOT EXISTS acls (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at DATETIME,
+                updated_at DATETIME,
+                deleted_at DATETIME,
                 channel_id INTEGER NOT NULL,
-                user_id INTEGER,
-                group_name TEXT,
+                user_id INTEGER NOT NULL DEFAULT -1,
+                \"group\" TEXT,
                 apply_here INTEGER NOT NULL DEFAULT 1,
                 apply_subs INTEGER NOT NULL DEFAULT 1,
                 allow INTEGER NOT NULL DEFAULT 0,
                 deny INTEGER NOT NULL DEFAULT 0
             );"
         )?;
+
+        // Migrate old schema: rename 'description' to 'description_blob' if needed
+        let has_description_col: bool = {
+            let mut col_stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('channels') WHERE name = 'description'"
+            )?;
+            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+        };
+        let has_description_blob_col: bool = {
+            let mut col_stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('channels') WHERE name = 'description_blob'"
+            )?;
+            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+        };
+        if has_description_col && !has_description_blob_col {
+            conn.execute_batch(
+                "ALTER TABLE channels RENAME COLUMN description TO description_blob;"
+            )?;
+            info!("Migrated channels table: renamed 'description' to 'description_blob'");
+        }
+
+        // Add 'temporary' column to channels if missing (TS schema doesn't have it)
+        let has_temporary_col: bool = {
+            let mut col_stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('channels') WHERE name = 'temporary'"
+            )?;
+            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+        };
+        if !has_temporary_col {
+            conn.execute_batch(
+                "ALTER TABLE channels ADD COLUMN temporary INTEGER NOT NULL DEFAULT 0;"
+            )?;
+            info!("Migrated channels table: added 'temporary' column");
+        }
+
+        // Migrate channel_links: TS uses 'link_id', Rust expects 'target_id'
+        let has_link_id_col: bool = {
+            let mut col_stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('channel_links') WHERE name = 'link_id'"
+            )?;
+            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+        };
+        if has_link_id_col {
+            conn.execute_batch(
+                "ALTER TABLE channel_links RENAME COLUMN link_id TO target_id;"
+            )?;
+            info!("Migrated channel_links table: renamed 'link_id' to 'target_id'");
+        }
+
+        // Migrate users table: TS uses 'name'/'password_hash', Rust uses 'username'/'pw_hash'
+        let has_name_col: bool = {
+            let mut col_stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'name'"
+            )?;
+            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+        };
+        let has_username_col: bool = {
+            let mut col_stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'username'"
+            )?;
+            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+        };
+        if has_name_col && !has_username_col {
+            conn.execute_batch(
+                "ALTER TABLE users RENAME COLUMN name TO username;"
+            )?;
+            info!("Migrated users table: renamed 'name' to 'username'");
+        }
+        let has_pw_hash_col: bool = {
+            let mut col_stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'pw_hash'"
+            )?;
+            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+        };
+        let has_password_hash_col: bool = {
+            let mut col_stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'password_hash'"
+            )?;
+            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+        };
+        if has_password_hash_col && !has_pw_hash_col {
+            conn.execute_batch(
+                "ALTER TABLE users RENAME COLUMN password_hash TO pw_hash;"
+            )?;
+            info!("Migrated users table: renamed 'password_hash' to 'pw_hash'");
+        }
+        // Add cert_hash if missing
+        let has_cert_hash_col: bool = {
+            let mut col_stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'cert_hash'"
+            )?;
+            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+        };
+        if !has_cert_hash_col {
+            conn.execute_batch(
+                "ALTER TABLE users ADD COLUMN cert_hash TEXT NOT NULL DEFAULT '';"
+            )?;
+            info!("Migrated users table: added 'cert_hash' column");
+        }
+
+        // Migrate old acls schema: rename 'group_name' to 'group' if needed
+        let has_group_name_col: bool = {
+            let mut col_stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('acls') WHERE name = 'group_name'"
+            )?;
+            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+        };
+        if has_group_name_col {
+            // SQLite doesn't support RENAME COLUMN in older versions; recreate table
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS acls_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at DATETIME,
+                    updated_at DATETIME,
+                    deleted_at DATETIME,
+                    channel_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL DEFAULT -1,
+                    \"group\" TEXT,
+                    apply_here INTEGER NOT NULL DEFAULT 1,
+                    apply_subs INTEGER NOT NULL DEFAULT 1,
+                    allow INTEGER NOT NULL DEFAULT 0,
+                    deny INTEGER NOT NULL DEFAULT 0
+                );
+                INSERT INTO acls_new (id, channel_id, user_id, \"group\", apply_here, apply_subs, allow, deny)
+                    SELECT id, channel_id, COALESCE(user_id, -1), group_name, apply_here, apply_subs, allow, deny FROM acls;
+                DROP TABLE acls;
+                ALTER TABLE acls_new RENAME TO acls;"
+            )?;
+            info!("Migrated acls table: renamed 'group_name' to '\"group\"'");
+        }
 
         // Ensure root channel exists (id=0, name="Root")
         let root_exists: bool = conn.query_row(
@@ -127,7 +260,7 @@ impl Database {
 
         if !root_exists {
             conn.execute(
-                "INSERT INTO channels (id, parent_id, name, description, position, max_users, temporary, inherit_acl)
+                "INSERT INTO channels (id, parent_id, name, description_blob, position, max_users, temporary, inherit_acl)
                  VALUES (0, NULL, 'Root', '', 0, 0, 0, 1)",
                 [],
             )?;
@@ -147,19 +280,21 @@ impl Database {
     pub fn load_channels(&self) -> Result<Vec<DbChannelRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, parent_id, name, description, position, max_users, temporary, inherit_acl FROM channels"
+            "SELECT id, parent_id, name, description_blob, position, max_users, temporary, inherit_acl FROM channels"
         )?;
 
         let rows = stmt.query_map([], |row| {
+            let parent_id_raw: Option<i64> = row.get(1)?;
+            let parent_id = parent_id_raw.and_then(|p| if p < 0 { None } else { Some(p as u32) });
             Ok(DbChannelRecord {
                 id: row.get(0)?,
-                parent_id: row.get(1)?,
+                parent_id,
                 name: row.get(2)?,
                 description: row.get::<_, String>(3).unwrap_or_default(),
                 position: row.get(4)?,
                 max_users: row.get(5)?,
-                temporary: row.get::<_, i32>(6)? != 0,
-                inherit_acl: row.get::<_, i32>(7)? != 0,
+                temporary: row.get::<_, i32>(6).unwrap_or(0) != 0,
+                inherit_acl: row.get::<_, i32>(7).unwrap_or(1) != 0,
             })
         })?;
 
@@ -190,7 +325,7 @@ impl Database {
     pub fn save_channel(&self, ch: &DbChannelRecord) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT OR REPLACE INTO channels (id, parent_id, name, description, position, max_users, temporary, inherit_acl)
+            "INSERT OR REPLACE INTO channels (id, parent_id, name, description_blob, position, max_users, temporary, inherit_acl)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 ch.id,
@@ -298,19 +433,20 @@ impl Database {
     pub fn load_acls(&self, channel_id: u32) -> Result<Vec<crate::acl_manager::AclEntry>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT channel_id, user_id, group_name, apply_here, apply_subs, allow, deny
-             FROM acls WHERE channel_id = ?1"
+            r#"SELECT channel_id, user_id, "group", apply_here, apply_subs, allow, deny
+             FROM acls WHERE channel_id = ?1 AND deleted_at IS NULL"#
         )?;
 
         let rows = stmt.query_map(params![channel_id], |row| {
+            let uid: i32 = row.get::<_, i32>(1).unwrap_or(-1);
             Ok(crate::acl_manager::AclEntry {
                 channel_id: row.get(0)?,
-                user_id: row.get(1)?,
+                user_id: if uid == -1 { None } else { Some(uid) },
                 group_name: row.get(2)?,
                 apply_here: row.get::<_, i32>(3)? != 0,
                 apply_subs: row.get::<_, i32>(4)? != 0,
-                allow: row.get::<_, u32>(5)?,
-                deny: row.get::<_, u32>(6)?,
+                allow: row.get::<_, u32>(5).unwrap_or(0),
+                deny: row.get::<_, u32>(6).unwrap_or(0),
             })
         })?;
 
@@ -327,14 +463,14 @@ impl Database {
         conn.execute("DELETE FROM acls WHERE channel_id = ?1", params![channel_id])?;
 
         let mut stmt = conn.prepare(
-            "INSERT INTO acls (channel_id, user_id, group_name, apply_here, apply_subs, allow, deny)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+            r#"INSERT INTO acls (channel_id, user_id, "group", apply_here, apply_subs, allow, deny)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#
         )?;
 
         for entry in entries {
             stmt.execute(params![
                 channel_id,
-                entry.user_id,
+                entry.user_id.unwrap_or(-1),
                 entry.group_name,
                 entry.apply_here as i32,
                 entry.apply_subs as i32,
@@ -350,18 +486,19 @@ impl Database {
     pub fn load_all_acls(&self) -> Result<Vec<crate::acl_manager::AclEntry>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT channel_id, user_id, group_name, apply_here, apply_subs, allow, deny FROM acls"
+            r#"SELECT channel_id, user_id, "group", apply_here, apply_subs, allow, deny FROM acls WHERE deleted_at IS NULL"#
         )?;
 
         let rows = stmt.query_map([], |row| {
+            let uid: i32 = row.get::<_, i32>(1).unwrap_or(-1);
             Ok(crate::acl_manager::AclEntry {
                 channel_id: row.get(0)?,
-                user_id: row.get(1)?,
+                user_id: if uid == -1 { None } else { Some(uid) },
                 group_name: row.get(2)?,
                 apply_here: row.get::<_, i32>(3)? != 0,
                 apply_subs: row.get::<_, i32>(4)? != 0,
-                allow: row.get::<_, u32>(5)?,
-                deny: row.get::<_, u32>(6)?,
+                allow: row.get::<_, u32>(5).unwrap_or(0),
+                deny: row.get::<_, u32>(6).unwrap_or(0),
             })
         })?;
 

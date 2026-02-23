@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { TestEnvironment, setupTestEnvironment } from '../setup';
+import { TestEnvironment, setupTestEnvironment, USE_RUST } from '../setup';
 import { MumbleClient } from '../../../packages/client/src/index.js';
 import type { UserState } from '../../../packages/protocol/src/index.js';
 
@@ -37,11 +37,19 @@ describe('Hub-Edge Communication Integration Tests', () => {
     });
 
     it('should have hub server running', () => {
-      expect(testEnv.hubServer).toBeDefined();
+      if (USE_RUST) {
+        expect(testEnv.hubProcess).toBeDefined();
+      } else {
+        expect(testEnv.hubServer).toBeDefined();
+      }
     });
 
     it('should have edge server running', () => {
-      expect(testEnv.edgeServer).toBeDefined();
+      if (USE_RUST) {
+        expect(testEnv.edgeProcess).toBeDefined();
+      } else {
+        expect(testEnv.edgeServer).toBeDefined();
+      }
     });
   });
 
