@@ -22,7 +22,7 @@ services:
     networks:
       - munode-network
     healthcheck:
-      test: ["CMD", "timeout", "3", "bash", "-c", "</dev/tcp/localhost/8443"]
+      test: ["CMD", "nc", "-z", "localhost", "8443"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -52,7 +52,7 @@ services:
     networks:
       - munode-network
     healthcheck:
-      test: ["CMD", "timeout", "3", "bash", "-c", "</dev/tcp/localhost/64738"]
+      test: ["CMD", "nc", "-z", "localhost", "64738"]
       interval: 30s
       timeout: 5s
       retries: 3

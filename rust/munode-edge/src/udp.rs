@@ -106,12 +106,7 @@ impl UdpServer {
                 }
             } else {
                 // Client doesn't have UDP, fall back to TCP tunnel
-                let mut tcp_buf = BytesMut::new();
-                bytes::BufMut::put_u16(&mut tcp_buf, MessageType::UdpTunnel as u16);
-                bytes::BufMut::put_u32(&mut tcp_buf, data.len() as u32);
-                bytes::BufMut::put_slice(&mut tcp_buf, data);
-                let tcp_data = tcp_buf.to_vec();
-
+                let tcp_data = build_udp_tunnel_packet(data);
                 if let Some(sender) = self.edge_state.client_manager.get_sender(target_session).await {
                     sender.send_raw(tcp_data).await;
                 }
@@ -134,4 +129,13 @@ impl UdpServer {
             false
         }
     }
+}
+
+/// Build a TCP UdpTunnel fallback packet from raw voice data.
+fn build_udp_tunnel_packet(data: &[u8]) -> Vec<u8> {
+    let mut buf = BytesMut::new();
+    bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
+    bytes::BufMut::put_u32(&mut buf, data.len() as u32);
+    bytes::BufMut::put_slice(&mut buf, data);
+    buf.to_vec()
 }

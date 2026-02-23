@@ -23,7 +23,7 @@ RUN cargo build --release --bin munode-edge --bin munode-hub
 # Stage 2: Minimal runtime image
 FROM debian:bookworm-slim AS runtime
 
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates netcat-openbsd && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
 RUN groupadd -r munode && useradd -r -g munode munode
@@ -45,7 +45,7 @@ EXPOSE 64738/udp
 
 # Health check: try to connect to the TLS port
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
-    CMD timeout 3 bash -c '</dev/tcp/localhost/64738' 2>/dev/null || exit 1
+    CMD nc -z localhost 64738 || exit 1
 
 ENTRYPOINT ["/app/munode-edge"]
 CMD ["config/edge.json"]

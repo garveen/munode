@@ -531,7 +531,9 @@ impl RpcHandler {
         let _params = request.edge_handle_permission_query.as_ref()
             .context("Missing edge_handle_permission_query params")?;
 
-        // Stub: grant all permissions (0x7FFFFFFF)
+        // TODO: Implement proper ACL-based permission checks.
+        // Currently grants all permissions (0x7FFFFFFF) as a stub.
+        // Production use requires checking user groups, channel ACLs, and inheritance.
         let result = EdgeHandlePermissionQueryResult {
             success: true,
             permissions: Some(0x7FFFFFFF),
