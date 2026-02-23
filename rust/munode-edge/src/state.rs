@@ -32,6 +32,13 @@ pub enum EdgeEvent {
         tree_id: Vec<u32>,
         session: Vec<u32>,
     },
+    /// Plugin data forwarded from another edge via Hub.
+    PluginDataBroadcast {
+        sender_session: u32,
+        data_id: String,
+        data: Vec<u8>,
+        target_sessions: Vec<u32>,
+    },
 }
 
 /// Shared state accessible by all components of the Edge server.

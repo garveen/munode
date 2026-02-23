@@ -508,17 +508,86 @@ async fn handle_client_connection(
                     });
                 }
                 MessageType::BanList if client_state == ClientState::Ready => {
-                    // BanList query/update - log and acknowledge
+                    // BanList query/update - forward to Hub
                     let ban_list = mumbleproto::BanList::decode(&frame.payload[..])?;
                     debug!("BanList from {}: query={:?}, {} entries", peer_addr, ban_list.query, ban_list.bans.len());
                     if ban_list.query.unwrap_or(false) {
-                        // Return empty ban list for now
-                        let response = mumbleproto::BanList {
-                            bans: vec![],
-                            query: Some(false),
-                        };
-                        client_sender.send_message(MessageType::BanList, &response).await;
+                        // Query: fetch ban list from Hub
+                        let hub = hub_client.clone();
+                        let sender = client_sender.clone();
+                        tokio::spawn(async move {
+                            if let Some(raw_data) = hub.rpc_get_ban_list().await {
+                                if let Ok(ban_resp) = mumbleproto::BanList::decode(raw_data.as_slice()) {
+                                    sender.send_message(MessageType::BanList, &ban_resp).await;
+                                }
+                            }
+                        });
+                    } else {
+                        // Update: forward ban list to Hub
+                        let raw = frame.payload.to_vec();
+                        let hub = hub_client.clone();
+                        tokio::spawn(async move {
+                            hub.rpc_update_ban_list(&raw).await;
+                        });
                     }
+                }
+                MessageType::Acl if client_state == ClientState::Ready => {
+                    // ACL query/update - forward to Hub
+                    let acl_msg = mumbleproto::Acl::decode(&frame.payload[..])?;
+                    let is_query = acl_msg.query.unwrap_or(false);
+                    debug!("ACL from {}: channel_id={}, query={}", peer_addr, acl_msg.channel_id, is_query);
+
+                    let hub = hub_client.clone();
+                    let sender = client_sender.clone();
+                    let raw = frame.payload.to_vec();
+                    let sid = session_id.unwrap_or(0);
+                    let client_info = edge_state.client_manager.get_client(sid).await;
+                    let uid = client_info.as_ref().map(|c| c.user_id).unwrap_or(0);
+                    let uname = client_info.as_ref().map(|c| c.username.clone()).unwrap_or_default();
+                    let ch_id = acl_msg.channel_id;
+                    tokio::spawn(async move {
+                        if let Some(raw_data) = hub.rpc_handle_acl(sid, uid, &uname, ch_id, is_query, &raw).await {
+                            if let Ok(acl_resp) = mumbleproto::Acl::decode(raw_data.as_slice()) {
+                                sender.send_message(MessageType::Acl, &acl_resp).await;
+                            }
+                        }
+                    });
+                }
+                MessageType::PluginDataTransmission if client_state == ClientState::Ready => {
+                    // Plugin data forwarding
+                    let plugin = mumbleproto::PluginDataTransmission::decode(&frame.payload[..])?;
+                    debug!("PluginData from {}: dataId={:?}", peer_addr, plugin.data_id);
+
+                    let hub = hub_client.clone();
+                    let sid = session_id.unwrap_or(0);
+                    let client_info = edge_state.client_manager.get_client(sid).await;
+                    let uname = client_info.as_ref().map(|c| c.username.clone()).unwrap_or_default();
+                    let edge_state_clone = edge_state.clone();
+                    tokio::spawn(async move {
+                        let data_bytes = plugin.data.clone().unwrap_or_default();
+                        let data_id_str = plugin.data_id.clone().unwrap_or_default();
+
+                        // Forward to Hub for cross-edge routing
+                        hub.notify_plugin_data(
+                            sid, &uname,
+                            &data_id_str,
+                            &data_bytes,
+                            &plugin.receiver_sessions,
+                        ).await;
+
+                        // Also deliver locally to targeted sessions on this edge
+                        for &target_session in &plugin.receiver_sessions {
+                            let fwd = mumbleproto::PluginDataTransmission {
+                                sender_session: Some(sid),
+                                data_id: plugin.data_id.clone(),
+                                data: Some(data_bytes.clone()),
+                                receiver_sessions: vec![target_session],
+                            };
+                            edge_state_clone.client_manager.send_to(
+                                target_session, MessageType::PluginDataTransmission, &fwd
+                            ).await;
+                        }
+                    });
                 }
                 MessageType::QueryUsers if client_state == ClientState::Ready => {
                     let query = mumbleproto::QueryUsers::decode(&frame.payload[..])?;
@@ -789,6 +858,20 @@ async fn hub_event_listener(
                             }
                         }
                         debug!("Forwarded text message from remote actor {}", actor);
+                    }
+                    EdgeEvent::PluginDataBroadcast { sender_session, data_id, data, target_sessions } => {
+                        let msg = mumbleproto::PluginDataTransmission {
+                            sender_session: Some(sender_session),
+                            data_id: Some(data_id.clone()),
+                            data: Some(data),
+                            receiver_sessions: vec![],
+                        };
+                        for &target_session in &target_sessions {
+                            state.client_manager.send_to(
+                                target_session, MessageType::PluginDataTransmission, &msg
+                            ).await;
+                        }
+                        debug!("Forwarded plugin data from session {}: {}", sender_session, data_id);
                     }
                 }
             }

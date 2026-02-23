@@ -14,6 +14,7 @@ use tracing::{debug, error, info, warn};
 use munode_common::config::{EdgeConfig, HubServerConfig};
 use munode_protocol::hubedge::{
     self, EdgeAuthenticateUserParams, EdgeFullSyncParams,
+    EdgeHandleAclParams, EdgePluginDataTransmissionParams,
     EdgeHubPacket, EdgeRegisterParams,
     PacketType, TypedRpcNotification, TypedRpcRequest, TypedRpcResponse,
 };
@@ -393,6 +394,17 @@ impl HubClient {
                             session,
                         });
                     }
+                }
+            }
+            "hub.pluginDataBroadcast" => {
+                // Plugin data forwarded from another edge
+                if let Some(params) = &notification.plugin_data_broadcast {
+                    self.edge_state.emit(EdgeEvent::PluginDataBroadcast {
+                        sender_session: params.sender_session,
+                        data_id: params.data_id.clone(),
+                        data: params.data.clone(),
+                        target_sessions: params.target_sessions.clone(),
+                    });
                 }
             }
             _ => {
@@ -887,6 +899,111 @@ impl HubClient {
         };
         if let Err(e) = self.send_packet(&packet).await {
             warn!("Failed to forward text message to Hub: {}", e);
+        }
+    }
+
+    /// RPC: Get ban list from Hub. Returns raw BanList protobuf bytes.
+    pub async fn rpc_get_ban_list(&self) -> Option<Vec<u8>> {
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id().await,
+            method: "edge.getBanList".to_string(),
+            ..Default::default()
+        };
+        match self.rpc_call(request).await {
+            Ok(resp) => resp.edge_handle_acl.and_then(|r| r.raw_data),
+            Err(e) => {
+                warn!("Failed to get ban list: {}", e);
+                None
+            }
+        }
+    }
+
+    /// RPC: Update ban list on Hub using raw BanList protobuf bytes.
+    pub async fn rpc_update_ban_list(&self, raw_ban_list: &[u8]) {
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id().await,
+            method: "edge.updateBanList".to_string(),
+            edge_handle_acl: Some(EdgeHandleAclParams {
+                edge_id: self.edge_id().await,
+                actor_session: 0,
+                actor_user_id: 0,
+                actor_username: String::new(),
+                channel_id: 0,
+                query: false,
+                raw_data: raw_ban_list.to_vec(),
+            }),
+            ..Default::default()
+        };
+        match self.rpc_call(request).await {
+            Ok(_) => debug!("Ban list updated on Hub"),
+            Err(e) => warn!("Failed to update ban list: {}", e),
+        }
+    }
+
+    /// RPC: Handle ACL query/update. Returns raw ACL protobuf bytes on query.
+    pub async fn rpc_handle_acl(
+        &self,
+        actor_session: u32,
+        actor_user_id: u32,
+        actor_username: &str,
+        channel_id: u32,
+        query: bool,
+        raw_data: &[u8],
+    ) -> Option<Vec<u8>> {
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id().await,
+            method: "edge.handleACL".to_string(),
+            edge_handle_acl: Some(EdgeHandleAclParams {
+                edge_id: self.edge_id().await,
+                actor_session,
+                actor_user_id,
+                actor_username: actor_username.to_string(),
+                channel_id,
+                query,
+                raw_data: raw_data.to_vec(),
+            }),
+            ..Default::default()
+        };
+        match self.rpc_call(request).await {
+            Ok(resp) => resp.edge_handle_acl.and_then(|r| r.raw_data),
+            Err(e) => {
+                warn!("Failed to handle ACL: {}", e);
+                None
+            }
+        }
+    }
+
+    /// Notify Hub of plugin data transmission for cross-edge forwarding.
+    pub async fn notify_plugin_data(
+        &self,
+        sender_session: u32,
+        sender_username: &str,
+        data_id: &str,
+        data: &[u8],
+        receiver_sessions: &[u32],
+    ) {
+        let edge_id = self.edge_id().await;
+        let notification = TypedRpcNotification {
+            method: "hub.handlePluginDataTransmission".to_string(),
+            timestamp: Some(current_millis() as i64),
+            plugin_data_transmission: Some(EdgePluginDataTransmissionParams {
+                edge_id,
+                actor_session: sender_session,
+                actor_username: sender_username.to_string(),
+                sender_session,
+                data_id: data_id.to_string(),
+                data: data.to_vec(),
+                receiver_sessions: receiver_sessions.to_vec(),
+            }),
+            ..Default::default()
+        };
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+        if let Err(e) = self.send_packet(&packet).await {
+            warn!("Failed to forward plugin data to Hub: {}", e);
         }
     }
 }

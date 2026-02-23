@@ -75,6 +75,10 @@ impl RpcHandler {
             "edge.handlePermissionQuery" => self.handle_permission_query(&request, &request_id).await,
             "edge.syncVoiceTarget" => self.handle_sync_voice_target(&request, &request_id).await,
             "edge.saveChannel" => self.handle_save_channel(&request, &request_id).await,
+            "edge.handleACL" => self.handle_acl(&request, &request_id).await,
+            "edge.saveACL" => self.handle_save_acl(&request, &request_id).await,
+            "edge.getBanList" => self.handle_get_ban_list(&request_id).await,
+            "edge.updateBanList" => self.handle_update_ban_list(&request, &request_id).await,
             _ => {
                 warn!("Unknown RPC method: {}", method);
                 Ok(self.make_error_packet(&request_id, -1, &format!("Unknown method: {}", method)))
@@ -125,6 +129,9 @@ impl RpcHandler {
             }
             "hub.handleChannelRemove" => {
                 self.on_channel_remove(&notification).await;
+            }
+            "hub.handlePluginDataTransmission" => {
+                self.on_plugin_data(&notification, edge_server_id).await;
             }
             _ => {
                 debug!("Unhandled notification: {}", method);
@@ -745,6 +752,222 @@ impl RpcHandler {
         }))
     }
 
+    async fn handle_acl(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.edge_handle_acl.as_ref()
+            .context("Missing edge_handle_acl params")?;
+
+        if params.query {
+            // ACL query: return ACL entries for the channel (including inherited)
+            let acls = self.state.acl_manager.get_channel_acls(params.channel_id);
+            let inherit_acl = self.state.channel_store
+                .get_channel(params.channel_id).await
+                .map(|c| c.inherit_acl)
+                .unwrap_or(true);
+
+            // Encode ACL data as raw bytes (Mumble ACL message format)
+            let acl_msg = munode_protocol::mumbleproto::Acl {
+                channel_id: params.channel_id,
+                inherit_acls: Some(inherit_acl),
+                groups: vec![],
+                acls: acls.iter().map(|a| {
+                    munode_protocol::mumbleproto::acl::ChanAcl {
+                        apply_here: Some(a.apply_here),
+                        apply_subs: Some(a.apply_subs),
+                        user_id: a.user_id.map(|id| id as u32),
+                        group: a.group_name.clone(),
+                        grant: Some(a.allow),
+                        deny: Some(a.deny),
+                        inherited: Some(false),
+                    }
+                }).collect(),
+                query: Some(true),
+            };
+
+            let raw = prost::Message::encode_to_vec(&acl_msg);
+
+            let result = EdgeHandleAclResult {
+                success: true,
+                raw_data: Some(raw),
+                error: None,
+                channel_id: Some(params.channel_id),
+                permission_denied: None,
+            };
+            Ok(self.make_response_packet(request_id, "edge.handleACL", |r| {
+                r.edge_handle_acl = Some(result);
+            }))
+        } else {
+            // ACL update: parse raw data and save
+            let acl_msg: munode_protocol::mumbleproto::Acl =
+                prost::Message::decode(params.raw_data.as_slice())
+                    .context("Failed to decode ACL message")?;
+
+            let entries: Vec<crate::acl_manager::AclEntry> = acl_msg.acls.iter().map(|a| {
+                crate::acl_manager::AclEntry {
+                    channel_id: params.channel_id,
+                    user_id: a.user_id.map(|id| id as i32),
+                    group_name: a.group.clone(),
+                    apply_here: a.apply_here.unwrap_or(true),
+                    apply_subs: a.apply_subs.unwrap_or(true),
+                    allow: a.grant.unwrap_or(0),
+                    deny: a.deny.unwrap_or(0),
+                }
+            }).collect();
+
+            self.state.acl_manager.save_acls(params.channel_id, &entries).await?;
+
+            // Update inherit_acl flag on channel if provided
+            if let Some(inherit) = acl_msg.inherit_acls {
+                if let Some(mut ch) = self.state.channel_store.get_channel(params.channel_id).await {
+                    ch.inherit_acl = inherit;
+                    self.state.channel_store.update_channel(ch).await;
+                }
+            }
+
+            // Broadcast ACL update notification to all edges
+            self.broadcast_notification("hub.aclUpdated", |n| {
+                n.unknown_params_json = Some(
+                    serde_json::json!({ "channel_id": params.channel_id }).to_string()
+                );
+            }).await;
+
+            let result = EdgeHandleAclResult {
+                success: true,
+                raw_data: None,
+                error: None,
+                channel_id: Some(params.channel_id),
+                permission_denied: None,
+            };
+            Ok(self.make_response_packet(request_id, "edge.handleACL", |r| {
+                r.edge_handle_acl = Some(result);
+            }))
+        }
+    }
+
+    async fn handle_save_acl(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.edge_save_acl.as_ref()
+            .context("Missing edge_save_acl params")?;
+
+        let channel_id = params.channel_id;
+        let entries: Vec<crate::acl_manager::AclEntry> = params.acls.iter().map(|a| {
+            crate::acl_manager::AclEntry {
+                channel_id,
+                user_id: a.user_id.map(|id| id as i32),
+                group_name: a.group.clone(),
+                apply_here: a.apply_here,
+                apply_subs: a.apply_subs,
+                allow: a.allow,
+                deny: a.deny,
+            }
+        }).collect();
+
+        self.state.acl_manager.save_acls(channel_id, &entries).await?;
+
+        let result = EdgeSaveAclResult {
+            success: true,
+            acl_ids: vec![],
+            error: None,
+        };
+        Ok(self.make_response_packet(request_id, "edge.saveACL", |r| {
+            r.edge_save_acl = Some(result);
+        }))
+    }
+
+    async fn handle_get_ban_list(
+        &self,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let bans = self.state.database.load_bans()?;
+
+        let ban_entries: Vec<munode_protocol::mumbleproto::ban_list::BanEntry> = bans.iter().map(|b| {
+            munode_protocol::mumbleproto::ban_list::BanEntry {
+                address: b.address.to_vec(),
+                mask: b.mask,
+                name: Some(b.name.clone()),
+                hash: Some(b.cert_hash.clone()),
+                reason: Some(b.reason.clone()),
+                start: Some(b.start_time.to_string()),
+                duration: Some(b.duration),
+            }
+        }).collect();
+
+        let ban_list = munode_protocol::mumbleproto::BanList {
+            bans: ban_entries,
+            query: Some(false),
+        };
+
+        let raw = prost::Message::encode_to_vec(&ban_list);
+
+        let result = EdgeHandleAclResult {
+            success: true,
+            raw_data: Some(raw),
+            error: None,
+            channel_id: None,
+            permission_denied: None,
+        };
+
+        Ok(self.make_response_packet(request_id, "edge.getBanList", |r| {
+            r.edge_handle_acl = Some(result);
+        }))
+    }
+
+    async fn handle_update_ban_list(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.edge_handle_acl.as_ref()
+            .context("Missing ban list data (via edge_handle_acl.raw_data)")?;
+
+        let ban_list: munode_protocol::mumbleproto::BanList =
+            prost::Message::decode(params.raw_data.as_slice())
+                .context("Failed to decode BanList message")?;
+
+        let bans_data: Vec<crate::database::BanRecord> = ban_list.bans.iter().map(|b| {
+            let mut address = [0u8; 16];
+            let copy_len = b.address.len().min(16);
+            address[..copy_len].copy_from_slice(&b.address[..copy_len]);
+
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+
+            crate::database::BanRecord {
+                id: 0,
+                address,
+                mask: b.mask,
+                name: b.name.clone().unwrap_or_default(),
+                cert_hash: b.hash.clone().unwrap_or_default(),
+                reason: b.reason.clone().unwrap_or_default(),
+                start_time: b.start.as_ref().and_then(|s| s.parse::<i64>().ok()).unwrap_or(now),
+                duration: b.duration.unwrap_or(0),
+            }
+        }).collect();
+
+        self.state.database.replace_bans(&bans_data)?;
+        info!("Updated ban list: {} entries", bans_data.len());
+
+        let result = EdgeHandleAclResult {
+            success: true,
+            raw_data: None,
+            error: None,
+            channel_id: None,
+            permission_denied: None,
+        };
+
+        Ok(self.make_response_packet(request_id, "edge.updateBanList", |r| {
+            r.edge_handle_acl = Some(result);
+        }))
+    }
+
     // ==================== Notification Handlers ====================
 
     async fn on_user_left(&self, notification: &TypedRpcNotification) {
@@ -755,6 +978,9 @@ impl RpcHandler {
                 if session_id == 0 {
                     return;
                 }
+
+                // Save last channel before removing session
+                self.save_user_last_channel(session_id).await;
 
                 if let Some(removed) = self.state.session_manager.remove_session(session_id).await {
                     info!("User left: {} (session={})", removed.username, session_id);
@@ -977,6 +1203,80 @@ impl RpcHandler {
                     self.broadcast_notification("hub.channelRemoved", |n| {
                         n.channel_removed = Some(HubChannelRemovedParams { channel_id });
                     }).await;
+                }
+            }
+        }
+    }
+
+    async fn on_plugin_data(&self, notification: &TypedRpcNotification, source_edge_id: u32) {
+        if let Some(params) = &notification.plugin_data_transmission {
+            debug!(
+                "Plugin data from session {}: dataId={}, {} receivers",
+                params.sender_session,
+                params.data_id,
+                params.receiver_sessions.len()
+            );
+
+            let target_sessions = if params.receiver_sessions.is_empty() {
+                // Broadcast to all sessions
+                self.state.session_manager.get_all_sessions().await
+                    .iter()
+                    .map(|s| s.session_id)
+                    .collect::<Vec<_>>()
+            } else {
+                params.receiver_sessions.clone()
+            };
+
+            // Group by edge for efficient routing
+            let mut edge_targets: HashMap<u32, Vec<u32>> = HashMap::new();
+            for session_id in &target_sessions {
+                if let Some(session) = self.state.session_manager.get_session(*session_id).await {
+                    edge_targets
+                        .entry(session.edge_id)
+                        .or_default()
+                        .push(*session_id);
+                }
+            }
+
+            // Send to each edge
+            for (edge_id, sessions) in edge_targets {
+                if edge_id == source_edge_id {
+                    continue; // Don't echo back to source
+                }
+                let broadcast_params = HubPluginDataBroadcastParams {
+                    sender_session: params.sender_session,
+                    data_id: params.data_id.clone(),
+                    data: params.data.clone(),
+                    target_sessions: sessions,
+                };
+
+                let notify = TypedRpcNotification {
+                    method: "hub.pluginDataBroadcast".to_string(),
+                    timestamp: Some(current_millis() as i64),
+                    plugin_data_broadcast: Some(broadcast_params),
+                    ..Default::default()
+                };
+
+                let packet = EdgeHubPacket {
+                    r#type: PacketType::RpcNotification as i32,
+                    rpc_notification: Some(notify),
+                    ..Default::default()
+                };
+
+                let data = packet.encode_to_vec();
+                crate::server::notify(&self.state, edge_id, data).await;
+            }
+        }
+    }
+
+    /// Save user's last channel when they disconnect (for auto-restore on reconnect).
+    async fn save_user_last_channel(&self, session_id: u32) {
+        if let Some(session) = self.state.session_manager.get_session(session_id).await {
+            if session.user_id > 0 {
+                if let Err(e) = self.state.database.save_user_last_channel(
+                    session.user_id, session.channel_id
+                ) {
+                    warn!("Failed to save last channel for user {}: {}", session.user_id, e);
                 }
             }
         }
