@@ -162,8 +162,8 @@ impl AclManager {
         perm: u32,
     ) -> bool {
         let effective = self.calculate_permissions(user_id, channel_id, groups).await;
-        // Write permission implies most other permissions
-        (effective & (perm | permission::WRITE)) != 0
+        // Write implications are already expanded in calculate_permissions
+        (effective & perm) != 0
     }
 
     /// Get all ACL entries for a channel (including inherited).
