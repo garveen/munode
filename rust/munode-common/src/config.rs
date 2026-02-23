@@ -132,6 +132,10 @@ pub struct HubNetworkConfig {
     /// WebSocket control port for edge connections.
     #[serde(default = "default_hub_port")]
     pub control_port: u16,
+    /// WebSocket port for the external auth service (optional).
+    /// When set, the Hub starts an additional WS listener on this port
+    /// that TypeScript auth service instances connect to.
+    pub auth_service_port: Option<u16>,
 }
 
 impl Default for HubNetworkConfig {
@@ -139,6 +143,7 @@ impl Default for HubNetworkConfig {
         Self {
             host: default_host(),
             control_port: default_hub_port(),
+            auth_service_port: None,
         }
     }
 }
@@ -172,6 +177,12 @@ pub struct HubAuthConfig {
     pub welcome_text: Option<String>,
     /// Server password (empty = no password).
     pub server_password: Option<String>,
+    /// When true and an external auth service is connected, always delegate
+    /// authentication to it, bypassing local DB lookups.
+    /// When false (default), the auth service is only called if one is connected;
+    /// otherwise local DB auth is used as a fallback.
+    #[serde(default)]
+    pub require_auth_service: bool,
 }
 
 impl Default for HubAuthConfig {
@@ -181,6 +192,7 @@ impl Default for HubAuthConfig {
             default_channel: 0,
             welcome_text: None,
             server_password: None,
+            require_auth_service: false,
         }
     }
 }

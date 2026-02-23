@@ -49,6 +49,8 @@ uuid = { version = "1", features = ["v4"] }
 
 # Crypto
 ring = "0.17"
+aes = "0.8"
+argon2 = "0.5"
 
 # Workspace crates
 munode-protocol = { path = "munode-protocol" }

@@ -39,6 +39,10 @@ pub enum EdgeEvent {
         data: Vec<u8>,
         target_sessions: Vec<u32>,
     },
+    /// Voice packet relayed from another edge via Hub TCP.
+    RelayedVoice {
+        voice_packet: Vec<u8>,
+    },
 }
 
 /// Shared state accessible by all components of the Edge server.

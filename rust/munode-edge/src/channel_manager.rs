@@ -225,6 +225,15 @@ impl ChannelManager {
     pub async fn get_all_remote_users(&self) -> Vec<RemoteUser> {
         self.remote_users.read().await.values().cloned().collect()
     }
+
+    /// Get remote users in a specific channel (on other edges).
+    pub async fn get_remote_users_in_channel(&self, channel_id: u32) -> Vec<RemoteUser> {
+        self.remote_users.read().await
+            .values()
+            .filter(|u| u.channel_id == channel_id)
+            .cloned()
+            .collect()
+    }
 }
 
 #[cfg(test)]

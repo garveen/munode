@@ -3,28 +3,40 @@
 # Use: docker build -f rust/Dockerfile .
 # Or via docker-compose.yml with context: ..
 
-# Stage 1: Build the Rust binaries
-FROM rust:1.86-bookworm AS builder
-
-# Install protobuf compiler
+# Stage 0: Install cargo-chef
+FROM rust:1.86-bookworm AS chef
+RUN cargo install cargo-chef --locked
 RUN apt-get update && apt-get install -y protobuf-compiler cmake && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /build
 
-# Copy proto files first (needed for prost-build)
+# Stage 1: Compute the dependency recipe
+FROM chef AS planner
+# Copy proto files (build.rs may inspect them at plan time)
 COPY packages/protocol/proto/ /proto/
+ENV MUNODE_PROTO_DIR=/proto
+COPY rust/Cargo.toml rust/Cargo.lock ./
+COPY rust/munode-protocol/ munode-protocol/
+COPY rust/munode-common/ munode-common/
+COPY rust/munode-edge/ munode-edge/
+COPY rust/munode-hub/ munode-hub/
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Copy Rust workspace files
+# Stage 2: Cache dependency compilation
+FROM chef AS builder
+COPY packages/protocol/proto/ /proto/
+ENV MUNODE_PROTO_DIR=/proto
+COPY --from=planner /build/recipe.json recipe.json
+# Build only dependencies - this layer is cached unless Cargo.toml/Cargo.lock changes
+RUN cargo chef cook --release --recipe-path recipe.json
+
+# Stage 3: Build the application binaries
 COPY rust/Cargo.toml rust/Cargo.lock ./
 COPY rust/munode-protocol/ munode-protocol/
 COPY rust/munode-common/ munode-common/
 COPY rust/munode-edge/ munode-edge/
 COPY rust/munode-hub/ munode-hub/
 
-# Point build.rs at the proto directory via env var
-ENV MUNODE_PROTO_DIR=/proto
-
-# Build in release mode
+# Build in release mode (dependencies already compiled above)
 RUN cargo build --release --bin munode-edge --bin munode-hub
 
 # Stage 2: Minimal runtime image

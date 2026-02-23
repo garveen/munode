@@ -26,3 +26,4 @@ bytes = { workspace = true }
 uuid = { workspace = true }
 prost = { workspace = true }
 ring = { workspace = true }
+aes = { workspace = true }

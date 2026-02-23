@@ -309,3 +309,14 @@ export {
   type DataReceivedData,
   type ConnectionQualityMetrics,
 } from './connection/connection-types.js';
+
+// AuthService protocol (Hub <-> external auth service)
+export {
+  AuthServicePacket_Type,
+  authServicePacket_TypeFromJSON,
+  authServicePacket_TypeToJSON,
+  AuthServicePacket,
+  HelloParams,
+  AuthRequest as AuthServiceAuthRequest,
+  AuthResponse as AuthServiceAuthResponse,
+} from './generated/proto/AuthService.js';

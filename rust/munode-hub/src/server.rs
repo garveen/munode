@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use prost::Message;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use munode_common::config::HubConfig;
 use munode_protocol::hubedge::*;
@@ -16,6 +17,28 @@ use crate::database::Database;
 use crate::edge_connection::EdgeConnection;
 use crate::rpc_handler::{EdgeSender, RpcHandler};
 use crate::session_manager::SessionManager;
+use crate::topology_manager::TopologyManager;
+use crate::auth_service::{AuthServiceHandle, run_auth_service_listener};
+
+/// Health data for a connected Edge server.
+#[derive(Debug, Clone)]
+pub struct EdgeHealth {
+    pub last_heartbeat: Instant,
+    pub user_count: u32,
+    pub channel_count: u32,
+    pub uptime_seconds: u64,
+}
+
+impl EdgeHealth {
+    pub fn new() -> Self {
+        Self {
+            last_heartbeat: Instant::now(),
+            user_count: 0,
+            channel_count: 0,
+            uptime_seconds: 0,
+        }
+    }
+}
 
 /// Shared state for the hub server, accessible by all edge connections.
 pub struct HubState {
@@ -25,6 +48,12 @@ pub struct HubState {
     pub database: Arc<Database>,
     pub acl_manager: AclManager,
     pub edge_connections: RwLock<HashMap<u32, EdgeSender>>,
+    /// Health records for each connected Edge, keyed by edge server_id.
+    pub edge_health: RwLock<HashMap<u32, EdgeHealth>>,
+    /// Cluster topology manager.
+    pub topology: RwLock<TopologyManager>,
+    /// External auth service handle.
+    pub auth_service: AuthServiceHandle,
 }
 
 /// The main Hub server.
@@ -46,6 +75,8 @@ impl HubServer {
         let channel_store = Arc::new(ChannelStore::new());
 
         // Create shared state
+        let auth_service = AuthServiceHandle::new();
+
         let state = Arc::new(HubState {
             config: self.config.clone(),
             session_manager: SessionManager::new(),
@@ -53,6 +84,9 @@ impl HubServer {
             acl_manager: AclManager::new(database.clone(), channel_store.clone()),
             database,
             edge_connections: RwLock::new(HashMap::new()),
+            edge_health: RwLock::new(HashMap::new()),
+            topology: RwLock::new(TopologyManager::new()),
+            auth_service: auth_service.clone(),
         });
 
         // Load channels from database
@@ -60,6 +94,25 @@ impl HubServer {
 
         // Create RPC handler
         let rpc_handler = Arc::new(RpcHandler::new(state.clone()));
+
+        // Start auth service WS listener if port is configured
+        if let Some(auth_port) = self.config.network.auth_service_port {
+            let auth_addr = format!("{}:{}", self.config.network.host, auth_port);
+            let auth_handle = auth_service.clone();
+            tokio::spawn(async move {
+                if let Err(e) = run_auth_service_listener(auth_addr, auth_handle).await {
+                    error!("Auth service listener error: {}", e);
+                }
+            });
+        }
+
+        // Start Edge health check loop
+        let health_state = state.clone();
+        let health_rpc = rpc_handler.clone();
+        let heartbeat_timeout = self.config.registry.heartbeat_timeout;
+        tokio::spawn(async move {
+            health_check_loop(health_state, health_rpc, heartbeat_timeout).await;
+        });
 
         // Bind WebSocket listener
         let addr = format!(
@@ -160,4 +213,34 @@ fn current_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+/// Periodically check Edge heartbeat health; clean up timed-out edges.
+async fn health_check_loop(
+    state: Arc<HubState>,
+    rpc_handler: Arc<RpcHandler>,
+    heartbeat_timeout_ms: u64,
+) {
+    let check_interval = Duration::from_millis(heartbeat_timeout_ms);
+    let timeout = Duration::from_millis(heartbeat_timeout_ms * 2);
+
+    loop {
+        tokio::time::sleep(check_interval).await;
+
+        let timed_out: Vec<u32> = {
+            let health = state.edge_health.read().await;
+            health
+                .iter()
+                .filter(|(_, h)| h.last_heartbeat.elapsed() > timeout)
+                .map(|(id, _)| *id)
+                .collect()
+        };
+
+        for edge_id in timed_out {
+            warn!("Edge {} heartbeat timeout — cleaning up", edge_id);
+            state.edge_connections.write().await.remove(&edge_id);
+            state.edge_health.write().await.remove(&edge_id);
+            rpc_handler.cleanup_edge(edge_id).await;
+        }
+    }
 }

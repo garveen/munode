@@ -2,16 +2,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use argon2::password_hash::SaltString;
 use prost::Message;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, warn};
 
+use munode_protocol::authservice::{AuthRequest as ExtAuthRequest};
 use munode_protocol::hubedge::*;
 
 use crate::channel_store::ChannelRecord;
 use crate::database::DbChannelRecord;
 use crate::server::HubState;
 use crate::session_manager::SessionInfo;
+use crate::topology_manager::{ArbitrationResult, LinkQuality, TopologyEdge};
 
 /// Sender type for pushing serialized packets to a specific edge.
 pub type EdgeSender = mpsc::Sender<Vec<u8>>;
@@ -79,6 +83,20 @@ impl RpcHandler {
             "edge.saveACL" => self.handle_save_acl(&request, &request_id).await,
             "edge.getBanList" => self.handle_get_ban_list(&request_id).await,
             "edge.updateBanList" => self.handle_update_ban_list(&request, &request_id).await,
+            "edge.getUserList" => self.handle_get_user_list(&request_id).await,
+            "edge.updateUserList" => self.handle_update_user_list(&request, &request_id).await,
+            "blob.put" => self.handle_blob_put(&request, &request_id).await,
+            "blob.get" => self.handle_blob_get(&request, &request_id).await,
+            "blob.getUserTexture" => self.handle_blob_get_user_texture(&request, &request_id).await,
+            "blob.getUserComment" => self.handle_blob_get_user_comment(&request, &request_id).await,
+            "blob.setUserTexture" => self.handle_blob_set_user_texture(&request, &request_id).await,
+            "blob.setUserComment" => self.handle_blob_set_user_comment(&request, &request_id).await,
+            "edge.join" => self.handle_cluster_join(&request, &request_id, edge_server_id).await,
+            "edge.joinComplete" => self.handle_cluster_join_complete(&request, &request_id).await,
+            "edge.reportPeerDisconnect" => self.handle_report_peer_disconnect(&request, &request_id).await,
+            "edge.reportQuality" => self.handle_report_quality(&request, &request_id).await,
+            "cluster.getStatus" => self.handle_cluster_get_status(&request_id).await,
+            "edge.relayVoiceViaTcp" => self.handle_relay_voice_via_tcp(&request, &request_id).await,
             _ => {
                 warn!("Unknown RPC method: {}", method);
                 Ok(self.make_error_packet(&request_id, -1, &format!("Unknown method: {}", method)))
@@ -270,6 +288,170 @@ impl RpcHandler {
         let username = &params.username;
         let password = &params.password;
 
+        // ------------------------------------------------------------------
+        // Step 1: Try external auth service (if connected)
+        // ------------------------------------------------------------------
+        if self.state.auth_service.is_connected().await {
+            let client_info = params.client_info.as_ref();
+            let ext_request = ExtAuthRequest {
+                request_id: request_id.to_string(),
+                username: username.clone(),
+                password: password.clone(),
+                tokens: params.tokens.clone(),
+                session_id: params.session_id,
+                server_id: params.server_id,
+                ip_address: client_info.map(|c| c.ip_address.clone()).unwrap_or_default(),
+                ip_version: client_info.map(|c| c.ip_version.clone()).unwrap_or_default(),
+                release: client_info.map(|c| c.release.clone()).unwrap_or_default(),
+                version: client_info.and_then(|c| c.version),
+                os: client_info.map(|c| c.os.clone()).unwrap_or_default(),
+                os_version: client_info.map(|c| c.os_version.clone()).unwrap_or_default(),
+                certificate_hash: client_info.and_then(|c| c.certificate_hash.clone()),
+            };
+
+            match self.state.auth_service.authenticate(ext_request).await {
+                Some(resp) => {
+                    if !resp.success {
+                        let result = EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None,
+                            username: None,
+                            display_name: None,
+                            groups: vec![],
+                            reason: resp.reason.clone(),
+                            reject_type: resp.reject_type,
+                            channel_id: None,
+                            mute: None, deaf: None, suppress: None,
+                            self_mute: None, self_deaf: None,
+                            priority_speaker: None, recording: None,
+                            cert_required: resp.cert_required,
+                        };
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(result);
+                        }));
+                    }
+
+                    // External auth succeeded — create session from response.
+                    let user_id = resp.user_id.unwrap_or(0);
+                    let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
+                    let channel_id = resp.channel_id.unwrap_or(config.auth.default_channel);
+
+                    let session_info = SessionInfo {
+                        session_id: params.session_id,
+                        edge_id: edge_server_id,
+                        user_id,
+                        username: auth_username.clone(),
+                        channel_id,
+                        groups: resp.groups.clone(),
+                        cert_hash: params
+                            .client_info.as_ref()
+                            .and_then(|ci| ci.certificate_hash.clone())
+                            .unwrap_or_default(),
+                        mute: params.mute.unwrap_or(false),
+                        deaf: params.deaf.unwrap_or(false),
+                        suppress: params.suppress.unwrap_or(false),
+                        self_mute: params.self_mute.unwrap_or(false),
+                        self_deaf: params.self_deaf.unwrap_or(false),
+                        priority_speaker: params.priority_speaker.unwrap_or(false),
+                        recording: params.recording.unwrap_or(false),
+                    };
+                    self.state.session_manager.add_session(session_info).await;
+
+                    info!(
+                        "User authenticated via ext service: {} (session={}, edge={}, channel={})",
+                        auth_username, params.session_id, edge_server_id, channel_id
+                    );
+
+                    // Broadcast hub.userJoined
+                    let cert_hash = params.client_info.as_ref()
+                        .and_then(|ci| ci.certificate_hash.clone());
+                    self.broadcast_notification("hub.userJoined", |n| {
+                        n.user_joined = Some(HubUserJoinedParams {
+                            session_id: params.session_id,
+                            edge_id: edge_server_id,
+                            user_id,
+                            username: auth_username.clone(),
+                            channel_id,
+                            groups: resp.groups.clone(),
+                            cert_hash,
+                            mute: params.mute, deaf: params.deaf,
+                            suppress: params.suppress, self_mute: params.self_mute,
+                            self_deaf: params.self_deaf,
+                            priority_speaker: params.priority_speaker,
+                            recording: params.recording,
+                        });
+                    }).await;
+
+                    let result = EdgeAuthenticateUserResult {
+                        success: true,
+                        user_id: Some(user_id),
+                        username: Some(auth_username),
+                        display_name: resp.display_name.clone(),
+                        groups: resp.groups,
+                        reason: None,
+                        reject_type: None,
+                        channel_id: Some(channel_id),
+                        mute: params.mute, deaf: params.deaf,
+                        suppress: params.suppress, self_mute: params.self_mute,
+                        self_deaf: params.self_deaf,
+                        priority_speaker: params.priority_speaker,
+                        recording: params.recording,
+                        cert_required: resp.cert_required,
+                    };
+                    return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                        r.edge_authenticate_user = Some(result);
+                    }));
+                }
+                None => {
+                    // Auth service timed out or disconnected mid-request.
+                    if config.auth.require_auth_service {
+                        // Configured to require the auth service — reject.
+                        let result = EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None, username: None, display_name: None,
+                            groups: vec![],
+                            reason: Some("Authentication service unavailable".to_string()),
+                            reject_type: Some(8), // AuthenticatorFail
+                            channel_id: None,
+                            mute: None, deaf: None, suppress: None,
+                            self_mute: None, self_deaf: None,
+                            priority_speaker: None, recording: None,
+                            cert_required: None,
+                        };
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(result);
+                        }));
+                    }
+                    // Otherwise fall through to local DB auth.
+                    warn!(
+                        "Auth service request timed out for user '{}'; falling back to local auth",
+                        username
+                    );
+                }
+            }
+        } else if config.auth.require_auth_service {
+            // No service connected but one is required — reject.
+            let result = EdgeAuthenticateUserResult {
+                success: false,
+                user_id: None, username: None, display_name: None,
+                groups: vec![],
+                reason: Some("Authentication service not connected".to_string()),
+                reject_type: Some(8), // AuthenticatorFail
+                channel_id: None,
+                mute: None, deaf: None, suppress: None,
+                self_mute: None, self_deaf: None,
+                priority_speaker: None, recording: None,
+                cert_required: None,
+            };
+            return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                r.edge_authenticate_user = Some(result);
+            }));
+        }
+
+        // ------------------------------------------------------------------
+        // Step 2: Local DB authentication (fallback / default)
+        // ------------------------------------------------------------------
+
         // Check server password if set
         if let Some(server_pw) = &config.auth.server_password {
             if !server_pw.is_empty() && password != server_pw {
@@ -326,10 +508,38 @@ impl RpcHandler {
             }
         }
 
-        // Look up or create user
+        // Look up user; verify password if they have one set
         let db_user = self.state.database.find_user(username)?;
         let (user_id, channel_id) = match db_user {
-            Some(u) => (u.id, u.last_channel),
+            Some(ref u) => {
+                // If user has a stored password hash, verify the supplied password
+                if !u.pw_hash.is_empty() {
+                    if !verify_password(&u.pw_hash, password) {
+                        let result = EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None,
+                            username: None,
+                            display_name: None,
+                            groups: vec![],
+                            reason: Some("Wrong password".to_string()),
+                            reject_type: Some(3), // WrongUserPW
+                            channel_id: None,
+                            mute: None,
+                            deaf: None,
+                            suppress: None,
+                            self_mute: None,
+                            self_deaf: None,
+                            priority_speaker: None,
+                            recording: None,
+                            cert_required: None,
+                        };
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(result);
+                        }));
+                    }
+                }
+                (u.id, u.last_channel)
+            }
             None => (0, config.auth.default_channel),
         };
 
@@ -968,6 +1178,73 @@ impl RpcHandler {
         }))
     }
 
+    async fn handle_get_user_list(&self, request_id: &str) -> Result<EdgeHubPacket> {
+        let users = self.state.database.list_users()?;
+        let user_list = munode_protocol::mumbleproto::UserList {
+            users: users
+                .iter()
+                .map(|u| munode_protocol::mumbleproto::user_list::User {
+                    user_id: u.id,
+                    name: Some(u.username.clone()),
+                    last_seen: None,
+                    last_channel: if u.last_channel > 0 { Some(u.last_channel) } else { None },
+                })
+                .collect(),
+        };
+        let raw = prost::Message::encode_to_vec(&user_list);
+        Ok(self.make_response_packet(request_id, "edge.getUserList", |r| {
+            r.edge_handle_acl = Some(EdgeHandleAclResult {
+                success: true,
+                raw_data: Some(raw),
+                error: None,
+                channel_id: None,
+                permission_denied: None,
+            });
+        }))
+    }
+
+    async fn handle_update_user_list(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.edge_handle_acl.as_ref()
+            .context("Missing user list data (via edge_handle_acl.raw_data)")?;
+        let raw: &[u8] = &params.raw_data;
+        let user_list: munode_protocol::mumbleproto::UserList =
+            prost::Message::decode(raw).context("Failed to decode UserList message")?;
+
+        let mut error_msg: Option<String> = None;
+        for u in &user_list.users {
+            if let Some(new_name) = &u.name {
+                if new_name.is_empty() {
+                    // Empty name = de-register
+                    self.state.database.delete_user(u.user_id)?;
+                } else {
+                    match self.state.database.rename_user(u.user_id, new_name) {
+                        Ok(false) => {
+                            error_msg = Some(format!("User {} not found", u.user_id));
+                        }
+                        Err(e) => {
+                            error_msg = Some(e.to_string());
+                            break;
+                        }
+                        Ok(true) => {}
+                    }
+                }
+            }
+        }
+        Ok(self.make_response_packet(request_id, "edge.updateUserList", |r| {
+            r.edge_handle_acl = Some(EdgeHandleAclResult {
+                success: error_msg.is_none(),
+                raw_data: None,
+                error: error_msg,
+                channel_id: None,
+                permission_denied: None,
+            });
+        }))
+    }
+
     // ==================== Notification Handlers ====================
 
     async fn on_user_left(&self, notification: &TypedRpcNotification) {
@@ -1374,6 +1651,9 @@ impl RpcHandler {
 
         self.edge_registry.write().await.remove(&server_id);
 
+        // Remove from cluster topology
+        self.state.topology.write().await.remove_edge(server_id);
+
         if !sessions.is_empty() {
             info!(
                 "Cleaned up {} sessions for disconnected edge {}",
@@ -1381,6 +1661,394 @@ impl RpcHandler {
                 server_id
             );
         }
+    }
+
+    // ==================== Blob RPC Handlers ====================
+
+    async fn handle_blob_put(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.blob_put.as_ref().context("Missing blob_put params")?;
+        match self.state.database.put_blob(&params.data) {
+            Ok(hash) => Ok(self.make_response_packet(request_id, "blob.put", |r| {
+                r.blob_put = Some(BlobPutResult { success: true, hash: Some(hash), error: None });
+            })),
+            Err(e) => Ok(self.make_response_packet(request_id, "blob.put", |r| {
+                r.blob_put = Some(BlobPutResult { success: false, hash: None, error: Some(e.to_string()) });
+            })),
+        }
+    }
+
+    async fn handle_blob_get(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.blob_get.as_ref().context("Missing blob_get params")?;
+        match self.state.database.get_blob(&params.hash) {
+            Ok(Some(data)) => Ok(self.make_response_packet(request_id, "blob.get", |r| {
+                r.blob_get = Some(BlobGetResult { success: true, data: Some(data), error: None });
+            })),
+            Ok(None) => Ok(self.make_response_packet(request_id, "blob.get", |r| {
+                r.blob_get = Some(BlobGetResult { success: false, data: None, error: Some("Not found".into()) });
+            })),
+            Err(e) => Ok(self.make_response_packet(request_id, "blob.get", |r| {
+                r.blob_get = Some(BlobGetResult { success: false, data: None, error: Some(e.to_string()) });
+            })),
+        }
+    }
+
+    async fn handle_blob_get_user_texture(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.blob_get_user_texture.as_ref().context("Missing blob_get_user_texture params")?;
+        match self.state.database.get_user_blob(params.user_id, "texture") {
+            Ok(Some((hash, data))) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
+                r.blob_get_user_texture = Some(BlobGetUserTextureResult {
+                    success: true, data: Some(data), hash: Some(hash), error: None,
+                });
+            })),
+            Ok(None) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
+                r.blob_get_user_texture = Some(BlobGetUserTextureResult {
+                    success: false, data: None, hash: None, error: Some("Not found".into()),
+                });
+            })),
+            Err(e) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
+                r.blob_get_user_texture = Some(BlobGetUserTextureResult {
+                    success: false, data: None, hash: None, error: Some(e.to_string()),
+                });
+            })),
+        }
+    }
+
+    async fn handle_blob_get_user_comment(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.blob_get_user_comment.as_ref().context("Missing blob_get_user_comment params")?;
+        match self.state.database.get_user_blob(params.user_id, "comment") {
+            Ok(Some((hash, data))) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
+                r.blob_get_user_comment = Some(BlobGetUserCommentResult {
+                    success: true, data: Some(data), hash: Some(hash), error: None,
+                });
+            })),
+            Ok(None) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
+                r.blob_get_user_comment = Some(BlobGetUserCommentResult {
+                    success: false, data: None, hash: None, error: Some("Not found".into()),
+                });
+            })),
+            Err(e) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
+                r.blob_get_user_comment = Some(BlobGetUserCommentResult {
+                    success: false, data: None, hash: None, error: Some(e.to_string()),
+                });
+            })),
+        }
+    }
+
+    async fn handle_blob_set_user_texture(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.blob_set_user_texture.as_ref().context("Missing blob_set_user_texture params")?;
+        match self.state.database.set_user_blob(params.user_id, "texture", &params.data) {
+            Ok(hash) => Ok(self.make_response_packet(request_id, "blob.setUserTexture", |r| {
+                r.blob_set_user_texture = Some(BlobSetUserTextureResult {
+                    success: true, hash: Some(hash), error: None,
+                });
+            })),
+            Err(e) => Ok(self.make_response_packet(request_id, "blob.setUserTexture", |r| {
+                r.blob_set_user_texture = Some(BlobSetUserTextureResult {
+                    success: false, hash: None, error: Some(e.to_string()),
+                });
+            })),
+        }
+    }
+
+    async fn handle_blob_set_user_comment(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.blob_set_user_comment.as_ref().context("Missing blob_set_user_comment params")?;
+        match self.state.database.set_user_blob(params.user_id, "comment", &params.data) {
+            Ok(hash) => Ok(self.make_response_packet(request_id, "blob.setUserComment", |r| {
+                r.blob_set_user_comment = Some(BlobSetUserCommentResult {
+                    success: true, hash: Some(hash), error: None,
+                });
+            })),
+            Err(e) => Ok(self.make_response_packet(request_id, "blob.setUserComment", |r| {
+                r.blob_set_user_comment = Some(BlobSetUserCommentResult {
+                    success: false, hash: None, error: Some(e.to_string()),
+                });
+            })),
+        }
+    }
+
+    // ==================== Cluster RPC Handlers ====================
+
+    /// edge.join — Edge requests to join the cluster.
+    async fn handle_cluster_join(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+        edge_server_id: u32,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.edge_join.as_ref().context("Missing edge_join params")?;
+        let join_edge_id = if params.server_id != 0 { params.server_id } else { edge_server_id };
+
+        let topo_edge = TopologyEdge {
+            edge_id: join_edge_id,
+            name: params.name.clone(),
+            host: params.host.clone(),
+            port: params.port,
+            voice_port: params.voice_port,
+            capacity: params.capacity,
+            joined_at: std::time::Instant::now(),
+            connected_peers: std::collections::HashSet::new(),
+        };
+
+        let peers_snapshot: Vec<PeerInfoProto> = {
+            let mut topo = self.state.topology.write().await;
+            topo.add_edge(topo_edge)
+                .into_iter()
+                .map(|p| PeerInfoProto {
+                    id: p.edge_id,
+                    name: p.name.clone(),
+                    host: p.host.clone(),
+                    port: p.port,
+                    voice_port: p.voice_port,
+                    cert_hash: None,
+                })
+                .collect()
+        };
+
+        // Notify existing edges about the new peer
+        let new_peer_notification = serde_json::json!({
+            "edge_id": join_edge_id,
+            "name": params.name,
+            "host": params.host,
+            "port": params.port,
+            "voice_port": params.voice_port,
+        });
+        let notification = TypedRpcNotification {
+            method: "hub.peerJoined".to_string(),
+            timestamp: Some(current_millis() as i64),
+            unknown_params_json: Some(new_peer_notification.to_string()),
+            ..Default::default()
+        };
+        let notify_packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+        let notify_data = notify_packet.encode_to_vec();
+
+        let edge_connections = self.state.edge_connections.read().await;
+        for (&eid, sender) in edge_connections.iter() {
+            if eid != join_edge_id {
+                let _ = sender.send(notify_data.clone()).await;
+            }
+        }
+
+        info!("Edge {} ({}) joined cluster — {} peers", join_edge_id, params.name, peers_snapshot.len());
+
+        Ok(self.make_response_packet(request_id, "edge.join", |r| {
+            r.edge_join = Some(EdgeJoinResult {
+                success: true,
+                token: Some(format!("join-{}", join_edge_id)),
+                peers: peers_snapshot,
+                timeout: Some(30),
+                error: None,
+            });
+        }))
+    }
+
+    /// edge.joinComplete — Edge confirms it has connected to peers.
+    async fn handle_cluster_join_complete(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.edge_join_complete.as_ref().context("Missing edge_join_complete params")?;
+        {
+            let mut topo = self.state.topology.write().await;
+            topo.mark_join_complete(params.server_id, params.connected_peers.clone());
+        }
+        info!("Edge {} join complete, connected peers: {:?}", params.server_id, params.connected_peers);
+
+        Ok(self.make_response_packet(request_id, "edge.joinComplete", |r| {
+            r.edge_join_complete = Some(EdgeJoinCompleteResult { success: true, error: None });
+        }))
+    }
+
+    /// edge.reportPeerDisconnect — Edge reports loss of connection to a peer.
+    async fn handle_report_peer_disconnect(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.edge_report_peer_disconnect.as_ref()
+            .context("Missing edge_report_peer_disconnect params")?;
+
+        let action = {
+            let mut topo = self.state.topology.write().await;
+            topo.arbitrate_disconnect(params.local_edge_id, params.remote_edge_id)
+        };
+
+        let action_str = match action {
+            ArbitrationResult::BothReported { edge_id } => {
+                warn!("Cluster: edge {} confirmed disconnected by arbitration", edge_id);
+                // Notify all edges about the forced disconnection
+                let notification = serde_json::json!({
+                    "edge_id": edge_id,
+                    "reason": "peer_disconnect_arbitration",
+                });
+                let notif = TypedRpcNotification {
+                    method: "hub.peerLeft".to_string(),
+                    timestamp: Some(current_millis() as i64),
+                    unknown_params_json: Some(notification.to_string()),
+                    ..Default::default()
+                };
+                let packet = EdgeHubPacket {
+                    r#type: PacketType::RpcNotification as i32,
+                    rpc_notification: Some(notif),
+                    ..Default::default()
+                };
+                let data = packet.encode_to_vec();
+                let edges = self.state.edge_connections.read().await;
+                for sender in edges.values() {
+                    let _ = sender.send(data.clone()).await;
+                }
+                "disconnect_confirmed".to_string()
+            }
+            ArbitrationResult::AwaitConfirmation => "await_confirmation".to_string(),
+            ArbitrationResult::HubDecides => "hub_decides".to_string(),
+        };
+
+        Ok(self.make_response_packet(request_id, "edge.reportPeerDisconnect", |r| {
+            r.edge_report_peer_disconnect = Some(EdgeReportPeerDisconnectResult { action: action_str });
+        }))
+    }
+
+    /// edge.reportQuality — Edge reports link quality to a peer.
+    async fn handle_report_quality(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.edge_report_quality.as_ref().context("Missing edge_report_quality params")?;
+        let quality_proto = params.quality;
+        let quality = LinkQuality {
+            rtt_ms: quality_proto.rtt as f64,
+            packet_loss: quality_proto.packet_loss as f64,
+            jitter_ms: quality_proto.jitter as f64,
+            samples: quality_proto.samples,
+            last_update: std::time::Instant::now(),
+        };
+        {
+            let mut topo = self.state.topology.write().await;
+            topo.report_quality(params.edge_id, params.target_edge_id, quality);
+        }
+
+        Ok(self.make_response_packet(request_id, "edge.reportQuality", |r| {
+            r.edge_report_quality = Some(EdgeReportQualityResult { success: true });
+        }))
+    }
+
+    /// cluster.getStatus — Returns current cluster topology status.
+    async fn handle_cluster_get_status(&self, request_id: &str) -> Result<EdgeHubPacket> {
+        let health_map = self.state.edge_health.read().await;
+        let topo = self.state.topology.read().await;
+        let now = std::time::Instant::now();
+
+        let edges: Vec<ClusterEdgeStatusProto> = topo.get_all_edges()
+            .into_iter()
+            .map(|e| {
+                let health = health_map.get(&e.edge_id);
+                let last_seen_secs = health
+                    .map(|h| now.duration_since(h.last_heartbeat).as_secs())
+                    .unwrap_or(u64::MAX);
+                let status = if last_seen_secs < 60 { "healthy" } else { "stale" };
+                let client_count = health.map(|h| h.user_count).unwrap_or(0);
+
+                ClusterEdgeStatusProto {
+                    id: e.edge_id,
+                    name: e.name.clone(),
+                    host: e.host.clone(),
+                    port: e.port,
+                    client_count,
+                    status: status.to_string(),
+                    last_seen: health.map(|h| {
+                        let secs_ago = now.duration_since(h.last_heartbeat).as_secs() as i64;
+                        current_millis() as i64 - secs_ago * 1000
+                    }),
+                }
+            })
+            .collect();
+
+        let edge_count = edges.len();
+        info!("cluster.getStatus: {} edges in topology", edge_count);
+        Ok(self.make_response_packet(request_id, "cluster.getStatus", |r| {
+            r.cluster_get_status = Some(ClusterGetStatusResult { edges });
+        }))
+    }
+
+    /// edge.relayVoiceViaTcp — Forward voice packet from source edge to target edge via Hub.
+    async fn handle_relay_voice_via_tcp(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.edge_relay_voice_via_tcp.as_ref()
+            .context("Missing edge_relay_voice_via_tcp params")?;
+
+        let target_edge_id = params.target_edge_id;
+        let voice_packet = params.voice_packet.clone();
+        let from_edge_id = params.from_edge_id;
+
+        // Forward the voice payload to the target edge via a notification
+        let notification = serde_json::json!({
+            "from_edge_id": from_edge_id,
+            "voice_packet": voice_packet,
+        });
+        let notif = TypedRpcNotification {
+            method: "hub.relayedVoice".to_string(),
+            timestamp: Some(current_millis() as i64),
+            unknown_params_json: Some(notification.to_string()),
+            ..Default::default()
+        };
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notif),
+            ..Default::default()
+        };
+        let data = packet.encode_to_vec();
+
+        let sent = {
+            let edges = self.state.edge_connections.read().await;
+            if let Some(sender) = edges.get(&target_edge_id) {
+                sender.send(data).await.is_ok()
+            } else {
+                false
+            }
+        };
+
+        if !sent {
+            debug!("Could not relay voice to edge {} (not connected)", target_edge_id);
+        }
+
+        Ok(self.make_response_packet(request_id, "edge.relayVoiceViaTcp", |r| {
+            r.edge_relay_voice_via_tcp = Some(EdgeRelayVoiceViaTcpResult {
+                success: sent,
+                error: if sent { None } else { Some(format!("Edge {} not connected", target_edge_id)) },
+            });
+        }))
     }
 }
 
@@ -1411,4 +2079,31 @@ fn current_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+/// Hash a password using Argon2id (PHC string format).
+#[allow(dead_code)]
+pub fn hash_password(password: &str) -> Result<String> {
+    use ring::rand::{SecureRandom, SystemRandom};
+    let rng = SystemRandom::new();
+    let mut salt_bytes = [0u8; 16];
+    rng.fill(&mut salt_bytes).map_err(|_| anyhow::anyhow!("RNG failed"))?;
+    let salt = SaltString::encode_b64(&salt_bytes)
+        .map_err(|e| anyhow::anyhow!("Salt encoding failed: {}", e))?;
+    let argon2 = Argon2::default();
+    let hash = argon2
+        .hash_password(password.as_bytes(), &salt)
+        .map_err(|e| anyhow::anyhow!("Password hashing failed: {}", e))?
+        .to_string();
+    Ok(hash)
+}
+
+/// Verify a password against an Argon2id PHC hash string.
+fn verify_password(hash: &str, password: &str) -> bool {
+    match PasswordHash::new(hash) {
+        Ok(parsed) => Argon2::default()
+            .verify_password(password.as_bytes(), &parsed)
+            .is_ok(),
+        Err(_) => false,
+    }
 }

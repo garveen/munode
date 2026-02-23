@@ -49,6 +49,31 @@ importers:
         specifier: ^1.4.0
         version: 1.6.1(@types/node@22.19.3)
 
+  packages/auth-service:
+    dependencies:
+      '@munode/common':
+        specifier: workspace:*
+        version: link:../common
+      '@munode/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      ws:
+        specifier: ^8.18.3
+        version: 8.18.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.19.3
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      tsx:
+        specifier: ^4.19.2
+        version: 4.21.0
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+
   packages/cli:
     dependencies:
       '@munode/common':
@@ -1141,7 +1166,7 @@ packages:
   /@types/fluent-ffmpeg@2.1.28:
     resolution: {integrity: sha512-5ovxsDwBcPfJ+eYs1I/ZpcYCnkce7pvH9AHSvrZllAp1ZPpTRDZAFjF3TRFbukxSgIYTTNYePbS0rKUmaxVbXw==}
     dependencies:
-      '@types/node': 20.19.27
+      '@types/node': 22.19.3
     dev: true
 
   /@types/json-schema@7.0.15:
@@ -1166,7 +1191,7 @@ packages:
   /@types/ws@8.18.1:
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
     dependencies:
-      '@types/node': 20.19.27
+      '@types/node': 22.19.3
     dev: true
 
   /@typescript-eslint/eslint-plugin@8.50.0(@typescript-eslint/parser@8.50.0)(eslint@9.39.2)(typescript@5.9.3):

@@ -13,5 +13,10 @@ pub mod voiceudp {
     include!("generated/voiceudp.rs");
 }
 
+/// Protobuf types for the external auth service protocol.
+pub mod authservice {
+    include!("generated/authservice.rs");
+}
+
 pub mod message_type;
 pub mod transport;

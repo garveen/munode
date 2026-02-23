@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
@@ -16,6 +16,8 @@ use munode_protocol::hubedge::{
     self, EdgeAuthenticateUserParams, EdgeFullSyncParams,
     EdgeHandleAclParams, EdgePluginDataTransmissionParams,
     EdgeHubPacket, EdgeRegisterParams,
+    BlobPutParams, BlobGetParams, BlobGetUserTextureParams, BlobGetUserCommentParams,
+    BlobSetUserTextureParams, BlobSetUserCommentParams,
     PacketType, TypedRpcNotification, TypedRpcRequest, TypedRpcResponse,
 };
 
@@ -49,6 +51,8 @@ pub struct HubClient {
     send_tx: Mutex<Option<mpsc::Sender<Vec<u8>>>>,
     /// Counter for generating unique request IDs.
     request_counter: Mutex<u64>,
+    /// Time when this HubClient was created (for uptime reporting).
+    start_time: Instant,
 }
 
 impl HubClient {
@@ -65,6 +69,7 @@ impl HubClient {
             pending: Mutex::new(HashMap::new()),
             send_tx: Mutex::new(None),
             request_counter: Mutex::new(0),
+            start_time: Instant::now(),
         })
     }
 
@@ -407,6 +412,38 @@ impl HubClient {
                     });
                 }
             }
+            "hub.relayedVoice" => {
+                // Voice packet relayed from another edge via Hub
+                if let Some(json_str) = &notification.unknown_params_json {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        if let Some(arr) = v["voice_packet"].as_array() {
+                            let voice_packet: Vec<u8> = arr.iter()
+                                .filter_map(|b| b.as_u64().map(|n| n as u8))
+                                .collect();
+                            self.edge_state.emit(EdgeEvent::RelayedVoice { voice_packet });
+                        }
+                    }
+                }
+            }
+            "hub.peerJoined" => {
+                // Another Edge joined the cluster (from handle_cluster_join broadcast)
+                if let Some(json_str) = &notification.unknown_params_json {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        let edge_id = v["edge_id"].as_u64().unwrap_or(0) as u32;
+                        let name = v["name"].as_str().unwrap_or("").to_string();
+                        info!("Peer edge joined cluster: {} (id {})", name, edge_id);
+                    }
+                }
+            }
+            "hub.peerLeft" => {
+                // An Edge left the cluster (disconnect arbitration)
+                if let Some(json_str) = &notification.unknown_params_json {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        let edge_id = v["edge_id"].as_u64().unwrap_or(0) as u32;
+                        warn!("Peer edge left cluster: id {}", edge_id);
+                    }
+                }
+            }
             _ => {
                 debug!("Unhandled notification: {}", method);
             }
@@ -560,6 +597,7 @@ impl HubClient {
 
             let user_count = self.edge_state.client_manager.client_count().await as u32;
             let channel_count = self.edge_state.channel_manager.get_all_channels().await.len() as u32;
+            let uptime_seconds = self.start_time.elapsed().as_secs();
 
             let packet = EdgeHubPacket {
                 r#type: PacketType::Heartbeat as i32,
@@ -573,7 +611,7 @@ impl HubClient {
                         memory_usage_mb: None,
                         network_send_kbps: None,
                         network_recv_kbps: None,
-                        uptime_seconds: None,
+                        uptime_seconds: Some(uptime_seconds),
                     }),
                 }),
                 ..Default::default()
@@ -973,6 +1011,47 @@ impl HubClient {
         }
     }
 
+    /// RPC: Get the registered user list from Hub (returns raw protobuf UserList bytes).
+    pub async fn rpc_get_user_list(&self) -> Option<Vec<u8>> {
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id().await,
+            method: "edge.getUserList".to_string(),
+            ..Default::default()
+        };
+        match self.rpc_call(request).await {
+            Ok(resp) => resp.edge_handle_acl.and_then(|r| r.raw_data),
+            Err(e) => {
+                warn!("Failed to get user list: {}", e);
+                None
+            }
+        }
+    }
+
+    /// RPC: Update (rename / de-register) users in Hub database.
+    pub async fn rpc_update_user_list(&self, raw_user_list: &[u8]) -> bool {
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id().await,
+            method: "edge.updateUserList".to_string(),
+            edge_handle_acl: Some(EdgeHandleAclParams {
+                edge_id: self.edge_id().await,
+                actor_session: 0,
+                actor_user_id: 0,
+                actor_username: String::new(),
+                channel_id: 0,
+                query: false,
+                raw_data: raw_user_list.to_vec(),
+            }),
+            ..Default::default()
+        };
+        match self.rpc_call(request).await {
+            Ok(resp) => resp.edge_handle_acl.map(|r| r.success).unwrap_or(false),
+            Err(e) => {
+                warn!("Failed to update user list: {}", e);
+                false
+            }
+        }
+    }
+
     /// Notify Hub of plugin data transmission for cross-edge forwarding.
     pub async fn notify_plugin_data(
         &self,
@@ -1006,6 +1085,120 @@ impl HubClient {
             warn!("Failed to forward plugin data to Hub: {}", e);
         }
     }
+
+    // ==================== Blob RPC Methods ====================
+
+    /// RPC: Upload blob data to Hub. Returns SHA-256 hash on success.
+    pub async fn blob_put(&self, data: Vec<u8>) -> Option<String> {
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id().await,
+            method: "blob.put".to_string(),
+            blob_put: Some(BlobPutParams { data }),
+            ..Default::default()
+        };
+        match self.rpc_call(request).await {
+            Ok(resp) => resp.blob_put.and_then(|r| if r.success { r.hash } else { None }),
+            Err(e) => { warn!("blob.put failed: {}", e); None }
+        }
+    }
+
+    /// RPC: Download blob data by SHA-256 hash.
+    pub async fn blob_get(&self, hash: &str) -> Option<Vec<u8>> {
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id().await,
+            method: "blob.get".to_string(),
+            blob_get: Some(BlobGetParams { hash: hash.to_string() }),
+            ..Default::default()
+        };
+        match self.rpc_call(request).await {
+            Ok(resp) => resp.blob_get.and_then(|r| if r.success { r.data } else { None }),
+            Err(e) => { warn!("blob.get failed: {}", e); None }
+        }
+    }
+
+    /// RPC: Get user texture blob. Returns (hash, data) on success.
+    pub async fn blob_get_user_texture(&self, user_id: u32) -> Option<(String, Vec<u8>)> {
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id().await,
+            method: "blob.getUserTexture".to_string(),
+            blob_get_user_texture: Some(BlobGetUserTextureParams { user_id }),
+            ..Default::default()
+        };
+        match self.rpc_call(request).await {
+            Ok(resp) => resp.blob_get_user_texture.and_then(|r| {
+                if r.success { Some((r.hash.unwrap_or_default(), r.data.unwrap_or_default())) } else { None }
+            }),
+            Err(e) => { warn!("blob.getUserTexture failed: {}", e); None }
+        }
+    }
+
+    /// RPC: Get user comment blob. Returns (hash, data) on success.
+    pub async fn blob_get_user_comment(&self, user_id: u32) -> Option<(String, Vec<u8>)> {
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id().await,
+            method: "blob.getUserComment".to_string(),
+            blob_get_user_comment: Some(BlobGetUserCommentParams { user_id }),
+            ..Default::default()
+        };
+        match self.rpc_call(request).await {
+            Ok(resp) => resp.blob_get_user_comment.and_then(|r| {
+                if r.success { Some((r.hash.unwrap_or_default(), r.data.unwrap_or_default())) } else { None }
+            }),
+            Err(e) => { warn!("blob.getUserComment failed: {}", e); None }
+        }
+    }
+
+    /// RPC: Set user texture blob. Returns hash on success.
+    pub async fn blob_set_user_texture(&self, user_id: u32, data: Vec<u8>) -> Option<String> {
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id().await,
+            method: "blob.setUserTexture".to_string(),
+            blob_set_user_texture: Some(BlobSetUserTextureParams { user_id, data }),
+            ..Default::default()
+        };
+        match self.rpc_call(request).await {
+            Ok(resp) => resp.blob_set_user_texture.and_then(|r| if r.success { r.hash } else { None }),
+            Err(e) => { warn!("blob.setUserTexture failed: {}", e); None }
+        }
+    }
+
+    /// RPC: Set user comment blob. Returns hash on success.
+    pub async fn blob_set_user_comment(&self, user_id: u32, data: Vec<u8>) -> Option<String> {
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id().await,
+            method: "blob.setUserComment".to_string(),
+            blob_set_user_comment: Some(BlobSetUserCommentParams { user_id, data }),
+            ..Default::default()
+        };
+        match self.rpc_call(request).await {
+            Ok(resp) => resp.blob_set_user_comment.and_then(|r| if r.success { r.hash } else { None }),
+            Err(e) => { warn!("blob.setUserComment failed: {}", e); None }
+        }
+    }
+
+    /// Relay a voice packet to a target Edge via Hub TCP tunnel.
+    /// Called when a local sender needs to reach a remote user on another edge.
+    pub async fn relay_voice_via_hub(&self, target_edge_id: u32, voice_packet: Vec<u8>) {
+        let from_edge_id = self.edge_id().await;
+        let request_id = self.next_request_id().await;
+
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.relayVoiceViaTcp".to_string(),
+            timeout_ms: Some(5000),
+            edge_relay_voice_via_tcp: Some(hubedge::EdgeRelayVoiceViaTcpParams {
+                from_edge_id,
+                target_edge_id,
+                voice_packet,
+                timestamp: current_millis() as i64,
+            }),
+            ..Default::default()
+        };
+
+        if let Err(e) = self.rpc_call(request).await {
+            debug!("relay_voice_via_hub to edge {} failed: {}", target_edge_id, e);
+        }
+    }
 }
 
 /// Simple timestamp in millis (no external dependency needed).
@@ -1022,4 +1215,5 @@ mod hex {
         data.iter().map(|b| format!("{:02x}", b)).collect()
     }
 }
+
 

@@ -1,6 +1,6 @@
 # MuNode Rust 实现状态总览
 
-> 最后更新: 2026-02-23
+> 最后更新: 2026-06-19
 
 ## 架构概述
 
@@ -37,8 +37,8 @@
 |-------|------|------|
 | `munode-protocol` | ✅ 完成 | Protobuf 类型定义、消息帧编解码、UDP 语音头 |
 | `munode-common` | ✅ 完成 | 配置、日志、错误类型 |
-| `munode-edge` | 🔶 基本完成 | Mumble 协议前端，缺语音加密、高级用户状态权限检查 |
-| `munode-hub` | 🔶 基本完成 | 中心协调，缺集群管理、Blob存储、高级用户状态 |
+| `munode-edge` | 🔶 基本完成 | Mumble 协议前端，已实现语音加密(OCB2)、高级用户状态、CodecVersion、UserList |
+| `munode-hub` | 🔶 基本完成 | 中心协调，已实现Blob存储、密码认证、健康监控、集群拓扑管理 |
 
 ## 已实现功能
 
@@ -65,12 +65,18 @@
 - ChannelRemove 转发
 - ✅ BanList 查询/更新 (通过 Hub RPC)
 - QueryUsers 处理
-- RequestBlob 处理 (频道描述)
+- ✅ RequestBlob 处理 (频道描述 + 用户 texture/comment)
 - Hub 事件监听器 (远程用户/频道变更广播)
 - Hub 文字消息转发
 - ✅ ACL 消息处理 (查询/更新通过 Hub RPC)
 - ✅ PluginDataTransmission 处理 (本地 + 跨 Edge 路由)
 - ✅ Hub pluginDataBroadcast 事件处理
+- ✅ OCB2-AES128 语音加密 (完整加解密管道，UDP 识别，TCP 回退，重放保护)
+- ✅ UserState texture/comment 上传到 Hub Blob 存储
+- ✅ CodecVersion 协商 (Opus 支持检测，broadcast_codec_version)
+- ✅ UserList 查询/更新 (通过 Hub RPC)
+- ✅ 高级 UserState 处理 (频道移动权限检查、admin mute/deaf、priority_speaker、recording)
+- ✅ listening_channel_add/remove 处理与广播
 
 ### Hub Server ✅
 - WebSocket 服务器接受 Edge 连接
@@ -97,6 +103,13 @@
 - ✅ 用户断连时保存 last_channel
 - 广播: 全部/特定/排除 Edge
 - 优雅关闭
+- ✅ Argon2id 密码哈希 + 验证 (用户密码认证)
+- ✅ Blob 存储 RPC (blob.put / blob.get / blob.getUserTexture / blob.getUserComment / blob.setUserTexture / blob.setUserComment)
+- ✅ SQLite Blob 表 (blobs + user_blobs，SHA-256 内容寻址)
+- ✅ Edge 健康监控 (EdgeHealth 结构体，心跳超时检测，health_check_loop 定期清理)
+- ✅ 用户列表 CRUD (list_users / rename_user / delete_user，通过 getUserList / updateUserList RPC)
+- ✅ 集群拓扑管理 (TopologyManager，Dijkstra 最优路径，Union-Find 分区检测，断连仲裁)
+- ✅ 集群 RPC: edge.join / edge.joinComplete / edge.reportPeerDisconnect / edge.reportQuality / cluster.getStatus
 
 ### ACL 权限系统 ✅
 - 权限位定义 (Write, Traverse, Enter, Speak, MuteDeafen, Move, MakeChannel, LinkChannel, Whisper, TextMessage, TempChannel, Listen, Kick, Ban, Register, SelfRegister)
@@ -121,14 +134,14 @@
 | # | 功能 | 优先级 | 状态 | 文档 |
 |---|------|--------|------|------|
 | 1 | ACL 权限系统 | P0 | ✅ 已实现 | [01-acl-permission-system.md](01-acl-permission-system.md) |
-| 2 | OCB2-AES128 语音加密 | P0 | ❌ 未实现 | [02-voice-encryption.md](02-voice-encryption.md) |
-| 3 | Blob 存储服务 | P1 | ❌ 未实现 | [03-blob-storage.md](03-blob-storage.md) |
+| 2 | OCB2-AES128 语音加密 | P0 | ✅ 已实现 | [02-voice-encryption.md](02-voice-encryption.md) |
+| 3 | Blob 存储服务 | P1 | ✅ 已实现 | [03-blob-storage.md](03-blob-storage.md) |
 | 4 | 封禁管理系统 | P1 | ✅ 已实现 | [04-ban-management.md](04-ban-management.md) |
-| 5 | 用户密码认证 | P1 | 🔶 部分实现 | [05-user-authentication.md](05-user-authentication.md) |
-| 6 | 集群管理与拓扑 | P2 | ❌ 未实现 | [06-cluster-management.md](06-cluster-management.md) |
-| 7 | 高级消息处理 | P2 | 🔶 PluginData已实现 | [07-advanced-message-handling.md](07-advanced-message-handling.md) |
-| 8 | Edge 健康监控 | P2 | ❌ 未实现 | [08-edge-health-monitoring.md](08-edge-health-monitoring.md) |
-| 9 | 高级用户状态管理 | P2 | 🔶 部分实现 | [09-advanced-user-state.md](09-advanced-user-state.md) |
+| 5 | 用户密码认证 | P1 | ✅ 已实现 | [05-user-authentication.md](05-user-authentication.md) |
+| 6 | 集群管理与拓扑 | P2 | ✅ 已实现 | [06-cluster-management.md](06-cluster-management.md) |
+| 7 | 高级消息处理 | P2 | ✅ 已实现 | [07-advanced-message-handling.md](07-advanced-message-handling.md) |
+| 8 | Edge 健康监控 | P2 | ✅ 已实现 | [08-edge-health-monitoring.md](08-edge-health-monitoring.md) |
+| 9 | 高级用户状态管理 | P2 | ✅ 已实现 | [09-advanced-user-state.md](09-advanced-user-state.md) |
 
 ## 测试状态
 

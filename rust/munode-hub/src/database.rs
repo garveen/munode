@@ -4,6 +4,13 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 use tracing::info;
 
+/// SHA-256 hex digest of arbitrary bytes.
+fn sha256_hex(data: &[u8]) -> String {
+    use ring::digest;
+    let digest = digest::digest(&digest::SHA256, data);
+    digest.as_ref().iter().map(|b| format!("{:02x}", b)).collect()
+}
+
 /// A user record from the database.
 #[derive(Debug, Clone)]
 pub struct UserRecord {
@@ -130,6 +137,9 @@ impl Database {
         // Create bans table
         Self::init_bans_table(&conn)?;
 
+        // Create blob storage tables
+        Self::init_blob_tables(&conn)?;
+
         Ok(())
     }
 
@@ -223,6 +233,55 @@ impl Database {
         } else {
             Ok(None)
         }
+    }
+
+    /// Create a new registered user. Returns the new user ID.
+    pub fn create_user(&self, username: &str, pw_hash: &str) -> Result<u32> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO users (username, pw_hash, last_channel, cert_hash) VALUES (?1, ?2, 0, '')",
+            params![username, pw_hash],
+        )?;
+        Ok(conn.last_insert_rowid() as u32)
+    }
+
+    /// List all registered users.
+    pub fn list_users(&self) -> Result<Vec<UserRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, username, pw_hash, last_channel, cert_hash FROM users ORDER BY id"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(UserRecord {
+                id: row.get(0)?,
+                username: row.get(1)?,
+                pw_hash: row.get(2)?,
+                last_channel: row.get(3)?,
+                cert_hash: row.get(4)?,
+            })
+        })?;
+        let mut users = Vec::new();
+        for row in rows {
+            users.push(row?);
+        }
+        Ok(users)
+    }
+
+    /// Rename a registered user. Returns false if the user was not found.
+    pub fn rename_user(&self, user_id: u32, new_name: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute(
+            "UPDATE users SET username = ?1 WHERE id = ?2",
+            params![new_name, user_id],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Delete a registered user (de-register).
+    pub fn delete_user(&self, user_id: u32) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let n = conn.execute("DELETE FROM users WHERE id = ?1", params![user_id])?;
+        Ok(n > 0)
     }
 
     /// Update the last channel for a user.
@@ -421,6 +480,96 @@ impl Database {
             params![now],
         )?;
         Ok(count as u32)
+    }
+
+    // ==================== Blob Storage ====================
+
+    /// Initialise blob tables.
+    fn init_blob_tables(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS blobs (
+                hash TEXT PRIMARY KEY,
+                data BLOB NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS user_blobs (
+                user_id INTEGER NOT NULL,
+                blob_type TEXT NOT NULL,
+                blob_hash TEXT,
+                PRIMARY KEY (user_id, blob_type),
+                FOREIGN KEY (blob_hash) REFERENCES blobs(hash)
+            );"
+        )?;
+        Ok(())
+    }
+
+    /// Store a blob and return its SHA-256 hex hash.
+    /// If a blob with the same hash already exists, it is not re-inserted.
+    pub fn put_blob(&self, data: &[u8]) -> Result<String> {
+        let hash = sha256_hex(data);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO blobs (hash, data, created_at) VALUES (?1, ?2, ?3)",
+            params![hash, data, now],
+        )?;
+        Ok(hash)
+    }
+
+    /// Retrieve a blob by its SHA-256 hex hash.
+    pub fn get_blob(&self, hash: &str) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT data FROM blobs WHERE hash = ?1")?;
+        let mut rows = stmt.query(params![hash])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get the blob hash for a user's texture or comment.
+    /// `blob_type` should be `"texture"` or `"comment"`.
+    pub fn get_user_blob_hash(&self, user_id: u32, blob_type: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT blob_hash FROM user_blobs WHERE user_id = ?1 AND blob_type = ?2"
+        )?;
+        let mut rows = stmt.query(params![user_id, blob_type])?;
+        if let Some(row) = rows.next()? {
+            Ok(row.get(0)?)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get the blob data for a user's texture or comment.
+    pub fn get_user_blob(&self, user_id: u32, blob_type: &str) -> Result<Option<(String, Vec<u8>)>> {
+        let hash = match self.get_user_blob_hash(user_id, blob_type)? {
+            Some(h) => h,
+            None => return Ok(None),
+        };
+        match self.get_blob(&hash)? {
+            Some(data) => Ok(Some((hash, data))),
+            None => Ok(None),
+        }
+    }
+
+    /// Store a user's texture or comment blob.
+    /// Stores the blob data and updates the user_blobs mapping.
+    pub fn set_user_blob(&self, user_id: u32, blob_type: &str, data: &[u8]) -> Result<String> {
+        let hash = self.put_blob(data)?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO user_blobs (user_id, blob_type, blob_hash) VALUES (?1, ?2, ?3)",
+            params![user_id, blob_type, hash],
+        )?;
+        Ok(hash)
     }
 }
 

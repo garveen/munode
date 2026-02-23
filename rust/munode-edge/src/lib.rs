@@ -1,5 +1,6 @@
 pub mod channel_manager;
 pub mod client;
+pub mod crypto;
 pub mod handler;
 pub mod hub_client;
 pub mod server;

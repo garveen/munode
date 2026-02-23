@@ -5,3 +5,5 @@ pub mod channel_store;
 pub mod rpc_handler;
 pub mod database;
 pub mod acl_manager;
+pub mod topology_manager;
+pub mod auth_service;

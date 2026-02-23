@@ -12,6 +12,7 @@ use munode_protocol::transport::encode_message;
 
 use crate::channel_manager::ChannelData;
 use crate::client::{ClientInfo, ClientSender};
+use crate::crypto::CryptState;
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 
@@ -49,8 +50,8 @@ impl<'a> LoginHandler<'a> {
         auth_result: &munode_protocol::hubedge::EdgeAuthenticateUserResult,
         opus_supported: bool,
     ) -> Result<()> {
-        // 1. Send CryptSetup
-        self.send_crypt_setup().await?;
+        // 1. Send CryptSetup and initialise OCB2 state for this session
+        self.send_crypt_setup(session_id).await?;
 
         // 2. Send CodecVersion
         self.send_codec_version(opus_supported).await?;
@@ -73,8 +74,14 @@ impl<'a> LoginHandler<'a> {
         Ok(())
     }
 
-    /// Send CryptSetup with random encryption keys.
-    async fn send_crypt_setup(&self) -> Result<()> {
+    /// Send CryptSetup with generated encryption keys, and register the CryptState
+    /// for this session in the ClientManager.
+    ///
+    /// Key assignment:
+    /// - `key`           : 16-byte AES-128 key (shared secret)
+    /// - `server_nonce`  : server's encrypt IV (server→client direction)
+    /// - `client_nonce`  : client's encrypt IV = server's decrypt IV (client→server direction)
+    async fn send_crypt_setup(&self, session_id: u32) -> Result<()> {
         let mut key = [0u8; 16];
         let mut client_nonce = [0u8; 16];
         let mut server_nonce = [0u8; 16];
@@ -85,13 +92,20 @@ impl<'a> LoginHandler<'a> {
         rng.fill(&mut client_nonce).map_err(|_| anyhow::anyhow!("RNG failed"))?;
         rng.fill(&mut server_nonce).map_err(|_| anyhow::anyhow!("RNG failed"))?;
 
+        // Build and store CryptState for this session
+        let mut crypt = CryptState::new();
+        // encrypt_iv = server_nonce (server→client)
+        // decrypt_iv = client_nonce (client→server, so server decrypts using this)
+        crypt.set_key(&key, &server_nonce, &client_nonce);
+        self.edge_state.client_manager.set_crypt_state(session_id, crypt).await;
+
         let msg = mumbleproto::CryptSetup {
             key: Some(key.to_vec()),
             client_nonce: Some(client_nonce.to_vec()),
             server_nonce: Some(server_nonce.to_vec()),
         };
         self.send(MessageType::CryptSetup, &msg).await?;
-        debug!("Sent CryptSetup");
+        debug!("Sent CryptSetup for session {}", session_id);
         Ok(())
     }
 
@@ -422,6 +436,8 @@ mod tests {
             last_active: std::time::Instant::now(),
             cert_hash: Some("abc123".to_string()),
             groups: vec![],
+            opus_supported: true,
+            listening_channels: vec![],
         };
 
         let msg = build_user_state_msg(&client);

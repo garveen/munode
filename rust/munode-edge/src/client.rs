@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use bytes::BytesMut;
@@ -9,6 +9,8 @@ use tracing::warn;
 
 use munode_protocol::message_type::MessageType;
 use munode_protocol::transport::encode_message;
+
+use crate::crypto::CryptState;
 
 /// Client connection state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +65,10 @@ pub struct ClientInfo {
     pub last_active: Instant,
     pub cert_hash: Option<String>,
     pub groups: Vec<String>,
+    /// Whether this client supports Opus codec.
+    pub opus_supported: bool,
+    /// Channels this client is listening to (beyond their current channel).
+    pub listening_channels: Vec<u32>,
 }
 
 /// Manages all connected clients and their message senders.
@@ -70,6 +76,8 @@ pub struct ClientManager {
     clients: RwLock<HashMap<u32, ClientInfo>>,
     senders: RwLock<HashMap<u32, ClientSender>>,
     channel_users: RwLock<HashMap<u32, Vec<u32>>>,
+    /// Per-session OCB2-AES128 cryptographic states.
+    crypt_states: RwLock<HashMap<u32, Arc<Mutex<CryptState>>>>,
 }
 
 impl ClientManager {
@@ -78,6 +86,7 @@ impl ClientManager {
             clients: RwLock::new(HashMap::new()),
             senders: RwLock::new(HashMap::new()),
             channel_users: RwLock::new(HashMap::new()),
+            crypt_states: RwLock::new(HashMap::new()),
         })
     }
 
@@ -104,6 +113,7 @@ impl ClientManager {
     /// Remove a client by session ID.
     pub async fn remove_client(&self, session: u32) -> Option<ClientInfo> {
         self.senders.write().await.remove(&session);
+        self.crypt_states.write().await.remove(&session);
         let client = self.clients.write().await.remove(&session);
         if let Some(ref c) = client {
             if let Some(users) = self.channel_users.write().await.get_mut(&c.channel_id) {
@@ -146,6 +156,40 @@ impl ClientManager {
     /// Get all session IDs.
     pub async fn get_all_sessions(&self) -> Vec<u32> {
         self.clients.read().await.keys().copied().collect()
+    }
+
+    /// Store a CryptState for a session.
+    pub async fn set_crypt_state(&self, session: u32, state: CryptState) {
+        self.crypt_states
+            .write()
+            .await
+            .insert(session, Arc::new(Mutex::new(state)));
+    }
+
+    /// Get the CryptState handle for a session (shared, lockable).
+    pub async fn get_crypt_state(&self, session: u32) -> Option<Arc<Mutex<CryptState>>> {
+        self.crypt_states.read().await.get(&session).cloned()
+    }
+
+    /// Update the decrypt IV for a session (called on CryptSetup resync).
+    pub async fn update_decrypt_iv(&self, session: u32, client_nonce: &[u8; 16]) {
+        if let Some(arc) = self.crypt_states.read().await.get(&session) {
+            arc.lock().unwrap().update_decrypt_iv(client_nonce);
+        }
+    }
+
+    /// Get the current encrypt IV for a session (to send in CryptSetup resync response).
+    pub async fn get_encrypt_iv(&self, session: u32) -> Option<Vec<u8>> {
+        self.crypt_states
+            .read()
+            .await
+            .get(&session)
+            .map(|arc| arc.lock().unwrap().encrypt_iv.to_vec())
+    }
+
+    /// Get all sessions that have a CryptState registered (i.e., have completed login).
+    pub async fn get_authenticated_sessions(&self) -> Vec<u32> {
+        self.crypt_states.read().await.keys().copied().collect()
     }
 
     /// Update client state.
@@ -244,6 +288,8 @@ mod tests {
             last_active: Instant::now(),
             cert_hash: None,
             groups: vec![],
+            opus_supported: true,
+            listening_channels: vec![],
         }
     }
 

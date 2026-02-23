@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn};
 use munode_protocol::hubedge::*;
 
 use crate::rpc_handler::RpcHandler;
-use crate::server::HubState;
+use crate::server::{EdgeHealth, HubState};
 
 /// Represents a single connected edge server.
 pub struct EdgeConnection {
@@ -89,6 +89,7 @@ impl EdgeConnection {
         // Cleanup on disconnect
         if let Some(server_id) = self.server_id {
             self.state.edge_connections.write().await.remove(&server_id);
+            self.state.edge_health.write().await.remove(&server_id);
             self.rpc_handler.cleanup_edge(server_id).await;
             info!("Edge {} (server_id={}) disconnected", addr, server_id);
         }
@@ -119,6 +120,12 @@ impl EdgeConnection {
                                 .write()
                                 .await
                                 .insert(sid, send_tx.clone());
+                            // Initialise health record
+                            self.state
+                                .edge_health
+                                .write()
+                                .await
+                                .insert(sid, EdgeHealth::new());
                         }
                     }
 
@@ -147,6 +154,20 @@ impl EdgeConnection {
                         "Heartbeat from edge {} (seq={})",
                         heartbeat.edge_id, heartbeat.sequence
                     );
+
+                    // Update health record
+                    let edge_id = heartbeat.edge_id;
+                    let mut health_map = self.state.edge_health.write().await;
+                    let health = health_map
+                        .entry(edge_id)
+                        .or_insert_with(EdgeHealth::new);
+                    health.last_heartbeat = std::time::Instant::now();
+                    if let Some(stats) = &heartbeat.stats {
+                        health.user_count = stats.user_count;
+                        health.channel_count = stats.channel_count;
+                        health.uptime_seconds = stats.uptime_seconds.unwrap_or(0);
+                    }
+                    drop(health_map);
 
                     let ack = EdgeHubPacket {
                         r#type: PacketType::HeartbeatAck as i32,
