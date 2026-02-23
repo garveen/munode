@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::SaltString;
 use prost::Message;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, warn};
 
@@ -16,6 +17,29 @@ use crate::database::DbChannelRecord;
 use crate::server::HubState;
 use crate::session_manager::SessionInfo;
 use crate::topology_manager::{ArbitrationResult, LinkQuality, TopologyEdge};
+
+/// HTTP auth request body sent to an external authentication endpoint.
+#[derive(Debug, Serialize)]
+struct HttpAuthRequest {
+    username: String,
+    password: String,
+    tokens: Vec<String>,
+    server_id: u32,
+}
+
+/// HTTP auth response from an external authentication endpoint.
+#[derive(Debug, Deserialize)]
+struct HttpAuthResponse {
+    success: bool,
+    user_id: Option<u32>,
+    username: Option<String>,
+    #[serde(rename = "displayName")]
+    display_name: Option<String>,
+    groups: Option<Vec<String>>,
+    reason: Option<String>,
+    #[serde(rename = "rejectType")]
+    reject_type: Option<u32>,
+}
 
 /// Sender type for pushing serialized packets to a specific edge.
 pub type EdgeSender = mpsc::Sender<Vec<u8>>;
@@ -429,8 +453,8 @@ impl RpcHandler {
                     );
                 }
             }
-        } else if config.auth.require_auth_service {
-            // No service connected but one is required — reject.
+        } else if config.auth.require_auth_service && config.auth.http_url.is_none() {
+            // No WS service connected, no HTTP URL configured, but one is required — reject.
             let result = EdgeAuthenticateUserResult {
                 success: false,
                 user_id: None, username: None, display_name: None,
@@ -449,7 +473,157 @@ impl RpcHandler {
         }
 
         // ------------------------------------------------------------------
-        // Step 2: Local DB authentication (fallback / default)
+        // Step 2: HTTP URL authentication (if configured)
+        // ------------------------------------------------------------------
+        if let Some(ref http_url) = config.auth.http_url.clone() {
+            let http_result = self.authenticate_via_http(
+                http_url,
+                username,
+                password,
+                &params.tokens,
+                params.server_id,
+                config.auth.http_timeout_ms,
+            ).await;
+
+            match http_result {
+                Ok(Some(resp)) => {
+                    if !resp.success {
+                        let result = EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None,
+                            username: None,
+                            display_name: None,
+                            groups: vec![],
+                            reason: resp.reason.clone(),
+                            reject_type: resp.reject_type,
+                            channel_id: None,
+                            mute: None, deaf: None, suppress: None,
+                            self_mute: None, self_deaf: None,
+                            priority_speaker: None, recording: None,
+                            cert_required: None,
+                        };
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(result);
+                        }));
+                    }
+
+                    // HTTP auth succeeded
+                    let user_id = resp.user_id.unwrap_or(0);
+                    let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
+                    let groups = resp.groups.clone().unwrap_or_default();
+                    let channel_id = config.auth.default_channel;
+
+                    let session_info = SessionInfo {
+                        session_id: params.session_id,
+                        edge_id: edge_server_id,
+                        user_id,
+                        username: auth_username.clone(),
+                        channel_id,
+                        groups: groups.clone(),
+                        cert_hash: params
+                            .client_info.as_ref()
+                            .and_then(|ci| ci.certificate_hash.clone())
+                            .unwrap_or_default(),
+                        mute: params.mute.unwrap_or(false),
+                        deaf: params.deaf.unwrap_or(false),
+                        suppress: params.suppress.unwrap_or(false),
+                        self_mute: params.self_mute.unwrap_or(false),
+                        self_deaf: params.self_deaf.unwrap_or(false),
+                        priority_speaker: params.priority_speaker.unwrap_or(false),
+                        recording: params.recording.unwrap_or(false),
+                    };
+                    self.state.session_manager.add_session(session_info).await;
+
+                    info!(
+                        "User authenticated via HTTP: {} (session={}, edge={}, channel={})",
+                        auth_username, params.session_id, edge_server_id, channel_id
+                    );
+
+                    let cert_hash = params.client_info.as_ref()
+                        .and_then(|ci| ci.certificate_hash.clone());
+                    self.broadcast_notification("hub.userJoined", |n| {
+                        n.user_joined = Some(HubUserJoinedParams {
+                            session_id: params.session_id,
+                            edge_id: edge_server_id,
+                            user_id,
+                            username: auth_username.clone(),
+                            channel_id,
+                            groups: groups.clone(),
+                            cert_hash,
+                            mute: params.mute, deaf: params.deaf,
+                            suppress: params.suppress, self_mute: params.self_mute,
+                            self_deaf: params.self_deaf,
+                            priority_speaker: params.priority_speaker,
+                            recording: params.recording,
+                        });
+                    }).await;
+
+                    let result = EdgeAuthenticateUserResult {
+                        success: true,
+                        user_id: Some(user_id),
+                        username: Some(auth_username),
+                        display_name: resp.display_name.clone(),
+                        groups,
+                        reason: None,
+                        reject_type: None,
+                        channel_id: Some(channel_id),
+                        mute: params.mute, deaf: params.deaf,
+                        suppress: params.suppress, self_mute: params.self_mute,
+                        self_deaf: params.self_deaf,
+                        priority_speaker: params.priority_speaker,
+                        recording: params.recording,
+                        cert_required: None,
+                    };
+                    return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                        r.edge_authenticate_user = Some(result);
+                    }));
+                }
+                Ok(None) => {
+                    // HTTP auth returned no response (timeout/error)
+                    if config.auth.require_auth_service {
+                        let result = EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None, username: None, display_name: None,
+                            groups: vec![],
+                            reason: Some("Authentication service unavailable".to_string()),
+                            reject_type: Some(8), // AuthenticatorFail
+                            channel_id: None,
+                            mute: None, deaf: None, suppress: None,
+                            self_mute: None, self_deaf: None,
+                            priority_speaker: None, recording: None,
+                            cert_required: None,
+                        };
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(result);
+                        }));
+                    }
+                    warn!("HTTP auth request failed for user '{}'; falling back to local auth", username);
+                }
+                Err(e) => {
+                    warn!("HTTP auth error for user '{}': {}; falling back to local auth", username, e);
+                    if config.auth.require_auth_service {
+                        let result = EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None, username: None, display_name: None,
+                            groups: vec![],
+                            reason: Some(format!("Authentication service error: {}", e)),
+                            reject_type: Some(8), // AuthenticatorFail
+                            channel_id: None,
+                            mute: None, deaf: None, suppress: None,
+                            self_mute: None, self_deaf: None,
+                            priority_speaker: None, recording: None,
+                            cert_required: None,
+                        };
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(result);
+                        }));
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Step 3: Local DB authentication (fallback / default)
         // ------------------------------------------------------------------
 
         // Check server password if set
@@ -621,6 +795,50 @@ impl RpcHandler {
         Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
             r.edge_authenticate_user = Some(result);
         }))
+    }
+
+    /// Authenticate a user via an HTTP endpoint.
+    ///
+    /// Returns `Ok(Some(response))` on a successful HTTP call (response may indicate failure).
+    /// Returns `Ok(None)` on timeout.
+    /// Returns `Err(...)` on network or parsing errors.
+    async fn authenticate_via_http(
+        &self,
+        url: &str,
+        username: &str,
+        password: &str,
+        tokens: &[String],
+        server_id: u32,
+        timeout_ms: u64,
+    ) -> Result<Option<HttpAuthResponse>> {
+        let body = HttpAuthRequest {
+            username: username.to_string(),
+            password: password.to_string(),
+            tokens: tokens.to_vec(),
+            server_id,
+        };
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(timeout_ms))
+            .build()?;
+
+        let response = client
+            .post(url)
+            .json(&body)
+            .send()
+            .await;
+
+        match response {
+            Ok(resp) => {
+                let auth_resp: HttpAuthResponse = resp.json().await?;
+                Ok(Some(auth_resp))
+            }
+            Err(e) if e.is_timeout() => {
+                warn!("HTTP auth timeout for user '{}'", username);
+                Ok(None)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     async fn handle_full_sync(

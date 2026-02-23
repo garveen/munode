@@ -13,7 +13,7 @@ import type { EdgeConfig } from '../../packages/edge-server/src/types.js';
 import type { HubConfig } from '../../packages/hub-server/src/types.js';
 import { MumbleClient } from '../../packages/client/src/index.js';
 import { testUserPasswords } from './test-users.js';
-import { spawn } from 'child_process';
+import { spawn, ChildProcess } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -21,6 +21,236 @@ const PROJECT_ROOT = join(__dirname, '../..');
 
 // 测试调试日志控制
 const TEST_DEBUG = process.env.TEST_DEBUG === '1' || process.env.TEST_VERBOSE === '1';
+
+/**
+ * 是否使用 Rust 实现（通过环境变量 MUNODE_USE_RUST=1 启用）
+ */
+export const USE_RUST = process.env.MUNODE_USE_RUST === '1';
+
+if (USE_RUST) {
+  console.log('[RUST MODE] Using Rust binaries for Hub and Edge servers');
+}
+
+/**
+ * 查找 Rust 二进制文件路径
+ */
+function findRustBinary(name: string): string {
+  const releasePath = join(PROJECT_ROOT, `rust/target/release/${name}`);
+  const debugPath = join(PROJECT_ROOT, `rust/target/debug/${name}`);
+  if (fs.existsSync(releasePath)) return releasePath;
+  if (fs.existsSync(debugPath)) return debugPath;
+  throw new Error(
+    `Rust binary '${name}' not found. Run 'cargo build' in the rust/ directory first.\n` +
+    `Checked: ${releasePath}\n        ${debugPath}`
+  );
+}
+
+/**
+ * Rust 服务进程封装，提供 stop/restart 接口
+ */
+export class RustServerProcess {
+  private proc: ChildProcess | null = null;
+  private readonly bin: string;
+  private readonly configPath: string;
+  private readonly label: string;
+
+  constructor(bin: string, configPath: string, label: string) {
+    this.bin = bin;
+    this.configPath = configPath;
+    this.label = label;
+  }
+
+  /** 启动进程（若已运行则先停止） */
+  async start(): Promise<void> {
+    if (this.proc) await this.stop();
+    const silent = !TEST_DEBUG;
+    this.proc = spawn(this.bin, [this.configPath], {
+      stdio: silent ? 'ignore' : 'inherit',
+    });
+    this.proc.on('error', (err) => {
+      console.error(`[RUST] ${this.label} process error:`, err);
+    });
+    debugLog(`[RUST] Started ${this.label} (pid=${this.proc.pid})`);
+  }
+
+  /** 停止进程 */
+  async stop(): Promise<void> {
+    if (!this.proc) return;
+    const pid = this.proc.pid;
+    return new Promise<void>((resolve) => {
+      if (!this.proc) { resolve(); return; }
+      this.proc.once('exit', () => {
+        this.proc = null;
+        debugLog(`[RUST] ${this.label} (pid=${pid}) stopped`);
+        resolve();
+      });
+      try {
+        this.proc.kill('SIGTERM');
+      } catch {
+        this.proc = null;
+        resolve();
+      }
+      // Force kill after 5 seconds
+      setTimeout(() => {
+        if (this.proc) {
+          try { this.proc.kill('SIGKILL'); } catch {}
+          this.proc = null;
+          resolve();
+        }
+      }, 5000);
+    });
+  }
+
+  /** 重启进程 */
+  async restart(): Promise<void> {
+    await this.stop();
+    await this.start();
+  }
+
+  /** 是否正在运行 */
+  isRunning(): boolean {
+    return this.proc !== null && !this.proc.killed;
+  }
+
+  get pid(): number | undefined {
+    return this.proc?.pid;
+  }
+}
+
+/**
+ * 生成 Rust Hub JSON 配置
+ */
+function generateRustHubConfig(params: {
+  controlPort: number;
+  dbPath: string;
+  authHttpUrl: string;
+  hmacSecret: string;
+  logLevel: string;
+}): object {
+  return {
+    network: {
+      host: '127.0.0.1',
+      control_port: params.controlPort,
+    },
+    database: {
+      path: params.dbPath,
+    },
+    auth: {
+      allow_guest: true,
+      http_url: params.authHttpUrl,
+      require_auth_service: false,
+    },
+    registry: {
+      hmac_secret: params.hmacSecret,
+      heartbeat_timeout: 90000,
+    },
+    log_level: params.logLevel,
+  };
+}
+
+/**
+ * 生成 Rust Edge JSON 配置
+ */
+function generateRustEdgeConfig(params: {
+  serverId: number;
+  name: string;
+  port: number;
+  edgePort: number;
+  controlPort: number;
+  hmacSecret: string;
+  logLevel: string;
+}): object {
+  const certsDir = join(PROJECT_ROOT, 'tests/integration/certs');
+  return {
+    server_id: params.serverId,
+    name: params.name,
+    network: {
+      host: '0.0.0.0',
+      port: params.port,
+      edge_port: params.edgePort,
+      external_host: '127.0.0.1',
+    },
+    tls: {
+      cert: join(certsDir, 'server.pem'),
+      key: join(certsDir, 'server.key'),
+      ca: join(certsDir, 'ca.pem'),
+    },
+    hub_server: {
+      host: '127.0.0.1',
+      control_port: params.controlPort,
+      hmac_secret: params.hmacSecret,
+      reconnect_interval: 5000,
+      heartbeat_interval: 30000,
+    },
+    server: {
+      capacity: 1000,
+      max_bandwidth: 558,
+    },
+    log_level: params.logLevel,
+  };
+}
+
+/**
+ * 启动 Rust Hub 服务进程
+ */
+async function startRustHubServer(params: {
+  basePort: number;
+  controlPort: number;
+  authPort: number;
+  dbPath: string;
+  hmacSecret: string;
+  silent: boolean;
+}): Promise<RustServerProcess> {
+  const configPath = join(PROJECT_ROOT, `tmp/rust-hub-${params.basePort}.json`);
+  fs.mkdirSync(join(PROJECT_ROOT, 'tmp'), { recursive: true });
+  const config = generateRustHubConfig({
+    controlPort: params.controlPort,
+    dbPath: params.dbPath,
+    authHttpUrl: `http://127.0.0.1:${params.authPort}/auth`,
+    hmacSecret: params.hmacSecret,
+    logLevel: params.silent ? 'error' : 'debug',
+  });
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  debugLog(`[RUST] Hub config written to ${configPath}`);
+
+  const bin = findRustBinary('munode-hub');
+  const proc = new RustServerProcess(bin, configPath, `Hub(${params.controlPort})`);
+  await proc.start();
+  return proc;
+}
+
+/**
+ * 启动 Rust Edge 服务进程
+ */
+async function startRustEdgeServer(
+  serverId: number,
+  name: string,
+  port: number,
+  edgeEdgePort: number,
+  controlPort: number,
+  basePort: number,
+  hmacSecret: string,
+  silent: boolean,
+): Promise<RustServerProcess> {
+  const configPath = join(PROJECT_ROOT, `tmp/rust-edge-${basePort}-${serverId}.json`);
+  fs.mkdirSync(join(PROJECT_ROOT, 'tmp'), { recursive: true });
+  const config = generateRustEdgeConfig({
+    serverId,
+    name,
+    port,
+    edgePort: edgeEdgePort,
+    controlPort,
+    hmacSecret,
+    logLevel: silent ? 'error' : 'debug',
+  });
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  debugLog(`[RUST] Edge config written to ${configPath}`);
+
+  const bin = findRustBinary('munode-edge');
+  const proc = new RustServerProcess(bin, configPath, `Edge${serverId}(${port})`);
+  await proc.start();
+  return proc;
+}
 
 /**
  * 测试调试日志函数
@@ -69,6 +299,16 @@ export interface TestEnvironment {
   edgeServer2?: EdgeServer;
   edgeServer3?: EdgeServer;
   edgeServer4?: EdgeServer;
+  /** Rust 模式：Hub 进程句柄 */
+  hubProcess?: RustServerProcess;
+  /** Rust 模式：Edge 进程句柄（对应 edgePort） */
+  edgeProcess?: RustServerProcess;
+  /** Rust 模式：Edge 进程句柄（对应 edgePort2） */
+  edgeProcess2?: RustServerProcess;
+  /** Rust 模式：Edge 进程句柄（对应 edgePort3） */
+  edgeProcess3?: RustServerProcess;
+  /** Rust 模式：Edge 进程句柄（对应 edgePort4） */
+  edgeProcess4?: RustServerProcess;
   authServer?: TestAuthServer;
   authPort: number;
   hubPort: number;
@@ -486,6 +726,7 @@ export async function setupTestEnvironment(
     refCount = 0;
     
     // Clean up old environment - stop Edge servers first to disconnect from Hub
+    if (oldEnv.edgeProcess4) { try { await oldEnv.edgeProcess4.stop(); } catch {} }
     if (oldEnv.edgeServer4) {
       try {
         await oldEnv.edgeServer4.stop();
@@ -495,6 +736,7 @@ export async function setupTestEnvironment(
         console.warn('Error stopping edge server 4:', error);
       }
     }
+    if (oldEnv.edgeProcess3) { try { await oldEnv.edgeProcess3.stop(); } catch {} }
     if (oldEnv.edgeServer3) {
       try {
         await oldEnv.edgeServer3.stop();
@@ -504,6 +746,7 @@ export async function setupTestEnvironment(
         console.warn('Error stopping edge server 3:', error);
       }
     }
+    if (oldEnv.edgeProcess2) { try { await oldEnv.edgeProcess2.stop(); } catch {} }
     if (oldEnv.edgeServer2) {
       try {
         await oldEnv.edgeServer2.stop();
@@ -513,6 +756,7 @@ export async function setupTestEnvironment(
         console.warn('Error stopping edge server 2:', error);
       }
     }
+    if (oldEnv.edgeProcess) { try { await oldEnv.edgeProcess.stop(); } catch {} }
     if (oldEnv.edgeServer) {
       try {
         await oldEnv.edgeServer.stop();
@@ -524,6 +768,7 @@ export async function setupTestEnvironment(
     }
     
     // Now stop Hub after all Edge servers have disconnected
+    if (oldEnv.hubProcess) { try { await oldEnv.hubProcess.stop(); } catch {} }
     if (oldEnv.hubServer) {
       try {
         await oldEnv.hubServer.stop();
@@ -553,14 +798,19 @@ export async function setupTestEnvironment(
   
   // Reuse global environment if available and reuse is not explicitly false
   if (globalTestEnvironment && finalOptions.reuse !== false) {
-    // Check if the global environment has all required servers
+    // Check if the global environment has all required servers (TS or Rust)
+    const hasHub = globalTestEnvironment.hubServer !== undefined || globalTestEnvironment.hubProcess !== undefined;
+    const hasEdge = globalTestEnvironment.edgeServer !== undefined || globalTestEnvironment.edgeProcess !== undefined;
+    const hasEdge2 = globalTestEnvironment.edgeServer2 !== undefined || globalTestEnvironment.edgeProcess2 !== undefined;
+    const hasEdge3 = globalTestEnvironment.edgeServer3 !== undefined || globalTestEnvironment.edgeProcess3 !== undefined;
+    const hasEdge4 = globalTestEnvironment.edgeServer4 !== undefined || globalTestEnvironment.edgeProcess4 !== undefined;
     const hasRequiredServers = 
-      (finalOptions.startHub === false || globalTestEnvironment.hubServer) &&
+      (finalOptions.startHub === false || hasHub) &&
       (finalOptions.startAuth === false || globalTestEnvironment.authServer) &&
-      (finalOptions.startEdge === false || globalTestEnvironment.edgeServer) &&
-      (finalOptions.startEdge2 !== true || globalTestEnvironment.edgeServer2) &&
-      (finalOptions.startEdge3 !== true || globalTestEnvironment.edgeServer3) &&
-      (finalOptions.startEdge4 !== true || globalTestEnvironment.edgeServer4);
+      (finalOptions.startEdge === false || hasEdge) &&
+      (finalOptions.startEdge2 !== true || hasEdge2) &&
+      (finalOptions.startEdge3 !== true || hasEdge3) &&
+      (finalOptions.startEdge4 !== true || hasEdge4);
     
     if (hasRequiredServers) {
       refCount++;
@@ -642,7 +892,7 @@ export async function setupTestEnvironment(
 
   const silent = finalOptions.silent ?? (process.env.TEST_VERBOSE !== '1');
 
-  console.log('Setting up test environment (in-process mode)...');
+  console.log(`Setting up test environment (${USE_RUST ? 'Rust binary' : 'in-process'} mode)...`);
   
   let authServer: TestAuthServer | undefined;
   let hubServer: HubServer | undefined;
@@ -650,6 +900,12 @@ export async function setupTestEnvironment(
   let edgeServer2: EdgeServer | undefined;
   let edgeServer3: EdgeServer | undefined;
   let edgeServer4: EdgeServer | undefined;
+  // Rust mode process handles
+  let hubProcess: RustServerProcess | undefined;
+  let edgeProcess: RustServerProcess | undefined;
+  let edgeProcess2: RustServerProcess | undefined;
+  let edgeProcess3: RustServerProcess | undefined;
+  let edgeProcess4: RustServerProcess | undefined;
   
   // 动态分配端口（统一UDP端口架构：不再为voice单独分配端口）
   const authPort = finalOptions.startAuth !== false ? await findAvailablePort(basePort) : 0;
@@ -704,6 +960,58 @@ export async function setupTestEnvironment(
 
     // 2. 启动 Hub 服务器
     if (finalOptions.startHub !== false) {
+      if (USE_RUST) {
+        // --- Rust Hub 模式 ---
+        const dbPath = join(PROJECT_ROOT, `data/hub-test-${basePort}.db`);
+        // 初始化数据库（使用 TS init 脚本，Rust hub 共用相同 schema）
+        if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+        fs.mkdirSync(join(PROJECT_ROOT, 'data'), { recursive: true });
+        const initScript = join(PROJECT_ROOT, 'scripts/init-test-db.ts');
+        if (fs.existsSync(initScript)) {
+          await new Promise<void>((resolve, reject) => {
+            const initProcess = spawn('tsx', [initScript, dbPath], {
+              stdio: silent ? 'ignore' : 'inherit',
+              cwd: PROJECT_ROOT,
+              env: { ...process.env, DB_PATH: dbPath },
+            });
+            initProcess.on('exit', (code: number) => {
+              if (code === 0) resolve();
+              else reject(new Error(`Database initialization failed with code ${code}`));
+            });
+            initProcess.on('error', reject);
+          });
+        }
+        await waitForCondition(() => fs.existsSync(dbPath), 2000, 50, 'database file to exist');
+
+        const hmacSecret = 'test-hmac-secret-key-for-integration-tests';
+        hubProcess = await startRustHubServer({
+          basePort,
+          controlPort,
+          authPort,
+          dbPath,
+          hmacSecret,
+          silent,
+        });
+        // Wait for Rust Hub control port to be listening
+        await waitForCondition(
+          async () => {
+            try {
+              const testSocket = await new Promise<boolean>((resolve) => {
+                const socket = new net.Socket();
+                socket.setTimeout(100);
+                socket.connect(controlPort, '127.0.0.1', () => { socket.destroy(); resolve(true); });
+                socket.on('error', () => { socket.destroy(); resolve(false); });
+                socket.on('timeout', () => { socket.destroy(); resolve(false); });
+              });
+              return testSocket;
+            } catch { return false; }
+          },
+          10000,
+          100,
+          'Rust Hub control port to be listening'
+        );
+        debugLog('[RUST] Hub started and control port is ready');
+      } else {
       const hubConfigPath = join(PROJECT_ROOT, 'tests/config/hub-test.js');
       if (fs.existsSync(hubConfigPath)) {
         const hubConfigModule = await import(`file://${hubConfigPath}?v=${++importCounter}`);
@@ -888,35 +1196,112 @@ export async function setupTestEnvironment(
             console.warn('Failed to set default ACL for all users:', error);
           }
         }
-      }
+      } // end if (fs.existsSync(hubConfigPath))
+      } // end else (TS mode)
     }
 
     // 3. 启动 Edge 服务器 1
     if (finalOptions.startEdge !== false && edgePort > 0) {
-      edgeServer = await startEdgeServer(1, 'MuNode Edge Server 1 (Test)', edgePort, edgeEdgePort, hubPort, controlPort, silent);
+      if (USE_RUST) {
+        edgeProcess = await startRustEdgeServer(1, 'MuNode Edge Server 1 (Rust Test)', edgePort, edgeEdgePort, controlPort, basePort, 'test-hmac-secret-key-for-integration-tests', silent);
+        await waitForCondition(
+          async () => {
+            try {
+              const testSocket = await new Promise<boolean>((resolve) => {
+                const socket = new net.Socket();
+                socket.setTimeout(100);
+                socket.connect(edgePort, '127.0.0.1', () => { socket.destroy(); resolve(true); });
+                socket.on('error', () => { socket.destroy(); resolve(false); });
+                socket.on('timeout', () => { socket.destroy(); resolve(false); });
+              });
+              return testSocket;
+            } catch { return false; }
+          },
+          5000, 100, `Rust Edge 1 to be listening on port ${edgePort}`
+        );
+        debugLog(`[RUST] Edge 1 started on port ${edgePort}`);
+      } else {
+        edgeServer = await startEdgeServer(1, 'MuNode Edge Server 1 (Test)', edgePort, edgeEdgePort, hubPort, controlPort, silent);
+      }
     }
 
     // 4. 启动 Edge 服务器 2
     if (finalOptions.startEdge2 !== false && edgePort2 > 0) {
-      edgeServer2 = await startEdgeServer(2, 'MuNode Edge Server 2 (Test)', edgePort2, edgeEdgePort2, hubPort, controlPort, silent);
+      if (USE_RUST) {
+        edgeProcess2 = await startRustEdgeServer(2, 'MuNode Edge Server 2 (Rust Test)', edgePort2, edgeEdgePort2, controlPort, basePort, 'test-hmac-secret-key-for-integration-tests', silent);
+        await waitForCondition(
+          async () => {
+            try {
+              return await new Promise<boolean>((resolve) => {
+                const socket = new net.Socket();
+                socket.setTimeout(100);
+                socket.connect(edgePort2, '127.0.0.1', () => { socket.destroy(); resolve(true); });
+                socket.on('error', () => { socket.destroy(); resolve(false); });
+                socket.on('timeout', () => { socket.destroy(); resolve(false); });
+              });
+            } catch { return false; }
+          },
+          5000, 100, `Rust Edge 2 to be listening on port ${edgePort2}`
+        );
+        debugLog(`[RUST] Edge 2 started on port ${edgePort2}`);
+      } else {
+        edgeServer2 = await startEdgeServer(2, 'MuNode Edge Server 2 (Test)', edgePort2, edgeEdgePort2, hubPort, controlPort, silent);
+      }
     }
 
     // 5. 启动 Edge 服务器 3
     if (finalOptions.startEdge3 === true && edgePort3 > 0) {
-      edgeServer3 = await startEdgeServer(3, 'MuNode Edge Server 3 (Test)', edgePort3, edgeEdgePort3, hubPort, controlPort, silent);
+      if (USE_RUST) {
+        edgeProcess3 = await startRustEdgeServer(3, 'MuNode Edge Server 3 (Rust Test)', edgePort3, edgeEdgePort3, controlPort, basePort, 'test-hmac-secret-key-for-integration-tests', silent);
+        await waitForCondition(
+          async () => {
+            try {
+              return await new Promise<boolean>((resolve) => {
+                const socket = new net.Socket();
+                socket.setTimeout(100);
+                socket.connect(edgePort3, '127.0.0.1', () => { socket.destroy(); resolve(true); });
+                socket.on('error', () => { socket.destroy(); resolve(false); });
+                socket.on('timeout', () => { socket.destroy(); resolve(false); });
+              });
+            } catch { return false; }
+          },
+          5000, 100, `Rust Edge 3 to be listening on port ${edgePort3}`
+        );
+        debugLog(`[RUST] Edge 3 started on port ${edgePort3}`);
+      } else {
+        edgeServer3 = await startEdgeServer(3, 'MuNode Edge Server 3 (Test)', edgePort3, edgeEdgePort3, hubPort, controlPort, silent);
+      }
     }
 
     // 6. 启动 Edge 服务器 4
     if (finalOptions.startEdge4 === true && edgePort4 > 0) {
-      edgeServer4 = await startEdgeServer(4, 'MuNode Edge Server 4 (Test)', edgePort4, edgeEdgePort4, hubPort, controlPort, silent);
+      if (USE_RUST) {
+        edgeProcess4 = await startRustEdgeServer(4, 'MuNode Edge Server 4 (Rust Test)', edgePort4, edgeEdgePort4, controlPort, basePort, 'test-hmac-secret-key-for-integration-tests', silent);
+        await waitForCondition(
+          async () => {
+            try {
+              return await new Promise<boolean>((resolve) => {
+                const socket = new net.Socket();
+                socket.setTimeout(100);
+                socket.connect(edgePort4, '127.0.0.1', () => { socket.destroy(); resolve(true); });
+                socket.on('error', () => { socket.destroy(); resolve(false); });
+                socket.on('timeout', () => { socket.destroy(); resolve(false); });
+              });
+            } catch { return false; }
+          },
+          5000, 100, `Rust Edge 4 to be listening on port ${edgePort4}`
+        );
+        debugLog(`[RUST] Edge 4 started on port ${edgePort4}`);
+      } else {
+        edgeServer4 = await startEdgeServer(4, 'MuNode Edge Server 4 (Test)', edgePort4, edgeEdgePort4, hubPort, controlPort, silent);
+      }
     }
 
-    // 7. 等待 Edge 服务器之间建立 UDP 连接
-    // 给予足够时间让所有 Edge 节点注册彼此的端点并完成 UDP 握手
-    // 这对跨 Edge 语音路由至关重要
+    // 7. 等待 Edge 服务器之间建立连接（仅 TS 模式检查内部 TLS 连接状态）
+    // Rust 模式下 Edge 间连接由 Hub 协调，需等待足够时间
     const activeEdges: EdgeServer[] = [edgeServer, edgeServer2, edgeServer3, edgeServer4].filter(Boolean) as EdgeServer[];
     if (activeEdges.length > 1) {
-      debugLog(`Waiting for ${activeEdges.length} Edge servers to establish UDP connections...`);
+      debugLog(`Waiting for ${activeEdges.length} TS Edge servers to establish UDP connections...`);
       
       // 等待每个 Edge 都注册了其他 Edge 的端点并完成 TLS 连接握手
       await sleep(2000); // 基础等待时间让通知传递
@@ -966,13 +1351,25 @@ export async function setupTestEnvironment(
         // 额外等待，让连接有更多时间完成
         await sleep(1000);
       }
+    } else if (USE_RUST) {
+      // Rust 模式：等待 Edge 注册到 Hub 后再继续
+      const rustEdgeCount = [edgeProcess, edgeProcess2, edgeProcess3, edgeProcess4].filter(Boolean).length;
+      if (rustEdgeCount > 0) {
+        debugLog(`[RUST] Waiting for ${rustEdgeCount} Edge server(s) to register with Hub...`);
+        await sleep(1500);
+      }
     }
 
-    console.log('✓ All servers started successfully in single process!');
+    console.log(`✓ All servers started successfully (${USE_RUST ? 'Rust binary' : 'in-process'} mode)!`);
 
   } catch (error) {
     console.error('Failed to setup test environment:', error);
     // Cleanup on error
+    if (edgeProcess4) await edgeProcess4.stop().catch(() => {});
+    if (edgeProcess3) await edgeProcess3.stop().catch(() => {});
+    if (edgeProcess2) await edgeProcess2.stop().catch(() => {});
+    if (edgeProcess) await edgeProcess.stop().catch(() => {});
+    if (hubProcess) await hubProcess.stop().catch(() => {});
     if (edgeServer4) await edgeServer4.stop().catch(() => {});
     if (edgeServer3) await edgeServer3.stop().catch(() => {});
     if (edgeServer2) await edgeServer2.stop().catch(() => {});
@@ -986,6 +1383,9 @@ export async function setupTestEnvironment(
     debugLog('Cleaning up test environment...');
 
     // Stop Edge servers first (in reverse order), checking port release after each
+    if (edgeProcess4) {
+      try { await edgeProcess4.stop(); debugLog('[RUST] Edge process 4 stopped'); } catch (e) { console.warn('Error stopping Rust edge 4:', e); }
+    }
     if (edgeServer4) {
       try {
         await edgeServer4.stop();
@@ -997,6 +1397,9 @@ export async function setupTestEnvironment(
       }
     }
 
+    if (edgeProcess3) {
+      try { await edgeProcess3.stop(); debugLog('[RUST] Edge process 3 stopped'); } catch (e) { console.warn('Error stopping Rust edge 3:', e); }
+    }
     if (edgeServer3) {
       try {
         await edgeServer3.stop();
@@ -1008,6 +1411,9 @@ export async function setupTestEnvironment(
       }
     }
 
+    if (edgeProcess2) {
+      try { await edgeProcess2.stop(); debugLog('[RUST] Edge process 2 stopped'); } catch (e) { console.warn('Error stopping Rust edge 2:', e); }
+    }
     if (edgeServer2) {
       try {
         await edgeServer2.stop();
@@ -1019,6 +1425,9 @@ export async function setupTestEnvironment(
       }
     }
 
+    if (edgeProcess) {
+      try { await edgeProcess.stop(); debugLog('[RUST] Edge process 1 stopped'); } catch (e) { console.warn('Error stopping Rust edge 1:', e); }
+    }
     if (edgeServer) {
       try {
         await edgeServer.stop();
@@ -1031,6 +1440,9 @@ export async function setupTestEnvironment(
     }
 
     // Now stop Hub after all Edge servers have disconnected
+    if (hubProcess) {
+      try { await hubProcess.stop(); debugLog('[RUST] Hub process stopped'); } catch (e) { console.warn('Error stopping Rust hub:', e); }
+    }
     if (hubServer) {
       try {
         await hubServer.stop();
@@ -1071,6 +1483,11 @@ export async function setupTestEnvironment(
     edgeServer2,
     edgeServer3,
     edgeServer4,
+    hubProcess,
+    edgeProcess,
+    edgeProcess2,
+    edgeProcess3,
+    edgeProcess4,
     authServer,
     authPort,
     hubPort,
@@ -1187,6 +1604,11 @@ process.on('beforeExit', async () => {
       const env = globalTestEnvironment;
       globalTestEnvironment = null;
       
+      if (env.edgeProcess4) await env.edgeProcess4.stop().catch(() => {});
+      if (env.edgeProcess3) await env.edgeProcess3.stop().catch(() => {});
+      if (env.edgeProcess2) await env.edgeProcess2.stop().catch(() => {});
+      if (env.edgeProcess) await env.edgeProcess.stop().catch(() => {});
+      if (env.hubProcess) await env.hubProcess.stop().catch(() => {});
       if (env.edgeServer4) await env.edgeServer4.stop().catch(() => {});
       if (env.edgeServer3) await env.edgeServer3.stop().catch(() => {});
       if (env.edgeServer2) await env.edgeServer2.stop().catch(() => {});
@@ -1209,8 +1631,12 @@ const handleSignal = async (signal: string) => {
     const env = globalTestEnvironment;
     globalTestEnvironment = null;
 
-    // 单进程模式，直接停止服务器实例
     try {
+      if (env.edgeProcess4) await env.edgeProcess4.stop().catch(() => {});
+      if (env.edgeProcess3) await env.edgeProcess3.stop().catch(() => {});
+      if (env.edgeProcess2) await env.edgeProcess2.stop().catch(() => {});
+      if (env.edgeProcess) await env.edgeProcess.stop().catch(() => {});
+      if (env.hubProcess) await env.hubProcess.stop().catch(() => {});
       if (env.edgeServer4) await env.edgeServer4.stop();
       if (env.edgeServer3) await env.edgeServer3.stop();
       if (env.edgeServer2) await env.edgeServer2.stop();

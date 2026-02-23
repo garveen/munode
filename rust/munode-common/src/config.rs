@@ -183,6 +183,15 @@ pub struct HubAuthConfig {
     /// otherwise local DB auth is used as a fallback.
     #[serde(default)]
     pub require_auth_service: bool,
+    /// Optional HTTP endpoint URL for external authentication.
+    /// When set, the Hub sends a POST request to this URL to authenticate users.
+    /// Request body: `{ "username": "...", "password": "...", "tokens": [...], "server_id": N }`
+    /// Expected response: `{ "success": true/false, "user_id": N, "username": "...", "groups": [...] }`
+    /// If the HTTP call fails and `require_auth_service` is false, falls back to local DB auth.
+    pub http_url: Option<String>,
+    /// Timeout in milliseconds for HTTP authentication requests (default: 5000).
+    #[serde(default = "default_auth_timeout")]
+    pub http_timeout_ms: u64,
 }
 
 impl Default for HubAuthConfig {
@@ -193,6 +202,8 @@ impl Default for HubAuthConfig {
             welcome_text: None,
             server_password: None,
             require_auth_service: false,
+            http_url: None,
+            http_timeout_ms: default_auth_timeout(),
         }
     }
 }
@@ -255,4 +266,7 @@ fn default_db_path() -> String {
 }
 fn default_true() -> bool {
     true
+}
+fn default_auth_timeout() -> u64 {
+    5000
 }
