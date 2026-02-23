@@ -1,12 +1,12 @@
-# Docker Compose for MuNode Rust Edge Server
-# Uses the TypeScript Hub server with the Rust Edge server
+# Docker Compose for MuNode Rust servers
+# Build context is the repo root (parent of rust/) so proto files are accessible.
 
 services:
   # Hub Server - Rust (central management node)
   hub:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: rust/Dockerfile
     container_name: munode-hub
     restart: unless-stopped
     entrypoint: ["/app/munode-hub"]
@@ -31,8 +31,8 @@ services:
   # Edge Server 1 - Rust (edge node handling client connections)
   edge-1:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: rust/Dockerfile
     container_name: munode-rust-edge-1
     restart: unless-stopped
     ports:
@@ -61,8 +61,8 @@ services:
   # Edge Server 2 - Rust (optional, for load balancing)
   edge-2:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: rust/Dockerfile
     container_name: munode-rust-edge-2
     restart: unless-stopped
     ports:

@@ -1,4 +1,7 @@
-target/
+rust/target/
+node_modules/
 *.log
-tmp/
 .git
+tmp/
+dist/
+coverage/
