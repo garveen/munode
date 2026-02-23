@@ -1,9 +1,25 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::channel_manager::ChannelManager;
 use crate::client::ClientManager;
+
+/// A single voice target configuration (whisper/shout destinations).
+#[derive(Debug, Clone)]
+pub struct VoiceTargetConfig {
+    pub sessions: Vec<u32>,
+    pub channels: Vec<VoiceTargetChannelConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VoiceTargetChannelConfig {
+    pub channel_id: u32,
+    pub links: bool,
+    pub children: bool,
+    pub group: Option<String>,
+}
 
 /// Events broadcast within the Edge server.
 #[derive(Debug, Clone)]
@@ -57,6 +73,8 @@ pub struct EdgeState {
     pub client_manager: Arc<ClientManager>,
     /// Event bus for internal notifications.
     pub event_tx: broadcast::Sender<EdgeEvent>,
+    /// Voice target cache: session_id -> target_id -> VoiceTargetConfig
+    pub voice_targets: Mutex<HashMap<u32, HashMap<u32, VoiceTargetConfig>>>,
 }
 
 impl EdgeState {
@@ -71,6 +89,7 @@ impl EdgeState {
             channel_manager,
             client_manager,
             event_tx,
+            voice_targets: Mutex::new(HashMap::new()),
         })
     }
 

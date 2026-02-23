@@ -143,7 +143,44 @@ impl HubClient {
             }
         });
 
-        // Register with Hub
+        // Reader task: must be running BEFORE RPC calls so responses can be received.
+        // Uses a oneshot channel to signal when the connection closes.
+        let (reader_done_tx, reader_done_rx) = tokio::sync::oneshot::channel::<()>();
+        let reader_self = self.clone();
+        let reader_handle = tokio::spawn(async move {
+            loop {
+                match ws_read.next().await {
+                    Some(Ok(msg)) => {
+                        match msg {
+                            tungstenite::Message::Binary(data) => {
+                                if let Err(e) = reader_self.handle_incoming(&data).await {
+                                    warn!("Error handling Hub message: {}", e);
+                                }
+                            }
+                            tungstenite::Message::Close(_) => {
+                                info!("Hub sent close frame");
+                                break;
+                            }
+                            tungstenite::Message::Ping(data) => {
+                                reader_self.send_raw(tungstenite::Message::Pong(data).into_data().to_vec()).await.ok();
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(Err(e)) => {
+                        error!("WebSocket read error: {}", e);
+                        break;
+                    }
+                    None => {
+                        info!("WebSocket stream ended");
+                        break;
+                    }
+                }
+            }
+            let _ = reader_done_tx.send(());
+        });
+
+        // Register with Hub (reader task is now running, so responses can arrive)
         self.do_register().await?;
 
         // Request full sync
@@ -159,38 +196,11 @@ impl HubClient {
             heartbeat_self.heartbeat_loop().await;
         });
 
-        // Main read loop: process incoming messages
-        loop {
-            match ws_read.next().await {
-                Some(Ok(msg)) => {
-                    match msg {
-                        tungstenite::Message::Binary(data) => {
-                            if let Err(e) = self.handle_incoming(&data).await {
-                                warn!("Error handling Hub message: {}", e);
-                            }
-                        }
-                        tungstenite::Message::Close(_) => {
-                            info!("Hub sent close frame");
-                            break;
-                        }
-                        tungstenite::Message::Ping(data) => {
-                            self.send_raw(tungstenite::Message::Pong(data).into_data().to_vec()).await.ok();
-                        }
-                        _ => {}
-                    }
-                }
-                Some(Err(e)) => {
-                    error!("WebSocket read error: {}", e);
-                    break;
-                }
-                None => {
-                    info!("WebSocket stream ended");
-                    break;
-                }
-            }
-        }
+        // Wait for the reader task to finish (connection closed)
+        let _ = reader_done_rx.await;
 
         heartbeat_handle.abort();
+        reader_handle.abort();
         writer_handle.abort();
         Ok(())
     }

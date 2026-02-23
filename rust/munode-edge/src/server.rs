@@ -322,40 +322,151 @@ async fn handle_client_connection(
                     }
                 }
                 MessageType::UdpTunnel if client_state == ClientState::Ready => {
-                    // Voice data tunneled through TCP - forward to all users in the same channel
+                    // Voice data tunneled through TCP.
+                    // Voice packet format: first byte is (voice_type << 5) | target
+                    // target: 0 = normal broadcast, 1-30 = voice target (whisper), 31 = loopback
                     if let Some(sid) = session_id {
                         if let Some(client) = edge_state.client_manager.get_client(sid).await {
-                            // Build a UdpTunnel frame once
-                            let mut buf = BytesMut::new();
-                            bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-                            bytes::BufMut::put_u32(&mut buf, frame.payload.len() as u32);
-                            bytes::BufMut::put_slice(&mut buf, &frame.payload);
-                            let data = buf.to_vec();
+                            let voice_target = if !frame.payload.is_empty() {
+                                (frame.payload[0] & 0x1F) as u32
+                            } else {
+                                0
+                            };
 
-                            // Local clients in same channel
-                            let sessions = edge_state.client_manager.get_channel_sessions(client.channel_id).await;
-                            for target_session in sessions {
-                                if target_session == sid {
-                                    continue;
+                            if voice_target == 31 {
+                                // Loopback: send only back to the sender
+                                let mut buf = BytesMut::new();
+                                bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
+                                bytes::BufMut::put_u32(&mut buf, frame.payload.len() as u32);
+                                bytes::BufMut::put_slice(&mut buf, &frame.payload);
+                                let data = buf.to_vec();
+                                if let Some(sender_tx) = edge_state.client_manager.get_sender(sid).await {
+                                    sender_tx.send_raw(data).await;
                                 }
-                                if let Some(sender) = edge_state.client_manager.get_sender(target_session).await {
-                                    sender.send_raw(data.clone()).await;
+                            } else if voice_target >= 1 && voice_target <= 30 {
+                                // Whisper/voice target: route to configured sessions/channels
+                                let vt_config = {
+                                    let cache = edge_state.voice_targets.lock().await;
+                                    cache.get(&sid).and_then(|m| m.get(&voice_target)).cloned()
+                                };
+                                if let Some(vt) = vt_config {
+                                    let mut target_sessions: std::collections::HashSet<u32> = std::collections::HashSet::new();
+                                    // Direct session targets
+                                    for s in &vt.sessions {
+                                        target_sessions.insert(*s);
+                                    }
+                                    // Channel targets
+                                    for ch_cfg in &vt.channels {
+                                        let mut ch_ids = std::collections::HashSet::new();
+                                        ch_ids.insert(ch_cfg.channel_id);
+                                        if ch_cfg.links {
+                                            let linked = edge_state.channel_manager.get_all_linked_channels(ch_cfg.channel_id).await;
+                                            ch_ids.extend(linked);
+                                        }
+                                        if ch_cfg.children {
+                                            fn collect_children(
+                                                ch_id: u32,
+                                                ch_ids: &mut std::collections::HashSet<u32>,
+                                                children_map: &std::collections::HashMap<u32, Vec<u32>>,
+                                            ) {
+                                                if let Some(children) = children_map.get(&ch_id) {
+                                                    for &child in children {
+                                                        if ch_ids.insert(child) {
+                                                            collect_children(child, ch_ids, children_map);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            let children_map = edge_state.channel_manager.get_all_children_map().await;
+                                            collect_children(ch_cfg.channel_id, &mut ch_ids, &children_map);
+                                        }
+                                        for ch_id in ch_ids {
+                                            let local_sessions = edge_state.client_manager.get_channel_sessions(ch_id).await;
+                                            for s in local_sessions {
+                                                if s != sid {
+                                                    target_sessions.insert(s);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // Build frame
+                                    let mut buf = BytesMut::new();
+                                    bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
+                                    bytes::BufMut::put_u32(&mut buf, frame.payload.len() as u32);
+                                    bytes::BufMut::put_slice(&mut buf, &frame.payload);
+                                    let data = buf.to_vec();
+                                    // Send to local targets
+                                    for target_session in &target_sessions {
+                                        if let Some(target_client) = edge_state.client_manager.get_client(*target_session).await {
+                                            if !target_client.deaf && !target_client.self_deaf {
+                                                if let Some(sender) = edge_state.client_manager.get_sender(*target_session).await {
+                                                    sender.send_raw(data.clone()).await;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    // Send to remote edges via Hub relay
+                                    let remote_users = edge_state.channel_manager.get_all_remote_users().await;
+                                    let mut by_edge: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
+                                    for ru in &remote_users {
+                                        if target_sessions.contains(&ru.session_id) {
+                                            by_edge.insert(ru.edge_id, true);
+                                        }
+                                    }
+                                    for target_edge_id in by_edge.into_keys() {
+                                        let mut relay_payload = Vec::new();
+                                        relay_payload.extend_from_slice(&sid.to_be_bytes());
+                                        relay_payload.extend_from_slice(&frame.payload);
+                                        hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                                    }
                                 }
-                            }
+                            } else {
+                                // Normal broadcast (target=0): route to same channel + linked channels
+                                let linked_channels = edge_state.channel_manager
+                                    .get_all_linked_channels(client.channel_id)
+                                    .await;
 
-                            // Remote users (other edges): relay via Hub TCP
-                            let remote_users = edge_state.channel_manager
-                                .get_remote_users_in_channel(client.channel_id)
-                                .await;
-                            let mut by_edge: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
-                            for ru in &remote_users {
-                                by_edge.insert(ru.edge_id, true);
-                            }
-                            for target_edge_id in by_edge.into_keys() {
-                                let mut relay_payload = Vec::new();
-                                relay_payload.extend_from_slice(&sid.to_be_bytes());
-                                relay_payload.extend_from_slice(&frame.payload);
-                                hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                                // Build frame once
+                                let mut buf = BytesMut::new();
+                                bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
+                                bytes::BufMut::put_u32(&mut buf, frame.payload.len() as u32);
+                                bytes::BufMut::put_slice(&mut buf, &frame.payload);
+                                let data = buf.to_vec();
+
+                                // Local clients in all linked channels
+                                for ch_id in &linked_channels {
+                                    let sessions = edge_state.client_manager.get_channel_sessions(*ch_id).await;
+                                    for target_session in sessions {
+                                        if target_session == sid {
+                                            continue;
+                                        }
+                                        if let Some(target_client) = edge_state.client_manager.get_client(target_session).await {
+                                            if target_client.deaf || target_client.self_deaf {
+                                                continue;
+                                            }
+                                        }
+                                        if let Some(sender) = edge_state.client_manager.get_sender(target_session).await {
+                                            sender.send_raw(data.clone()).await;
+                                        }
+                                    }
+                                }
+
+                                // Remote users (other edges) in any linked channel
+                                let remote_users = edge_state.channel_manager
+                                    .get_remote_users_in_channels(&linked_channels)
+                                    .await;
+                                let mut by_edge: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
+                                for ru in &remote_users {
+                                    if !ru.deaf && !ru.self_deaf {
+                                        by_edge.insert(ru.edge_id, true);
+                                    }
+                                }
+                                for target_edge_id in by_edge.into_keys() {
+                                    let mut relay_payload = Vec::new();
+                                    relay_payload.extend_from_slice(&sid.to_be_bytes());
+                                    relay_payload.extend_from_slice(&frame.payload);
+                                    hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                                }
                             }
                         }
                     }
@@ -393,6 +504,34 @@ async fn handle_client_connection(
                                 }
                                 Some(hubedge::VoiceTargetConfigProto { sessions, channels })
                             };
+
+                            // Cache voice target locally for routing
+                            {
+                                use crate::state::{VoiceTargetChannelConfig, VoiceTargetConfig};
+                                use std::collections::HashMap;
+                                let mut vt_cache = edge_state.voice_targets.lock().await;
+                                let session_vts = vt_cache.entry(sid).or_insert_with(HashMap::new);
+                                if vt.targets.is_empty() {
+                                    session_vts.remove(&(target_id as u32));
+                                } else {
+                                    let mut vt_sessions = Vec::new();
+                                    let mut vt_channels = Vec::new();
+                                    for target in &vt.targets {
+                                        for &s in &target.session {
+                                            vt_sessions.push(s);
+                                        }
+                                        if let Some(ch_id) = target.channel_id {
+                                            vt_channels.push(VoiceTargetChannelConfig {
+                                                channel_id: ch_id,
+                                                links: target.links.unwrap_or(false),
+                                                children: target.children.unwrap_or(false),
+                                                group: target.group.clone(),
+                                            });
+                                        }
+                                    }
+                                    session_vts.insert(target_id as u32, VoiceTargetConfig { sessions: vt_sessions, channels: vt_channels });
+                                }
+                            }
 
                             // Sync to Hub (fire-and-forget)
                             let hub = hub_client.clone();
@@ -1085,7 +1224,7 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                     }
                     EdgeEvent::RelayedVoice { voice_packet } => {
                         // Voice relayed from another edge via Hub TCP.
-                        // Format: sender_session (4 bytes BE) + plaintext voice data.
+                        // Format: sender_session (4 bytes BE) + voice data.
                         if voice_packet.len() < 5 {
                             continue;
                         }
@@ -1095,26 +1234,36 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         let voice_data = &voice_packet[4..];
 
                         // Find what channel the remote sender is in
-                        let channel_id = if let Some(ru) = state.channel_manager.get_remote_user(sender_session).await {
+                        let sender_channel_id = if let Some(ru) = state.channel_manager.get_remote_user(sender_session).await {
                             ru.channel_id
                         } else {
                             debug!("RelayedVoice: unknown remote session {}", sender_session);
                             continue;
                         };
 
-                        // Deliver to local clients in that channel via TCP UdpTunnel
-                        let local_targets = state.client_manager.get_channel_sessions(channel_id).await;
+                        // Get all linked channels (for channel link broadcast support)
+                        let linked_channels = state.channel_manager.get_all_linked_channels(sender_channel_id).await;
+
+                        // Deliver to local clients in all linked channels via TCP UdpTunnel
                         let mut buf = bytes::BytesMut::new();
                         bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
                         bytes::BufMut::put_u32(&mut buf, voice_data.len() as u32);
                         bytes::BufMut::put_slice(&mut buf, voice_data);
                         let frame = buf.to_vec();
-                        for target_session in local_targets {
-                            if let Some(sender) = state.client_manager.get_sender(target_session).await {
-                                sender.send_raw(frame.clone()).await;
+                        for ch_id in &linked_channels {
+                            let local_targets = state.client_manager.get_channel_sessions(*ch_id).await;
+                            for target_session in local_targets {
+                                if let Some(target_client) = state.client_manager.get_client(target_session).await {
+                                    if target_client.deaf || target_client.self_deaf {
+                                        continue;
+                                    }
+                                }
+                                if let Some(sender) = state.client_manager.get_sender(target_session).await {
+                                    sender.send_raw(frame.clone()).await;
+                                }
                             }
                         }
-                        debug!("Delivered relayed voice from session {} to channel {}", sender_session, channel_id);
+                        debug!("Delivered relayed voice from session {} to {} linked channels", sender_session, linked_channels.len());
                     }
                 }
             }
