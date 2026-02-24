@@ -449,10 +449,11 @@ describe('Voice Integration Tests', () => {
       await admin.disconnect();
 
       // ── Hub 重启 ──
-      if (!testEnv.hubServer) throw new Error('hubServer not available in testEnv');
-      await testEnv.hubServer.stop();
+      const hub = testEnv.hubServer || testEnv.hubProcess;
+      if (!hub) throw new Error('Hub not available in testEnv (neither hubServer nor hubProcess)');
+      await hub.stop();
       await new Promise(resolve => setTimeout(resolve, 1000));
-      await testEnv.hubServer.start();
+      await hub.start();
       // 等待 Edge 重连 Hub 并完成频道同步（主动检测而非固定等待）
       // Edge 检测到 Hub 断开 → 重连 → joinCluster → loadDataFromHub
       await waitForCondition(
@@ -467,15 +468,29 @@ describe('Voice Integration Tests', () => {
               rejectUnauthorized: false,
             });
             await probe.disconnect();
+            // Also verify Edge 2 is ready if present
+            if (testEnv.edgePort2) {
+              const probe2 = new MumbleClient();
+              await probe2.connect({
+                host: 'localhost',
+                port: testEnv.edgePort2,
+                username: 'admin',
+                password: 'admin123',
+                rejectUnauthorized: false,
+              });
+              await probe2.disconnect();
+            }
             return true;
           } catch {
             return false;
           }
         },
-        15000, // 最多等 15 秒
+        20000, // 最多等 20 秒
         500,
-        'Edge to reconnect to Hub after restart'
+        'Edges to reconnect to Hub after restart'
       );
+      // Extra stabilization time after all edges reconnected (allow full re-sync)
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
       // 重启后连接客户端
       const clients = await createClients(testEnv, [

@@ -418,7 +418,8 @@ async fn handle_client_connection(
                                     for s in &vt.sessions {
                                         target_sessions.insert(*s);
                                     }
-                                    // Channel targets
+                                    // Channel targets: collect local sessions AND track remote channels
+                                    let mut channel_target_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
                                     for ch_cfg in &vt.channels {
                                         let mut ch_ids = std::collections::HashSet::new();
                                         ch_ids.insert(ch_cfg.channel_id);
@@ -443,6 +444,7 @@ async fn handle_client_connection(
                                             let children_map = edge_state.channel_manager.get_all_children_map().await;
                                             collect_children(ch_cfg.channel_id, &mut ch_ids, &children_map);
                                         }
+                                        channel_target_ids.extend(&ch_ids);
                                         for ch_id in ch_ids {
                                             let local_sessions = edge_state.client_manager.get_channel_sessions(ch_id).await;
                                             for s in local_sessions {
@@ -469,11 +471,18 @@ async fn handle_client_connection(
                                             }
                                         }
                                     }
-                                    // Send to remote edges via Hub relay (whisper: include target sessions)
+                                    // Send to remote edges via Hub relay
+                                    // For session targets: relay those specific sessions
+                                    // For channel targets: also relay to remote users in those channels
+                                    let local_edge_id = *edge_state.edge_id.read().await;
                                     let remote_users = edge_state.channel_manager.get_all_remote_users().await;
                                     let mut by_edge: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
                                     for ru in &remote_users {
-                                        if !ru.deaf && !ru.self_deaf && target_sessions.contains(&ru.session_id) {
+                                        if ru.deaf || ru.self_deaf { continue; }
+                                        if let Some(lid) = local_edge_id { if ru.edge_id == lid { continue; } }
+                                        let in_session_target = target_sessions.contains(&ru.session_id);
+                                        let in_channel_target = !channel_target_ids.is_empty() && channel_target_ids.contains(&ru.channel_id);
+                                        if in_session_target || in_channel_target {
                                             by_edge.entry(ru.edge_id).or_default().push(ru.session_id);
                                         }
                                     }
@@ -522,12 +531,14 @@ async fn handle_client_connection(
                                 }
 
                                 // Remote users (other edges) in any linked channel
+                                let local_edge_id = *edge_state.edge_id.read().await;
                                 let remote_users = edge_state.channel_manager
                                     .get_remote_users_in_channels(&linked_channels)
                                     .await;
                                 let mut by_edge: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
                                 for ru in &remote_users {
                                     if !ru.deaf && !ru.self_deaf {
+                                        if let Some(lid) = local_edge_id { if ru.edge_id == lid { continue; } }
                                         by_edge.insert(ru.edge_id, true);
                                     }
                                 }
