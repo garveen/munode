@@ -308,7 +308,14 @@ async fn handle_client_connection(
                 MessageType::UserState if client_state == ClientState::Ready => {
                     let user_state = mumbleproto::UserState::decode(&frame.payload[..])?;
                     if let Some(sid) = session_id {
-                        handle_user_state_update(&edge_state, &hub_client, sid, &user_state).await;
+                        // Check if this targets another user (admin operation)
+                        let target_sid = user_state.session.unwrap_or(sid);
+                        if target_sid != sid && (user_state.mute.is_some() || user_state.deaf.is_some() || user_state.channel_id.is_some()) {
+                            // Admin operation: apply to target session
+                            handle_admin_user_state_update(&edge_state, &hub_client, sid, target_sid, &user_state).await;
+                        } else {
+                            handle_user_state_update(&edge_state, &hub_client, sid, &user_state).await;
+                        }
                     }
                 }
                 MessageType::TextMessage if client_state == ClientState::Ready => {
@@ -327,13 +334,17 @@ async fn handle_client_connection(
                     // target: 0 = normal broadcast, 1-30 = voice target (whisper), 31 = loopback
                     if let Some(sid) = session_id {
                         if let Some(client) = edge_state.client_manager.get_client(sid).await {
+                            // Suppressed users cannot speak (except loopback)
                             let voice_target = if !frame.payload.is_empty() {
                                 (frame.payload[0] & 0x1F) as u32
                             } else {
                                 0
                             };
 
-                            if voice_target == 31 {
+                            // Block suppressed users from speaking (except loopback target=31)
+                            if client.suppress && voice_target != 31 {
+                                // Silently drop the packet
+                            } else if voice_target == 31 {
                                 // Loopback: send only back to the sender
                                 let mut buf = BytesMut::new();
                                 bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
@@ -938,6 +949,12 @@ async fn handle_user_state_update(
                     let sender = edge_state.client_manager.get_sender(session_id).await;
                     edge_state.client_manager.remove_client(session_id).await;
                     client.channel_id = target_channel_id;
+                    // Check Speak permission; suppress the user if they can't speak in the new channel
+                    let can_speak = match hub_client.handle_permission_query(session_id, target_channel_id).await {
+                        Ok(r) => r.permissions.map(|p| p & 0x8 != 0).unwrap_or(true), // SPEAK = 0x8
+                        Err(_) => true,
+                    };
+                    client.suppress = !can_speak;
                     if let Some(sender) = sender {
                         edge_state.client_manager.add_client(client.clone(), sender).await;
                     }
@@ -989,10 +1006,29 @@ async fn handle_user_state_update(
         }
 
         // 9.4 Listening channel add/remove
+        let mut actually_added_channels: Vec<u32> = Vec::new();
         if !user_state.listening_channel_add.is_empty() || !user_state.listening_channel_remove.is_empty() {
             for &ch in &user_state.listening_channel_add {
+                // Check Listen permission (0x800) before adding
+                let can_listen = match hub_client.handle_permission_query(session_id, ch).await {
+                    Ok(r) => r.permissions.map(|p| p & 0x800 != 0).unwrap_or(true), // LISTEN
+                    Err(_) => true,
+                };
+                if !can_listen {
+                    debug!("Listen denied for session {} on channel {}", session_id, ch);
+                    if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                        let pq = mumbleproto::PermissionDenied {
+                            r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                            channel_id: Some(ch),
+                            ..Default::default()
+                        };
+                        sender.send_message(MessageType::PermissionDenied, &pq).await;
+                    }
+                    continue;
+                }
                 if !client.listening_channels.contains(&ch) {
                     client.listening_channels.push(ch);
+                    actually_added_channels.push(ch);
                 }
             }
             client.listening_channels.retain(|ch| !user_state.listening_channel_remove.contains(ch));
@@ -1023,8 +1059,8 @@ async fn handle_user_state_update(
             edge_state.client_manager.update_client(client.clone()).await;
             // Build broadcast message including listening channels
             let mut msg = handler::build_user_state_msg(&client);
-            if !user_state.listening_channel_add.is_empty() {
-                msg.listening_channel_add = user_state.listening_channel_add.clone();
+            if !actually_added_channels.is_empty() {
+                msg.listening_channel_add = actually_added_channels;
             }
             if !user_state.listening_channel_remove.is_empty() {
                 msg.listening_channel_remove = user_state.listening_channel_remove.clone();
@@ -1044,6 +1080,66 @@ async fn handle_user_state_update(
                     "recording": client.recording,
                 });
                 hub_client.notify_user_state_changed(session_id, state_json).await;
+            }
+        }
+    }
+}
+
+/// Handle an admin UserState update (one user modifying another user's state).
+/// Currently handles: mute/deaf, channel move (kick to channel).
+async fn handle_admin_user_state_update(
+    edge_state: &Arc<EdgeState>,
+    hub_client: &Arc<HubClient>,
+    _actor_session: u32,
+    target_session: u32,
+    user_state: &mumbleproto::UserState,
+) {
+    if let Some(mut client) = edge_state.client_manager.get_client(target_session).await {
+        let mut needs_broadcast = false;
+
+        // Admin mute/deaf
+        if let Some(mute) = user_state.mute {
+            client.mute = mute;
+            needs_broadcast = true;
+        }
+        if let Some(deaf) = user_state.deaf {
+            client.deaf = deaf;
+            needs_broadcast = true;
+        }
+
+        // Admin channel move (drag user to another channel)
+        let mut channel_moved = false;
+        if let Some(target_channel_id) = user_state.channel_id {
+            if client.channel_id != target_channel_id {
+                let sender = edge_state.client_manager.get_sender(target_session).await;
+                edge_state.client_manager.remove_client(target_session).await;
+                client.channel_id = target_channel_id;
+                // Re-check suppress for the new channel
+                let can_speak = match hub_client.handle_permission_query(target_session, target_channel_id).await {
+                    Ok(r) => r.permissions.map(|p| p & 0x8 != 0).unwrap_or(true),
+                    Err(_) => true,
+                };
+                client.suppress = !can_speak;
+                if let Some(sender) = sender {
+                    edge_state.client_manager.add_client(client.clone(), sender).await;
+                }
+                needs_broadcast = true;
+                channel_moved = true;
+            }
+        }
+
+        if needs_broadcast {
+            edge_state.client_manager.update_client(client.clone()).await;
+            let msg = handler::build_user_state_msg(&client);
+            edge_state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+            if channel_moved {
+                hub_client.notify_user_moved(target_session, client.channel_id).await;
+            } else {
+                let state_json = serde_json::json!({
+                    "mute": client.mute,
+                    "deaf": client.deaf,
+                });
+                hub_client.notify_user_state_changed(target_session, state_json).await;
             }
         }
     }
