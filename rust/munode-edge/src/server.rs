@@ -258,19 +258,8 @@ async fn handle_client_connection(
                         channel_id
                     );
 
-                    // Check Speak permission for initial channel to determine suppress
-                    let initial_suppress = if auth_result.suppress.unwrap_or(false) {
-                        true // Hub explicitly set suppress
-                    } else {
-                        // Check if user can speak in their initial channel
-                        match hub_client.handle_permission_query(sid, channel_id).await {
-                            Ok(r) => r.permissions.map(|p| p & 0x8 == 0).unwrap_or(false), // no SPEAK = suppress
-                            Err(_) => false,
-                        }
-                    };
-
-                    // Create local client
-                    let client = ClientInfo {
+                    // Create local client (suppress will be recomputed after add)
+                    let mut client = ClientInfo {
                         session: sid,
                         user_id: auth_result.user_id.unwrap_or(0),
                         username: auth_result.username.clone().unwrap_or(username.clone()),
@@ -278,7 +267,7 @@ async fn handle_client_connection(
                         state: ClientState::Authenticated,
                         mute: auth_result.mute.unwrap_or(false),
                         deaf: auth_result.deaf.unwrap_or(false),
-                        suppress: initial_suppress,
+                        suppress: auth_result.suppress.unwrap_or(false),
                         self_mute: auth_result.self_mute.unwrap_or(false),
                         self_deaf: auth_result.self_deaf.unwrap_or(false),
                         priority_speaker: auth_result.priority_speaker.unwrap_or(false),
@@ -291,7 +280,21 @@ async fn handle_client_connection(
                         opus_supported: opus,
                         listening_channels: vec![],
                     };
+                    // Add client to manager first so permission queries can resolve user_id
                     edge_state.client_manager.add_client(client.clone(), client_sender.clone()).await;
+
+                    // Check Speak permission for initial channel to determine suppress
+                    // (done AFTER add_client so hub_client.handle_permission_query gets the right user_id)
+                    if !auth_result.suppress.unwrap_or(false) {
+                        let can_speak = match hub_client.handle_permission_query(sid, channel_id).await {
+                            Ok(r) => r.permissions.map(|p| p & 0x8 != 0).unwrap_or(true),
+                            Err(_) => true,
+                        };
+                        if !can_speak {
+                            client.suppress = true;
+                            edge_state.client_manager.update_client(client.clone()).await;
+                        }
+                    }
 
                     // Execute full login sequence
                     let login = LoginHandler::new(
@@ -302,7 +305,17 @@ async fn handle_client_connection(
                     client_state = ClientState::Ready;
                     edge_state.client_manager.set_client_state(sid, ClientState::Ready).await;
 
-                    // Broadcast new user to all other clients
+                    // If suppress was set by permission check, notify the client itself
+                    if client.suppress && !auth_result.suppress.unwrap_or(false) {
+                        let suppress_msg = mumbleproto::UserState {
+                            session: Some(sid),
+                            suppress: Some(true),
+                            ..Default::default()
+                        };
+                        client_sender.send_message(MessageType::UserState, &suppress_msg).await;
+                    }
+
+                    // Broadcast new user to all other clients (use updated client state)
                     let user_state_msg = handler::build_user_state_msg(&client);
                     edge_state.client_manager.broadcast(
                         MessageType::UserState,
@@ -721,6 +734,20 @@ async fn handle_client_connection(
                     let ban_list = mumbleproto::BanList::decode(&frame.payload[..])?;
                     debug!("BanList from {}: query={:?}, {} entries", peer_addr, ban_list.query, ban_list.bans.len());
                     if ban_list.query.unwrap_or(false) {
+                        // Check admin (Write) permission on root channel
+                        let sid = session_id.unwrap_or(0);
+                        let is_admin = match hub_client.handle_permission_query(sid, 0).await {
+                            Ok(r) => r.permissions.map(|p| p & 0x1 != 0).unwrap_or(false), // WRITE = 0x1
+                            Err(_) => false,
+                        };
+                        if !is_admin {
+                            let pq = mumbleproto::PermissionDenied {
+                                r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                channel_id: Some(0),
+                                ..Default::default()
+                            };
+                            client_sender.send_message(MessageType::PermissionDenied, &pq).await;
+                        } else {
                         // Query: fetch ban list from Hub
                         let hub = hub_client.clone();
                         let sender = client_sender.clone();
@@ -731,6 +758,7 @@ async fn handle_client_connection(
                                 }
                             }
                         });
+                        }
                     } else {
                         // Update: forward ban list to Hub
                         let raw = frame.payload.to_vec();
