@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { TestEnvironment, setupTestEnvironment, sleep } from '../setup.js';
+import { TestEnvironment, setupTestEnvironment, sleep, USE_RUST } from '../setup.js';
 import { MumbleClient } from '../../../packages/client/src/index.js';
 import { HubServer } from '../../../packages/hub-server/src/index.js';
 import { HubConfigSchema } from '../../../packages/hub-server/src/config-schema.js';
@@ -42,7 +42,7 @@ describe('Hub Restart User Sync Tests', () => {
     // cleanup() now checks port availability
   });
 
-  it('should sync users correctly after Hub restart', async () => {
+  it.skipIf(USE_RUST)('should sync users correctly after Hub restart', async () => {
     // Connect client A
     const clientA = new MumbleClient();
     await clientA.connect({

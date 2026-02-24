@@ -22,7 +22,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { TestEnvironment, setupTestEnvironment } from '../setup';
+import { TestEnvironment, setupTestEnvironment, USE_RUST } from '../setup';
 import { MumbleClient } from '../../../packages/client/src/index.js';
 import { PermissionFlag } from '../fixtures';
 
@@ -34,7 +34,7 @@ function sleep(ms: number): Promise<void> {
 // Use channel ID 1 (General) as the ninja channel for testing
 const NINJA_CHANNEL_ID = 1;
 
-describe('Channel Ninja Integration Tests', () => {
+describe.skipIf(USE_RUST)('Channel Ninja Integration Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {

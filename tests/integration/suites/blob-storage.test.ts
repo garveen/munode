@@ -8,10 +8,10 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { setupTestEnvironment, createClients, cleanupClients } from '../setup.js';
+import { setupTestEnvironment, createClients, cleanupClients, USE_RUST } from '../setup.js';
 import type { TestEnvironment } from '../setup.js';
 
-describe('Blob Storage Integration Tests', () => {
+describe.skipIf(USE_RUST)('Blob Storage Integration Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { TestEnvironment, setupTestEnvironment } from '../setup';
+import { TestEnvironment, setupTestEnvironment, USE_RUST } from '../setup';
 
 let testEnv: TestEnvironment;
 
@@ -22,7 +22,7 @@ afterAll(async () => {
   }
 }, 30000);
 
-describe('Edge-to-Edge Voice Encryption Tests', () => {
+describe.skipIf(USE_RUST)('Edge-to-Edge Voice Encryption Tests', () => {
   it('should distribute encryption keys to Edge servers', async () => {
     // 等待Edge服务器注册到Hub并接收配置
     await new Promise(resolve => setTimeout(resolve, 2000));

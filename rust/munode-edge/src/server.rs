@@ -647,28 +647,53 @@ async fn handle_client_connection(
                                 // Encode IP address as bytes (IPv4 4 bytes, IPv6 16 bytes)
                                 let addr_bytes = encode_ip_address(&target.ip_address);
 
-                                let response = mumbleproto::UserStats {
-                                    session: Some(target_session),
-                                    stats_only: Some(false),
-                                    from_client: Some(mumbleproto::user_stats::Stats {
-                                        good: Some(good),
-                                        late: Some(late),
-                                        lost: Some(lost),
-                                        resync: Some(resync),
-                                    }),
-                                    from_server: Some(mumbleproto::user_stats::Stats {
-                                        good: Some(good),
-                                        late: Some(late),
-                                        lost: Some(lost),
-                                        resync: Some(resync),
-                                    }),
-                                    address: Some(addr_bytes),
-                                    onlinesecs: Some(onlinesecs),
-                                    idlesecs: Some(idlesecs),
-                                    opus: Some(target.opus_supported),
-                                    strong_certificate: Some(target.cert_hash.is_some()),
-                                    celt_versions: vec![-2147483637], // CELT 0.7.0 (Mumble standard)
-                                    ..Default::default()
+                                let is_stats_only = stats.stats_only.unwrap_or(false);
+
+                                let response = if is_stats_only {
+                                    // stats_only=true: return only mutable stats, no certs/address
+                                    mumbleproto::UserStats {
+                                        session: Some(target_session),
+                                        stats_only: Some(true),
+                                        from_client: Some(mumbleproto::user_stats::Stats {
+                                            good: Some(good),
+                                            late: Some(late),
+                                            lost: Some(lost),
+                                            resync: Some(resync),
+                                        }),
+                                        from_server: Some(mumbleproto::user_stats::Stats {
+                                            good: Some(good),
+                                            late: Some(late),
+                                            lost: Some(lost),
+                                            resync: Some(resync),
+                                        }),
+                                        onlinesecs: Some(onlinesecs),
+                                        idlesecs: Some(idlesecs),
+                                        ..Default::default()
+                                    }
+                                } else {
+                                    mumbleproto::UserStats {
+                                        session: Some(target_session),
+                                        stats_only: Some(false),
+                                        from_client: Some(mumbleproto::user_stats::Stats {
+                                            good: Some(good),
+                                            late: Some(late),
+                                            lost: Some(lost),
+                                            resync: Some(resync),
+                                        }),
+                                        from_server: Some(mumbleproto::user_stats::Stats {
+                                            good: Some(good),
+                                            late: Some(late),
+                                            lost: Some(lost),
+                                            resync: Some(resync),
+                                        }),
+                                        address: Some(addr_bytes),
+                                        onlinesecs: Some(onlinesecs),
+                                        idlesecs: Some(idlesecs),
+                                        opus: Some(target.opus_supported),
+                                        strong_certificate: Some(target.cert_hash.is_some()),
+                                        celt_versions: vec![-2147483637], // CELT 0.7.0 (Mumble standard)
+                                        ..Default::default()
+                                    }
                                 };
                                 client_sender.send_message(MessageType::UserStats, &response).await;
                             }
@@ -869,16 +894,33 @@ async fn handle_client_connection(
                         ).await;
 
                         // Also deliver locally to targeted sessions on this edge
-                        for &target_session in &plugin.receiver_sessions {
-                            let fwd = mumbleproto::PluginDataTransmission {
-                                sender_session: Some(sid),
-                                data_id: plugin.data_id.clone(),
-                                data: Some(data_bytes.clone()),
-                                receiver_sessions: vec![target_session],
-                            };
-                            edge_state_clone.client_manager.send_to(
-                                target_session, MessageType::PluginDataTransmission, &fwd
-                            ).await;
+                        if plugin.receiver_sessions.is_empty() {
+                            // Broadcast: deliver to all local authenticated clients except sender
+                            let all_clients = edge_state_clone.client_manager.get_all_clients().await;
+                            for client in all_clients {
+                                if client.session == sid { continue; }
+                                let fwd = mumbleproto::PluginDataTransmission {
+                                    sender_session: Some(sid),
+                                    data_id: plugin.data_id.clone(),
+                                    data: Some(data_bytes.clone()),
+                                    receiver_sessions: vec![],
+                                };
+                                edge_state_clone.client_manager.send_to(
+                                    client.session, MessageType::PluginDataTransmission, &fwd
+                                ).await;
+                            }
+                        } else {
+                            for &target_session in &plugin.receiver_sessions {
+                                let fwd = mumbleproto::PluginDataTransmission {
+                                    sender_session: Some(sid),
+                                    data_id: plugin.data_id.clone(),
+                                    data: Some(data_bytes.clone()),
+                                    receiver_sessions: vec![target_session],
+                                };
+                                edge_state_clone.client_manager.send_to(
+                                    target_session, MessageType::PluginDataTransmission, &fwd
+                                ).await;
+                            }
                         }
                     });
                 }
@@ -1173,6 +1215,8 @@ async fn handle_user_state_update(
                     "deaf": client.deaf,
                     "priority_speaker": client.priority_speaker,
                     "recording": client.recording,
+                    "listening_channel_add": msg.listening_channel_add,
+                    "listening_channel_remove": msg.listening_channel_remove,
                 });
                 hub_client.notify_user_state_changed(session_id, state_json).await;
             }
@@ -1373,6 +1417,23 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         let msg = handler::build_user_remove_msg(session_id, None);
                         state.client_manager.broadcast(MessageType::UserRemove, &msg, None).await;
                         debug!("Broadcast remote user left: session {}", session_id);
+                    }
+                    EdgeEvent::RemoteUserStateChanged { session_id } => {
+                        if let Some(user) = state.channel_manager.get_remote_user(session_id).await {
+                            let msg = mumbleproto::UserState {
+                                session: Some(session_id),
+                                self_mute: Some(user.self_mute),
+                                self_deaf: Some(user.self_deaf),
+                                mute: Some(user.mute),
+                                deaf: Some(user.deaf),
+                                suppress: Some(user.suppress),
+                                priority_speaker: Some(user.priority_speaker),
+                                recording: Some(user.recording),
+                                ..Default::default()
+                            };
+                            state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                        }
+                        debug!("Broadcast remote user state changed: session {}", session_id);
                     }
                     EdgeEvent::RemoteUserMoved { session_id, channel_id } => {
                         let msg = mumbleproto::UserState {

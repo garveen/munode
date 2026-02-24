@@ -53,6 +53,7 @@ pub struct RemoteUser {
     pub self_deaf: bool,
     pub priority_speaker: bool,
     pub recording: bool,
+    pub listening_channels: Vec<u32>,
 }
 
 impl From<&GlobalSessionProto> for RemoteUser {
@@ -72,6 +73,7 @@ impl From<&GlobalSessionProto> for RemoteUser {
             self_deaf: proto.self_deaf.unwrap_or(false),
             priority_speaker: proto.priority_speaker.unwrap_or(false),
             recording: proto.recording.unwrap_or(false),
+            listening_channels: vec![],
         }
     }
 }

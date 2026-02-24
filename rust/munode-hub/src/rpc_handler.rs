@@ -1582,6 +1582,7 @@ impl RpcHandler {
         if let Some(json_str) = &notification.unknown_params_json {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
                 let session_id = v["session_id"].as_u64().unwrap_or(0) as u32;
+                let source_edge_id = v["edge_id"].as_u64().unwrap_or(0) as u32;
                 if session_id == 0 {
                     return;
                 }
@@ -1611,6 +1612,42 @@ impl RpcHandler {
                         session.recording = rec;
                     }
                     sessions.add_session(session).await;
+                }
+
+                // Broadcast state change to other edges
+                let broadcast_json = serde_json::json!({
+                    "session_id": session_id,
+                    "edge_id": source_edge_id,
+                    "self_mute": v["self_mute"],
+                    "self_deaf": v["self_deaf"],
+                    "mute": v["mute"],
+                    "deaf": v["deaf"],
+                    "suppress": v["suppress"],
+                    "priority_speaker": v["priority_speaker"],
+                    "recording": v["recording"],
+                    "listening_channel_add": v["listening_channel_add"],
+                    "listening_channel_remove": v["listening_channel_remove"],
+                });
+                let forward = TypedRpcNotification {
+                    method: "hub.userStateBroadcast".to_string(),
+                    timestamp: Some(current_millis() as i64),
+                    unknown_params_json: Some(broadcast_json.to_string()),
+                    ..Default::default()
+                };
+                let packet = EdgeHubPacket {
+                    r#type: PacketType::RpcNotification as i32,
+                    rpc_notification: Some(forward),
+                    ..Default::default()
+                };
+                let data = packet.encode_to_vec();
+                let edges = self.state.edge_connections.read().await;
+                for (edge_id, sender) in edges.iter() {
+                    if *edge_id == source_edge_id {
+                        continue;
+                    }
+                    if let Err(e) = sender.try_send(data.clone()) {
+                        warn!("Failed to broadcast user state to edge {}: {}", edge_id, e);
+                    }
                 }
             }
         }

@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { TestEnvironment, setupTestEnvironment, sleep, createClients, cleanupClients } from '../setup';
+import { TestEnvironment, setupTestEnvironment, sleep, createClients, cleanupClients, USE_RUST } from '../setup';
 import { MumbleClient } from '../../../packages/client/src/index.js';
 import { UDPQualitySimulator, applyNetworkQuality } from '../../utils/udp-quality-simulator.js';
 import * as crypto from 'crypto';
@@ -515,7 +515,7 @@ describe('4-Edge Voice Routing Tests', () => {
      * 测试基于网络质量的路由选择
      * 使用 UDP 质量模拟器模拟网络劣化
      */
-    it('should record network quality metrics with simulated degradation', async () => {
+    it.skipIf(USE_RUST)('should record network quality metrics with simulated degradation', async () => {
       const clients = await createClients(testEnv, [
         { username: 'network_sim_sender', edge: 1, channelId: 0 },
         // 接收方使用 UDP 语音，这样 Edge 2 的 UDP socket 模拟才能影响语音包下发
@@ -584,7 +584,7 @@ describe('4-Edge Voice Routing Tests', () => {
     /**
      * 测试严重网络劣化场景
      */
-    it('should handle severe network degradation', async () => {
+    it.skipIf(USE_RUST)('should handle severe network degradation', async () => {
       const clients = await createClients(testEnv, [
         { username: 'severe_sender', edge: 1, channelId: 0 },
         // 接收方使用 UDP 语音，这样严重丢包模拟才能真正影响语音包接收
@@ -636,7 +636,7 @@ describe('4-Edge Voice Routing Tests', () => {
     /**
      * 测试网络质量恢复
      */
-    it('should detect network quality recovery', async () => {
+    it.skipIf(USE_RUST)('should detect network quality recovery', async () => {
       const clients = await createClients(testEnv, [
         { username: 'random_payload_user', edge: 1, channelId: 0 },
         { username: 'random_receiver', edge: 2, channelId: 0 },

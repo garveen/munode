@@ -12,6 +12,7 @@ use tokio_tungstenite::tungstenite;
 use tracing::{debug, error, info, warn};
 
 use munode_common::config::{EdgeConfig, HubServerConfig};
+use munode_protocol::message_type::MessageType;
 use munode_protocol::hubedge::{
     self, EdgeAuthenticateUserParams, EdgeFullSyncParams,
     EdgeHandleAclParams, EdgePluginDataTransmissionParams,
@@ -320,6 +321,7 @@ impl HubClient {
                         self_deaf: params.self_deaf.unwrap_or(false),
                         priority_speaker: params.priority_speaker.unwrap_or(false),
                         recording: params.recording.unwrap_or(false),
+                        listening_channels: vec![],
                     };
                     info!("Remote user joined: {} (session {})", user.username, user.session_id);
                     self.edge_state.channel_manager.upsert_remote_user(user.clone()).await;
@@ -336,11 +338,58 @@ impl HubClient {
             }
             "hub.userRemoveBroadcast" => {
                 if let Some(params) = &notification.user_remove_broadcast {
-                    info!("Remote user removed: session {}", params.session);
-                    self.edge_state.channel_manager.remove_remote_user(params.session).await;
+                    let target_session = params.session;
+                    info!("User removed: session {}", target_session);
+                    // If the kicked user is a LOCAL client on this edge, send them UserRemove
+                    if let Some(sender) = self.edge_state.client_manager.get_sender(target_session).await {
+                        let msg = crate::handler::build_user_remove_msg(
+                            target_session,
+                            params.reason.as_deref(),
+                        );
+                        sender.send_message(MessageType::UserRemove, &msg).await;
+                    }
+                    // Remove from remote user tracking and broadcast removal to local clients
+                    self.edge_state.channel_manager.remove_remote_user(target_session).await;
                     self.edge_state.emit(EdgeEvent::RemoteUserLeft {
-                        session_id: params.session,
+                        session_id: target_session,
                     });
+                }
+            }
+            "hub.userStateBroadcast" => {
+                // User state changed on another edge (mute, deaf, etc.)
+                if let Some(json_str) = &notification.unknown_params_json {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        let session_id = v["session_id"].as_u64().unwrap_or(0) as u32;
+                        if session_id > 0 {
+                            if let Some(mut user) = self.edge_state.channel_manager.get_remote_user(session_id).await {
+                                if let Some(b) = v["self_mute"].as_bool() { user.self_mute = b; }
+                                if let Some(b) = v["self_deaf"].as_bool() { user.self_deaf = b; }
+                                if let Some(b) = v["mute"].as_bool() { user.mute = b; }
+                                if let Some(b) = v["deaf"].as_bool() { user.deaf = b; }
+                                if let Some(b) = v["suppress"].as_bool() { user.suppress = b; }
+                                if let Some(b) = v["priority_speaker"].as_bool() { user.priority_speaker = b; }
+                                if let Some(b) = v["recording"].as_bool() { user.recording = b; }
+                                // Handle listening channel changes
+                                if let Some(arr) = v["listening_channel_add"].as_array() {
+                                    for ch in arr {
+                                        if let Some(ch_id) = ch.as_u64().map(|n| n as u32) {
+                                            if !user.listening_channels.contains(&ch_id) {
+                                                user.listening_channels.push(ch_id);
+                                            }
+                                        }
+                                    }
+                                }
+                                if let Some(arr) = v["listening_channel_remove"].as_array() {
+                                    let remove: Vec<u32> = arr.iter()
+                                        .filter_map(|ch| ch.as_u64().map(|n| n as u32))
+                                        .collect();
+                                    user.listening_channels.retain(|ch| !remove.contains(ch));
+                                }
+                                self.edge_state.channel_manager.upsert_remote_user(user).await;
+                                self.edge_state.emit(EdgeEvent::RemoteUserStateChanged { session_id });
+                            }
+                        }
+                    }
                 }
             }
             "hub.userMoved" => {
