@@ -1660,39 +1660,98 @@ impl RpcHandler {
     async fn on_channel_state(&self, notification: &TypedRpcNotification) {
         if let Some(json_str) = &notification.unknown_params_json {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                let channel_id = v["channel_id"].as_u64().map(|n| n as u32);
-                let name = v["name"].as_str().map(String::from);
-                let parent_id = v["parent_id"].as_u64().map(|n| n as u32);
+                // Support both flat format (Rust edge) and nested channelState (TS edge)
+                let cs = if v["channelState"].is_object() { &v["channelState"] } else { &v };
+                let channel_id = cs["channel_id"].as_u64().map(|n| n as u32);
 
                 if let Some(ch_id) = channel_id {
-                    // Update existing channel
+                    // Handle links_add / links_remove first
+                    let links_add: Vec<u32> = cs["links_add"].as_array()
+                        .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u32)).collect())
+                        .unwrap_or_default();
+                    let links_remove: Vec<u32> = cs["links_remove"].as_array()
+                        .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u32)).collect())
+                        .unwrap_or_default();
+
+                    for target_id in &links_add {
+                        if let Err(e) = self.state.database.add_channel_link(ch_id, *target_id) {
+                            warn!("Failed to add channel link {} <-> {}: {}", ch_id, target_id, e);
+                        } else {
+                            // Update in-memory channel store both directions
+                            if let Some(mut ch) = self.state.channel_store.get_channel(ch_id).await {
+                                ch.links.insert(*target_id);
+                                self.state.channel_store.update_channel(ch).await;
+                            }
+                            if let Some(mut peer) = self.state.channel_store.get_channel(*target_id).await {
+                                peer.links.insert(ch_id);
+                                self.state.channel_store.update_channel(peer).await;
+                            }
+                        }
+                    }
+                    for target_id in &links_remove {
+                        if let Err(e) = self.state.database.remove_channel_link(ch_id, *target_id) {
+                            warn!("Failed to remove channel link {} <-> {}: {}", ch_id, target_id, e);
+                        } else {
+                            if let Some(mut ch) = self.state.channel_store.get_channel(ch_id).await {
+                                ch.links.remove(target_id);
+                                self.state.channel_store.update_channel(ch).await;
+                            }
+                            if let Some(mut peer) = self.state.channel_store.get_channel(*target_id).await {
+                                peer.links.remove(&ch_id);
+                                self.state.channel_store.update_channel(peer).await;
+                            }
+                        }
+                    }
+
+                    // Update regular channel fields if present
                     if let Some(mut ch) = self.state.channel_store.get_channel(ch_id).await {
-                        if let Some(n) = &name {
-                            ch.name = n.clone();
+                        if let Some(n) = cs["name"].as_str() {
+                            ch.name = n.to_string();
                         }
-                        if let Some(pid) = parent_id {
-                            ch.parent_id = Some(pid);
+                        if let Some(pid) = cs["parent"].as_u64().or_else(|| cs["parent_id"].as_u64()) {
+                            ch.parent_id = Some(pid as u32);
                         }
-                        if let Some(pos) = v["position"].as_i64() {
+                        if let Some(pos) = cs["position"].as_i64() {
                             ch.position = pos as i32;
                         }
-                        if let Some(desc) = v["description"].as_str() {
+                        if let Some(desc) = cs["description"].as_str() {
                             ch.description = desc.to_string();
                         }
                         self.state.channel_store.update_channel(ch).await;
+                    }
 
-                        // Broadcast to all edges
-                        if let Some(ch) = self.state.channel_store.get_channel(ch_id).await {
+                    // Broadcast updated channel to all edges
+                    if let Some(ch) = self.state.channel_store.get_channel(ch_id).await {
+                        let proto = ChannelDataProto {
+                            channel_id: ch.id,
+                            name: ch.name,
+                            parent_id: ch.parent_id,
+                            description: Some(ch.description),
+                            position: Some(ch.position),
+                            max_users: if ch.max_users > 0 { Some(ch.max_users) } else { None },
+                            temporary: Some(ch.temporary),
+                            inherit_acl: Some(ch.inherit_acl),
+                            links: ch.links.iter().copied().collect(),
+                        };
+                        self.broadcast_notification("hub.channelUpdated", |n| {
+                            n.channel_updated = Some(HubChannelUpdatedParams { channel: proto });
+                        }).await;
+                    }
+
+                    // For link changes, also broadcast the peer channels so both ends are synced
+                    let all_peers: std::collections::HashSet<u32> = links_add.iter().chain(links_remove.iter()).copied().collect();
+                    for peer_id in all_peers {
+                        if let Some(peer) = self.state.channel_store.get_channel(peer_id).await {
                             let proto = ChannelDataProto {
-                                channel_id: ch.id,
-                                name: ch.name,
-                                parent_id: ch.parent_id,
-                                description: Some(ch.description),
-                                position: Some(ch.position),
-                                max_users: if ch.max_users > 0 { Some(ch.max_users) } else { None },
-                                temporary: Some(ch.temporary),
-                                inherit_acl: Some(ch.inherit_acl),
-                                links: ch.links.iter().copied().collect(),
+                                channel_id: peer.id,
+                                name: peer.name,
+                                parent_id: peer.parent_id,
+                                description: Some(peer.description),
+                                position: Some(peer.position),
+                                max_users: if peer.max_users > 0 { Some(peer.max_users) } else { None },
+                                temporary: Some(peer.temporary),
+                                inherit_acl: Some(peer.inherit_acl),
+                                links: peer.links.iter().copied().collect(),
                             };
                             self.broadcast_notification("hub.channelUpdated", |n| {
                                 n.channel_updated = Some(HubChannelUpdatedParams { channel: proto });

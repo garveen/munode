@@ -428,6 +428,39 @@ impl HubClient {
                     });
                 }
             }
+            "hub.syncVoiceTarget" => {
+                // Voice target synced from another edge via Hub
+                if let Some(params) = &notification.sync_voice_target {
+                    let client_session = params.client_session;
+                    let target_id = params.target_id;
+                    // Parse config_json
+                    if let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&params.config_json) {
+                        use crate::state::{VoiceTargetConfig, VoiceTargetChannelConfig};
+                        let sessions: Vec<u32> = cfg["sessions"].as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
+                            .unwrap_or_default();
+                        let channels: Vec<VoiceTargetChannelConfig> = cfg["channels"].as_array()
+                            .map(|a| a.iter().filter_map(|ch| {
+                                let ch_id = ch["channel_id"].as_u64()? as u32;
+                                Some(VoiceTargetChannelConfig {
+                                    channel_id: ch_id,
+                                    links: ch["links"].as_bool().unwrap_or(false),
+                                    children: ch["children"].as_bool().unwrap_or(false),
+                                    group: ch["group"].as_str().map(|s| s.to_string()),
+                                })
+                            }).collect())
+                            .unwrap_or_default();
+                        let mut vt_cache = self.edge_state.voice_targets.lock().await;
+                        let session_vts = vt_cache.entry(client_session).or_default();
+                        if sessions.is_empty() && channels.is_empty() {
+                            session_vts.remove(&target_id);
+                        } else {
+                            session_vts.insert(target_id, VoiceTargetConfig { sessions, channels });
+                        }
+                        debug!("Synced voice target {} for session {}", target_id, client_session);
+                    }
+                }
+            }
             "hub.relayedVoice" => {
                 // Voice packet relayed from another edge via Hub
                 if let Some(json_str) = &notification.unknown_params_json {
@@ -906,6 +939,36 @@ impl HubClient {
 
         response.edge_save_channel
             .ok_or_else(|| anyhow::anyhow!("No edge_save_channel in response"))
+    }
+
+    /// Notify Hub about a channel state change (including links_add/links_remove).
+    pub async fn notify_channel_state(
+        &self,
+        channel_id: u32,
+        links_add: Vec<u32>,
+        links_remove: Vec<u32>,
+    ) {
+        let edge_id = self.edge_id().await;
+        let params_json = serde_json::json!({
+            "edge_id": edge_id,
+            "channel_id": channel_id,
+            "links_add": links_add,
+            "links_remove": links_remove,
+        });
+        let notification = TypedRpcNotification {
+            method: "hub.handleChannelState".to_string(),
+            timestamp: Some(current_millis() as i64),
+            unknown_params_json: Some(params_json.to_string()),
+            ..Default::default()
+        };
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+        if let Err(e) = self.send_packet(&packet).await {
+            warn!("Failed to notify Hub of channel state: {}", e);
+        }
     }
 
     /// Notify Hub about a channel removal request.

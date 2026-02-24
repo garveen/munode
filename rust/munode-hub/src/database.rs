@@ -341,6 +341,30 @@ impl Database {
         Ok(())
     }
 
+    /// Add a bidirectional channel link to the database.
+    pub fn add_channel_link(&self, ch1: u32, ch2: u32) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO channel_links (channel_id, target_id) VALUES (?1, ?2)",
+            params![ch1, ch2],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO channel_links (channel_id, target_id) VALUES (?1, ?2)",
+            params![ch2, ch1],
+        )?;
+        Ok(())
+    }
+
+    /// Remove a bidirectional channel link from the database.
+    pub fn remove_channel_link(&self, ch1: u32, ch2: u32) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM channel_links WHERE (channel_id = ?1 AND target_id = ?2) OR (channel_id = ?2 AND target_id = ?1)",
+            params![ch1, ch2],
+        )?;
+        Ok(())
+    }
+
     /// Delete a channel by ID.
     pub fn delete_channel(&self, channel_id: u32) -> Result<()> {
         let conn = self.conn.lock().unwrap();

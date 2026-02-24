@@ -469,17 +469,22 @@ async fn handle_client_connection(
                                             }
                                         }
                                     }
-                                    // Send to remote edges via Hub relay
+                                    // Send to remote edges via Hub relay (whisper: include target sessions)
                                     let remote_users = edge_state.channel_manager.get_all_remote_users().await;
-                                    let mut by_edge: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
+                                    let mut by_edge: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
                                     for ru in &remote_users {
-                                        if target_sessions.contains(&ru.session_id) {
-                                            by_edge.insert(ru.edge_id, true);
+                                        if !ru.deaf && !ru.self_deaf && target_sessions.contains(&ru.session_id) {
+                                            by_edge.entry(ru.edge_id).or_default().push(ru.session_id);
                                         }
                                     }
-                                    for target_edge_id in by_edge.into_keys() {
+                                    for (target_edge_id, sessions_on_edge) in by_edge {
+                                        // Relay format: [4B sender_session][4B target_count][4B*n target_sessions][voice_payload]
                                         let mut relay_payload = Vec::new();
                                         relay_payload.extend_from_slice(&sid.to_be_bytes());
+                                        relay_payload.extend_from_slice(&(sessions_on_edge.len() as u32).to_be_bytes());
+                                        for s in &sessions_on_edge {
+                                            relay_payload.extend_from_slice(&s.to_be_bytes());
+                                        }
                                         relay_payload.extend_from_slice(&frame.payload);
                                         hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                                     }
@@ -527,8 +532,10 @@ async fn handle_client_connection(
                                     }
                                 }
                                 for target_edge_id in by_edge.into_keys() {
+                                    // Normal broadcast: 0 target_count = deliver to all in linked channels
                                     let mut relay_payload = Vec::new();
                                     relay_payload.extend_from_slice(&sid.to_be_bytes());
+                                    relay_payload.extend_from_slice(&0u32.to_be_bytes()); // 0 = broadcast
                                     relay_payload.extend_from_slice(&frame.payload);
                                     hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                                 }
@@ -731,23 +738,31 @@ async fn handle_client_connection(
                     }
                 }
                 MessageType::ChannelState if client_state == ClientState::Ready => {
-                    // Client requesting channel create/edit - forward to Hub via saveChannel RPC
+                    // Client requesting channel create/edit - forward to Hub
                     let ch_state = mumbleproto::ChannelState::decode(&frame.payload[..])?;
                     debug!("ChannelState from {}: channel_id={:?}, name={:?}", peer_addr, ch_state.channel_id, ch_state.name);
 
                     let hub = hub_client.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = hub.save_channel(
-                            ch_state.channel_id,
-                            ch_state.parent,
-                            ch_state.name.as_deref(),
-                            ch_state.description.as_deref(),
-                            ch_state.position,
-                            ch_state.max_users,
-                        ).await {
-                            warn!("Failed to forward ChannelState to Hub: {}", e);
+                    let has_links = !ch_state.links_add.is_empty() || !ch_state.links_remove.is_empty();
+                    if has_links {
+                        // Link/unlink request - send via notification
+                        if let Some(ch_id) = ch_state.channel_id {
+                            hub.notify_channel_state(ch_id, ch_state.links_add, ch_state.links_remove).await;
                         }
-                    });
+                    } else {
+                        tokio::spawn(async move {
+                            if let Err(e) = hub.save_channel(
+                                ch_state.channel_id,
+                                ch_state.parent,
+                                ch_state.name.as_deref(),
+                                ch_state.description.as_deref(),
+                                ch_state.position,
+                                ch_state.max_users,
+                            ).await {
+                                warn!("Failed to forward ChannelState to Hub: {}", e);
+                            }
+                        });
+                    }
                 }
                 MessageType::ChannelRemove if client_state == ClientState::Ready => {
                     // Client requesting channel removal - forward to Hub
@@ -1422,14 +1437,31 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                     }
                     EdgeEvent::RelayedVoice { voice_packet } => {
                         // Voice relayed from another edge via Hub TCP.
-                        // Format: sender_session (4 bytes BE) + voice data.
-                        if voice_packet.len() < 5 {
+                        // New format: [4B sender_session][4B target_count][4B*n target_sessions][voice_payload]
+                        // target_count=0 means normal broadcast (all users in linked channels)
+                        if voice_packet.len() < 8 {
                             continue;
                         }
                         let sender_session = u32::from_be_bytes([
                             voice_packet[0], voice_packet[1], voice_packet[2], voice_packet[3],
                         ]);
-                        let voice_data = &voice_packet[4..];
+                        let target_count = u32::from_be_bytes([
+                            voice_packet[4], voice_packet[5], voice_packet[6], voice_packet[7],
+                        ]) as usize;
+                        let header_size = 8 + target_count * 4;
+                        if voice_packet.len() < header_size {
+                            continue;
+                        }
+                        let mut target_sessions: std::collections::HashSet<u32> = std::collections::HashSet::new();
+                        for i in 0..target_count {
+                            let off = 8 + i * 4;
+                            let s = u32::from_be_bytes([
+                                voice_packet[off], voice_packet[off+1], voice_packet[off+2], voice_packet[off+3],
+                            ]);
+                            target_sessions.insert(s);
+                        }
+                        let voice_data = &voice_packet[header_size..];
+                        let is_broadcast = target_count == 0;
 
                         // Find what channel the remote sender is in
                         let sender_channel_id = if let Some(ru) = state.channel_manager.get_remote_user(sender_session).await {
@@ -1439,10 +1471,6 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                             continue;
                         };
 
-                        // Get all linked channels (for channel link broadcast support)
-                        let linked_channels = state.channel_manager.get_all_linked_channels(sender_channel_id).await;
-
-                        // Deliver to local clients in all linked channels via TCP UdpTunnel
                         // Inject sender_session into the forwarded voice packet
                         let forwarded = inject_session_into_voice(voice_data, sender_session);
                         let mut buf = bytes::BytesMut::new();
@@ -1450,20 +1478,38 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
                         bytes::BufMut::put_slice(&mut buf, &forwarded);
                         let frame = buf.to_vec();
-                        for ch_id in &linked_channels {
-                            let local_targets = state.client_manager.get_channel_sessions(*ch_id).await;
-                            for target_session in local_targets {
-                                if let Some(target_client) = state.client_manager.get_client(target_session).await {
+
+                        if is_broadcast {
+                            // Normal broadcast: deliver to all clients in linked channels
+                            let linked_channels = state.channel_manager.get_all_linked_channels(sender_channel_id).await;
+                            for ch_id in &linked_channels {
+                                let local_targets = state.client_manager.get_channel_sessions(*ch_id).await;
+                                for target_session in local_targets {
+                                    if let Some(target_client) = state.client_manager.get_client(target_session).await {
+                                        if target_client.deaf || target_client.self_deaf {
+                                            continue;
+                                        }
+                                    }
+                                    if let Some(sender) = state.client_manager.get_sender(target_session).await {
+                                        sender.send_raw(frame.clone()).await;
+                                    }
+                                }
+                            }
+                            debug!("Delivered relayed broadcast from session {} to linked channels", sender_session);
+                        } else {
+                            // Whisper: deliver only to specified target sessions
+                            for target_session in &target_sessions {
+                                if let Some(target_client) = state.client_manager.get_client(*target_session).await {
                                     if target_client.deaf || target_client.self_deaf {
                                         continue;
                                     }
                                 }
-                                if let Some(sender) = state.client_manager.get_sender(target_session).await {
+                                if let Some(sender) = state.client_manager.get_sender(*target_session).await {
                                     sender.send_raw(frame.clone()).await;
                                 }
                             }
+                            debug!("Delivered relayed whisper from session {} to {} targets", sender_session, target_sessions.len());
                         }
-                        debug!("Delivered relayed voice from session {} to {} linked channels", sender_session, linked_channels.len());
                     }
                 }
             }
