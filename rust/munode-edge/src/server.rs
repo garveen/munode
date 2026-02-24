@@ -396,11 +396,12 @@ async fn handle_client_connection(
                             if client.suppress && voice_target != 31 {
                                 // Silently drop the packet
                             } else if voice_target == 31 {
-                                // Loopback: send only back to the sender
+                                // Loopback: send back to the sender (inject session ID per protocol)
+                                let forwarded = inject_session_into_voice(&frame.payload, sid);
                                 let mut buf = BytesMut::new();
                                 bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-                                bytes::BufMut::put_u32(&mut buf, frame.payload.len() as u32);
-                                bytes::BufMut::put_slice(&mut buf, &frame.payload);
+                                bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
+                                bytes::BufMut::put_slice(&mut buf, &forwarded);
                                 let data = buf.to_vec();
                                 if let Some(sender_tx) = edge_state.client_manager.get_sender(sid).await {
                                     sender_tx.send_raw(data).await;
@@ -451,11 +452,12 @@ async fn handle_client_connection(
                                             }
                                         }
                                     }
-                                    // Build frame
+                                    // Build frame with sender session injected
+                                    let forwarded = inject_session_into_voice(&frame.payload, sid);
                                     let mut buf = BytesMut::new();
                                     bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-                                    bytes::BufMut::put_u32(&mut buf, frame.payload.len() as u32);
-                                    bytes::BufMut::put_slice(&mut buf, &frame.payload);
+                                    bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
+                                    bytes::BufMut::put_slice(&mut buf, &forwarded);
                                     let data = buf.to_vec();
                                     // Send to local targets
                                     for target_session in &target_sessions {
@@ -488,11 +490,12 @@ async fn handle_client_connection(
                                     .get_all_linked_channels(client.channel_id)
                                     .await;
 
-                                // Build frame once
+                                // Build frame once with sender session injected
+                                let forwarded = inject_session_into_voice(&frame.payload, sid);
                                 let mut buf = BytesMut::new();
                                 bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-                                bytes::BufMut::put_u32(&mut buf, frame.payload.len() as u32);
-                                bytes::BufMut::put_slice(&mut buf, &frame.payload);
+                                bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
+                                bytes::BufMut::put_slice(&mut buf, &forwarded);
                                 let data = buf.to_vec();
 
                                 // Local clients in all linked channels
@@ -1263,6 +1266,36 @@ async fn broadcast_codec_version(edge_state: &Arc<EdgeState>) {
     edge_state.client_manager.broadcast(MessageType::CodecVersion, &msg, None).await;
 }
 
+/// Encode a u32 as a Mumble varint (NOT protobuf varint).
+/// Mumble varint format: 0x00-0x7F = 1 byte, 0x80-0x3FFF = 2 bytes (10xxxxxx), etc.
+fn encode_mumble_varint(value: u32) -> Vec<u8> {
+    if value < 0x80 {
+        vec![value as u8]
+    } else if value < 0x4000 {
+        vec![((value >> 8) | 0x80) as u8, (value & 0xFF) as u8]
+    } else if value < 0x200000 {
+        vec![((value >> 16) | 0xC0) as u8, ((value >> 8) & 0xFF) as u8, (value & 0xFF) as u8]
+    } else {
+        vec![0xF0, ((value >> 24) & 0xFF) as u8, ((value >> 16) & 0xFF) as u8, ((value >> 8) & 0xFF) as u8, (value & 0xFF) as u8]
+    }
+}
+
+/// Inject sender session ID into a voice packet for forwarding.
+/// Client sends: [header(1B)][sequence_varint][audio_data]
+/// Server forwards: [header(1B)][sender_session_varint][sequence_varint][audio_data]
+fn inject_session_into_voice(payload: &[u8], sender_session: u32) -> Vec<u8> {
+    if payload.is_empty() {
+        return Vec::new();
+    }
+    let header = payload[0];
+    let session_varint = encode_mumble_varint(sender_session);
+    let mut result = Vec::with_capacity(1 + session_varint.len() + payload.len() - 1);
+    result.push(header);
+    result.extend_from_slice(&session_varint);
+    result.extend_from_slice(&payload[1..]);
+    result
+}
+
 /// Encode an IP address string into bytes (4 bytes for IPv4, 16 bytes for IPv6).
 fn encode_ip_address(addr: &str) -> Vec<u8> {
     if let Ok(ip) = addr.parse::<std::net::IpAddr>() {
@@ -1410,10 +1443,12 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         let linked_channels = state.channel_manager.get_all_linked_channels(sender_channel_id).await;
 
                         // Deliver to local clients in all linked channels via TCP UdpTunnel
+                        // Inject sender_session into the forwarded voice packet
+                        let forwarded = inject_session_into_voice(voice_data, sender_session);
                         let mut buf = bytes::BytesMut::new();
                         bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-                        bytes::BufMut::put_u32(&mut buf, voice_data.len() as u32);
-                        bytes::BufMut::put_slice(&mut buf, voice_data);
+                        bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
+                        bytes::BufMut::put_slice(&mut buf, &forwarded);
                         let frame = buf.to_vec();
                         for ch_id in &linked_channels {
                             let local_targets = state.client_manager.get_channel_sessions(*ch_id).await;

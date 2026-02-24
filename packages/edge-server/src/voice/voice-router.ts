@@ -1586,52 +1586,12 @@ export class VoiceRouter extends TypedEventEmitter<VoiceRouterEvents> {
   }
 
   /**
-   * Send voice packet to client via TCP tunnel
+   * Send voice packet to client via TCP tunnel (no encryption - TCP is TLS-protected)
    */
-  private async sendVoicePacketViaTCP(client: ClientInfo, voiceData: Buffer): Promise<void> {
-    // Voice data doesn't need encryption because TCP connection is TLS-encrypted
-    // But we still need to encrypt payload with OCB2 to maintain protocol consistency
-
-    this.logger.debug(`[TCP-VOICE] Sending voice via TCP to ${client.username} (${client.session}), voice data size: ${voiceData.length}`);
-
-    try {
-      let encrypted: Buffer;
-
-      // Try Worker Pool first, fallback to local crypto
-      if (this.cryptoWorkerPool && this.vhostName) {
-        try {
-          const compositeKey = `${this.vhostName}:${client.session}`;
-          encrypted = await this.cryptoWorkerPool.encrypt(compositeKey, voiceData);
-          this.logger.debug(`[TCP-VOICE] Encrypted voice data size: ${encrypted.length}`);
-        } catch (error) {
-          this.logger.warn(`Worker Pool encrypt failed for TCP session ${client.session}, falling back to local crypto:`, error);
-          const crypto = this.clientCryptos.get(client.session);
-          if (!crypto) {
-            this.logger.warn(`No crypto for client ${client.session}, voice packet not sent via TCP`);
-            return;
-          }
-          encrypted = crypto.encrypt(voiceData);
-          this.logger.debug(`[TCP-VOICE] Encrypted voice data size: ${encrypted.length}`);
-        }
-      } else {
-        // Fallback to local crypto
-        const crypto = this.clientCryptos.get(client.session);
-        if (!crypto) {
-          this.logger.warn(`No crypto for client ${client.session}, voice packet not sent via TCP`);
-          return;
-        }
-        encrypted = crypto.encrypt(voiceData);
-        this.logger.debug(`[TCP-VOICE] Encrypted voice data size: ${encrypted.length}`);
-      }
-
-      // Wrap encrypted voice data in UDPTunnel protobuf message
-      // So client can parse it correctly when receiving
-      this.logger.debug(`[TCP-VOICE] Emitting sendTCPVoicePacket event for ${client.username} (${client.session}), encrypted size: ${encrypted.length}`);
-      this.emit('sendTCPVoicePacket', client.session, encrypted);
-      this.logger.debug(`[TCP-VOICE] Event emitted successfully`);
-    } catch (error) {
-      this.logger.error(`Failed to encrypt voice packet for client ${client.session}:`, error);
-    }
+  private sendVoicePacketViaTCP(client: ClientInfo, voiceData: Buffer): void {
+    // TCP connection is already TLS-encrypted; no need for OCB2.
+    this.logger.debug(`[TCP-VOICE] Sending voice via TCP to ${client.username} (${client.session}), size: ${voiceData.length}`);
+    this.emit('sendTCPVoicePacket', client.session, voiceData);
   }
   
   // ===== 缓存管理方法（事件驱动，主动重建） =====

@@ -267,28 +267,26 @@ export class ConnectionManager {
    */
   async sendVoicePacket(packet: Buffer): Promise<void> {
     console.log(`[ConnectionManager] sendVoicePacket: size=${packet.length}, isUsingTcpVoice=${this.isUsingTcpVoice()}`);
-    
-    // 加密语音包（如果加密已初始化）
-    let encryptedPacket = packet;
-    if (this.client.getCryptoManager().isInitialized()) {
-      encryptedPacket = this.client.getCryptoManager().encrypt(packet);
-      console.log(`[ConnectionManager] Voice packet encrypted: ${packet.length} -> ${encryptedPacket.length} bytes`);
-    }
 
     if (this.isUsingTcpVoice()) {
-      // 使用TCP隧道发送语音包
-      console.log('[ConnectionManager] Using TCP tunnel for voice');
-      return this.sendTCPVoicePacket(encryptedPacket);
+      // TCP is already TLS-encrypted; no OCB2 encryption needed
+      console.log('[ConnectionManager] Using TCP tunnel for voice (no OCB2)');
+      return this.sendTCPVoicePacket(packet);
     } else {
+      // UDP requires OCB2 encryption
+      let encryptedPacket = packet;
+      if (this.client.getCryptoManager().isInitialized()) {
+        encryptedPacket = this.client.getCryptoManager().encrypt(packet);
+        console.log(`[ConnectionManager] Voice packet encrypted for UDP: ${packet.length} -> ${encryptedPacket.length} bytes`);
+      }
       try {
-        // 尝试使用UDP发送
         return await this.sendUDP(encryptedPacket);
       } catch (error) {
-        // UDP失败，降级到TCP
+        // UDP failed, fall back to TCP (no encryption for TCP)
         console.warn('UDP voice send failed, falling back to TCP:', error);
         this.udpFailed = true;
         this.useTcpVoice = true;
-        return this.sendTCPVoicePacket(encryptedPacket);
+        return this.sendTCPVoicePacket(packet);
       }
     }
   }
@@ -674,17 +672,10 @@ export class ConnectionManager {
         return;
       }
       
-      // UDP隧道中的数据与UDP包一样，是加密的，需要先解密
-      let decryptedData: Buffer = packetBuffer;
-      if (this.client.getCryptoManager().isInitialized()) {
-        try {
-          const decrypted = this.client.getCryptoManager().decrypt(packetBuffer);
-          decryptedData = Buffer.from(decrypted);
-        } catch (error) {
-          console.warn('Failed to decrypt UDP tunnel packet:', error);
-          return;
-        }
-      }
+      // TCP tunnel voice packets are NOT encrypted with OCB2-AES128.
+      // The TCP connection is already protected by TLS, so the voice data
+      // arrives in plaintext.  Only actual UDP packets need OCB2 decryption.
+      const decryptedData: Buffer = packetBuffer;
       
       // 解析语音包
       const voiceInfo = this.parseVoicePacket(decryptedData);
