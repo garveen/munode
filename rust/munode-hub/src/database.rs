@@ -422,9 +422,40 @@ impl Database {
     /// Update the last channel for a user.
     pub fn save_user_last_channel(&self, user_id: u32, channel_id: u32) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        // Use INSERT OR REPLACE to handle both existing and new user rows
         conn.execute(
             "UPDATE users SET last_channel = ?1 WHERE id = ?2",
             params![channel_id, user_id],
+        )?;
+        // If no rows were updated (user not in DB), insert a minimal row
+        if conn.changes() == 0 {
+            conn.execute(
+                "INSERT OR IGNORE INTO users (id, username, pw_hash, last_channel, cert_hash) VALUES (?1, '', '', ?2, '')",
+                params![user_id, channel_id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Get the last channel for a user (by user_id). Returns 0 if not found.
+    pub fn get_user_last_channel(&self, user_id: u32) -> Result<u32> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT last_channel FROM users WHERE id = ?1")?;
+        let mut rows = stmt.query(params![user_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(row.get::<_, u32>(0).unwrap_or(0))
+        } else {
+            Ok(0)
+        }
+    }
+
+    /// Ensure an externally-authenticated user exists in the DB (creates if missing).
+    /// This allows last_channel to be tracked for ext-auth users.
+    pub fn upsert_ext_user(&self, user_id: u32, username: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO users (id, username, pw_hash, last_channel, cert_hash) VALUES (?1, ?2, '', 0, '')",
+            params![user_id, username],
         )?;
         Ok(())
     }

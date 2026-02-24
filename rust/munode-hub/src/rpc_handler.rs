@@ -358,7 +358,22 @@ impl RpcHandler {
                     // External auth succeeded — create session from response.
                     let user_id = resp.user_id.unwrap_or(0);
                     let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
-                    let channel_id = resp.channel_id.unwrap_or(config.auth.default_channel);
+                    // Ensure ext-auth user exists in DB so last_channel can be tracked
+                    if user_id > 0 {
+                        let _ = self.state.database.upsert_ext_user(user_id, &auth_username);
+                    }
+                    // Prefer ext auth's channel, fall back to DB last_channel, then default
+                    let channel_id = if let Some(ch) = resp.channel_id {
+                        ch
+                    } else if user_id > 0 {
+                        // Check DB for last_channel saved from previous session
+                        match self.state.database.get_user_last_channel(user_id) {
+                            Ok(last_ch) if last_ch > 0 => last_ch,
+                            _ => config.auth.default_channel,
+                        }
+                    } else {
+                        config.auth.default_channel
+                    };
 
                     let session_info = SessionInfo {
                         session_id: params.session_id,
@@ -511,7 +526,19 @@ impl RpcHandler {
                     let user_id = resp.user_id.unwrap_or(0);
                     let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
                     let groups = resp.groups.clone().unwrap_or_default();
-                    let channel_id = config.auth.default_channel;
+                    // Ensure ext-auth user exists in DB for last_channel tracking
+                    if user_id > 0 {
+                        let _ = self.state.database.upsert_ext_user(user_id, &auth_username);
+                    }
+                    // Check DB for last_channel saved from previous session
+                    let channel_id = if user_id > 0 {
+                        match self.state.database.get_user_last_channel(user_id) {
+                            Ok(last_ch) if last_ch > 0 => last_ch,
+                            _ => config.auth.default_channel,
+                        }
+                    } else {
+                        config.auth.default_channel
+                    };
 
                     let session_info = SessionInfo {
                         session_id: params.session_id,

@@ -258,6 +258,17 @@ async fn handle_client_connection(
                         channel_id
                     );
 
+                    // Check Speak permission for initial channel to determine suppress
+                    let initial_suppress = if auth_result.suppress.unwrap_or(false) {
+                        true // Hub explicitly set suppress
+                    } else {
+                        // Check if user can speak in their initial channel
+                        match hub_client.handle_permission_query(sid, channel_id).await {
+                            Ok(r) => r.permissions.map(|p| p & 0x8 == 0).unwrap_or(false), // no SPEAK = suppress
+                            Err(_) => false,
+                        }
+                    };
+
                     // Create local client
                     let client = ClientInfo {
                         session: sid,
@@ -267,7 +278,7 @@ async fn handle_client_connection(
                         state: ClientState::Authenticated,
                         mute: auth_result.mute.unwrap_or(false),
                         deaf: auth_result.deaf.unwrap_or(false),
-                        suppress: auth_result.suppress.unwrap_or(false),
+                        suppress: initial_suppress,
                         self_mute: auth_result.self_mute.unwrap_or(false),
                         self_deaf: auth_result.self_deaf.unwrap_or(false),
                         priority_speaker: auth_result.priority_speaker.unwrap_or(false),
