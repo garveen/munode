@@ -340,13 +340,15 @@ impl HubClient {
                 if let Some(params) = &notification.user_remove_broadcast {
                     let target_session = params.session;
                     info!("User removed: session {}", target_session);
-                    // If the kicked user is a LOCAL client on this edge, send them UserRemove
+                    // If the kicked user is a LOCAL client on this edge, send them UserRemove then close
                     if let Some(sender) = self.edge_state.client_manager.get_sender(target_session).await {
                         let msg = crate::handler::build_user_remove_msg(
                             target_session,
                             params.reason.as_deref(),
                         );
                         sender.send_message(MessageType::UserRemove, &msg).await;
+                        // Drop sender by removing client from manager - this closes the TCP connection
+                        self.edge_state.client_manager.remove_client(target_session).await;
                     }
                     // Remove from remote user tracking and broadcast removal to local clients
                     self.edge_state.channel_manager.remove_remote_user(target_session).await;
@@ -370,23 +372,25 @@ impl HubClient {
                                 if let Some(b) = v["priority_speaker"].as_bool() { user.priority_speaker = b; }
                                 if let Some(b) = v["recording"].as_bool() { user.recording = b; }
                                 // Handle listening channel changes
-                                if let Some(arr) = v["listening_channel_add"].as_array() {
-                                    for ch in arr {
-                                        if let Some(ch_id) = ch.as_u64().map(|n| n as u32) {
-                                            if !user.listening_channels.contains(&ch_id) {
-                                                user.listening_channels.push(ch_id);
-                                            }
-                                        }
-                                    }
-                                }
-                                if let Some(arr) = v["listening_channel_remove"].as_array() {
-                                    let remove: Vec<u32> = arr.iter()
+                                let listening_add: Vec<u32> = if let Some(arr) = v["listening_channel_add"].as_array() {
+                                    arr.iter()
                                         .filter_map(|ch| ch.as_u64().map(|n| n as u32))
-                                        .collect();
-                                    user.listening_channels.retain(|ch| !remove.contains(ch));
+                                        .filter(|&ch_id| !user.listening_channels.contains(&ch_id))
+                                        .collect()
+                                } else { vec![] };
+                                let listening_remove: Vec<u32> = if let Some(arr) = v["listening_channel_remove"].as_array() {
+                                    arr.iter().filter_map(|ch| ch.as_u64().map(|n| n as u32)).collect()
+                                } else { vec![] };
+                                for &ch_id in &listening_add {
+                                    user.listening_channels.push(ch_id);
                                 }
+                                user.listening_channels.retain(|ch| !listening_remove.contains(ch));
                                 self.edge_state.channel_manager.upsert_remote_user(user).await;
-                                self.edge_state.emit(EdgeEvent::RemoteUserStateChanged { session_id });
+                                self.edge_state.emit(EdgeEvent::RemoteUserStateChanged {
+                                    session_id,
+                                    listening_channel_add: listening_add,
+                                    listening_channel_remove: listening_remove,
+                                });
                             }
                         }
                     }

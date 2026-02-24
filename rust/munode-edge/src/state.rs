@@ -33,7 +33,11 @@ pub enum EdgeEvent {
     /// A remote user left.
     RemoteUserLeft { session_id: u32 },
     /// A remote user's state changed (mute, deaf, etc.).
-    RemoteUserStateChanged { session_id: u32 },
+    RemoteUserStateChanged {
+        session_id: u32,
+        listening_channel_add: Vec<u32>,
+        listening_channel_remove: Vec<u32>,
+    },
     /// A remote user moved channels.
     RemoteUserMoved { session_id: u32, channel_id: u32 },
     /// A channel was created.

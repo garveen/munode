@@ -144,6 +144,8 @@ export interface ClientEventMap {
   // 用户事件
   userJoined: (user: mumbleproto.UserState) => void;
   userLeft: (user: mumbleproto.UserRemove) => void;
+  userRemove: (user: mumbleproto.UserRemove) => void;
+  kicked: (data: mumbleproto.UserRemove) => void;
   userMoved: (user: mumbleproto.UserState, fromChannel: number, toChannel: number) => void;
   userStateChanged: (user: mumbleproto.UserState, changes: Partial<mumbleproto.UserState>) => void;
   userTalking: (session: number) => void;

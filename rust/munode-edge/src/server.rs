@@ -1418,9 +1418,9 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         state.client_manager.broadcast(MessageType::UserRemove, &msg, None).await;
                         debug!("Broadcast remote user left: session {}", session_id);
                     }
-                    EdgeEvent::RemoteUserStateChanged { session_id } => {
+                    EdgeEvent::RemoteUserStateChanged { session_id, listening_channel_add, listening_channel_remove } => {
                         if let Some(user) = state.channel_manager.get_remote_user(session_id).await {
-                            let msg = mumbleproto::UserState {
+                            let mut msg = mumbleproto::UserState {
                                 session: Some(session_id),
                                 self_mute: Some(user.self_mute),
                                 self_deaf: Some(user.self_deaf),
@@ -1431,6 +1431,12 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                                 recording: Some(user.recording),
                                 ..Default::default()
                             };
+                            if !listening_channel_add.is_empty() {
+                                msg.listening_channel_add = listening_channel_add;
+                            }
+                            if !listening_channel_remove.is_empty() {
+                                msg.listening_channel_remove = listening_channel_remove;
+                            }
                             state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
                         }
                         debug!("Broadcast remote user state changed: session {}", session_id);
