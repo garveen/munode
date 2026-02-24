@@ -303,6 +303,8 @@ impl HubClient {
         match method.as_str() {
             "hub.userJoined" => {
                 if let Some(params) = &notification.user_joined {
+                    let local_edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+                    let is_local = params.edge_id == local_edge_id;
                     let user = RemoteUser {
                         session_id: params.session_id,
                         edge_id: params.edge_id,
@@ -321,11 +323,15 @@ impl HubClient {
                     };
                     info!("Remote user joined: {} (session {})", user.username, user.session_id);
                     self.edge_state.channel_manager.upsert_remote_user(user.clone()).await;
-                    self.edge_state.emit(EdgeEvent::RemoteUserJoined {
-                        session_id: user.session_id,
-                        username: user.username,
-                        channel_id: user.channel_id,
-                    });
+                    // Only emit RemoteUserJoined for truly remote users.
+                    // Local users are handled by the main connection task which has the correct state.
+                    if !is_local {
+                        self.edge_state.emit(EdgeEvent::RemoteUserJoined {
+                            session_id: user.session_id,
+                            username: user.username,
+                            channel_id: user.channel_id,
+                        });
+                    }
                 }
             }
             "hub.userRemoveBroadcast" => {
@@ -643,6 +649,8 @@ impl HubClient {
         password: &str,
         tokens: Vec<String>,
         client_info: Option<hubedge::ClientInfo>,
+        preconnect_self_mute: Option<bool>,
+        preconnect_self_deaf: Option<bool>,
     ) -> Result<hubedge::EdgeAuthenticateUserResult> {
         let request_id = self.next_request_id().await;
         let request = TypedRpcRequest {
@@ -659,8 +667,8 @@ impl HubClient {
                 mute: None,
                 deaf: None,
                 suppress: None,
-                self_mute: None,
-                self_deaf: None,
+                self_mute: preconnect_self_mute,
+                self_deaf: preconnect_self_deaf,
                 priority_speaker: None,
                 recording: None,
             }),

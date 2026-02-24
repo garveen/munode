@@ -158,6 +158,9 @@ async fn handle_client_connection(
     let mut buf = BytesMut::with_capacity(8192);
     let mut session_id: Option<u32> = None;
     let mut client_state = ClientState::Connected;
+    // Pre-connect state: sent by client before Authenticate message
+    let mut preconnect_self_mute: Option<bool> = None;
+    let mut preconnect_self_deaf: Option<bool> = None;
 
     loop {
         // Read data from TLS stream
@@ -173,6 +176,17 @@ async fn handle_client_connection(
                 MessageType::Version => {
                     let response = handler::encode_version_response(&frame.payload, &peer_addr.to_string())?;
                     client_sender.send_raw(response).await;
+                }
+                // Pre-connect UserState: client sends self_deaf/self_mute before Authenticate
+                MessageType::UserState if client_state == ClientState::Connected => {
+                    if let Ok(us) = mumbleproto::UserState::decode(&frame.payload[..]) {
+                        if us.self_mute.is_some() { preconnect_self_mute = us.self_mute; }
+                        if us.self_deaf.is_some() {
+                            preconnect_self_deaf = us.self_deaf;
+                            // self_deaf implies self_mute per Mumble protocol
+                            if us.self_deaf == Some(true) { preconnect_self_mute = Some(true); }
+                        }
+                    }
                 }
                 MessageType::Authenticate if client_state == ClientState::Connected => {
                     let auth = mumbleproto::Authenticate::decode(&frame.payload[..])?;
@@ -222,6 +236,7 @@ async fn handle_client_connection(
                     // Authenticate via Hub
                     let auth_result = match hub_client.authenticate_user(
                         sid, &username, &password, tokens, Some(client_info),
+                        preconnect_self_mute, preconnect_self_deaf,
                     ).await {
                         Ok(result) => result,
                         Err(e) => {
@@ -268,8 +283,8 @@ async fn handle_client_connection(
                         mute: auth_result.mute.unwrap_or(false),
                         deaf: auth_result.deaf.unwrap_or(false),
                         suppress: auth_result.suppress.unwrap_or(false),
-                        self_mute: auth_result.self_mute.unwrap_or(false),
-                        self_deaf: auth_result.self_deaf.unwrap_or(false),
+                        self_mute: preconnect_self_mute.unwrap_or(auth_result.self_mute.unwrap_or(false)),
+                        self_deaf: preconnect_self_deaf.unwrap_or(auth_result.self_deaf.unwrap_or(false)),
                         priority_speaker: auth_result.priority_speaker.unwrap_or(false),
                         recording: auth_result.recording.unwrap_or(false),
                         ip_address: peer_addr.ip().to_string(),
@@ -313,6 +328,18 @@ async fn handle_client_connection(
                             ..Default::default()
                         };
                         client_sender.send_message(MessageType::UserState, &suppress_msg).await;
+                    }
+
+                    // If pre-connect self_deaf/self_mute was set, notify client and broadcast
+                    if preconnect_self_deaf.is_some() || preconnect_self_mute.is_some() {
+                        let preconnect_msg = mumbleproto::UserState {
+                            session: Some(sid),
+                            self_mute: preconnect_self_mute,
+                            self_deaf: preconnect_self_deaf,
+                            ..Default::default()
+                        };
+                        // Notify the client itself
+                        client_sender.send_message(MessageType::UserState, &preconnect_msg).await;
                     }
 
                     // Broadcast new user to all other clients (use updated client state)
@@ -1260,23 +1287,26 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
             Ok(event) => {
                 match event {
                     EdgeEvent::RemoteUserJoined { session_id, username, channel_id } => {
-                        if let Some(user) = state.channel_manager.get_remote_user(session_id).await {
-                            let msg = mumbleproto::UserState {
-                                session: Some(user.session_id),
-                                user_id: Some(user.user_id),
-                                name: Some(user.username.clone()),
-                                channel_id: Some(user.channel_id),
-                                mute: Some(user.mute),
-                                deaf: Some(user.deaf),
-                                suppress: Some(user.suppress),
-                                self_mute: Some(user.self_mute),
-                                self_deaf: Some(user.self_deaf),
-                                priority_speaker: Some(user.priority_speaker),
-                                recording: Some(user.recording),
-                                hash: user.cert_hash.clone(),
-                                ..Default::default()
-                            };
-                            state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                        // Only broadcast for REMOTE users (not local clients - handled by main task)
+                        if state.client_manager.get_client(session_id).await.is_none() {
+                            if let Some(user) = state.channel_manager.get_remote_user(session_id).await {
+                                let msg = mumbleproto::UserState {
+                                    session: Some(user.session_id),
+                                    user_id: Some(user.user_id),
+                                    name: Some(user.username.clone()),
+                                    channel_id: Some(user.channel_id),
+                                    mute: Some(user.mute),
+                                    deaf: Some(user.deaf),
+                                    suppress: Some(user.suppress),
+                                    self_mute: Some(user.self_mute),
+                                    self_deaf: Some(user.self_deaf),
+                                    priority_speaker: Some(user.priority_speaker),
+                                    recording: Some(user.recording),
+                                    hash: user.cert_hash.clone(),
+                                    ..Default::default()
+                                };
+                                state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                            }
                         }
                         debug!("Broadcast remote user joined: {} (session {}, channel {})", username, session_id, channel_id);
                     }
