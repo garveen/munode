@@ -256,7 +256,7 @@ fn default_capacity() -> u32 {
     1000
 }
 fn default_max_bandwidth() -> u32 {
-    558
+    558000
 }
 fn default_log_level() -> String {
     "info".to_string()

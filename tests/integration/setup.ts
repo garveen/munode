@@ -184,7 +184,7 @@ function generateRustEdgeConfig(params: {
     },
     server: {
       capacity: 1000,
-      max_bandwidth: 558,
+      max_bandwidth: 558000,
     },
     log_level: params.logLevel,
   };
