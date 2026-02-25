@@ -85,7 +85,7 @@ export class AuthManager {
 
       const onReject = (message: mumbleproto.Reject) => {
         cleanup();
-        this.handleReject(message);
+        // handleReject 已由 connection.ts 调用，此处只需拒绝 Promise
         reject(new Error(`Authentication failed: ${message.reason || 'Unknown reason'}`));
       };
 

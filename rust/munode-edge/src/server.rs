@@ -204,7 +204,9 @@ async fn handle_client_connection(
                             Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
                             "Server not ready, please try again later",
                         )).await;
-                        writer_handle.abort();
+                        // Drop sender so the writer task drains and flushes before exiting
+                        drop(client_sender);
+                        writer_handle.await.ok();
                         return Ok(());
                     }
 
@@ -217,7 +219,8 @@ async fn handle_client_connection(
                                 Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
                                 "Internal server error",
                             )).await;
-                            writer_handle.abort();
+                            drop(client_sender);
+                            writer_handle.await.ok();
                             return Ok(());
                         }
                     };
@@ -245,7 +248,8 @@ async fn handle_client_connection(
                                 Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
                                 "Authentication failed",
                             )).await;
-                            writer_handle.abort();
+                            drop(client_sender);
+                            writer_handle.await.ok();
                             return Ok(());
                         }
                     };
@@ -257,7 +261,9 @@ async fn handle_client_connection(
                             auth_result.reject_type.map(|t| t as i32),
                             &reason,
                         )).await;
-                        writer_handle.abort();
+                        // Drop sender so the writer task drains and flushes the Reject before exiting
+                        drop(client_sender);
+                        writer_handle.await.ok();
                         return Ok(());
                     }
 

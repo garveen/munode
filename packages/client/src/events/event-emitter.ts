@@ -126,6 +126,15 @@ export const ClientEvents = {
 } as const;
 
 /**
+ * 认证失败事件的载荷
+ */
+export interface AuthenticationFailedInfo {
+  reason: string;
+  type: number;  // Reject_RejectType 枚举值
+  message: mumbleproto.Reject;
+}
+
+/**
  * 事件类型定义
  */
 export interface ClientEventMap {
@@ -137,8 +146,8 @@ export interface ClientEventMap {
   connectionStateChanged: (state: string) => void;
 
   // 认证事件
-  authenticated: (session: number) => void;
-  authenticationFailed: (reason: string) => void;
+  authenticated: (message: mumbleproto.ServerSync) => void;
+  authenticationFailed: (info: AuthenticationFailedInfo) => void;
   serverSync: (data: mumbleproto.ServerSync) => void;
 
   // 用户事件

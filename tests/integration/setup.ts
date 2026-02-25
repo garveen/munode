@@ -35,10 +35,10 @@ if (USE_RUST) {
  * 查找 Rust 二进制文件路径
  */
 function findRustBinary(name: string): string {
-  const releasePath = join(PROJECT_ROOT, `rust/target/release/${name}`);
   const debugPath = join(PROJECT_ROOT, `rust/target/debug/${name}`);
-  if (fs.existsSync(releasePath)) return releasePath;
+  const releasePath = join(PROJECT_ROOT, `rust/target/release/${name}`);
   if (fs.existsSync(debugPath)) return debugPath;
+  if (fs.existsSync(releasePath)) return releasePath;
   throw new Error(
     `Rust binary '${name}' not found. Run 'cargo build' in the rust/ directory first.\n` +
     `Checked: ${releasePath}\n        ${debugPath}`
@@ -53,19 +53,20 @@ export class RustServerProcess {
   private readonly bin: string;
   private readonly configPath: string;
   private readonly label: string;
+  private readonly silent: boolean;
 
-  constructor(bin: string, configPath: string, label: string) {
+  constructor(bin: string, configPath: string, label: string, silent: boolean = true) {
     this.bin = bin;
     this.configPath = configPath;
     this.label = label;
+    this.silent = silent;
   }
 
   /** 启动进程（若已运行则先停止） */
   async start(): Promise<void> {
     if (this.proc) await this.stop();
-    const silent = !TEST_DEBUG;
     this.proc = spawn(this.bin, [this.configPath], {
-      stdio: silent ? 'ignore' : 'inherit',
+      stdio: this.silent ? 'ignore' : 'inherit',
     });
     this.proc.on('error', (err) => {
       console.error(`[RUST] ${this.label} process error:`, err);
@@ -214,7 +215,7 @@ async function startRustHubServer(params: {
   debugLog(`[RUST] Hub config written to ${configPath}`);
 
   const bin = findRustBinary('munode-hub');
-  const proc = new RustServerProcess(bin, configPath, `Hub(${params.controlPort})`);
+  const proc = new RustServerProcess(bin, configPath, `Hub(${params.controlPort})`, params.silent);
   await proc.start();
   return proc;
 }
@@ -247,7 +248,7 @@ async function startRustEdgeServer(
   debugLog(`[RUST] Edge config written to ${configPath}`);
 
   const bin = findRustBinary('munode-edge');
-  const proc = new RustServerProcess(bin, configPath, `Edge${serverId}(${port})`);
+  const proc = new RustServerProcess(bin, configPath, `Edge${serverId}(${port})`, silent);
   await proc.start();
   return proc;
 }
@@ -608,7 +609,6 @@ async function startEdgeServer(
   edgeConfig.workerThreads = edgeConfig.workerThreads || {
     enabled: true,
     count: 2, // Use 2 workers for tests
-    balanceStrategy: 'session-affinity',
     workerTimeout: 5000,
     maxQueueLength: 100
   };
@@ -616,7 +616,8 @@ async function startEdgeServer(
   // 配置UDP语音传输的共享密钥用于握手验证
   edgeConfig.voice_routing = edgeConfig.voice_routing || {
     enabled: true,
-    shared_secret: 'test-shared-secret-for-udp-voice-handshake'
+    shared_secret: 'test-shared-secret-for-udp-voice-handshake',
+    connection_strategy: 'tcp_only', // Force TCP for Edge-to-Edge in tests to avoid UDP issues
   };
   if (!edgeConfig.voice_routing.shared_secret) {
     edgeConfig.voice_routing.shared_secret = 'test-shared-secret-for-udp-voice-handshake';
@@ -629,8 +630,6 @@ async function startEdgeServer(
     cert: join(certsDir, 'server.pem'),
     key: join(certsDir, 'server.key'),
     ca: join(certsDir, 'ca.pem'),
-    require_client_cert: false,
-    reject_unauthorized: false
   };
 
   edgeConfig.hub_server = edgeConfig.hub_server || {
@@ -638,11 +637,9 @@ async function startEdgeServer(
     port: hubPort,
     control_port: controlPort,
     tls: { reject_unauthorized: false },
-    connection_type: 'websocket' as const,
     reconnect_interval: 5000,
     heartbeat_interval: 30000,
     pool_size: 1,
-    reconnection_timeout: 10000
   };
   edgeConfig.hub_server.host = '127.0.0.1';
   edgeConfig.hub_server.port = hubPort;

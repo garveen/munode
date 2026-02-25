@@ -8,8 +8,12 @@
  * - PCM 输入处理
  */
 
-import { OpusEncoder as DiscordOpusEncoder } from '@discordjs/opus';
+import { createRequire } from 'module';
 import type { EncoderOptions } from '../types/audio-types.js';
+
+const require = createRequire(import.meta.url);
+// @discordjs/opus is a CJS native module; use createRequire for ESM compatibility
+const { OpusEncoder: DiscordOpusEncoder } = require('@discordjs/opus') as { OpusEncoder: new (sampleRate: number, channels: number) => import('@discordjs/opus').OpusEncoder };
 
 export class OpusEncoder {
   private frameSize: number; // in ms

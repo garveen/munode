@@ -364,8 +364,11 @@ export class ConnectionManager {
 
         case MessageType.Reject: {
           // 拒绝消息 (认证失败)
+          // 先调用 handleReject 触发 authenticationFailed 事件（携带类型信息）
+          // 再 emit 'reject' 事件让 authenticate() 的 Promise 能直接捕获
           const rejectMessage = mumbleproto.Reject.decode(payload);
           this.client.getAuthManager().handleReject(rejectMessage);
+          this.client.emit('reject', rejectMessage);
           break;
         }
 

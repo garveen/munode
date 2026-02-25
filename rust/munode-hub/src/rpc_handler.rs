@@ -336,6 +336,10 @@ impl RpcHandler {
             match self.state.auth_service.authenticate(ext_request).await {
                 Some(resp) => {
                     if !resp.success {
+                        // Per Mumble protocol: if the auth service didn't specify a
+                        // reject type, default to WrongUserPW (3) so the client can
+                        // prompt the user to re-enter credentials.
+                        let reject_type = resp.reject_type.or(Some(3)); // WrongUserPW
                         let result = EdgeAuthenticateUserResult {
                             success: false,
                             user_id: None,
@@ -343,7 +347,7 @@ impl RpcHandler {
                             display_name: None,
                             groups: vec![],
                             reason: resp.reason.clone(),
-                            reject_type: resp.reject_type,
+                            reject_type,
                             channel_id: None,
                             mute: None, deaf: None, suppress: None,
                             self_mute: None, self_deaf: None,
@@ -857,7 +861,25 @@ impl RpcHandler {
 
         match response {
             Ok(resp) => {
-                let auth_resp: HttpAuthResponse = resp.json().await?;
+                let status = resp.status();
+                let mut auth_resp: HttpAuthResponse = resp.json().await?;
+                // If the auth service didn't include a reject_type but auth failed,
+                // infer an appropriate type from the HTTP status code.
+                // Per Mumble protocol (murmur Messages.cpp): wrong credentials for a
+                // known user → WrongUserPW (3); wrong server password → WrongServerPW (4).
+                // A 401/403 from an HTTP auth service means "invalid credentials", so
+                // use WrongUserPW (3) so the Mumble client prompts for a password retry.
+                if !auth_resp.success && auth_resp.reject_type.is_none() {
+                    auth_resp.reject_type = Some(
+                        if status == reqwest::StatusCode::UNAUTHORIZED
+                            || status == reqwest::StatusCode::FORBIDDEN
+                        {
+                            3 // WrongUserPW
+                        } else {
+                            3 // Default to WrongUserPW for any unspecified credential failure
+                        },
+                    );
+                }
                 Ok(Some(auth_resp))
             }
             Err(e) if e.is_timeout() => {

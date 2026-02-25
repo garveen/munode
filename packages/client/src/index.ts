@@ -17,6 +17,7 @@ export { AudioFormatConverter } from './audio/format.js';
 
 // 事件
 export { ClientEvents } from './events/event-emitter.js';
+export type { AuthenticationFailedInfo } from './events/event-emitter.js';
 
 // API 服务器
 export { startHttpServer } from './api/http-server.js';

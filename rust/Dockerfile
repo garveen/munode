@@ -4,7 +4,7 @@
 # Or via docker-compose.yml with context: ..
 
 # Stage 0: Install cargo-chef
-FROM rust:1.86-bookworm AS chef
+FROM rust:1.86-slim-bookworm AS chef
 RUN cargo install cargo-chef --locked
 RUN apt-get update && apt-get install -y protobuf-compiler cmake && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
