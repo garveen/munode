@@ -686,8 +686,168 @@ async function startEdgeServer(
 }
 
 /**
- * 设置完整的测试环境 - 单进程模式
+ * 创建独立的测试环境（不影响 globalTestEnvironment）
+ * 用于需要重启 Hub/Edge 但不想影响其他测试的场景
  */
+async function createIsolatedTestEnvironment(
+  basePort: number,
+  options: {
+    startHub?: boolean;
+    startEdge?: boolean;
+    startEdge2?: boolean;
+    startEdge3?: boolean;
+    startEdge4?: boolean;
+    startAuth?: boolean;
+    silent?: boolean;
+  }
+): Promise<TestEnvironment> {
+  const startHub = options.startHub !== false;
+  const startEdge = options.startEdge !== false;
+  const startEdge2 = options.startEdge2 !== false;
+  const silent = options.silent ?? true;
+
+  // Allocate ports for this isolated environment
+  const authPort = options.startAuth !== false ? await findAvailablePort(basePort) : 0;
+  const hubPort = startHub ? await findAvailablePort(authPort + 1) : 0;
+  const controlPort = startHub ? await findAvailablePort(hubPort + 1) : 0;
+  const webApiPort = await findAvailablePort(controlPort + 1);
+  const edgePort = startEdge ? await findAvailablePort(webApiPort + 1) : 0;
+  const edgeEdgePort = startEdge ? await findAvailablePort(edgePort + 1) : 0;
+  const edgeUdpPort = edgePort;
+  const edgePort2 = startEdge2 ? await findAvailablePort(edgeEdgePort + 1) : 0;
+  const edgeEdgePort2 = startEdge2 ? await findAvailablePort(edgePort2 + 1) : 0;
+  const edgeUdpPort2 = edgePort2;
+
+  let authServer: TestAuthServer | undefined;
+  let hubProcess: RustServerProcess | undefined;
+  let edgeProcess: RustServerProcess | undefined;
+  let edgeProcess2: RustServerProcess | undefined;
+
+  if (options.startAuth !== false) {
+    authServer = new TestAuthServer(authPort);
+    await authServer.start();
+  }
+
+  if (startHub && USE_RUST) {
+    const dbPath = join(PROJECT_ROOT, `data/hub-isolated-${basePort}.db`);
+    if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+    if (fs.existsSync(dbPath + '-wal')) fs.unlinkSync(dbPath + '-wal');
+    if (fs.existsSync(dbPath + '-shm')) fs.unlinkSync(dbPath + '-shm');
+    fs.mkdirSync(join(PROJECT_ROOT, 'data'), { recursive: true });
+    const initScript = join(PROJECT_ROOT, 'scripts/init-test-db.ts');
+    if (fs.existsSync(initScript)) {
+      await new Promise<void>((resolve, reject) => {
+        const initProcess = spawn('tsx', [initScript, dbPath], {
+          stdio: silent ? 'ignore' : 'inherit',
+          cwd: PROJECT_ROOT,
+          env: { ...process.env, DB_PATH: dbPath },
+        });
+        initProcess.on('exit', (code: number) => {
+          if (code === 0) resolve();
+          else reject(new Error(`Database initialization failed with code ${code}`));
+        });
+        initProcess.on('error', reject);
+      });
+    }
+    const hmacSecret = 'test-hmac-secret-key-for-integration-tests';
+    hubProcess = await startRustHubServer({
+      basePort,
+      controlPort,
+      authPort,
+      dbPath,
+      hmacSecret,
+      silent,
+    });
+    await waitForCondition(
+      async () => {
+        try {
+          const testSocket = await new Promise<boolean>((resolve) => {
+            const socket = new net.Socket();
+            socket.connect(controlPort, '127.0.0.1', () => { socket.destroy(); resolve(true); });
+            socket.on('error', () => { socket.destroy(); resolve(false); });
+          });
+          return testSocket;
+        } catch { return false; }
+      },
+      10000, 100, `Isolated Hub control port ${controlPort}`
+    );
+  }
+
+  if (startEdge && USE_RUST) {
+    const hmacSecret = 'test-hmac-secret-key-for-integration-tests';
+    edgeProcess = await startRustEdgeServer(1, 'Edge1-Isolated', edgePort, edgeEdgePort, controlPort, basePort, hmacSecret, silent);
+    await waitForCondition(
+      async () => {
+        try {
+          return await new Promise<boolean>((resolve) => {
+            const socket = new net.Socket();
+            socket.connect(edgePort, '127.0.0.1', () => { socket.destroy(); resolve(true); });
+            socket.on('error', () => { socket.destroy(); resolve(false); });
+          });
+        } catch { return false; }
+      },
+      10000, 100, `Isolated Edge 1 port ${edgePort}`
+    );
+  }
+
+  if (startEdge2 && USE_RUST) {
+    const hmacSecret = 'test-hmac-secret-key-for-integration-tests';
+    edgeProcess2 = await startRustEdgeServer(2, 'Edge2-Isolated', edgePort2, edgeEdgePort2, controlPort, basePort, hmacSecret, silent);
+    await waitForCondition(
+      async () => {
+        try {
+          return await new Promise<boolean>((resolve) => {
+            const socket = new net.Socket();
+            socket.connect(edgePort2, '127.0.0.1', () => { socket.destroy(); resolve(true); });
+            socket.on('error', () => { socket.destroy(); resolve(false); });
+          });
+        } catch { return false; }
+      },
+      10000, 100, `Isolated Edge 2 port ${edgePort2}`
+    );
+  }
+
+  // Wait for edges to register with hub
+  await sleep(1000);
+
+  const env: TestEnvironment = {
+    hubProcess,
+    edgeProcess,
+    edgeProcess2,
+    authServer,
+    authPort,
+    hubPort,
+    controlPort,
+    webApiPort,
+    edgePort,
+    edgeEdgePort,
+    edgeUdpPort,
+    edgePort2,
+    edgeEdgePort2,
+    edgeUdpPort2,
+    edgePort3: 0,
+    edgeEdgePort3: 0,
+    edgeUdpPort3: 0,
+    edgePort4: 0,
+    edgeEdgePort4: 0,
+    edgeUdpPort4: 0,
+    cleanup: async () => {
+      if (edgeProcess2) await edgeProcess2.stop().catch(() => {});
+      if (edgeProcess) await edgeProcess.stop().catch(() => {});
+      if (hubProcess) await hubProcess.stop().catch(() => {});
+      if (authServer) await authServer.stop().catch(() => {});
+      // Clean up DB files
+      const dbPath = join(PROJECT_ROOT, `data/hub-isolated-${basePort}.db`);
+      for (const ext of ['', '-wal', '-shm']) {
+        try { if (fs.existsSync(dbPath + ext)) fs.unlinkSync(dbPath + ext); } catch {}
+      }
+    },
+  };
+
+  return env;
+}
+
+
 export async function setupTestEnvironment(
   basePort: number = 8080,
   options: {
@@ -700,8 +860,14 @@ export async function setupTestEnvironment(
     hubConfig?: Partial<HubConfig>;
     reuse?: boolean;
     silent?: boolean;
+    /** When true, creates an isolated environment without affecting globalTestEnvironment */
+    isolated?: boolean;
   } = {}
 ): Promise<TestEnvironment> {
+  // Isolated mode: bypass global environment management entirely
+  if (options.isolated) {
+    return createIsolatedTestEnvironment(basePort, options);
+  }
   // Apply default values
   const defaultOptions = {
     startHub: true,

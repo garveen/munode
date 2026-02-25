@@ -139,7 +139,7 @@ describe('User Visibility Integration Tests', () => {
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'sender_edge1',
-        password: 'sender_edge1_pass',
+        password: 'password1',
         rejectUnauthorized: false,
       });
       

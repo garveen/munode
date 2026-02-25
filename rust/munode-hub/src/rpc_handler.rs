@@ -358,7 +358,22 @@ impl RpcHandler {
                     // External auth succeeded — create session from response.
                     let user_id = resp.user_id.unwrap_or(0);
                     let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
-                    let channel_id = resp.channel_id.unwrap_or(config.auth.default_channel);
+                    // Ensure ext-auth user exists in DB so last_channel can be tracked
+                    if user_id > 0 {
+                        let _ = self.state.database.upsert_ext_user(user_id, &auth_username);
+                    }
+                    // Prefer ext auth's channel, fall back to DB last_channel, then default
+                    let channel_id = if let Some(ch) = resp.channel_id {
+                        ch
+                    } else if user_id > 0 {
+                        // Check DB for last_channel saved from previous session
+                        match self.state.database.get_user_last_channel(user_id) {
+                            Ok(last_ch) if last_ch > 0 => last_ch,
+                            _ => config.auth.default_channel,
+                        }
+                    } else {
+                        config.auth.default_channel
+                    };
 
                     let session_info = SessionInfo {
                         session_id: params.session_id,
@@ -511,7 +526,19 @@ impl RpcHandler {
                     let user_id = resp.user_id.unwrap_or(0);
                     let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
                     let groups = resp.groups.clone().unwrap_or_default();
-                    let channel_id = config.auth.default_channel;
+                    // Ensure ext-auth user exists in DB for last_channel tracking
+                    if user_id > 0 {
+                        let _ = self.state.database.upsert_ext_user(user_id, &auth_username);
+                    }
+                    // Check DB for last_channel saved from previous session
+                    let channel_id = if user_id > 0 {
+                        match self.state.database.get_user_last_channel(user_id) {
+                            Ok(last_ch) if last_ch > 0 => last_ch,
+                            _ => config.auth.default_channel,
+                        }
+                    } else {
+                        config.auth.default_channel
+                    };
 
                     let session_info = SessionInfo {
                         session_id: params.session_id,
@@ -1555,6 +1582,7 @@ impl RpcHandler {
         if let Some(json_str) = &notification.unknown_params_json {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
                 let session_id = v["session_id"].as_u64().unwrap_or(0) as u32;
+                let source_edge_id = v["edge_id"].as_u64().unwrap_or(0) as u32;
                 if session_id == 0 {
                     return;
                 }
@@ -1584,6 +1612,42 @@ impl RpcHandler {
                         session.recording = rec;
                     }
                     sessions.add_session(session).await;
+                }
+
+                // Broadcast state change to other edges
+                let broadcast_json = serde_json::json!({
+                    "session_id": session_id,
+                    "edge_id": source_edge_id,
+                    "self_mute": v["self_mute"],
+                    "self_deaf": v["self_deaf"],
+                    "mute": v["mute"],
+                    "deaf": v["deaf"],
+                    "suppress": v["suppress"],
+                    "priority_speaker": v["priority_speaker"],
+                    "recording": v["recording"],
+                    "listening_channel_add": v["listening_channel_add"],
+                    "listening_channel_remove": v["listening_channel_remove"],
+                });
+                let forward = TypedRpcNotification {
+                    method: "hub.userStateBroadcast".to_string(),
+                    timestamp: Some(current_millis() as i64),
+                    unknown_params_json: Some(broadcast_json.to_string()),
+                    ..Default::default()
+                };
+                let packet = EdgeHubPacket {
+                    r#type: PacketType::RpcNotification as i32,
+                    rpc_notification: Some(forward),
+                    ..Default::default()
+                };
+                let data = packet.encode_to_vec();
+                let edges = self.state.edge_connections.read().await;
+                for (edge_id, sender) in edges.iter() {
+                    if *edge_id == source_edge_id {
+                        continue;
+                    }
+                    if let Err(e) = sender.try_send(data.clone()) {
+                        warn!("Failed to broadcast user state to edge {}: {}", edge_id, e);
+                    }
                 }
             }
         }
@@ -1633,39 +1697,98 @@ impl RpcHandler {
     async fn on_channel_state(&self, notification: &TypedRpcNotification) {
         if let Some(json_str) = &notification.unknown_params_json {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                let channel_id = v["channel_id"].as_u64().map(|n| n as u32);
-                let name = v["name"].as_str().map(String::from);
-                let parent_id = v["parent_id"].as_u64().map(|n| n as u32);
+                // Support both flat format (Rust edge) and nested channelState (TS edge)
+                let cs = if v["channelState"].is_object() { &v["channelState"] } else { &v };
+                let channel_id = cs["channel_id"].as_u64().map(|n| n as u32);
 
                 if let Some(ch_id) = channel_id {
-                    // Update existing channel
+                    // Handle links_add / links_remove first
+                    let links_add: Vec<u32> = cs["links_add"].as_array()
+                        .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u32)).collect())
+                        .unwrap_or_default();
+                    let links_remove: Vec<u32> = cs["links_remove"].as_array()
+                        .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u32)).collect())
+                        .unwrap_or_default();
+
+                    for target_id in &links_add {
+                        if let Err(e) = self.state.database.add_channel_link(ch_id, *target_id) {
+                            warn!("Failed to add channel link {} <-> {}: {}", ch_id, target_id, e);
+                        } else {
+                            // Update in-memory channel store both directions
+                            if let Some(mut ch) = self.state.channel_store.get_channel(ch_id).await {
+                                ch.links.insert(*target_id);
+                                self.state.channel_store.update_channel(ch).await;
+                            }
+                            if let Some(mut peer) = self.state.channel_store.get_channel(*target_id).await {
+                                peer.links.insert(ch_id);
+                                self.state.channel_store.update_channel(peer).await;
+                            }
+                        }
+                    }
+                    for target_id in &links_remove {
+                        if let Err(e) = self.state.database.remove_channel_link(ch_id, *target_id) {
+                            warn!("Failed to remove channel link {} <-> {}: {}", ch_id, target_id, e);
+                        } else {
+                            if let Some(mut ch) = self.state.channel_store.get_channel(ch_id).await {
+                                ch.links.remove(target_id);
+                                self.state.channel_store.update_channel(ch).await;
+                            }
+                            if let Some(mut peer) = self.state.channel_store.get_channel(*target_id).await {
+                                peer.links.remove(&ch_id);
+                                self.state.channel_store.update_channel(peer).await;
+                            }
+                        }
+                    }
+
+                    // Update regular channel fields if present
                     if let Some(mut ch) = self.state.channel_store.get_channel(ch_id).await {
-                        if let Some(n) = &name {
-                            ch.name = n.clone();
+                        if let Some(n) = cs["name"].as_str() {
+                            ch.name = n.to_string();
                         }
-                        if let Some(pid) = parent_id {
-                            ch.parent_id = Some(pid);
+                        if let Some(pid) = cs["parent"].as_u64().or_else(|| cs["parent_id"].as_u64()) {
+                            ch.parent_id = Some(pid as u32);
                         }
-                        if let Some(pos) = v["position"].as_i64() {
+                        if let Some(pos) = cs["position"].as_i64() {
                             ch.position = pos as i32;
                         }
-                        if let Some(desc) = v["description"].as_str() {
+                        if let Some(desc) = cs["description"].as_str() {
                             ch.description = desc.to_string();
                         }
                         self.state.channel_store.update_channel(ch).await;
+                    }
 
-                        // Broadcast to all edges
-                        if let Some(ch) = self.state.channel_store.get_channel(ch_id).await {
+                    // Broadcast updated channel to all edges
+                    if let Some(ch) = self.state.channel_store.get_channel(ch_id).await {
+                        let proto = ChannelDataProto {
+                            channel_id: ch.id,
+                            name: ch.name,
+                            parent_id: ch.parent_id,
+                            description: Some(ch.description),
+                            position: Some(ch.position),
+                            max_users: if ch.max_users > 0 { Some(ch.max_users) } else { None },
+                            temporary: Some(ch.temporary),
+                            inherit_acl: Some(ch.inherit_acl),
+                            links: ch.links.iter().copied().collect(),
+                        };
+                        self.broadcast_notification("hub.channelUpdated", |n| {
+                            n.channel_updated = Some(HubChannelUpdatedParams { channel: proto });
+                        }).await;
+                    }
+
+                    // For link changes, also broadcast the peer channels so both ends are synced
+                    let all_peers: std::collections::HashSet<u32> = links_add.iter().chain(links_remove.iter()).copied().collect();
+                    for peer_id in all_peers {
+                        if let Some(peer) = self.state.channel_store.get_channel(peer_id).await {
                             let proto = ChannelDataProto {
-                                channel_id: ch.id,
-                                name: ch.name,
-                                parent_id: ch.parent_id,
-                                description: Some(ch.description),
-                                position: Some(ch.position),
-                                max_users: if ch.max_users > 0 { Some(ch.max_users) } else { None },
-                                temporary: Some(ch.temporary),
-                                inherit_acl: Some(ch.inherit_acl),
-                                links: ch.links.iter().copied().collect(),
+                                channel_id: peer.id,
+                                name: peer.name,
+                                parent_id: peer.parent_id,
+                                description: Some(peer.description),
+                                position: Some(peer.position),
+                                max_users: if peer.max_users > 0 { Some(peer.max_users) } else { None },
+                                temporary: Some(peer.temporary),
+                                inherit_acl: Some(peer.inherit_acl),
+                                links: peer.links.iter().copied().collect(),
                             };
                             self.broadcast_notification("hub.channelUpdated", |n| {
                                 n.channel_updated = Some(HubChannelUpdatedParams { channel: proto });

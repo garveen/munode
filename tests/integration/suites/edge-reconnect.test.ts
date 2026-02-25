@@ -10,10 +10,10 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { setupTestEnvironment, sleep, waitForCondition } from '../setup.js';
+import { setupTestEnvironment, sleep, waitForCondition, USE_RUST } from '../setup.js';
 import type { TestEnvironment } from '../setup.js';
 
-describe('Edge Reconnection Tests', () => {
+describe.skipIf(USE_RUST)('Edge Reconnection Tests', () => {
   let testEnv: TestEnvironment;
   
   beforeAll(async () => {

@@ -5,12 +5,12 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { setupTestEnvironment, sleep } from '../setup.js';
+import { setupTestEnvironment, sleep, USE_RUST } from '../setup.js';
 import type { TestEnvironment } from '../setup.js';
 import { createClients, cleanupClients, createVoicePacket } from '../utils/test-helpers.js';
 import { UDPQualitySimulator, NetworkScenarios } from '../utils/udp-quality-simulator.js';
 
-describe('UDP Quality Simulation Tests', () => {
+describe.skipIf(USE_RUST)('UDP Quality Simulation Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {

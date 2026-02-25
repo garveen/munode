@@ -12,6 +12,7 @@ use tokio_tungstenite::tungstenite;
 use tracing::{debug, error, info, warn};
 
 use munode_common::config::{EdgeConfig, HubServerConfig};
+use munode_protocol::message_type::MessageType;
 use munode_protocol::hubedge::{
     self, EdgeAuthenticateUserParams, EdgeFullSyncParams,
     EdgeHandleAclParams, EdgePluginDataTransmissionParams,
@@ -143,7 +144,44 @@ impl HubClient {
             }
         });
 
-        // Register with Hub
+        // Reader task: must be running BEFORE RPC calls so responses can be received.
+        // Uses a oneshot channel to signal when the connection closes.
+        let (reader_done_tx, reader_done_rx) = tokio::sync::oneshot::channel::<()>();
+        let reader_self = self.clone();
+        let reader_handle = tokio::spawn(async move {
+            loop {
+                match ws_read.next().await {
+                    Some(Ok(msg)) => {
+                        match msg {
+                            tungstenite::Message::Binary(data) => {
+                                if let Err(e) = reader_self.handle_incoming(&data).await {
+                                    warn!("Error handling Hub message: {}", e);
+                                }
+                            }
+                            tungstenite::Message::Close(_) => {
+                                info!("Hub sent close frame");
+                                break;
+                            }
+                            tungstenite::Message::Ping(data) => {
+                                reader_self.send_raw(tungstenite::Message::Pong(data).into_data().to_vec()).await.ok();
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(Err(e)) => {
+                        error!("WebSocket read error: {}", e);
+                        break;
+                    }
+                    None => {
+                        info!("WebSocket stream ended");
+                        break;
+                    }
+                }
+            }
+            let _ = reader_done_tx.send(());
+        });
+
+        // Register with Hub (reader task is now running, so responses can arrive)
         self.do_register().await?;
 
         // Request full sync
@@ -159,38 +197,11 @@ impl HubClient {
             heartbeat_self.heartbeat_loop().await;
         });
 
-        // Main read loop: process incoming messages
-        loop {
-            match ws_read.next().await {
-                Some(Ok(msg)) => {
-                    match msg {
-                        tungstenite::Message::Binary(data) => {
-                            if let Err(e) = self.handle_incoming(&data).await {
-                                warn!("Error handling Hub message: {}", e);
-                            }
-                        }
-                        tungstenite::Message::Close(_) => {
-                            info!("Hub sent close frame");
-                            break;
-                        }
-                        tungstenite::Message::Ping(data) => {
-                            self.send_raw(tungstenite::Message::Pong(data).into_data().to_vec()).await.ok();
-                        }
-                        _ => {}
-                    }
-                }
-                Some(Err(e)) => {
-                    error!("WebSocket read error: {}", e);
-                    break;
-                }
-                None => {
-                    info!("WebSocket stream ended");
-                    break;
-                }
-            }
-        }
+        // Wait for the reader task to finish (connection closed)
+        let _ = reader_done_rx.await;
 
         heartbeat_handle.abort();
+        reader_handle.abort();
         writer_handle.abort();
         Ok(())
     }
@@ -293,6 +304,8 @@ impl HubClient {
         match method.as_str() {
             "hub.userJoined" => {
                 if let Some(params) = &notification.user_joined {
+                    let local_edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+                    let is_local = params.edge_id == local_edge_id;
                     let user = RemoteUser {
                         session_id: params.session_id,
                         edge_id: params.edge_id,
@@ -308,23 +321,79 @@ impl HubClient {
                         self_deaf: params.self_deaf.unwrap_or(false),
                         priority_speaker: params.priority_speaker.unwrap_or(false),
                         recording: params.recording.unwrap_or(false),
+                        listening_channels: vec![],
                     };
                     info!("Remote user joined: {} (session {})", user.username, user.session_id);
                     self.edge_state.channel_manager.upsert_remote_user(user.clone()).await;
-                    self.edge_state.emit(EdgeEvent::RemoteUserJoined {
-                        session_id: user.session_id,
-                        username: user.username,
-                        channel_id: user.channel_id,
-                    });
+                    // Only emit RemoteUserJoined for truly remote users.
+                    // Local users are handled by the main connection task which has the correct state.
+                    if !is_local {
+                        self.edge_state.emit(EdgeEvent::RemoteUserJoined {
+                            session_id: user.session_id,
+                            username: user.username,
+                            channel_id: user.channel_id,
+                        });
+                    }
                 }
             }
             "hub.userRemoveBroadcast" => {
                 if let Some(params) = &notification.user_remove_broadcast {
-                    info!("Remote user removed: session {}", params.session);
-                    self.edge_state.channel_manager.remove_remote_user(params.session).await;
+                    let target_session = params.session;
+                    info!("User removed: session {}", target_session);
+                    // If the kicked user is a LOCAL client on this edge, send them UserRemove then close
+                    if let Some(sender) = self.edge_state.client_manager.get_sender(target_session).await {
+                        let msg = crate::handler::build_user_remove_msg(
+                            target_session,
+                            params.reason.as_deref(),
+                        );
+                        sender.send_message(MessageType::UserRemove, &msg).await;
+                        // Drop sender by removing client from manager - this closes the TCP connection
+                        self.edge_state.client_manager.remove_client(target_session).await;
+                    }
+                    // Remove from remote user tracking and broadcast removal to local clients
+                    self.edge_state.channel_manager.remove_remote_user(target_session).await;
                     self.edge_state.emit(EdgeEvent::RemoteUserLeft {
-                        session_id: params.session,
+                        session_id: target_session,
                     });
+                }
+            }
+            "hub.userStateBroadcast" => {
+                // User state changed on another edge (mute, deaf, etc.)
+                if let Some(json_str) = &notification.unknown_params_json {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+                        let session_id = v["session_id"].as_u64().unwrap_or(0) as u32;
+                        if session_id > 0 {
+                            if let Some(mut user) = self.edge_state.channel_manager.get_remote_user(session_id).await {
+                                if let Some(b) = v["self_mute"].as_bool() { user.self_mute = b; }
+                                if let Some(b) = v["self_deaf"].as_bool() { user.self_deaf = b; }
+                                if let Some(b) = v["mute"].as_bool() { user.mute = b; }
+                                if let Some(b) = v["deaf"].as_bool() { user.deaf = b; }
+                                if let Some(b) = v["suppress"].as_bool() { user.suppress = b; }
+                                if let Some(b) = v["priority_speaker"].as_bool() { user.priority_speaker = b; }
+                                if let Some(b) = v["recording"].as_bool() { user.recording = b; }
+                                // Handle listening channel changes
+                                let listening_add: Vec<u32> = if let Some(arr) = v["listening_channel_add"].as_array() {
+                                    arr.iter()
+                                        .filter_map(|ch| ch.as_u64().map(|n| n as u32))
+                                        .filter(|&ch_id| !user.listening_channels.contains(&ch_id))
+                                        .collect()
+                                } else { vec![] };
+                                let listening_remove: Vec<u32> = if let Some(arr) = v["listening_channel_remove"].as_array() {
+                                    arr.iter().filter_map(|ch| ch.as_u64().map(|n| n as u32)).collect()
+                                } else { vec![] };
+                                for &ch_id in &listening_add {
+                                    user.listening_channels.push(ch_id);
+                                }
+                                user.listening_channels.retain(|ch| !listening_remove.contains(ch));
+                                self.edge_state.channel_manager.upsert_remote_user(user).await;
+                                self.edge_state.emit(EdgeEvent::RemoteUserStateChanged {
+                                    session_id,
+                                    listening_channel_add: listening_add,
+                                    listening_channel_remove: listening_remove,
+                                });
+                            }
+                        }
+                    }
                 }
             }
             "hub.userMoved" => {
@@ -410,6 +479,39 @@ impl HubClient {
                         data: params.data.clone(),
                         target_sessions: params.target_sessions.clone(),
                     });
+                }
+            }
+            "hub.syncVoiceTarget" => {
+                // Voice target synced from another edge via Hub
+                if let Some(params) = &notification.sync_voice_target {
+                    let client_session = params.client_session;
+                    let target_id = params.target_id;
+                    // Parse config_json
+                    if let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&params.config_json) {
+                        use crate::state::{VoiceTargetConfig, VoiceTargetChannelConfig};
+                        let sessions: Vec<u32> = cfg["sessions"].as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
+                            .unwrap_or_default();
+                        let channels: Vec<VoiceTargetChannelConfig> = cfg["channels"].as_array()
+                            .map(|a| a.iter().filter_map(|ch| {
+                                let ch_id = ch["channel_id"].as_u64()? as u32;
+                                Some(VoiceTargetChannelConfig {
+                                    channel_id: ch_id,
+                                    links: ch["links"].as_bool().unwrap_or(false),
+                                    children: ch["children"].as_bool().unwrap_or(false),
+                                    group: ch["group"].as_str().map(|s| s.to_string()),
+                                })
+                            }).collect())
+                            .unwrap_or_default();
+                        let mut vt_cache = self.edge_state.voice_targets.lock().await;
+                        let session_vts = vt_cache.entry(client_session).or_default();
+                        if sessions.is_empty() && channels.is_empty() {
+                            session_vts.remove(&target_id);
+                        } else {
+                            session_vts.insert(target_id, VoiceTargetConfig { sessions, channels });
+                        }
+                        debug!("Synced voice target {} for session {}", target_id, client_session);
+                    }
                 }
             }
             "hub.relayedVoice" => {
@@ -633,6 +735,8 @@ impl HubClient {
         password: &str,
         tokens: Vec<String>,
         client_info: Option<hubedge::ClientInfo>,
+        preconnect_self_mute: Option<bool>,
+        preconnect_self_deaf: Option<bool>,
     ) -> Result<hubedge::EdgeAuthenticateUserResult> {
         let request_id = self.next_request_id().await;
         let request = TypedRpcRequest {
@@ -649,8 +753,8 @@ impl HubClient {
                 mute: None,
                 deaf: None,
                 suppress: None,
-                self_mute: None,
-                self_deaf: None,
+                self_mute: preconnect_self_mute,
+                self_deaf: preconnect_self_deaf,
                 priority_speaker: None,
                 recording: None,
             }),
@@ -888,6 +992,36 @@ impl HubClient {
 
         response.edge_save_channel
             .ok_or_else(|| anyhow::anyhow!("No edge_save_channel in response"))
+    }
+
+    /// Notify Hub about a channel state change (including links_add/links_remove).
+    pub async fn notify_channel_state(
+        &self,
+        channel_id: u32,
+        links_add: Vec<u32>,
+        links_remove: Vec<u32>,
+    ) {
+        let edge_id = self.edge_id().await;
+        let params_json = serde_json::json!({
+            "edge_id": edge_id,
+            "channel_id": channel_id,
+            "links_add": links_add,
+            "links_remove": links_remove,
+        });
+        let notification = TypedRpcNotification {
+            method: "hub.handleChannelState".to_string(),
+            timestamp: Some(current_millis() as i64),
+            unknown_params_json: Some(params_json.to_string()),
+            ..Default::default()
+        };
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+        if let Err(e) = self.send_packet(&packet).await {
+            warn!("Failed to notify Hub of channel state: {}", e);
+        }
     }
 
     /// Notify Hub about a channel removal request.

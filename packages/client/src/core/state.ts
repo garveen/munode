@@ -250,6 +250,12 @@ export class StateManager {
       // 触发用户离开事件
       this.client.emit('userRemove', message);
     }
+
+    // If we ourselves are being removed (kicked/banned), emit kicked and disconnect
+    if (this.session && this.session.session === session) {
+      this.client.emit('kicked', message);
+      this.client.disconnect();
+    }
   }
 
   /**

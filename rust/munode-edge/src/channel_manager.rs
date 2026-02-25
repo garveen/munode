@@ -53,6 +53,7 @@ pub struct RemoteUser {
     pub self_deaf: bool,
     pub priority_speaker: bool,
     pub recording: bool,
+    pub listening_channels: Vec<u32>,
 }
 
 impl From<&GlobalSessionProto> for RemoteUser {
@@ -72,6 +73,7 @@ impl From<&GlobalSessionProto> for RemoteUser {
             self_deaf: proto.self_deaf.unwrap_or(false),
             priority_speaker: proto.priority_speaker.unwrap_or(false),
             recording: proto.recording.unwrap_or(false),
+            listening_channels: vec![],
         }
     }
 }
@@ -233,6 +235,40 @@ impl ChannelManager {
             .filter(|u| u.channel_id == channel_id)
             .cloned()
             .collect()
+    }
+
+    /// Get all channels reachable from `start_channel_id` via channel links (BFS).
+    /// Returns the set of all linked channel IDs including the start channel itself.
+    pub async fn get_all_linked_channels(&self, start_channel_id: u32) -> std::collections::HashSet<u32> {
+        let channels = self.channels.read().await;
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(start_channel_id);
+        visited.insert(start_channel_id);
+        while let Some(ch_id) = queue.pop_front() {
+            if let Some(ch) = channels.get(&ch_id) {
+                for &link_id in &ch.links {
+                    if visited.insert(link_id) {
+                        queue.push_back(link_id);
+                    }
+                }
+            }
+        }
+        visited
+    }
+
+    /// Get remote users in any of the given channels.
+    pub async fn get_remote_users_in_channels(&self, channel_ids: &std::collections::HashSet<u32>) -> Vec<RemoteUser> {
+        self.remote_users.read().await
+            .values()
+            .filter(|u| channel_ids.contains(&u.channel_id))
+            .cloned()
+            .collect()
+    }
+
+    /// Get a snapshot of the children map.
+    pub async fn get_all_children_map(&self) -> std::collections::HashMap<u32, Vec<u32>> {
+        self.channel_children.read().await.clone()
     }
 }
 

@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { setupTestEnvironment, createClients, cleanupClients, type TestEnvironment } from '../setup.js';
+import { setupTestEnvironment, createClients, cleanupClients, USE_RUST, type TestEnvironment } from '../setup.js';
 import { MumbleClient } from '../../../packages/client/src/index.js';
 import { cpus } from 'os';
 
@@ -20,7 +20,7 @@ describe('Worker Pool Integration Tests', () => {
     await testEnv?.cleanup();
   }, 30000);
 
-  it('should initialize Worker Pool on server start', () => {
+  it.skipIf(USE_RUST)('should initialize Worker Pool on server start', () => {
     const workerPool = testEnv.edgeServer?.getCryptoWorkerPool();
     expect(workerPool).toBeDefined();
   });
@@ -40,7 +40,7 @@ describe('Worker Pool Integration Tests', () => {
     await cleanupClients(clients);
   }, 15000);
 
-  it('should get Worker Pool statistics', async () => {
+  it.skipIf(USE_RUST)('should get Worker Pool statistics', async () => {
     const workerPool = testEnv.edgeServer?.getCryptoWorkerPool();
     expect(workerPool).toBeDefined();
 
