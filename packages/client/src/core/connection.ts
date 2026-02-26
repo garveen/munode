@@ -214,6 +214,17 @@ export class ConnectionManager {
   }
 
   /**
+   * Abruptly destroy the TCP socket (sends TCP RST).
+   * Used in tests to simulate an ungraceful disconnect.
+   */
+  destroySocket(): void {
+    if (this.tcpSocket) {
+      this.tcpSocket.destroy();
+      this.tcpSocket = null;
+    }
+  }
+
+  /**
    * 发送 TCP 消息
    */
   async sendTCP(message: Buffer): Promise<void> {

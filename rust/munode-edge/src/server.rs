@@ -162,19 +162,35 @@ async fn handle_client_connection(
     let mut preconnect_self_mute: Option<bool> = None;
     let mut preconnect_self_deaf: Option<bool> = None;
 
-    loop {
+    'outer: loop {
         // Read data from TLS stream
-        let n = reader.read_buf(&mut buf).await?;
+        let n = match reader.read_buf(&mut buf).await {
+            Ok(n) => n,
+            Err(e) => {
+                info!("Client {} connection error: {}", peer_addr, e);
+                break 'outer;
+            }
+        };
         if n == 0 {
             info!("Client {} disconnected", peer_addr);
             break;
         }
 
         // Process all complete frames in the buffer
-        while let Some(frame) = decode_frame(&mut buf)? {
+        loop {
+            let frame = match decode_frame(&mut buf) {
+                Ok(Some(frame)) => frame,
+                Ok(None) => break,
+                Err(e) => {
+                    warn!("Frame decode error from {}: {}", peer_addr, e);
+                    break 'outer;
+                }
+            };
             match frame.message_type {
                 MessageType::Version => {
-                    let response = handler::encode_version_response(&frame.payload, &peer_addr.to_string())?;
+                    let Ok(response) = handler::encode_version_response(&frame.payload, &peer_addr.to_string()) else {
+                        continue;
+                    };
                     client_sender.send_raw(response).await;
                 }
                 // Pre-connect UserState: client sends self_deaf/self_mute before Authenticate
@@ -189,7 +205,7 @@ async fn handle_client_connection(
                     }
                 }
                 MessageType::Authenticate if client_state == ClientState::Connected => {
-                    let auth = mumbleproto::Authenticate::decode(&frame.payload[..])?;
+                    let Ok(auth) = mumbleproto::Authenticate::decode(&frame.payload[..]) else { continue; };
                     let username = auth.username.clone().unwrap_or_default();
                     let password = auth.password.clone().unwrap_or_default();
                     let tokens: Vec<String> = auth.tokens.clone();
@@ -321,7 +337,10 @@ async fn handle_client_connection(
                     let login = LoginHandler::new(
                         &client_sender, config, &edge_state, &hub_client,
                     );
-                    login.execute_login(sid, &auth_result, opus).await?;
+                    if let Err(e) = login.execute_login(sid, &auth_result, opus).await {
+                        info!("Login sequence failed for {} (session={}): {}", peer_addr, sid, e);
+                        break 'outer;
+                    }
 
                     client_state = ClientState::Ready;
                     edge_state.client_manager.set_client_state(sid, ClientState::Ready).await;
@@ -359,11 +378,11 @@ async fn handle_client_connection(
                     info!("Client {} is now Ready (session={})", peer_addr, sid);
                 }
                 MessageType::Ping => {
-                    let response = handler::encode_ping_response(&frame.payload)?;
+                    let Ok(response) = handler::encode_ping_response(&frame.payload) else { continue; };
                     client_sender.send_raw(response).await;
                 }
                 MessageType::UserState if client_state == ClientState::Ready => {
-                    let user_state = mumbleproto::UserState::decode(&frame.payload[..])?;
+                    let Ok(user_state) = mumbleproto::UserState::decode(&frame.payload[..]) else { continue; };
                     if let Some(sid) = session_id {
                         // Check if this targets another user (admin operation)
                         let target_sid = user_state.session.unwrap_or(sid);
@@ -376,7 +395,7 @@ async fn handle_client_connection(
                     }
                 }
                 MessageType::TextMessage if client_state == ClientState::Ready => {
-                    let text_msg = mumbleproto::TextMessage::decode(&frame.payload[..])?;
+                    let Ok(text_msg) = mumbleproto::TextMessage::decode(&frame.payload[..]) else { continue; };
                     if let Some(sid) = session_id {
                         debug!("TextMessage from session {}: {:?}", sid, text_msg.message);
                         // Local broadcast to clients on this edge
@@ -561,7 +580,7 @@ async fn handle_client_connection(
                     }
                 }
                 MessageType::VoiceTarget if client_state == ClientState::Ready => {
-                    let vt = mumbleproto::VoiceTarget::decode(&frame.payload[..])?;
+                    let Ok(vt) = mumbleproto::VoiceTarget::decode(&frame.payload[..]) else { continue; };
                     if let Some(sid) = session_id {
                         let target_id = vt.id.unwrap_or(0);
                         debug!("VoiceTarget from session {}: id={}", sid, target_id);
@@ -633,7 +652,7 @@ async fn handle_client_connection(
                     }
                 }
                 MessageType::UserStats if client_state == ClientState::Ready => {
-                    let stats = mumbleproto::UserStats::decode(&frame.payload[..])?;
+                    let Ok(stats) = mumbleproto::UserStats::decode(&frame.payload[..]) else { continue; };
                     if let Some(requester_sid) = session_id {
                         debug!("UserStats request for session {:?}", stats.session);
                         if let Some(target_session) = stats.session {
@@ -708,7 +727,7 @@ async fn handle_client_connection(
                     }
                 }
                 MessageType::PermissionQuery if client_state == ClientState::Ready => {
-                    let pq = mumbleproto::PermissionQuery::decode(&frame.payload[..])?;
+                    let Ok(pq) = mumbleproto::PermissionQuery::decode(&frame.payload[..]) else { continue; };
                     if let Some(sid) = session_id {
                         let channel_id = pq.channel_id.unwrap_or(0);
                         debug!("PermissionQuery from session {} for channel {}", sid, channel_id);
@@ -742,7 +761,7 @@ async fn handle_client_connection(
                 }
                 MessageType::CryptSetup if client_state == ClientState::Ready => {
                     // Client sending updated nonce for CryptSetup resync
-                    let crypt = mumbleproto::CryptSetup::decode(&frame.payload[..])?;
+                    let Ok(crypt) = mumbleproto::CryptSetup::decode(&frame.payload[..]) else { continue; };
                     debug!("CryptSetup resync from {}: has_client_nonce={}", peer_addr, crypt.client_nonce.is_some());
                     if let Some(sid) = session_id {
                         // Update decrypt IV if client provided their new nonce
@@ -764,7 +783,7 @@ async fn handle_client_connection(
                 }
                 MessageType::UserRemove if client_state == ClientState::Ready => {
                     // User-initiated kick/ban - forward to Hub
-                    let user_remove = mumbleproto::UserRemove::decode(&frame.payload[..])?;
+                    let Ok(user_remove) = mumbleproto::UserRemove::decode(&frame.payload[..]) else { continue; };
                     if let Some(sid) = session_id {
                         if let Some(client) = edge_state.client_manager.get_client(sid).await {
                             debug!("UserRemove from session {} targeting session {}", sid, user_remove.session);
@@ -781,7 +800,7 @@ async fn handle_client_connection(
                 }
                 MessageType::ChannelState if client_state == ClientState::Ready => {
                     // Client requesting channel create/edit - forward to Hub
-                    let ch_state = mumbleproto::ChannelState::decode(&frame.payload[..])?;
+                    let Ok(ch_state) = mumbleproto::ChannelState::decode(&frame.payload[..]) else { continue; };
                     debug!("ChannelState from {}: channel_id={:?}, name={:?}", peer_addr, ch_state.channel_id, ch_state.name);
 
                     let hub = hub_client.clone();
@@ -808,7 +827,7 @@ async fn handle_client_connection(
                 }
                 MessageType::ChannelRemove if client_state == ClientState::Ready => {
                     // Client requesting channel removal - forward to Hub
-                    let ch_remove = mumbleproto::ChannelRemove::decode(&frame.payload[..])?;
+                    let Ok(ch_remove) = mumbleproto::ChannelRemove::decode(&frame.payload[..]) else { continue; };
                     debug!("ChannelRemove from {}: channel_id={}", peer_addr, ch_remove.channel_id);
 
                     let hub = hub_client.clone();
@@ -818,7 +837,7 @@ async fn handle_client_connection(
                 }
                 MessageType::BanList if client_state == ClientState::Ready => {
                     // BanList query/update - forward to Hub
-                    let ban_list = mumbleproto::BanList::decode(&frame.payload[..])?;
+                    let Ok(ban_list) = mumbleproto::BanList::decode(&frame.payload[..]) else { continue; };
                     debug!("BanList from {}: query={:?}, {} entries", peer_addr, ban_list.query, ban_list.bans.len());
                     if ban_list.query.unwrap_or(false) {
                         // Check admin (Write) permission on root channel
@@ -857,7 +876,7 @@ async fn handle_client_connection(
                 }
                 MessageType::Acl if client_state == ClientState::Ready => {
                     // ACL query/update - forward to Hub
-                    let acl_msg = mumbleproto::Acl::decode(&frame.payload[..])?;
+                    let Ok(acl_msg) = mumbleproto::Acl::decode(&frame.payload[..]) else { continue; };
                     let is_query = acl_msg.query.unwrap_or(false);
                     debug!("ACL from {}: channel_id={}, query={}", peer_addr, acl_msg.channel_id, is_query);
 
@@ -879,7 +898,7 @@ async fn handle_client_connection(
                 }
                 MessageType::PluginDataTransmission if client_state == ClientState::Ready => {
                     // Plugin data forwarding
-                    let plugin = mumbleproto::PluginDataTransmission::decode(&frame.payload[..])?;
+                    let Ok(plugin) = mumbleproto::PluginDataTransmission::decode(&frame.payload[..]) else { continue; };
                     debug!("PluginData from {}: dataId={:?}", peer_addr, plugin.data_id);
 
                     let hub = hub_client.clone();
@@ -931,7 +950,7 @@ async fn handle_client_connection(
                     });
                 }
                 MessageType::QueryUsers if client_state == ClientState::Ready => {
-                    let query = mumbleproto::QueryUsers::decode(&frame.payload[..])?;
+                    let Ok(query) = mumbleproto::QueryUsers::decode(&frame.payload[..]) else { continue; };
                     debug!("QueryUsers from {}: ids={:?}, names={:?}", peer_addr, query.ids, query.names);
                     // Return matching users from local clients (deduplicated)
                     let mut result_ids = Vec::new();
@@ -962,7 +981,7 @@ async fn handle_client_connection(
                 }
                 MessageType::RequestBlob if client_state == ClientState::Ready => {
                     // RequestBlob - request for user textures/comments or channel descriptions
-                    let blob = mumbleproto::RequestBlob::decode(&frame.payload[..])?;
+                    let Ok(blob) = mumbleproto::RequestBlob::decode(&frame.payload[..]) else { continue; };
                     debug!("RequestBlob from {}: session_textures={:?}, session_comments={:?}, channel_descriptions={:?}",
                            peer_addr, blob.session_texture, blob.session_comment, blob.channel_description);
                     // Send empty responses for channel descriptions that were requested
@@ -1014,7 +1033,7 @@ async fn handle_client_connection(
                     }
                 }
                 MessageType::UserList if client_state == ClientState::Ready => {
-                    let msg = mumbleproto::UserList::decode(&frame.payload[..])?;
+                    let Ok(msg) = mumbleproto::UserList::decode(&frame.payload[..]) else { continue; };
                     if msg.users.is_empty() {
                         // Query: send full registered user list from Hub
                         if let Some(raw) = hub_client.rpc_get_user_list().await {
@@ -1029,7 +1048,7 @@ async fn handle_client_connection(
                     }
                 }
                 MessageType::CodecVersion if client_state == ClientState::Ready => {
-                    let cv = mumbleproto::CodecVersion::decode(&frame.payload[..])?;
+                    let Ok(cv) = mumbleproto::CodecVersion::decode(&frame.payload[..]) else { continue; };
                     if let Some(sid) = session_id {
                         // Update client's codec capability
                         if let Some(mut c) = edge_state.client_manager.get_client(sid).await {
