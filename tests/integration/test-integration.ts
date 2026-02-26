@@ -1,145 +1,158 @@
 #!/usr/bin/env node
 /**
- * 手动集成测试入口文件（适配集成测试基础设施）
+ * 手动集成测试入口文件（展示模式）
  *
- * 启动组件：
- * - 1 个 Auth Server（内置于 setup.ts）
- * - 1 个 Hub Server（TS 进程内 或 Rust 二进制，通过 MUNODE_USE_RUST=1 切换）
- * - 3 个 Edge Server
+ * 启动完整测试环境（Hub + 3 个 Edge + 认证服务器），展示连接信息
+ * 和可用用户，保持运行直到按下 Ctrl+C。
+ *
+ * Rust 模式下 Hub/Edge 进程的 stdout/stderr 会直接转发到本终端。
  *
  * 运行方式:
  *   npx tsx tests/integration/test-integration.ts
- *   或
- *   LOG_LEVEL=debug npx tsx tests/integration/test-integration.ts
- *   或
  *   MUNODE_USE_RUST=1 npx tsx tests/integration/test-integration.ts
+ *
+ * Rust 模式需要先编译：
+ *   cd rust && cargo build --release
  */
 
-// 必须在导入任何模块之前设置环境变量
-const logLevel = process.env.LOG_LEVEL ?? 'info';
-process.env.LOG_LEVEL = logLevel;
+// ① 在 setup.ts 加载前设置 TEST_DEBUG=1。
+//   RustServerProcess.start() 内部根据 TEST_DEBUG 决定 stdio 模式：
+//     TEST_DEBUG=1  →  stdio: 'inherit'  →  Rust stdout/stderr 转发到本终端
+//     TEST_DEBUG=0  →  stdio: 'ignore'   →  Rust 输出静默丢弃
+process.env.TEST_DEBUG = '1';
 
-import { setupTestEnvironment, USE_RUST, sleep, type TestEnvironment } from './setup.js';
-import { testUserPasswords } from './test-users.js';
-import { createLogger, setGlobalLogLevel } from '@munode/common';
+// 声明此文件为 ES 模块（顶层 await 需要）
+export {};
 
-// 确保所有 logger 都使用指定的日志级别
-setGlobalLogLevel(logLevel);
+// ② 动态导入——保证 ① 的 env 赋值在 setup.ts 模块求值前已生效。
+//   若改为 static import，ESM 会先执行所有 import 语句再运行模块体，
+//   导致 TEST_DEBUG 在 setup.ts 加载时仍为未设置状态。
+const { setupTestEnvironment, USE_RUST } = await import('./setup.js');
+const { testUserPasswords } = await import('./test-users.js');
 
-const logger = createLogger({ service: 'integration-test' });
+// ──────────────────────────────────────────────────────────────────
+// 工具函数
+// ──────────────────────────────────────────────────────────────────
 
-logger.info(`Log level set to: ${logLevel}`);
-logger.info(`Mode: ${USE_RUST ? 'Rust binary' : 'TypeScript in-process'}`);
+const SEP  = '═'.repeat(64);
+const SEP2 = '─'.repeat(64);
 
-// ==================
-// 测试场景
-// ==================
-
-/**
- * 运行基本测试场景
- */
-async function runTestScenarios(testEnv: TestEnvironment): Promise<void> {
-  logger.info('');
-  logger.info('='.repeat(60));
-  logger.info('Running Test Scenarios');
-  logger.info('='.repeat(60));
-
-  // 等待所有服务器稳定
-  await sleep(3000);
-
-  // 场景 1: 检查服务器状态
-  logger.info('\n[Scenario 1] Checking server status...');
-
-  if (USE_RUST) {
-    logger.info(`Hub process:   running=${testEnv.hubProcess?.isRunning() ?? false}, pid=${testEnv.hubProcess?.pid ?? 'N/A'}`);
-    logger.info(`Edge 1 process: running=${testEnv.edgeProcess?.isRunning() ?? false}, pid=${testEnv.edgeProcess?.pid ?? 'N/A'}`);
-    logger.info(`Edge 2 process: running=${testEnv.edgeProcess2?.isRunning() ?? false}, pid=${testEnv.edgeProcess2?.pid ?? 'N/A'}`);
-    logger.info(`Edge 3 process: running=${testEnv.edgeProcess3?.isRunning() ?? false}, pid=${testEnv.edgeProcess3?.pid ?? 'N/A'}`);
-  } else {
-    const hubStatus = testEnv.hubServer?.getStatus();
-    logger.info(`Hub Server: ${JSON.stringify(hubStatus, null, 2)}`);
-
-    const edges = [testEnv.edgeServer, testEnv.edgeServer2, testEnv.edgeServer3].filter(Boolean);
-    for (let i = 0; i < edges.length; i++) {
-      const edge = edges[i]!;
-      const edgeStatus = {
-        server_id: edge.getConfig().server_id,
-        name: edge.getConfig().name,
-        port: edge.getConfig().network.port,
-        uptime: edge.getUptime(),
-        running: edge.isServerRunning(),
-      };
-      logger.info(`Edge Server ${i + 1}: ${JSON.stringify(edgeStatus, null, 2)}`);
-    }
-  }
-
-  // 端口信息（动态分配，不再硬编码）
-  logger.info('\nPort assignments:');
-  logger.info(`  Auth Server:    http://localhost:${testEnv.authPort}`);
-  logger.info(`  Hub Control:    ws://localhost:${testEnv.controlPort}`);
-  logger.info(`  Hub Web API:    http://localhost:${testEnv.webApiPort}`);
-  logger.info(`  Edge 1 Client:  mumble://localhost:${testEnv.edgePort}`);
-  if (testEnv.edgePort2 > 0) {
-    logger.info(`  Edge 2 Client:  mumble://localhost:${testEnv.edgePort2}`);
-  }
-  if (testEnv.edgePort3 > 0) {
-    logger.info(`  Edge 3 Client:  mumble://localhost:${testEnv.edgePort3}`);
-  }
-
-  // 场景 2: 显示可用测试用户
-  logger.info('\n[Scenario 2] Available test users...');
-  const userEntries = Object.entries(testUserPasswords);
-  for (const [username, info] of userEntries) {
-    const groups = info.groups?.join(', ') ?? 'user';
-    logger.info(`  ${username} (id=${info.user_id}, password=${info.password}, groups=[${groups}])`);
-  }
-  const total = userEntries.length;
-  logger.info(`Total: ${total} users`);
+function banner(title: string): void {
+  console.log(`\n${SEP}\n  ${title}\n${SEP}`);
 }
 
-// ==================
-// 主程序
-// ==================
-
-async function main(): Promise<void> {
-  logger.info('Starting Integration Test Environment...');
-  logger.info(`Mode: ${USE_RUST ? 'Rust binary' : 'TypeScript in-process'}`);
-  logger.info('');
-
-  try {
-    // 使用集成测试基础设施启动：Auth + Hub + Edge1 + Edge2 + Edge3
-    logger.info('Setting up environment via setupTestEnvironment (Auth + Hub + Edge1 + Edge2 + Edge3)...');
-    const testEnv = await setupTestEnvironment(8080, {
-      startHub:   true,
-      startEdge:  true,
-      startEdge2: true,
-      startEdge3: true,
-      startEdge4: false,
-      startAuth:  true,
-      reuse:      false,
-      silent:     false,  // 手动测试始终转发 Rust 进程的 stdout/stderr
-    });
-
-    logger.info('');
-    logger.info('✓ All servers started successfully!');
-    logger.info('');
-
-    // 运行测试场景
-    await runTestScenarios(testEnv);
-
-    // 保持运行，等待手动终止
-    // setup.ts 已注册 SIGINT/SIGTERM 处理器负责清理
-    logger.info('\nEnvironment is running. Press Ctrl+C to stop.');
-    await new Promise<never>(() => { /* keep alive */ });
-
-  } catch (error) {
-    logger.error('Failed to start servers:', { error });
-    process.exit(1);
-  }
+function section(title: string): void {
+  console.log(`\n  ▶ ${title}`);
+  console.log(`  ${SEP2}`);
 }
 
-// 启动
-main().catch(error => {
-  logger.error('Fatal error:', { error });
+// ──────────────────────────────────────────────────────────────────
+// 启动环境
+// ──────────────────────────────────────────────────────────────────
+
+banner(`MuNode 手动测试环境  [${USE_RUST ? 'Rust 模式' : 'TypeScript 模式'}]`);
+console.log('  正在启动服务器，请稍候...\n');
+
+let testEnv: Awaited<ReturnType<typeof setupTestEnvironment>>;
+
+try {
+  testEnv = await setupTestEnvironment(8080, {
+    startHub:   true,
+    startEdge:  true,
+    startEdge2: true,
+    startEdge3: true,
+    startEdge4: false,
+    startAuth:  true,
+    silent:     false,  // 输出详细日志（TS 模式），Rust 模式同时启用 'inherit' stdio
+    reuse:      false,  // 每次都创建全新环境，避免残留状态
+  });
+} catch (err) {
+  console.error('\n✗ 测试环境启动失败:', err);
   process.exit(1);
-});
+}
+
+console.log('\n  ✓ 所有服务器已就绪');
+
+// ──────────────────────────────────────────────────────────────────
+// 连接信息
+// ──────────────────────────────────────────────────────────────────
+
+banner('连接信息');
+
+section('认证服务器');
+console.log(`    HTTP  →  http://127.0.0.1:${testEnv.authPort}/auth`);
+
+section('Hub 服务器');
+console.log(`    控制端口  →  ${testEnv.controlPort}`);
+console.log(`    Web API   →  http://127.0.0.1:${testEnv.webApiPort}`);
+
+section('Edge 服务器（Mumble 客户端连接地址）');
+const edges = [
+  { label: 'Edge 1', port: testEnv.edgePort,  edgePort: testEnv.edgeEdgePort  },
+  { label: 'Edge 2', port: testEnv.edgePort2, edgePort: testEnv.edgeEdgePort2 },
+  { label: 'Edge 3', port: testEnv.edgePort3, edgePort: testEnv.edgeEdgePort3 },
+  { label: 'Edge 4', port: testEnv.edgePort4, edgePort: testEnv.edgeEdgePort4 },
+];
+
+for (const e of edges) {
+  if (e.port > 0) {
+    console.log(`    ${e.label}  →  mumble://127.0.0.1:${e.port}  (Edge 间通信端口: ${e.edgePort})`);
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// 可用用户列表
+// ──────────────────────────────────────────────────────────────────
+
+banner('可用测试用户（按 user_id 排序）');
+
+const COL_USER = 28;
+const COL_PASS = 26;
+const COL_ID   = 10;
+
+console.log(
+  '  ' +
+  '用户名'.padEnd(COL_USER) +
+  '密码'.padEnd(COL_PASS) +
+  'user_id'.padEnd(COL_ID) +
+  '组'
+);
+console.log('  ' + SEP2);
+
+const sortedUsers = Object.entries(testUserPasswords)
+  .sort(([, a], [, b]) => a.user_id - b.user_id);
+
+const MAX_DISPLAY = 40;
+for (const [username, info] of sortedUsers.slice(0, MAX_DISPLAY)) {
+  const groups = info.groups?.join(', ') ?? '—';
+  console.log(
+    '  ' +
+    username.padEnd(COL_USER) +
+    info.password.padEnd(COL_PASS) +
+    String(info.user_id).padEnd(COL_ID) +
+    groups
+  );
+}
+
+if (sortedUsers.length > MAX_DISPLAY) {
+  console.log(
+    `\n  … 另有 ${sortedUsers.length - MAX_DISPLAY} 个用户` +
+    '，详见 tests/integration/test-users.ts'
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// 运行提示
+// ──────────────────────────────────────────────────────────────────
+
+if (USE_RUST) {
+  console.log(
+    '\n  ℹ  Rust 模式：Hub/Edge 进程的 stdout/stderr 已通过 stdio:inherit 转发到本终端'
+  );
+}
+
+banner('环境就绪  —  按 Ctrl+C 关闭所有服务');
+
+// SIGINT / SIGTERM 由 setup.ts 在模块级注册的处理器负责清理并退出进程，
+// 此处只需保持进程运行即可。
+await new Promise<never>(() => {});

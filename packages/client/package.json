@@ -5,6 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "type": "module",
   "bin": {
     "munode-client": "./dist/cli.js"
   },
