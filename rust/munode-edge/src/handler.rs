@@ -158,6 +158,9 @@ impl<'a> LoginHandler<'a> {
     }
 
     /// Send UserState for all remote users.
+    ///
+    /// Boolean flags are only included when `true` to avoid spurious
+    /// client-side notifications for new-to-client users.
     async fn send_remote_users(&self, self_session: u32) -> Result<()> {
         let remote_users = self.edge_state.channel_manager.get_all_remote_users().await;
         let local_clients = self.edge_state.client_manager.get_all_clients().await;
@@ -171,13 +174,13 @@ impl<'a> LoginHandler<'a> {
                 user_id: Some(user.user_id),
                 name: Some(user.username.clone()),
                 channel_id: Some(user.channel_id),
-                mute: Some(user.mute),
-                deaf: Some(user.deaf),
-                suppress: Some(user.suppress),
-                self_mute: Some(user.self_mute),
-                self_deaf: Some(user.self_deaf),
-                priority_speaker: Some(user.priority_speaker),
-                recording: Some(user.recording),
+                mute: if user.mute { Some(true) } else { None },
+                deaf: if user.deaf { Some(true) } else { None },
+                suppress: if user.suppress { Some(true) } else { None },
+                self_mute: if user.self_mute { Some(true) } else { None },
+                self_deaf: if user.self_deaf { Some(true) } else { None },
+                priority_speaker: if user.priority_speaker { Some(true) } else { None },
+                recording: if user.recording { Some(true) } else { None },
                 hash: user.cert_hash.clone(),
                 ..Default::default()
             };
@@ -193,13 +196,13 @@ impl<'a> LoginHandler<'a> {
                 user_id: Some(client.user_id),
                 name: Some(client.username.clone()),
                 channel_id: Some(client.channel_id),
-                mute: Some(client.mute),
-                deaf: Some(client.deaf),
-                suppress: Some(client.suppress),
-                self_mute: Some(client.self_mute),
-                self_deaf: Some(client.self_deaf),
-                priority_speaker: Some(client.priority_speaker),
-                recording: Some(client.recording),
+                mute: if client.mute { Some(true) } else { None },
+                deaf: if client.deaf { Some(true) } else { None },
+                suppress: if client.suppress { Some(true) } else { None },
+                self_mute: if client.self_mute { Some(true) } else { None },
+                self_deaf: if client.self_deaf { Some(true) } else { None },
+                priority_speaker: if client.priority_speaker { Some(true) } else { None },
+                recording: if client.recording { Some(true) } else { None },
                 hash: client.cert_hash.clone(),
                 ..Default::default()
             };
@@ -211,6 +214,10 @@ impl<'a> LoginHandler<'a> {
     }
 
     /// Send the self UserState.
+    ///
+    /// Only includes boolean flags (mute, deaf, suppress, etc.) when they are
+    /// explicitly `true`. Sending `false` would trigger spurious client-side
+    /// notifications such as "recording ended" or "you were unmuted".
     async fn send_self_user_state(
         &self,
         session_id: u32,
@@ -222,13 +229,13 @@ impl<'a> LoginHandler<'a> {
             user_id: Some(auth_result.user_id.unwrap_or(0)),
             name: Some(auth_result.username.clone().unwrap_or_default()),
             channel_id: Some(channel_id),
-            mute: auth_result.mute,
-            deaf: auth_result.deaf,
-            suppress: auth_result.suppress,
-            self_mute: auth_result.self_mute,
-            self_deaf: auth_result.self_deaf,
-            priority_speaker: auth_result.priority_speaker,
-            recording: auth_result.recording,
+            mute: auth_result.mute.filter(|&v| v),
+            deaf: auth_result.deaf.filter(|&v| v),
+            suppress: auth_result.suppress.filter(|&v| v),
+            self_mute: auth_result.self_mute.filter(|&v| v),
+            self_deaf: auth_result.self_deaf.filter(|&v| v),
+            priority_speaker: auth_result.priority_speaker.filter(|&v| v),
+            recording: auth_result.recording.filter(|&v| v),
             ..Default::default()
         };
         self.send(MessageType::UserState, &msg).await?;
@@ -238,10 +245,12 @@ impl<'a> LoginHandler<'a> {
 
     /// Send ServerSync.
     async fn send_server_sync(&self, session_id: u32) -> Result<()> {
+        let welcome = self.config.server.welcome_text.clone()
+            .unwrap_or_else(|| "Welcome to MuNode Server".to_string());
         let msg = mumbleproto::ServerSync {
             session: Some(session_id),
             max_bandwidth: Some(self.config.server.max_bandwidth),
-            welcome_text: self.config.server.welcome_text.clone(),
+            welcome_text: Some(welcome),
             permissions: Some(0),
         };
         self.send(MessageType::ServerSync, &msg).await?;
@@ -250,10 +259,14 @@ impl<'a> LoginHandler<'a> {
     }
 
     /// Send ServerConfig.
+    ///
+    /// Note: `welcome_text` is intentionally omitted here; it is already sent
+    /// in `ServerSync`. Including it again would cause duplicate MOTD
+    /// notifications on some clients.
     async fn send_server_config(&self) -> Result<()> {
         let msg = mumbleproto::ServerConfig {
             max_bandwidth: Some(self.config.server.max_bandwidth),
-            welcome_text: self.config.server.welcome_text.clone(),
+            welcome_text: None,
             allow_html: Some(true),
             message_length: Some(5000),
             image_message_length: Some(131072),
@@ -315,19 +328,22 @@ pub fn encode_reject(reject_type: Option<i32>, reason: &str) -> Vec<u8> {
 }
 
 /// Build a UserState message from a ClientInfo.
+///
+/// Boolean flags are only included when `true` to avoid spurious
+/// client-side notifications.
 pub fn build_user_state_msg(client: &ClientInfo) -> mumbleproto::UserState {
     mumbleproto::UserState {
         session: Some(client.session),
         user_id: Some(client.user_id),
         name: Some(client.username.clone()),
         channel_id: Some(client.channel_id),
-        mute: Some(client.mute),
-        deaf: Some(client.deaf),
-        suppress: Some(client.suppress),
-        self_mute: Some(client.self_mute),
-        self_deaf: Some(client.self_deaf),
-        priority_speaker: Some(client.priority_speaker),
-        recording: Some(client.recording),
+        mute: if client.mute { Some(true) } else { None },
+        deaf: if client.deaf { Some(true) } else { None },
+        suppress: if client.suppress { Some(true) } else { None },
+        self_mute: if client.self_mute { Some(true) } else { None },
+        self_deaf: if client.self_deaf { Some(true) } else { None },
+        priority_speaker: if client.priority_speaker { Some(true) } else { None },
+        recording: if client.recording { Some(true) } else { None },
         hash: client.cert_hash.clone(),
         ..Default::default()
     }
@@ -445,8 +461,17 @@ mod tests {
         assert_eq!(msg.user_id(), 100);
         assert_eq!(msg.name(), "testuser");
         assert_eq!(msg.channel_id(), 1);
-        assert_eq!(msg.self_mute(), true);
+        assert_eq!(msg.self_mute, Some(true));
         assert_eq!(msg.hash(), "abc123");
+
+        // false boolean fields must be None (not Some(false)) to avoid
+        // spurious client notifications like "unmuted" or "recording ended"
+        assert_eq!(msg.mute, None);
+        assert_eq!(msg.deaf, None);
+        assert_eq!(msg.suppress, None);
+        assert_eq!(msg.self_deaf, None);
+        assert_eq!(msg.priority_speaker, None);
+        assert_eq!(msg.recording, None);
     }
 
     #[test]
