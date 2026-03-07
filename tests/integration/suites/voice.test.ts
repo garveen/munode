@@ -172,6 +172,10 @@ describe('Voice Integration Tests', () => {
       
       const [sender, recvE1Same, recvE2Same, recvE1Other, recvE2Other] = clients;
       
+      // 在监听器设置前创建语音包，以便在监听器中比对数据内容
+      const voicePacket = createVoicePacket(4, 0, 0);
+      const sentAudioData = voicePacket.subarray(2); // header(1B) + sequence(1B) 之后的原始音频数据
+
       // 设置语音监听器
       const receivedVoice = {
         recvE1Same: false,
@@ -179,35 +183,46 @@ describe('Voice Integration Tests', () => {
         recvE1Other: false,
         recvE2Other: false,
       };
-      
+      const receivedAudioData: { recvE1Same: Buffer | null; recvE2Same: Buffer | null } = {
+        recvE1Same: null,
+        recvE2Same: null,
+      };
+
       const senderSession = sender.getStateManager().getSession()?.session || 0;
-      
+
       recvE1Same.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.recvE1Same = true;
+        if (data.session === senderSession) {
+          receivedVoice.recvE1Same = true;
+          receivedAudioData.recvE1Same = data.data;
+        }
       });
-      
+
       recvE2Same.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.recvE2Same = true;
+        if (data.session === senderSession) {
+          receivedVoice.recvE2Same = true;
+          receivedAudioData.recvE2Same = data.data;
+        }
       });
-      
+
       recvE1Other.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE1Other = true;
       });
-      
+
       recvE2Other.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE2Other = true;
       });
-      
-      // 发送语音包
-      const voicePacket = createVoicePacket(4, 0, 0);
+
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
-      
+
       // 等待语音包到达（跨 Edge 需要更长时间）
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       // 验证结果
       expect(receivedVoice.recvE1Same).toBe(true); // 同 Edge 同频道应该收到
       expect(receivedVoice.recvE2Same).toBe(true); // 跨 Edge 同频道应该收到
+      // 验证语音数据内容与发送一致（保证中继不损坏数据）
+      expect(Buffer.compare(receivedAudioData.recvE1Same!, sentAudioData)).toBe(0);
+      expect(Buffer.compare(receivedAudioData.recvE2Same!, sentAudioData)).toBe(0);
       expect(receivedVoice.recvE1Other).toBe(false); // 同 Edge 不同频道不应收到
       expect(receivedVoice.recvE2Other).toBe(false); // 跨 Edge 不同频道不应收到
       
@@ -230,36 +245,44 @@ describe('Voice Integration Tests', () => {
       await deafE2.sendUserState({ self_deaf: true });
       await new Promise(resolve => setTimeout(resolve, 300));
       
+      // 在监听器设置前创建语音包以用于数据内容验证
+      const voicePacket = createVoicePacket(4, 0, 0);
+      const sentAudioData = voicePacket.subarray(2);
+
       const receivedVoice = {
         deafE1: false,
         deafE2: false,
         normalE1: false,
       };
-      
+      let normalE1AudioData: Buffer | null = null;
+
       const senderSession = sender.getStateManager().getSession()?.session || 0;
-      
+
       deafE1.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.deafE1 = true;
       });
-      
+
       deafE2.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.deafE2 = true;
       });
-      
+
       normalE1.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.normalE1 = true;
+        if (data.session === senderSession) {
+          receivedVoice.normalE1 = true;
+          normalE1AudioData = data.data;
+        }
       });
-      
-      // 发送语音包
-      const voicePacket = createVoicePacket(4, 0, 0);
+
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
-      
+
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       // 验证：deaf 用户不应收到，normal 用户应该收到
       expect(receivedVoice.deafE1).toBe(false);
       expect(receivedVoice.deafE2).toBe(false);
       expect(receivedVoice.normalE1).toBe(true);
+      // 验证语音数据内容与发送一致
+      expect(Buffer.compare(normalE1AudioData!, sentAudioData)).toBe(0);
       
       await cleanupClients(clients);
     });
@@ -313,26 +336,35 @@ describe('Voice Integration Tests', () => {
       const linkedClients = [sender, recvE2Ch0, recvE1Ch1, recvE2Ch1];
       const linkedSessions = linkedClients.map(c => c.getStateManager().getSession()?.session ?? 0);
       const linkedSessionSet = new Set(linkedSessions);
-      
+
+      // 在监听器设置前创建每个发送者的语音包，以便验证数据内容
+      const sentPackets = linkedClients.map(() => createVoicePacket(4, 0, 0));
+      const sentAudioDataMap = new Map<number, Buffer>(
+        linkedClients.map((_, i) => [linkedSessions[i], sentPackets[i].subarray(2)])
+      );
+
       // receivedFrom[i] = 客户端 i 收到了哪些 sender session 的语音
       const receivedFrom: Set<number>[] = clients.map(() => new Set<number>());
-      
+      // receivedDataMap[i] = 客户端 i 收到的来自各 sender 的音频数据
+      const receivedDataMap: Map<number, Buffer>[] = clients.map(() => new Map<number, Buffer>());
+
       clients.forEach((client, idx) => {
         client.on('voice', (data: VoiceData) => {
           if (linkedSessionSet.has(data.session)) {
             receivedFrom[idx].add(data.session);
+            receivedDataMap[idx].set(data.session, data.data);
           }
         });
       });
-      
+
       // 4 个 linked client 同时发送语音
       await Promise.all(
-        linkedClients.map(c => c.getConnectionManager().sendVoicePacket(createVoicePacket(4, 0, 0)))
+        linkedClients.map((c, i) => c.getConnectionManager().sendVoicePacket(sentPackets[i]))
       );
-      
+
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // 验证：每个 linked client 都应收到其他 3 个 client 的语音（按 session 匹配）
+
+      // 验证：每个 linked client 都应收到其他 3 个 client 的语音且数据内容一致
       const clientNames = ['voice_sender3', 'voice_recv_e2_ch0', 'voice_recv_e1_ch1', 'voice_recv_e2_ch1'];
       for (let i = 0; i < linkedClients.length; i++) {
         for (let j = 0; j < linkedClients.length; j++) {
@@ -341,6 +373,12 @@ describe('Voice Integration Tests', () => {
               receivedFrom[i].has(linkedSessions[j]),
               `${clientNames[i]} 应收到来自 ${clientNames[j]} (session=${linkedSessions[j]}) 的语音`
             ).toBe(true);
+            const receivedBuf = receivedDataMap[i].get(linkedSessions[j]);
+            expect(receivedBuf, `${clientNames[i]} 应有来自 ${clientNames[j]} 的语音数据`).toBeDefined();
+            expect(
+              Buffer.compare(receivedBuf!, sentAudioDataMap.get(linkedSessions[j])!),
+              `${clientNames[i]} 收到的来自 ${clientNames[j]} 的语音数据应与发出的一致`
+            ).toBe(0);
           }
         }
       }
@@ -400,24 +438,33 @@ describe('Voice Integration Tests', () => {
       const sessions = clients.map(c => c.getStateManager().getSession()?.session ?? 0);
       const sessionSet = new Set(sessions);
 
+      // 在监听器设置前创建每个发送者的语音包，以便验证数据内容
+      const sentPackets = clients.map(() => createVoicePacket(4, 0, 0));
+      const sentAudioDataMap = new Map<number, Buffer>(
+        clients.map((_, i) => [sessions[i], sentPackets[i].subarray(2)])
+      );
+
       // receivedFrom[i] = 客户端 i 收到了哪些 session 的语音
       const receivedFrom: Set<number>[] = clients.map(() => new Set<number>());
+      // receivedDataMap[i] = 客户端 i 收到的来自各 sender 的音频数据
+      const receivedDataMap: Map<number, Buffer>[] = clients.map(() => new Map<number, Buffer>());
       clients.forEach((client, idx) => {
         client.on('voice', (data: VoiceData) => {
           if (sessionSet.has(data.session)) {
             receivedFrom[idx].add(data.session);
+            receivedDataMap[idx].set(data.session, data.data);
           }
         });
       });
 
       // 5 个客户端全部同时发送语音
       await Promise.all(
-        clients.map(c => c.getConnectionManager().sendVoicePacket(createVoicePacket(4, 0, 0)))
+        clients.map((c, i) => c.getConnectionManager().sendVoicePacket(sentPackets[i]))
       );
 
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // 验证：各客户端应收到其他全部 4 个客户端的语音
+      // 验证：各客户端应收到其他全部 4 个客户端的语音且数据内容一致
       const names = ['chain_a_e1', 'chain_b_e1', 'chain_b_e2', 'chain_c_e1', 'chain_c_e2'];
       for (let i = 0; i < clients.length; i++) {
         for (let j = 0; j < clients.length; j++) {
@@ -426,6 +473,12 @@ describe('Voice Integration Tests', () => {
               receivedFrom[i].has(sessions[j]),
               `${names[i]} 应收到来自 ${names[j]} (session=${sessions[j]}) 的语音`
             ).toBe(true);
+            const receivedBuf = receivedDataMap[i].get(sessions[j]);
+            expect(receivedBuf, `${names[i]} 应有来自 ${names[j]} 的语音数据`).toBeDefined();
+            expect(
+              Buffer.compare(receivedBuf!, sentAudioDataMap.get(sessions[j])!),
+              `${names[i]} 收到的来自 ${names[j]} 的语音数据应与发出的一致`
+            ).toBe(0);
           }
         }
       }
@@ -563,20 +616,34 @@ describe('Voice Integration Tests', () => {
       // 等待 VoiceTarget 同步到所有 Edge（增加到 0.5 秒）
       await new Promise(resolve => setTimeout(resolve, 500));
       
+      // 在监听器设置前创建语音包以用于数据内容验证
+      const voicePacket = createVoicePacket(4, 1, 0);
+      const sentAudioData = voicePacket.subarray(2);
+
       const receivedVoice = {
         target1E1: false,
         target1E2: false,
         nonTargetE1: false,
         nonTargetE2: false,
       };
-      
+      const receivedAudioData: { target1E1: Buffer | null; target1E2: Buffer | null } = {
+        target1E1: null,
+        target1E2: null,
+      };
+
       const senderSession = sender.getStateManager().getSession()?.session || 0;
-      
+
       target1E1.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.target1E1 = true;
+        if (data.session === senderSession) {
+          receivedVoice.target1E1 = true;
+          receivedAudioData.target1E1 = data.data;
+        }
       });
       target1E2.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.target1E2 = true;
+        if (data.session === senderSession) {
+          receivedVoice.target1E2 = true;
+          receivedAudioData.target1E2 = data.data;
+        }
       });
       nonTargetE1.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.nonTargetE1 = true;
@@ -584,20 +651,21 @@ describe('Voice Integration Tests', () => {
       nonTargetE2.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.nonTargetE2 = true;
       });
-      
+
       // 等待监听器设置完成
       await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // 发送 whisper 语音包 (target=1)
-      const voicePacket = createVoicePacket(4, 1, 0);
+
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
-      
+
       // 等待语音包跨 Edge 传输
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       // 验证：只有 target 用户收到
       expect(receivedVoice.target1E1).toBe(true);
       expect(receivedVoice.target1E2).toBe(true);
+      // 验证语音数据内容与发送一致
+      expect(Buffer.compare(receivedAudioData.target1E1!, sentAudioData)).toBe(0);
+      expect(Buffer.compare(receivedAudioData.target1E2!, sentAudioData)).toBe(0);
       expect(receivedVoice.nonTargetE1).toBe(false);
       expect(receivedVoice.nonTargetE2).toBe(false);
       
@@ -630,20 +698,34 @@ describe('Voice Integration Tests', () => {
       // 等待 VoiceTarget 同步到所有 Edge（增加到 0.5 秒）
       await new Promise(resolve => setTimeout(resolve, 500));
       
+      // 在监听器设置前创建语音包以用于数据内容验证
+      const voicePacket = createVoicePacket(4, 2, 0);
+      const sentAudioData = voicePacket.subarray(2);
+
       const receivedVoice = {
         recvE1Ch1: false,
         recvE2Ch1: false,
         recvE1Ch0: false,
         recvE1Ch2: false,
       };
-      
+      const receivedAudioData: { recvE1Ch1: Buffer | null; recvE2Ch1: Buffer | null } = {
+        recvE1Ch1: null,
+        recvE2Ch1: null,
+      };
+
       const senderSession = sender.getStateManager().getSession()?.session || 0;
-      
+
       recvE1Ch1.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.recvE1Ch1 = true;
+        if (data.session === senderSession) {
+          receivedVoice.recvE1Ch1 = true;
+          receivedAudioData.recvE1Ch1 = data.data;
+        }
       });
       recvE2Ch1.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.recvE2Ch1 = true;
+        if (data.session === senderSession) {
+          receivedVoice.recvE2Ch1 = true;
+          receivedAudioData.recvE2Ch1 = data.data;
+        }
       });
       recvE1Ch0.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE1Ch0 = true;
@@ -651,20 +733,21 @@ describe('Voice Integration Tests', () => {
       recvE1Ch2.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.recvE1Ch2 = true;
       });
-      
+
       // 等待监听器设置完成
       await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // 发送 whisper 到 target=2
-      const voicePacket = createVoicePacket(4, 2, 0);
+
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
-      
+
       // 等待语音包跨 Edge 传输
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       // 验证
       expect(receivedVoice.recvE1Ch1).toBe(true);
       expect(receivedVoice.recvE2Ch1).toBe(true);
+      // 验证语音数据内容与发送一致
+      expect(Buffer.compare(receivedAudioData.recvE1Ch1!, sentAudioData)).toBe(0);
+      expect(Buffer.compare(receivedAudioData.recvE2Ch1!, sentAudioData)).toBe(0);
       expect(receivedVoice.recvE1Ch0).toBe(false); // whisper 不发给自己频道
       expect(receivedVoice.recvE1Ch2).toBe(false);
       
@@ -682,29 +765,37 @@ describe('Voice Integration Tests', () => {
       
       const [sender, other] = clients;
       
+      // 在监听器设置前创建语音包以用于数据内容验证
+      const voicePacket = createVoicePacket(4, 31, 0);
+      const sentAudioData = voicePacket.subarray(2);
+
       const receivedVoice = {
         sender: false,
         other: false,
       };
-      
+      let senderAudioData: Buffer | null = null;
+
       const senderSession = sender.getStateManager().getSession()?.session || 0;
-      
+
       sender.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.sender = true;
+        if (data.session === senderSession) {
+          receivedVoice.sender = true;
+          senderAudioData = data.data;
+        }
       });
-      
+
       other.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.other = true;
       });
-      
-      // 发送 loopback 语音包
-      const voicePacket = createVoicePacket(4, 31, 0);
+
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
-      
+
       await new Promise(resolve => setTimeout(resolve, 500));
-      
+
       // 验证：只有发送者自己收到
       expect(receivedVoice.sender).toBe(true);
+      // 验证语音数据内容与发送一致
+      expect(Buffer.compare(senderAudioData!, sentAudioData)).toBe(0);
       expect(receivedVoice.other).toBe(false);
       
       await cleanupClients(clients);
@@ -726,32 +817,47 @@ describe('Voice Integration Tests', () => {
         recvE1: 0,
         recvE2: 0,
       };
-      
+      const receivedDataE1: Buffer[] = [];
+      const receivedDataE2: Buffer[] = [];
+
       const senderSession = sender.getStateManager().getSession()?.session || 0;
-      
+
       recvE1.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedCount.recvE1++;
+        if (data.session === senderSession) {
+          receivedCount.recvE1++;
+          receivedDataE1.push(data.data);
+        }
       });
-      
+
       recvE2.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedCount.recvE2++;
+        if (data.session === senderSession) {
+          receivedCount.recvE2++;
+          receivedDataE2.push(data.data);
+        }
       });
-      
+
       // 等待跨 Edge 连接和状态同步就绪
       await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // 发送 5 个语音包
+
+      // 发送 5 个语音包，记录每个包的原始音频数据
+      const sentAudioDataList: Buffer[] = [];
       for (let i = 0; i < 5; i++) {
         const voicePacket = createVoicePacket(4, 0, i);
+        sentAudioDataList.push(voicePacket.subarray(2));
         await sender.getConnectionManager().sendVoicePacket(voicePacket);
         await new Promise(resolve => setTimeout(resolve, 100));
       }
-      
+
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       // 验证：两个接收者都应该收到 5 个包
       expect(receivedCount.recvE1).toBe(5);
       expect(receivedCount.recvE2).toBe(5);
+      // 验证每个语音包数据内容与发送顺序一致
+      for (let i = 0; i < 5; i++) {
+        expect(Buffer.compare(receivedDataE1[i], sentAudioDataList[i])).toBe(0);
+        expect(Buffer.compare(receivedDataE2[i], sentAudioDataList[i])).toBe(0);
+      }
       
       await cleanupClients(clients);
     });
@@ -804,14 +910,35 @@ describe('Voice Integration Tests', () => {
       
       const senderSession = sender.getStateManager().getSession()?.session || 0;
       
+      // 在监听器设置前创建两个语音包以用于数据内容验证
+      const voicePacket1 = createVoicePacket(4, 0, 0);
+      const sentAudioData1 = voicePacket1.subarray(2); // PTT 包音频数据
+      const voicePacket2 = createVoicePacket(4, 3, 1);
+      const sentAudioData2 = voicePacket2.subarray(2); // Whisper 包音频数据
+
+      const receivedAudioDataPTT: { recvE1Ch0: Buffer | null; recvE2Ch1: Buffer | null } = {
+        recvE1Ch0: null,
+        recvE2Ch1: null,
+      };
+      let whisperAudioData: Buffer | null = null;
+
       recvE1Ch0.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.recvE1Ch0 = true;
+        if (data.session === senderSession) {
+          receivedVoice.recvE1Ch0 = true;
+          receivedAudioDataPTT.recvE1Ch0 = data.data;
+        }
       });
       recvE2Ch1.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.recvE2Ch1 = true;
+        if (data.session === senderSession) {
+          receivedVoice.recvE2Ch1 = true;
+          receivedAudioDataPTT.recvE2Ch1 = data.data;
+        }
       });
       whisperTargetE2.on('voice', (data: VoiceData) => {
-        if (data.session === senderSession) receivedVoice.whisperTargetE2 = true;
+        if (data.session === senderSession) {
+          receivedVoice.whisperTargetE2 = true;
+          whisperAudioData = data.data;
+        }
       });
       deafE1Ch0.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.deafE1Ch0 = true;
@@ -819,21 +946,21 @@ describe('Voice Integration Tests', () => {
       normalE1Ch2.on('voice', (data: VoiceData) => {
         if (data.session === senderSession) receivedVoice.normalE1Ch2 = true;
       });
-      
-      // 第一次：普通 push-to-talk (target=0)
-      const voicePacket1 = createVoicePacket(4, 0, 0);
+
       await sender.getConnectionManager().sendVoicePacket(voicePacket1);
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // 第二次：whisper (target=3)
-      const voicePacket2 = createVoicePacket(4, 3, 1);
+
       await sender.getConnectionManager().sendVoicePacket(voicePacket2);
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       // 验证
       expect(receivedVoice.recvE1Ch0).toBe(true); // 接收 push-to-talk
       expect(receivedVoice.recvE2Ch1).toBe(true); // 接收 push-to-talk（链接）
       expect(receivedVoice.whisperTargetE2).toBe(true); // 接收 whisper
+      // 验证语音数据内容与发送一致
+      expect(Buffer.compare(receivedAudioDataPTT.recvE1Ch0!, sentAudioData1)).toBe(0);
+      expect(Buffer.compare(receivedAudioDataPTT.recvE2Ch1!, sentAudioData1)).toBe(0);
+      expect(Buffer.compare(whisperAudioData!, sentAudioData2)).toBe(0);
       expect(receivedVoice.deafE1Ch0).toBe(false); // deaf 不接收
       expect(receivedVoice.normalE1Ch2).toBe(false); // 未链接且非 whisper 目标
       

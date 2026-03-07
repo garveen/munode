@@ -21,6 +21,19 @@ pub struct VoiceTargetChannelConfig {
     pub group: Option<String>,
 }
 
+/// Delta of boolean state fields for a remote user state change.
+/// Only fields that actually changed carry `Some(value)`; unchanged fields are `None`.
+#[derive(Debug, Clone, Default)]
+pub struct RemoteUserStateDelta {
+    pub self_mute: Option<bool>,
+    pub self_deaf: Option<bool>,
+    pub mute: Option<bool>,
+    pub deaf: Option<bool>,
+    pub suppress: Option<bool>,
+    pub priority_speaker: Option<bool>,
+    pub recording: Option<bool>,
+}
+
 /// Events broadcast within the Edge server.
 #[derive(Debug, Clone)]
 pub enum EdgeEvent {
@@ -35,6 +48,7 @@ pub enum EdgeEvent {
     /// A remote user's state changed (mute, deaf, etc.).
     RemoteUserStateChanged {
         session_id: u32,
+        delta: RemoteUserStateDelta,
         listening_channel_add: Vec<u32>,
         listening_channel_remove: Vec<u32>,
     },

@@ -9,7 +9,7 @@ use prost::Message;
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::time;
 use tokio_tungstenite::tungstenite;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use munode_common::config::{EdgeConfig, HubServerConfig};
 use munode_protocol::message_type::MessageType;
@@ -299,40 +299,49 @@ impl HubClient {
     /// Handle a notification from the Hub.
     async fn handle_notification(&self, notification: TypedRpcNotification) {
         let method = &notification.method;
-        debug!("Hub notification: {}", method);
+        let eid = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        // High-frequency voice relay notifications are trace-level to avoid log flooding.
+        if method == "hub.relayVoicePacket" {
+            trace!("Hub notification: {} (edge={})", method, eid);
+        } else {
+            debug!("Hub notification: {} (edge={})", method, eid);
+        }
 
         match method.as_str() {
             "hub.userJoined" => {
                 if let Some(params) = &notification.user_joined {
                     let local_edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
                     let is_local = params.edge_id == local_edge_id;
-                    let user = RemoteUser {
-                        session_id: params.session_id,
-                        edge_id: params.edge_id,
-                        user_id: params.user_id,
-                        username: params.username.clone(),
-                        channel_id: params.channel_id,
-                        cert_hash: params.cert_hash.clone(),
-                        groups: params.groups.clone(),
-                        mute: params.mute.unwrap_or(false),
-                        deaf: params.deaf.unwrap_or(false),
-                        suppress: params.suppress.unwrap_or(false),
-                        self_mute: params.self_mute.unwrap_or(false),
-                        self_deaf: params.self_deaf.unwrap_or(false),
-                        priority_speaker: params.priority_speaker.unwrap_or(false),
-                        recording: params.recording.unwrap_or(false),
-                        listening_channels: vec![],
-                    };
-                    info!("Remote user joined: {} (session {})", user.username, user.session_id);
-                    self.edge_state.channel_manager.upsert_remote_user(user.clone()).await;
-                    // Only emit RemoteUserJoined for truly remote users.
-                    // Local users are handled by the main connection task which has the correct state.
+                    // Only add REMOTE users (from other edges) to channel_manager.remote_users.
+                    // Local users are tracked by their own connection handler via client_manager;
+                    // adding them here would cause duplicate UserState messages during login.
                     if !is_local {
+                        let user = RemoteUser {
+                            session_id: params.session_id,
+                            edge_id: params.edge_id,
+                            user_id: params.user_id,
+                            username: params.username.clone(),
+                            channel_id: params.channel_id,
+                            cert_hash: params.cert_hash.clone(),
+                            groups: params.groups.clone(),
+                            mute: params.mute.unwrap_or(false),
+                            deaf: params.deaf.unwrap_or(false),
+                            suppress: params.suppress.unwrap_or(false),
+                            self_mute: params.self_mute.unwrap_or(false),
+                            self_deaf: params.self_deaf.unwrap_or(false),
+                            priority_speaker: params.priority_speaker.unwrap_or(false),
+                            recording: params.recording.unwrap_or(false),
+                            listening_channels: vec![],
+                        };
+                        info!("Remote user joined: {} (session {})", user.username, user.session_id);
+                        self.edge_state.channel_manager.upsert_remote_user(user.clone()).await;
                         self.edge_state.emit(EdgeEvent::RemoteUserJoined {
                             session_id: user.session_id,
                             username: user.username,
                             channel_id: user.channel_id,
                         });
+                    } else {
+                        info!("Local user joined (hub.userJoined echo): {} (session {})", params.username, params.session_id);
                     }
                 }
             }
@@ -364,13 +373,15 @@ impl HubClient {
                         let session_id = v["session_id"].as_u64().unwrap_or(0) as u32;
                         if session_id > 0 {
                             if let Some(mut user) = self.edge_state.channel_manager.get_remote_user(session_id).await {
-                                if let Some(b) = v["self_mute"].as_bool() { user.self_mute = b; }
-                                if let Some(b) = v["self_deaf"].as_bool() { user.self_deaf = b; }
-                                if let Some(b) = v["mute"].as_bool() { user.mute = b; }
-                                if let Some(b) = v["deaf"].as_bool() { user.deaf = b; }
-                                if let Some(b) = v["suppress"].as_bool() { user.suppress = b; }
-                                if let Some(b) = v["priority_speaker"].as_bool() { user.priority_speaker = b; }
-                                if let Some(b) = v["recording"].as_bool() { user.recording = b; }
+                                // Build delta from ONLY fields present in the JSON (= actually changed).
+                                let mut delta = crate::state::RemoteUserStateDelta::default();
+                                if let Some(b) = v["self_mute"].as_bool() { user.self_mute = b; delta.self_mute = Some(b); }
+                                if let Some(b) = v["self_deaf"].as_bool() { user.self_deaf = b; delta.self_deaf = Some(b); }
+                                if let Some(b) = v["mute"].as_bool()      { user.mute = b;      delta.mute = Some(b); }
+                                if let Some(b) = v["deaf"].as_bool()      { user.deaf = b;      delta.deaf = Some(b); }
+                                if let Some(b) = v["suppress"].as_bool()  { user.suppress = b;  delta.suppress = Some(b); }
+                                if let Some(b) = v["priority_speaker"].as_bool() { user.priority_speaker = b; delta.priority_speaker = Some(b); }
+                                if let Some(b) = v["recording"].as_bool() { user.recording = b; delta.recording = Some(b); }
                                 // Handle listening channel changes
                                 let listening_add: Vec<u32> = if let Some(arr) = v["listening_channel_add"].as_array() {
                                     arr.iter()
@@ -388,6 +399,7 @@ impl HubClient {
                                 self.edge_state.channel_manager.upsert_remote_user(user).await;
                                 self.edge_state.emit(EdgeEvent::RemoteUserStateChanged {
                                     session_id,
+                                    delta,
                                     listening_channel_add: listening_add,
                                     listening_channel_remove: listening_remove,
                                 });
@@ -514,17 +526,13 @@ impl HubClient {
                     }
                 }
             }
-            "hub.relayedVoice" => {
-                // Voice packet relayed from another edge via Hub
-                if let Some(json_str) = &notification.unknown_params_json {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                        if let Some(arr) = v["voice_packet"].as_array() {
-                            let voice_packet: Vec<u8> = arr.iter()
-                                .filter_map(|b| b.as_u64().map(|n| n as u8))
-                                .collect();
-                            self.edge_state.emit(EdgeEvent::RelayedVoice { voice_packet });
-                        }
-                    }
+            "hub.relayVoicePacket" => {
+                // Voice packet relayed from another edge via Hub (typed protobuf)
+                if let Some(params) = &notification.relay_voice_packet {
+                    let voice_packet = params.voice_packet.clone();
+                    self.edge_state.emit(EdgeEvent::RelayedVoice { voice_packet });
+                } else {
+                    debug!("hub.relayVoicePacket notification missing relay_voice_packet field");
                 }
             }
             "hub.peerJoined" => {

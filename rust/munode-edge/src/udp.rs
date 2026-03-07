@@ -165,59 +165,80 @@ impl UdpServer {
     /// Route decrypted voice to channel members, encrypting per-recipient.
     /// Also relays to remote users (on other edges) via Hub TCP.
     async fn route_voice(&self, sender_session: u32, plaintext: &[u8]) {
-        let sender_channel = match self.edge_state.client_manager.get_client(sender_session).await {
-            Some(c) => c.channel_id,
+        let sender_client = match self.edge_state.client_manager.get_client(sender_session).await {
+            Some(c) => c,
             None => return,
         };
+        let sender_channel = sender_client.channel_id;
 
-        // --- Local clients (same edge) ---
-        let targets: Vec<u32> = self
-            .edge_state
-            .client_manager
-            .get_channel_sessions(sender_channel)
-            .await
-            .into_iter()
-            .filter(|&s| s != sender_session)
-            .collect();
+        // Block suppressed users from speaking
+        let voice_target = if !plaintext.is_empty() { (plaintext[0] & 0x1F) as u32 } else { 0 };
+        if sender_client.suppress && voice_target != 31 {
+            return;
+        }
 
+        let my_edge_id = *self.edge_state.edge_id.read().await;
+
+        // Get all linked channels (sender's channel + any linked channels)
+        let linked_channels = self.edge_state.channel_manager
+            .get_all_linked_channels(sender_channel)
+            .await;
+
+        // Inject sender session ID into voice packet for forwarding to local clients.
+        // Client-to-server format: [header(1B)][sequence_varint][audio]
+        // Server-to-client format: [header(1B)][sender_session_varint][sequence_varint][audio]
+        let forwarded = inject_session_into_voice(plaintext, sender_session);
+
+        // --- Local clients (same edge, all linked channels) ---
         let session_addrs = self.session_to_addr.read().await;
 
-        for target in targets {
-            if let Some(&addr) = session_addrs.get(&target) {
-                // Has UDP address: encrypt and send
-                if let Some(cs_arc) = self.edge_state.client_manager.get_crypt_state(target).await {
-                    let mut encrypted = Vec::new();
-                    cs_arc.lock().unwrap().encrypt(plaintext, &mut encrypted);
-                    if let Err(e) = self.socket.send_to(&encrypted, addr).await {
-                        warn!("UDP send to session {} failed: {}", target, e);
+        for ch_id in &linked_channels {
+            let targets = self.edge_state.client_manager.get_channel_sessions(*ch_id).await;
+            for target in targets {
+                if target == sender_session {
+                    continue;
+                }
+                if let Some(target_client) = self.edge_state.client_manager.get_client(target).await {
+                    if target_client.deaf || target_client.self_deaf {
+                        continue;
                     }
                 }
-            } else {
-                // No UDP address: deliver via TCP UDPTunnel (plaintext over TLS)
-                self.fallback_to_tcp(target, plaintext).await;
+                if let Some(&addr) = session_addrs.get(&target) {
+                    // Has UDP address: encrypt with session-injected voice and send
+                    if let Some(cs_arc) = self.edge_state.client_manager.get_crypt_state(target).await {
+                        let mut encrypted = Vec::new();
+                        cs_arc.lock().unwrap().encrypt(&forwarded, &mut encrypted);
+                        if let Err(e) = self.socket.send_to(&encrypted, addr).await {
+                            warn!("UDP send to session {} failed: {}", target, e);
+                        }
+                    }
+                } else {
+                    // No UDP address: deliver via TCP UDPTunnel (includes session ID)
+                    self.fallback_to_tcp(target, &forwarded).await;
+                }
             }
         }
         drop(session_addrs);
 
         // --- Remote users (on other edges) via Hub TCP relay ---
+        // Use get_remote_users_in_channels to cover all linked channels
         let remote_users = self.edge_state.channel_manager
-            .get_remote_users_in_channel(sender_channel)
+            .get_remote_users_in_channels(&linked_channels)
             .await;
 
-        // Group by edge to batch relay calls
-        let mut by_edge: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
+        // Group by edge (broadcast to each edge once; receiver edge handles local delivery)
+        let mut by_edge: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
         for ru in &remote_users {
-            by_edge.entry(ru.edge_id).or_default().push(ru.session_id);
+            if ru.deaf || ru.self_deaf { continue; }
+            if let Some(lid) = my_edge_id { if ru.edge_id == lid { continue; } }
+            by_edge.insert(ru.edge_id, true);
         }
 
-        for (target_edge_id, sessions) in by_edge {
-            debug!("Relaying voice to edge {} for {} remote sessions", target_edge_id, sessions.len());
-            // Build a minimal UdpTunnel frame to send to the target edge
-            // The target edge's Hub handler will deliver it to the local clients
-            let mut relay_payload = Vec::new();
-            // Encode: sender_session (4 bytes BE) + plaintext voice data
-            relay_payload.extend_from_slice(&sender_session.to_be_bytes());
-            relay_payload.extend_from_slice(plaintext);
+        for target_edge_id in by_edge.into_keys() {
+            debug!("edge={:?} UDP voice: relaying broadcast from session {} to edge {}", my_edge_id, sender_session, target_edge_id);
+            // Relay format: standard Mumble server-to-client packet
+            // [header][session_varint][seq][voice_data]  (matches TS hub relay format)
+            let relay_payload = inject_session_into_voice(plaintext, sender_session);
             self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
         }
     }
@@ -262,6 +283,9 @@ impl UdpServer {
             return;
         };
 
+        // Inject sender_session so clients know who sent the audio
+        let forwarded = inject_session_into_voice(voice_data, sender_session);
+
         // Deliver to local clients in the same channel
         let local_targets = self.edge_state.client_manager.get_channel_sessions(channel_id).await;
         let session_addrs = self.session_to_addr.read().await;
@@ -270,13 +294,13 @@ impl UdpServer {
             if let Some(&addr) = session_addrs.get(&target) {
                 if let Some(cs_arc) = self.edge_state.client_manager.get_crypt_state(target).await {
                     let mut encrypted = Vec::new();
-                    cs_arc.lock().unwrap().encrypt(voice_data, &mut encrypted);
+                    cs_arc.lock().unwrap().encrypt(&forwarded, &mut encrypted);
                     if let Err(e) = self.socket.send_to(&encrypted, addr).await {
                         warn!("UDP relay to session {} failed: {}", target, e);
                     }
                 }
             } else {
-                self.fallback_to_tcp(target, voice_data).await;
+                self.fallback_to_tcp(target, &forwarded).await;
             }
         }
     }
@@ -289,4 +313,33 @@ fn build_udp_tunnel_packet(data: &[u8]) -> Vec<u8> {
     bytes::BufMut::put_u32(&mut buf, data.len() as u32);
     bytes::BufMut::put_slice(&mut buf, data);
     buf.to_vec()
+}
+
+/// Encode a u32 value as a Mumble variable-length integer.
+fn encode_mumble_varint(value: u32) -> Vec<u8> {
+    if value < 0x80 {
+        vec![value as u8]
+    } else if value < 0x4000 {
+        vec![((value >> 8) | 0x80) as u8, (value & 0xFF) as u8]
+    } else if value < 0x200000 {
+        vec![((value >> 16) | 0xC0) as u8, ((value >> 8) & 0xFF) as u8, (value & 0xFF) as u8]
+    } else {
+        vec![0xF0, ((value >> 24) & 0xFF) as u8, ((value >> 16) & 0xFF) as u8, ((value >> 8) & 0xFF) as u8, (value & 0xFF) as u8]
+    }
+}
+
+/// Inject sender session ID into a voice packet payload before forwarding to clients.
+/// Client-to-server format: [header(1B)][sequence_varint][audio_data]
+/// Server-to-client format: [header(1B)][sender_session_varint][sequence_varint][audio_data]
+fn inject_session_into_voice(payload: &[u8], sender_session: u32) -> Vec<u8> {
+    if payload.is_empty() {
+        return Vec::new();
+    }
+    let header = payload[0];
+    let session_varint = encode_mumble_varint(sender_session);
+    let mut result = Vec::with_capacity(1 + session_varint.len() + payload.len() - 1);
+    result.push(header);
+    result.extend_from_slice(&session_varint);
+    result.extend_from_slice(&payload[1..]);
+    result
 }

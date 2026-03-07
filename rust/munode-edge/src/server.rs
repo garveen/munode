@@ -8,7 +8,7 @@ use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_rustls::TlsAcceptor;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use munode_common::config::EdgeConfig;
 use munode_protocol::hubedge;
@@ -135,6 +135,9 @@ async fn handle_client_connection(
 ) -> Result<()> {
     info!("New TCP connection from {}", peer_addr);
 
+    // Disable Nagle's algorithm for real-time voice delivery
+    stream.set_nodelay(true)?;
+
     let tls_stream = acceptor.accept(stream).await?;
     let (mut reader, mut writer) = tokio::io::split(tls_stream);
 
@@ -150,6 +153,10 @@ async fn handle_client_connection(
         while let Some(data) = send_rx.recv().await {
             if let Err(e) = writer.write_all(&data).await {
                 debug!("Write error to client: {}", e);
+                break;
+            }
+            if let Err(e) = writer.flush().await {
+                debug!("Flush error to client: {}", e);
                 break;
             }
         }
@@ -295,11 +302,16 @@ async fn handle_client_connection(
                         channel_id
                     );
 
+                    // Prefer display_name over username (matches JS implementation behaviour).
+                    let display_name = auth_result.display_name.clone()
+                        .or(auth_result.username.clone())
+                        .unwrap_or(username.clone());
+
                     // Create local client (suppress will be recomputed after add)
                     let mut client = ClientInfo {
                         session: sid,
                         user_id: auth_result.user_id.unwrap_or(0),
-                        username: auth_result.username.clone().unwrap_or(username.clone()),
+                        username: display_name,
                         channel_id,
                         state: ClientState::Authenticated,
                         mute: auth_result.mute.unwrap_or(false),
@@ -341,6 +353,10 @@ async fn handle_client_connection(
                         info!("Login sequence failed for {} (session={}): {}", peer_addr, sid, e);
                         break 'outer;
                     }
+
+                    // Broadcast updated codec version to all clients now that this client's
+                    // opus capability is registered
+                    broadcast_codec_version(&edge_state).await;
 
                     client_state = ClientState::Ready;
                     edge_state.client_manager.set_client_state(sid, ClientState::Ready).await;
@@ -511,15 +527,11 @@ async fn handle_client_connection(
                                             by_edge.entry(ru.edge_id).or_default().push(ru.session_id);
                                         }
                                     }
-                                    for (target_edge_id, sessions_on_edge) in by_edge {
-                                        // Relay format: [4B sender_session][4B target_count][4B*n target_sessions][voice_payload]
-                                        let mut relay_payload = Vec::new();
-                                        relay_payload.extend_from_slice(&sid.to_be_bytes());
-                                        relay_payload.extend_from_slice(&(sessions_on_edge.len() as u32).to_be_bytes());
-                                        for s in &sessions_on_edge {
-                                            relay_payload.extend_from_slice(&s.to_be_bytes());
-                                        }
-                                        relay_payload.extend_from_slice(&frame.payload);
+                                    for (target_edge_id, _sessions_on_edge) in by_edge {
+                                        // Relay format: standard Mumble server-to-client packet
+                                        // [header][session_varint][seq][voice_data]
+                                        // (matches TS hub relay format)
+                                        let relay_payload = inject_session_into_voice(&frame.payload, sid);
                                         hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                                     }
                                 }
@@ -568,11 +580,10 @@ async fn handle_client_connection(
                                     }
                                 }
                                 for target_edge_id in by_edge.into_keys() {
-                                    // Normal broadcast: 0 target_count = deliver to all in linked channels
-                                    let mut relay_payload = Vec::new();
-                                    relay_payload.extend_from_slice(&sid.to_be_bytes());
-                                    relay_payload.extend_from_slice(&0u32.to_be_bytes()); // 0 = broadcast
-                                    relay_payload.extend_from_slice(&frame.payload);
+                                    debug!("edge={:?} TCP voice: relaying broadcast from session {} to edge {}", local_edge_id, sid, target_edge_id);
+                                    // Relay format: standard Mumble server-to-client packet
+                                    // [header][session_varint][seq][voice_data]
+                                    let relay_payload = inject_session_into_voice(&frame.payload, sid);
                                     hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                                 }
                             }
@@ -1138,13 +1149,20 @@ async fn handle_user_state_update(
             }
         }
 
-        // Self-mute/self-deaf updates
-        if let Some(self_mute) = user_state.self_mute {
-            client.self_mute = self_mute;
-            needs_broadcast = true;
-        }
+        // Self-deaf update: self_deaf=true implies self_mute=true (Mumble protocol coupling).
         if let Some(self_deaf) = user_state.self_deaf {
             client.self_deaf = self_deaf;
+            if self_deaf {
+                client.self_mute = true; // deaf always implies mute
+            }
+            needs_broadcast = true;
+        }
+        // Self-mute update: self_mute=false implies self_deaf=false.
+        if let Some(self_mute) = user_state.self_mute {
+            client.self_mute = self_mute;
+            if !self_mute {
+                client.self_deaf = false; // un-muting also clears deaf
+            }
             needs_broadcast = true;
         }
 
@@ -1219,17 +1237,52 @@ async fn handle_user_state_update(
 
         if needs_broadcast {
             edge_state.client_manager.update_client(client.clone()).await;
-            // Build broadcast message including listening channels
-            let mut msg = handler::build_user_state_msg(&client);
+
+            // Build a targeted state-change message containing ONLY the changed fields
+            // with their ACTUAL boolean values (including `false`).
+            //
+            // Using build_user_state_msg() here would be wrong: it omits false-valued
+            // fields (returns None), so observers can never learn about state transitions
+            // like self_mute going true→false (un-mute).
+            let mut broadcast_msg = mumbleproto::UserState {
+                session: Some(session_id),
+                actor:   Some(session_id),
+                ..Default::default()
+            };
+
+            if channel_moved {
+                broadcast_msg.channel_id = Some(client.channel_id);
+                // Always include suppress on channel move (it may have changed).
+                broadcast_msg.suppress = Some(client.suppress);
+            }
+
+            // Propagate self_deaf with coupling: self_deaf=true ⇒ self_mute=true.
+            if let Some(sd) = user_state.self_deaf {
+                broadcast_msg.self_deaf = Some(sd);
+                if sd { broadcast_msg.self_mute = Some(true); }
+            }
+            // self_mute may override the coupling value set above;
+            // self_mute=false ⇒ self_deaf=false as well.
+            if let Some(sm) = user_state.self_mute {
+                broadcast_msg.self_mute = Some(sm);
+                if !sm { broadcast_msg.self_deaf = Some(false); }
+            }
+
+            if let Some(v) = user_state.mute            { broadcast_msg.mute             = Some(v); }
+            if let Some(v) = user_state.deaf            { broadcast_msg.deaf             = Some(v); }
+            if let Some(v) = user_state.priority_speaker{ broadcast_msg.priority_speaker = Some(v); }
+            if let Some(v) = user_state.recording       { broadcast_msg.recording        = Some(v); }
+
             if !actually_added_channels.is_empty() {
-                msg.listening_channel_add = actually_added_channels;
+                broadcast_msg.listening_channel_add = actually_added_channels.clone();
             }
             if !user_state.listening_channel_remove.is_empty() {
-                msg.listening_channel_remove = user_state.listening_channel_remove.clone();
+                broadcast_msg.listening_channel_remove = user_state.listening_channel_remove.clone();
             }
-            edge_state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
 
-            // Notify Hub of state change
+            edge_state.client_manager.broadcast(MessageType::UserState, &broadcast_msg, None).await;
+
+            // Notify Hub of the final (coupled) state so other edges stay in sync.
             if channel_moved {
                 hub_client.notify_user_moved(session_id, client.channel_id).await;
             } else {
@@ -1240,8 +1293,8 @@ async fn handle_user_state_update(
                     "deaf": client.deaf,
                     "priority_speaker": client.priority_speaker,
                     "recording": client.recording,
-                    "listening_channel_add": msg.listening_channel_add,
-                    "listening_channel_remove": msg.listening_channel_remove,
+                    "listening_channel_add": broadcast_msg.listening_channel_add,
+                    "listening_channel_remove": broadcast_msg.listening_channel_remove,
                 });
                 hub_client.notify_user_state_changed(session_id, state_json).await;
             }
@@ -1254,7 +1307,7 @@ async fn handle_user_state_update(
 async fn handle_admin_user_state_update(
     edge_state: &Arc<EdgeState>,
     hub_client: &Arc<HubClient>,
-    _actor_session: u32,
+    actor_session: u32,
     target_session: u32,
     user_state: &mumbleproto::UserState,
 ) {
@@ -1294,8 +1347,21 @@ async fn handle_admin_user_state_update(
 
         if needs_broadcast {
             edge_state.client_manager.update_client(client.clone()).await;
-            let msg = handler::build_user_state_msg(&client);
-            edge_state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+            // Build targeted message; only include fields that were actually changed,
+            // with their real boolean values (including false) so clients can observe
+            // state transitions (e.g., admin un-muting a user).
+            let mut broadcast_msg = mumbleproto::UserState {
+                session: Some(target_session),
+                actor:   Some(actor_session),
+                ..Default::default()
+            };
+            if channel_moved {
+                broadcast_msg.channel_id = Some(client.channel_id);
+                broadcast_msg.suppress   = Some(client.suppress);
+            }
+            if let Some(v) = user_state.mute  { broadcast_msg.mute  = Some(v); }
+            if let Some(v) = user_state.deaf  { broadcast_msg.deaf  = Some(v); }
+            edge_state.client_manager.broadcast(MessageType::UserState, &broadcast_msg, None).await;
             if channel_moved {
                 hub_client.notify_user_moved(target_session, client.channel_id).await;
             } else {
@@ -1375,6 +1441,30 @@ fn encode_mumble_varint(value: u32) -> Vec<u8> {
     }
 }
 
+/// Decode a Mumble varint from a byte slice.
+/// Returns (value, bytes_consumed) or None if insufficient data.
+fn decode_mumble_varint(data: &[u8]) -> Option<(u32, usize)> {
+    if data.is_empty() { return None; }
+    let v = data[0];
+    if (v & 0x80) == 0x00 {
+        Some((v as u32, 1))
+    } else if (v & 0xC0) == 0x80 {
+        if data.len() < 2 { return None; }
+        Some((((v & 0x3F) as u32) << 8 | data[1] as u32, 2))
+    } else if (v & 0xE0) == 0xC0 {
+        if data.len() < 3 { return None; }
+        Some((((v & 0x1F) as u32) << 16 | (data[1] as u32) << 8 | data[2] as u32, 3))
+    } else if (v & 0xF0) == 0xF0 {
+        if data.len() < 5 { return None; }
+        Some((
+            ((data[1] as u32) << 24) | ((data[2] as u32) << 16) | ((data[3] as u32) << 8) | data[4] as u32,
+            5,
+        ))
+    } else {
+        None
+    }
+}
+
 /// Inject sender session ID into a voice packet for forwarding.
 /// Client sends: [header(1B)][sequence_varint][audio_data]
 /// Server forwards: [header(1B)][sender_session_varint][sequence_varint][audio_data]
@@ -1404,6 +1494,452 @@ fn encode_ip_address(addr: &str) -> Vec<u8> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::channel_manager::ChannelManager;
+    use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
+    use crate::hub_client::HubClient;
+    use crate::state::EdgeState;
+    use bytes::BytesMut;
+    use munode_common::config::{
+        EdgeConfig, HubServerConfig, NetworkConfig, ServerConfig, TlsConfig,
+    };
+    use munode_protocol::message_type::MessageType;
+    use munode_protocol::mumbleproto;
+    use munode_protocol::transport::decode_frame;
+    use prost::Message;
+    use tokio::sync::mpsc;
+
+    /// Construct a minimal `EdgeConfig` suitable for unit tests.
+    fn test_config() -> EdgeConfig {
+        EdgeConfig {
+            server_id: 1,
+            name: "test".to_string(),
+            network: NetworkConfig {
+                host: "127.0.0.1".to_string(),
+                port: 64738,
+                edge_port: None,
+                external_host: "127.0.0.1".to_string(),
+                external_port: None,
+                region: None,
+            },
+            tls: TlsConfig {
+                cert: "test.pem".to_string(),
+                key: "test.key".to_string(),
+                ca: None,
+            },
+            hub_server: HubServerConfig {
+                host: "localhost".to_string(),
+                control_port: 8080,
+                reconnect_interval: 5000,
+                heartbeat_interval: 10000,
+                hmac_secret: None,
+            },
+            server: ServerConfig::default(),
+            log_level: "info".to_string(),
+        }
+    }
+
+    /// Build a `ClientInfo` that is already in the `Ready` state.
+    fn ready_client(session: u32, channel: u32) -> ClientInfo {
+        ClientInfo {
+            session,
+            user_id: session,
+            username: format!("user{}", session),
+            channel_id: channel,
+            state: ClientState::Ready,
+            mute: false,
+            deaf: false,
+            suppress: false,
+            self_mute: false,
+            self_deaf: false,
+            priority_speaker: false,
+            recording: false,
+            ip_address: "127.0.0.1".to_string(),
+            connected_at: std::time::Instant::now(),
+            last_active: std::time::Instant::now(),
+            cert_hash: None,
+            groups: vec![],
+            opus_supported: true,
+            listening_channels: vec![],
+        }
+    }
+
+    /// Decode the first Mumble frame from raw bytes and return the UserState message.
+    fn decode_user_state(data: &[u8]) -> mumbleproto::UserState {
+        let mut buf = BytesMut::from(data);
+        let frame = decode_frame(&mut buf)
+            .expect("decode_frame ok")
+            .expect("frame present");
+        assert_eq!(frame.message_type, MessageType::UserState, "expected UserState frame");
+        mumbleproto::UserState::decode(&frame.payload[..]).expect("decode UserState")
+    }
+
+    /// Build a minimal `EdgeState` + disconnected `HubClient` for unit tests.
+    /// The HubClient has no active WebSocket so Hub notifications are silently dropped.
+    fn test_edge_and_hub() -> (Arc<EdgeState>, Arc<HubClient>) {
+        let channel_manager = ChannelManager::new();
+        let client_manager = ClientManager::new();
+        let edge_state = EdgeState::new(channel_manager, client_manager);
+        let hub_client = HubClient::new(&test_config(), edge_state.clone());
+        (edge_state, hub_client)
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: user self-mutes – broadcast includes self_mute=Some(true)
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_self_mute_broadcast_to_self_and_others() {
+        let (es, hub) = test_edge_and_hub();
+
+        // Register two Ready clients.
+        let (tx_a, mut rx_a) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_b, mut rx_b) = mpsc::channel::<Vec<u8>>(16);
+        es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_a)).await;
+        es.client_manager.add_client(ready_client(2, 0), ClientSender::new(tx_b)).await;
+
+        // User 1 mutes themselves.
+        let us = mumbleproto::UserState { session: Some(1), self_mute: Some(true), ..Default::default() };
+        handle_user_state_update(&es, &hub, 1, &us).await;
+
+        // Both clients must receive self_mute=true.
+        let msg_a = decode_user_state(&rx_a.recv().await.unwrap());
+        assert_eq!(msg_a.session, Some(1));
+        assert_eq!(msg_a.self_mute, Some(true), "self: must see self_mute=true");
+
+        let msg_b = decode_user_state(&rx_b.recv().await.unwrap());
+        assert_eq!(msg_b.session, Some(1));
+        assert_eq!(msg_b.self_mute, Some(true), "observer: must see self_mute=true");
+
+        // Internal state must be updated.
+        let c = es.client_manager.get_client(1).await.unwrap();
+        assert!(c.self_mute);
+        assert!(!c.self_deaf);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: user un-mutes – broadcast must carry self_mute=Some(false), not None
+    // This is the critical regression: build_user_state_msg previously emitted
+    // None for false fields, making the un-mute invisible to observers.
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_self_unmute_broadcast_carries_false() {
+        let (es, hub) = test_edge_and_hub();
+
+        let (tx_a, mut rx_a) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_b, mut rx_b) = mpsc::channel::<Vec<u8>>(16);
+        // Start with user 1 already muted.
+        let mut client1 = ready_client(1, 0);
+        client1.self_mute = true;
+        es.client_manager.add_client(client1, ClientSender::new(tx_a)).await;
+        es.client_manager.add_client(ready_client(2, 0), ClientSender::new(tx_b)).await;
+
+        // User 1 un-mutes.
+        let us = mumbleproto::UserState { session: Some(1), self_mute: Some(false), ..Default::default() };
+        handle_user_state_update(&es, &hub, 1, &us).await;
+
+        // CRITICAL: un-mute must deliver self_mute=Some(false), NOT None.
+        let msg_a = decode_user_state(&rx_a.recv().await.unwrap());
+        assert_eq!(msg_a.self_mute, Some(false), "self: self_mute must be Some(false) on un-mute");
+        // Un-muting also clears deaf (coupling).
+        assert_eq!(msg_a.self_deaf, Some(false), "self: un-muting must also clear self_deaf");
+
+        let msg_b = decode_user_state(&rx_b.recv().await.unwrap());
+        assert_eq!(msg_b.self_mute, Some(false), "observer: self_mute must be Some(false) on un-mute");
+        assert_eq!(msg_b.self_deaf, Some(false), "observer: un-muting must also clear self_deaf");
+
+        let c = es.client_manager.get_client(1).await.unwrap();
+        assert!(!c.self_mute);
+        assert!(!c.self_deaf);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: self_deaf=true must imply self_mute=true (Mumble protocol rule)
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_self_deaf_implies_self_mute() {
+        let (es, hub) = test_edge_and_hub();
+
+        let (tx_a, mut rx_a) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_b, mut rx_b) = mpsc::channel::<Vec<u8>>(16);
+        es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_a)).await;
+        es.client_manager.add_client(ready_client(2, 0), ClientSender::new(tx_b)).await;
+
+        // Client only sends self_deaf=true; self_mute is absent in the message.
+        let us = mumbleproto::UserState { session: Some(1), self_deaf: Some(true), ..Default::default() };
+        handle_user_state_update(&es, &hub, 1, &us).await;
+
+        let msg_a = decode_user_state(&rx_a.recv().await.unwrap());
+        assert_eq!(msg_a.self_deaf, Some(true),  "self: self_deaf must be true");
+        assert_eq!(msg_a.self_mute, Some(true),  "self: self_deaf=true must imply self_mute=true");
+
+        let msg_b = decode_user_state(&rx_b.recv().await.unwrap());
+        assert_eq!(msg_b.self_deaf, Some(true),  "observer: self_deaf must be true");
+        assert_eq!(msg_b.self_mute, Some(true),  "observer: self_deaf=true must imply self_mute=true");
+
+        let c = es.client_manager.get_client(1).await.unwrap();
+        assert!(c.self_deaf);
+        assert!(c.self_mute, "client.self_mute must be set when self_deaf=true");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: un-deafening (self_deaf=false) alone does NOT clear self_mute
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_un_deaf_does_not_clear_self_mute() {
+        let (es, hub) = test_edge_and_hub();
+
+        let (tx_a, mut rx_a) = mpsc::channel::<Vec<u8>>(16);
+        // Start with user 1 both muted and deafened.
+        let mut c1 = ready_client(1, 0);
+        c1.self_mute = true;
+        c1.self_deaf = true;
+        es.client_manager.add_client(c1, ClientSender::new(tx_a)).await;
+
+        // Un-deafen only.
+        let us = mumbleproto::UserState { session: Some(1), self_deaf: Some(false), ..Default::default() };
+        handle_user_state_update(&es, &hub, 1, &us).await;
+
+        let msg = decode_user_state(&rx_a.recv().await.unwrap());
+        assert_eq!(msg.self_deaf, Some(false), "self_deaf must be false");
+        // self_mute was NOT touched – field should be absent (None).
+        assert_eq!(msg.self_mute, None, "un-deaf alone must not change self_mute");
+
+        let c = es.client_manager.get_client(1).await.unwrap();
+        assert!(!c.self_deaf);
+        assert!(c.self_mute, "self_mute must remain true after un-deaf");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: recording flag change broadcasts Some(false) on recording stop
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_recording_flag_false_is_broadcast() {
+        let (es, hub) = test_edge_and_hub();
+
+        let (tx_a, mut rx_a) = mpsc::channel::<Vec<u8>>(16);
+        let mut c1 = ready_client(1, 0);
+        c1.recording = true;
+        es.client_manager.add_client(c1, ClientSender::new(tx_a)).await;
+
+        let us = mumbleproto::UserState { session: Some(1), recording: Some(false), ..Default::default() };
+        handle_user_state_update(&es, &hub, 1, &us).await;
+
+        let msg = decode_user_state(&rx_a.recv().await.unwrap());
+        assert_eq!(msg.recording, Some(false), "recording=false must be explicitly broadcast");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: admin mute/unmute of another user
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_admin_mute_and_unmute_broadcast_false() {
+        let (es, hub) = test_edge_and_hub();
+
+        let (tx_admin, mut rx_admin) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_target, mut rx_target) = mpsc::channel::<Vec<u8>>(16);
+        es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_admin)).await;
+        let mut target = ready_client(2, 0);
+        target.mute = true;
+        es.client_manager.add_client(target, ClientSender::new(tx_target)).await;
+
+        // Admin (session 1) un-mutes user 2.
+        let us = mumbleproto::UserState {
+            session: Some(2),
+            mute: Some(false),
+            ..Default::default()
+        };
+        handle_admin_user_state_update(&es, &hub, 1, 2, &us).await;
+
+        // Both admin and target must receive mute=Some(false).
+        let msg_admin = decode_user_state(&rx_admin.recv().await.unwrap());
+        assert_eq!(msg_admin.session, Some(2));
+        assert_eq!(msg_admin.actor,   Some(1), "actor must be set to admin session");
+        assert_eq!(msg_admin.mute,    Some(false), "admin: mute=false must be explicit");
+
+        let msg_target = decode_user_state(&rx_target.recv().await.unwrap());
+        assert_eq!(msg_target.mute, Some(false), "target: mute=false must be explicit");
+
+        let c = es.client_manager.get_client(2).await.unwrap();
+        assert!(!c.mute);
+    }
+
+    // -----------------------------------------------------------------------
+    // Helper: fire hub_event_listener as a background task.
+    // Returns the EdgeState whose event channel we can emit into.
+    async fn run_event_listener_task(es: Arc<EdgeState>) -> Arc<EdgeState> {
+        let es2 = es.clone();
+        tokio::spawn(async move {
+            let mut rx = es2.subscribe_events();
+            hub_event_listener(es2, &mut rx).await;
+        });
+        // Give the background task a moment to subscribe before the first emit.
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        es
+    }
+
+    // Helper: build a RemoteUser (all-false booleans, default state).
+    fn remote_user(session: u32, channel: u32) -> crate::channel_manager::RemoteUser {
+        crate::channel_manager::RemoteUser {
+            session_id: session,
+            edge_id: 99,
+            user_id: session,
+            username: format!("remote{}", session),
+            channel_id: channel,
+            cert_hash: None,
+            groups: vec![],
+            mute: false,
+            deaf: false,
+            suppress: false,
+            self_mute: false,
+            self_deaf: false,
+            priority_speaker: false,
+            recording: false,
+            listening_channels: vec![],
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Regression: when a normal (unmuted) user RECONNECTS, RemoteUserJoined
+    // must NOT include Some(false) for any bool field. The Mumble client
+    // interprets every present bool field as a change notification, so
+    // omitting false values prevents spurious "userX unmuted / stopped
+    // recording / ..." messages.
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_remote_user_joined_no_false_booleans() {
+        let (es, _hub) = test_edge_and_hub();
+
+        // One local observer.
+        let (tx_obs, mut rx_obs) = mpsc::channel::<Vec<u8>>(16);
+        es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_obs)).await;
+
+        // Remote user (all defaults – nothing true).
+        es.channel_manager.upsert_remote_user(remote_user(10, 0)).await;
+        let es = run_event_listener_task(es).await;
+
+        es.emit(EdgeEvent::RemoteUserJoined {
+            session_id: 10,
+            username: "remote10".to_string(),
+            channel_id: 0,
+        });
+
+        let msg = decode_user_state(&rx_obs.recv().await.expect("must receive join announcement"));
+        assert_eq!(msg.session, Some(10));
+        assert_eq!(msg.name.as_deref(), Some("remote10"), "name must be set");
+
+        // All boolean fields must be ABSENT (None) – not Some(false).
+        assert_eq!(msg.mute,             None, "mute must be absent for default-false user");
+        assert_eq!(msg.deaf,             None, "deaf must be absent");
+        assert_eq!(msg.suppress,         None, "suppress must be absent");
+        assert_eq!(msg.self_mute,        None, "self_mute must be absent (prevents 'user unmuted' notification)");
+        assert_eq!(msg.self_deaf,        None, "self_deaf must be absent");
+        assert_eq!(msg.priority_speaker, None, "priority_speaker must be absent");
+        assert_eq!(msg.recording,        None, "recording must be absent (prevents 'user stopped recording' notification)");
+    }
+
+    // -----------------------------------------------------------------------
+    // When a remote user joins WITH some true flags, those flags MUST appear.
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_remote_user_joined_true_flags_are_included() {
+        let (es, _hub) = test_edge_and_hub();
+
+        let (tx_obs, mut rx_obs) = mpsc::channel::<Vec<u8>>(16);
+        es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_obs)).await;
+
+        let mut ru = remote_user(11, 0);
+        ru.self_mute = true;
+        ru.recording = true;
+        es.channel_manager.upsert_remote_user(ru).await;
+        let es = run_event_listener_task(es).await;
+
+        es.emit(EdgeEvent::RemoteUserJoined {
+            session_id: 11,
+            username: "remote11".to_string(),
+            channel_id: 0,
+        });
+
+        let msg = decode_user_state(&rx_obs.recv().await.unwrap());
+        assert_eq!(msg.self_mute, Some(true),  "self_mute=true must be present");
+        assert_eq!(msg.recording, Some(true),  "recording=true must be present");
+        assert_eq!(msg.self_deaf, None,         "unset flags must remain absent");
+    }
+
+    // -----------------------------------------------------------------------
+    // Regression: RemoteUserStateChanged must only broadcast fields present
+    // in the delta, not ALL current state. Broadcasting all state would send
+    // Some(false) for every default-off field on every state update.
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_remote_user_state_changed_only_broadcasts_delta() {
+        use crate::state::RemoteUserStateDelta;
+
+        let (es, _hub) = test_edge_and_hub();
+
+        let (tx_obs, mut rx_obs) = mpsc::channel::<Vec<u8>>(16);
+        es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_obs)).await;
+        es.channel_manager.upsert_remote_user(remote_user(12, 0)).await;
+        let es = run_event_listener_task(es).await;
+
+        // Only self_mute changed – all other fields are absent in the delta.
+        let delta = RemoteUserStateDelta {
+            self_mute: Some(true),
+            ..Default::default()
+        };
+        es.emit(EdgeEvent::RemoteUserStateChanged {
+            session_id: 12,
+            delta,
+            listening_channel_add: vec![],
+            listening_channel_remove: vec![],
+        });
+
+        let msg = decode_user_state(&rx_obs.recv().await.unwrap());
+        assert_eq!(msg.session,   Some(12));
+        assert_eq!(msg.self_mute, Some(true), "changed field must be included");
+        // All unchanged fields must be absent (None) – not Some(false).
+        assert_eq!(msg.self_deaf,        None, "unchanged self_deaf must be absent");
+        assert_eq!(msg.mute,             None, "unchanged mute must be absent");
+        assert_eq!(msg.deaf,             None, "unchanged deaf must be absent");
+        assert_eq!(msg.recording,        None, "unchanged recording must be absent");
+        assert_eq!(msg.priority_speaker, None, "unchanged priority_speaker must be absent");
+    }
+
+    // -----------------------------------------------------------------------
+    // When delta un-mutes a remote user, Some(false) must propagate.
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_remote_user_state_changed_unmute_carries_false() {
+        use crate::state::RemoteUserStateDelta;
+
+        let (es, _hub) = test_edge_and_hub();
+
+        let (tx_obs, mut rx_obs) = mpsc::channel::<Vec<u8>>(16);
+        es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_obs)).await;
+        let mut ru = remote_user(13, 0);
+        ru.self_mute = false; // now false after update
+        es.channel_manager.upsert_remote_user(ru).await;
+        let es = run_event_listener_task(es).await;
+
+        let delta = RemoteUserStateDelta {
+            self_mute: Some(false), // explicit false = "just un-muted"
+            ..Default::default()
+        };
+        es.emit(EdgeEvent::RemoteUserStateChanged {
+            session_id: 13,
+            delta,
+            listening_channel_add: vec![],
+            listening_channel_remove: vec![],
+        });
+
+        let msg = decode_user_state(&rx_obs.recv().await.unwrap());
+        assert_eq!(msg.self_mute, Some(false), "un-mute delta must carry Some(false)");
+        // Other fields still absent.
+        assert_eq!(msg.recording, None);
+    }
+}
+
 /// Listen for events from the Hub and broadcast them to local clients.
 async fn hub_event_listener(    state: Arc<EdgeState>,
     event_rx: &mut tokio::sync::broadcast::Receiver<EdgeEvent>,
@@ -1418,18 +1954,25 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         // Only broadcast for REMOTE users (not local clients - handled by main task)
                         if state.client_manager.get_client(session_id).await.is_none() {
                             if let Some(user) = state.channel_manager.get_remote_user(session_id).await {
+                                // When announcing a newly-joined user we must NOT include Some(false)
+                                // for boolean fields – the Mumble client interprets every present bool
+                                // field as "this just changed to that value", triggering spurious
+                                // notifications ("user unmuted", "user stopped recording", etc.).
+                                // Only include a field when it is true (non-default).
+                                // Also: only include user_id for registered users (user_id > 0);
+                                // sending user_id=0 wrongly marks the guest as SuperUser.
                                 let msg = mumbleproto::UserState {
                                     session: Some(user.session_id),
-                                    user_id: Some(user.user_id),
+                                    user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
                                     name: Some(user.username.clone()),
                                     channel_id: Some(user.channel_id),
-                                    mute: Some(user.mute),
-                                    deaf: Some(user.deaf),
-                                    suppress: Some(user.suppress),
-                                    self_mute: Some(user.self_mute),
-                                    self_deaf: Some(user.self_deaf),
-                                    priority_speaker: Some(user.priority_speaker),
-                                    recording: Some(user.recording),
+                                    mute:             if user.mute             { Some(true) } else { None },
+                                    deaf:             if user.deaf             { Some(true) } else { None },
+                                    suppress:         if user.suppress         { Some(true) } else { None },
+                                    self_mute:        if user.self_mute        { Some(true) } else { None },
+                                    self_deaf:        if user.self_deaf        { Some(true) } else { None },
+                                    priority_speaker: if user.priority_speaker { Some(true) } else { None },
+                                    recording:        if user.recording        { Some(true) } else { None },
                                     hash: user.cert_hash.clone(),
                                     ..Default::default()
                                 };
@@ -1443,27 +1986,28 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         state.client_manager.broadcast(MessageType::UserRemove, &msg, None).await;
                         debug!("Broadcast remote user left: session {}", session_id);
                     }
-                    EdgeEvent::RemoteUserStateChanged { session_id, listening_channel_add, listening_channel_remove } => {
-                        if let Some(user) = state.channel_manager.get_remote_user(session_id).await {
-                            let mut msg = mumbleproto::UserState {
-                                session: Some(session_id),
-                                self_mute: Some(user.self_mute),
-                                self_deaf: Some(user.self_deaf),
-                                mute: Some(user.mute),
-                                deaf: Some(user.deaf),
-                                suppress: Some(user.suppress),
-                                priority_speaker: Some(user.priority_speaker),
-                                recording: Some(user.recording),
-                                ..Default::default()
-                            };
-                            if !listening_channel_add.is_empty() {
-                                msg.listening_channel_add = listening_channel_add;
-                            }
-                            if !listening_channel_remove.is_empty() {
-                                msg.listening_channel_remove = listening_channel_remove;
-                            }
-                            state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                    EdgeEvent::RemoteUserStateChanged { session_id, delta, listening_channel_add, listening_channel_remove } => {
+                        // Only forward fields that ACTUALLY changed (carried by delta).
+                        // Broadcasting the full current state would include Some(false) for
+                        // unchanged default-off fields, triggering spurious client notifications.
+                        let mut msg = mumbleproto::UserState {
+                            session: Some(session_id),
+                            self_mute:        delta.self_mute,
+                            self_deaf:        delta.self_deaf,
+                            mute:             delta.mute,
+                            deaf:             delta.deaf,
+                            suppress:         delta.suppress,
+                            priority_speaker: delta.priority_speaker,
+                            recording:        delta.recording,
+                            ..Default::default()
+                        };
+                        if !listening_channel_add.is_empty() {
+                            msg.listening_channel_add = listening_channel_add;
                         }
+                        if !listening_channel_remove.is_empty() {
+                            msg.listening_channel_remove = listening_channel_remove;
+                        }
+                        state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
                         debug!("Broadcast remote user state changed: session {}", session_id);
                     }
                     EdgeEvent::RemoteUserMoved { session_id, channel_id } => {
@@ -1540,78 +2084,120 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                     }
                     EdgeEvent::RelayedVoice { voice_packet } => {
                         // Voice relayed from another edge via Hub TCP.
-                        // New format: [4B sender_session][4B target_count][4B*n target_sessions][voice_payload]
-                        // target_count=0 means normal broadcast (all users in linked channels)
-                        if voice_packet.len() < 8 {
+                        // Standard Mumble server-to-client format:
+                        //   [header(1B)][sender_session_varint][sequence_varint][voice_data]
+                        // voice_packet already has session injected, so it can be sent directly to clients.
+                        if voice_packet.len() < 2 {
                             continue;
                         }
-                        let sender_session = u32::from_be_bytes([
-                            voice_packet[0], voice_packet[1], voice_packet[2], voice_packet[3],
-                        ]);
-                        let target_count = u32::from_be_bytes([
-                            voice_packet[4], voice_packet[5], voice_packet[6], voice_packet[7],
-                        ]) as usize;
-                        let header_size = 8 + target_count * 4;
-                        if voice_packet.len() < header_size {
-                            continue;
-                        }
-                        let mut target_sessions: std::collections::HashSet<u32> = std::collections::HashSet::new();
-                        for i in 0..target_count {
-                            let off = 8 + i * 4;
-                            let s = u32::from_be_bytes([
-                                voice_packet[off], voice_packet[off+1], voice_packet[off+2], voice_packet[off+3],
-                            ]);
-                            target_sessions.insert(s);
-                        }
-                        let voice_data = &voice_packet[header_size..];
-                        let is_broadcast = target_count == 0;
+                        let voice_target = (voice_packet[0] & 0x1F) as u32;
 
-                        // Find what channel the remote sender is in
-                        let sender_channel_id = if let Some(ru) = state.channel_manager.get_remote_user(sender_session).await {
-                            ru.channel_id
-                        } else {
-                            debug!("RelayedVoice: unknown remote session {}", sender_session);
-                            continue;
+                        // Parse sender_session varint from offset 1
+                        let sender_session = match decode_mumble_varint(&voice_packet[1..]) {
+                            Some((s, _)) => s,
+                            None => {
+                                debug!("RelayedVoice: failed to parse sender session");
+                                continue;
+                            }
                         };
 
-                        // Inject sender_session into the forwarded voice packet
-                        let forwarded = inject_session_into_voice(voice_data, sender_session);
-                        let mut buf = bytes::BytesMut::new();
-                        bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-                        bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
-                        bytes::BufMut::put_slice(&mut buf, &forwarded);
-                        let frame = buf.to_vec();
+                        let my_edge_id = state.edge_id.read().await.unwrap_or(0);
 
-                        if is_broadcast {
-                            // Normal broadcast: deliver to all clients in linked channels
-                            let linked_channels = state.channel_manager.get_all_linked_channels(sender_channel_id).await;
-                            for ch_id in &linked_channels {
-                                let local_targets = state.client_manager.get_channel_sessions(*ch_id).await;
-                                for target_session in local_targets {
-                                    if let Some(target_client) = state.client_manager.get_client(target_session).await {
-                                        if target_client.deaf || target_client.self_deaf {
-                                            continue;
+                        // Trace: log first 16 bytes of voice_packet to verify format
+                        {
+                            let hex: String = voice_packet.iter().take(16)
+                                .map(|b| format!("{:02X}", b))
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            trace!("edge={} RelayedVoice recv: len={} header=0x{:02X} target={} session={} bytes=[{}]",
+                                my_edge_id, voice_packet.len(), voice_packet[0], voice_target, sender_session, hex);
+                        }
+
+                        // Build TCP UdpTunnel frame (voice_packet is already correctly formatted)
+                        let frame = {
+                            let mut buf = bytes::BytesMut::new();
+                            bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
+                            bytes::BufMut::put_u32(&mut buf, voice_packet.len() as u32);
+                            bytes::BufMut::put_slice(&mut buf, &voice_packet);
+                            buf.to_vec()
+                        };
+
+                        match voice_target {
+                            31 => {
+                                // Loopback — ignore cross-edge loopback
+                                debug!("edge={} Ignoring relayed loopback from session {}", my_edge_id, sender_session);
+                            }
+                            0 => {
+                                // PTT broadcast: deliver to all local clients in sender's linked channels
+                                let sender_channel_id = if let Some(ru) = state.channel_manager.get_remote_user(sender_session).await {
+                                    ru.channel_id
+                                } else {
+                                    debug!("edge={} RelayedVoice PTT: unknown remote session {}", my_edge_id, sender_session);
+                                    continue;
+                                };
+                                let linked_channels = state.channel_manager.get_all_linked_channels(sender_channel_id).await;
+                                let mut delivered = 0usize;
+                                for ch_id in &linked_channels {
+                                    let local_targets = state.client_manager.get_channel_sessions(*ch_id).await;
+                                    for target_session in local_targets {
+                                        if let Some(target_client) = state.client_manager.get_client(target_session).await {
+                                            if target_client.deaf || target_client.self_deaf {
+                                                continue;
+                                            }
+                                        }
+                                        if let Some(sender_tx) = state.client_manager.get_sender(target_session).await {
+                                            sender_tx.send_raw(frame.clone()).await;
+                                            delivered += 1;
                                         }
                                     }
-                                    if let Some(sender) = state.client_manager.get_sender(target_session).await {
-                                        sender.send_raw(frame.clone()).await;
+                                }
+                                trace!("edge={} Delivered relayed broadcast from session {} to {} local clients in {} linked channels", my_edge_id, sender_session, delivered, linked_channels.len());
+                            }
+                            1..=30 => {
+                                // Whisper: use synced VoiceTarget config for sender's session
+                                let vt_config = {
+                                    let cache = state.voice_targets.lock().await;
+                                    cache.get(&sender_session).and_then(|m| m.get(&voice_target)).cloned()
+                                };
+                                if let Some(vt) = vt_config {
+                                    let mut target_sessions: std::collections::HashSet<u32> = std::collections::HashSet::new();
+                                    for s in &vt.sessions {
+                                        target_sessions.insert(*s);
                                     }
+                                    for ch_cfg in &vt.channels {
+                                        let mut ch_ids = std::collections::HashSet::new();
+                                        ch_ids.insert(ch_cfg.channel_id);
+                                        if ch_cfg.links {
+                                            let linked = state.channel_manager.get_all_linked_channels(ch_cfg.channel_id).await;
+                                            ch_ids.extend(linked);
+                                        }
+                                        for ch_id in ch_ids {
+                                            let local_sessions = state.client_manager.get_channel_sessions(ch_id).await;
+                                            for s in local_sessions {
+                                                if s != sender_session {
+                                                    target_sessions.insert(s);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    let mut delivered = 0usize;
+                                    for target_session in &target_sessions {
+                                        if let Some(target_client) = state.client_manager.get_client(*target_session).await {
+                                            if target_client.deaf || target_client.self_deaf {
+                                                continue;
+                                            }
+                                        }
+                                        if let Some(sender_tx) = state.client_manager.get_sender(*target_session).await {
+                                            sender_tx.send_raw(frame.clone()).await;
+                                            delivered += 1;
+                                        }
+                                    }
+                                    trace!("edge={} Delivered relayed whisper from session {} to {}/{} targets", my_edge_id, sender_session, delivered, target_sessions.len());
+                                } else {
+                                    debug!("edge={} RelayedVoice whisper: no VoiceTarget config for session {} target {}", my_edge_id, sender_session, voice_target);
                                 }
                             }
-                            debug!("Delivered relayed broadcast from session {} to linked channels", sender_session);
-                        } else {
-                            // Whisper: deliver only to specified target sessions
-                            for target_session in &target_sessions {
-                                if let Some(target_client) = state.client_manager.get_client(*target_session).await {
-                                    if target_client.deaf || target_client.self_deaf {
-                                        continue;
-                                    }
-                                }
-                                if let Some(sender) = state.client_manager.get_sender(*target_session).await {
-                                    sender.send_raw(frame.clone()).await;
-                                }
-                            }
-                            debug!("Delivered relayed whisper from session {} to {} targets", sender_session, target_sessions.len());
+                            _ => {}
                         }
                     }
                 }

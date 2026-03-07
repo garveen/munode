@@ -7,7 +7,7 @@ use argon2::password_hash::SaltString;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 use munode_protocol::authservice::{AuthRequest as ExtAuthRequest};
 use munode_protocol::hubedge::*;
@@ -93,7 +93,12 @@ impl RpcHandler {
         let request_id = request.request_id.clone();
         let method = request.method.clone();
 
-        debug!("RPC request: {} (id={})", method, request_id);
+        // High-frequency voice relay requests are trace-level to avoid log flooding.
+        if method == "edge.relayVoiceViaTcp" {
+            trace!("RPC request: {} (id={})", method, request_id);
+        } else {
+            debug!("RPC request: {} (id={})", method, request_id);
+        }
 
         let response = match method.as_str() {
             "edge.register" => self.handle_register(&request, &request_id).await,
@@ -2374,16 +2379,17 @@ impl RpcHandler {
         let target_edge_id = params.target_edge_id;
         let voice_packet = params.voice_packet.clone();
         let from_edge_id = params.from_edge_id;
+        let timestamp = params.timestamp;
 
-        // Forward the voice payload to the target edge via a notification
-        let notification = serde_json::json!({
-            "from_edge_id": from_edge_id,
-            "voice_packet": voice_packet,
-        });
+        // Forward the voice payload to the target edge via a typed protobuf notification
         let notif = TypedRpcNotification {
-            method: "hub.relayedVoice".to_string(),
+            method: "hub.relayVoicePacket".to_string(),
             timestamp: Some(current_millis() as i64),
-            unknown_params_json: Some(notification.to_string()),
+            relay_voice_packet: Some(HubRelayVoicePacketParams {
+                from_edge_id,
+                voice_packet,
+                timestamp,
+            }),
             ..Default::default()
         };
         let packet = EdgeHubPacket {

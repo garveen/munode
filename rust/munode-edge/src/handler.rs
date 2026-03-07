@@ -114,11 +114,14 @@ impl<'a> LoginHandler<'a> {
         let msg = mumbleproto::CodecVersion {
             alpha: -2147483637, // CELT 0.7.0
             beta: -2147483632,  // CELT 0.11.0
-            prefer_alpha: true,
+            // prefer_alpha must be false when opus=true; otherwise some Mumble clients
+            // (especially older 1.3.x builds) use CELT Alpha even when Opus is available,
+            // which prevents modern 1.4+ receivers from decoding the audio.
+            prefer_alpha: !opus,
             opus: Some(opus),
         };
         self.send(MessageType::CodecVersion, &msg).await?;
-        debug!("Sent CodecVersion");
+        debug!("Sent CodecVersion (opus={}, prefer_alpha={})", opus, !opus);
         Ok(())
     }
 
@@ -165,13 +168,25 @@ impl<'a> LoginHandler<'a> {
         let remote_users = self.edge_state.channel_manager.get_all_remote_users().await;
         let local_clients = self.edge_state.client_manager.get_all_clients().await;
 
+        // Build a set of local session IDs so we can skip them when iterating
+        // remote_users. Normally local users should not be in remote_users (the
+        // hub.userJoined handler now skips is_local users), but the initial
+        // full_sync from Hub may still include sessions that belong to this edge
+        // if Hub hasn't cleaned them up yet.
+        let local_sessions: std::collections::HashSet<u32> =
+            local_clients.iter().map(|c| c.session).collect();
+
         for user in &remote_users {
             if user.session_id == self_session {
                 continue;
             }
+            // Skip local users – they will be sent in the local_clients loop below.
+            if local_sessions.contains(&user.session_id) {
+                continue;
+            }
             let msg = mumbleproto::UserState {
                 session: Some(user.session_id),
-                user_id: Some(user.user_id),
+                user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
                 name: Some(user.username.clone()),
                 channel_id: Some(user.channel_id),
                 mute: if user.mute { Some(true) } else { None },
@@ -193,7 +208,7 @@ impl<'a> LoginHandler<'a> {
             }
             let msg = mumbleproto::UserState {
                 session: Some(client.session),
-                user_id: Some(client.user_id),
+                user_id: if client.user_id > 0 { Some(client.user_id) } else { None },
                 name: Some(client.username.clone()),
                 channel_id: Some(client.channel_id),
                 mute: if client.mute { Some(true) } else { None },
@@ -224,10 +239,19 @@ impl<'a> LoginHandler<'a> {
         auth_result: &munode_protocol::hubedge::EdgeAuthenticateUserResult,
     ) -> Result<()> {
         let channel_id = auth_result.channel_id.unwrap_or(self.config.server.default_channel);
+        // Prefer display_name over username (matches JS implementation behaviour).
+        let display_name = auth_result.display_name.clone()
+            .or(auth_result.username.clone())
+            .unwrap_or_default();
+        // Only include user_id for registered users (user_id > 0).
+        // Sending user_id=0 would cause Mumble clients to treat the user as a
+        // registered account with id=0 rather than as a guest.
+        let user_id = auth_result.user_id.filter(|&id| id > 0);
         let msg = mumbleproto::UserState {
             session: Some(session_id),
-            user_id: Some(auth_result.user_id.unwrap_or(0)),
-            name: Some(auth_result.username.clone().unwrap_or_default()),
+            actor: Some(session_id),
+            user_id,
+            name: Some(display_name),
             channel_id: Some(channel_id),
             mute: auth_result.mute.filter(|&v| v),
             deaf: auth_result.deaf.filter(|&v| v),
@@ -306,7 +330,7 @@ pub fn encode_version_response(payload: &[u8], peer_addr: &str) -> Result<Vec<u8
     );
 
     let server_version = mumbleproto::Version {
-        version: Some(0x0001_0500), // 1.5.0
+        version: Some(0x0001_0400), // 1.4.0 — 1.5.0+ triggers protobuf audio; we use legacy format
         release: Some("MuNode-Rust 0.1.0".into()),
         os: Some(std::env::consts::OS.into()),
         os_version: Some(String::new()),
@@ -334,7 +358,8 @@ pub fn encode_reject(reject_type: Option<i32>, reason: &str) -> Vec<u8> {
 pub fn build_user_state_msg(client: &ClientInfo) -> mumbleproto::UserState {
     mumbleproto::UserState {
         session: Some(client.session),
-        user_id: Some(client.user_id),
+        // Only include user_id for registered users (user_id > 0); guests should have None.
+        user_id: if client.user_id > 0 { Some(client.user_id) } else { None },
         name: Some(client.username.clone()),
         channel_id: Some(client.channel_id),
         mute: if client.mute { Some(true) } else { None },
