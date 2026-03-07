@@ -1166,23 +1166,26 @@ async fn handle_user_state_update(
             needs_broadcast = true;
         }
 
-        // 9.2 Admin mute/deaf (only allowed by users with MuteDeafen permission on user's channel)
-        if user_state.mute.is_some() || user_state.deaf.is_some() {
-            if let Some(mute) = user_state.mute { client.mute = mute; }
-            if let Some(deaf) = user_state.deaf { client.deaf = deaf; }
-            needs_broadcast = true;
-        }
+        // 9.2 mute/deaf/suppress/priority_speaker are SERVER-ADMIN-only fields.
+        // Per Murmur (Messages.cpp msgUserState), modifying these requires the
+        // MuteDeafen ACL permission.  A client targeting its own session that
+        // sends these fields (e.g. as part of its initial resumption state on
+        // connect) must have that permission; regular users do not, so we
+        // silently ignore them here.  Legitimate admin operations arrive through
+        // handle_admin_user_state_update which carries proper permission checks.
+        // Accepting these fields here would let a Mumble client trigger
+        // spurious "Server opened mic/speaker" notifications on every connect.
 
-        // 9.3 Priority speaker (requires Write or specific permission)
-        if let Some(ps) = user_state.priority_speaker {
-            client.priority_speaker = ps;
-            needs_broadcast = true;
-        }
-
-        // 9.3 Recording flag (anyone can mark themselves as recording)
+        // 9.3 Recording flag (anyone can mark themselves as recording).
+        // Only broadcast when the value actually changed — Murmur only sets
+        // bBroadcast if `pDstServerUser->bRecording != msg.recording()`, so
+        // a client resending `recording=false` on connect should NOT generate
+        // a "User stopped recording" notification on other clients.
         if let Some(rec) = user_state.recording {
-            client.recording = rec;
-            needs_broadcast = true;
+            if rec != client.recording {
+                client.recording = rec;
+                needs_broadcast = true;
+            }
         }
 
         // 9.4 Listening channel add/remove
@@ -1268,10 +1271,14 @@ async fn handle_user_state_update(
                 if !sm { broadcast_msg.self_deaf = Some(false); }
             }
 
-            if let Some(v) = user_state.mute            { broadcast_msg.mute             = Some(v); }
-            if let Some(v) = user_state.deaf            { broadcast_msg.deaf             = Some(v); }
-            if let Some(v) = user_state.priority_speaker{ broadcast_msg.priority_speaker = Some(v); }
-            if let Some(v) = user_state.recording       { broadcast_msg.recording        = Some(v); }
+            // mute/deaf/priority_speaker are not processed here (admin-only).
+            if let Some(v) = user_state.recording {
+                // Only include recording in the broadcast when the value
+                // actually changed (change detection already skips no-ops above).
+                if broadcast_msg.recording.is_none() {
+                    broadcast_msg.recording = Some(v);
+                }
+            }
 
             if !actually_added_channels.is_empty() {
                 broadcast_msg.listening_channel_add = actually_added_channels.clone();
@@ -1282,21 +1289,33 @@ async fn handle_user_state_update(
 
             edge_state.client_manager.broadcast(MessageType::UserState, &broadcast_msg, None).await;
 
-            // Notify Hub of the final (coupled) state so other edges stay in sync.
+            // Notify Hub of the CHANGED fields only so that other edges stay in
+            // sync.  Previously we sent the full current state on every update
+            // which caused other edges to build a delta that included
+            // Some(false) for every default-off field, triggering spurious
+            // "Server opened mic/speaker" / "Server granted priority speaker"
+            // notifications on their local clients.
             if channel_moved {
                 hub_client.notify_user_moved(session_id, client.channel_id).await;
             } else {
-                let state_json = serde_json::json!({
-                    "self_mute": client.self_mute,
-                    "self_deaf": client.self_deaf,
-                    "mute": client.mute,
-                    "deaf": client.deaf,
-                    "priority_speaker": client.priority_speaker,
-                    "recording": client.recording,
-                    "listening_channel_add": broadcast_msg.listening_channel_add,
-                    "listening_channel_remove": broadcast_msg.listening_channel_remove,
-                });
-                hub_client.notify_user_state_changed(session_id, state_json).await;
+                let mut state_map = serde_json::Map::new();
+                if let Some(v) = broadcast_msg.self_mute        { state_map.insert("self_mute".into(), v.into()); }
+                if let Some(v) = broadcast_msg.self_deaf        { state_map.insert("self_deaf".into(), v.into()); }
+                if let Some(v) = broadcast_msg.mute             { state_map.insert("mute".into(), v.into()); }
+                if let Some(v) = broadcast_msg.deaf             { state_map.insert("deaf".into(), v.into()); }
+                if let Some(v) = broadcast_msg.priority_speaker { state_map.insert("priority_speaker".into(), v.into()); }
+                if let Some(v) = broadcast_msg.recording        { state_map.insert("recording".into(), v.into()); }
+                if !broadcast_msg.listening_channel_add.is_empty() {
+                    state_map.insert("listening_channel_add".into(),
+                        serde_json::Value::Array(broadcast_msg.listening_channel_add.iter().map(|&n| n.into()).collect()));
+                }
+                if !broadcast_msg.listening_channel_remove.is_empty() {
+                    state_map.insert("listening_channel_remove".into(),
+                        serde_json::Value::Array(broadcast_msg.listening_channel_remove.iter().map(|&n| n.into()).collect()));
+                }
+                if !state_map.is_empty() {
+                    hub_client.notify_user_state_changed(session_id, serde_json::Value::Object(state_map)).await;
+                }
             }
         }
     }
