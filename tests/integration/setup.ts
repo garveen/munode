@@ -1127,7 +1127,10 @@ export async function setupTestEnvironment(
         // --- Rust Hub 模式 ---
         const dbPath = join(PROJECT_ROOT, `data/hub-test-${basePort}.db`);
         // 初始化数据库（使用 TS init 脚本，Rust hub 共用相同 schema）
-        if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+        // 必须同时删除 WAL 和 SHM 文件，否则 SQLite 在找不到主 DB 文件时会因 SHM 文件而报 disk I/O error
+        for (const ext of ['', '-wal', '-shm']) {
+          if (fs.existsSync(dbPath + ext)) fs.unlinkSync(dbPath + ext);
+        }
         fs.mkdirSync(join(PROJECT_ROOT, 'data'), { recursive: true });
         const initScript = join(PROJECT_ROOT, 'scripts/init-test-db.ts');
         if (fs.existsSync(initScript)) {
