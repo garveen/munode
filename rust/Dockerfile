@@ -9,8 +9,8 @@ ARG no_proxy
 
 # Stage 1: Build
 FROM rust:alpine3.23 AS builder
-RUN apk add --no-cache protobuf-dev cmake musl-dev openssl-dev openssl-libs-static pkgconf \
-    && cargo install cargo-chef --locked
+RUN apk add --no-cache protobuf-dev cmake musl-dev openssl-dev openssl-libs-static pkgconf
+run cargo install cargo-chef --locked
 WORKDIR /build
 COPY rust/Cargo.toml rust/Cargo.lock ./
 COPY rust/munode-protocol/Cargo.toml rust/munode-protocol/build.rs munode-protocol/
