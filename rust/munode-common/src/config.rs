@@ -83,6 +83,10 @@ pub struct ServerConfig {
     pub default_channel: u32,
     /// Welcome text shown to connecting clients.
     pub welcome_text: Option<String>,
+    /// When true, skip Hub relay for cross-edge voice; only direct UDP is used.
+    /// Intended for integration tests that verify Edge-to-Edge direct connection.
+    #[serde(default)]
+    pub disable_hub_relay: bool,
 }
 
 impl Default for ServerConfig {
@@ -92,6 +96,7 @@ impl Default for ServerConfig {
             max_bandwidth: default_max_bandwidth(),
             default_channel: 0,
             welcome_text: None,
+            disable_hub_relay: false,
         }
     }
 }

@@ -22,8 +22,17 @@ use crate::state::EdgeState;
 /// 3. Server tries decrypting with each authenticated session's CryptState;
 ///    on success the UDP address is mapped to that session.
 /// 4. Subsequent packets are decrypted, routed, and re-encrypted per-recipient.
+///
+/// Edge-to-Edge direct voice is handled on a separate `edge_socket` bound on
+/// `edge_port`.  Outbound packets include a 6-byte header:
+///   [EDGE_MAGIC(2B)] [sender_session_u32_BE(4B)] [plaintext_voice...]
+/// Inbound packets from peers are identified by the same magic prefix.
 pub struct UdpServer {
+    /// Client-facing socket (Mumble port).
     socket: Arc<UdpSocket>,
+    /// Edge-to-Edge dedicated socket (edge_port).  May be the same as `socket`
+    /// when `edge_port` is not configured (fall-back guard).
+    edge_socket: Arc<UdpSocket>,
     edge_state: Arc<EdgeState>,
     hub_client: Arc<HubClient>,
     /// Maps UDP source address → session ID.
@@ -33,11 +42,26 @@ pub struct UdpServer {
 }
 
 impl UdpServer {
-    pub async fn new(addr: SocketAddr, edge_state: Arc<EdgeState>, hub_client: Arc<HubClient>) -> Result<Self> {
-        let socket = UdpSocket::bind(addr).await?;
-        info!("UDP server listening on {}", addr);
+    pub async fn new(
+        client_addr: SocketAddr,
+        edge_addr: SocketAddr,
+        edge_state: Arc<EdgeState>,
+        hub_client: Arc<HubClient>,
+    ) -> Result<Self> {
+        let socket = Arc::new(UdpSocket::bind(client_addr).await?);
+        info!("UDP (client) server listening on {}", client_addr);
+
+        let edge_socket = if edge_addr != client_addr {
+            let s = Arc::new(UdpSocket::bind(edge_addr).await?);
+            info!("UDP (edge-to-edge) server listening on {}", edge_addr);
+            s
+        } else {
+            Arc::clone(&socket)
+        };
+
         Ok(Self {
-            socket: Arc::new(socket),
+            socket,
+            edge_socket,
             edge_state,
             hub_client,
             addr_to_session: Arc::new(RwLock::new(HashMap::new())),
@@ -59,30 +83,56 @@ impl UdpServer {
         }
     }
 
-    /// Main receive loop.
+    /// Main receive loop.  Polls both the client socket and the edge socket.
     pub async fn run(&self) -> Result<()> {
-        let mut buf = [0u8; 2048];
+        let mut client_buf = [0u8; 2048];
+        let mut edge_buf = [0u8; 2048];
+
+        // If edge_socket is the same Arc as socket (no separate edge port),
+        // we only select on the client socket to avoid double-polling the same fd.
+        let separate_edge_sock = !Arc::ptr_eq(&self.socket, &self.edge_socket);
 
         loop {
-            let (len, peer_addr) = self.socket.recv_from(&mut buf).await?;
-            if len < 4 {
-                continue;
-            }
-
-            // Edge-to-Edge internal routing packet (magic prefix 0x0000)
-            if len >= 2 && buf[0] == EDGE_MAGIC[0] && buf[1] == EDGE_MAGIC[1] {
-                self.handle_edge_packet(&buf[2..len], peer_addr).await;
-                continue;
-            }
-
-            let data = &buf[..len];
-            let known_session = self.addr_to_session.read().await.get(&peer_addr).copied();
-
-            if let Some(session_id) = known_session {
-                self.handle_known_client(data, session_id).await;
+            if separate_edge_sock {
+                tokio::select! {
+                    res = self.socket.recv_from(&mut client_buf) => {
+                        let (len, peer_addr) = res?;
+                        if len >= 4 {
+                            self.handle_client_datagram(&client_buf[..len], peer_addr).await;
+                        }
+                    }
+                    res = self.edge_socket.recv_from(&mut edge_buf) => {
+                        let (len, peer_addr) = res?;
+                        if len >= 6 && edge_buf[0] == EDGE_MAGIC[0] && edge_buf[1] == EDGE_MAGIC[1] {
+                            self.handle_edge_packet(&edge_buf[2..len], peer_addr).await;
+                        } else {
+                            debug!("Unexpected packet on edge socket from {} ({} bytes)", peer_addr, len);
+                        }
+                    }
+                }
             } else {
-                self.try_identify_and_handle(data, peer_addr).await;
+                let (len, peer_addr) = self.socket.recv_from(&mut client_buf).await?;
+                if len >= 4 {
+                    self.handle_client_datagram(&client_buf[..len], peer_addr).await;
+                }
             }
+        }
+    }
+
+    /// Dispatch a datagram received on the client-facing socket.
+    async fn handle_client_datagram(&self, data: &[u8], peer_addr: SocketAddr) {
+        // Edge-to-Edge packet on client port (fallback when no dedicated edge port)
+        if data.len() >= 2 && data[0] == EDGE_MAGIC[0] && data[1] == EDGE_MAGIC[1] {
+            self.handle_edge_packet(&data[2..], peer_addr).await;
+            return;
+        }
+
+        let known_session = self.addr_to_session.read().await.get(&peer_addr).copied();
+
+        if let Some(session_id) = known_session {
+            self.handle_known_client(data, session_id).await;
+        } else {
+            self.try_identify_and_handle(data, peer_addr).await;
         }
     }
 
@@ -236,10 +286,31 @@ impl UdpServer {
 
         for target_edge_id in by_edge.into_keys() {
             debug!("edge={:?} UDP voice: relaying broadcast from session {} to edge {}", my_edge_id, sender_session, target_edge_id);
-            // Relay format: standard Mumble server-to-client packet
-            // [header][session_varint][seq][voice_data]  (matches TS hub relay format)
+            // Relay format: [EDGE_MAGIC(2B)][sender_session_u32_BE(4B)][plaintext_voice]
             let relay_payload = inject_session_into_voice(plaintext, sender_session);
-            self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+
+            // Try direct UDP to peer edge first; fall back to Hub relay if not known.
+            let peer_udp_addr = {
+                let reg = self.edge_state.peer_registry.lock().await;
+                reg.get(target_edge_id).map(|p| p.udp_addr)
+            };
+
+            if let Some(peer_addr) = peer_udp_addr {
+                // Packet format for peer Edge: [EDGE_MAGIC(2B)][sender_session_u32_BE(4B)][raw plaintext voice]
+                // Receiver (handle_edge_packet) strips EDGE_MAGIC then reads 4B session + raw voice.
+                let mut direct_packet = Vec::with_capacity(2 + 4 + plaintext.len());
+                direct_packet.extend_from_slice(&EDGE_MAGIC);
+                direct_packet.extend_from_slice(&sender_session.to_be_bytes());
+                direct_packet.extend_from_slice(plaintext);
+                if let Err(e) = self.edge_socket.send_to(&direct_packet, peer_addr).await {
+                    warn!("Direct UDP to edge {} at {} failed: {}", target_edge_id, peer_addr, e);
+                    if !self.edge_state.disable_hub_relay {
+                        self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                    }
+                }
+            } else if !self.edge_state.disable_hub_relay {
+                self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+            }
         }
     }
 

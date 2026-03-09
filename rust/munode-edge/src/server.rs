@@ -39,7 +39,7 @@ impl EdgeServer {
         // Create shared state
         let client_manager = ClientManager::new();
         let channel_manager = ChannelManager::new();
-        let edge_state = EdgeState::new(channel_manager, client_manager);
+        let edge_state = EdgeState::new(channel_manager, client_manager, self.config.server.disable_hub_relay);
 
         // Set up TLS
         let tls_acceptor = create_tls_acceptor(&self.config.tls)?;
@@ -58,7 +58,10 @@ impl EdgeServer {
         // Start UDP server (needs hub_client for cross-edge relay)
         let udp_addr: SocketAddr = format!("{}:{}", self.config.network.host, self.config.network.port)
             .parse()?;
-        let udp_server = UdpServer::new(udp_addr, edge_state.clone(), hub_client.clone()).await?;
+        let edge_port = self.config.network.edge_port.unwrap_or(self.config.network.port + 1);
+        let edge_udp_addr: SocketAddr = format!("{}:{}", self.config.network.host, edge_port)
+            .parse()?;
+        let udp_server = UdpServer::new(udp_addr, edge_udp_addr, edge_state.clone(), hub_client.clone()).await?;
         let udp_handle = tokio::spawn(async move {
             if let Err(e) = udp_server.run().await {
                 error!("UDP server error: {}", e);
@@ -532,7 +535,9 @@ async fn handle_client_connection(
                                         // [header][session_varint][seq][voice_data]
                                         // (matches TS hub relay format)
                                         let relay_payload = inject_session_into_voice(&frame.payload, sid);
-                                        hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                                        if !edge_state.disable_hub_relay {
+                                            hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                                        }
                                     }
                                 }
                             } else {
@@ -584,7 +589,9 @@ async fn handle_client_connection(
                                     // Relay format: standard Mumble server-to-client packet
                                     // [header][session_varint][seq][voice_data]
                                     let relay_payload = inject_session_into_voice(&frame.payload, sid);
-                                    hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                                    if !edge_state.disable_hub_relay {
+                                        hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                                    }
                                 }
                             }
                         }
@@ -1600,7 +1607,7 @@ mod tests {
     fn test_edge_and_hub() -> (Arc<EdgeState>, Arc<HubClient>) {
         let channel_manager = ChannelManager::new();
         let client_manager = ClientManager::new();
-        let edge_state = EdgeState::new(channel_manager, client_manager);
+        let edge_state = EdgeState::new(channel_manager, client_manager, false);
         let hub_client = HubClient::new(&test_config(), edge_state.clone());
         (edge_state, hub_client)
     }

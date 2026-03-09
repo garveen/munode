@@ -1,10 +1,38 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::channel_manager::ChannelManager;
 use crate::client::ClientManager;
+
+/// Information about a peer Edge node for direct UDP routing.
+#[derive(Debug, Clone)]
+pub struct PeerEdgeInfo {
+    /// Edge-to-Edge UDP endpoint (dedicated `edge_port`).
+    pub udp_addr: SocketAddr,
+}
+
+/// Registry of known peer Edges, populated from `hub.peerJoined` notifications.
+#[derive(Debug, Default)]
+pub struct PeerRegistry {
+    peers: HashMap<u32, PeerEdgeInfo>,
+}
+
+impl PeerRegistry {
+    pub fn upsert(&mut self, edge_id: u32, info: PeerEdgeInfo) {
+        self.peers.insert(edge_id, info);
+    }
+
+    pub fn remove(&mut self, edge_id: u32) {
+        self.peers.remove(&edge_id);
+    }
+
+    pub fn get(&self, edge_id: u32) -> Option<&PeerEdgeInfo> {
+        self.peers.get(&edge_id)
+    }
+}
 
 /// A single voice target configuration (whisper/shout destinations).
 #[derive(Debug, Clone)]
@@ -95,12 +123,18 @@ pub struct EdgeState {
     pub event_tx: broadcast::Sender<EdgeEvent>,
     /// Voice target cache: session_id -> target_id -> VoiceTargetConfig
     pub voice_targets: Mutex<HashMap<u32, HashMap<u32, VoiceTargetConfig>>>,
+    /// Registry of peer Edges and their UDP endpoints for direct voice routing.
+    pub peer_registry: Mutex<PeerRegistry>,
+    /// When true, skip Hub relay and only use direct Edge-to-Edge UDP.
+    /// Used in integration tests to verify the direct connection path.
+    pub disable_hub_relay: bool,
 }
 
 impl EdgeState {
     pub fn new(
         channel_manager: Arc<ChannelManager>,
         client_manager: Arc<ClientManager>,
+        disable_hub_relay: bool,
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(256);
         Arc::new(Self {
@@ -110,6 +144,8 @@ impl EdgeState {
             client_manager,
             event_tx,
             voice_targets: Mutex::new(HashMap::new()),
+            peer_registry: Mutex::new(PeerRegistry::default()),
+            disable_hub_relay,
         })
     }
 

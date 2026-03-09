@@ -1,0 +1,29 @@
+services:
+  hub:
+    build:
+      context: ..
+      dockerfile: rust/Dockerfile
+    container_name: munode-hub
+    restart: unless-stopped
+    entrypoint: ["/app/munode-hub"]
+    command: ["config/hub.json"]
+    ports:
+      - "${HUB_GRPC_PORT:-8443}:8443"
+    volumes:
+      - ${HUB_CONFIG:-./config/hub.json}:/app/config/hub.json:ro
+      - ${DATA_DIR:-./data}:/app/data
+      - ${LOG_DIR:-./logs}/hub:/app/logs
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+    networks:
+      - munode-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8443"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  munode-network:
+    driver: bridge

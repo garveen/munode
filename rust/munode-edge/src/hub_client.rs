@@ -16,14 +16,14 @@ use munode_protocol::message_type::MessageType;
 use munode_protocol::hubedge::{
     self, EdgeAuthenticateUserParams, EdgeFullSyncParams,
     EdgeHandleAclParams, EdgePluginDataTransmissionParams,
-    EdgeHubPacket, EdgeRegisterParams,
+    EdgeHubPacket, EdgeJoinCompleteParams, EdgeJoinParams, EdgeRegisterParams,
     BlobPutParams, BlobGetParams, BlobGetUserTextureParams, BlobGetUserCommentParams,
     BlobSetUserTextureParams, BlobSetUserCommentParams,
     PacketType, TypedRpcNotification, TypedRpcRequest, TypedRpcResponse,
 };
 
 use crate::channel_manager::{ChannelData, RemoteUser};
-use crate::state::{EdgeEvent, EdgeState};
+use crate::state::{EdgeEvent, EdgeState, PeerEdgeInfo};
 
 /// Connection state for the Hub client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +44,16 @@ pub struct HubClient {
     config: HubServerConfig,
     server_id: u32,
     server_name: String,
+    /// External host advertised to Hub and broadcast to peer Edges.
+    external_host: String,
+    /// Effective external port for Mumble client connections (NAT-mapped).
+    external_port: u16,
+    /// Effective port for Edge-to-Edge TLS connections.
+    edge_port: u16,
+    /// Geographic region identifier.
+    region: Option<String>,
+    /// Maximum number of users for this Edge.
+    capacity: u32,
     state: RwLock<HubConnectionState>,
     edge_state: Arc<EdgeState>,
     /// Pending RPC requests awaiting responses.
@@ -61,10 +71,17 @@ impl HubClient {
         config: &EdgeConfig,
         edge_state: Arc<EdgeState>,
     ) -> Arc<Self> {
+        let external_port = config.network.external_port.unwrap_or(config.network.port);
+        let edge_port = config.network.edge_port.unwrap_or(config.network.port + 1);
         Arc::new(Self {
             config: config.hub_server.clone(),
             server_id: config.server_id,
             server_name: config.name.clone(),
+            external_host: config.network.external_host.clone(),
+            external_port,
+            edge_port,
+            region: config.network.region.clone(),
+            capacity: config.server.capacity,
             state: RwLock::new(HubConnectionState::Disconnected),
             edge_state,
             pending: Mutex::new(HashMap::new()),
@@ -186,6 +203,9 @@ impl HubClient {
 
         // Request full sync
         self.do_full_sync().await?;
+
+        // Join cluster topology so Hub can broadcast our address to peer Edges
+        self.do_join_cluster().await?;
 
         *self.state.write().await = HubConnectionState::Registered;
         self.edge_state.emit(EdgeEvent::HubRegistered);
@@ -541,7 +561,17 @@ impl HubClient {
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
                         let edge_id = v["edge_id"].as_u64().unwrap_or(0) as u32;
                         let name = v["name"].as_str().unwrap_or("").to_string();
-                        info!("Peer edge joined cluster: {} (id {})", name, edge_id);
+                        let host = v["host"].as_str().unwrap_or("").to_string();
+                        // voice_port is the edge_port of the peer (used for Edge-to-Edge UDP)
+                        let voice_port = v["voice_port"].as_u64().unwrap_or(0) as u16;
+                        info!("Peer edge joined cluster: {} (id {}) at {}:{}", name, edge_id, host, voice_port);
+                        if !host.is_empty() && voice_port > 0 {
+                            if let Ok(udp_addr) = format!("{}:{}", host, voice_port).parse() {
+                                let mut reg = self.edge_state.peer_registry.lock().await;
+                                reg.upsert(edge_id, PeerEdgeInfo { udp_addr });
+                                info!("Registered direct UDP route to peer edge {} at {}", edge_id, udp_addr);
+                            }
+                        }
                     }
                 }
             }
@@ -551,6 +581,7 @@ impl HubClient {
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
                         let edge_id = v["edge_id"].as_u64().unwrap_or(0) as u32;
                         warn!("Peer edge left cluster: id {}", edge_id);
+                        self.edge_state.peer_registry.lock().await.remove(edge_id);
                     }
                 }
             }
@@ -568,10 +599,10 @@ impl HubClient {
         let params = EdgeRegisterParams {
             server_id: self.server_id,
             name: self.server_name.clone(),
-            host: self.config.host.clone(),
-            port: self.config.control_port as u32,
-            region: None,
-            capacity: 1000,
+            host: self.external_host.clone(),
+            port: self.external_port as u32,
+            region: self.region.clone(),
+            capacity: self.capacity,
             certificate: String::new(),
             challenge: None,
             challenge_response: None,
@@ -625,10 +656,10 @@ impl HubClient {
         let params = EdgeRegisterParams {
             server_id: self.server_id,
             name: self.server_name.clone(),
-            host: self.config.host.clone(),
-            port: self.config.control_port as u32,
-            region: None,
-            capacity: 1000,
+            host: self.external_host.clone(),
+            port: self.external_port as u32,
+            region: self.region.clone(),
+            capacity: self.capacity,
             certificate: String::new(),
             challenge: Some(challenge.to_string()),
             challenge_response: Some(challenge_response),
@@ -693,6 +724,74 @@ impl HubClient {
             result.channels.len(),
             result.sessions.len()
         );
+        Ok(())
+    }
+
+    /// Join the cluster topology so Hub can broadcast our address to peer Edges.
+    /// Called after successful registration and full sync; sends `edge.join` RPC
+    /// then confirms with `edge.joinComplete`.
+    async fn do_join_cluster(&self) -> Result<()> {
+        let request_id = self.next_request_id().await;
+        let params = EdgeJoinParams {
+            server_id: self.server_id,
+            name: self.server_name.clone(),
+            host: self.external_host.clone(),
+            port: self.external_port as u32,
+            voice_port: self.edge_port as u32,
+            capacity: self.capacity,
+        };
+
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.join".to_string(),
+            timeout_ms: Some(30000),
+            edge_join: Some(params),
+            ..Default::default()
+        };
+
+        let response = self.rpc_call(request).await
+            .context("edge.join RPC failed")?;
+
+        let result = response.edge_join
+            .ok_or_else(|| anyhow::anyhow!("No edge_join in response"))?;
+
+        if !result.success {
+            anyhow::bail!("edge.join failed: {:?}", result.error);
+        }
+
+        info!(
+            "Joined cluster topology, {} existing peers",
+            result.peers.len()
+        );
+        for peer in &result.peers {
+            info!("  Peer edge: {} (id={}, {}:{})", peer.name, peer.id, peer.host, peer.port);
+            // Register each existing peer's UDP address
+            if !peer.host.is_empty() && peer.voice_port > 0 {
+                if let Ok(udp_addr) = format!("{}:{}", peer.host, peer.voice_port).parse() {
+                    let mut reg = self.edge_state.peer_registry.lock().await;
+                    reg.upsert(peer.id, PeerEdgeInfo { udp_addr });
+                    info!("Registered direct UDP route to existing peer edge {} at {}", peer.id, udp_addr);
+                }
+            }
+        }
+
+        // Notify Hub that we have processed the peer list
+        let complete_id = self.next_request_id().await;
+        let token = result.token.unwrap_or_default();
+        let connected_peers: Vec<u32> = result.peers.iter().map(|p| p.id).collect();
+        let complete_request = TypedRpcRequest {
+            request_id: complete_id,
+            method: "edge.joinComplete".to_string(),
+            timeout_ms: Some(10000),
+            edge_join_complete: Some(EdgeJoinCompleteParams {
+                server_id: self.server_id,
+                token,
+                connected_peers,
+            }),
+            ..Default::default()
+        };
+        let _ = self.rpc_call(complete_request).await;
+
         Ok(())
     }
 

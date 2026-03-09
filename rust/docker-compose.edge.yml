@@ -1,0 +1,31 @@
+services:
+  edge:
+    build:
+      context: ..
+      dockerfile: rust/Dockerfile
+    container_name: munode-edge
+    restart: unless-stopped
+    ports:
+      - "${MUMBLE_PORT:-64738}:64738/tcp"
+      - "${MUMBLE_PORT:-64738}:64738/udp"
+      - "${EDGE_PORT:-64739}:64739/udp"
+    volumes:
+      - ${EDGE_CONFIG:-./config/edge.json}:/app/config/edge.json:ro
+      - ${CERTS_DIR:-./certs}:/app/certs:ro
+      - ${LOG_DIR:-./logs}/edge:/app/logs
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - HUB_HOST=${HUB_HOST:?HUB_HOST must be set}
+      - HUB_PORT=${HUB_PORT:-8443}
+    networks:
+      - munode-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "64738"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+networks:
+  munode-network:
+    driver: bridge

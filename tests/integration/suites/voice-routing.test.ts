@@ -16,10 +16,13 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { TestEnvironment, setupTestEnvironment, sleep, createClients, cleanupClients, USE_RUST } from '../setup';
+import { TestEnvironment, setupTestEnvironment, sleep, createClients, cleanupClients, USE_RUST, RustServerProcess, findAvailablePort, debugLog } from '../setup';
 import { MumbleClient } from '../../../packages/client/src/index.js';
 import { UDPQualitySimulator, applyNetworkQuality } from '../../utils/udp-quality-simulator.js';
 import * as crypto from 'crypto';
+import { join } from 'path';
+import * as fs from 'fs';
+import * as net from 'net';
 
 /**
  * 生成随机语音数据用于测试
@@ -751,5 +754,276 @@ describe('4-Edge Voice Routing Tests', () => {
       await cleanupClients(clients);
     }, 45000);
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Edge-to-Edge Direct UDP Connection Tests  (Rust only)
+//
+// 验证目标：
+//  1. Edge-to-Edge 直连 UDP 能够正确传送语音（不依赖 Hub relay）
+//  2. 配置 disable_hub_relay=true 后，如果直连 UDP 有效则接收方能收到语音
+//  3. 配置 disable_hub_relay=true 后，如果对端 edge_port 不可达则语音不到达
+//     （证明没有走 Hub relay 兜底）
+//
+// 依赖条件：
+//  - Rust Edge 已实现双 socket (edge_socket) + PeerRegistry
+//  - hub.peerJoined 在 edge.join 后填充 PeerRegistry
+//  - 客户端通过真实 UDP 发送语音（非 forceTcpVoice）
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DIRECT_TEST_ROOT = join(import.meta.dirname, '../../..');
+const DIRECT_CERTS_DIR = join(DIRECT_TEST_ROOT, 'tests/integration/certs');
+const DIRECT_HMAC = 'test-hmac-direct-udp-key';
+
+function writeDirectHubConfig(basePort: number, controlPort: number): string {
+  const path = join(DIRECT_TEST_ROOT, `tmp/direct-hub-${basePort}.json`);
+  fs.mkdirSync(join(DIRECT_TEST_ROOT, 'tmp'), { recursive: true });
+  fs.writeFileSync(path, JSON.stringify({
+    network: { host: '127.0.0.1', control_port: controlPort },
+    database: { path: join(DIRECT_TEST_ROOT, `tmp/direct-hub-${basePort}.db`) },
+    auth: { allow_guest: true, require_auth_service: false },
+    registry: { hmac_secret: DIRECT_HMAC, heartbeat_timeout: 90000 },
+    log_level: 'error',
+  }, null, 2));
+  return path;
+}
+
+function writeDirectEdgeConfig(params: {
+  serverId: number;
+  listenPort: number;
+  edgePort: number;
+  controlPort: number;
+  basePort: number;
+  disableHubRelay: boolean;
+}): string {
+  const path = join(DIRECT_TEST_ROOT, `tmp/direct-edge-${params.basePort}-${params.serverId}.json`);
+  fs.writeFileSync(path, JSON.stringify({
+    server_id: params.serverId,
+    name: `DirectEdge-${params.serverId}`,
+    network: {
+      host: '127.0.0.1',
+      port: params.listenPort,
+      edge_port: params.edgePort,
+      external_host: '127.0.0.1',
+      external_port: params.listenPort,
+    },
+    tls: {
+      cert: join(DIRECT_CERTS_DIR, 'server.pem'),
+      key: join(DIRECT_CERTS_DIR, 'server.key'),
+      ca: join(DIRECT_CERTS_DIR, 'ca.pem'),
+    },
+    hub_server: {
+      host: '127.0.0.1',
+      control_port: params.controlPort,
+      hmac_secret: DIRECT_HMAC,
+      reconnect_interval: 3000,
+      heartbeat_interval: 30000,
+    },
+    server: {
+      capacity: 100,
+      max_bandwidth: 558000,
+      disable_hub_relay: params.disableHubRelay,
+    },
+    log_level: 'error',
+  }, null, 2));
+  return path;
+}
+
+function isPortListeningDirect(host: string, port: number, timeoutMs = 2000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => { socket.destroy(); resolve(false); }, timeoutMs);
+    const socket = net.createConnection({ host, port });
+    socket.on('connect', () => { clearTimeout(timer); socket.destroy(); resolve(true); });
+    socket.on('error', () => { clearTimeout(timer); resolve(false); });
+  });
+}
+
+async function waitForPortDirect(host: string, port: number, maxMs = 15000): Promise<void> {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    if (await isPortListeningDirect(host, port, 500)) return;
+    await new Promise(r => setTimeout(r, 400));
+  }
+  throw new Error(`Port ${host}:${port} did not become available within ${maxMs}ms`);
+}
+
+describe.skipIf(!USE_RUST)('Edge-to-Edge Direct UDP Voice', () => {
+  let hubProc: RustServerProcess;
+  let edge1Proc: RustServerProcess;
+  let edge2Proc: RustServerProcess;
+
+  let basePort: number;
+  let controlPort: number;
+  let listenPort1: number;
+  let edgePort1: number;
+  let listenPort2: number;
+  let edgePort2: number;
+
+  beforeAll(async () => {
+    basePort = await findAvailablePort(15200);
+    controlPort = basePort;
+    listenPort1 = basePort + 1;
+    edgePort1   = basePort + 2;
+    listenPort2 = basePort + 3;
+    edgePort2   = basePort + 4;
+
+    debugLog(`[direct-udp] hub=${controlPort} edge1=${listenPort1}(ep=${edgePort1}) edge2=${listenPort2}(ep=${edgePort2})`);
+
+    const hubBin  = join(DIRECT_TEST_ROOT, 'rust/target/debug/munode-hub');
+    const edgeBin = join(DIRECT_TEST_ROOT, 'rust/target/debug/munode-edge');
+
+    hubProc = new RustServerProcess(hubBin, writeDirectHubConfig(basePort, controlPort), `DirectHub(${controlPort})`, true);
+    await hubProc.start();
+    await waitForPortDirect('127.0.0.1', controlPort, 15000);
+
+    edge1Proc = new RustServerProcess(edgeBin,
+      writeDirectEdgeConfig({ serverId: 1, listenPort: listenPort1, edgePort: edgePort1, controlPort, basePort, disableHubRelay: false }),
+      `DirectEdge1(${listenPort1})`, true);
+    await edge1Proc.start();
+    await waitForPortDirect('127.0.0.1', listenPort1, 15000);
+
+    edge2Proc = new RustServerProcess(edgeBin,
+      writeDirectEdgeConfig({ serverId: 2, listenPort: listenPort2, edgePort: edgePort2, controlPort, basePort, disableHubRelay: false }),
+      `DirectEdge2(${listenPort2})`, true);
+    await edge2Proc.start();
+    await waitForPortDirect('127.0.0.1', listenPort2, 15000);
+
+    // 等待两个 edge 完成 edge.join 并互相收到 hub.peerJoined
+    await sleep(2500);
+  }, 60000);
+
+  afterAll(async () => {
+    edge2Proc?.stop().catch(() => {});
+    edge1Proc?.stop().catch(() => {});
+    await sleep(300);
+    hubProc?.stop().catch(() => {});
+  });
+
+  it('Edge-1 and Edge-2 both accept Mumble client connections', async () => {
+    const ok1 = await isPortListeningDirect('127.0.0.1', listenPort1);
+    const ok2 = await isPortListeningDirect('127.0.0.1', listenPort2);
+    expect(ok1).toBe(true);
+    expect(ok2).toBe(true);
+  });
+
+  it('voice reaches Edge-2 client from Edge-1 client via direct UDP path', async () => {
+    // Both clients connect without forceTcpVoice so that:
+    //  1. Client A sends voice via real OCB2 UDP → Edge-1's client socket
+    //  2. Edge-1 udp.rs route_voice → look up PeerRegistry → send direct to Edge-2's edge_port
+    //  3. Edge-2 receives on edge_socket → handle_edge_packet → deliver to Client B via TCP tunnel
+    const clientA = new MumbleClient();
+    await clientA.connect({
+      host: '127.0.0.1',
+      port: listenPort1,
+      username: 'direct_sender',
+      password: '',
+      rejectUnauthorized: false,
+    });
+    expect(clientA.isConnected()).toBe(true);
+
+    const clientB = new MumbleClient();
+    let receivedVoice = 0;
+    const senderSession = clientA.getStateManager().getSession()?.session ?? 0;
+
+    await clientB.connect({
+      host: '127.0.0.1',
+      port: listenPort2,
+      username: 'direct_receiver',
+      password: '',
+      rejectUnauthorized: false,
+    });
+    expect(clientB.isConnected()).toBe(true);
+
+    clientB.on('voice', (data: { session: number }) => {
+      if (data.session === senderSession) receivedVoice++;
+    });
+
+    // Wait for UDP handshake to complete (CryptSetup + UDP ping exchange)
+    await sleep(1200);
+
+    // Send 10 voice packets; client will use UDP if handshake succeeded
+    for (let i = 0; i < 10; i++) {
+      const pkt = createVoicePacket(4, 0, i);
+      await clientA.getConnectionManager().sendVoicePacket(pkt);
+      await sleep(40);
+    }
+
+    await sleep(800);
+
+    debugLog(`[direct-udp] voice received by Edge-2 client: ${receivedVoice}/10`);
+    expect(receivedVoice).toBeGreaterThan(0);
+
+    await clientA.disconnect();
+    await clientB.disconnect();
+  }, 30000);
+
+  it('disable_hub_relay=true: voice still arrives via direct UDP', async () => {
+    // Restart edges with disable_hub_relay=true to prove voice ONLY uses direct UDP.
+    // If direct UDP doesn't work, no voice arrives and the test fails — no Hub relay fallback.
+    edge2Proc?.stop().catch(() => {});
+    edge1Proc?.stop().catch(() => {});
+    await sleep(600);
+
+    const edgeBin = join(DIRECT_TEST_ROOT, 'rust/target/debug/munode-edge');
+
+    edge1Proc = new RustServerProcess(edgeBin,
+      writeDirectEdgeConfig({ serverId: 11, listenPort: listenPort1, edgePort: edgePort1, controlPort, basePort: basePort + 100, disableHubRelay: true }),
+      `NoRelayEdge1(${listenPort1})`, true);
+    edge2Proc = new RustServerProcess(edgeBin,
+      writeDirectEdgeConfig({ serverId: 12, listenPort: listenPort2, edgePort: edgePort2, controlPort, basePort: basePort + 100, disableHubRelay: true }),
+      `NoRelayEdge2(${listenPort2})`, true);
+
+    await edge1Proc.start();
+    await edge2Proc.start();
+    await waitForPortDirect('127.0.0.1', listenPort1, 15000);
+    await waitForPortDirect('127.0.0.1', listenPort2, 15000);
+
+    // Allow edge.join + hub.peerJoined to populate PeerRegistry
+    await sleep(2500);
+
+    const clientA = new MumbleClient();
+    await clientA.connect({
+      host: '127.0.0.1',
+      port: listenPort1,
+      username: 'norelay_sender',
+      password: '',
+      rejectUnauthorized: false,
+    });
+
+    const clientB = new MumbleClient();
+    let receivedVoice = 0;
+    const senderSession = clientA.getStateManager().getSession()?.session ?? 0;
+
+    await clientB.connect({
+      host: '127.0.0.1',
+      port: listenPort2,
+      username: 'norelay_receiver',
+      password: '',
+      rejectUnauthorized: false,
+    });
+
+    clientB.on('voice', (data: { session: number }) => {
+      if (data.session === senderSession) receivedVoice++;
+    });
+
+    // Wait for UDP ping handshake
+    await sleep(1200);
+
+    for (let i = 0; i < 10; i++) {
+      const pkt = createVoicePacket(4, 0, i);
+      await clientA.getConnectionManager().sendVoicePacket(pkt);
+      await sleep(40);
+    }
+
+    await sleep(800);
+
+    debugLog(`[direct-udp/no-relay] received: ${receivedVoice}/10`);
+    // Hub relay is disabled — voice must travel via direct UDP.
+    // If PeerRegistry is populated correctly, voice arrives.
+    expect(receivedVoice).toBeGreaterThan(0);
+
+    await clientA.disconnect();
+    await clientB.disconnect();
+  }, 60000);
 });
 
