@@ -3,6 +3,10 @@
 # Use: docker build -f rust/Dockerfile .
 # Or via docker-compose.yml with context: ..
 
+ARG http_proxy
+ARG https_proxy
+ARG no_proxy
+
 # Stage 1: Build
 FROM rust:alpine3.23 AS builder
 RUN apk add --no-cache protobuf-dev cmake musl-dev openssl-dev openssl-libs-static pkgconf \
