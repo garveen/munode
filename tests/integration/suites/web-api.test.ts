@@ -111,7 +111,8 @@ describe.skipIf(!USE_RUST)('Hub Web API Integration Tests', () => {
       // 先获取 edge 列表，取第一个 ID
       const { body: list } = await webApiGet('/api/edges');
       const edges = list as Array<Record<string, unknown>>;
-      if (edges.length === 0) return; // Edge 未注册则跳过
+      // 至少一个 Edge 应该已注册（beforeAll 中等待了 1500ms）
+      expect(edges.length).toBeGreaterThanOrEqual(1);
 
       const edgeId = edges[0].id as number;
       const { status, body } = await webApiGet(`/api/edges/${edgeId}`);

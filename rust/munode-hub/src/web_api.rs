@@ -154,7 +154,8 @@ async fn handle_edges(State(state): State<AppState>) -> Json<Vec<EdgeSummary>> {
             is_online,
         });
     }
-    let _ = topo; // topo lock held to keep consistent read snapshot
+    // Hold topo lock through the end of this function for a consistent read snapshot
+    drop(topo);
 
     Json(result)
 }

@@ -21,14 +21,19 @@ use crate::topology_manager::TopologyManager;
 use crate::auth_service::{AuthServiceHandle, run_auth_service_listener};
 use crate::lua_auth::LuaAuthEngine;
 
-/// Information about a registered edge server.
+/// Information about a registered edge server (keyed by server_id in HubState).
 #[derive(Debug, Clone)]
 pub struct EdgeRegistration {
     pub server_id: u32,
+    /// Human-readable server name.
     pub name: String,
+    /// Hostname or IP for Edge-to-Edge connections.
     pub host: String,
+    /// Mumble client port.
     pub port: u32,
+    /// Maximum number of concurrent users this edge supports.
     pub capacity: u32,
+    /// Optional geographic region tag (e.g. "us-east", "eu-west").
     pub region: Option<String>,
 }
 
