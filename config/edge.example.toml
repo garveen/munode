@@ -1,5 +1,12 @@
 # MuNode Edge Server – example configuration
 # Copy this file to edge.toml and edit as needed.
+#
+# Docker Compose Usage:
+#   1. Copy this file to edge.toml in the same directory
+#   2. Update server_id (must be unique per edge)
+#   3. Update hmac_secret to match Hub's registry.hmac_secret
+#   4. Hub connects via 'hub:8443' within the Docker network
+#   5. Mount TLS certificates to /app/certs/ volume
 
 # Unique server ID for this edge (must be different for each edge in the cluster)
 server_id = 1
@@ -11,51 +18,75 @@ name = "MuNode Edge Server #1"
 # Network
 # ---------------------------------------------------------------------------
 [network]
-host          = "0.0.0.0"              # Bind address for all services
-port          = 64738                   # Main port for client connections (TCP/TLS + UDP)
-edge_port     = 64739                   # Edge-to-Edge TCP port (must differ from port)
+host          = "0.0.0.0"              # Bind address for all services (default: 0.0.0.0)
+port          = 64738                   # Main port for client connections (TCP/TLS + UDP, default: 64738)
+
+# Edge-to-Edge TCP port (must differ from main port)
+# If not set, defaults to port + 1
+edge_port     = 64739                   # Default: port + 1
 
 # External addresses for NAT/firewall scenarios
-external_host = "edge1.example.com"     # Public hostname/IP (used by other edges and Hub)
-external_port = 64738                   # External port mapping for client connections
-# external_edge_port = 64739            # Optional: if edge_port is mapped differently
+# Docker Compose: Set this to your public hostname/IP
+# Other edge servers and Hub will use this address to reach this edge
+external_host = "edge1.example.com"     # Public hostname/IP used by other edges and Hub (default: same as host)
+
+# External port mapping for client connections (useful when behind NAT/firewall)
+# If not set, uses the same value as 'port'
+external_port = 64738                   # Default: same as port
+
+# External edge-to-edge port mapping (if different from edge_port)
+# If not set, uses the same value as 'edge_port'
+# external_edge_port = 64739            # Default: same as edge_port
 
 # Geographic region identifier (used for proximity-based routing)
-region = "asia-east"
+# Used for proximity-based client assignment and routing optimization
+region = "asia-east"                    # Default: not set (recommended to set for multi-region deployments)
 
 # ---------------------------------------------------------------------------
 # TLS/SSL
 # ---------------------------------------------------------------------------
 [tls]
-cert = "./data/certs/edge-cert.pem"     # Server certificate (PEM format)
-key  = "./data/certs/edge-key.pem"      # Private key (PEM format)
-# ca = "./data/certs/ca-chain.pem"      # Optional: CA chain for client certificate validation
+# Docker Compose: Mount certificates to /app/certs/ volume
+cert = "./certs/edge-cert.pem"          # Server certificate (PEM format)
+key  = "./certs/edge-key.pem"           # Private key (PEM format)
+# ca = "./certs/ca-chain.pem"           # Optional: CA chain for client certificate validation
 
 # ---------------------------------------------------------------------------
 # Hub Server Connection
 # ---------------------------------------------------------------------------
 [hub_server]
-host               = "hub.example.com"  # Hub server hostname or IP
-control_port       = 64738              # Hub's WebSocket control port
-reconnect_interval = 5000               # Milliseconds between reconnection attempts
-heartbeat_interval = 30000              # Milliseconds between heartbeat packets
+# Docker Compose: Use container service name 'hub' for internal communication
+# For standalone deployment, use the actual Hub hostname/IP
+host               = "hub"              # Hub server hostname (Docker: 'hub', standalone: 'hub.example.com')
+control_port       = 8443               # Hub's WebSocket control port (default: 8443)
+
+# Reconnection and heartbeat settings
+reconnect_interval = 5000               # Milliseconds between reconnection attempts (default: 5000)
+heartbeat_interval = 30000              # Milliseconds between heartbeat packets (default: 30000)
 
 # HMAC challenge-response authentication (must match Hub's registry.hmac_secret)
-hmac_secret = "change-me-to-match-hub-secret"
+# If not set, edge authentication is disabled (Hub must allow unauthenticated edges)
+hmac_secret = "change-me-to-match-hub-secret"  # Default: not set
 
 # ---------------------------------------------------------------------------
 # Server Capacity & Behavior
 # ---------------------------------------------------------------------------
 [server]
-capacity       = 1000                   # Maximum concurrent connections
-max_bandwidth  = 72000                  # Maximum bandwidth per user (bps, ~72 kbps)
-default_channel = 0                     # Default channel ID for new users (0 = root)
+# Maximum number of concurrent client connections
+capacity       = 1000                   # Default: 1000
+
+# Maximum bandwidth per user in bits per second
+max_bandwidth  = 558000                 # Default: 558000 (bps, ~558 kbps)
+
+# Default channel ID for newly connected users
+default_channel = 0                     # Default: 0 (root channel)
 
 # Optional welcome message displayed to connecting clients
-# welcome_text = "Welcome to MuNode Edge #1!"
+# welcome_text = "Welcome to MuNode Edge #1!"  # Default: not set
 
-# Test/debug flag: disable Hub relay for cross-edge voice (direct UDP only)
-# disable_hub_relay = false
+# Test/debug flag: disable Hub relay for cross-edge voice (use direct UDP only)
+# Used primarily for integration tests that verify Edge-to-Edge direct connections
+# disable_hub_relay = false             # Default: false
 
 # ---------------------------------------------------------------------------
 # Logging

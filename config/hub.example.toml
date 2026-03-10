@@ -1,28 +1,40 @@
 # MuNode Hub Server – example configuration
 # Copy this file to hub.toml and edit as needed.
+#
+# Docker Compose Usage:
+#   1. Copy this file to hub.toml in the same directory
+#   2. Update hmac_secret and auth settings
+#   3. Edge servers connect to 'hub:8443' within the Docker network
 
 # ---------------------------------------------------------------------------
 # Network
 # ---------------------------------------------------------------------------
 [network]
-host         = "0.0.0.0"
-control_port = 64738   # Edge nodes connect to this WebSocket port
+host         = "0.0.0.0"            # Bind address (default: 0.0.0.0)
+control_port = 8443                  # Edge nodes connect to this WebSocket port (default: 8443)
 
-# Optional: start a second WS listener for external auth services.
-# auth_service_port = 64739
+# Optional: start a second WS listener for external auth services
+# This allows TypeScript auth service instances to connect via WebSocket
+# auth_service_port = 64739          # Default: not set (auth service WS disabled)
 
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
 [database]
-path = "./data/hub.sqlite"
+# Docker Compose: this path is relative to /app/ in the container
+# The ./data directory should be mounted as a volume
+path = "./data/hub.sqlite"           # SQLite database file path (default: data/munode.db)
 
 # ---------------------------------------------------------------------------
 # Registry (Edge authentication)
 # ---------------------------------------------------------------------------
 [registry]
-hmac_secret       = "change-me-to-a-random-secret"
-heartbeat_timeout = 30000   # ms
+# HMAC secret for edge server authentication challenge-response
+# If not set, edge authentication is disabled (less secure)
+hmac_secret       = "change-me-to-a-random-secret"  # Default: not set
+
+# Heartbeat timeout: if no heartbeat received from edge within this time, mark as dead
+heartbeat_timeout = 90000            # Milliseconds (default: 90000)
 
 # ---------------------------------------------------------------------------
 # Authentication
@@ -37,14 +49,31 @@ heartbeat_timeout = 30000   # ms
 # methods are reachable (prevents silent fallback to local DB).
 # ---------------------------------------------------------------------------
 [auth]
-allow_guest    = false
-default_channel = 0
-# welcome_text = "Welcome to the server!"
-# server_password = "optional-server-wide-password"
-require_auth_service = false
+# Allow guests/anonymous users to connect without authentication
+allow_guest    = true                # Default: true
+
+# Default channel ID for newly connected users
+default_channel = 0                  # Default: 0 (root channel)
+
+# Welcome message displayed to all connecting clients
+# welcome_text = "Welcome to the server!"  # Default: not set
+
+# Server-wide password: all users must provide this password to connect
+# server_password = "optional-server-wide-password"  # Default: not set
+
+# When true, require external auth service to be available (no fallback to local DB)
+# When false, fall back to local database authentication if external service fails
+require_auth_service = false         # Default: false
+
+# HTTP timeout for external authentication requests
+http_timeout_ms = 5000               # Milliseconds (default: 5000)
 
 # ---------------------------------------------------------------------------
-# Option A: Lua inline script (equivalent to the TypeScript config callback)
+# Authentication Methods
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Option A: Lua inline script (most flexible, recommended for complex logic)
 #
 # The script is written inside a TOML literal multi-line string (''' ... ''').
 # No escaping is needed – write the Lua code exactly as you would in a file.
@@ -125,11 +154,21 @@ end
 # ---------------------------------------------------------------------------
 # Option B: HTTP Webhook (simpler, no scripting required)
 # Comment out lua_script above and uncomment these lines.
+# The Hub will POST authentication requests to this URL and expect JSON response.
 # ---------------------------------------------------------------------------
 # http_url        = "https://example.com/mumble-connector/api/authenticate"
-# http_timeout_ms = 5000
+# http_timeout_ms = 5000               # HTTP request timeout in milliseconds (default: 5000)
+
+# ---------------------------------------------------------------------------
+# Option C: Local SQLite Database (fallback)
+# If no external auth method is configured, the Hub will use local database.
+# Users can be managed via SQL queries to the database file.
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-log_level = "info"
+log_level = "info"                      # trace | debug | info | warn | error
+
+# Note: Log output goes to stdout/stderr and should be captured by your
+# process manager (Docker, systemd, etc.). No log file configuration needed.
