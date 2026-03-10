@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-/// Edge server configuration.
+/// The main Edge server configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct EdgeConfig {
     /// Unique server ID for this edge.
@@ -16,9 +16,23 @@ pub struct EdgeConfig {
     /// Server capacity and limits.
     #[serde(default)]
     pub server: ServerConfig,
+    /// Client suggestion configuration.
+    #[serde(default)]
+    pub suggest: Option<EdgeSuggestConfig>,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
+}
+
+/// Client suggestion configuration for Edge.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EdgeSuggestConfig {
+    /// Suggested client version (numeric, e.g., 1340029 for 1.3.0.29).
+    pub version: Option<u32>,
+    /// Suggest positional audio.
+    pub positional: Option<bool>,
+    /// Suggest push-to-talk.
+    pub push_to_talk: Option<bool>,
 }
 
 /// Network binding configuration.
@@ -87,6 +101,18 @@ pub struct ServerConfig {
     /// Intended for integration tests that verify Edge-to-Edge direct connection.
     #[serde(default)]
     pub disable_hub_relay: bool,
+    /// Maximum text message length in bytes (default: 5000).
+    #[serde(default = "default_text_message_length")]
+    pub text_message_length: u32,
+    /// Maximum image message length in bytes (default: 131072).
+    #[serde(default = "default_image_message_length")]
+    pub image_message_length: u32,
+    /// Maximum text messages per second per user (token bucket). 0 = unlimited.
+    #[serde(default = "default_message_rate")]
+    pub message_rate: f32,
+    /// Token bucket burst size for text messages (default: 5).
+    #[serde(default = "default_message_burst")]
+    pub message_burst: u32,
 }
 
 impl Default for ServerConfig {
@@ -97,6 +123,10 @@ impl Default for ServerConfig {
             default_channel: 0,
             welcome_text: None,
             disable_hub_relay: false,
+            text_message_length: default_text_message_length(),
+            image_message_length: default_image_message_length(),
+            message_rate: default_message_rate(),
+            message_burst: default_message_burst(),
         }
     }
 }
@@ -127,6 +157,15 @@ pub struct HubConfig {
     /// Registry configuration (edge registration).
     #[serde(default)]
     pub registry: HubRegistryConfig,
+    /// Server limits (message lengths, rate limits, user counts).
+    #[serde(default)]
+    pub limits: HubLimitsConfig,
+    /// Auto-ban configuration.
+    #[serde(default)]
+    pub auto_ban: HubAutoBanConfig,
+    /// Client suggestion configuration (sent to connecting clients).
+    #[serde(default)]
+    pub suggest: HubSuggestConfig,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -237,6 +276,91 @@ impl Default for HubAuthConfig {
     }
 }
 
+/// Hub server limits configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HubLimitsConfig {
+    /// Maximum number of users on the server. 0 = unlimited.
+    #[serde(default = "default_max_users")]
+    pub max_users: u32,
+    /// Maximum number of users per channel. 0 = unlimited.
+    #[serde(default)]
+    pub max_users_per_channel: u32,
+    /// Maximum text message length in bytes.
+    #[serde(default = "default_text_message_length")]
+    pub text_message_length: u32,
+    /// Maximum image message length in bytes.
+    #[serde(default = "default_image_message_length")]
+    pub image_message_length: u32,
+    /// Maximum text messages per second per user (token bucket). 0 = unlimited.
+    #[serde(default = "default_message_rate")]
+    pub message_rate: f32,
+    /// Token bucket burst size for text messages.
+    #[serde(default = "default_message_burst")]
+    pub message_burst: u32,
+}
+
+impl Default for HubLimitsConfig {
+    fn default() -> Self {
+        Self {
+            max_users: default_max_users(),
+            max_users_per_channel: 0,
+            text_message_length: default_text_message_length(),
+            image_message_length: default_image_message_length(),
+            message_rate: default_message_rate(),
+            message_burst: default_message_burst(),
+        }
+    }
+}
+
+/// Auto-ban configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HubAutoBanConfig {
+    /// Enable auto-ban.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Number of failed auth attempts before banning.
+    #[serde(default = "default_auto_ban_attempts")]
+    pub attempts: u32,
+    /// Time window in seconds to count failed attempts.
+    #[serde(default = "default_auto_ban_window")]
+    pub time_window: u64,
+    /// Ban duration in seconds. 0 = permanent.
+    #[serde(default = "default_auto_ban_duration")]
+    pub duration: u64,
+}
+
+impl Default for HubAutoBanConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            attempts: default_auto_ban_attempts(),
+            time_window: default_auto_ban_window(),
+            duration: default_auto_ban_duration(),
+        }
+    }
+}
+
+/// Client suggestion configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HubSuggestConfig {
+    /// Suggested client version (numeric, e.g., 1340029 for 1.3.0.29).
+    pub version: Option<u32>,
+    /// Suggest positional audio.
+    pub positional: Option<bool>,
+    /// Suggest push-to-talk.
+    pub push_to_talk: Option<bool>,
+}
+
+impl Default for HubSuggestConfig {
+    fn default() -> Self {
+        Self {
+            version: None,
+            positional: None,
+            push_to_talk: None,
+        }
+    }
+}
+
 /// Hub registry configuration for edge authentication.
 #[derive(Debug, Clone, Deserialize)]
 pub struct HubRegistryConfig {
@@ -302,4 +426,28 @@ fn default_true() -> bool {
 }
 fn default_auth_timeout() -> u64 {
     5000
+}
+fn default_max_users() -> u32 {
+    1000
+}
+fn default_text_message_length() -> u32 {
+    5000
+}
+fn default_image_message_length() -> u32 {
+    131072
+}
+fn default_message_rate() -> f32 {
+    10.0
+}
+fn default_message_burst() -> u32 {
+    5
+}
+fn default_auto_ban_attempts() -> u32 {
+    10
+}
+fn default_auto_ban_window() -> u64 {
+    120
+}
+fn default_auto_ban_duration() -> u64 {
+    300
 }

@@ -292,13 +292,27 @@ impl<'a> LoginHandler<'a> {
             max_bandwidth: Some(self.config.server.max_bandwidth),
             welcome_text: None,
             allow_html: Some(true),
-            message_length: Some(5000),
-            image_message_length: Some(131072),
+            message_length: Some(self.config.server.text_message_length),
+            image_message_length: Some(self.config.server.image_message_length),
             max_users: Some(self.config.server.capacity),
             recording_allowed: Some(true),
         };
         self.send(MessageType::ServerConfig, &msg).await?;
         debug!("Sent ServerConfig");
+
+        // Send SuggestConfig if any suggestions are configured
+        if let Some(suggest) = self.config.suggest.as_ref() {
+            if suggest.version.is_some() || suggest.positional.is_some() || suggest.push_to_talk.is_some() {
+                let suggest_msg = mumbleproto::SuggestConfig {
+                    version: suggest.version.clone(),
+                    positional: suggest.positional,
+                    push_to_talk: suggest.push_to_talk,
+                };
+                self.send(MessageType::SuggestConfig, &suggest_msg).await?;
+                debug!("Sent SuggestConfig");
+            }
+        }
+
         Ok(())
     }
 

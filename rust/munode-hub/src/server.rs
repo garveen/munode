@@ -41,6 +41,42 @@ impl EdgeHealth {
     }
 }
 
+/// Tracks failed auth attempts per IP for auto-ban.
+#[derive(Debug, Default)]
+pub struct FailedAuthTracker {
+    /// IP address -> list of timestamps of failed attempts (within the configured window).
+    attempts: HashMap<String, Vec<Instant>>,
+}
+
+impl FailedAuthTracker {
+    /// Record a failed auth attempt from `ip`. Returns the current number of failed
+    /// attempts within the configured time window.
+    pub fn record_failure(&mut self, ip: &str, window_secs: u64) -> u32 {
+        let now = Instant::now();
+        let window = Duration::from_secs(window_secs);
+        let entry = self.attempts.entry(ip.to_string()).or_default();
+        // Purge stale entries outside the window
+        entry.retain(|t| now.duration_since(*t) < window);
+        entry.push(now);
+        entry.len() as u32
+    }
+
+    /// Clear the failure count for an IP (after a successful login or ban).
+    pub fn clear(&mut self, ip: &str) {
+        self.attempts.remove(ip);
+    }
+
+    /// Purge all stale entries across all IPs.
+    pub fn purge_stale(&mut self, window_secs: u64) {
+        let now = Instant::now();
+        let window = Duration::from_secs(window_secs);
+        self.attempts.retain(|_, attempts| {
+            attempts.retain(|t| now.duration_since(*t) < window);
+            !attempts.is_empty()
+        });
+    }
+}
+
 /// Shared state for the hub server, accessible by all edge connections.
 pub struct HubState {
     pub config: HubConfig,
@@ -57,6 +93,8 @@ pub struct HubState {
     pub auth_service: AuthServiceHandle,
     /// Embedded Lua authentication engine (present when `auth.lua_script` is set).
     pub lua_engine: Option<Arc<LuaAuthEngine>>,
+    /// Failed authentication attempt tracker (for auto-ban).
+    pub failed_auth_tracker: RwLock<FailedAuthTracker>,
 }
 
 /// The main Hub server.
@@ -106,6 +144,7 @@ impl HubServer {
             topology: RwLock::new(TopologyManager::new()),
             auth_service: auth_service.clone(),
             lua_engine,
+            failed_auth_tracker: RwLock::new(FailedAuthTracker::default()),
         });
 
         // Load channels from database

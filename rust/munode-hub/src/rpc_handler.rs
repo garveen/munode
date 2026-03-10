@@ -319,6 +319,46 @@ impl RpcHandler {
         let password = &params.password;
 
         // ------------------------------------------------------------------
+        // Step 0: Auto-ban check — reject if IP has been auto-banned
+        // ------------------------------------------------------------------
+        let client_ip = params.client_info.as_ref()
+            .map(|c| c.ip_address.clone())
+            .unwrap_or_default();
+        if config.auto_ban.enabled && !client_ip.is_empty() {
+            // Periodically purge stale tracking entries
+            self.state.failed_auth_tracker.write().await.purge_stale(config.auto_ban.time_window);
+
+            // Check if this IP is currently in the ban list
+            if let Some(ip_bytes) = parse_ip_to_bytes(&client_ip) {
+                match self.state.database.check_ip_banned(&ip_bytes) {
+                    Ok(Some(ban)) => {
+                        warn!("Rejecting connection from banned IP {}: {}", client_ip, ban.reason);
+                        let result = EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None, username: None, display_name: None,
+                            groups: vec![],
+                            reason: Some(format!("You are banned: {}", ban.reason)),
+                            reject_type: Some(2), // Banned
+                            channel_id: None,
+                            mute: None, deaf: None, suppress: None,
+                            self_mute: None, self_deaf: None,
+                            priority_speaker: None, recording: None,
+                            cert_required: None,
+                        };
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(result);
+                        }));
+                    }
+                    Ok(None) => {} // Not banned, proceed
+                    Err(e) => {
+                        warn!("Failed to check ban list for IP {}: {}", client_ip, e);
+                        // Don't reject on DB error — fail open for ban check only
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
         // Step 1: Try external auth service (if connected)
         // ------------------------------------------------------------------
         if self.state.auth_service.is_connected().await {
@@ -346,6 +386,8 @@ impl RpcHandler {
                         // reject type, default to WrongUserPW (3) so the client can
                         // prompt the user to re-enter credentials.
                         let reject_type = resp.reject_type.or(Some(3)); // WrongUserPW
+                        // Track failed auth attempt for auto-ban (credential failure from ext service)
+                        self.record_auth_failure(&client_ip).await;
                         let result = EdgeAuthenticateUserResult {
                             success: false,
                             user_id: None,
@@ -525,6 +567,8 @@ impl RpcHandler {
             match tokio::task::spawn_blocking(move || engine.authenticate_sync(lua_req)).await {
                 Ok(Ok(resp)) => {
                     if !resp.success {
+                        // Track failed auth attempt for auto-ban (Lua auth credential failure)
+                        self.record_auth_failure(&client_ip).await;
                         let result = EdgeAuthenticateUserResult {
                             success: false,
                             user_id: None,
@@ -668,6 +712,8 @@ impl RpcHandler {
             match http_result {
                 Ok(Some(resp)) => {
                     if !resp.success {
+                        // Track failed auth attempt for auto-ban (HTTP auth credential failure)
+                        self.record_auth_failure(&client_ip).await;
                         let result = EdgeAuthenticateUserResult {
                             success: false,
                             user_id: None,
@@ -821,6 +867,8 @@ impl RpcHandler {
         // Check server password if set
         if let Some(server_pw) = &config.auth.server_password {
             if !server_pw.is_empty() && password != server_pw {
+                // Track failed attempt (wrong server password counts toward auto-ban)
+                self.record_auth_failure(&client_ip).await;
                 let result = EdgeAuthenticateUserResult {
                     success: false,
                     user_id: None,
@@ -850,6 +898,8 @@ impl RpcHandler {
             // Look up user in database
             let db_user = self.state.database.find_user(username)?;
             if db_user.is_none() {
+                // Track failed attempt (unknown username with no guest access counts toward auto-ban)
+                self.record_auth_failure(&client_ip).await;
                 let result = EdgeAuthenticateUserResult {
                     success: false,
                     user_id: None,
@@ -881,6 +931,8 @@ impl RpcHandler {
                 // If user has a stored password hash, verify the supplied password
                 if !u.pw_hash.is_empty() {
                     if !verify_password(&u.pw_hash, password) {
+                        // Track failed auth attempt for auto-ban (via unified helper)
+                        self.record_auth_failure(&client_ip).await;
                         let result = EdgeAuthenticateUserResult {
                             success: false,
                             user_id: None,
@@ -2045,6 +2097,112 @@ impl RpcHandler {
 
     // ==================== Helpers ====================
 
+    /// Record a failed authentication attempt for the given IP address and apply an auto-ban
+    /// if the threshold is reached. Returns `true` if the IP has now been banned.
+    async fn record_auth_failure(&self, client_ip: &str) -> bool {
+        let config = &self.state.config;
+        if !config.auto_ban.enabled || client_ip.is_empty() {
+            return false;
+        }
+
+        let count = self.state.failed_auth_tracker.write().await
+            .record_failure(client_ip, config.auto_ban.time_window);
+
+        if count >= config.auto_ban.attempts {
+            warn!("Auto-banning IP {} after {} failed attempts", client_ip, count);
+            if let Some(ip_bytes) = parse_ip_to_bytes(client_ip) {
+                let ban = crate::database::BanRecord {
+                    id: 0,
+                    address: ip_bytes,
+                    mask: if client_ip.contains(':') { 128 } else { 32 },
+                    name: format!("auto-ban:{}", client_ip),
+                    cert_hash: String::new(),
+                    reason: format!("Auto-banned: {} failed login attempts", count),
+                    start_time: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64,
+                    duration: config.auto_ban.duration as u32,
+                };
+                if let Err(e) = self.state.database.add_ban(&ban) {
+                    warn!("Failed to add auto-ban: {}", e);
+                }
+            } else {
+                warn!("Auto-ban: unable to parse IP '{}', skipping DB entry", client_ip);
+            }
+            self.state.failed_auth_tracker.write().await.clear(client_ip);
+            return true;
+        }
+        false
+    }
+
+    /// After a disconnect is confirmed by arbitration, detect network partitions
+    /// and send hub.shutdownRequest to the smallest partition to prevent split-brain.
+    async fn handle_partition_after_disconnect(&self) {
+        let partitions = {
+            let topo = self.state.topology.read().await;
+            topo.detect_partitions()
+        };
+
+        if partitions.len() <= 1 {
+            // No partition or single partition, nothing to do
+            return;
+        }
+
+        // Build a per-edge user count map in O(M) first, then count per partition in O(N) total
+        let all_sessions = self.state.session_manager.get_all_sessions().await;
+        let mut users_per_edge: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        for session in &all_sessions {
+            *users_per_edge.entry(session.edge_id).or_insert(0) += 1;
+        }
+
+        let mut partition_user_counts: Vec<(std::collections::HashSet<u32>, usize)> = partitions
+            .into_iter()
+            .map(|partition| {
+                let user_count: usize = partition
+                    .iter()
+                    .map(|edge_id| users_per_edge.get(edge_id).copied().unwrap_or(0))
+                    .sum();
+                (partition, user_count)
+            })
+            .collect();
+
+        // Sort by user count ascending, so the smallest partition is first
+        partition_user_counts.sort_by_key(|(_, count)| *count);
+
+        // The smallest partition gets the shutdown request
+        if let Some((smallest_partition, count)) = partition_user_counts.first() {
+            warn!(
+                "Cluster partition detected: sending hub.shutdownRequest to smallest partition ({} edges, {} users)",
+                smallest_partition.len(), count
+            );
+            let shutdown_notif = TypedRpcNotification {
+                method: "hub.shutdownRequest".to_string(),
+                timestamp: Some(current_millis() as i64),
+                shutdown_request: Some(HubShutdownRequestParams {
+                    reason: format!(
+                        "Network partition detected: your cluster partition ({} users) is smaller. Please reconnect.",
+                        count
+                    ),
+                }),
+                ..Default::default()
+            };
+            let shutdown_packet = EdgeHubPacket {
+                r#type: PacketType::RpcNotification as i32,
+                rpc_notification: Some(shutdown_notif),
+                ..Default::default()
+            };
+            let shutdown_data = shutdown_packet.encode_to_vec();
+            let edges = self.state.edge_connections.read().await;
+            for edge_id in smallest_partition {
+                if let Some(sender) = edges.get(edge_id) {
+                    info!("Sending hub.shutdownRequest to edge {}", edge_id);
+                    let _ = sender.send(shutdown_data.clone()).await;
+                }
+            }
+        }
+    }
+
     /// Broadcast a notification to all connected edges.
     async fn broadcast_notification<F>(&self, method: &str, build: F)
     where
@@ -2399,10 +2557,16 @@ impl RpcHandler {
                     ..Default::default()
                 };
                 let data = packet.encode_to_vec();
-                let edges = self.state.edge_connections.read().await;
-                for sender in edges.values() {
-                    let _ = sender.send(data.clone()).await;
+                {
+                    let edges = self.state.edge_connections.read().await;
+                    for sender in edges.values() {
+                        let _ = sender.send(data.clone()).await;
+                    }
                 }
+
+                // Detect network partitions and shut down smallest partition
+                self.handle_partition_after_disconnect().await;
+
                 "disconnect_confirmed".to_string()
             }
             ArbitrationResult::AwaitConfirmation => "await_confirmation".to_string(),
@@ -2584,5 +2748,17 @@ fn verify_password(hash: &str, password: &str) -> bool {
             .verify_password(password.as_bytes(), &parsed)
             .is_ok(),
         Err(_) => false,
+    }
+}
+
+
+/// Parse an IP address string (IPv4 or IPv6) into a 16-byte array (IPv4-mapped IPv6 format).
+/// Returns `None` if the address cannot be parsed so the caller can skip the ban.
+fn parse_ip_to_bytes(ip: &str) -> Option<[u8; 16]> {
+    use std::net::IpAddr;
+    match ip.parse::<IpAddr>() {
+        Ok(IpAddr::V4(v4)) => Some(v4.to_ipv6_mapped().octets()),
+        Ok(IpAddr::V6(v6)) => Some(v6.octets()),
+        Err(_) => None,
     }
 }

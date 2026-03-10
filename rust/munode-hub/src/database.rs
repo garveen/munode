@@ -615,6 +615,31 @@ impl Database {
         Ok(bans)
     }
 
+    /// Check if an IP address (as 16-byte IPv6-mapped) is currently banned.
+    /// Returns the matching active `BanRecord` if banned, or `None` if not banned.
+    pub fn check_ip_banned(&self, ip_bytes: &[u8; 16]) -> Result<Option<BanRecord>> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let bans = self.load_bans()?;
+        for ban in bans {
+            // Skip expired bans (duration=0 means permanent)
+            if ban.duration > 0 {
+                let expiry = ban.start_time.saturating_add(ban.duration as i64);
+                if now >= expiry {
+                    continue;
+                }
+            }
+            // Check if IP matches the ban (CIDR mask)
+            if ip_matches_ban(ip_bytes, &ban.address, ban.mask) {
+                return Ok(Some(ban));
+            }
+        }
+        Ok(None)
+    }
+
     /// Add a ban record.
     pub fn add_ban(&self, ban: &BanRecord) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
@@ -765,6 +790,35 @@ impl Database {
     }
 }
 
+/// Check if `ip` (16-byte IPv6-mapped) is covered by a ban entry with address `ban_addr` and
+/// prefix length `mask_len` (0–128). Values > 128 are clamped to 128 (i.e., exact-match) since
+/// IPv6 addresses are 128 bits; callers must validate inputs at the boundary if strict checking is
+/// needed.
+pub fn ip_matches_ban(ip: &[u8; 16], ban_addr: &[u8; 16], mask_len: u32) -> bool {
+    // Clamp mask to 128 — IPv6 has 128 bits; anything larger is treated as an exact match.
+    let mask_bits = mask_len.min(128) as usize;
+    let full_bytes = mask_bits / 8;
+    let remainder = mask_bits % 8;
+
+    // Compare full bytes
+    if ip[..full_bytes] != ban_addr[..full_bytes] {
+        return false;
+    }
+
+    // Compare the partial byte (if any): shift right to isolate the significant bits
+    // (`remainder` = 1..7), then compare the resulting prefix.
+    if remainder > 0 && full_bytes < 16 {
+        let shift = 8 - remainder;
+        let ip_prefix = ip[full_bytes] >> shift;
+        let ban_prefix = ban_addr[full_bytes] >> shift;
+        if ip_prefix != ban_prefix {
+            return false;
+        }
+    }
+
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -831,5 +885,91 @@ mod tests {
         let db = temp_db();
         let links = db.load_channel_links().unwrap();
         assert!(links.is_empty());
+    }
+
+    #[test]
+    fn test_ip_matches_ban_ipv4_exact() {
+        // 192.168.1.5 mapped to IPv6: ::ffff:192.168.1.5
+        let ip: [u8; 16] = [0,0,0,0, 0,0,0,0, 0,0, 0xff,0xff, 192,168,1,5];
+        let ban: [u8; 16] = [0,0,0,0, 0,0,0,0, 0,0, 0xff,0xff, 192,168,1,5];
+        assert!(ip_matches_ban(&ip, &ban, 128));
+        // Different last byte
+        let other: [u8; 16] = [0,0,0,0, 0,0,0,0, 0,0, 0xff,0xff, 192,168,1,6];
+        assert!(!ip_matches_ban(&other, &ban, 128));
+    }
+
+    #[test]
+    fn test_ip_matches_ban_ipv4_cidr24() {
+        // Ban 192.168.1.0/120 (IPv6-mapped /120 = IPv4 /24)
+        let ban: [u8; 16] = [0,0,0,0, 0,0,0,0, 0,0, 0xff,0xff, 192,168,1,0];
+        let ip_in: [u8; 16] = [0,0,0,0, 0,0,0,0, 0,0, 0xff,0xff, 192,168,1,99];
+        let ip_out: [u8; 16] = [0,0,0,0, 0,0,0,0, 0,0, 0xff,0xff, 192,168,2,1];
+        assert!(ip_matches_ban(&ip_in, &ban, 120));
+        assert!(!ip_matches_ban(&ip_out, &ban, 120));
+    }
+
+    #[test]
+    fn test_ip_matches_ban_zero_mask() {
+        // Mask 0 matches everything
+        let ban: [u8; 16] = [0u8; 16];
+        let ip: [u8; 16] = [1,2,3,4, 5,6,7,8, 9,10,11,12, 13,14,15,16];
+        assert!(ip_matches_ban(&ip, &ban, 0));
+    }
+
+    #[test]
+    fn test_check_ip_banned_active() {
+        let db = temp_db();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let ip: [u8; 16] = [0,0,0,0, 0,0,0,0, 0,0, 0xff,0xff, 10,0,0,1];
+        let ban = BanRecord {
+            id: 0, address: ip, mask: 128,
+            name: "test".to_string(), cert_hash: "".to_string(),
+            reason: "test ban".to_string(),
+            start_time: now,
+            duration: 3600, // 1 hour
+        };
+        db.add_ban(&ban).unwrap();
+        let result = db.check_ip_banned(&ip).unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().reason, "test ban");
+    }
+
+    #[test]
+    fn test_check_ip_banned_expired() {
+        let db = temp_db();
+        let past = 1000i64; // long past timestamp
+        let ip: [u8; 16] = [0,0,0,0, 0,0,0,0, 0,0, 0xff,0xff, 10,0,0,2];
+        let ban = BanRecord {
+            id: 0, address: ip, mask: 128,
+            name: "test".to_string(), cert_hash: "".to_string(),
+            reason: "expired ban".to_string(),
+            start_time: past,
+            duration: 60, // 60s, expired long ago
+        };
+        db.add_ban(&ban).unwrap();
+        let result = db.check_ip_banned(&ip).unwrap();
+        assert!(result.is_none(), "Expired ban should not block");
+    }
+
+    #[test]
+    fn test_check_ip_banned_permanent() {
+        let db = temp_db();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let ip: [u8; 16] = [0,0,0,0, 0,0,0,0, 0,0, 0xff,0xff, 10,0,0,3];
+        let ban = BanRecord {
+            id: 0, address: ip, mask: 128,
+            name: "test".to_string(), cert_hash: "".to_string(),
+            reason: "permanent ban".to_string(),
+            start_time: now, duration: 0, // permanent
+        };
+        db.add_ban(&ban).unwrap();
+        let result = db.check_ip_banned(&ip).unwrap();
+        assert!(result.is_some(), "Permanent ban should always block");
     }
 }

@@ -171,6 +171,15 @@ async fn handle_client_connection(
     // Pre-connect state: sent by client before Authenticate message
     let mut preconnect_self_mute: Option<bool> = None;
     let mut preconnect_self_deaf: Option<bool> = None;
+    // Per-client rate limiter for text messages
+    let mut text_rate_limiter = if config.server.message_rate > 0.0 {
+        Some(munode_common::rate_limiter::TokenBucket::new(
+            config.server.message_rate,
+            config.server.message_burst,
+        ))
+    } else {
+        None
+    };
 
     'outer: loop {
         // Read data from TLS stream
@@ -416,6 +425,32 @@ async fn handle_client_connection(
                 MessageType::TextMessage if client_state == ClientState::Ready => {
                     let Ok(text_msg) = mumbleproto::TextMessage::decode(&frame.payload[..]) else { continue; };
                     if let Some(sid) = session_id {
+                        // Check message length limit (in bytes, consistent with Mumble protocol)
+                        let msg_len = text_msg.message.len() as u32;
+                        let limit = config.server.text_message_length;
+                        if limit > 0 && msg_len > limit {
+                            warn!("Session {} sent text message too long ({} > {} bytes), dropping", sid, msg_len, limit);
+                            let reject = mumbleproto::PermissionDenied {
+                                r#type: Some(mumbleproto::permission_denied::DenyType::TextTooLong as i32),
+                                reason: Some(format!("Message too long: {} > {} bytes", msg_len, limit)),
+                                ..Default::default()
+                            };
+                            client_sender.send_message(MessageType::PermissionDenied, &reject).await;
+                            continue;
+                        }
+                        // Apply rate limiting
+                        if let Some(ref mut rl) = text_rate_limiter {
+                            if !rl.try_consume() {
+                                warn!("Session {} text message rate limited", sid);
+                                let reject = mumbleproto::PermissionDenied {
+                                    r#type: Some(mumbleproto::permission_denied::DenyType::Text as i32),
+                                    reason: Some("Text message rate limit exceeded".to_string()),
+                                    ..Default::default()
+                                };
+                                client_sender.send_message(MessageType::PermissionDenied, &reject).await;
+                                continue;
+                            }
+                        }
                         debug!("TextMessage from session {}: {:?}", sid, text_msg.message);
                         // Local broadcast to clients on this edge
                         broadcast_text_message(&edge_state, sid, &text_msg).await;
@@ -1580,6 +1615,7 @@ mod tests {
                 hmac_secret: None,
             },
             server: ServerConfig::default(),
+            suggest: None,
             log_level: "info".to_string(),
         }
     }
@@ -2242,6 +2278,31 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                             }
                             _ => {}
                         }
+                    }
+                    EdgeEvent::ShutdownRequested { reason } => {
+                        // Hub requests graceful shutdown due to cluster partition.
+                        // Send ServerReject to all connected clients so they reconnect elsewhere.
+                        warn!("Shutdown requested: {}", reason);
+                        let reject_msg = mumbleproto::Reject {
+                            r#type: Some(mumbleproto::reject::RejectType::None as i32),
+                            reason: Some(format!("Server shutting down: {}", reason)),
+                        };
+                        let authenticated_sessions = state.client_manager.get_authenticated_sessions().await;
+                        for session in authenticated_sessions {
+                            state.client_manager.send_to(
+                                session,
+                                MessageType::Reject,
+                                &reject_msg,
+                            ).await;
+                        }
+                        // Give clients a moment to receive the reject, then exit gracefully
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                        warn!("Exiting due to hub shutdown request (cluster partition)");
+                        // Use tokio::signal abort or break the event loop to allow cleanup.
+                        // Since the event loop runs as a background task, exit the process.
+                        // This is the standard practice for stateless edge servers in a cluster.
+                        drop(state);
+                        std::process::exit(0);
                     }
                 }
             }

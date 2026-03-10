@@ -53,9 +53,9 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | channel_count_limit | ✅ | ❌ | 频道数量限制 |
 | **带宽和消息** |
 | bandwidth | ✅ | ❌ | 带宽限制 |
-| text_message_length | ✅ | ❌ | 文本消息长度 |
-| image_message_length | ✅ | ❌ | 图片消息长度 |
-| message_limit | ✅ | ❌ | 消息速率限制 |
+| text_message_length | ✅ | ✅ | 文本消息长度（`limits.text_message_length` / `server.text_message_length`） |
+| image_message_length | ✅ | ✅ | 图片消息长度（`limits.image_message_length` / `server.image_message_length`） |
+| message_limit | ✅ | ✅ | 消息速率限制（`limits.message_rate`/`message_burst` / `server.message_rate`/`message_burst`） |
 | plugin_message_limit | ✅ | ❌ | 插件消息限制 |
 | **安全** |
 | kdf_iterations | ✅ | ❌ | KDF 迭代次数 |
@@ -66,14 +66,17 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | username_regex | ✅ | ❌ | 用户名正则 |
 | channel_name_regex | ✅ | ❌ | 频道名正则 |
 | **自动封禁** |
-| auto_ban.* | ✅ | ❌ | 自动封禁配置 |
+| auto_ban.enabled | ✅ | ✅ | 启用自动封禁 |
+| auto_ban.attempts | ✅ | ✅ | 触发封禁的失败次数（`auto_ban.attempts`） |
+| auto_ban.time_window | ✅ | ✅ | 计数时间窗口（秒，`auto_ban.time_window`） |
+| auto_ban.duration | ✅ | ✅ | 封禁时长（秒，`auto_ban.duration`，0=永久） |
 | **频道行为** |
-| remember_channel | ✅ | ❌ | 记住频道 |
-| remember_channel_duration | ✅ | ❌ | 记忆时长 |
+| remember_channel | ✅ | ✅ | 记住频道（始终启用，不可配置） |
+| remember_channel_duration | ✅ | ❌ | 记忆时长（暂未支持过期） |
 | **客户端建议** |
-| suggest.version | ✅ | ❌ | 建议版本 |
-| suggest.positional | ✅ | ❌ | 建议位置音频 |
-| suggest.push_to_talk | ✅ | ❌ | 建议 PTT |
+| suggest.version | ✅ | ✅ | 建议版本（数字，如 1340029，`suggest.version`） |
+| suggest.positional | ✅ | ✅ | 建议位置音频（`suggest.positional`） |
+| suggest.push_to_talk | ✅ | ✅ | 建议 PTT（`suggest.push_to_talk`） |
 | **服务器注册** |
 | register_password | ✅ | ❌ | 注册密码 |
 | register_hostname | ✅ | ❌ | 注册主机名 |
@@ -200,6 +203,20 @@ function authenticate(req)
 end
 '''
 
+# 消息限制配置（可选，有默认值）
+[limits]
+text_message_length = 5000       # 最大文本消息长度（字节）
+image_message_length = 131072    # 最大图片消息长度（字节，128KB）
+message_rate = 10.0              # 每用户每秒最大消息数（令牌桶速率）
+message_burst = 5                # 令牌桶突发容量
+
+# 自动封禁配置（可选）
+[auto_ban]
+enabled = true                   # 开启自动封禁
+attempts = 10                    # 触发封禁的失败次数
+time_window = 120                # 计数窗口（秒）
+duration = 300                   # 封禁时长（秒，0=永久）
+
 log_level = "info"               # 生产环境使用 info
 ```
 
@@ -227,6 +244,16 @@ hmac_secret = "SAME-AS-HUB"     # 必须与 Hub 匹配
 [server]
 capacity = 1000                  # 根据资源调整
 max_bandwidth = 558000           # 标准带宽
+text_message_length = 5000       # 最大文本消息长度（字节，默认 5000）
+image_message_length = 131072    # 最大图片消息长度（字节，默认 131072）
+message_rate = 10.0              # 每用户每秒消息速率（默认 10.0）
+message_burst = 5                # 令牌桶突发容量（默认 5）
+
+# 客户端建议配置（可选）
+[suggest]
+# version = 1340029              # 建议客户端版本（数字格式，如 1.3.0.29 → 1340029）
+# positional = true              # 建议启用位置音频
+# push_to_talk = false           # 建议关闭 PTT（启用语音激活）
 
 log_level = "info"
 ```
