@@ -169,7 +169,7 @@
 ### 5. 自动封禁系统
 
 **优先级**: P1  
-**状态**: ✅ 已完成（基础实现）
+**状态**: ✅ 已完成
 
 #### 功能描述
 基于行为的自动封禁：
@@ -182,15 +182,19 @@
 - [x] 添加 `auto_ban` 配置结构（`HubAutoBanConfig`：`enabled`、`attempts`、`time_window`、`duration`）
 - [x] 实现连接尝试追踪（按 IP，`FailedAuthTracker` in `server.rs`）
 - [x] 实现时间窗口滑动计数（过期自动清理）
-- [x] 实现自动封禁逻辑（密码错误达阈值后写入数据库 ban 记录）
+- [x] 实现自动封禁逻辑（统一 `record_auth_failure()` 方法，所有认证失败路径均追踪）
 - [x] 添加封禁列表存储（数据库 bans 表）
 - [x] 实现封禁过期自动清理（基于 `time_window`）
+- [x] **安全修复**: Step 0 实际检查数据库封禁列表（`check_ip_banned`），封禁 IP 立即拒绝连接
+- [x] **安全修复**: 所有认证失败路径均追踪（外部认证服务、Lua、HTTP、服务器密码、用户未找到、本地DB密码错误）
+- [x] 添加 CIDR 掩码匹配函数 `ip_matches_ban` 支持网段封禁
 - [ ] 添加手动解封接口（暂未实现）
 
 #### 集成测试
 - [x] 多次失败登录拒绝测试（`auto-ban.test.ts`）
 - [x] 正确密码仍可登录测试（`auto-ban.test.ts`）
-- [ ] 封禁期间连接拒绝测试（需配置 `auto_ban.enabled=true`）
+- [x] IP 封禁检查单元测试（`database.rs` 测试：`test_check_ip_banned_*`、`test_ip_matches_ban_*`）
+- [ ] 封禁期间连接拒绝集成测试（需配置 `auto_ban.enabled=true`）
 - [ ] 封禁过期自动解除测试
 - [ ] 不同 IP 独立计数测试
 

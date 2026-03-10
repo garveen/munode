@@ -327,6 +327,35 @@ impl RpcHandler {
         if config.auto_ban.enabled && !client_ip.is_empty() {
             // Periodically purge stale tracking entries
             self.state.failed_auth_tracker.write().await.purge_stale(config.auto_ban.time_window);
+
+            // Check if this IP is currently in the ban list
+            if let Some(ip_bytes) = parse_ip_to_bytes(&client_ip) {
+                match self.state.database.check_ip_banned(&ip_bytes) {
+                    Ok(Some(ban)) => {
+                        warn!("Rejecting connection from banned IP {}: {}", client_ip, ban.reason);
+                        let result = EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None, username: None, display_name: None,
+                            groups: vec![],
+                            reason: Some(format!("You are banned: {}", ban.reason)),
+                            reject_type: Some(2), // Banned
+                            channel_id: None,
+                            mute: None, deaf: None, suppress: None,
+                            self_mute: None, self_deaf: None,
+                            priority_speaker: None, recording: None,
+                            cert_required: None,
+                        };
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(result);
+                        }));
+                    }
+                    Ok(None) => {} // Not banned, proceed
+                    Err(e) => {
+                        warn!("Failed to check ban list for IP {}: {}", client_ip, e);
+                        // Don't reject on DB error — fail open for ban check only
+                    }
+                }
+            }
         }
 
         // ------------------------------------------------------------------
@@ -357,6 +386,8 @@ impl RpcHandler {
                         // reject type, default to WrongUserPW (3) so the client can
                         // prompt the user to re-enter credentials.
                         let reject_type = resp.reject_type.or(Some(3)); // WrongUserPW
+                        // Track failed auth attempt for auto-ban (credential failure from ext service)
+                        self.record_auth_failure(&client_ip).await;
                         let result = EdgeAuthenticateUserResult {
                             success: false,
                             user_id: None,
@@ -536,6 +567,8 @@ impl RpcHandler {
             match tokio::task::spawn_blocking(move || engine.authenticate_sync(lua_req)).await {
                 Ok(Ok(resp)) => {
                     if !resp.success {
+                        // Track failed auth attempt for auto-ban (Lua auth credential failure)
+                        self.record_auth_failure(&client_ip).await;
                         let result = EdgeAuthenticateUserResult {
                             success: false,
                             user_id: None,
@@ -679,6 +712,8 @@ impl RpcHandler {
             match http_result {
                 Ok(Some(resp)) => {
                     if !resp.success {
+                        // Track failed auth attempt for auto-ban (HTTP auth credential failure)
+                        self.record_auth_failure(&client_ip).await;
                         let result = EdgeAuthenticateUserResult {
                             success: false,
                             user_id: None,
@@ -832,6 +867,8 @@ impl RpcHandler {
         // Check server password if set
         if let Some(server_pw) = &config.auth.server_password {
             if !server_pw.is_empty() && password != server_pw {
+                // Track failed attempt (wrong server password counts toward auto-ban)
+                self.record_auth_failure(&client_ip).await;
                 let result = EdgeAuthenticateUserResult {
                     success: false,
                     user_id: None,
@@ -861,6 +898,8 @@ impl RpcHandler {
             // Look up user in database
             let db_user = self.state.database.find_user(username)?;
             if db_user.is_none() {
+                // Track failed attempt (unknown username with no guest access counts toward auto-ban)
+                self.record_auth_failure(&client_ip).await;
                 let result = EdgeAuthenticateUserResult {
                     success: false,
                     user_id: None,
@@ -892,36 +931,8 @@ impl RpcHandler {
                 // If user has a stored password hash, verify the supplied password
                 if !u.pw_hash.is_empty() {
                     if !verify_password(&u.pw_hash, password) {
-                        // Record failed auth attempt for auto-ban
-                        if config.auto_ban.enabled && !client_ip.is_empty() {
-                            let count = self.state.failed_auth_tracker.write().await
-                                .record_failure(&client_ip, config.auto_ban.time_window);
-                            if count >= config.auto_ban.attempts {
-                                warn!("Auto-banning IP {} after {} failed attempts", client_ip, count);
-                                // Add to database bans
-                                if let Some(ip_bytes) = parse_ip_to_bytes(&client_ip) {
-                                    let ban = crate::database::BanRecord {
-                                        id: 0,
-                                        address: ip_bytes,
-                                        mask: if client_ip.contains(':') { 128 } else { 32 },
-                                        name: format!("auto-ban:{}", username),
-                                        cert_hash: String::new(),
-                                        reason: format!("Auto-banned: {} failed login attempts", count),
-                                        start_time: std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap_or_default()
-                                            .as_secs() as i64,
-                                        duration: config.auto_ban.duration as u32,
-                                    };
-                                    if let Err(e) = self.state.database.add_ban(&ban) {
-                                        warn!("Failed to add auto-ban: {}", e);
-                                    }
-                                } else {
-                                    warn!("Auto-ban: unable to parse IP address '{}', skipping ban entry", client_ip);
-                                }
-                                self.state.failed_auth_tracker.write().await.clear(&client_ip);
-                            }
-                        }
+                        // Track failed auth attempt for auto-ban (via unified helper)
+                        self.record_auth_failure(&client_ip).await;
                         let result = EdgeAuthenticateUserResult {
                             success: false,
                             user_id: None,
@@ -2085,6 +2096,45 @@ impl RpcHandler {
     }
 
     // ==================== Helpers ====================
+
+    /// Record a failed authentication attempt for the given IP address and apply an auto-ban
+    /// if the threshold is reached. Returns `true` if the IP has now been banned.
+    async fn record_auth_failure(&self, client_ip: &str) -> bool {
+        let config = &self.state.config;
+        if !config.auto_ban.enabled || client_ip.is_empty() {
+            return false;
+        }
+
+        let count = self.state.failed_auth_tracker.write().await
+            .record_failure(client_ip, config.auto_ban.time_window);
+
+        if count >= config.auto_ban.attempts {
+            warn!("Auto-banning IP {} after {} failed attempts", client_ip, count);
+            if let Some(ip_bytes) = parse_ip_to_bytes(client_ip) {
+                let ban = crate::database::BanRecord {
+                    id: 0,
+                    address: ip_bytes,
+                    mask: if client_ip.contains(':') { 128 } else { 32 },
+                    name: format!("auto-ban:{}", client_ip),
+                    cert_hash: String::new(),
+                    reason: format!("Auto-banned: {} failed login attempts", count),
+                    start_time: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64,
+                    duration: config.auto_ban.duration as u32,
+                };
+                if let Err(e) = self.state.database.add_ban(&ban) {
+                    warn!("Failed to add auto-ban: {}", e);
+                }
+            } else {
+                warn!("Auto-ban: unable to parse IP '{}', skipping DB entry", client_ip);
+            }
+            self.state.failed_auth_tracker.write().await.clear(client_ip);
+            return true;
+        }
+        false
+    }
 
     /// After a disconnect is confirmed by arbitration, detect network partitions
     /// and send hub.shutdownRequest to the smallest partition to prevent split-brain.
