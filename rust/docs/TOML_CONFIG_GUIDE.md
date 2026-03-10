@@ -1,0 +1,305 @@
+# Rust TOML 配置说明
+
+本文档说明 Rust 版本 MuNode 的 TOML 配置文件格式和选项。
+
+## 与 TypeScript 版本的对比
+
+Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配置更简洁，专注于核心功能。
+
+### Hub Server 配置对照表
+
+| 配置项 | TypeScript (JS) | Rust (TOML) | 说明 |
+|--------|----------------|-------------|------|
+| **基本信息** |
+| server_id | ✅ | ❌ | 服务器 ID |
+| name | ✅ | ❌ | 服务器名称 |  
+| register_name | ✅ | ❌ | 显示名称 |
+| **网络** |
+| host | ✅ | ✅ | 监听地址 |
+| port | ✅ | ❌ | 主服务端口 |
+| control_port | ✅ | ✅ | 控制端口（Edge 连接） |
+| **TLS** |
+| tls.cert, key, ca | ✅ | ❌ | TLS 证书配置 |
+| tls.require_client_cert | ✅ | ❌ | 要求客户端证书 |
+| **数据库** |
+| database.path | ✅ | ✅ | 数据库路径 |
+| database.backup_dir | ✅ | ❌ | 备份目录 |
+| database.wal_mode | ✅ | ❌ | WAL 模式 |
+| **Blob 存储** |
+| blob_store.enabled | ✅ | ❌ | 启用 blob 存储 |
+| blob_store.path | ✅ | ❌ | 存储路径 |
+| **注册表** |
+| registry.hmac_secret | ✅ | ✅ | HMAC 密钥 |
+| registry.heartbeat_timeout | ✅ | ✅ | 心跳超时 |
+| registry.max_edges | ✅ | ❌ | 最大 Edge 数 |
+| **Web API** |
+| web_api.enabled | ✅ | ❌ | 启用 Web API |
+| web_api.port | ✅ | ❌ | API 端口 |
+| **认证** |
+| auth.allow_guest | ✅ | ✅ | 允许游客 |
+| auth.default_channel | ✅ | ✅ | 默认频道 |
+| auth.welcome_text | ✅ | ✅ | 欢迎消息 |
+| auth.server_password | ✅ | ✅ | 服务器密码 |
+| auth.require_auth_service | ✅ | ✅ | 强制外部认证 |
+| auth.lua_script | ❌ | ✅ | Lua 认证脚本 |
+| auth.http_url | ✅ | ✅ | HTTP 认证 URL |
+| auth.http_timeout_ms | ✅ | ✅ | HTTP 超时 |
+| auth.callback | ✅ | ❌ | JS 回调函数 |
+| **服务器限制** |
+| timeout | ✅ | ❌ | 客户端超时 |
+| max_users | ✅ | ❌ | 最大用户数 |
+| max_users_per_channel | ✅ | ❌ | 每频道最大用户数 |
+| channel_nesting_limit | ✅ | ❌ | 频道嵌套限制 |
+| channel_count_limit | ✅ | ❌ | 频道数量限制 |
+| **带宽和消息** |
+| bandwidth | ✅ | ❌ | 带宽限制 |
+| text_message_length | ✅ | ❌ | 文本消息长度 |
+| image_message_length | ✅ | ❌ | 图片消息长度 |
+| message_limit | ✅ | ❌ | 消息速率限制 |
+| plugin_message_limit | ✅ | ❌ | 插件消息限制 |
+| **安全** |
+| kdf_iterations | ✅ | ❌ | KDF 迭代次数 |
+| allow_html | ✅ | ❌ | 允许 HTML |
+| cert_required | ✅ | ❌ | 要求证书 |
+| force_external_auth | ✅ | ❌ | 强制外部认证 |
+| **验证规则** |
+| username_regex | ✅ | ❌ | 用户名正则 |
+| channel_name_regex | ✅ | ❌ | 频道名正则 |
+| **自动封禁** |
+| auto_ban.* | ✅ | ❌ | 自动封禁配置 |
+| **频道行为** |
+| remember_channel | ✅ | ❌ | 记住频道 |
+| remember_channel_duration | ✅ | ❌ | 记忆时长 |
+| **客户端建议** |
+| suggest.version | ✅ | ❌ | 建议版本 |
+| suggest.positional | ✅ | ❌ | 建议位置音频 |
+| suggest.push_to_talk | ✅ | ❌ | 建议 PTT |
+| **服务器注册** |
+| register_password | ✅ | ❌ | 注册密码 |
+| register_hostname | ✅ | ❌ | 注册主机名 |
+| bonjour | ✅ | ❌ | 本地发现 |
+| **高级功能** |
+| listeners_per_channel | ✅ | ❌ | 频道监听者限制 |
+| allow_recording | ✅ | ❌ | 允许录音 |
+| channel_ninja | ✅ | ❌ | 隐身频道 |
+| send_version | ✅ | ❌ | 发送版本 |
+| allow_ping | ✅ | ❌ | 允许 ping |
+| **日志** |
+| log_level | ✅ | ✅ | 日志级别 |
+| log_file | ✅ | ❌ | 日志文件 |
+| log_days | ✅ | ❌ | 日志保留天数 |
+| **语音路由** |
+| voice_routing.* | ✅ | ❌ | 语音路由配置 |
+
+### Edge Server 配置对照表
+
+| 配置项 | TypeScript (JS) | Rust (TOML) | 说明 |
+|--------|----------------|-------------|------|
+| **基本信息** |
+| server_id | ✅ | ✅ | 服务器 ID（必须唯一） |
+| name | ✅ | ✅ | 服务器名称 |
+| mode | ✅ | ❌ | 集群模式 |
+| **网络** |
+| network.host | ✅ | ✅ | 监听地址 |
+| network.port | ✅ | ✅ | 客户端端口 |
+| network.edge_port | ✅ | ✅ | Edge 间端口 |
+| network.external_host | ✅ | ✅ | 外部地址 |
+| network.external_port | ✅ | ✅ | 外部端口 |
+| network.external_edge_port | ✅ | ❌ | 外部 Edge 端口 |
+| network.region | ✅ | ✅ | 地理区域 |
+| **TLS** |
+| tls.cert | ✅ | ✅ | 服务器证书 |
+| tls.key | ✅ | ✅ | 私钥 |
+| tls.ca | ✅ | ✅ | CA 证书 |
+| tls.edge_cert | ✅ | ❌ | Edge 间客户端证书 |
+| tls.edge_key | ✅ | ❌ | Edge 间私钥 |
+| **Hub 连接** |
+| hub_server.host | ✅ | ✅ | Hub 地址 |
+| hub_server.port | ✅ | ❌ | Hub 主端口 |
+| hub_server.control_port | ✅ | ✅ | Hub 控制端口 |
+| hub_server.reconnect_interval | ✅ | ✅ | 重连间隔 |
+| hub_server.heartbeat_interval | ✅ | ✅ | 心跳间隔 |
+| hub_server.hmac_secret | ✅ | ✅ | HMAC 密钥 |
+| hub_server.pool_size | ✅ | ❌ | 连接池大小 |
+| hub_server.tls.* | ✅ | ❌ | Hub TLS 配置 |
+| **服务器配置** |
+| server.capacity | ✅ | ✅ | 最大用户数 |
+| server.max_bandwidth | ✅ | ✅ | 最大带宽 |
+| server.default_channel | ✅ | ✅ | 默认频道 |
+| server.welcome_text | ✅ | ✅ | 欢迎消息 |
+| server.disable_hub_relay | ✅ | ✅ | 禁用 Hub 中转 |
+| **语音路由** |
+| voice_routing.enabled | ✅ | ❌ | 启用语音路由 |
+| voice_routing.shared_secret | ✅ | ❌ | 共享密钥 |
+| voice_routing.connection_strategy | ✅ | ❌ | 连接策略 |
+| voice_routing.local_decision.* | ✅ | ❌ | 本地决策配置 |
+| voice_routing.relay.* | ✅ | ❌ | 中继配置 |
+| **客户端建议** |
+| client.suggest_version | ✅ | ❌ | 建议版本 |
+| client.suggest_positional | ✅ | ❌ | 建议位置音频 |
+| client.suggest_push_to_talk | ✅ | ❌ | 建议 PTT |
+| **功能开关** |
+| features.geoip | ✅ | ❌ | GeoIP 功能 |
+| features.allow_ping | ✅ | ❌ | 允许 ping |
+| **日志** |
+| log_level | ✅ | ✅ | 日志级别 |
+| log_file | ✅ | ❌ | 日志文件 |
+
+## Rust 版本的设计理念
+
+### 简化配置
+
+Rust 版本有意简化配置选项，主要原因：
+
+1. **核心功能优先** - 专注于实现 Mumble 协议核心功能
+2. **合理默认值** - 很多 TypeScript 版本的配置在 Rust 中有合理的默认实现
+3. **减少复杂性** - 避免过度配置导致的混乱
+4. **类型安全** - TOML 提供更好的类型检查
+
+### 硬编码的值
+
+以下值在 Rust 版本中是硬编码的：
+
+- 带宽限制：558000 bps
+- 消息长度限制：根据协议规范
+- 超时值：标准默认值
+- 用户名和频道名验证：基本的 Unicode 字符验证
+
+### 未实现的功能
+
+某些 TypeScript 功能在 Rust 版本中尚未实现：
+
+1. **Web API** - HTTP REST API 接口
+2. **Blob 存储** - 独立的 blob 存储系统
+3. **服务器注册** - 公共服务器列表注册
+4. **高级 ACL 功能** - channnel_ninja 等
+5. **详细的语音路由配置** - 完整的路由策略配置
+
+这些功能可能在未来版本中添加。
+
+## 配置最佳实践
+
+### Hub Server
+
+```toml
+[network]
+control_port = 8443              # 标准控制端口
+
+[database]
+path = "./data/hub.sqlite"       # 确保目录可写
+
+[registry]
+hmac_secret = "CHANGE-ME-RANDOM-64-CHAR-STRING"  # 使用强密钥
+heartbeat_timeout = 90000        # 3 次心跳间隔
+
+[auth]
+allow_guest = false              # 生产环境建议禁用
+lua_script = '''                 # 推荐使用 Lua 脚本
+function authenticate(req)
+  -- 调用你的认证系统
+end
+'''
+
+log_level = "info"               # 生产环境使用 info
+```
+
+### Edge Server
+
+```toml
+server_id = 1                    # 集群中必须唯一
+name = "Edge Server 1"
+
+[network]
+port = 64738                     # Mumble 标准端口
+edge_port = 64739               # Edge 间通信端口
+external_host = "edge.example.com"  # 公网地址
+region = "asia-east"            # 地理区域
+
+[tls]
+cert = "./certs/edge-cert.pem"   # 正式证书
+key = "./certs/edge-key.pem"
+
+[hub_server]
+host = "hub"                     # Docker: 使用服务名
+control_port = 8443
+hmac_secret = "SAME-AS-HUB"     # 必须与 Hub 匹配
+
+[server]
+capacity = 1000                  # 根据资源调整
+max_bandwidth = 558000           # 标准带宽
+
+log_level = "info"
+```
+
+## Docker Compose 配置要点
+
+### Hub
+
+- `database.path` 相对于容器内 `/app/`
+- Edge 通过 `hub:8443` 连接（容器网络）
+- 确保 `./data` 目录挂载为 volume
+
+### Edge
+
+- `hub_server.host = "hub"` （容器服务名）
+- `external_host` 设置为公网 IP/域名
+- TLS 证书挂载到 `/app/certs/`
+- `server_id` 在集群中必须唯一
+
+## 迁移指南
+
+从 TypeScript 版本迁移到 Rust 版本：
+
+1. **复制必需配置**：
+   - server_id, name
+   - network 配置
+   - TLS 证书路径
+   - Hub 连接信息
+
+2. **简化认证配置**：
+   - TypeScript callback → Rust Lua script
+   - 或使用 HTTP webhook
+
+3. **调整默认值**：
+   - 检查 Rust 的默认值是否满足需求
+   - 大多数默认值已经优化
+
+4. **移除不支持的配置**：
+   - 删除 Rust 不支持的配置项
+   - 参考上面的对照表
+
+5. **测试连接**：
+   - 先测试 Hub-Edge 连接
+   - 再测试客户端连接
+   - 验证认证流程
+
+## 常见问题
+
+### Q: 为什么 Rust 版本配置项这么少？
+
+A: Rust 版本专注于核心功能，很多 TypeScript 的配置在 Rust 中使用了合理的默认值或标准实现。
+
+### Q: 会添加更多配置项吗？
+
+A: 可能会，但会谨慎评估每个配置项的必要性，避免过度配置。
+
+### Q: 如何实现 TypeScript 的某个特性？
+
+A: 可以通过以下方式：
+- Lua 脚本（认证逻辑）
+- 外部服务（Web API）
+- 代码扩展（提交 PR）
+
+### Q: TOML 支持注释吗？
+
+A: 支持，使用 `#` 开头的行注释。
+
+### Q: 可以使用 JSON 配置吗？
+
+A: 可以，使用 `.json` 扩展名，配置项相同。
+
+## 参考资料
+
+- [TOML 规范](https://toml.io/)
+- [Mumble 协议文档](https://mumble-protocol.readthedocs.io/)
+- [MuNode 架构文档](../../docs/)

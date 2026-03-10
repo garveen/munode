@@ -1,0 +1,780 @@
+# MuNode Rust Implementation TODO
+
+本文档追踪 Rust 版本相对于 TypeScript 版本尚未实现的功能。
+
+## 状态说明
+
+- ✅ **已完成** - 功能已实现且测试通过
+- 🚧 **进行中** - 正在实现
+- ⏸️ **暂停** - 实现被阻塞或暂停
+- 📋 **计划中** - 已规划但未开始
+- ❓ **待定** - 是否实现待评估
+- ❌ **不实现** - 明确决定不实现
+
+## 优先级
+
+- **P0** - 核心功能，必须实现
+- **P1** - 重要功能，应尽快实现
+- **P2** - 有用功能，可以延后
+- **P3** - 可选功能，按需实现
+
+---
+
+## Hub Server 功能
+
+### 1. Web API 接口
+
+**优先级**: P2  
+**状态**: 📋 计划中
+
+#### 功能描述
+提供 HTTP REST API 接口用于：
+- 查询服务器状态
+- 管理用户和频道
+- 获取统计信息
+- 执行管理操作
+
+#### 实现任务
+- [ ] 设计 RESTful API 路由
+- [ ] 实现 HTTP 服务器（使用 axum/warp）
+- [ ] 实现认证和授权中间件
+- [ ] 实现核心 API 端点
+  - [ ] GET /api/status - 服务器状态
+  - [ ] GET /api/users - 用户列表
+  - [ ] GET /api/channels - 频道列表
+  - [ ] POST /api/users/{id}/kick - 踢出用户
+  - [ ] POST /api/channels - 创建频道
+  - [ ] DELETE /api/channels/{id} - 删除频道
+- [ ] 添加 CORS 支持
+- [ ] 编写 API 文档
+
+#### 集成测试
+- [ ] Web API 基本连接测试
+- [ ] 认证和授权测试
+- [ ] 用户管理 API 测试
+- [ ] 频道管理 API 测试
+- [ ] 错误处理测试
+
+#### 依赖
+无
+
+#### 参考
+- TypeScript: `packages/hub-server/src/web-api/`
+
+---
+
+### 2. Blob 存储系统
+
+**优先级**: P1  
+**状态**: 📋 计划中
+
+#### 功能描述
+存储和管理二进制数据：
+- 用户头像
+- 频道图片/图标
+- 语音注释
+- 其他二进制附件
+
+#### 实现任务
+- [ ] 设计 blob 存储架构
+- [ ] 实现文件系统存储后端
+- [ ] 实现 blob 元数据管理（数据库）
+- [ ] 添加 blob 上传/下载接口
+- [ ] 实现 blob 引用计数和清理
+- [ ] 添加存储配额限制
+- [ ] 支持 S3/对象存储后端（可选）
+
+#### 集成测试
+- [ ] Blob 上传测试
+- [ ] Blob 下载测试
+- [ ] Blob 删除和清理测试
+- [ ] 存储配额测试
+- [ ] 引用计数测试
+
+#### 依赖
+无
+
+#### 参考
+- TypeScript: `packages/hub-server/src/blob-store.ts`
+- 文档: `docs/blob-storage-system.md`
+
+---
+
+### 3. 带宽和消息限制配置
+
+**优先级**: P0
+**状态**: 📋 计划中
+
+#### 功能描述
+细粒度的流量控制配置：
+- 每用户带宽限制
+- 文本消息长度限制
+- 图片消息长度限制
+- 消息速率限制（令牌桶）
+- 插件消息限制
+
+#### 实现任务
+- [ ] 添加配置项到 `HubConfig`
+- [ ] 实现令牌桶速率限制器
+- [ ] 在消息处理中应用限制
+- [ ] 添加限制超出的错误处理
+
+#### 集成测试
+- [ ] 带宽限制测试
+- [ ] 消息长度限制测试
+- [ ] 消息速率限制测试
+- [ ] 插件消息限制测试
+- [ ] 用户组限制测试
+
+#### 依赖
+无
+
+#### 参考
+- TypeScript: Hub config `bandwidth`, `message_limit`, etc.
+- 文档: `docs/rate-limiter-usage.md`
+
+---
+
+### 4. 用户名和频道名验证规则
+
+**优先级**: P2  
+**状态**: 📋 计划中
+
+#### 功能描述
+通过正则表达式配置允许的字符：
+- `username_regex` - 用户名验证
+- `channel_name_regex` - 频道名验证
+
+#### 实现任务
+- [ ] 添加 `username_regex` 配置项
+- [ ] 添加 `channel_name_regex` 配置项
+- [ ] 实现正则表达式验证函数
+- [ ] 在用户认证时验证用户名
+- [ ] 在频道创建/重命名时验证
+- [ ] 添加友好的错误消息
+
+#### 集成测试
+- [ ] 有效用户名测试
+- [ ] 无效用户名拒绝测试
+- [ ] 有效频道名测试
+- [ ] 无效频道名拒绝测试
+- [ ] Unicode 字符测试
+
+#### 依赖
+无
+
+---
+
+### 5. 自动封禁系统
+
+**优先级**: P1  
+**状态**: 📋 计划中
+
+#### 功能描述
+基于行为的自动封禁：
+- 连接尝试次数限制
+- 时间窗口内的失败尝试
+- 自动封禁时长
+- 可选：封禁成功连接（暴力测试）
+
+#### 实现任务
+- [ ] 添加 `auto_ban` 配置结构
+- [ ] 实现连接尝试追踪（按 IP）
+- [ ] 实现时间窗口滑动计数
+- [ ] 实现自动封禁逻辑
+- [ ] 添加封禁列表存储（内存+数据库）
+- [ ] 实现封禁过期自动清理
+- [ ] 添加手动解封接口
+
+#### 集成测试
+- [ ] 多次失败登录触发封禁测试
+- [ ] 封禁期间连接拒绝测试
+- [ ] 封禁过期自动解除测试
+- [ ] 手动解封测试
+- [ ] 不同 IP 独立计数测试
+
+#### 依赖
+无
+
+#### 参考
+- TypeScript: `auto_ban` config section
+
+---
+
+### 6. 频道记忆功能
+
+**优先级**: P0
+**状态**: 📋 计划中
+
+#### 功能描述
+记住用户上次所在频道：
+该功能不可禁用，永久记忆
+
+#### 实现任务
+- [ ] 添加配置项
+- [ ] 在数据库添加存储字段
+- [ ] 用户离线时保存频道信息
+- [ ] 用户上线时恢复频道
+- [ ] 实现过期清理逻辑
+- [ ] 处理频道已删除的情况
+
+#### 集成测试
+- [ ] 用户重连恢复频道测试
+- [ ] 过期清理测试
+- [ ] 频道已删除回退测试
+- [ ] 禁用功能时默认行为测试
+
+#### 依赖
+无
+
+---
+
+### 7. 客户端建议配置
+
+**优先级**: P1
+**状态**: 待实现
+
+#### 功能描述
+向客户端发送建议配置：
+- `suggest.version` - 建议的客户端版本
+- `suggest.positional` - 是否启用位置音频
+- `suggest.push_to_talk` - 是否启用 PTT
+
+#### 实现任务
+- [ ] 添加 `suggest` 配置结构
+- [ ] 在 ServerConfig 消息中包含建议
+- [ ] 客户端连接时发送
+
+#### 集成测试
+- [ ] 验证 ServerConfig 包含建议
+- [ ] 测试各种建议组合
+- [ ] 验证客户端接收
+
+#### 依赖
+无
+
+
+---
+
+### 8. 服务器注册（公共列表）
+
+**优先级**: P3  
+**状态**: ❌ 不实现
+
+#### 功能描述
+将服务器注册到公共服务器列表：
+- `register_password` - 注册密码
+- `register_hostname` - 公共主机名
+- `register_location` - 地理位置
+- `register_url` - 服务器网站
+- `bonjour` - 本地网络发现
+
+#### 实现任务
+N/A - 不计划实现
+
+#### 原因
+- 公共服务器列表不常用
+- 现代部署更倾向于私有/企业内部使用
+- 可通过外部工具实现（如 DNS-SD）
+- 复杂度与收益不成正比
+
+---
+
+### 9. Channel Ninja 功能
+
+**优先级**: P3
+**状态**: 暂不实现
+
+#### 功能描述
+隐藏特定频道中的用户：
+- `channel_ninja` - 全局开关
+- `ninja_channels` - 忍者频道 ID 列表
+- 无 Enter/Listen 权限的用户看不到这些频道中的用户
+
+#### 实现任务
+- [ ] 添加配置项
+- [ ] 在频道状态广播时过滤用户
+- [ ] 在用户状态广播时检查权限
+- [ ] 确保音频不泄露到无权限用户
+- [ ] 数据库存储忍者频道标记
+
+#### 集成测试
+- [ ] 无权限用户看不到忍者频道用户
+- [ ] 有权限用户正常看到
+- [ ] 用户进出忍者频道测试
+- [ ] 音频路由隔离测试
+
+#### 依赖
+- ACL 系统（已实现）
+
+#### 参考
+- 文档: `CHANNEL_NINJA_IMPLEMENTATION.md`
+
+---
+
+### 10. 监听者功能
+
+**优先级**: P0
+**状态**: 📋 计划中
+
+#### 功能描述
+频道监听（不在频道内也能听到）：
+- `listeners_per_channel` - 每频道监听者限制
+- `listeners_per_user` - 每用户可监听频道数限制
+- `broadcast_listener_volume_adjustments` - 广播音量调整
+
+#### 实现任务
+- [ ] 添加配置项
+- [ ] 实现监听者状态管理
+- [ ] 实现跨频道音频路由
+- [ ] 实现监听数量限制
+- [ ] 添加音量调整支持
+- [ ] 处理权限检查
+
+#### 集成测试
+- [ ] 添加/移除监听者测试
+- [ ] 跨频道音频接收测试
+- [ ] 监听者数量限制测试
+- [ ] 音量调整广播测试
+- [ ] 权限检查测试
+
+#### 依赖
+无
+
+#### 参考
+- 文档: `docs/channel-listener-volume-adjustment.md`
+
+---
+
+### 11. 语音路由策略配置
+
+**优先级**: P1  
+**状态**: 🚧 进行中
+
+#### 功能描述
+Edge 间语音路由的详细配置：
+- 路由策略（直连/中转/混合）
+- 质量阈值
+- 负载均衡
+- 故障转移
+
+#### 实现任务
+- [x] 基本直连路由（已实现）
+- [x] Hub 中转路由（已实现）
+- [ ] 完整的路由策略配置
+- [ ] 质量指标收集和决策
+- [ ] 动态路由切换
+- [ ] 负载平衡算法
+- [ ] 详细的配置选项
+
+#### 集成测试
+- [x] 基本语音路由测试（已有）
+- [x] 跨 Edge 语音测试（已有）
+- [ ] 路由策略切换测试
+- [ ] 质量降级测试
+- [ ] 负载平衡测试
+
+#### 依赖
+无
+
+#### 参考
+- TypeScript: `voice_routing` config section
+- 文档: `docs/Edge*.md`
+
+---
+
+### 12. 集群分割探测与处置（Hub 侧）
+
+**优先级**: P1  
+**状态**: ⚠️ 部分实现
+
+#### 功能描述
+Hub 检测到 Edge 间连接断裂时，自动识别形成的孤立子集群，并对用户数量最少的子集群发送关停通知，防止集群脑裂问题。
+
+#### 当前实现情况（Rust Hub）
+- ✅ `topology_manager.rs` 中已实现 `detect_partitions()`（Union-Find 算法）
+- ✅ `arbitrate_disconnect()` 仲裁机制已实现（双边确认）
+- ✅ `handle_report_peer_disconnect` RPC 处理已实现
+- ❌ 检测到分割后，**缺少对最小子集群发送 `hub.shutdownRequest` 的处置逻辑**
+- ❌ `detect_partitions()` 未被 `arbitrate_disconnect()` 的后续流程自动调用
+
+#### 当前实现情况（Rust Edge）
+- ❌ **未处理 `hub.shutdownRequest` 消息**，目前只处理 `edge.forceDisconnect`
+
+#### TypeScript 对应实现
+- ✅ `notification-handler.ts`: `detectDisconnectedClusters()` + `shutdownEdgeCluster()` 对小分区发 `hub.shutdownRequest`
+- ✅ `hub-message-handler.ts`: Edge 侧 `handleShutdownRequestFromHub()` 完整处理
+
+#### 实现任务
+- [ ] Hub: 在仲裁确认断连后调用 `detect_partitions()` 识别子集群
+- [ ] Hub: 统计各子集群用户数量，向最小子集群发送 `hub.shutdownRequest` 通知
+- [ ] Edge: 处理 `hub.shutdownRequest` 消息（优雅断开所有本地客户端并停止服务）
+- [ ] Edge: 收到关停请求后向连接的客户端发送 ServerReject / 让其重连到其他 Edge
+
+#### 集成测试
+- [ ] 两个 Edge 断开连接触发仲裁测试
+- [ ] 分割检测后最小子集群收到关停请求测试
+- [ ] Edge 收到 shutdownRequest 后客户端被正确断开测试
+
+#### 依赖
+- 无
+
+#### 参考
+- TypeScript: `packages/hub-server/src/handlers/notification-handler.ts`
+- TypeScript: `packages/edge-server/src/cluster/hub-message-handler.ts`
+
+---
+
+## Edge Server 功能
+
+### 1. 详细的语音路由配置
+
+**优先级**: P1  
+**状态**: 🚧 进行中
+
+#### 功能描述
+Edge 端的语音路由配置：
+- `voice_routing.enabled` - 启用路由
+- `voice_routing.shared_secret` - UDP 加密密钥
+- `voice_routing.connection_strategy` - 连接策略
+- `voice_routing.fallback_thresholds` - 降级阈值
+- `voice_routing.local_decision` - 本地决策配置
+- `voice_routing.relay` - 中继配置
+
+#### 实现任务
+- [x] 基本 UDP 语音路由（已实现）
+- [x] Edge 间 TCP 路由（已实现）
+- [ ] 完整的配置结构
+- [ ] 连接策略实现（auto_fallback/tcp_only）
+- [ ] 质量探测和指标
+- [ ] 自动降级逻辑
+- [ ] 本地路由决策
+- [ ] 中继优先级和限制
+
+#### 集成测试
+- [x] 基本 UDP 路由测试（已有）
+- [x] TCP 降级测试（已有）
+- [ ] 策略配置测试
+- [ ] 质量探测测试
+- [ ] 自动降级触发测试
+- [ ] 中继负载测试
+
+#### 依赖
+- Hub 语音路由配置（见上）
+
+#### 参考
+- TypeScript: `voice_routing` config in Edge
+- 文档: `docs/Edge语音路由实现总结.md`
+
+---
+
+### 2. GeoIP 功能
+
+**优先级**: P3  
+**状态**: ❓ 待定
+
+#### 功能描述
+根据 IP 地址确定用户地理位置：
+- `features.geoip` - 启用 GeoIP
+- 用于日志记录
+- 用于统计分析
+- 用于基于地理位置的路由优化
+
+#### 实现任务
+- [ ] 集成 GeoIP 库（maxminddb-rust）
+- [ ] 加载 GeoLite2 数据库
+- [ ] 在用户连接时查询位置
+- [ ] 存储位置信息（内存/日志）
+- [ ] 可选：基于位置的 Edge 分配建议
+
+#### 集成测试
+- [ ] GeoIP 数据库加载测试
+- [ ] IP 位置查询测试
+- [ ] 边界情况测试（无效 IP、私有 IP）
+
+#### 依赖
+- GeoLite2 数据库文件
+
+#### 备注
+实用性有限，主要用于统计和日志。
+
+---
+
+### 3. Hub 连接池
+
+**优先级**: P1
+**状态**: 📋 计划中
+
+#### 功能描述
+Edge 到 Hub 的连接池：
+- `hub_server.pool_size` - 连接池大小
+- 多个并发连接提高可靠性
+- 负载分散
+
+#### 实现任务
+- [ ] 实现连接池管理结构
+- [ ] 支持多个并发 WebSocket 连接
+- [ ] 实现连接健康检查
+- [ ] 请求负载均衡
+- [ ] 连接故障自动恢复
+- [ ] 配置最小/最大连接数
+
+#### 集成测试
+- [ ] 连接池初始化测试
+- [ ] 多连接并发请求测试
+- [ ] 单个连接故障不影响测试
+- [ ] 连接池扩容/缩容测试
+
+#### 依赖
+无
+
+#### 参考
+- TypeScript: `hub_server.pool_size`
+- 文档: `docs/hub-edge-connection-pool.md`, `docs/connection-pool-refactoring.md`
+
+---
+
+### 4. 客户端建议配置
+
+**优先级**: P3  
+**状态**: 不实现
+
+#### 功能描述
+Edge 向客户端发送建议：
+- `client.suggest_version` - 建议版本号
+- `client.suggest_positional` - 位置音频
+- `client.suggest_push_to_talk` - PTT
+
+#### 实现任务
+- [ ] 添加 `client` 配置结构
+- [ ] 在 ServerConfig 消息中包含
+- [ ] 客户端连接时发送
+
+#### 集成测试
+- [ ] ServerConfig 包含建议测试
+- [ ] 各种建议组合测试
+
+#### 依赖
+无
+
+#### 备注
+实用性有限，与 Hub 的相同功能重复。
+
+---
+
+### 5. 经由 Peer Edge 中继控制信道
+
+**优先级**: P2  
+**状态**: 📋 计划中（TS 和 Rust 均未实现）
+
+#### 功能描述
+当 Edge 无法直连 Hub 时（网络分区、临时故障），可借助集群内其他 Edge 作为中继，将控制信道消息代理到 Hub。  
+**注意**：该功能仅适用于控制信道（RPC/通知），不用于语音转发（语音已有 Hub TCP 中继）。
+
+#### 设计要点
+- Edge A 直连 Hub 失败后，向已知 Peer Edge B 请求代理转发
+- Edge B 将控制消息转发给 Hub，并将响应回传给 Edge A
+- 需要在 Peer Edge 之间建立专用的控制代理通道（区别于语音路由通道）
+- 代理链路最多一跳（Edge → Peer Edge → Hub），避免环路
+- Hub 侧需要识别代理来源，正确记录原始 Edge ID
+
+#### 实现任务
+- [ ] 设计 Edge 间控制代理协议（新 RPC 消息类型）
+- [ ] Edge: 实现检测 Hub 直连失败并发起代理请求的逻辑
+- [ ] Edge: 实现作为代理节点接收并转发控制消息的逻辑
+- [ ] Hub: 识别代理转发来源，正确处理 Edge ID 映射
+- [ ] 配置项：`hub_server.allow_peer_proxy` - 允许作为代理节点
+- [ ] 代理链路的超时和健康检查
+- [ ] 直连恢复后自动切回直连
+
+#### 集成测试
+- [ ] Edge 无法直连 Hub 时通过 Peer 代理注册测试
+- [ ] 代理模式下控制消息（用户加入/离开/频道操作）正确传递测试
+- [ ] 直连恢复后自动切回直连测试
+- [ ] 代理节点断开时的降级处理测试
+
+#### 依赖
+- Hub 连接池（Edge #3）
+- Edge 间连接可靠性机制
+
+---
+
+## 其他系统性改进
+
+### 1. 性能优化
+
+**优先级**: P1  
+**状态**: 📋 计划中
+
+#### 任务
+- [ ] 异步 I/O 优化
+- [ ] 内存分配优化
+- [ ] 数据库查询优化
+- [ ] 消息序列化优化
+- [ ] 连接处理优化
+- [ ] 基准测试套件
+
+#### 测试
+- [ ] 性能基准测试
+- [ ] 负载测试
+- [ ] 内存泄漏测试
+- [ ] 并发连接测试
+
+---
+
+### 2. 监控和可观测性
+
+**优先级**: P2  
+**状态**: 📋 计划中
+
+#### 任务
+- [ ] Prometheus metrics 导出
+- [ ] 健康检查端点
+- [ ] 详细的结构化日志
+- [ ] 分布式追踪（OpenTelemetry）
+- [ ] 性能指标收集
+
+#### 测试
+- [ ] Metrics 端点测试
+- [ ] 健康检查测试
+- [ ] 日志格式测试
+
+---
+
+### 3. 运维工具
+
+**优先级**: P2  
+**状态**: 📋 计划中
+
+#### 任务
+- [ ] 数据库迁移工具
+- [ ] 配置验证工具
+- [ ] 备份/恢复工具
+- [ ] 诊断和调试工具
+- [ ] 批量管理脚本
+
+---
+
+## 测试覆盖率追踪
+
+### Hub Server 集成测试
+
+| 功能模块 | 测试覆盖 | 状态 |
+|---------|---------|------|
+| 认证（本地数据库） | ✅ | tests/integration/suites/auth.test.ts |
+| 认证（HTTP） | ✅ | tests/integration/suites/auth.test.ts |
+| 认证（Lua） | ❌ | 待添加 |
+| Edge 注册 | ✅ | tests/integration/suites/edge-cluster-join.test.ts |
+| 频道管理 | ✅ | tests/integration/suites/channel.test.ts |
+| ACL 权限 | ✅ | tests/integration/suites/acl*.test.ts |
+| 用户状态同步 | ✅ | tests/integration/suites/user-state-broadcast.test.ts |
+| Hub 重启恢复 | ✅ | tests/integration/suites/hub-restart.test.ts |
+| Web API | ❌ | 未实现 |
+| Blob 存储 | ✅ | tests/integration/suites/blob-storage.test.ts (TS only) |
+| 自动封禁 | ❌ | 待添加 |
+| 频道记忆 | ❌ | 待添加 |
+| 集群分割探测（Hub 侧） | ⚠️ | 部分实现，缺 shutdownRequest 处置 |
+| 集群分割处置（Edge 侧） | ❌ | 未实现 hub.shutdownRequest 处理 |
+
+### Edge Server 集成测试
+
+| 功能模块 | 测试覆盖 | 状态 |
+|---------|---------|------|
+| 客户端连接 | ✅ | tests/integration/suites/hub-edge.test.ts |
+| UDP 连接 | ✅ | tests/integration/suites/udp-connection.test.ts |
+| TCP 语音 | ✅ | tests/integration/suites/tcp-voice.test.ts |
+| 语音路由 | ✅ | tests/integration/suites/voice*.test.ts |
+| Edge 间连接 | ✅ | tests/integration/suites/edge-cluster-join.test.ts |
+| 语音加密 | ✅ | tests/integration/suites/edge-voice-encryption.test.ts |
+| 包丢失计算 | ✅ | tests/integration/suites/edge-packet-loss-calculation.test.ts |
+| 多租户 SNI | ✅ | tests/integration/suites/multi-tenant-sni.test.ts (TS only) |
+| GeoIP | ❌ | 未实现 |
+| 连接池 | ❌ | 待添加 |
+| 经由 Peer Edge 中继控制信道 | ❌ | 待实现（TS 和 Rust 均未有此功能） |
+
+---
+
+## 实现优先级排序
+
+### 立即实现（P0）
+1. **带宽和消息限制配置** (Hub #3) - 📋 计划中
+   - 流量控制和速率限制是核心安全功能
+2. **频道记忆功能** (Hub #6) - 📋 计划中
+   - 用户体验核心功能，永久记忆用户频道
+3. **监听者功能** (Hub #10) - 📋 计划中
+   - 跨频道音频路由核心功能
+
+### 尽快实现（P1）
+4. **语音路由策略配置（Hub）** (Hub #11) - 🚧 进行中
+   - 正在实现，需要完善配置和策略
+5. **详细的语音路由配置（Edge）** (Edge #1) - 🚧 进行中
+   - 正在实现，需要完善配置和降级逻辑
+6. **集群分割探测与处置** (Hub #12) - ⚠️ 部分实现
+   - Hub 侧补充 shutdownRequest 处置逻辑；Edge 侧补充 hub.shutdownRequest 处理
+7. **Blob 存储系统** (Hub #2) - 📋 计划中
+   - 头像、图片等附件存储
+8. **自动封禁系统** (Hub #5) - 📋 计划中
+   - 安全防护功能
+9. **客户端建议配置（Hub）** (Hub #7) - 📋 计划中
+   - 客户端配置建议
+10. **Hub 连接池** (Edge #3) - 📋 计划中
+    - 可靠性和负载分散
+11. **性能优化** (其他 #1) - 📋 计划中
+    - 持续优化性能和内存使用
+
+### 可以延后（P2）
+12. **Web API 接口** (Hub #1) - 📋 计划中
+    - 管理和监控接口
+13. **用户名和频道名验证规则** (Hub #4) - 📋 计划中
+    - 正则验证规则
+14. **经由 Peer Edge 中继控制信道** (Edge #5) - 📋 计划中
+    - Hub 不可达时通过 Peer Edge 代理控制信道，防止 Edge 孤岛
+15. **监控和可观测性** (其他 #2) - 📋 计划中
+    - Prometheus metrics 和追踪
+16. **运维工具** (其他 #3) - 📋 计划中
+    - 数据库迁移、备份等工具
+
+### 按需实现（P3）
+17. **Channel Ninja 功能** (Hub #9) - 暂不实现
+    - 隐藏特定频道用户
+18. **GeoIP 功能** (Edge #2) - ❓ 待定
+    - 地理位置查询
+19. **客户端建议配置（Edge）** (Edge #4) - 不实现
+    - 与 Hub 功能重复
+
+### 不实现
+20. **服务器注册（公共列表）** (Hub #8) - ❌ 不实现
+    - 现代部署不需要此功能
+
+---
+
+## 贡献指南
+
+### 开始实现新功能
+
+1. 在本文档中将状态更新为 🚧 进行中
+2. 创建功能分支：`git checkout -b feature/功能名`
+3. 实现功能代码
+4. 编写单元测试
+5. 编写集成测试
+6. 更新配置文档
+7. 提交 PR
+
+### 测试要求
+
+- 所有新功能必须有对应的集成测试
+- 测试应覆盖正常流程和边界情况
+- 测试必须在 Rust 模式下通过：`MUNODE_USE_RUST=1 pnpm test:integration`
+
+### 文档要求
+
+- 更新配置示例文件
+- 更新 TOML_CONFIG_GUIDE.md
+- 添加功能使用文档（如有必要）
+- 更新本 TODO 文档
+
+---
+
+## 更新日志
+
+- 2026-03-10: 初始版本，列出所有未实现功能
