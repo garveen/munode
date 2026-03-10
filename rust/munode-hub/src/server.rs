@@ -12,6 +12,7 @@ use munode_common::config::HubConfig;
 use munode_protocol::hubedge::*;
 
 use crate::acl_manager::AclManager;
+use crate::blob_store::BlobStore;
 use crate::channel_store::ChannelStore;
 use crate::database::Database;
 use crate::edge_connection::EdgeConnection;
@@ -100,6 +101,8 @@ pub struct HubState {
     pub channel_store: Arc<ChannelStore>,
     pub database: Arc<Database>,
     pub acl_manager: AclManager,
+    /// Filesystem-backed blob storage.
+    pub blob_store: Arc<BlobStore>,
     pub edge_connections: RwLock<HashMap<u32, EdgeSender>>,
     /// Health records for each connected Edge, keyed by edge server_id.
     pub edge_health: RwLock<HashMap<u32, EdgeHealth>>,
@@ -135,6 +138,10 @@ impl HubServer {
 
         let channel_store = Arc::new(ChannelStore::new());
 
+        // Open filesystem blob store
+        let blob_store = Arc::new(BlobStore::open(&self.config.blob_store.path)
+            .context("Failed to open blob store")?);
+
         // Create shared state
         let auth_service = AuthServiceHandle::new();
 
@@ -159,6 +166,7 @@ impl HubServer {
             channel_store: channel_store.clone(),
             acl_manager: AclManager::new(database.clone(), channel_store.clone()),
             database,
+            blob_store,
             edge_connections: RwLock::new(HashMap::new()),
             edge_health: RwLock::new(HashMap::new()),
             topology: RwLock::new(TopologyManager::new()),

@@ -172,6 +172,9 @@ pub struct HubConfig {
     /// Web API configuration.
     #[serde(default)]
     pub web_api: HubWebApiConfig,
+    /// Blob store configuration.
+    #[serde(default)]
+    pub blob_store: HubBlobStoreConfig,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -423,6 +426,23 @@ impl Default for HubWebApiConfig {
     }
 }
 
+/// Blob store configuration for the Hub server.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HubBlobStoreConfig {
+    /// Base directory for blob files.
+    /// Blobs are stored at `<path>/<hash[0..2]>/<hash>`.
+    #[serde(default = "default_blob_store_path")]
+    pub path: String,
+}
+
+impl Default for HubBlobStoreConfig {
+    fn default() -> Self {
+        Self {
+            path: default_blob_store_path(),
+        }
+    }
+}
+
 /// Load hub configuration from a TOML or JSON file (detected by extension).
 pub fn load_hub_config(path: &str) -> Result<HubConfig, anyhow::Error> {
     let content = std::fs::read_to_string(path)?;
@@ -496,4 +516,7 @@ fn default_auto_ban_duration() -> u64 {
 }
 fn default_web_api_port() -> u16 {
     8080
+}
+fn default_blob_store_path() -> String {
+    "data/blobs".to_string()
 }
