@@ -63,8 +63,8 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | cert_required | ✅ | ❌ | 要求证书 |
 | force_external_auth | ✅ | ❌ | 强制外部认证 |
 | **验证规则** |
-| username_regex | ✅ | ❌ | 用户名正则 |
-| channel_name_regex | ✅ | ❌ | 频道名正则 |
+| username_regex | ✅ | ✅ | 用户名正则（`validation.username_regex`） |
+| channel_name_regex | ✅ | ✅ | 频道名正则（`validation.channel_name_regex`） |
 | **自动封禁** |
 | auto_ban.enabled | ✅ | ✅ | 启用自动封禁 |
 | auto_ban.attempts | ✅ | ✅ | 触发封禁的失败次数（`auto_ban.attempts`） |
@@ -166,7 +166,6 @@ Rust 版本有意简化配置选项，主要原因：
 - 带宽限制：558000 bps
 - 消息长度限制：根据协议规范
 - 超时值：标准默认值
-- 用户名和频道名验证：基本的 Unicode 字符验证
 
 ### 未实现的功能
 
@@ -216,6 +215,14 @@ enabled = true                   # 开启自动封禁
 attempts = 10                    # 触发封禁的失败次数
 time_window = 120                # 计数窗口（秒）
 duration = 300                   # 封禁时长（秒，0=永久）
+
+# 验证规则配置（可选）
+# 使用 Rust regex 语法，参考 https://docs.rs/regex
+[validation]
+# 用户名必须以字母开头，只能包含字母、数字和下划线，长度 2-30
+username_regex = '^[a-zA-Z][a-zA-Z0-9_]{1,29}$'
+# 频道名必须以字母或数字开头，只能包含字母、数字、空格、下划线和连字符，长度 1-60
+channel_name_regex = '^[a-zA-Z0-9][a-zA-Z0-9 _-]{0,59}$'
 
 log_level = "info"               # 生产环境使用 info
 ```

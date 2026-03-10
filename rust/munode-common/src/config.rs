@@ -166,9 +166,25 @@ pub struct HubConfig {
     /// Client suggestion configuration (sent to connecting clients).
     #[serde(default)]
     pub suggest: HubSuggestConfig,
+    /// Validation rules for usernames and channel names.
+    #[serde(default)]
+    pub validation: HubValidationConfig,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
+}
+
+/// Validation rules configuration.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct HubValidationConfig {
+    /// Regular expression that usernames must match.
+    /// When set, authentication is rejected with InvalidUsername if the name doesn't match.
+    /// Uses Rust `regex` crate syntax. Example: `^[a-zA-Z][a-zA-Z0-9_]{1,29}$`
+    pub username_regex: Option<String>,
+    /// Regular expression that channel names must match.
+    /// When set, channel creation or rename is rejected with an error if the name doesn't match.
+    /// Uses Rust `regex` crate syntax. Example: `^[a-zA-Z0-9 _-]{1,60}$`
+    pub channel_name_regex: Option<String>,
 }
 
 /// Hub network configuration.

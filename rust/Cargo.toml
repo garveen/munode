@@ -47,6 +47,7 @@ anyhow = "1"
 # Utilities
 bytes = "1"
 uuid = { version = "1", features = ["v4"] }
+regex = "1"
 
 # Crypto
 ring = "0.17"

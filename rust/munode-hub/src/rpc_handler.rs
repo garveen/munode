@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::SaltString;
 use prost::Message;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, trace, warn};
@@ -74,14 +75,36 @@ pub struct RpcHandler {
     edge_registry: RwLock<HashMap<u32, EdgeRegistration>>,
     /// Voice targets keyed by (client_session, target_id).
     voice_targets: RwLock<HashMap<(u32, u32), VoiceTargetEntry>>,
+    /// Pre-compiled username regex (cached from config at startup).
+    username_regex: Option<Regex>,
+    /// Pre-compiled channel name regex (cached from config at startup).
+    channel_name_regex: Option<Regex>,
 }
 
 impl RpcHandler {
     pub fn new(state: Arc<HubState>) -> Self {
+        let username_regex = state.config.validation.username_regex.as_deref()
+            .and_then(|p| match Regex::new(p) {
+                Ok(re) => Some(re),
+                Err(e) => {
+                    warn!("Invalid username_regex '{}': {}", p, e);
+                    None
+                }
+            });
+        let channel_name_regex = state.config.validation.channel_name_regex.as_deref()
+            .and_then(|p| match Regex::new(p) {
+                Ok(re) => Some(re),
+                Err(e) => {
+                    warn!("Invalid channel_name_regex '{}': {}", p, e);
+                    None
+                }
+            });
         Self {
             state,
             edge_registry: RwLock::new(HashMap::new()),
             voice_targets: RwLock::new(HashMap::new()),
+            username_regex,
+            channel_name_regex,
         }
     }
 
@@ -317,6 +340,30 @@ impl RpcHandler {
         let config = &self.state.config;
         let username = &params.username;
         let password = &params.password;
+
+        // ------------------------------------------------------------------
+        // Step -1: Validation rules — reject if username doesn't match regex
+        // ------------------------------------------------------------------
+        if let Some(re) = &self.username_regex {
+            if !re.is_match(username) {
+                warn!("Rejecting username '{}': does not match configured username_regex", username);
+                let result = EdgeAuthenticateUserResult {
+                    success: false,
+                    user_id: None, username: None, display_name: None,
+                    groups: vec![],
+                    reason: Some(format!("Invalid username: '{}' does not meet naming requirements", username)),
+                    reject_type: Some(2), // InvalidUsername
+                    channel_id: None,
+                    mute: None, deaf: None, suppress: None,
+                    self_mute: None, self_deaf: None,
+                    priority_speaker: None, recording: None,
+                    cert_required: None,
+                };
+                return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                    r.edge_authenticate_user = Some(result);
+                }));
+            }
+        }
 
         // ------------------------------------------------------------------
         // Step 0: Auto-ban check — reject if IP has been auto-banned
@@ -1307,6 +1354,25 @@ impl RpcHandler {
     ) -> Result<EdgeHubPacket> {
         let params = request.edge_save_channel.as_ref()
             .context("Missing edge_save_channel params")?;
+
+        // Validate channel name against configured regex (for create and rename).
+        if let Some(channel_name) = &params.name {
+            if let Some(re) = &self.channel_name_regex {
+                if !re.is_match(channel_name) {
+                    warn!("Rejecting channel name '{}': does not match configured channel_name_regex", channel_name);
+                    return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                        r.edge_save_channel = Some(EdgeSaveChannelResult {
+                            success: false,
+                            channel_id: None,
+                            error: Some(format!(
+                                "Invalid channel name: '{}' does not meet naming requirements",
+                                channel_name
+                            )),
+                        });
+                    }));
+                }
+            }
+        }
 
         let is_new = params.id.is_none();
         let channel_id = if is_new {

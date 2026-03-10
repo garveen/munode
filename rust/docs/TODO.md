@@ -139,7 +139,7 @@
 ### 4. 用户名和频道名验证规则
 
 **优先级**: P2  
-**状态**: 📋 计划中
+**状态**: ✅ 已完成
 
 #### 功能描述
 通过正则表达式配置允许的字符：
@@ -147,19 +147,19 @@
 - `channel_name_regex` - 频道名验证
 
 #### 实现任务
-- [ ] 添加 `username_regex` 配置项
-- [ ] 添加 `channel_name_regex` 配置项
-- [ ] 实现正则表达式验证函数
-- [ ] 在用户认证时验证用户名
-- [ ] 在频道创建/重命名时验证
-- [ ] 添加友好的错误消息
+- [x] 添加 `username_regex` 配置项（`validation.username_regex`）
+- [x] 添加 `channel_name_regex` 配置项（`validation.channel_name_regex`）
+- [x] 实现正则表达式验证函数（`matches_regex()` in `rpc_handler.rs`，使用 `regex` crate）
+- [x] 在用户认证时验证用户名（`handle_authenticate_user` Step -1，拒绝返回 `InvalidUsername`）
+- [x] 在频道创建/重命名时验证（`handle_save_channel` 前置检查）
+- [x] 添加友好的错误消息（含用户名/频道名和失败原因）
 
 #### 集成测试
-- [ ] 有效用户名测试
-- [ ] 无效用户名拒绝测试
-- [ ] 有效频道名测试
-- [ ] 无效频道名拒绝测试
-- [ ] Unicode 字符测试
+- [x] 有效用户名测试（`validation-rules.test.ts`）
+- [x] 无效用户名拒绝测试（`validation-rules.test.ts`：数字开头、特殊字符、过短、含空格）
+- [x] 有效频道名测试（`validation-rules.test.ts`）
+- [x] 无效频道名拒绝测试（`validation-rules.test.ts`：特殊字符、下划线开头）
+- [x] Unicode 字符测试（`validation-rules.test.ts`：中文用户名被拒绝）
 
 #### 依赖
 无
@@ -682,6 +682,7 @@ Edge 向客户端发送建议：
 | 集群分割探测（Hub 侧） | ✅ | 已实现 shutdownRequest 处置（`handle_partition_after_disconnect`） |
 | 集群分割处置（Edge 侧） | ✅ | 已实现 hub.shutdownRequest 处理（`EdgeEvent::ShutdownRequested`） |
 | 消息限制 | ✅ | tests/integration/suites/message-limits.test.ts |
+| 用户名/频道名验证规则 | ✅ | tests/integration/suites/validation-rules.test.ts (Rust only) |
 
 ### Edge Server 集成测试
 
@@ -732,8 +733,8 @@ Edge 向客户端发送建议：
 ### 可以延后（P2）
 12. **Web API 接口** (Hub #1) - 📋 计划中
     - 管理和监控接口
-13. **用户名和频道名验证规则** (Hub #4) - 📋 计划中
-    - 正则验证规则
+13. **用户名和频道名验证规则** (Hub #4) - ✅ 已完成
+    - 正则验证规则（`validation.username_regex`、`validation.channel_name_regex`）
 14. **经由 Peer Edge 中继控制信道** (Edge #5) - 📋 计划中
     - Hub 不可达时通过 Peer Edge 代理控制信道，防止 Edge 孤岛
 15. **监控和可观测性** (其他 #2) - 📋 计划中
@@ -785,3 +786,4 @@ Edge 向客户端发送建议：
 ## 更新日志
 
 - 2026-03-10: 初始版本，列出所有未实现功能
+- 2026-03-10: 实现 Hub #4 用户名/频道名验证规则（`validation.username_regex`、`validation.channel_name_regex`），添加集成测试 `validation-rules.test.ts`
