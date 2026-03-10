@@ -8,3 +8,4 @@ pub mod acl_manager;
 pub mod topology_manager;
 pub mod auth_service;
 pub mod lua_auth;
+pub mod web_api;

@@ -58,6 +58,9 @@ argon2 = "0.5"
 mlua = { version = "0.10", features = ["lua54", "send", "serialize", "vendored"] }
 ureq = { version = "2", features = ["json"] }
 
+# Web API
+axum = { version = "0.7", features = [] }
+
 # Workspace crates
 munode-protocol = { path = "munode-protocol" }
 munode-common = { path = "munode-common" }

@@ -16,13 +16,13 @@
 ### 1. blob-store.ts
 | 子功能点 | 描述 | Rust |
 |---------|------|------|
-| BlobStore.init | 初始化 blob 存储目录 | ❌ |
-| BlobStore.put | 基于 SHA1 内容寻址存储 blob 数据，原子写入（临时文件+rename） | ❌ |
-| BlobStore.get | 按 SHA1 key 读取 blob 并验证完整性 | ❌ |
-| BlobStore.exists | 检查 blob 是否存在 | ❌ |
+| BlobStore.init | 初始化 blob 存储目录 | ✅ Rust 在数据库初始化时创建 blobs 表 |
+| BlobStore.put | 基于 SHA1 内容寻址存储 blob 数据，原子写入（临时文件+rename） | ✅ Rust 使用 SHA-256，内嵌于 SQLite |
+| BlobStore.get | 按 SHA1 key 读取 blob 并验证完整性 | ✅ |
+| BlobStore.exists | 检查 blob 是否存在 | ✅ 通过 put_blob 的 INSERT OR IGNORE |
 | BlobStore.delete | 删除指定 blob | ❌ |
-| BlobStore.getStats | 统计 blob 总数和总大小 | ❌ |
-| BlobStore 目录结构 | 使用前两位字符做子目录分片，与 Go 实现兼容 | ❌ |
+| BlobStore.getStats | 统计 blob 总数和总大小 | ❌ （Web API /api/stats 中无专项 blob 统计）|
+| BlobStore 目录结构 | 使用前两位字符做子目录分片，与 Go 实现兼容 | ❌ Rust 使用数据库内嵌存储，无文件目录 |
 
 ### 2. channel-listener-manager.ts
 | 子功能点 | 描述 | Rust |
@@ -339,9 +339,9 @@
 |---------|------|------|
 | handleUserState | 用户状态变更转发到 Hub | ✅ munode-edge/handler.rs |
 | handleChannelState | 频道状态变更转发到 Hub | ⚠️ |
-| preConnect 状态缓冲 | 未认证时缓存 UserState | ❌ |
-| uploadUserTexture | 用户头像 blob 上传 | ❌ |
-| uploadUserComment | 用户评论 blob 上传 | ❌ |
+| preConnect 状态缓冲 | 未认证时缓存 UserState | ✅ munode-edge/server.rs |
+| uploadUserTexture | 用户头像 blob 上传 | ✅ 通过 Hub RPC blob.setUserTexture |
+| uploadUserComment | 用户评论 blob 上传 | ✅ 通过 Hub RPC blob.setUserComment |
 | handleUserRemove | 用户移除（踢/禁）处理 | ⚠️ |
 
 ### 41. lifecycle/disconnect-handler.ts
@@ -714,7 +714,7 @@
 | HubServer.start | 启动 WebSocket/Web API | ✅ |
 | HubServer.stop | 停止服务器 | ✅ |
 | registerEdgeVoiceEndpoint | 注册 Edge 语音端点 | ⚠️ |
-| Web API 服务 | HTTP REST API | ❌ |
+| Web API 服务 | HTTP REST API | ✅ /api/status, /api/edges, /api/stats, /api/topology, /api/health |
 
 ### 99. network-topology-manager.ts
 | 子功能点 | 描述 | Rust |
@@ -819,10 +819,10 @@
 | **Channel Ninja** | 低 | 低 | 高 | 完全未实现 |
 | **监控/统计** | 低 | 低 | 高 | 客户端统计、UDP 监控等未实现 |
 | **速率限制** | 中 | 低 | 中 | 令牌桶速率限制器已实现（文本消息），多类型限制待完善 |
-| **Web API** | 低 | 低 | 高 | 完全未实现 |
+| **Web API** | 低 | 低 | 高 | ✅ 已实现核心端点（status/edges/stats/topology/health） |
 | **GeoIP** | 低 | 低 | 高 | 完全未实现 |
 | **连接池/重连** | 低 | 中 | 高 | 基本重连有，高级池化未实现 |
-| **Blob 存储** | 低 | 中 | 高 | Hub 有基础支持，Edge 无独立 BlobStore |
+| **Blob 存储** | 低 | 中 | 高 | ✅ 内嵌于 SQLite，支持用户头像/评论，内容寻址去重 |
 
 ### Rust 特有功能（TS 未实现）
 

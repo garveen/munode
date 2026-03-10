@@ -46,16 +46,7 @@ struct HttpAuthResponse {
 /// Sender type for pushing serialized packets to a specific edge.
 pub type EdgeSender = mpsc::Sender<Vec<u8>>;
 
-/// Information about a registered edge server.
-#[derive(Debug, Clone)]
-pub struct EdgeRegistration {
-    pub server_id: u32,
-    pub name: String,
-    pub host: String,
-    pub port: u32,
-    pub capacity: u32,
-    pub region: Option<String>,
-}
+use crate::server::EdgeRegistration;
 
 /// Voice target storage entry.
 #[derive(Debug, Clone)]
@@ -71,8 +62,6 @@ struct VoiceTargetEntry {
 /// Handles all incoming RPC requests from edges.
 pub struct RpcHandler {
     state: Arc<HubState>,
-    /// Registered edge info keyed by server_id.
-    edge_registry: RwLock<HashMap<u32, EdgeRegistration>>,
     /// Voice targets keyed by (client_session, target_id).
     voice_targets: RwLock<HashMap<(u32, u32), VoiceTargetEntry>>,
     /// Pre-compiled username regex (cached from config at startup).
@@ -101,7 +90,6 @@ impl RpcHandler {
             });
         Self {
             state,
-            edge_registry: RwLock::new(HashMap::new()),
             voice_targets: RwLock::new(HashMap::new()),
             username_regex,
             channel_name_regex,
@@ -274,14 +262,13 @@ impl RpcHandler {
             registration.name, registration.server_id, registration.host, registration.port
         );
 
-        self.edge_registry
+        self.state.edge_registry
             .write()
             .await
             .insert(params.server_id, registration);
 
         // Build edge list for response
-        let edge_list: Vec<EdgeInfo> = self
-            .edge_registry
+        let edge_list: Vec<EdgeInfo> = self.state.edge_registry
             .read()
             .await
             .values()
@@ -1235,8 +1222,7 @@ impl RpcHandler {
             .collect();
 
         // Build edge list
-        let edges: Vec<EdgeInfoProto> = self
-            .edge_registry
+        let edges: Vec<EdgeInfoProto> = self.state.edge_registry
             .read()
             .await
             .values()
@@ -2357,7 +2343,7 @@ impl RpcHandler {
             .await;
         }
 
-        self.edge_registry.write().await.remove(&server_id);
+        self.state.edge_registry.write().await.remove(&server_id);
 
         // Remove from cluster topology
         self.state.topology.write().await.remove_edge(server_id);

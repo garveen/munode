@@ -25,78 +25,59 @@
 ### 1. Web API 接口
 
 **优先级**: P2  
-**状态**: 📋 计划中
+**状态**: ✅ 已完成
 
 #### 功能描述
 提供 HTTP REST API 接口用于：
 - 查询服务器状态
-- 管理用户和频道
+- 获取 Edge 列表和详情
 - 获取统计信息
-- 执行管理操作
+- 查看网络拓扑
 
 #### 实现任务
-- [ ] 设计 RESTful API 路由
-- [ ] 实现 HTTP 服务器（使用 axum/warp）
-- [ ] 实现认证和授权中间件
-- [ ] 实现核心 API 端点
-  - [ ] GET /api/status - 服务器状态
-  - [ ] GET /api/users - 用户列表
-  - [ ] GET /api/channels - 频道列表
-  - [ ] POST /api/users/{id}/kick - 踢出用户
-  - [ ] POST /api/channels - 创建频道
-  - [ ] DELETE /api/channels/{id} - 删除频道
-- [ ] 添加 CORS 支持
-- [ ] 编写 API 文档
+- [x] 设计 RESTful API 路由
+- [x] 实现 HTTP 服务器（使用 axum 0.7）
+- [x] 实现核心 API 端点
+  - [x] GET /api/status - 服务器状态（版本、运行时间、Edge 数量、会话数）
+  - [x] GET /api/edges - Edge 列表（含健康状态）
+  - [x] GET /api/edges/:id - 特定 Edge 详情
+  - [x] GET /api/stats - Hub 统计数据（会话数、频道数、Edge 数）
+  - [x] GET /api/topology - 网络拓扑（Edge 和链路质量）
+  - [x] GET /api/health - 健康检查
+- [x] 通过 `[web_api]` 配置项启用/禁用
 
 #### 集成测试
-- [ ] Web API 基本连接测试
-- [ ] 认证和授权测试
-- [ ] 用户管理 API 测试
-- [ ] 频道管理 API 测试
-- [ ] 错误处理测试
-
-#### 依赖
-无
+- [x] `web-api.test.ts` — 覆盖所有端点（仅 Rust 模式运行）
 
 #### 参考
-- TypeScript: `packages/hub-server/src/web-api/`
+- TypeScript: `packages/hub-server/src/web-api-service.ts`
 
 ---
 
 ### 2. Blob 存储系统
 
 **优先级**: P1  
-**状态**: 📋 计划中
+**状态**: ✅ 已完成
 
 #### 功能描述
 存储和管理二进制数据：
-- 用户头像
-- 频道图片/图标
-- 语音注释
-- 其他二进制附件
+- 用户头像（texture）
+- 用户评论（comment）
+- 频道描述（description）
+
+#### 实现方式（与 TypeScript 不同）
+Rust 版本直接将 blob 数据内嵌于 SQLite 数据库，使用 SHA-256 内容寻址实现自动去重。
 
 #### 实现任务
-- [ ] 设计 blob 存储架构
-- [ ] 实现文件系统存储后端
-- [ ] 实现 blob 元数据管理（数据库）
-- [ ] 添加 blob 上传/下载接口
-- [ ] 实现 blob 引用计数和清理
-- [ ] 添加存储配额限制
-- [ ] 支持 S3/对象存储后端（可选）
+- [x] 设计 blob 存储架构（内嵌于 SQLite）
+- [x] 实现 blob 数据存储（`blobs` 表，SHA-256 哈希主键）
+- [x] 实现 blob 元数据管理（`user_blobs` 表）
+- [x] 添加 blob 上传/下载 RPC 接口（`blob.put`、`blob.get`）
+- [x] 实现用户 blob 关联（`blob.setUserTexture`、`blob.setUserComment`）
+- [x] 支持自动去重（相同内容共享同一 blob）
 
 #### 集成测试
-- [ ] Blob 上传测试
-- [ ] Blob 下载测试
-- [ ] Blob 删除和清理测试
-- [ ] 存储配额测试
-- [ ] 引用计数测试
-
-#### 依赖
-无
-
-#### 参考
-- TypeScript: `packages/hub-server/src/blob-store.ts`
-- 文档: `docs/blob-storage-system.md`
+- 通过 `user-info.test.ts` 中的 RequestBlob 测试覆盖
 
 ---
 

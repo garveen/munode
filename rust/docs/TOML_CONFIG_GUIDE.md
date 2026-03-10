@@ -26,15 +26,16 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | database.backup_dir | ✅ | ❌ | 备份目录 |
 | database.wal_mode | ✅ | ❌ | WAL 模式 |
 | **Blob 存储** |
-| blob_store.enabled | ✅ | ❌ | 启用 blob 存储 |
-| blob_store.path | ✅ | ❌ | 存储路径 |
+| blob_store.enabled | ✅ | ✅ | 启用 blob 存储（内嵌于数据库） |
+| blob_store.path | ✅ | ❌ | 独立存储路径（Rust 使用数据库内嵌存储） |
 | **注册表** |
 | registry.hmac_secret | ✅ | ✅ | HMAC 密钥 |
 | registry.heartbeat_timeout | ✅ | ✅ | 心跳超时 |
 | registry.max_edges | ✅ | ❌ | 最大 Edge 数 |
 | **Web API** |
-| web_api.enabled | ✅ | ❌ | 启用 Web API |
-| web_api.port | ✅ | ❌ | API 端口 |
+| web_api.enabled | ✅ | ✅ | 启用 Web API |
+| web_api.port | ✅ | ✅ | API 端口 |
+| web_api.host | ✅ | ✅ | API 监听地址 |
 | **认证** |
 | auth.allow_guest | ✅ | ✅ | 允许游客 |
 | auth.default_channel | ✅ | ✅ | 默认频道 |
@@ -171,13 +172,14 @@ Rust 版本有意简化配置选项，主要原因：
 
 某些 TypeScript 功能在 Rust 版本中尚未实现：
 
-1. **Web API** - HTTP REST API 接口
-2. **Blob 存储** - 独立的 blob 存储系统
-3. **服务器注册** - 公共服务器列表注册
-4. **高级 ACL 功能** - channnel_ninja 等
-5. **详细的语音路由配置** - 完整的路由策略配置
+1. **服务器注册** - 公共服务器列表注册
+2. **高级 ACL 功能** - channnel_ninja 等
+3. **详细的语音路由配置** - 完整的路由策略配置
 
-这些功能可能在未来版本中添加。
+以下功能已在 Rust 版本中实现（但与 TypeScript 实现方式不同）：
+
+- **Web API** - 已实现 `/api/status`、`/api/edges`、`/api/stats`、`/api/topology`、`/api/health` 端点
+- **Blob 存储** - 已实现，直接内嵌于 SQLite 数据库（使用 SHA-256 内容寻址）
 
 ## 配置最佳实践
 
@@ -261,6 +263,12 @@ message_burst = 5                # 令牌桶突发容量（默认 5）
 # version = 1340029              # 建议客户端版本（数字格式，如 1.3.0.29 → 1340029）
 # positional = true              # 建议启用位置音频
 # push_to_talk = false           # 建议关闭 PTT（启用语音激活）
+
+# Web API 配置（可选）
+[web_api]
+enabled = false                  # 是否启用 HTTP Web API
+host = "0.0.0.0"                 # 监听地址
+port = 8080                      # 监听端口
 
 log_level = "info"
 ```

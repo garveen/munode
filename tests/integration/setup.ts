@@ -123,6 +123,7 @@ export class RustServerProcess {
  */
 function generateRustHubConfig(params: {
   controlPort: number;
+  webApiPort: number;
   dbPath: string;
   authHttpUrl: string;
   hmacSecret: string;
@@ -144,6 +145,11 @@ function generateRustHubConfig(params: {
     registry: {
       hmac_secret: params.hmacSecret,
       heartbeat_timeout: 90000,
+    },
+    web_api: {
+      enabled: true,
+      host: '127.0.0.1',
+      port: params.webApiPort,
     },
     log_level: params.logLevel,
   };
@@ -197,6 +203,7 @@ function generateRustEdgeConfig(params: {
 async function startRustHubServer(params: {
   basePort: number;
   controlPort: number;
+  webApiPort: number;
   authPort: number;
   dbPath: string;
   hmacSecret: string;
@@ -206,6 +213,7 @@ async function startRustHubServer(params: {
   fs.mkdirSync(join(PROJECT_ROOT, 'tmp'), { recursive: true });
   const config = generateRustHubConfig({
     controlPort: params.controlPort,
+    webApiPort: params.webApiPort,
     dbPath: params.dbPath,
     authHttpUrl: `http://127.0.0.1:${params.authPort}/auth`,
     hmacSecret: params.hmacSecret,
@@ -750,6 +758,7 @@ async function createIsolatedTestEnvironment(
     hubProcess = await startRustHubServer({
       basePort,
       controlPort,
+      webApiPort,
       authPort,
       dbPath,
       hmacSecret,
@@ -1153,6 +1162,7 @@ export async function setupTestEnvironment(
         hubProcess = await startRustHubServer({
           basePort,
           controlPort,
+          webApiPort,
           authPort,
           dbPath,
           hmacSecret,

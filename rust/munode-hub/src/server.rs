@@ -21,6 +21,17 @@ use crate::topology_manager::TopologyManager;
 use crate::auth_service::{AuthServiceHandle, run_auth_service_listener};
 use crate::lua_auth::LuaAuthEngine;
 
+/// Information about a registered edge server.
+#[derive(Debug, Clone)]
+pub struct EdgeRegistration {
+    pub server_id: u32,
+    pub name: String,
+    pub host: String,
+    pub port: u32,
+    pub capacity: u32,
+    pub region: Option<String>,
+}
+
 /// Health data for a connected Edge server.
 #[derive(Debug, Clone)]
 pub struct EdgeHealth {
@@ -89,12 +100,16 @@ pub struct HubState {
     pub edge_health: RwLock<HashMap<u32, EdgeHealth>>,
     /// Cluster topology manager.
     pub topology: RwLock<TopologyManager>,
+    /// Registered edge info keyed by server_id (updated on edge.register).
+    pub edge_registry: RwLock<HashMap<u32, EdgeRegistration>>,
     /// External auth service handle.
     pub auth_service: AuthServiceHandle,
     /// Embedded Lua authentication engine (present when `auth.lua_script` is set).
     pub lua_engine: Option<Arc<LuaAuthEngine>>,
     /// Failed authentication attempt tracker (for auto-ban).
     pub failed_auth_tracker: RwLock<FailedAuthTracker>,
+    /// Server start time for uptime calculation.
+    pub started_at: std::time::Instant,
 }
 
 /// The main Hub server.
@@ -142,9 +157,11 @@ impl HubServer {
             edge_connections: RwLock::new(HashMap::new()),
             edge_health: RwLock::new(HashMap::new()),
             topology: RwLock::new(TopologyManager::new()),
+            edge_registry: RwLock::new(HashMap::new()),
             auth_service: auth_service.clone(),
             lua_engine,
             failed_auth_tracker: RwLock::new(FailedAuthTracker::default()),
+            started_at: std::time::Instant::now(),
         });
 
         // Load channels from database
@@ -171,6 +188,16 @@ impl HubServer {
         tokio::spawn(async move {
             health_check_loop(health_state, health_rpc, heartbeat_timeout).await;
         });
+
+        // Start Web API if enabled
+        if self.config.web_api.enabled {
+            let web_state = state.clone();
+            let web_host = self.config.web_api.host.clone();
+            let web_port = self.config.web_api.port;
+            tokio::spawn(async move {
+                crate::web_api::run_web_api(&web_host, web_port, web_state).await;
+            });
+        }
 
         // Bind WebSocket listener
         let addr = format!(

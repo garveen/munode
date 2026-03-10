@@ -82,6 +82,11 @@ impl SessionManager {
             false
         }
     }
+
+    /// Return the total number of active sessions.
+    pub async fn count_sessions(&self) -> usize {
+        self.sessions.read().await.len()
+    }
 }
 
 #[cfg(test)]

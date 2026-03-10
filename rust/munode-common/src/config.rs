@@ -169,6 +169,9 @@ pub struct HubConfig {
     /// Validation rules for usernames and channel names.
     #[serde(default)]
     pub validation: HubValidationConfig,
+    /// Web API configuration.
+    #[serde(default)]
+    pub web_api: HubWebApiConfig,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -396,6 +399,30 @@ impl Default for HubRegistryConfig {
     }
 }
 
+/// Web API configuration for the Hub server.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HubWebApiConfig {
+    /// Enable the Web API HTTP server.
+    #[serde(default)]
+    pub enabled: bool,
+    /// HTTP listening port for the Web API.
+    #[serde(default = "default_web_api_port")]
+    pub port: u16,
+    /// HTTP listening host for the Web API.
+    #[serde(default = "default_host")]
+    pub host: String,
+}
+
+impl Default for HubWebApiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_web_api_port(),
+            host: default_host(),
+        }
+    }
+}
+
 /// Load hub configuration from a TOML or JSON file (detected by extension).
 pub fn load_hub_config(path: &str) -> Result<HubConfig, anyhow::Error> {
     let content = std::fs::read_to_string(path)?;
@@ -466,4 +493,7 @@ fn default_auto_ban_window() -> u64 {
 }
 fn default_auto_ban_duration() -> u64 {
     300
+}
+fn default_web_api_port() -> u16 {
+    8080
 }
