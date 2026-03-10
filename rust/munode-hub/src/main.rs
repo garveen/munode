@@ -9,7 +9,7 @@ use munode_hub::server::HubServer;
 async fn main() -> Result<()> {
     let config_path = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "config/hub.json".to_string());
+        .unwrap_or_else(|| "config/hub.toml".to_string());
 
     let config = load_hub_config(&config_path)?;
     init_logging(&config.log_level);

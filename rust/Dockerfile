@@ -52,4 +52,4 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
     CMD nc -z localhost 64738 || exit 1
 
 ENTRYPOINT ["/app/munode-edge"]
-CMD ["config/edge.json"]
+CMD ["config/edge.toml"]

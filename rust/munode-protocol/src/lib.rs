@@ -16,6 +16,8 @@ pub mod voiceudp {
 /// Protobuf types for the external auth service protocol.
 pub mod authservice {
     include!("generated/authservice.rs");
+    /// Re-export for ergonomic use: `AuthServicePacketType::AuthRequest`, etc.
+    pub use auth_service_packet::Type as AuthServicePacketType;
 }
 
 pub mod message_type;

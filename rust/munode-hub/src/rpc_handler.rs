@@ -14,6 +14,7 @@ use munode_protocol::hubedge::*;
 
 use crate::channel_store::ChannelRecord;
 use crate::database::DbChannelRecord;
+use crate::lua_auth::LuaAuthRequest;
 use crate::server::HubState;
 use crate::session_manager::SessionInfo;
 use crate::topology_manager::{ArbitrationResult, LinkQuality, TopologyEdge};
@@ -477,8 +478,12 @@ impl RpcHandler {
                     );
                 }
             }
-        } else if config.auth.require_auth_service && config.auth.http_url.is_none() {
-            // No WS service connected, no HTTP URL configured, but one is required — reject.
+        } else if config.auth.require_auth_service
+            && config.auth.http_url.is_none()
+            && self.state.lua_engine.is_none()
+        {
+            // No WS service connected, no HTTP URL configured, no Lua script —
+            // but an external auth service is required → reject.
             let result = EdgeAuthenticateUserResult {
                 success: false,
                 user_id: None, username: None, display_name: None,
@@ -494,6 +499,157 @@ impl RpcHandler {
             return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
                 r.edge_authenticate_user = Some(result);
             }));
+        }
+
+        // ------------------------------------------------------------------
+        // Step 1.5: Lua script authentication (if configured)
+        // ------------------------------------------------------------------
+        if let Some(lua_engine) = self.state.lua_engine.as_ref() {
+            let engine = lua_engine.clone();
+            let client_info = params.client_info.as_ref();
+            let lua_req = LuaAuthRequest {
+                username: username.clone(),
+                password: password.clone(),
+                session_id: params.session_id,
+                tokens: params.tokens.clone(),
+                server_id: params.server_id,
+                ip: client_info.map(|c| c.ip_address.clone()).unwrap_or_default(),
+                ip_version: client_info.map(|c| c.ip_version.clone()).unwrap_or_default(),
+                release: client_info.map(|c| c.release.clone()).unwrap_or_default(),
+                version: client_info.and_then(|c| c.version),
+                os: client_info.map(|c| c.os.clone()).unwrap_or_default(),
+                osversion: client_info.map(|c| c.os_version.clone()).unwrap_or_default(),
+                certificate_hash: client_info.and_then(|c| c.certificate_hash.clone()),
+            };
+
+            match tokio::task::spawn_blocking(move || engine.authenticate_sync(lua_req)).await {
+                Ok(Ok(resp)) => {
+                    if !resp.success {
+                        let result = EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None,
+                            username: None,
+                            display_name: None,
+                            groups: vec![],
+                            reason: resp.reason.clone(),
+                            reject_type: resp.reject_type.or(Some(3)), // default WrongUserPW
+                            channel_id: None,
+                            mute: None, deaf: None, suppress: None,
+                            self_mute: None, self_deaf: None,
+                            priority_speaker: None, recording: None,
+                            cert_required: None,
+                        };
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(result);
+                        }));
+                    }
+
+                    // Lua auth succeeded — create session.
+                    let user_id = resp.user_id.unwrap_or(0);
+                    let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
+                    let groups = resp.groups.clone().unwrap_or_default();
+                    if user_id > 0 {
+                        let _ = self.state.database.upsert_ext_user(user_id, &auth_username);
+                    }
+                    let channel_id = if user_id > 0 {
+                        match self.state.database.get_user_last_channel(user_id) {
+                            Ok(last_ch) if last_ch > 0 => last_ch,
+                            _ => config.auth.default_channel,
+                        }
+                    } else {
+                        config.auth.default_channel
+                    };
+
+                    let session_info = SessionInfo {
+                        session_id: params.session_id,
+                        edge_id: edge_server_id,
+                        user_id,
+                        username: auth_username.clone(),
+                        channel_id,
+                        groups: groups.clone(),
+                        cert_hash: params
+                            .client_info.as_ref()
+                            .and_then(|ci| ci.certificate_hash.clone())
+                            .unwrap_or_default(),
+                        mute: params.mute.unwrap_or(false),
+                        deaf: params.deaf.unwrap_or(false),
+                        suppress: params.suppress.unwrap_or(false),
+                        self_mute: params.self_mute.unwrap_or(false),
+                        self_deaf: params.self_deaf.unwrap_or(false),
+                        priority_speaker: params.priority_speaker.unwrap_or(false),
+                        recording: params.recording.unwrap_or(false),
+                    };
+                    self.state.session_manager.add_session(session_info).await;
+
+                    info!(
+                        "User authenticated via Lua script: {} (session={}, edge={}, channel={})",
+                        auth_username, params.session_id, edge_server_id, channel_id
+                    );
+
+                    let cert_hash = params.client_info.as_ref()
+                        .and_then(|ci| ci.certificate_hash.clone());
+                    self.broadcast_notification("hub.userJoined", |n| {
+                        n.user_joined = Some(HubUserJoinedParams {
+                            session_id: params.session_id,
+                            edge_id: edge_server_id,
+                            user_id,
+                            username: auth_username.clone(),
+                            channel_id,
+                            groups: groups.clone(),
+                            cert_hash,
+                            mute: params.mute, deaf: params.deaf,
+                            suppress: params.suppress, self_mute: params.self_mute,
+                            self_deaf: params.self_deaf,
+                            priority_speaker: params.priority_speaker,
+                            recording: params.recording,
+                        });
+                    }).await;
+
+                    let result = EdgeAuthenticateUserResult {
+                        success: true,
+                        user_id: Some(user_id),
+                        username: Some(auth_username),
+                        display_name: resp.display_name.clone(),
+                        groups,
+                        reason: None,
+                        reject_type: None,
+                        channel_id: Some(channel_id),
+                        mute: params.mute, deaf: params.deaf,
+                        suppress: params.suppress, self_mute: params.self_mute,
+                        self_deaf: params.self_deaf,
+                        priority_speaker: params.priority_speaker,
+                        recording: params.recording,
+                        cert_required: None,
+                    };
+                    return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                        r.edge_authenticate_user = Some(result);
+                    }));
+                }
+                Ok(Err(e)) => {
+                    warn!("Lua auth error for '{}': {}; falling back to next auth method", username, e);
+                    if config.auth.require_auth_service {
+                        let result = EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None, username: None, display_name: None,
+                            groups: vec![],
+                            reason: Some(format!("Authentication script error: {e}")),
+                            reject_type: Some(8), // AuthenticatorFail
+                            channel_id: None,
+                            mute: None, deaf: None, suppress: None,
+                            self_mute: None, self_deaf: None,
+                            priority_speaker: None, recording: None,
+                            cert_required: None,
+                        };
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(result);
+                        }));
+                    }
+                }
+                Err(e) => {
+                    // spawn_blocking itself failed (task was cancelled)
+                    warn!("Lua auth task failed for '{}': {}", username, e);
+                }
+            }
         }
 
         // ------------------------------------------------------------------
@@ -1070,29 +1226,11 @@ impl RpcHandler {
             .insert((params.client_session, params.target_id), entry);
 
         // Broadcast to other edges
-        // Build a JSON-compatible string from the voice target config
-        let config_json = if let Some(cfg) = &params.config {
-            let sessions: Vec<u32> = cfg.sessions.iter().map(|s| s.session).collect();
-            let channels: Vec<serde_json::Value> = cfg.channels.iter().map(|c| {
-                serde_json::json!({
-                    "channel_id": c.channel_id,
-                    "children": c.children,
-                    "links": c.links,
-                    "group": c.group,
-                })
-            }).collect();
-            serde_json::json!({
-                "sessions": sessions,
-                "channels": channels,
-            }).to_string()
-        } else {
-            "{}".to_string()
-        };
         let sync_params = HubSyncVoiceTargetParams {
             edge_id: params.edge_id,
             client_session: params.client_session,
             target_id: params.target_id,
-            config_json,
+            config: params.config.clone(),
             timestamp: current_millis() as i64,
         };
         self.broadcast_notification("hub.syncVoiceTarget", |n| {
@@ -1520,222 +1658,202 @@ impl RpcHandler {
     // ==================== Notification Handlers ====================
 
     async fn on_user_left(&self, notification: &TypedRpcNotification) {
-        // Parse from unknown_params_json
-        if let Some(json_str) = &notification.unknown_params_json {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                let session_id = v["session_id"].as_u64().unwrap_or(0) as u32;
-                if session_id == 0 {
-                    return;
-                }
+        let params = notification.handle_user_left.as_ref();
+        let session_id = params.map(|p| p.session_id).unwrap_or(0);
+        let reason = params.and_then(|p| p.reason.clone());
+        if session_id == 0 {
+            return;
+        }
 
-                // Save last channel before removing session
-                self.save_user_last_channel(session_id).await;
+        // Save last channel before removing session
+        self.save_user_last_channel(session_id).await;
 
-                if let Some(removed) = self.state.session_manager.remove_session(session_id).await {
-                    info!("User left: {} (session={})", removed.username, session_id);
+        if let Some(removed) = self.state.session_manager.remove_session(session_id).await {
+            info!("User left: {} (session={})", removed.username, session_id);
 
-                    // Broadcast user removal to all edges
-                    let remove_params = HubUserRemoveBroadcastParams {
-                        session: session_id,
-                        actor: None,
-                        reason: v["reason"].as_str().map(String::from),
-                        ban: None,
-                        target_sessions: vec![],
-                    };
-                    self.broadcast_notification("hub.userRemoveBroadcast", |n| {
-                        n.user_remove_broadcast = Some(remove_params);
-                    })
-                    .await;
-                }
-            }
+            // Broadcast user removal to all edges
+            let remove_params = HubUserRemoveBroadcastParams {
+                session: session_id,
+                actor: None,
+                reason,
+                ban: None,
+                target_sessions: vec![],
+            };
+            self.broadcast_notification("hub.userRemoveBroadcast", |n| {
+                n.user_remove_broadcast = Some(remove_params);
+            })
+            .await;
         }
     }
 
     async fn on_user_remove(&self, notification: &TypedRpcNotification) {
-        if let Some(json_str) = &notification.unknown_params_json {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                let target_session = v["target_session"].as_u64().unwrap_or(0) as u32;
-                if target_session == 0 {
-                    return;
-                }
+        let p = match notification.handle_user_remove.as_ref() {
+            Some(p) => p,
+            None => return,
+        };
+        let target_session = p.target_session;
+        if target_session == 0 {
+            return;
+        }
 
-                if let Some(removed) = self.state.session_manager.remove_session(target_session).await {
-                    info!("User removed: {} (session={})", removed.username, target_session);
+        if let Some(removed) = self.state.session_manager.remove_session(target_session).await {
+            info!("User removed: {} (session={})", removed.username, target_session);
 
-                    let remove_params = HubUserRemoveBroadcastParams {
-                        session: target_session,
-                        actor: v["actor_session"].as_u64().map(|v| v as u32),
-                        reason: v["reason"].as_str().map(String::from),
-                        ban: v["ban"].as_bool(),
-                        target_sessions: vec![],
-                    };
-                    self.broadcast_notification("hub.userRemoveBroadcast", |n| {
-                        n.user_remove_broadcast = Some(remove_params);
-                    })
-                    .await;
-                }
-            }
+            let remove_params = HubUserRemoveBroadcastParams {
+                session: target_session,
+                actor: if p.actor_session != 0 { Some(p.actor_session) } else { None },
+                reason: if p.reason.is_empty() { None } else { Some(p.reason.clone()) },
+                ban: Some(p.ban),
+                target_sessions: vec![],
+            };
+            self.broadcast_notification("hub.userRemoveBroadcast", |n| {
+                n.user_remove_broadcast = Some(remove_params);
+            })
+            .await;
         }
     }
 
     async fn on_user_moved(&self, notification: &TypedRpcNotification) {
-        if let Some(json_str) = &notification.unknown_params_json {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                let session_id = v["session_id"].as_u64().unwrap_or(0) as u32;
-                let channel_id = v["channel_id"].as_u64().unwrap_or(0) as u32;
-                let edge_id = v["edge_id"].as_u64().unwrap_or(0) as u32;
-
-                if session_id == 0 {
-                    return;
-                }
-
-                self.state.session_manager.move_user_to_channel(session_id, channel_id).await;
-
-                let moved_params = HubUserMovedParams {
-                    session_id,
-                    edge_id,
-                    channel_id,
-                    actor_session: None,
-                };
-                self.broadcast_notification("hub.userMoved", |n| {
-                    n.user_moved = Some(moved_params);
-                })
-                .await;
-            }
+        let p = match notification.handle_user_moved.as_ref() {
+            Some(p) => p,
+            None => return,
+        };
+        if p.session_id == 0 {
+            return;
         }
+
+        self.state.session_manager.move_user_to_channel(p.session_id, p.channel_id).await;
+
+        let moved_params = HubUserMovedParams {
+            session_id: p.session_id,
+            edge_id: p.edge_id,
+            channel_id: p.channel_id,
+            actor_session: None,
+        };
+        self.broadcast_notification("hub.userMoved", |n| {
+            n.user_moved = Some(moved_params);
+        })
+        .await;
     }
 
     async fn on_user_state_changed(&self, notification: &TypedRpcNotification) {
-        if let Some(json_str) = &notification.unknown_params_json {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                let session_id = v["session_id"].as_u64().unwrap_or(0) as u32;
-                let source_edge_id = v["edge_id"].as_u64().unwrap_or(0) as u32;
-                if session_id == 0 {
-                    return;
-                }
+        let p = match notification.handle_user_state_changed.as_ref() {
+            Some(p) => p,
+            None => return,
+        };
+        if p.session_id == 0 {
+            return;
+        }
+        let source_edge_id = p.edge_id;
 
-                // Update session state
-                let sessions = &self.state.session_manager;
-                if let Some(mut session) = sessions.get_session(session_id).await {
-                    if let Some(mute) = v["self_mute"].as_bool() {
-                        session.self_mute = mute;
-                    }
-                    if let Some(deaf) = v["self_deaf"].as_bool() {
-                        session.self_deaf = deaf;
-                    }
-                    if let Some(mute) = v["mute"].as_bool() {
-                        session.mute = mute;
-                    }
-                    if let Some(deaf) = v["deaf"].as_bool() {
-                        session.deaf = deaf;
-                    }
-                    if let Some(suppress) = v["suppress"].as_bool() {
-                        session.suppress = suppress;
-                    }
-                    if let Some(ps) = v["priority_speaker"].as_bool() {
-                        session.priority_speaker = ps;
-                    }
-                    if let Some(rec) = v["recording"].as_bool() {
-                        session.recording = rec;
-                    }
-                    sessions.add_session(session).await;
-                }
+        // Update session state
+        let sessions = &self.state.session_manager;
+        if let Some(mut session) = sessions.get_session(p.session_id).await {
+            if let Some(v) = p.self_mute { session.self_mute = v; }
+            if let Some(v) = p.self_deaf { session.self_deaf = v; }
+            if let Some(v) = p.mute      { session.mute = v; }
+            if let Some(v) = p.deaf      { session.deaf = v; }
+            if let Some(v) = p.suppress  { session.suppress = v; }
+            if let Some(v) = p.priority_speaker { session.priority_speaker = v; }
+            if let Some(v) = p.recording { session.recording = v; }
+            sessions.add_session(session).await;
+        }
 
-                // Broadcast state change to other edges
-                let broadcast_json = serde_json::json!({
-                    "session_id": session_id,
-                    "edge_id": source_edge_id,
-                    "self_mute": v["self_mute"],
-                    "self_deaf": v["self_deaf"],
-                    "mute": v["mute"],
-                    "deaf": v["deaf"],
-                    "suppress": v["suppress"],
-                    "priority_speaker": v["priority_speaker"],
-                    "recording": v["recording"],
-                    "listening_channel_add": v["listening_channel_add"],
-                    "listening_channel_remove": v["listening_channel_remove"],
-                });
-                let forward = TypedRpcNotification {
-                    method: "hub.userStateBroadcast".to_string(),
-                    timestamp: Some(current_millis() as i64),
-                    unknown_params_json: Some(broadcast_json.to_string()),
-                    ..Default::default()
-                };
-                let packet = EdgeHubPacket {
-                    r#type: PacketType::RpcNotification as i32,
-                    rpc_notification: Some(forward),
-                    ..Default::default()
-                };
-                let data = packet.encode_to_vec();
-                let edges = self.state.edge_connections.read().await;
-                for (edge_id, sender) in edges.iter() {
-                    if *edge_id == source_edge_id {
-                        continue;
-                    }
-                    if let Err(e) = sender.try_send(data.clone()) {
-                        warn!("Failed to broadcast user state to edge {}: {}", edge_id, e);
-                    }
-                }
+        // Broadcast state change to other edges
+        let broadcast = HubUserStateBroadcastParams {
+            session_id: p.session_id,
+            edge_id: source_edge_id,
+            self_mute: p.self_mute,
+            self_deaf: p.self_deaf,
+            mute: p.mute,
+            deaf: p.deaf,
+            suppress: p.suppress,
+            priority_speaker: p.priority_speaker,
+            recording: p.recording,
+            listening_channel_add: p.listening_channel_add.clone(),
+            listening_channel_remove: p.listening_channel_remove.clone(),
+        };
+        let forward = TypedRpcNotification {
+            method: "hub.userStateBroadcast".to_string(),
+            timestamp: Some(current_millis() as i64),
+            user_state_broadcast: Some(broadcast),
+            ..Default::default()
+        };
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(forward),
+            ..Default::default()
+        };
+        let data = packet.encode_to_vec();
+        let edges = self.state.edge_connections.read().await;
+        for (edge_id, sender) in edges.iter() {
+            if *edge_id == source_edge_id {
+                continue;
+            }
+            if let Err(e) = sender.try_send(data.clone()) {
+                warn!("Failed to broadcast user state to edge {}: {}", edge_id, e);
             }
         }
     }
 
     /// Handle text message forwarding: relay to all other edges (not the sender).
     async fn on_text_message(&self, notification: &TypedRpcNotification, source_edge_id: u32) {
-        if let Some(json_str) = &notification.unknown_params_json {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                let actor = v["actor"].as_u64().unwrap_or(0) as u32;
-                if actor == 0 {
-                    debug!("Ignoring text message with invalid actor=0");
-                    return;
-                }
+        let p = match notification.handle_text_message.as_ref() {
+            Some(p) => p,
+            None => return,
+        };
+        if p.actor == 0 {
+            debug!("Ignoring text message with invalid actor=0");
+            return;
+        }
 
-                debug!("Forwarding text message from actor {} (edge {}) to other edges", actor, source_edge_id);
+        debug!("Forwarding text message from actor {} (edge {}) to other edges", p.actor, source_edge_id);
 
-                // Forward to all edges except the source
-                let forward_notification = TypedRpcNotification {
-                    method: "hub.textMessageForward".to_string(),
-                    timestamp: Some(current_millis() as i64),
-                    unknown_params_json: Some(json_str.clone()),
-                    ..Default::default()
-                };
+        // Forward to all edges except the source
+        let forward_notification = TypedRpcNotification {
+            method: "hub.textMessageForward".to_string(),
+            timestamp: Some(current_millis() as i64),
+            text_message_forward: Some(HubTextMessageForwardParams {
+                actor: p.actor,
+                message: p.message.clone(),
+                channel_id: p.channel_id.clone(),
+                tree_id: p.tree_id.clone(),
+                session: p.session.clone(),
+            }),
+            ..Default::default()
+        };
 
-                let packet = EdgeHubPacket {
-                    r#type: PacketType::RpcNotification as i32,
-                    rpc_notification: Some(forward_notification),
-                    ..Default::default()
-                };
-                let data = packet.encode_to_vec();
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(forward_notification),
+            ..Default::default()
+        };
+        let data = packet.encode_to_vec();
 
-                let edges = self.state.edge_connections.read().await;
-                for (edge_id, sender) in edges.iter() {
-                    if *edge_id == source_edge_id {
-                        continue;
-                    }
-                    if let Err(e) = sender.try_send(data.clone()) {
-                        warn!("Failed to forward text message to edge {}: {}", edge_id, e);
-                    }
-                }
+        let edges = self.state.edge_connections.read().await;
+        for (edge_id, sender) in edges.iter() {
+            if *edge_id == source_edge_id {
+                continue;
+            }
+            if let Err(e) = sender.try_send(data.clone()) {
+                warn!("Failed to forward text message to edge {}: {}", edge_id, e);
             }
         }
     }
 
     /// Handle channel state notification from an edge (channel create/edit request).
     async fn on_channel_state(&self, notification: &TypedRpcNotification) {
-        if let Some(json_str) = &notification.unknown_params_json {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                // Support both flat format (Rust edge) and nested channelState (TS edge)
-                let cs = if v["channelState"].is_object() { &v["channelState"] } else { &v };
-                let channel_id = cs["channel_id"].as_u64().map(|n| n as u32);
+        let p = match notification.handle_channel_state.as_ref() {
+            Some(p) => p,
+            None => return,
+        };
+        {
+                let channel_id = Some(p.channel_id);
 
                 if let Some(ch_id) = channel_id {
                     // Handle links_add / links_remove first
-                    let links_add: Vec<u32> = cs["links_add"].as_array()
-                        .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u32)).collect())
-                        .unwrap_or_default();
-                    let links_remove: Vec<u32> = cs["links_remove"].as_array()
-                        .map(|a| a.iter().filter_map(|x| x.as_u64().map(|n| n as u32)).collect())
-                        .unwrap_or_default();
+                    let links_add: Vec<u32> = p.links_add.clone();
+                    let links_remove: Vec<u32> = p.links_remove.clone();
 
                     for target_id in &links_add {
                         if let Err(e) = self.state.database.add_channel_link(ch_id, *target_id) {
@@ -1769,17 +1887,17 @@ impl RpcHandler {
 
                     // Update regular channel fields if present
                     if let Some(mut ch) = self.state.channel_store.get_channel(ch_id).await {
-                        if let Some(n) = cs["name"].as_str() {
-                            ch.name = n.to_string();
+                        if let Some(ref n) = p.name {
+                            ch.name = n.clone();
                         }
-                        if let Some(pid) = cs["parent"].as_u64().or_else(|| cs["parent_id"].as_u64()) {
-                            ch.parent_id = Some(pid as u32);
+                        if let Some(pid) = p.parent_id {
+                            ch.parent_id = Some(pid);
                         }
-                        if let Some(pos) = cs["position"].as_i64() {
-                            ch.position = pos as i32;
+                        if let Some(pos) = p.position {
+                            ch.position = pos;
                         }
-                        if let Some(desc) = cs["description"].as_str() {
-                            ch.description = desc.to_string();
+                        if let Some(ref desc) = p.description {
+                            ch.description = desc.clone();
                         }
                         self.state.channel_store.update_channel(ch).await;
                     }
@@ -1823,33 +1941,31 @@ impl RpcHandler {
                         }
                     }
                 }
-            }
         }
     }
 
     /// Handle channel removal notification from an edge.
     async fn on_channel_remove(&self, notification: &TypedRpcNotification) {
-        if let Some(json_str) = &notification.unknown_params_json {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                let channel_id = v["channel_id"].as_u64().unwrap_or(0) as u32;
-                if channel_id == 0 {
-                    return; // Don't allow removing root channel
-                }
+        let channel_id = match notification.handle_channel_remove.as_ref() {
+            Some(p) => p.channel_id,
+            None => return,
+        };
+        if channel_id == 0 {
+            return; // Don't allow removing root channel
+        }
 
-                if let Some(removed) = self.state.channel_store.remove_channel(channel_id).await {
-                    info!("Channel removed: {} (id={})", removed.name, channel_id);
+        if let Some(removed) = self.state.channel_store.remove_channel(channel_id).await {
+            info!("Channel removed: {} (id={})", removed.name, channel_id);
 
-                    // Delete from database
-                    if let Err(e) = self.state.database.delete_channel(channel_id) {
-                        warn!("Failed to delete channel {} from database: {}", channel_id, e);
-                    }
-
-                    // Broadcast to all edges
-                    self.broadcast_notification("hub.channelRemoved", |n| {
-                        n.channel_removed = Some(HubChannelRemovedParams { channel_id });
-                    }).await;
-                }
+            // Delete from database
+            if let Err(e) = self.state.database.delete_channel(channel_id) {
+                warn!("Failed to delete channel {} from database: {}", channel_id, e);
             }
+
+            // Broadcast to all edges
+            self.broadcast_notification("hub.channelRemoved", |n| {
+                n.channel_removed = Some(HubChannelRemovedParams { channel_id });
+            }).await;
         }
     }
 
@@ -2197,17 +2313,15 @@ impl RpcHandler {
         };
 
         // Notify existing edges about the new peer
-        let new_peer_notification = serde_json::json!({
-            "edge_id": join_edge_id,
-            "name": params.name,
-            "host": params.host,
-            "port": params.port,
-            "voice_port": params.voice_port,
-        });
         let notification = TypedRpcNotification {
             method: "hub.peerJoined".to_string(),
             timestamp: Some(current_millis() as i64),
-            unknown_params_json: Some(new_peer_notification.to_string()),
+            cluster_peer_joined: Some(HubClusterPeerJoinedParams {
+                edge_id: join_edge_id,
+                name: params.name.clone(),
+                host: params.host.clone(),
+                voice_port: params.voice_port,
+            }),
             ..Default::default()
         };
         let notify_packet = EdgeHubPacket {
@@ -2273,14 +2387,10 @@ impl RpcHandler {
             ArbitrationResult::BothReported { edge_id } => {
                 warn!("Cluster: edge {} confirmed disconnected by arbitration", edge_id);
                 // Notify all edges about the forced disconnection
-                let notification = serde_json::json!({
-                    "edge_id": edge_id,
-                    "reason": "peer_disconnect_arbitration",
-                });
                 let notif = TypedRpcNotification {
                     method: "hub.peerLeft".to_string(),
                     timestamp: Some(current_millis() as i64),
-                    unknown_params_json: Some(notification.to_string()),
+                    cluster_peer_left: Some(HubClusterPeerLeftParams { edge_id }),
                     ..Default::default()
                 };
                 let packet = EdgeHubPacket {

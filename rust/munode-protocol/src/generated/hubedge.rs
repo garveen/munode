@@ -1747,11 +1747,172 @@ pub struct HubSyncVoiceTargetParams {
     pub client_session: u32,
     #[prost(uint32, required, tag = "3")]
     pub target_id: u32,
-    /// VoiceTarget config as JSON (complex nested structure)
-    #[prost(string, required, tag = "4")]
-    pub config_json: ::prost::alloc::string::String,
+    /// VoiceTarget config (typed)
+    #[prost(message, optional, tag = "4")]
+    pub config: ::core::option::Option<VoiceTargetConfigProto>,
     #[prost(int64, required, tag = "5")]
     pub timestamp: i64,
+}
+/// ---------------------------------------------------------------------------
+/// Edge → Hub 通知消息 (替代 unknown_params_json)
+/// ---------------------------------------------------------------------------
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeHandleUserLeftParams {
+    #[prost(uint32, required, tag = "1")]
+    pub session_id: u32,
+    #[prost(uint32, required, tag = "2")]
+    pub edge_id: u32,
+    #[prost(string, optional, tag = "3")]
+    pub reason: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeHandleUserRemoveParams {
+    #[prost(uint32, required, tag = "1")]
+    pub edge_id: u32,
+    #[prost(uint32, required, tag = "2")]
+    pub actor_session: u32,
+    #[prost(uint32, required, tag = "3")]
+    pub actor_user_id: u32,
+    #[prost(string, required, tag = "4")]
+    pub actor_username: ::prost::alloc::string::String,
+    #[prost(uint32, required, tag = "5")]
+    pub target_session: u32,
+    #[prost(string, required, tag = "6")]
+    pub reason: ::prost::alloc::string::String,
+    #[prost(bool, required, tag = "7")]
+    pub ban: bool,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct EdgeHandleUserMovedParams {
+    #[prost(uint32, required, tag = "1")]
+    pub session_id: u32,
+    #[prost(uint32, required, tag = "2")]
+    pub edge_id: u32,
+    #[prost(uint32, required, tag = "3")]
+    pub channel_id: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeHandleUserStateChangedParams {
+    #[prost(uint32, required, tag = "1")]
+    pub session_id: u32,
+    #[prost(uint32, required, tag = "2")]
+    pub edge_id: u32,
+    #[prost(bool, optional, tag = "3")]
+    pub self_mute: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "4")]
+    pub self_deaf: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "5")]
+    pub mute: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "6")]
+    pub deaf: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "7")]
+    pub suppress: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "8")]
+    pub priority_speaker: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "9")]
+    pub recording: ::core::option::Option<bool>,
+    #[prost(uint32, repeated, packed = "false", tag = "10")]
+    pub listening_channel_add: ::prost::alloc::vec::Vec<u32>,
+    #[prost(uint32, repeated, packed = "false", tag = "11")]
+    pub listening_channel_remove: ::prost::alloc::vec::Vec<u32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeHandleTextMessageParams {
+    #[prost(uint32, required, tag = "1")]
+    pub actor: u32,
+    #[prost(uint32, required, tag = "2")]
+    pub edge_id: u32,
+    #[prost(string, required, tag = "3")]
+    pub message: ::prost::alloc::string::String,
+    #[prost(uint32, repeated, packed = "false", tag = "4")]
+    pub channel_id: ::prost::alloc::vec::Vec<u32>,
+    #[prost(uint32, repeated, packed = "false", tag = "5")]
+    pub tree_id: ::prost::alloc::vec::Vec<u32>,
+    #[prost(uint32, repeated, packed = "false", tag = "6")]
+    pub session: ::prost::alloc::vec::Vec<u32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeHandleChannelStateParams {
+    #[prost(uint32, required, tag = "1")]
+    pub edge_id: u32,
+    #[prost(uint32, required, tag = "2")]
+    pub channel_id: u32,
+    #[prost(uint32, repeated, packed = "false", tag = "3")]
+    pub links_add: ::prost::alloc::vec::Vec<u32>,
+    #[prost(uint32, repeated, packed = "false", tag = "4")]
+    pub links_remove: ::prost::alloc::vec::Vec<u32>,
+    #[prost(string, optional, tag = "5")]
+    pub name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "6")]
+    pub description: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int32, optional, tag = "7")]
+    pub position: ::core::option::Option<i32>,
+    #[prost(uint32, optional, tag = "8")]
+    pub parent_id: ::core::option::Option<u32>,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct EdgeHandleChannelRemoveParams {
+    #[prost(uint32, required, tag = "1")]
+    pub edge_id: u32,
+    #[prost(uint32, required, tag = "2")]
+    pub channel_id: u32,
+}
+/// ---------------------------------------------------------------------------
+/// Hub → Edge 广播消息 (替代 unknown_params_json)
+/// ---------------------------------------------------------------------------
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HubUserStateBroadcastParams {
+    #[prost(uint32, required, tag = "1")]
+    pub session_id: u32,
+    #[prost(uint32, required, tag = "2")]
+    pub edge_id: u32,
+    #[prost(bool, optional, tag = "3")]
+    pub self_mute: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "4")]
+    pub self_deaf: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "5")]
+    pub mute: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "6")]
+    pub deaf: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "7")]
+    pub suppress: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "8")]
+    pub priority_speaker: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "9")]
+    pub recording: ::core::option::Option<bool>,
+    #[prost(uint32, repeated, packed = "false", tag = "10")]
+    pub listening_channel_add: ::prost::alloc::vec::Vec<u32>,
+    #[prost(uint32, repeated, packed = "false", tag = "11")]
+    pub listening_channel_remove: ::prost::alloc::vec::Vec<u32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HubTextMessageForwardParams {
+    #[prost(uint32, required, tag = "1")]
+    pub actor: u32,
+    #[prost(string, required, tag = "2")]
+    pub message: ::prost::alloc::string::String,
+    #[prost(uint32, repeated, packed = "false", tag = "3")]
+    pub channel_id: ::prost::alloc::vec::Vec<u32>,
+    #[prost(uint32, repeated, packed = "false", tag = "4")]
+    pub tree_id: ::prost::alloc::vec::Vec<u32>,
+    #[prost(uint32, repeated, packed = "false", tag = "5")]
+    pub session: ::prost::alloc::vec::Vec<u32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HubClusterPeerJoinedParams {
+    #[prost(uint32, required, tag = "1")]
+    pub edge_id: u32,
+    #[prost(string, required, tag = "2")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(string, required, tag = "3")]
+    pub host: ::prost::alloc::string::String,
+    #[prost(uint32, required, tag = "4")]
+    pub voice_port: u32,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct HubClusterPeerLeftParams {
+    #[prost(uint32, required, tag = "1")]
+    pub edge_id: u32,
 }
 /// ---------------------------------------------------------------------------
 /// hub.pluginDataBroadcast - Hub 广播插件数据到 Edge
@@ -1974,6 +2135,31 @@ pub struct TypedRpcNotification {
     >,
     #[prost(message, optional, tag = "23")]
     pub relay_voice_packet: ::core::option::Option<HubRelayVoicePacketParams>,
+    /// Typed replacements for unknown_params_json
+    #[prost(message, optional, tag = "24")]
+    pub handle_user_left: ::core::option::Option<EdgeHandleUserLeftParams>,
+    #[prost(message, optional, tag = "25")]
+    pub handle_user_remove: ::core::option::Option<EdgeHandleUserRemoveParams>,
+    #[prost(message, optional, tag = "26")]
+    pub handle_user_moved: ::core::option::Option<EdgeHandleUserMovedParams>,
+    #[prost(message, optional, tag = "27")]
+    pub handle_user_state_changed: ::core::option::Option<
+        EdgeHandleUserStateChangedParams,
+    >,
+    #[prost(message, optional, tag = "28")]
+    pub handle_text_message: ::core::option::Option<EdgeHandleTextMessageParams>,
+    #[prost(message, optional, tag = "29")]
+    pub handle_channel_state: ::core::option::Option<EdgeHandleChannelStateParams>,
+    #[prost(message, optional, tag = "30")]
+    pub handle_channel_remove: ::core::option::Option<EdgeHandleChannelRemoveParams>,
+    #[prost(message, optional, tag = "31")]
+    pub user_state_broadcast: ::core::option::Option<HubUserStateBroadcastParams>,
+    #[prost(message, optional, tag = "32")]
+    pub text_message_forward: ::core::option::Option<HubTextMessageForwardParams>,
+    #[prost(message, optional, tag = "33")]
+    pub cluster_peer_joined: ::core::option::Option<HubClusterPeerJoinedParams>,
+    #[prost(message, optional, tag = "34")]
+    pub cluster_peer_left: ::core::option::Option<HubClusterPeerLeftParams>,
     /// For unknown notification types, store params as JSON string
     #[prost(string, optional, tag = "99")]
     pub unknown_params_json: ::core::option::Option<::prost::alloc::string::String>,

@@ -101,10 +101,14 @@ impl Default for ServerConfig {
     }
 }
 
-/// Load edge configuration from a JSON file.
+/// Load edge configuration from a TOML or JSON file (detected by extension).
 pub fn load_edge_config(path: &str) -> Result<EdgeConfig, anyhow::Error> {
     let content = std::fs::read_to_string(path)?;
-    let config: EdgeConfig = serde_json::from_str(&content)?;
+    let config: EdgeConfig = if path.ends_with(".json") {
+        serde_json::from_str(&content)?
+    } else {
+        toml::from_str(&content)?
+    };
     Ok(config)
 }
 
@@ -197,6 +201,25 @@ pub struct HubAuthConfig {
     /// Timeout in milliseconds for HTTP authentication requests (default: 5000).
     #[serde(default = "default_auth_timeout")]
     pub http_timeout_ms: u64,
+    /// Inline Lua 5.4 script for authentication.
+    ///
+    /// The script must define a global `authenticate(req)` function that receives a
+    /// table with all client fields and returns a result table.
+    ///
+    /// Fields available in `req`:
+    ///   username, password, session_id, tokens, server_id,
+    ///   ip, ip_version, release, version, os, osversion, certificate_hash
+    ///
+    /// The `authenticate` function must return a table with at least `success` (bool).
+    /// On success: `{ success=true, user_id=N, username="...", display_name="...", groups={...} }`
+    /// On failure: `{ success=false, reason="...", reject_type=N }`
+    ///
+    /// The following globals are injected by the Hub:
+    ///   `http_post(url, body_table [, headers_table])` → `{ status, ok, json, body }`
+    ///
+    /// Evaluated before `http_url` and local DB auth, after the WebSocket auth service.
+    /// Write the script inline using TOML literal multi-line strings (''' ... ''').
+    pub lua_script: Option<String>,
 }
 
 impl Default for HubAuthConfig {
@@ -209,6 +232,7 @@ impl Default for HubAuthConfig {
             require_auth_service: false,
             http_url: None,
             http_timeout_ms: default_auth_timeout(),
+            lua_script: None,
         }
     }
 }
@@ -232,10 +256,14 @@ impl Default for HubRegistryConfig {
     }
 }
 
-/// Load hub configuration from a JSON file.
+/// Load hub configuration from a TOML or JSON file (detected by extension).
 pub fn load_hub_config(path: &str) -> Result<HubConfig, anyhow::Error> {
     let content = std::fs::read_to_string(path)?;
-    let config: HubConfig = serde_json::from_str(&content)?;
+    let config: HubConfig = if path.ends_with(".json") {
+        serde_json::from_str(&content)?
+    } else {
+        toml::from_str(&content)?
+    };
     Ok(config)
 }
 

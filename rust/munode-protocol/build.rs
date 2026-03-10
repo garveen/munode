@@ -46,6 +46,7 @@ fn main() -> Result<()> {
                 proto_dir.join("HubEdge.proto"),
                 proto_dir.join("HubEdgeSync.proto"),
                 proto_dir.join("HubEdgeRPC.proto"),
+                proto_dir.join("AuthService.proto"),
                 proto_dir.join("VoiceUDP.proto"),
             ],
             &[&proto_dir],

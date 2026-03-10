@@ -25,3 +25,5 @@ ring = { workspace = true }
 argon2 = { workspace = true }
 rusqlite = { version = "0.33", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json"] }
+mlua = { workspace = true }
+ureq = { workspace = true }

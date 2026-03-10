@@ -1,0 +1,135 @@
+# MuNode Hub Server – example configuration
+# Copy this file to hub.toml and edit as needed.
+
+# ---------------------------------------------------------------------------
+# Network
+# ---------------------------------------------------------------------------
+[network]
+host         = "0.0.0.0"
+control_port = 64738   # Edge nodes connect to this WebSocket port
+
+# Optional: start a second WS listener for external auth services.
+# auth_service_port = 64739
+
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
+[database]
+path = "./data/hub.sqlite"
+
+# ---------------------------------------------------------------------------
+# Registry (Edge authentication)
+# ---------------------------------------------------------------------------
+[registry]
+hmac_secret       = "change-me-to-a-random-secret"
+heartbeat_timeout = 30000   # ms
+
+# ---------------------------------------------------------------------------
+# Authentication
+#
+# Priority order (first match wins):
+#   1. External WebSocket auth service  (auth_service_port must be set)
+#   2. Lua script                       (auth.lua_script)
+#   3. HTTP URL                         (auth.http_url)
+#   4. Local SQLite database
+#
+# Set require_auth_service = true to hard-fail if none of the above external
+# methods are reachable (prevents silent fallback to local DB).
+# ---------------------------------------------------------------------------
+[auth]
+allow_guest    = false
+default_channel = 0
+# welcome_text = "Welcome to the server!"
+# server_password = "optional-server-wide-password"
+require_auth_service = false
+
+# ---------------------------------------------------------------------------
+# Option A: Lua inline script (equivalent to the TypeScript config callback)
+#
+# The script is written inside a TOML literal multi-line string (''' ... ''').
+# No escaping is needed – write the Lua code exactly as you would in a file.
+#
+# Injected globals:
+#   http_post(url, body_table [, headers_table])
+#       -> { status = number, ok = boolean, json = table|nil, body = string|nil }
+#
+# authenticate(req) must return:
+#   Success: { success=true,  user_id=N,   username="...", display_name="...", groups={...} }
+#   Failure: { success=false, reason="...", reject_type=N }
+#            reject_type: 3=WrongUserPW  4=WrongServerPW  5=NoCertificate  8=AuthenticatorFail
+#
+# req fields available:
+#   username, password, session_id, tokens (array), server_id,
+#   ip, ip_version, release, version (integer|nil), os, osversion,
+#   certificate_hash (string|nil)
+# ---------------------------------------------------------------------------
+lua_script = '''
+-- Persistent state: HTTP headers shared across all calls (set once, reused).
+local AUTH_URL   = "https://example.com/mumble-connector/api/authenticate"
+local AUTH_TOKEN = "replace-with-your-api-token"
+
+function authenticate(req)
+  local res = http_post(
+    AUTH_URL,
+    {
+      username         = req.username,
+      password         = req.password,
+      session_id       = req.session_id,
+      tokens           = req.tokens,
+      server_id        = req.server_id,
+      ip               = req.ip,
+      ip_version       = req.ip_version,
+      release          = req.release,
+      version          = req.version,
+      os               = req.os,
+      osversion        = req.osversion,
+      certificate_hash = req.certificate_hash,
+    },
+    {
+      ["Content-Type"] = "application/json",
+      ["accept"]       = "application/json",
+      ["X-Token"]      = AUTH_TOKEN,
+    }
+  )
+
+  -- HTTP-level failure
+  if not res.ok then
+    return {
+      success     = false,
+      reason      = "Authentication service unavailable (HTTP " .. tostring(res.status) .. ")",
+      reject_type = 8,  -- AuthenticatorFail
+    }
+  end
+
+  local body = res.json
+
+  -- Application-level success (adapt field names to your API)
+  if body.status == 0 then
+    return {
+      success      = true,
+      user_id      = body.user_id,
+      username     = body.nickname,
+      display_name = body.nickname,
+      groups       = body.groups,
+    }
+  else
+    return {
+      success     = false,
+      reason      = body.reason or "Authentication denied",
+      reject_type = 3,  -- WrongUserPW
+    }
+  end
+end
+'''
+
+# ---------------------------------------------------------------------------
+# Option B: HTTP Webhook (simpler, no scripting required)
+# Comment out lua_script above and uncomment these lines.
+# ---------------------------------------------------------------------------
+# http_url        = "https://example.com/mumble-connector/api/authenticate"
+# http_timeout_ms = 5000
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+log_level = "info"

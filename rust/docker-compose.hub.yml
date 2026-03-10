@@ -6,11 +6,11 @@ services:
     container_name: munode-hub
     restart: unless-stopped
     entrypoint: ["/app/munode-hub"]
-    command: ["config/hub.json"]
+    command: ["config/hub.toml"]
     ports:
       - "${HUB_GRPC_PORT:-8443}:8443"
     volumes:
-      - ${HUB_CONFIG:-./config/hub.json}:/app/config/hub.json:ro
+      - ${HUB_CONFIG:-./config/hub.toml}:/app/config/hub.toml:ro
       - ${DATA_DIR:-./data}:/app/data
       - ${LOG_DIR:-./logs}/hub:/app/logs
     environment:

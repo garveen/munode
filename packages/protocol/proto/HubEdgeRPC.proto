@@ -737,8 +737,108 @@ message HubSyncVoiceTargetParams {
   required uint32 edge_id = 1;
   required uint32 client_session = 2;
   required uint32 target_id = 3;
-  required string config_json = 4;  // VoiceTarget config as JSON (complex nested structure)
+  optional VoiceTargetConfigProto config = 4;  // VoiceTarget config (typed)
   required int64 timestamp = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Edge → Hub 通知消息 (替代 unknown_params_json)
+// ---------------------------------------------------------------------------
+message EdgeHandleUserLeftParams {
+  required uint32 session_id = 1;
+  required uint32 edge_id = 2;
+  optional string reason = 3;
+}
+
+message EdgeHandleUserRemoveParams {
+  required uint32 edge_id = 1;
+  required uint32 actor_session = 2;
+  required uint32 actor_user_id = 3;
+  required string actor_username = 4;
+  required uint32 target_session = 5;
+  required string reason = 6;
+  required bool ban = 7;
+}
+
+message EdgeHandleUserMovedParams {
+  required uint32 session_id = 1;
+  required uint32 edge_id = 2;
+  required uint32 channel_id = 3;
+}
+
+message EdgeHandleUserStateChangedParams {
+  required uint32 session_id = 1;
+  required uint32 edge_id = 2;
+  optional bool self_mute = 3;
+  optional bool self_deaf = 4;
+  optional bool mute = 5;
+  optional bool deaf = 6;
+  optional bool suppress = 7;
+  optional bool priority_speaker = 8;
+  optional bool recording = 9;
+  repeated uint32 listening_channel_add = 10;
+  repeated uint32 listening_channel_remove = 11;
+}
+
+message EdgeHandleTextMessageParams {
+  required uint32 actor = 1;
+  required uint32 edge_id = 2;
+  required string message = 3;
+  repeated uint32 channel_id = 4;
+  repeated uint32 tree_id = 5;
+  repeated uint32 session = 6;
+}
+
+message EdgeHandleChannelStateParams {
+  required uint32 edge_id = 1;
+  required uint32 channel_id = 2;
+  repeated uint32 links_add = 3;
+  repeated uint32 links_remove = 4;
+  optional string name = 5;
+  optional string description = 6;
+  optional int32 position = 7;
+  optional uint32 parent_id = 8;
+}
+
+message EdgeHandleChannelRemoveParams {
+  required uint32 edge_id = 1;
+  required uint32 channel_id = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Hub → Edge 广播消息 (替代 unknown_params_json)
+// ---------------------------------------------------------------------------
+message HubUserStateBroadcastParams {
+  required uint32 session_id = 1;
+  required uint32 edge_id = 2;
+  optional bool self_mute = 3;
+  optional bool self_deaf = 4;
+  optional bool mute = 5;
+  optional bool deaf = 6;
+  optional bool suppress = 7;
+  optional bool priority_speaker = 8;
+  optional bool recording = 9;
+  repeated uint32 listening_channel_add = 10;
+  repeated uint32 listening_channel_remove = 11;
+}
+
+message HubTextMessageForwardParams {
+  required uint32 actor = 1;
+  required string message = 2;
+  repeated uint32 channel_id = 3;
+  repeated uint32 tree_id = 4;
+  repeated uint32 session = 5;
+}
+
+message HubClusterPeerJoinedParams {
+  required uint32 edge_id = 1;
+  required string name = 2;
+  required string host = 3;
+  required uint32 voice_port = 4;
+}
+
+message HubClusterPeerLeftParams {
+  required uint32 edge_id = 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -869,6 +969,18 @@ message TypedRPCNotification {
   optional HubPluginDataBroadcastParams plugin_data_broadcast = 21;
   optional EdgePluginDataTransmissionParams plugin_data_transmission = 22;
   optional HubRelayVoicePacketParams relay_voice_packet = 23;
+  // Typed replacements for unknown_params_json
+  optional EdgeHandleUserLeftParams handle_user_left = 24;
+  optional EdgeHandleUserRemoveParams handle_user_remove = 25;
+  optional EdgeHandleUserMovedParams handle_user_moved = 26;
+  optional EdgeHandleUserStateChangedParams handle_user_state_changed = 27;
+  optional EdgeHandleTextMessageParams handle_text_message = 28;
+  optional EdgeHandleChannelStateParams handle_channel_state = 29;
+  optional EdgeHandleChannelRemoveParams handle_channel_remove = 30;
+  optional HubUserStateBroadcastParams user_state_broadcast = 31;
+  optional HubTextMessageForwardParams text_message_forward = 32;
+  optional HubClusterPeerJoinedParams cluster_peer_joined = 33;
+  optional HubClusterPeerLeftParams cluster_peer_left = 34;
   
   // For unknown notification types, store params as JSON string
   optional string unknown_params_json = 99;

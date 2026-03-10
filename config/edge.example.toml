@@ -1,0 +1,63 @@
+# MuNode Edge Server – example configuration
+# Copy this file to edge.toml and edit as needed.
+
+# Unique server ID for this edge (must be different for each edge in the cluster)
+server_id = 1
+
+# Human-readable server name (shown in logs and monitoring)
+name = "MuNode Edge Server #1"
+
+# ---------------------------------------------------------------------------
+# Network
+# ---------------------------------------------------------------------------
+[network]
+host          = "0.0.0.0"              # Bind address for all services
+port          = 64738                   # Main port for client connections (TCP/TLS + UDP)
+edge_port     = 64739                   # Edge-to-Edge TCP port (must differ from port)
+
+# External addresses for NAT/firewall scenarios
+external_host = "edge1.example.com"     # Public hostname/IP (used by other edges and Hub)
+external_port = 64738                   # External port mapping for client connections
+# external_edge_port = 64739            # Optional: if edge_port is mapped differently
+
+# Geographic region identifier (used for proximity-based routing)
+region = "asia-east"
+
+# ---------------------------------------------------------------------------
+# TLS/SSL
+# ---------------------------------------------------------------------------
+[tls]
+cert = "./data/certs/edge-cert.pem"     # Server certificate (PEM format)
+key  = "./data/certs/edge-key.pem"      # Private key (PEM format)
+# ca = "./data/certs/ca-chain.pem"      # Optional: CA chain for client certificate validation
+
+# ---------------------------------------------------------------------------
+# Hub Server Connection
+# ---------------------------------------------------------------------------
+[hub_server]
+host               = "hub.example.com"  # Hub server hostname or IP
+control_port       = 64738              # Hub's WebSocket control port
+reconnect_interval = 5000               # Milliseconds between reconnection attempts
+heartbeat_interval = 30000              # Milliseconds between heartbeat packets
+
+# HMAC challenge-response authentication (must match Hub's registry.hmac_secret)
+hmac_secret = "change-me-to-match-hub-secret"
+
+# ---------------------------------------------------------------------------
+# Server Capacity & Behavior
+# ---------------------------------------------------------------------------
+[server]
+capacity       = 1000                   # Maximum concurrent connections
+max_bandwidth  = 72000                  # Maximum bandwidth per user (bps, ~72 kbps)
+default_channel = 0                     # Default channel ID for new users (0 = root)
+
+# Optional welcome message displayed to connecting clients
+# welcome_text = "Welcome to MuNode Edge #1!"
+
+# Test/debug flag: disable Hub relay for cross-edge voice (direct UDP only)
+# disable_hub_relay = false
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+log_level = "info"                      # trace | debug | info | warn | error

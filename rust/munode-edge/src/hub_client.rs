@@ -20,6 +20,9 @@ use munode_protocol::hubedge::{
     BlobPutParams, BlobGetParams, BlobGetUserTextureParams, BlobGetUserCommentParams,
     BlobSetUserTextureParams, BlobSetUserCommentParams,
     PacketType, TypedRpcNotification, TypedRpcRequest, TypedRpcResponse,
+    EdgeHandleUserLeftParams, EdgeHandleUserRemoveParams, EdgeHandleUserMovedParams,
+    EdgeHandleUserStateChangedParams, EdgeHandleTextMessageParams,
+    EdgeHandleChannelStateParams, EdgeHandleChannelRemoveParams,
 };
 
 use crate::channel_manager::{ChannelData, RemoteUser};
@@ -388,42 +391,34 @@ impl HubClient {
             }
             "hub.userStateBroadcast" => {
                 // User state changed on another edge (mute, deaf, etc.)
-                if let Some(json_str) = &notification.unknown_params_json {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                        let session_id = v["session_id"].as_u64().unwrap_or(0) as u32;
-                        if session_id > 0 {
-                            if let Some(mut user) = self.edge_state.channel_manager.get_remote_user(session_id).await {
-                                // Build delta from ONLY fields present in the JSON (= actually changed).
-                                let mut delta = crate::state::RemoteUserStateDelta::default();
-                                if let Some(b) = v["self_mute"].as_bool() { user.self_mute = b; delta.self_mute = Some(b); }
-                                if let Some(b) = v["self_deaf"].as_bool() { user.self_deaf = b; delta.self_deaf = Some(b); }
-                                if let Some(b) = v["mute"].as_bool()      { user.mute = b;      delta.mute = Some(b); }
-                                if let Some(b) = v["deaf"].as_bool()      { user.deaf = b;      delta.deaf = Some(b); }
-                                if let Some(b) = v["suppress"].as_bool()  { user.suppress = b;  delta.suppress = Some(b); }
-                                if let Some(b) = v["priority_speaker"].as_bool() { user.priority_speaker = b; delta.priority_speaker = Some(b); }
-                                if let Some(b) = v["recording"].as_bool() { user.recording = b; delta.recording = Some(b); }
-                                // Handle listening channel changes
-                                let listening_add: Vec<u32> = if let Some(arr) = v["listening_channel_add"].as_array() {
-                                    arr.iter()
-                                        .filter_map(|ch| ch.as_u64().map(|n| n as u32))
-                                        .filter(|&ch_id| !user.listening_channels.contains(&ch_id))
-                                        .collect()
-                                } else { vec![] };
-                                let listening_remove: Vec<u32> = if let Some(arr) = v["listening_channel_remove"].as_array() {
-                                    arr.iter().filter_map(|ch| ch.as_u64().map(|n| n as u32)).collect()
-                                } else { vec![] };
-                                for &ch_id in &listening_add {
-                                    user.listening_channels.push(ch_id);
-                                }
-                                user.listening_channels.retain(|ch| !listening_remove.contains(ch));
-                                self.edge_state.channel_manager.upsert_remote_user(user).await;
-                                self.edge_state.emit(EdgeEvent::RemoteUserStateChanged {
-                                    session_id,
-                                    delta,
-                                    listening_channel_add: listening_add,
-                                    listening_channel_remove: listening_remove,
-                                });
+                if let Some(p) = &notification.user_state_broadcast {
+                    let session_id = p.session_id;
+                    if session_id > 0 {
+                        if let Some(mut user) = self.edge_state.channel_manager.get_remote_user(session_id).await {
+                            let mut delta = crate::state::RemoteUserStateDelta::default();
+                            if let Some(b) = p.self_mute     { user.self_mute = b;         delta.self_mute = Some(b); }
+                            if let Some(b) = p.self_deaf     { user.self_deaf = b;         delta.self_deaf = Some(b); }
+                            if let Some(b) = p.mute          { user.mute = b;              delta.mute = Some(b); }
+                            if let Some(b) = p.deaf          { user.deaf = b;              delta.deaf = Some(b); }
+                            if let Some(b) = p.suppress      { user.suppress = b;          delta.suppress = Some(b); }
+                            if let Some(b) = p.priority_speaker { user.priority_speaker = b; delta.priority_speaker = Some(b); }
+                            if let Some(b) = p.recording     { user.recording = b;         delta.recording = Some(b); }
+                            let listening_add: Vec<u32> = p.listening_channel_add.iter()
+                                .copied()
+                                .filter(|&ch_id| !user.listening_channels.contains(&ch_id))
+                                .collect();
+                            let listening_remove = p.listening_channel_remove.clone();
+                            for &ch_id in &listening_add {
+                                user.listening_channels.push(ch_id);
                             }
+                            user.listening_channels.retain(|ch| !listening_remove.contains(ch));
+                            self.edge_state.channel_manager.upsert_remote_user(user).await;
+                            self.edge_state.emit(EdgeEvent::RemoteUserStateChanged {
+                                session_id,
+                                delta,
+                                listening_channel_add: listening_add,
+                                listening_channel_remove: listening_remove,
+                            });
                         }
                     }
                 }
@@ -478,28 +473,14 @@ impl HubClient {
             }
             "hub.textMessageForward" => {
                 // Text message forwarded from another edge via Hub
-                if let Some(json_str) = &notification.unknown_params_json {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                        let actor = v["actor"].as_u64().unwrap_or(0) as u32;
-                        let message = v["message"].as_str().unwrap_or_default().to_string();
-                        let channel_id: Vec<u32> = v["channel_id"].as_array()
-                            .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
-                            .unwrap_or_default();
-                        let tree_id: Vec<u32> = v["tree_id"].as_array()
-                            .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
-                            .unwrap_or_default();
-                        let session: Vec<u32> = v["session"].as_array()
-                            .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
-                            .unwrap_or_default();
-
-                        self.edge_state.emit(EdgeEvent::TextMessageForward {
-                            actor,
-                            message,
-                            channel_id,
-                            tree_id,
-                            session,
-                        });
-                    }
+                if let Some(p) = &notification.text_message_forward {
+                    self.edge_state.emit(EdgeEvent::TextMessageForward {
+                        actor: p.actor,
+                        message: p.message.clone(),
+                        channel_id: p.channel_id.clone(),
+                        tree_id: p.tree_id.clone(),
+                        session: p.session.clone(),
+                    });
                 }
             }
             "hub.pluginDataBroadcast" => {
@@ -518,23 +499,17 @@ impl HubClient {
                 if let Some(params) = &notification.sync_voice_target {
                     let client_session = params.client_session;
                     let target_id = params.target_id;
-                    // Parse config_json
-                    if let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&params.config_json) {
+                    if let Some(cfg) = &params.config {
                         use crate::state::{VoiceTargetConfig, VoiceTargetChannelConfig};
-                        let sessions: Vec<u32> = cfg["sessions"].as_array()
-                            .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
-                            .unwrap_or_default();
-                        let channels: Vec<VoiceTargetChannelConfig> = cfg["channels"].as_array()
-                            .map(|a| a.iter().filter_map(|ch| {
-                                let ch_id = ch["channel_id"].as_u64()? as u32;
-                                Some(VoiceTargetChannelConfig {
-                                    channel_id: ch_id,
-                                    links: ch["links"].as_bool().unwrap_or(false),
-                                    children: ch["children"].as_bool().unwrap_or(false),
-                                    group: ch["group"].as_str().map(|s| s.to_string()),
-                                })
-                            }).collect())
-                            .unwrap_or_default();
+                        let sessions: Vec<u32> = cfg.sessions.iter().map(|s| s.session).collect();
+                        let channels: Vec<VoiceTargetChannelConfig> = cfg.channels.iter().map(|c| {
+                            VoiceTargetChannelConfig {
+                                channel_id: c.channel_id,
+                                links: c.links.unwrap_or(false),
+                                children: c.children.unwrap_or(false),
+                                group: c.group.clone(),
+                            }
+                        }).collect();
                         let mut vt_cache = self.edge_state.voice_targets.lock().await;
                         let session_vts = vt_cache.entry(client_session).or_default();
                         if sessions.is_empty() && channels.is_empty() {
@@ -543,6 +518,12 @@ impl HubClient {
                             session_vts.insert(target_id, VoiceTargetConfig { sessions, channels });
                         }
                         debug!("Synced voice target {} for session {}", target_id, client_session);
+                    } else {
+                        // No config means clear the target
+                        let mut vt_cache = self.edge_state.voice_targets.lock().await;
+                        if let Some(session_vts) = vt_cache.get_mut(&client_session) {
+                            session_vts.remove(&target_id);
+                        }
                     }
                 }
             }
@@ -557,32 +538,27 @@ impl HubClient {
             }
             "hub.peerJoined" => {
                 // Another Edge joined the cluster (from handle_cluster_join broadcast)
-                if let Some(json_str) = &notification.unknown_params_json {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                        let edge_id = v["edge_id"].as_u64().unwrap_or(0) as u32;
-                        let name = v["name"].as_str().unwrap_or("").to_string();
-                        let host = v["host"].as_str().unwrap_or("").to_string();
-                        // voice_port is the edge_port of the peer (used for Edge-to-Edge UDP)
-                        let voice_port = v["voice_port"].as_u64().unwrap_or(0) as u16;
-                        info!("Peer edge joined cluster: {} (id {}) at {}:{}", name, edge_id, host, voice_port);
-                        if !host.is_empty() && voice_port > 0 {
-                            if let Ok(udp_addr) = format!("{}:{}", host, voice_port).parse() {
-                                let mut reg = self.edge_state.peer_registry.lock().await;
-                                reg.upsert(edge_id, PeerEdgeInfo { udp_addr });
-                                info!("Registered direct UDP route to peer edge {} at {}", edge_id, udp_addr);
-                            }
+                if let Some(p) = &notification.cluster_peer_joined {
+                    let peer_edge_id = p.edge_id;
+                    let name = &p.name;
+                    let host = &p.host;
+                    let voice_port = p.voice_port as u16;
+                    info!("Peer edge joined cluster: {} (id {}) at {}:{}", name, peer_edge_id, host, voice_port);
+                    if !host.is_empty() && voice_port > 0 {
+                        if let Ok(udp_addr) = format!("{}:{}", host, voice_port).parse() {
+                            let mut reg = self.edge_state.peer_registry.lock().await;
+                            reg.upsert(peer_edge_id, PeerEdgeInfo { udp_addr });
+                            info!("Registered direct UDP route to peer edge {} at {}", peer_edge_id, udp_addr);
                         }
                     }
                 }
             }
             "hub.peerLeft" => {
                 // An Edge left the cluster (disconnect arbitration)
-                if let Some(json_str) = &notification.unknown_params_json {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
-                        let edge_id = v["edge_id"].as_u64().unwrap_or(0) as u32;
-                        warn!("Peer edge left cluster: id {}", edge_id);
-                        self.edge_state.peer_registry.lock().await.remove(edge_id);
-                    }
+                if let Some(p) = &notification.cluster_peer_left {
+                    let peer_edge_id = p.edge_id;
+                    warn!("Peer edge left cluster: id {}", peer_edge_id);
+                    self.edge_state.peer_registry.lock().await.remove(peer_edge_id);
                 }
             }
             _ => {
@@ -878,15 +854,14 @@ impl HubClient {
     /// Notify the Hub that a local user has disconnected.
     pub async fn notify_user_left(&self, session_id: u32, reason: Option<&str>) {
         let edge_id = self.edge_id().await;
-        let params_json = serde_json::json!({
-            "session_id": session_id,
-            "edge_id": edge_id,
-            "reason": reason,
-        });
         let notification = TypedRpcNotification {
             method: "hub.handleUserLeft".to_string(),
             timestamp: Some(current_millis() as i64),
-            unknown_params_json: Some(params_json.to_string()),
+            handle_user_left: Some(EdgeHandleUserLeftParams {
+                session_id,
+                edge_id,
+                reason: reason.map(String::from),
+            }),
             ..Default::default()
         };
         let packet = EdgeHubPacket {
@@ -910,19 +885,18 @@ impl HubClient {
         ban: bool,
     ) {
         let edge_id = self.edge_id().await;
-        let params_json = serde_json::json!({
-            "edge_id": edge_id,
-            "actor_session": actor_session,
-            "actor_user_id": actor_user_id,
-            "actor_username": actor_username,
-            "target_session": target_session,
-            "reason": reason,
-            "ban": ban,
-        });
         let notification = TypedRpcNotification {
             method: "hub.handleUserRemove".to_string(),
             timestamp: Some(current_millis() as i64),
-            unknown_params_json: Some(params_json.to_string()),
+            handle_user_remove: Some(EdgeHandleUserRemoveParams {
+                edge_id,
+                actor_session,
+                actor_user_id,
+                actor_username: actor_username.to_string(),
+                target_session,
+                reason: reason.to_string(),
+                ban,
+            }),
             ..Default::default()
         };
         let packet = EdgeHubPacket {
@@ -938,15 +912,14 @@ impl HubClient {
     /// Notify the Hub about a user channel move.
     pub async fn notify_user_moved(&self, session_id: u32, channel_id: u32) {
         let edge_id = self.edge_id().await;
-        let params_json = serde_json::json!({
-            "session_id": session_id,
-            "edge_id": edge_id,
-            "channel_id": channel_id,
-        });
         let notification = TypedRpcNotification {
             method: "hub.handleUserMoved".to_string(),
             timestamp: Some(current_millis() as i64),
-            unknown_params_json: Some(params_json.to_string()),
+            handle_user_moved: Some(EdgeHandleUserMovedParams {
+                session_id,
+                edge_id,
+                channel_id,
+            }),
             ..Default::default()
         };
         let packet = EdgeHubPacket {
@@ -960,15 +933,36 @@ impl HubClient {
     }
 
     /// Notify the Hub about a user state change (self-mute/deaf etc).
-    pub async fn notify_user_state_changed(&self, session_id: u32, user_state_json: serde_json::Value) {
+    pub async fn notify_user_state_changed(
+        &self,
+        session_id: u32,
+        self_mute: Option<bool>,
+        self_deaf: Option<bool>,
+        mute: Option<bool>,
+        deaf: Option<bool>,
+        suppress: Option<bool>,
+        priority_speaker: Option<bool>,
+        recording: Option<bool>,
+        listening_channel_add: Vec<u32>,
+        listening_channel_remove: Vec<u32>,
+    ) {
         let edge_id = self.edge_id().await;
-        let mut params = user_state_json;
-        params["session_id"] = serde_json::json!(session_id);
-        params["edge_id"] = serde_json::json!(edge_id);
         let notification = TypedRpcNotification {
             method: "hub.handleUserStateChanged".to_string(),
             timestamp: Some(current_millis() as i64),
-            unknown_params_json: Some(params.to_string()),
+            handle_user_state_changed: Some(EdgeHandleUserStateChangedParams {
+                session_id,
+                edge_id,
+                self_mute,
+                self_deaf,
+                mute,
+                deaf,
+                suppress,
+                priority_speaker,
+                recording,
+                listening_channel_add,
+                listening_channel_remove,
+            }),
             ..Default::default()
         };
         let packet = EdgeHubPacket {
@@ -1109,16 +1103,19 @@ impl HubClient {
         links_remove: Vec<u32>,
     ) {
         let edge_id = self.edge_id().await;
-        let params_json = serde_json::json!({
-            "edge_id": edge_id,
-            "channel_id": channel_id,
-            "links_add": links_add,
-            "links_remove": links_remove,
-        });
         let notification = TypedRpcNotification {
             method: "hub.handleChannelState".to_string(),
             timestamp: Some(current_millis() as i64),
-            unknown_params_json: Some(params_json.to_string()),
+            handle_channel_state: Some(EdgeHandleChannelStateParams {
+                edge_id,
+                channel_id,
+                links_add,
+                links_remove,
+                name: None,
+                description: None,
+                position: None,
+                parent_id: None,
+            }),
             ..Default::default()
         };
         let packet = EdgeHubPacket {
@@ -1134,14 +1131,13 @@ impl HubClient {
     /// Notify Hub about a channel removal request.
     pub async fn notify_channel_remove(&self, channel_id: u32) {
         let edge_id = self.edge_id().await;
-        let params_json = serde_json::json!({
-            "edge_id": edge_id,
-            "channel_id": channel_id,
-        });
         let notification = TypedRpcNotification {
             method: "hub.handleChannelRemove".to_string(),
             timestamp: Some(current_millis() as i64),
-            unknown_params_json: Some(params_json.to_string()),
+            handle_channel_remove: Some(EdgeHandleChannelRemoveParams {
+                edge_id,
+                channel_id,
+            }),
             ..Default::default()
         };
         let packet = EdgeHubPacket {
@@ -1157,18 +1153,17 @@ impl HubClient {
     /// Forward a text message to Hub for cross-edge delivery.
     pub async fn notify_text_message(&self, sender_session: u32, text_msg: &munode_protocol::mumbleproto::TextMessage) {
         let edge_id = self.edge_id().await;
-        let params_json = serde_json::json!({
-            "edge_id": edge_id,
-            "actor": sender_session,
-            "message": text_msg.message,
-            "channel_id": text_msg.channel_id,
-            "tree_id": text_msg.tree_id,
-            "session": text_msg.session,
-        });
         let notification = TypedRpcNotification {
             method: "hub.handleTextMessage".to_string(),
             timestamp: Some(current_millis() as i64),
-            unknown_params_json: Some(params_json.to_string()),
+            handle_text_message: Some(EdgeHandleTextMessageParams {
+                actor: sender_session,
+                edge_id,
+                message: text_msg.message.clone(),
+                channel_id: text_msg.channel_id.clone(),
+                tree_id: text_msg.tree_id.clone(),
+                session: text_msg.session.clone(),
+            }),
             ..Default::default()
         };
         let packet = EdgeHubPacket {

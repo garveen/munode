@@ -1305,23 +1305,33 @@ async fn handle_user_state_update(
             if channel_moved {
                 hub_client.notify_user_moved(session_id, client.channel_id).await;
             } else {
-                let mut state_map = serde_json::Map::new();
-                if let Some(v) = broadcast_msg.self_mute        { state_map.insert("self_mute".into(), v.into()); }
-                if let Some(v) = broadcast_msg.self_deaf        { state_map.insert("self_deaf".into(), v.into()); }
-                if let Some(v) = broadcast_msg.mute             { state_map.insert("mute".into(), v.into()); }
-                if let Some(v) = broadcast_msg.deaf             { state_map.insert("deaf".into(), v.into()); }
-                if let Some(v) = broadcast_msg.priority_speaker { state_map.insert("priority_speaker".into(), v.into()); }
-                if let Some(v) = broadcast_msg.recording        { state_map.insert("recording".into(), v.into()); }
-                if !broadcast_msg.listening_channel_add.is_empty() {
-                    state_map.insert("listening_channel_add".into(),
-                        serde_json::Value::Array(broadcast_msg.listening_channel_add.iter().map(|&n| n.into()).collect()));
-                }
-                if !broadcast_msg.listening_channel_remove.is_empty() {
-                    state_map.insert("listening_channel_remove".into(),
-                        serde_json::Value::Array(broadcast_msg.listening_channel_remove.iter().map(|&n| n.into()).collect()));
-                }
-                if !state_map.is_empty() {
-                    hub_client.notify_user_state_changed(session_id, serde_json::Value::Object(state_map)).await;
+                let listening_channel_add = if !broadcast_msg.listening_channel_add.is_empty() {
+                    broadcast_msg.listening_channel_add.clone()
+                } else { vec![] };
+                let listening_channel_remove = if !broadcast_msg.listening_channel_remove.is_empty() {
+                    broadcast_msg.listening_channel_remove.clone()
+                } else { vec![] };
+                if broadcast_msg.self_mute.is_some()
+                    || broadcast_msg.self_deaf.is_some()
+                    || broadcast_msg.mute.is_some()
+                    || broadcast_msg.deaf.is_some()
+                    || broadcast_msg.priority_speaker.is_some()
+                    || broadcast_msg.recording.is_some()
+                    || !listening_channel_add.is_empty()
+                    || !listening_channel_remove.is_empty()
+                {
+                    hub_client.notify_user_state_changed(
+                        session_id,
+                        broadcast_msg.self_mute,
+                        broadcast_msg.self_deaf,
+                        broadcast_msg.mute,
+                        broadcast_msg.deaf,
+                        None,  // suppress not changed here
+                        broadcast_msg.priority_speaker,
+                        broadcast_msg.recording,
+                        listening_channel_add,
+                        listening_channel_remove,
+                    ).await;
                 }
             }
         }
@@ -1391,11 +1401,18 @@ async fn handle_admin_user_state_update(
             if channel_moved {
                 hub_client.notify_user_moved(target_session, client.channel_id).await;
             } else {
-                let state_json = serde_json::json!({
-                    "mute": client.mute,
-                    "deaf": client.deaf,
-                });
-                hub_client.notify_user_state_changed(target_session, state_json).await;
+                hub_client.notify_user_state_changed(
+                    target_session,
+                    None,
+                    None,
+                    broadcast_msg.mute,
+                    broadcast_msg.deaf,
+                    None,
+                    None,
+                    None,
+                    vec![],
+                    vec![],
+                ).await;
             }
         }
     }

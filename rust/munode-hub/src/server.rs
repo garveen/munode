@@ -19,6 +19,7 @@ use crate::rpc_handler::{EdgeSender, RpcHandler};
 use crate::session_manager::SessionManager;
 use crate::topology_manager::TopologyManager;
 use crate::auth_service::{AuthServiceHandle, run_auth_service_listener};
+use crate::lua_auth::LuaAuthEngine;
 
 /// Health data for a connected Edge server.
 #[derive(Debug, Clone)]
@@ -54,6 +55,8 @@ pub struct HubState {
     pub topology: RwLock<TopologyManager>,
     /// External auth service handle.
     pub auth_service: AuthServiceHandle,
+    /// Embedded Lua authentication engine (present when `auth.lua_script` is set).
+    pub lua_engine: Option<Arc<LuaAuthEngine>>,
 }
 
 /// The main Hub server.
@@ -77,6 +80,21 @@ impl HubServer {
         // Create shared state
         let auth_service = AuthServiceHandle::new();
 
+        // Initialise Lua auth engine if a script is configured.
+        let lua_engine = if let Some(ref script) = self.config.auth.lua_script {
+            match LuaAuthEngine::new(script) {
+                Ok(engine) => {
+                    info!("Lua auth engine initialised");
+                    Some(Arc::new(engine))
+                }
+                Err(e) => {
+                    return Err(e.context("Failed to initialise Lua auth engine"));
+                }
+            }
+        } else {
+            None
+        };
+
         let state = Arc::new(HubState {
             config: self.config.clone(),
             session_manager: SessionManager::new(),
@@ -87,6 +105,7 @@ impl HubServer {
             edge_health: RwLock::new(HashMap::new()),
             topology: RwLock::new(TopologyManager::new()),
             auth_service: auth_service.clone(),
+            lua_engine,
         });
 
         // Load channels from database
