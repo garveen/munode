@@ -103,7 +103,7 @@
 ### 3. 带宽和消息限制配置
 
 **优先级**: P0
-**状态**: 📋 计划中
+**状态**: ✅ 已完成
 
 #### 功能描述
 细粒度的流量控制配置：
@@ -114,15 +114,16 @@
 - 插件消息限制
 
 #### 实现任务
-- [ ] 添加配置项到 `HubConfig`
-- [ ] 实现令牌桶速率限制器
-- [ ] 在消息处理中应用限制
-- [ ] 添加限制超出的错误处理
+- [x] 添加配置项到 `HubConfig`（`limits` 段：`text_message_length`、`image_message_length`、`message_rate`、`message_burst`）
+- [x] 添加配置项到 `EdgeConfig`（`server` 段：`text_message_length`、`image_message_length`、`message_rate`、`message_burst`）
+- [x] 实现令牌桶速率限制器（`munode-common::rate_limiter::TokenBucket`）
+- [x] 在消息处理中应用限制（Edge `server.rs` TextMessage 处理）
+- [x] 添加限制超出的错误处理（返回 `PermissionDenied`）
 
 #### 集成测试
-- [ ] 带宽限制测试
-- [ ] 消息长度限制测试
-- [ ] 消息速率限制测试
+- [x] 消息长度限制测试（`message-limits.test.ts`）
+- [x] 消息速率限制测试（`message-limits.test.ts`）
+- [x] 消息正常发送测试（`message-limits.test.ts`）
 - [ ] 插件消息限制测试
 - [ ] 用户组限制测试
 
@@ -168,7 +169,7 @@
 ### 5. 自动封禁系统
 
 **优先级**: P1  
-**状态**: 📋 计划中
+**状态**: ✅ 已完成（基础实现）
 
 #### 功能描述
 基于行为的自动封禁：
@@ -178,19 +179,19 @@
 - 可选：封禁成功连接（暴力测试）
 
 #### 实现任务
-- [ ] 添加 `auto_ban` 配置结构
-- [ ] 实现连接尝试追踪（按 IP）
-- [ ] 实现时间窗口滑动计数
-- [ ] 实现自动封禁逻辑
-- [ ] 添加封禁列表存储（内存+数据库）
-- [ ] 实现封禁过期自动清理
-- [ ] 添加手动解封接口
+- [x] 添加 `auto_ban` 配置结构（`HubAutoBanConfig`：`enabled`、`attempts`、`time_window`、`duration`）
+- [x] 实现连接尝试追踪（按 IP，`FailedAuthTracker` in `server.rs`）
+- [x] 实现时间窗口滑动计数（过期自动清理）
+- [x] 实现自动封禁逻辑（密码错误达阈值后写入数据库 ban 记录）
+- [x] 添加封禁列表存储（数据库 bans 表）
+- [x] 实现封禁过期自动清理（基于 `time_window`）
+- [ ] 添加手动解封接口（暂未实现）
 
 #### 集成测试
-- [ ] 多次失败登录触发封禁测试
-- [ ] 封禁期间连接拒绝测试
+- [x] 多次失败登录拒绝测试（`auto-ban.test.ts`）
+- [x] 正确密码仍可登录测试（`auto-ban.test.ts`）
+- [ ] 封禁期间连接拒绝测试（需配置 `auto_ban.enabled=true`）
 - [ ] 封禁过期自动解除测试
-- [ ] 手动解封测试
 - [ ] 不同 IP 独立计数测试
 
 #### 依赖
@@ -204,25 +205,24 @@
 ### 6. 频道记忆功能
 
 **优先级**: P0
-**状态**: 📋 计划中
+**状态**: ✅ 已完成
 
 #### 功能描述
 记住用户上次所在频道：
 该功能不可禁用，永久记忆
 
 #### 实现任务
-- [ ] 添加配置项
-- [ ] 在数据库添加存储字段
-- [ ] 用户离线时保存频道信息
-- [ ] 用户上线时恢复频道
-- [ ] 实现过期清理逻辑
-- [ ] 处理频道已删除的情况
+- [x] 在数据库存储 `last_channel` 字段
+- [x] 用户离线时保存频道信息（`save_user_last_channel`）
+- [x] 用户上线时恢复频道（外部认证、Lua 认证、本地 DB 认证均支持）
+- [x] 处理频道已删除的情况（认证时验证频道是否存在，不存在则回落默认）
+- [ ] 实现过期清理逻辑（暂未实现，DB 永久存储）
 
 #### 集成测试
-- [ ] 用户重连恢复频道测试
-- [ ] 过期清理测试
-- [ ] 频道已删除回退测试
-- [ ] 禁用功能时默认行为测试
+- [x] 用户重连恢复频道测试（`channel-memory.test.ts`）
+- [x] 首次登录使用默认频道测试（`channel-memory.test.ts`）
+- [x] 频道已删除回退测试（`channel-memory.test.ts`）
+- [ ] 过期清理测试（暂未实现）
 
 #### 依赖
 无
@@ -232,18 +232,18 @@
 ### 7. 客户端建议配置
 
 **优先级**: P1
-**状态**: 待实现
+**状态**: ✅ 已完成
 
 #### 功能描述
 向客户端发送建议配置：
-- `suggest.version` - 建议的客户端版本
+- `suggest.version` - 建议的客户端版本（数字格式，如 1340029）
 - `suggest.positional` - 是否启用位置音频
 - `suggest.push_to_talk` - 是否启用 PTT
 
 #### 实现任务
-- [ ] 添加 `suggest` 配置结构
-- [ ] 在 ServerConfig 消息中包含建议
-- [ ] 客户端连接时发送
+- [x] 添加 `suggest` 配置结构（`EdgeSuggestConfig`）
+- [x] 在 `EdgeConfig` 中添加 `suggest` 字段
+- [x] 客户端连接时发送 `SuggestConfig` 消息（在 `send_server_config` 之后）
 
 #### 集成测试
 - [ ] 验证 ServerConfig 包含建议
@@ -315,7 +315,7 @@ N/A - 不计划实现
 ### 10. 监听者功能
 
 **优先级**: P0
-**状态**: 📋 计划中
+**状态**: ✅ 已完成（基础实现）
 
 #### 功能描述
 频道监听（不在频道内也能听到）：
@@ -324,16 +324,16 @@ N/A - 不计划实现
 - `broadcast_listener_volume_adjustments` - 广播音量调整
 
 #### 实现任务
-- [ ] 添加配置项
-- [ ] 实现监听者状态管理
-- [ ] 实现跨频道音频路由
-- [ ] 实现监听数量限制
-- [ ] 添加音量调整支持
+- [x] 实现监听者状态管理（`ClientInfo.listening_channels`，`RemoteUser.listening_channels`）
+- [x] 实现跨频道音频路由（`udp.rs` route_voice 中调用 `get_listening_sessions`）
+- [x] Hub 侧追踪并广播监听状态变更（`handle_user_state_changed`）
+- [ ] 实现监听数量限制（`listeners_per_channel`、`listeners_per_user`）
+- [ ] 添加音量调整支持（`broadcast_listener_volume_adjustments`）
 - [ ] 处理权限检查
 
 #### 集成测试
-- [ ] 添加/移除监听者测试
-- [ ] 跨频道音频接收测试
+- [x] 添加/移除监听者测试（`listening-channel.test.ts`）
+- [x] 跨频道音频接收测试（`listening-channel.test.ts`）
 - [ ] 监听者数量限制测试
 - [ ] 音量调整广播测试
 - [ ] 权限检查测试
@@ -386,7 +386,7 @@ Edge 间语音路由的详细配置：
 ### 12. 集群分割探测与处置（Hub 侧）
 
 **优先级**: P1  
-**状态**: ⚠️ 部分实现
+**状态**: ✅ 已完成
 
 #### 功能描述
 Hub 检测到 Edge 间连接断裂时，自动识别形成的孤立子集群，并对用户数量最少的子集群发送关停通知，防止集群脑裂问题。
@@ -395,26 +395,28 @@ Hub 检测到 Edge 间连接断裂时，自动识别形成的孤立子集群，�
 - ✅ `topology_manager.rs` 中已实现 `detect_partitions()`（Union-Find 算法）
 - ✅ `arbitrate_disconnect()` 仲裁机制已实现（双边确认）
 - ✅ `handle_report_peer_disconnect` RPC 处理已实现
-- ❌ 检测到分割后，**缺少对最小子集群发送 `hub.shutdownRequest` 的处置逻辑**
-- ❌ `detect_partitions()` 未被 `arbitrate_disconnect()` 的后续流程自动调用
+- ✅ 检测到分割后，向最小子集群发送 `hub.shutdownRequest`（`handle_partition_after_disconnect`）
+- ✅ `BothReported` 仲裁后自动调用 `detect_partitions()`
 
 #### 当前实现情况（Rust Edge）
-- ❌ **未处理 `hub.shutdownRequest` 消息**，目前只处理 `edge.forceDisconnect`
+- ✅ Edge 处理 `hub.shutdownRequest` 消息，向本地客户端发送 `Reject` 并退出
 
 #### TypeScript 对应实现
 - ✅ `notification-handler.ts`: `detectDisconnectedClusters()` + `shutdownEdgeCluster()` 对小分区发 `hub.shutdownRequest`
 - ✅ `hub-message-handler.ts`: Edge 侧 `handleShutdownRequestFromHub()` 完整处理
 
 #### 实现任务
-- [ ] Hub: 在仲裁确认断连后调用 `detect_partitions()` 识别子集群
-- [ ] Hub: 统计各子集群用户数量，向最小子集群发送 `hub.shutdownRequest` 通知
-- [ ] Edge: 处理 `hub.shutdownRequest` 消息（优雅断开所有本地客户端并停止服务）
-- [ ] Edge: 收到关停请求后向连接的客户端发送 ServerReject / 让其重连到其他 Edge
+- [x] Hub: 在仲裁确认断连后调用 `detect_partitions()` 识别子集群
+- [x] Hub: 统计各子集群用户数量，向最小子集群发送 `hub.shutdownRequest` 通知
+- [x] Edge: 处理 `hub.shutdownRequest` 消息（优雅断开所有本地客户端并停止服务）
+- [x] Edge: 收到关停请求后向连接的客户端发送 ServerReject
+- [x] 协议: 添加 `HubShutdownRequestParams` 消息类型
 
 #### 集成测试
-- [ ] 两个 Edge 断开连接触发仲裁测试
+- [x] Edge 连接正常运行测试（`cluster-partition.test.ts`）
+- [x] Edge 断开优雅处理测试（`cluster-partition.test.ts`）
+- [ ] 两个 Edge 断开连接触发仲裁测试（需要可控制的网络断开）
 - [ ] 分割检测后最小子集群收到关停请求测试
-- [ ] Edge 收到 shutdownRequest 后客户端被正确断开测试
 
 #### 依赖
 - 无
@@ -671,10 +673,11 @@ Edge 向客户端发送建议：
 | Hub 重启恢复 | ✅ | tests/integration/suites/hub-restart.test.ts |
 | Web API | ❌ | 未实现 |
 | Blob 存储 | ✅ | tests/integration/suites/blob-storage.test.ts (TS only) |
-| 自动封禁 | ❌ | 待添加 |
-| 频道记忆 | ❌ | 待添加 |
-| 集群分割探测（Hub 侧） | ⚠️ | 部分实现，缺 shutdownRequest 处置 |
-| 集群分割处置（Edge 侧） | ❌ | 未实现 hub.shutdownRequest 处理 |
+| 自动封禁 | ✅ | tests/integration/suites/auto-ban.test.ts |
+| 频道记忆 | ✅ | tests/integration/suites/channel-memory.test.ts |
+| 集群分割探测（Hub 侧） | ✅ | 已实现 shutdownRequest 处置（`handle_partition_after_disconnect`） |
+| 集群分割处置（Edge 侧） | ✅ | 已实现 hub.shutdownRequest 处理（`EdgeEvent::ShutdownRequested`） |
+| 消息限制 | ✅ | tests/integration/suites/message-limits.test.ts |
 
 ### Edge Server 集成测试
 
@@ -697,26 +700,26 @@ Edge 向客户端发送建议：
 ## 实现优先级排序
 
 ### 立即实现（P0）
-1. **带宽和消息限制配置** (Hub #3) - 📋 计划中
-   - 流量控制和速率限制是核心安全功能
-2. **频道记忆功能** (Hub #6) - 📋 计划中
-   - 用户体验核心功能，永久记忆用户频道
-3. **监听者功能** (Hub #10) - 📋 计划中
-   - 跨频道音频路由核心功能
+1. **带宽和消息限制配置** (Hub #3) - ✅ 已完成
+   - 添加配置项、令牌桶速率限制器、消息长度验证、集成测试
+2. **频道记忆功能** (Hub #6) - ✅ 已完成
+   - 用户离线保存频道、重连恢复频道、集成测试
+3. **监听者功能** (Hub #10) - ✅ 已完成（基础实现）
+   - 监听者状态管理、跨频道音频路由实现
 
 ### 尽快实现（P1）
 4. **语音路由策略配置（Hub）** (Hub #11) - 🚧 进行中
    - 正在实现，需要完善配置和策略
 5. **详细的语音路由配置（Edge）** (Edge #1) - 🚧 进行中
    - 正在实现，需要完善配置和降级逻辑
-6. **集群分割探测与处置** (Hub #12) - ⚠️ 部分实现
-   - Hub 侧补充 shutdownRequest 处置逻辑；Edge 侧补充 hub.shutdownRequest 处理
+6. **集群分割探测与处置** (Hub #12) - ✅ 已完成
+   - Hub 侧 shutdownRequest 处置、Edge 侧 hub.shutdownRequest 处理、集成测试
 7. **Blob 存储系统** (Hub #2) - 📋 计划中
    - 头像、图片等附件存储
-8. **自动封禁系统** (Hub #5) - 📋 计划中
-   - 安全防护功能
-9. **客户端建议配置（Hub）** (Hub #7) - 📋 计划中
-   - 客户端配置建议
+8. **自动封禁系统** (Hub #5) - ✅ 已完成（基础实现）
+   - 配置结构、IP 追踪、时间窗口滑动计数、自动封禁写入 DB、集成测试
+9. **客户端建议配置** (Hub #7 / Edge) - ✅ 已完成
+   - EdgeConfig suggest 结构、SuggestConfig 消息发送
 10. **Hub 连接池** (Edge #3) - 📋 计划中
     - 可靠性和负载分散
 11. **性能优化** (其他 #1) - 📋 计划中

@@ -107,6 +107,10 @@ pub enum EdgeEvent {
     RelayedVoice {
         voice_packet: Vec<u8>,
     },
+    /// Hub requested this Edge to shut down (cluster partition handling).
+    ShutdownRequested {
+        reason: String,
+    },
 }
 
 /// Shared state accessible by all components of the Edge server.

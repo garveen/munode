@@ -262,6 +262,21 @@ impl ClientManager {
             false
         }
     }
+
+    /// Get all sessions that are currently listening to the given channel.
+    /// This returns sessions whose `listening_channels` contains `channel_id`
+    /// but whose `channel_id` is different (to avoid double-delivery).
+    pub async fn get_listening_sessions(&self, channel_id: u32) -> Vec<u32> {
+        self.clients
+            .read()
+            .await
+            .values()
+            .filter(|c| {
+                c.channel_id != channel_id && c.listening_channels.contains(&channel_id)
+            })
+            .map(|c| c.session)
+            .collect()
+    }
 }
 
 #[cfg(test)]

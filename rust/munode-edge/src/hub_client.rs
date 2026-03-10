@@ -466,6 +466,17 @@ impl HubClient {
                     warn!("Hub forced disconnect: {}", params.reason);
                 }
             }
+            "hub.shutdownRequest" => {
+                // Hub requests this Edge to gracefully shut down (cluster partition handling)
+                let reason = notification.shutdown_request.as_ref()
+                    .map(|p| p.reason.as_str())
+                    .unwrap_or("Network partition detected");
+                warn!("Hub shutdown request received: {}", reason);
+                // Emit shutdown event so server can gracefully disconnect all clients
+                self.edge_state.emit(EdgeEvent::ShutdownRequested {
+                    reason: reason.to_string(),
+                });
+            }
             "edge.peerJoined" => {
                 if let Some(params) = &notification.peer_joined {
                     info!("Peer edge joined: {} (id {})", params.name, params.id);

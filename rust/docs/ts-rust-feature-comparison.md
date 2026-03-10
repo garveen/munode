@@ -198,7 +198,7 @@
 | getClientsInChannel | O(1) 频道用户索引查询 | ✅ Rust 使用 channel_users HashMap |
 | channelUsersIndex | 频道-用户反向索引 | ✅ |
 | listeningUsersIndex | 频道监听者反向索引 | ⚠️ Rust 支持 listening_channels 但无独立索引 |
-| 速率限制集成 | 每客户端独立的多类型速率限制器 | ❌ |
+| 速率限制集成 | 每客户端独立的多类型速率限制器 | ✅ munode-common/rate_limiter.rs + munode-edge/server.rs (TokenBucket) |
 | 统计收集器集成 | 每客户端的详细数据统计 | ❌ |
 | 频道监听音量管理 | 集成 ChannelListenerVolumeManager | ❌ |
 | forceDisconnect | 强制断开客户端连接 | ✅ |
@@ -467,7 +467,7 @@
 | setVoiceTarget | 设置 VoiceTarget 耳语目标 | ✅ |
 | setClientCrypto | 设置客户端加密状态 | ✅ |
 | 频道链接语音路由 | 链接频道间的语音转发 | ✅ |
-| 监听者语音路由 | 频道监听者接收语音 | ⚠️ |
+| 监听者语音路由 | 频道监听者接收语音 | ✅ munode-edge/udp.rs get_listening_sessions |
 | VoiceTarget 缓存 | 缓存 VoiceTarget 路由结果 | ❌ |
 
 ### 63. voice/voice-routing-manager.ts
@@ -814,11 +814,11 @@
 | **Hub-Edge 通信** | 高 | 中 | 低 | WebSocket RPC 完成，连接池未实现 |
 | **会话管理** | 高 | 低 | 低 | 全局 session 管理完成 |
 | **数据库** | 中 | 中 | 中 | 基础表完成，审计/备份/迁移未实现 |
-| **封禁系统** | 低 | 中 | 高 | Edge 端完全缺失，Hub 部分支持 |
+| **封禁系统** | 中 | 中 | 中 | Hub 自动封禁已实现（FailedAuthTracker），Edge 端检查待完善 |
 | **多租户** | 低 | 低 | 高 | 完全未实现 |
 | **Channel Ninja** | 低 | 低 | 高 | 完全未实现 |
 | **监控/统计** | 低 | 低 | 高 | 客户端统计、UDP 监控等未实现 |
-| **速率限制** | 低 | 低 | 高 | 完全未实现 |
+| **速率限制** | 中 | 低 | 中 | 令牌桶速率限制器已实现（文本消息），多类型限制待完善 |
 | **Web API** | 低 | 低 | 高 | 完全未实现 |
 | **GeoIP** | 低 | 低 | 高 | 完全未实现 |
 | **连接池/重连** | 低 | 中 | 高 | 基本重连有，高级池化未实现 |

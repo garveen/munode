@@ -267,6 +267,30 @@ impl UdpServer {
                     self.fallback_to_tcp(target, &forwarded).await;
                 }
             }
+
+            // --- Listeners: clients on this edge that are listening to this channel ---
+            let listeners = self.edge_state.client_manager.get_listening_sessions(*ch_id).await;
+            for target in listeners {
+                if target == sender_session {
+                    continue;
+                }
+                if let Some(target_client) = self.edge_state.client_manager.get_client(target).await {
+                    if target_client.deaf || target_client.self_deaf {
+                        continue;
+                    }
+                }
+                if let Some(&addr) = session_addrs.get(&target) {
+                    if let Some(cs_arc) = self.edge_state.client_manager.get_crypt_state(target).await {
+                        let mut encrypted = Vec::new();
+                        cs_arc.lock().unwrap().encrypt(&forwarded, &mut encrypted);
+                        if let Err(e) = self.socket.send_to(&encrypted, addr).await {
+                            warn!("UDP send to listener session {} failed: {}", target, e);
+                        }
+                    }
+                } else {
+                    self.fallback_to_tcp(target, &forwarded).await;
+                }
+            }
         }
         drop(session_addrs);
 

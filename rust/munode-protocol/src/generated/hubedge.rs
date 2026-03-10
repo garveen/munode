@@ -1915,6 +1915,15 @@ pub struct HubClusterPeerLeftParams {
     pub edge_id: u32,
 }
 /// ---------------------------------------------------------------------------
+/// hub.shutdownRequest - Hub 请求 Edge 优雅关闭（集群分割处理）
+/// ---------------------------------------------------------------------------
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HubShutdownRequestParams {
+    /// Human-readable reason for the shutdown request.
+    #[prost(string, required, tag = "1")]
+    pub reason: ::prost::alloc::string::String,
+}
+/// ---------------------------------------------------------------------------
 /// hub.pluginDataBroadcast - Hub 广播插件数据到 Edge
 /// ---------------------------------------------------------------------------
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2160,6 +2169,9 @@ pub struct TypedRpcNotification {
     pub cluster_peer_joined: ::core::option::Option<HubClusterPeerJoinedParams>,
     #[prost(message, optional, tag = "34")]
     pub cluster_peer_left: ::core::option::Option<HubClusterPeerLeftParams>,
+    /// hub.shutdownRequest - Hub requests Edge to gracefully shut down (cluster partition)
+    #[prost(message, optional, tag = "35")]
+    pub shutdown_request: ::core::option::Option<HubShutdownRequestParams>,
     /// For unknown notification types, store params as JSON string
     #[prost(string, optional, tag = "99")]
     pub unknown_params_json: ::core::option::Option<::prost::alloc::string::String>,
