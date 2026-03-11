@@ -734,6 +734,13 @@ impl Database {
         Ok(count as u32)
     }
 
+    /// Delete a specific ban by its row ID.  Returns `true` if a row was deleted.
+    pub fn delete_ban_by_id(&self, id: i64) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let count = conn.execute("DELETE FROM bans WHERE id = ?1", params![id])?;
+        Ok(count > 0)
+    }
+
     // ==================== Blob Storage (user_blobs hash mapping) ====================
 
     /// Initialise the user_blobs metadata table.

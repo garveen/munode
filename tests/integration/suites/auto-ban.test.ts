@@ -229,3 +229,83 @@ describe.skipIf(!USE_RUST)('Auto-Ban Active Integration Tests (Rust)', () => {
     expect(failed).toBe(true);
   }, 10000);
 });
+
+describe.skipIf(!USE_RUST)('Auto-Ban Expiry Tests (Rust)', () => {
+  let expiryEnv: TestEnvironment;
+
+  beforeAll(async () => {
+    // Use a very short ban duration (2 seconds) to test expiry
+    expiryEnv = await setupTestEnvironment(8254, {
+      startHub: true,
+      startEdge: true,
+      startEdge2: false,
+      startAuth: true,
+      silent: true,
+      isolated: true,
+      rustHubExtraConfig: {
+        auto_ban: {
+          enabled: true,
+          attempts: 2,     // Ban after 2 failures
+          time_window: 60,
+          duration: 2,     // 2-second ban
+        },
+      },
+    });
+  }, 60000);
+
+  afterAll(async () => {
+    await expiryEnv?.cleanup();
+  }, 30000);
+
+  it('should unban IP after ban duration expires', async () => {
+    // Trigger auto-ban with 2 failed attempts
+    for (let i = 0; i < 2; i++) {
+      const client = new MumbleClient();
+      try {
+        await client.connect({
+          host: 'localhost',
+          port: expiryEnv.edgePort,
+          username: 'user1',
+          password: `bad_pass_${i}`,
+          rejectUnauthorized: false,
+        });
+        await sleep(300);
+      } catch {}
+      try { await client.disconnect(); } catch {}
+      await sleep(200);
+    }
+
+    await sleep(500);
+
+    // Should be banned now
+    let wasBanned = false;
+    {
+      const c = new MumbleClient();
+      try {
+        await c.connect({ host: 'localhost', port: expiryEnv.edgePort, username: 'user1', password: 'password1', rejectUnauthorized: false });
+        await sleep(400);
+        if (!c.isConnected()) wasBanned = true;
+      } catch { wasBanned = true; }
+      try { await c.disconnect(); } catch {}
+    }
+    expect(wasBanned).toBe(true);
+
+    // Wait for ban to expire (3 seconds to be safe)
+    await sleep(3500);
+
+    // Should succeed now
+    const goodClient = new MumbleClient();
+    let success = false;
+    try {
+      await goodClient.connect({ host: 'localhost', port: expiryEnv.edgePort, username: 'user1', password: 'password1', rejectUnauthorized: false });
+      await sleep(500);
+      success = goodClient.isConnected();
+    } catch (e) {
+      // Still banned?
+    } finally {
+      try { await goodClient.disconnect(); } catch {}
+    }
+
+    expect(success).toBe(true);
+  }, 20000);
+});

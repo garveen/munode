@@ -193,6 +193,24 @@ describe.skipIf(!USE_RUST)('Hub Web API Integration Tests', () => {
     }, 5000);
   });
 
+  describe('Ban Management', () => {
+    it('GET /api/bans should return ban list (empty initially)', async () => {
+      const { status, body } = await webApiGet('/api/bans');
+      expect(status).toBe(200);
+      const resp = body as Record<string, unknown>;
+      expect(Array.isArray(resp.bans)).toBe(true);
+      expect(typeof resp.timestamp).toBe('number');
+    }, 5000);
+
+    it('DELETE /api/bans/:id with unknown ID should return 404', async () => {
+      const url = `http://127.0.0.1:${testEnv.webApiPort}/api/bans/999999`;
+      const res = await fetch(url, { method: 'DELETE' });
+      expect(res.status).toBe(404);
+      const body = await res.json() as Record<string, unknown>;
+      expect(body.success).toBe(false);
+    }, 5000);
+  });
+
   describe('Unknown Endpoints', () => {
     it('unknown path should return 404', async () => {
       const url = `http://127.0.0.1:${testEnv.webApiPort}/api/nonexistent`;

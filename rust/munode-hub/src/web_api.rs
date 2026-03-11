@@ -7,6 +7,8 @@
 //!   GET /api/stats       — Hub statistics (sessions, channels, …)
 //!   GET /api/topology    — Network topology (edges and links)
 //!   GET /api/health      — Liveness probe (always 200 OK)
+//!   GET /api/bans        — List active ban records
+//!   DELETE /api/bans/:id — Remove a ban record (manual unban)
 //!   GET /metrics         — Prometheus metrics endpoint
 
 use std::sync::Arc;
@@ -16,7 +18,7 @@ use axum::{
     extract::{Path, State},
     http::{header, StatusCode},
     response::{IntoResponse, Json, Response},
-    routing::get,
+    routing::{delete, get},
     Router,
 };
 use serde::Serialize;
@@ -102,6 +104,38 @@ pub struct TopologyResponse {
 #[derive(Serialize)]
 pub struct HealthResponse {
     pub ok: bool,
+}
+
+/// A single ban record as returned by the Web API.
+#[derive(Serialize)]
+pub struct BanEntry {
+    pub id: i64,
+    /// IP address in human-readable form (IPv4 or IPv6).
+    pub address: String,
+    /// CIDR prefix length.
+    pub mask: u32,
+    pub name: String,
+    pub reason: String,
+    /// Unix timestamp when the ban was created.
+    pub start_time: i64,
+    /// Duration in seconds. 0 = permanent.
+    pub duration: u32,
+    /// Whether the ban is currently active (not yet expired).
+    pub active: bool,
+}
+
+/// Response for ban list endpoint.
+#[derive(Serialize)]
+pub struct BanListResponse {
+    pub bans: Vec<BanEntry>,
+    pub timestamp: u64,
+}
+
+/// Response for unban endpoint.
+#[derive(Serialize)]
+pub struct UnbanResponse {
+    pub success: bool,
+    pub message: String,
 }
 
 fn now_secs() -> u64 {
@@ -263,6 +297,106 @@ async fn handle_health() -> Json<HealthResponse> {
     Json(HealthResponse { ok: true })
 }
 
+// ── Ban Management ────────────────────────────────────────────────────────────
+
+/// Helper: convert raw IPv4-mapped-IPv6 bytes to a human-readable string.
+fn bytes_to_ip_string(bytes: &[u8; 16]) -> String {
+    // Check for IPv4-mapped IPv6 (::ffff:a.b.c.d)
+    if bytes[..10] == [0u8; 10] && bytes[10] == 0xff && bytes[11] == 0xff {
+        return format!("{}.{}.{}.{}", bytes[12], bytes[13], bytes[14], bytes[15]);
+    }
+    // Check for pure IPv4 in first 4 bytes (older storage format)
+    if bytes[4..] == [0u8; 12] {
+        return format!("{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3]);
+    }
+    // Full IPv6
+    let octets: [u8; 16] = *bytes;
+    let v6 = std::net::Ipv6Addr::from(octets);
+    v6.to_string()
+}
+
+async fn handle_bans(State(state): State<AppState>) -> impl IntoResponse {
+    match state.database.load_bans() {
+        Ok(bans) => {
+            let now = now_secs() as i64;
+            let entries: Vec<BanEntry> = bans
+                .into_iter()
+                .map(|b| {
+                    let active = if b.duration > 0 {
+                        now < b.start_time.saturating_add(b.duration as i64)
+                    } else {
+                        true // Permanent ban
+                    };
+                    BanEntry {
+                        id: b.id,
+                        address: bytes_to_ip_string(&b.address),
+                        mask: b.mask,
+                        name: b.name,
+                        reason: b.reason,
+                        start_time: b.start_time,
+                        duration: b.duration,
+                        active,
+                    }
+                })
+                .collect();
+            (
+                StatusCode::OK,
+                Json(BanListResponse {
+                    bans: entries,
+                    timestamp: now_secs(),
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("Failed to load bans: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "Failed to load bans" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn handle_unban(
+    State(state): State<AppState>,
+    Path(ban_id): Path<i64>,
+) -> impl IntoResponse {
+    match state.database.delete_ban_by_id(ban_id) {
+        Ok(true) => {
+            info!("Ban {} removed via Web API", ban_id);
+            (
+                StatusCode::OK,
+                Json(UnbanResponse {
+                    success: true,
+                    message: format!("Ban {} removed", ban_id),
+                }),
+            )
+                .into_response()
+        }
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(UnbanResponse {
+                success: false,
+                message: format!("Ban {} not found", ban_id),
+            }),
+        )
+            .into_response(),
+        Err(e) => {
+            error!("Failed to remove ban {}: {}", ban_id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(UnbanResponse {
+                    success: false,
+                    message: format!("Internal error: {}", e),
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
 // ── Prometheus Metrics ────────────────────────────────────────────────────────
 
 /// Plain-text Prometheus metrics response.
@@ -352,6 +486,8 @@ pub fn build_router(state: Arc<HubState>) -> Router {
         .route("/api/stats", get(handle_stats))
         .route("/api/topology", get(handle_topology))
         .route("/api/health", get(handle_health))
+        .route("/api/bans", get(handle_bans))
+        .route("/api/bans/:id", delete(handle_unban))
         .route("/metrics", get(handle_metrics))
         .with_state(state)
 }
