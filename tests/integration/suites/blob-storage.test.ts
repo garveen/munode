@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { setupTestEnvironment, createClients, cleanupClients, USE_RUST } from '../setup.js';
 import type { TestEnvironment } from '../setup.js';
+import type { MumbleClient } from '../../../packages/client/src/index.js';
 
 describe.skipIf(USE_RUST)('Blob Storage Integration Tests', () => {
   let testEnv: TestEnvironment;
@@ -242,6 +243,12 @@ describe.skipIf(USE_RUST)('Blob Storage Integration Tests', () => {
 describe.skipIf(!USE_RUST)('Blob Storage Integration Tests (Rust)', () => {
   let testEnv: TestEnvironment;
 
+  /** Find a user from client[1]'s user list by name, accepting 'admin' or 'Administrator'. */
+  function findAdminUser(clients: MumbleClient[]) {
+    const users = clients[1].getUsers();
+    return users.find(u => u.name === 'admin' || u.name === 'Administrator');
+  }
+
   beforeAll(async () => {
     testEnv = await setupTestEnvironment(15210, {
       startHub: true,
@@ -272,8 +279,7 @@ describe.skipIf(!USE_RUST)('Blob Storage Integration Tests (Rust)', () => {
         await new Promise(r => setTimeout(r, 800));
 
         // client1 should receive a texture_hash for admin in a UserState broadcast
-        const users = clients[1].getUsers();
-        const admin = users.find(u => u.name === 'admin' || u.name === 'Administrator');
+        const admin = findAdminUser(clients);
         expect(admin).toBeDefined();
         // texture_hash is sent for blobs > 128 bytes (Mumble protocol)
         expect(admin!.texture_hash).toBeTruthy();
@@ -294,7 +300,7 @@ describe.skipIf(!USE_RUST)('Blob Storage Integration Tests (Rust)', () => {
         // Upload the same texture twice from two different clients
         await clients[0].setTexture(texture);
         await new Promise(r => setTimeout(r, 500));
-        const hash0 = clients[1].getUsers().find(u => u.name === 'admin' || u.name === 'Administrator')?.texture_hash;
+        const hash0 = findAdminUser(clients)?.texture_hash;
 
         await clients[1].setTexture(texture);
         await new Promise(r => setTimeout(r, 500));
@@ -326,8 +332,7 @@ describe.skipIf(!USE_RUST)('Blob Storage Integration Tests (Rust)', () => {
         await new Promise(r => setTimeout(r, 1000));
 
         // user1 should see admin's comment_hash
-        const users = clients[1].getUsers();
-        const admin = users.find(u => u.name === 'admin' || u.name === 'Administrator');
+        const admin = findAdminUser(clients);
         expect(admin).toBeDefined();
         expect(admin!.comment_hash).toBeTruthy();
       } finally {

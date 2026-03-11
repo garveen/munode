@@ -1270,16 +1270,16 @@ async fn handle_user_state_update(
                 if let Some(hash_hex) = hub_client.blob_set_user_texture(uid, data).await {
                     // Convert hex hash to bytes for the Mumble texture_hash field
                     if let Some(hash_bytes) = hex_to_bytes(&hash_hex) {
-                        client.texture_hash = Some(hash_bytes.clone());
-                        edge_state.client_manager.update_client(client.clone()).await;
                         // Broadcast the hash to all connected clients so they can
                         // request the texture via RequestBlob.
                         let hash_msg = mumbleproto::UserState {
                             session: Some(session_id),
                             actor: Some(session_id),
-                            texture_hash: Some(hash_bytes),
+                            texture_hash: Some(hash_bytes.clone()),
                             ..Default::default()
                         };
+                        client.texture_hash = Some(hash_bytes);
+                        edge_state.client_manager.update_client(client.clone()).await;
                         edge_state.client_manager.broadcast(MessageType::UserState, &hash_msg, None).await;
                     }
                 }
@@ -1295,14 +1295,14 @@ async fn handle_user_state_update(
                     // matching the Mumble protocol convention.  Short comments are
                     // sent inline (comment field) rather than by reference.
                     if data_len > 128 {
-                        client.comment_hash = Some(hash_bytes.clone());
-                        edge_state.client_manager.update_client(client.clone()).await;
                         let hash_msg = mumbleproto::UserState {
                             session: Some(session_id),
                             actor: Some(session_id),
-                            comment_hash: Some(hash_bytes),
+                            comment_hash: Some(hash_bytes.clone()),
                             ..Default::default()
                         };
+                        client.comment_hash = Some(hash_bytes);
+                        edge_state.client_manager.update_client(client.clone()).await;
                         edge_state.client_manager.broadcast(MessageType::UserState, &hash_msg, None).await;
                     }
                 }

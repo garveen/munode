@@ -29,6 +29,11 @@ use munode_protocol::hubedge::{
 use crate::channel_manager::{ChannelData, RemoteUser};
 use crate::state::{EdgeEvent, EdgeState, PeerEdgeInfo};
 
+/// Maximum time to wait for the primary pool slot to register before bringing
+/// up secondary slots.  100ms × 100 = 10 seconds.
+const SECONDARY_SLOT_WAIT_POLL_INTERVAL_MS: u64 = 100;
+const SECONDARY_SLOT_WAIT_MAX_POLLS: u32 = 100;
+
 /// Connection state for the Hub client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HubConnectionState {
@@ -322,11 +327,11 @@ impl HubClient {
     /// Connect a secondary slot: only authenticate / heartbeat (no full sync / cluster join).
     async fn try_connect_secondary_slot(self: &Arc<Self>, slot: usize) -> Result<()> {
         // Wait until primary is registered before bringing up secondary slots.
-        for _ in 0..100 {
+        for _ in 0..SECONDARY_SLOT_WAIT_MAX_POLLS {
             if self.state().await == HubConnectionState::Registered {
                 break;
             }
-            time::sleep(Duration::from_millis(100)).await;
+            time::sleep(Duration::from_millis(SECONDARY_SLOT_WAIT_POLL_INTERVAL_MS)).await;
         }
         self.try_connect_slot(slot, false).await
     }
