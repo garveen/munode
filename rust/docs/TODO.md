@@ -178,7 +178,7 @@ Rust 版本使用文件系统存储 blob 数据，以 SHA-256 哈希前两位为
 - [x] 多次失败登录拒绝测试（`auto-ban.test.ts`）
 - [x] 正确密码仍可登录测试（`auto-ban.test.ts`）
 - [x] IP 封禁检查单元测试（`database.rs` 测试：`test_check_ip_banned_*`、`test_ip_matches_ban_*`）
-- [ ] 封禁期间连接拒绝集成测试（需配置 `auto_ban.enabled=true`）
+- [x] 封禁期间连接拒绝集成测试（`auto-ban.test.ts`：3 次失败后被禁）
 - [ ] 封禁过期自动解除测试
 - [ ] 不同 IP 独立计数测试
 
@@ -632,18 +632,18 @@ Edge 向客户端发送建议：
 ### 2. 监控和可观测性
 
 **优先级**: P2  
-**状态**: 📋 计划中
+**状态**: 🚧 进行中（基础实现）
 
 #### 任务
-- [ ] Prometheus metrics 导出
-- [ ] 健康检查端点
-- [ ] 详细的结构化日志
+- [x] Prometheus metrics 导出（`GET /metrics`：`connected_edges`、`total_sessions`、`total_channels`、`uptime_seconds`）
+- [x] 健康检查端点（`GET /api/health`）
+- [ ] 详细的结构化日志（当前为 tracing 文本格式，可扩展为 JSON）
 - [ ] 分布式追踪（OpenTelemetry）
-- [ ] 性能指标收集
+- [ ] 更多性能指标（每 Edge 语音流量、RPC 延迟等）
 
 #### 测试
-- [ ] Metrics 端点测试
-- [ ] 健康检查测试
+- [x] Metrics 端点测试（`web-api.test.ts`：格式验证、edge count ≥ 1）
+- [x] 健康检查测试（`web-api.test.ts`）
 - [ ] 日志格式测试
 
 ---

@@ -129,8 +129,10 @@ function generateRustHubConfig(params: {
   authHttpUrl: string;
   hmacSecret: string;
   logLevel: string;
+  /** Optional overrides merged into the generated config */
+  extraConfig?: Record<string, unknown>;
 }): object {
-  return {
+  const base: Record<string, unknown> = {
     network: {
       host: '127.0.0.1',
       control_port: params.controlPort,
@@ -157,6 +159,10 @@ function generateRustHubConfig(params: {
     },
     log_level: params.logLevel,
   };
+  if (params.extraConfig) {
+    Object.assign(base, params.extraConfig);
+  }
+  return base;
 }
 
 /**
@@ -212,6 +218,8 @@ async function startRustHubServer(params: {
   dbPath: string;
   hmacSecret: string;
   silent: boolean;
+  /** Optional extra config fields merged into the Hub JSON config */
+  extraConfig?: Record<string, unknown>;
 }): Promise<RustServerProcess> {
   const configPath = join(PROJECT_ROOT, `tmp/rust-hub-${params.basePort}.json`);
   const blobStorePath = join(PROJECT_ROOT, `tmp/rust-hub-blobs-${params.basePort}`);
@@ -224,6 +232,7 @@ async function startRustHubServer(params: {
     authHttpUrl: `http://127.0.0.1:${params.authPort}/auth`,
     hmacSecret: params.hmacSecret,
     logLevel: params.silent ? 'error' : 'debug',
+    extraConfig: params.extraConfig,
   });
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
   debugLog(`[RUST] Hub config written to ${configPath}`);
@@ -710,6 +719,8 @@ async function createIsolatedTestEnvironment(
     startEdge4?: boolean;
     startAuth?: boolean;
     silent?: boolean;
+    /** Extra fields merged into the Rust Hub JSON config (Rust mode only) */
+    rustHubExtraConfig?: Record<string, unknown>;
   }
 ): Promise<TestEnvironment> {
   const startHub = options.startHub !== false;
@@ -769,6 +780,7 @@ async function createIsolatedTestEnvironment(
       dbPath,
       hmacSecret,
       silent,
+      extraConfig: options.rustHubExtraConfig,
     });
     await waitForCondition(
       async () => {
@@ -870,6 +882,8 @@ export async function setupTestEnvironment(
     startEdge4?: boolean;
     startAuth?: boolean;
     hubConfig?: Partial<HubConfig>;
+    /** Extra fields merged into the Rust Hub JSON config (Rust mode only) */
+    rustHubExtraConfig?: Record<string, unknown>;
     reuse?: boolean;
     silent?: boolean;
     /** When true, creates an isolated environment without affecting globalTestEnvironment */
@@ -1173,6 +1187,7 @@ export async function setupTestEnvironment(
           dbPath,
           hmacSecret,
           silent,
+          extraConfig: (finalOptions as { rustHubExtraConfig?: Record<string, unknown> }).rustHubExtraConfig,
         });
         // Wait for Rust Hub control port to be listening
         await waitForCondition(

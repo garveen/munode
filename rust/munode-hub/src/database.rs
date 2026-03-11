@@ -263,6 +263,48 @@ impl Database {
         // Create bans table
         Self::init_bans_table(&conn)?;
 
+        // Add cert_hash to bans table if missing (migration from older schema)
+        let bans_has_cert_hash: bool = {
+            let mut col_stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('bans') WHERE name = 'cert_hash'"
+            )?;
+            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+        };
+        if !bans_has_cert_hash {
+            conn.execute_batch(
+                "ALTER TABLE bans ADD COLUMN cert_hash TEXT NOT NULL DEFAULT '';"
+            )?;
+            info!("Migrated bans table: added 'cert_hash' column");
+        }
+
+        // Add start_time to bans table if missing (TS schema uses 'start')
+        let bans_has_start_time: bool = {
+            let mut col_stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('bans') WHERE name = 'start_time'"
+            )?;
+            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+        };
+        if !bans_has_start_time {
+            // Copy from 'start' column if present, otherwise default to 0
+            let has_start: bool = {
+                let mut s = conn.prepare(
+                    "SELECT COUNT(*) FROM pragma_table_info('bans') WHERE name = 'start'"
+                )?;
+                s.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+            };
+            if has_start {
+                conn.execute_batch(
+                    "ALTER TABLE bans ADD COLUMN start_time INTEGER NOT NULL DEFAULT 0;
+                     UPDATE bans SET start_time = COALESCE(start, 0);"
+                )?;
+            } else {
+                conn.execute_batch(
+                    "ALTER TABLE bans ADD COLUMN start_time INTEGER NOT NULL DEFAULT 0;"
+                )?;
+            }
+            info!("Migrated bans table: added 'start_time' column");
+        }
+
         // Create blob storage tables
         Self::init_blob_tables(&conn)?;
 
