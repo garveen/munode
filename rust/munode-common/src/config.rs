@@ -81,6 +81,12 @@ pub struct HubServerConfig {
     pub heartbeat_interval: u64,
     /// Optional HMAC secret for authentication.
     pub hmac_secret: Option<String>,
+    /// Number of parallel WebSocket connections to maintain to the Hub (connection pool).
+    /// `1` (default) disables pooling.  Values `> 1` enable pool mode for improved
+    /// resilience: RPC requests are distributed across connections in round-robin order,
+    /// and Hub-to-Edge push notifications are only processed on the primary connection.
+    #[serde(default = "default_pool_size")]
+    pub pool_size: u32,
 }
 
 /// Server capacity and behavior configuration.
@@ -468,6 +474,9 @@ fn default_reconnect_interval() -> u64 {
 }
 fn default_heartbeat_interval() -> u64 {
     30000
+}
+fn default_pool_size() -> u32 {
+    1
 }
 fn default_heartbeat_timeout() -> u64 {
     90000

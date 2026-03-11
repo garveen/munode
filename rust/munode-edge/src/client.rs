@@ -69,6 +69,12 @@ pub struct ClientInfo {
     pub opus_supported: bool,
     /// Channels this client is listening to (beyond their current channel).
     pub listening_channels: Vec<u32>,
+    /// SHA-256 hash of this user's texture blob (if any).
+    /// Broadcast to peers so they can request the full texture via RequestBlob.
+    pub texture_hash: Option<Vec<u8>>,
+    /// SHA-256 hash of this user's comment blob (if comment is > 128 bytes).
+    /// Broadcast to peers so they can request the full comment via RequestBlob.
+    pub comment_hash: Option<Vec<u8>>,
 }
 
 /// Manages all connected clients and their message senders.
@@ -305,6 +311,8 @@ mod tests {
             groups: vec![],
             opus_supported: true,
             listening_channels: vec![],
+            texture_hash: None,
+            comment_hash: None,
         }
     }
 

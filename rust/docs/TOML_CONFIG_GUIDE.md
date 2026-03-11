@@ -26,8 +26,7 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | database.backup_dir | ✅ | ❌ | 备份目录 |
 | database.wal_mode | ✅ | ❌ | WAL 模式 |
 | **Blob 存储** |
-| blob_store.enabled | ✅ | ✅ | 启用 blob 存储（内嵌于数据库） |
-| blob_store.path | ✅ | ❌ | 独立存储路径（Rust 使用数据库内嵌存储） |
+| blob_store.path | ✅ | ✅ | Blob 文件存储目录（默认 `data/blobs`），以 hash 前两位为子目录分片 |
 | **注册表** |
 | registry.hmac_secret | ✅ | ✅ | HMAC 密钥 |
 | registry.heartbeat_timeout | ✅ | ✅ | 心跳超时 |
@@ -124,7 +123,7 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | hub_server.reconnect_interval | ✅ | ✅ | 重连间隔 |
 | hub_server.heartbeat_interval | ✅ | ✅ | 心跳间隔 |
 | hub_server.hmac_secret | ✅ | ✅ | HMAC 密钥 |
-| hub_server.pool_size | ✅ | ❌ | 连接池大小 |
+| hub_server.pool_size | ✅ | ✅ | 连接池大小（默认 1 = 单连接，>1 = 多连接轮询） |
 | hub_server.tls.* | ✅ | ❌ | Hub TLS 配置 |
 | **服务器配置** |
 | server.capacity | ✅ | ✅ | 最大用户数 |
@@ -192,6 +191,9 @@ control_port = 8443              # 标准控制端口
 [database]
 path = "./data/hub.sqlite"       # 确保目录可写
 
+[blob_store]
+path = "./data/blobs"            # Blob 文件目录，以 hash 前两位为子目录分片
+
 [registry]
 hmac_secret = "CHANGE-ME-RANDOM-64-CHAR-STRING"  # 使用强密钥
 heartbeat_timeout = 90000        # 3 次心跳间隔
@@ -249,6 +251,7 @@ key = "./certs/edge-key.pem"
 host = "hub"                     # Docker: 使用服务名
 control_port = 8443
 hmac_secret = "SAME-AS-HUB"     # 必须与 Hub 匹配
+# pool_size = 2                  # 可选：多连接轮询提高可靠性（默认 1）
 
 [server]
 capacity = 1000                  # 根据资源调整

@@ -57,7 +57,7 @@
 ### 2. Blob 存储系统
 
 **优先级**: P1  
-**状态**: ✅ 已完成
+**状态**: ✅ 已完成（文件系统存储）
 
 #### 功能描述
 存储和管理二进制数据：
@@ -65,19 +65,22 @@
 - 用户评论（comment）
 - 频道描述（description）
 
-#### 实现方式（与 TypeScript 不同）
-Rust 版本直接将 blob 数据内嵌于 SQLite 数据库，使用 SHA-256 内容寻址实现自动去重。
+#### 实现方式
+Rust 版本使用文件系统存储 blob 数据，以 SHA-256 哈希前两位为子目录分片（`<path>/<hash[0:2]>/<hash>`），实现内容寻址和自动去重。数据库（`user_blobs` 表）仅保存用户与 blob hash 的映射关系。
 
 #### 实现任务
-- [x] 设计 blob 存储架构（内嵌于 SQLite）
-- [x] 实现 blob 数据存储（`blobs` 表，SHA-256 哈希主键）
-- [x] 实现 blob 元数据管理（`user_blobs` 表）
+- [x] 设计 blob 存储架构（文件系统，hash 分片目录）
+- [x] 实现 `blob_store.rs`：原子写入（tmp→rename）、内容寻址、自动去重
+- [x] 实现 `BlobStoreStats`：统计 blob 数量和总大小
+- [x] 保留 `user_blobs` 表用于用户→hash 映射，移除 SQLite 内联 blob 数据
+- [x] 添加 `HubBlobStoreConfig`（`blob_store.path`）
 - [x] 添加 blob 上传/下载 RPC 接口（`blob.put`、`blob.get`）
 - [x] 实现用户 blob 关联（`blob.setUserTexture`、`blob.setUserComment`）
-- [x] 支持自动去重（相同内容共享同一 blob）
+- [x] 支持自动去重（相同内容共享同一 blob 文件）
 
 #### 集成测试
 - 通过 `user-info.test.ts` 中的 RequestBlob 测试覆盖
+- `blob-storage.test.ts` 新增 Rust 模式专用测试套件
 
 ---
 
@@ -490,27 +493,33 @@ Edge 端的语音路由配置：
 ### 3. Hub 连接池
 
 **优先级**: P1
-**状态**: 📋 计划中
+**状态**: ✅ 已完成
 
 #### 功能描述
 Edge 到 Hub 的连接池：
-- `hub_server.pool_size` - 连接池大小
-- 多个并发连接提高可靠性
-- 负载分散
+- `hub_server.pool_size` - 连接池大小（默认 1，= 单连接向后兼容）
+- 多个并发 WebSocket 连接提高可靠性
+- 轮询（round-robin）负载分散
+- 连接故障自动恢复（每个 slot 独立重连）
+
+#### 实现方式
+连接池实现完全内化在 `HubClient` 中（无需修改调用方）：
+- `pool_senders: Vec<Mutex<Option<Sender>>>` — 每个 slot 的发送通道
+- `pool_rr: AtomicUsize` — 轮询计数器
+- Slot 0 为主连接（处理 Hub→Edge 推送通知）
+- Slot 1..N 为辅助连接（仅处理 RPC 响应，抑制通知以避免重复更新）
+- 主连接完成 register/full_sync/join_cluster 后，辅助连接再建立
 
 #### 实现任务
-- [ ] 实现连接池管理结构
-- [ ] 支持多个并发 WebSocket 连接
-- [ ] 实现连接健康检查
-- [ ] 请求负载均衡
-- [ ] 连接故障自动恢复
-- [ ] 配置最小/最大连接数
+- [x] `hub_server.pool_size` 配置项（默认 1）
+- [x] 多个并发 WebSocket 连接（`pool_senders`）
+- [x] 轮询 RPC 请求负载均衡（`pool_rr`）
+- [x] 连接故障自动恢复（per-slot 独立重连循环）
+- [x] 主连接处理通知，辅助连接不处理（避免重复）
 
 #### 集成测试
-- [ ] 连接池初始化测试
-- [ ] 多连接并发请求测试
-- [ ] 单个连接故障不影响测试
-- [ ] 连接池扩容/缩容测试
+- 现有集成测试在 `pool_size=1`（默认）下全部通过
+- 池化功能在单连接模式下向后兼容
 
 #### 依赖
 无

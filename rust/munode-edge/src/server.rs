@@ -340,6 +340,8 @@ async fn handle_client_connection(
                         groups: vec![],
                         opus_supported: opus,
                         listening_channels: vec![],
+            texture_hash: None,
+            comment_hash: None,
                     };
                     // Add client to manager first so permission queries can resolve user_id
                     edge_state.client_manager.add_client(client.clone(), client_sender.clone()).await;
@@ -1260,24 +1262,51 @@ async fn handle_user_state_update(
             needs_broadcast = true;
         }
 
-        // Texture / comment blob updates (upload to Hub)
+        // Texture / comment blob updates (upload to Hub and broadcast hash to peers)
         if let Some(texture_data) = &user_state.texture {
             if !texture_data.is_empty() {
                 let uid = client.user_id;
                 let data = texture_data.clone();
-                let hub = hub_client.clone();
-                tokio::spawn(async move {
-                    hub.blob_set_user_texture(uid, data).await;
-                });
+                if let Some(hash_hex) = hub_client.blob_set_user_texture(uid, data).await {
+                    // Convert hex hash to bytes for the Mumble texture_hash field
+                    if let Some(hash_bytes) = hex_to_bytes(&hash_hex) {
+                        client.texture_hash = Some(hash_bytes.clone());
+                        edge_state.client_manager.update_client(client.clone()).await;
+                        // Broadcast the hash to all connected clients so they can
+                        // request the texture via RequestBlob.
+                        let hash_msg = mumbleproto::UserState {
+                            session: Some(session_id),
+                            actor: Some(session_id),
+                            texture_hash: Some(hash_bytes),
+                            ..Default::default()
+                        };
+                        edge_state.client_manager.broadcast(MessageType::UserState, &hash_msg, None).await;
+                    }
+                }
             }
         }
         if let Some(comment) = &user_state.comment {
             let uid = client.user_id;
             let data = comment.as_bytes().to_vec();
-            let hub = hub_client.clone();
-            tokio::spawn(async move {
-                hub.blob_set_user_comment(uid, data).await;
-            });
+            let data_len = data.len();
+            if let Some(hash_hex) = hub_client.blob_set_user_comment(uid, data).await {
+                if let Some(hash_bytes) = hex_to_bytes(&hash_hex) {
+                    // Only broadcast comment_hash for long comments (> 128 bytes),
+                    // matching the Mumble protocol convention.  Short comments are
+                    // sent inline (comment field) rather than by reference.
+                    if data_len > 128 {
+                        client.comment_hash = Some(hash_bytes.clone());
+                        edge_state.client_manager.update_client(client.clone()).await;
+                        let hash_msg = mumbleproto::UserState {
+                            session: Some(session_id),
+                            actor: Some(session_id),
+                            comment_hash: Some(hash_bytes),
+                            ..Default::default()
+                        };
+                        edge_state.client_manager.broadcast(MessageType::UserState, &hash_msg, None).await;
+                    }
+                }
+            }
         }
 
         if needs_broadcast {
@@ -1505,6 +1534,18 @@ async fn broadcast_codec_version(edge_state: &Arc<EdgeState>) {
     edge_state.client_manager.broadcast(MessageType::CodecVersion, &msg, None).await;
 }
 
+/// Decode a hex string into bytes.  Returns `None` if the string is not valid hex.
+fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let bytes: Option<Vec<u8>> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect();
+    bytes
+}
+
 /// Encode a u32 as a Mumble varint (NOT protobuf varint).
 /// Mumble varint format: 0x00-0x7F = 1 byte, 0x80-0x3FFF = 2 bytes (10xxxxxx), etc.
 fn encode_mumble_varint(value: u32) -> Vec<u8> {
@@ -1613,6 +1654,7 @@ mod tests {
                 reconnect_interval: 5000,
                 heartbeat_interval: 10000,
                 hmac_secret: None,
+                pool_size: 1,
             },
             server: ServerConfig::default(),
             suggest: None,
@@ -1642,6 +1684,8 @@ mod tests {
             groups: vec![],
             opus_supported: true,
             listening_channels: vec![],
+            texture_hash: None,
+            comment_hash: None,
         }
     }
 

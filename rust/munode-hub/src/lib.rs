@@ -1,4 +1,5 @@
 pub mod server;
+pub mod blob_store;
 pub mod edge_connection;
 pub mod session_manager;
 pub mod channel_store;

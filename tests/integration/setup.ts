@@ -125,6 +125,7 @@ function generateRustHubConfig(params: {
   controlPort: number;
   webApiPort: number;
   dbPath: string;
+  blobStorePath: string;
   authHttpUrl: string;
   hmacSecret: string;
   logLevel: string;
@@ -136,6 +137,9 @@ function generateRustHubConfig(params: {
     },
     database: {
       path: params.dbPath,
+    },
+    blob_store: {
+      path: params.blobStorePath,
     },
     auth: {
       allow_guest: true,
@@ -210,11 +214,13 @@ async function startRustHubServer(params: {
   silent: boolean;
 }): Promise<RustServerProcess> {
   const configPath = join(PROJECT_ROOT, `tmp/rust-hub-${params.basePort}.json`);
+  const blobStorePath = join(PROJECT_ROOT, `tmp/rust-hub-blobs-${params.basePort}`);
   fs.mkdirSync(join(PROJECT_ROOT, 'tmp'), { recursive: true });
   const config = generateRustHubConfig({
     controlPort: params.controlPort,
     webApiPort: params.webApiPort,
     dbPath: params.dbPath,
+    blobStorePath,
     authHttpUrl: `http://127.0.0.1:${params.authPort}/auth`,
     hmacSecret: params.hmacSecret,
     logLevel: params.silent ? 'error' : 'debug',

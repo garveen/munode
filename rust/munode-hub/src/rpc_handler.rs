@@ -2365,7 +2365,7 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_put.as_ref().context("Missing blob_put params")?;
-        match self.state.database.put_blob(&params.data) {
+        match self.state.blob_store.put(&params.data) {
             Ok(hash) => Ok(self.make_response_packet(request_id, "blob.put", |r| {
                 r.blob_put = Some(BlobPutResult { success: true, hash: Some(hash), error: None });
             })),
@@ -2381,7 +2381,7 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_get.as_ref().context("Missing blob_get params")?;
-        match self.state.database.get_blob(&params.hash) {
+        match self.state.blob_store.get(&params.hash) {
             Ok(Some(data)) => Ok(self.make_response_packet(request_id, "blob.get", |r| {
                 r.blob_get = Some(BlobGetResult { success: true, data: Some(data), error: None });
             })),
@@ -2400,12 +2400,27 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_get_user_texture.as_ref().context("Missing blob_get_user_texture params")?;
-        match self.state.database.get_user_blob(params.user_id, "texture") {
-            Ok(Some((hash, data))) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
-                r.blob_get_user_texture = Some(BlobGetUserTextureResult {
-                    success: true, data: Some(data), hash: Some(hash), error: None,
-                });
-            })),
+        let hash_result = self.state.database.get_user_blob_hash(params.user_id, "texture");
+        match hash_result {
+            Ok(Some(hash)) => {
+                match self.state.blob_store.get(&hash) {
+                    Ok(Some(data)) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
+                        r.blob_get_user_texture = Some(BlobGetUserTextureResult {
+                            success: true, data: Some(data), hash: Some(hash.clone()), error: None,
+                        });
+                    })),
+                    Ok(None) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
+                        r.blob_get_user_texture = Some(BlobGetUserTextureResult {
+                            success: false, data: None, hash: None, error: Some("Blob data not found".into()),
+                        });
+                    })),
+                    Err(e) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
+                        r.blob_get_user_texture = Some(BlobGetUserTextureResult {
+                            success: false, data: None, hash: None, error: Some(e.to_string()),
+                        });
+                    })),
+                }
+            }
             Ok(None) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
                 r.blob_get_user_texture = Some(BlobGetUserTextureResult {
                     success: false, data: None, hash: None, error: Some("Not found".into()),
@@ -2425,12 +2440,27 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_get_user_comment.as_ref().context("Missing blob_get_user_comment params")?;
-        match self.state.database.get_user_blob(params.user_id, "comment") {
-            Ok(Some((hash, data))) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
-                r.blob_get_user_comment = Some(BlobGetUserCommentResult {
-                    success: true, data: Some(data), hash: Some(hash), error: None,
-                });
-            })),
+        let hash_result = self.state.database.get_user_blob_hash(params.user_id, "comment");
+        match hash_result {
+            Ok(Some(hash)) => {
+                match self.state.blob_store.get(&hash) {
+                    Ok(Some(data)) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
+                        r.blob_get_user_comment = Some(BlobGetUserCommentResult {
+                            success: true, data: Some(data), hash: Some(hash.clone()), error: None,
+                        });
+                    })),
+                    Ok(None) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
+                        r.blob_get_user_comment = Some(BlobGetUserCommentResult {
+                            success: false, data: None, hash: None, error: Some("Blob data not found".into()),
+                        });
+                    })),
+                    Err(e) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
+                        r.blob_get_user_comment = Some(BlobGetUserCommentResult {
+                            success: false, data: None, hash: None, error: Some(e.to_string()),
+                        });
+                    })),
+                }
+            }
             Ok(None) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
                 r.blob_get_user_comment = Some(BlobGetUserCommentResult {
                     success: false, data: None, hash: None, error: Some("Not found".into()),
@@ -2450,12 +2480,21 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_set_user_texture.as_ref().context("Missing blob_set_user_texture params")?;
-        match self.state.database.set_user_blob(params.user_id, "texture", &params.data) {
-            Ok(hash) => Ok(self.make_response_packet(request_id, "blob.setUserTexture", |r| {
-                r.blob_set_user_texture = Some(BlobSetUserTextureResult {
-                    success: true, hash: Some(hash), error: None,
-                });
-            })),
+        match self.state.blob_store.put(&params.data) {
+            Ok(hash) => {
+                match self.state.database.set_user_blob_hash(params.user_id, "texture", &hash) {
+                    Ok(()) => Ok(self.make_response_packet(request_id, "blob.setUserTexture", |r| {
+                        r.blob_set_user_texture = Some(BlobSetUserTextureResult {
+                            success: true, hash: Some(hash.clone()), error: None,
+                        });
+                    })),
+                    Err(e) => Ok(self.make_response_packet(request_id, "blob.setUserTexture", |r| {
+                        r.blob_set_user_texture = Some(BlobSetUserTextureResult {
+                            success: false, hash: None, error: Some(e.to_string()),
+                        });
+                    })),
+                }
+            }
             Err(e) => Ok(self.make_response_packet(request_id, "blob.setUserTexture", |r| {
                 r.blob_set_user_texture = Some(BlobSetUserTextureResult {
                     success: false, hash: None, error: Some(e.to_string()),
@@ -2470,12 +2509,21 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_set_user_comment.as_ref().context("Missing blob_set_user_comment params")?;
-        match self.state.database.set_user_blob(params.user_id, "comment", &params.data) {
-            Ok(hash) => Ok(self.make_response_packet(request_id, "blob.setUserComment", |r| {
-                r.blob_set_user_comment = Some(BlobSetUserCommentResult {
-                    success: true, hash: Some(hash), error: None,
-                });
-            })),
+        match self.state.blob_store.put(&params.data) {
+            Ok(hash) => {
+                match self.state.database.set_user_blob_hash(params.user_id, "comment", &hash) {
+                    Ok(()) => Ok(self.make_response_packet(request_id, "blob.setUserComment", |r| {
+                        r.blob_set_user_comment = Some(BlobSetUserCommentResult {
+                            success: true, hash: Some(hash.clone()), error: None,
+                        });
+                    })),
+                    Err(e) => Ok(self.make_response_packet(request_id, "blob.setUserComment", |r| {
+                        r.blob_set_user_comment = Some(BlobSetUserCommentResult {
+                            success: false, hash: None, error: Some(e.to_string()),
+                        });
+                    })),
+                }
+            }
             Err(e) => Ok(self.make_response_packet(request_id, "blob.setUserComment", |r| {
                 r.blob_set_user_comment = Some(BlobSetUserCommentResult {
                     success: false, hash: None, error: Some(e.to_string()),
@@ -2483,6 +2531,7 @@ impl RpcHandler {
             })),
         }
     }
+
 
     // ==================== Cluster RPC Handlers ====================
 

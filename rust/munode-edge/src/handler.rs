@@ -384,6 +384,8 @@ pub fn build_user_state_msg(client: &ClientInfo) -> mumbleproto::UserState {
         priority_speaker: if client.priority_speaker { Some(true) } else { None },
         recording: if client.recording { Some(true) } else { None },
         hash: client.cert_hash.clone(),
+        texture_hash: client.texture_hash.clone(),
+        comment_hash: client.comment_hash.clone(),
         ..Default::default()
     }
 }
@@ -493,6 +495,8 @@ mod tests {
             groups: vec![],
             opus_supported: true,
             listening_channels: vec![],
+            texture_hash: None,
+            comment_hash: None,
         };
 
         let msg = build_user_state_msg(&client);
