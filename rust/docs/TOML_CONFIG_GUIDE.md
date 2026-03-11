@@ -280,6 +280,13 @@ message_burst = 5                # 令牌桶突发容量（默认 5）
 enabled = false                  # 是否启用 HTTP Web API
 host = "0.0.0.0"                 # 监听地址
 port = 8080                      # 监听端口
+# 启用后可访问：
+# GET /api/health  — 健康探针
+# GET /api/status  — Hub 状态
+# GET /api/stats   — Hub 统计数据
+# GET /api/edges   — Edge 列表
+# GET /api/topology — 网络拓扑
+# GET /metrics     — Prometheus metrics（文本格式）
 
 log_level = "info"
 ```

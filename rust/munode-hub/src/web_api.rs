@@ -7,14 +7,15 @@
 //!   GET /api/stats       — Hub statistics (sessions, channels, …)
 //!   GET /api/topology    — Network topology (edges and links)
 //!   GET /api/health      — Liveness probe (always 200 OK)
+//!   GET /metrics         — Prometheus metrics endpoint
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
-    response::Json,
+    http::{header, StatusCode},
+    response::{IntoResponse, Json, Response},
     routing::get,
     Router,
 };
@@ -262,6 +263,84 @@ async fn handle_health() -> Json<HealthResponse> {
     Json(HealthResponse { ok: true })
 }
 
+// ── Prometheus Metrics ────────────────────────────────────────────────────────
+
+/// Plain-text Prometheus metrics response.
+///
+/// Exports the following metrics:
+///
+/// | Name | Type | Description |
+/// |------|------|-------------|
+/// | `munode_hub_connected_edges` | gauge | Number of currently connected Edge nodes |
+/// | `munode_hub_total_sessions` | gauge | Total user sessions across all Edges |
+/// | `munode_hub_total_channels` | gauge | Total channels in the channel store |
+/// | `munode_hub_uptime_seconds` | gauge | Hub server uptime in seconds |
+async fn handle_metrics(State(state): State<AppState>) -> Response {
+    let uptime = state.started_at.elapsed().as_secs();
+
+    // Gather edge + session stats
+    let edge_regs = state.edge_registry.read().await;
+    let health_map = state.edge_health.read().await;
+    let heartbeat_timeout = state.config.registry.heartbeat_timeout;
+    let online_threshold = std::time::Duration::from_millis(heartbeat_timeout + 10_000);
+
+    let connected_edges: usize = edge_regs
+        .keys()
+        .filter(|id| {
+            health_map
+                .get(id)
+                .map(|h| h.last_heartbeat.elapsed() <= online_threshold)
+                .unwrap_or(false)
+        })
+        .count();
+
+    let total_sessions: u32 = health_map.values().map(|h| h.user_count).sum();
+    let total_channels = state.channel_store.count().await;
+
+    drop(edge_regs);
+    drop(health_map);
+
+    let mut buf = String::with_capacity(1024);
+
+    // Helper macro to write a gauge metric in Prometheus text format
+    macro_rules! gauge {
+        ($name:expr, $help:expr, $value:expr) => {
+            buf.push_str(&format!(
+                "# HELP {} {}\n# TYPE {} gauge\n{} {}\n",
+                $name, $help, $name, $name, $value
+            ));
+        };
+    }
+
+    gauge!(
+        "munode_hub_connected_edges",
+        "Number of currently connected Edge nodes",
+        connected_edges
+    );
+    gauge!(
+        "munode_hub_total_sessions",
+        "Total user sessions across all Edges",
+        total_sessions
+    );
+    gauge!(
+        "munode_hub_total_channels",
+        "Total channels in the channel store",
+        total_channels
+    );
+    gauge!(
+        "munode_hub_uptime_seconds",
+        "Hub server uptime in seconds",
+        uptime
+    );
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        buf,
+    )
+        .into_response()
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 /// Build the axum router for the Web API.
@@ -273,6 +352,7 @@ pub fn build_router(state: Arc<HubState>) -> Router {
         .route("/api/stats", get(handle_stats))
         .route("/api/topology", get(handle_topology))
         .route("/api/health", get(handle_health))
+        .route("/metrics", get(handle_metrics))
         .with_state(state)
 }
 

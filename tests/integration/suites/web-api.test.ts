@@ -164,6 +164,35 @@ describe.skipIf(!USE_RUST)('Hub Web API Integration Tests', () => {
     }, 5000);
   });
 
+  describe('Prometheus Metrics', () => {
+    it('GET /metrics should return Prometheus text format', async () => {
+      const url = `http://127.0.0.1:${testEnv.webApiPort}/metrics`;
+      const res = await fetch(url);
+      expect(res.status).toBe(200);
+      const contentType = res.headers.get('content-type') ?? '';
+      expect(contentType).toContain('text/plain');
+      const text = await res.text();
+      // All four required metrics must be present
+      expect(text).toContain('munode_hub_connected_edges');
+      expect(text).toContain('munode_hub_total_sessions');
+      expect(text).toContain('munode_hub_total_channels');
+      expect(text).toContain('munode_hub_uptime_seconds');
+      // Each metric must have a HELP and TYPE line
+      expect(text).toContain('# HELP munode_hub_connected_edges');
+      expect(text).toContain('# TYPE munode_hub_connected_edges gauge');
+    }, 5000);
+
+    it('GET /metrics should report at least 1 connected edge', async () => {
+      const url = `http://127.0.0.1:${testEnv.webApiPort}/metrics`;
+      const res = await fetch(url);
+      const text = await res.text();
+      // Extract value for munode_hub_connected_edges
+      const match = text.match(/^munode_hub_connected_edges (\d+)/m);
+      expect(match).not.toBeNull();
+      expect(parseInt(match![1])).toBeGreaterThanOrEqual(1);
+    }, 5000);
+  });
+
   describe('Unknown Endpoints', () => {
     it('unknown path should return 404', async () => {
       const url = `http://127.0.0.1:${testEnv.webApiPort}/api/nonexistent`;
