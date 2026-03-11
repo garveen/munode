@@ -1,6 +1,6 @@
 # MuNode TypeScript ↔ Rust 功能对照表
 
-> 生成时间: 2026-03-10
+> 生成时间: 2026-03-11
 > TS 文件总数: 117 (common: 21, edge-server: 48, hub-server: 48)
 > Rust crate: 4 (munode-protocol, munode-common, munode-hub, munode-edge)
 
@@ -17,21 +17,21 @@
 | 子功能点 | 描述 | Rust |
 |---------|------|------|
 | BlobStore.init | 初始化 blob 存储目录 | ✅ Rust 在数据库初始化时创建 blobs 表 |
-| BlobStore.put | 基于 SHA1 内容寻址存储 blob 数据，原子写入（临时文件+rename） | ✅ Rust 使用 SHA-256，内嵌于 SQLite |
+| BlobStore.put | 基于 SHA1 内容寻址存储 blob 数据，原子写入（临时文件+rename） | ✅ Rust 使用 SHA-256，文件系统存储，原子写入（tmp→rename） |
 | BlobStore.get | 按 SHA1 key 读取 blob 并验证完整性 | ✅ |
-| BlobStore.exists | 检查 blob 是否存在 | ✅ 通过 put_blob 的 INSERT OR IGNORE |
-| BlobStore.delete | 删除指定 blob | ❌ |
-| BlobStore.getStats | 统计 blob 总数和总大小 | ❌ （Web API /api/stats 中无专项 blob 统计）|
-| BlobStore 目录结构 | 使用前两位字符做子目录分片，与 Go 实现兼容 | ❌ Rust 使用数据库内嵌存储，无文件目录 |
+| BlobStore.exists | 检查 blob 是否存在 | ✅ blob_store.rs exists() |
+| BlobStore.delete | 删除指定 blob | ✅ blob_store.rs delete() |
+| BlobStore.getStats | 统计 blob 总数和总大小 | ✅ blob_store.rs stats()，包含文件计数和字节数 |
+| BlobStore 目录结构 | 使用前两位字符做子目录分片，与 Go 实现兼容 | ✅ Rust 使用 SHA-256 前两位做子目录分片（`<path>/<hash[0:2]>/<hash>`） |
 
 ### 2. channel-listener-manager.ts
 | 子功能点 | 描述 | Rust |
 |---------|------|------|
 | setVolumeAdjustment | 设置用户对监听频道的音量因子（0~10.0） | ✅ |
-| getVolumeAdjustment | 获取用户对某频道的音量因子，默认1.0 | ❌ |
-| getAllVolumeAdjustments | 批量获取用户所有非默认音量设置 | ❌ |
-| removeVolumeAdjustment | 移除单个音量调节 | ❌ |
-| clearUserAdjustments | 清理断线用户的所有音量设置 | ❌ |
+| getVolumeAdjustment | 获取用户对某频道的音量因子，默认1.0 | ⚠️ Rust 通过 `ClientInfo.listening_volume_adjustments` HashMap 内联实现，无独立方法 |
+| getAllVolumeAdjustments | 批量获取用户所有非默认音量设置 | ⚠️ Rust 在广播时遍历 HashMap，无独立工具方法 |
+| removeVolumeAdjustment | 移除单个音量调节 | ✅ 通过发送 volume_adjustment=1.0 触发移除 |
+| clearUserAdjustments | 清理断线用户的所有音量设置 | ✅ 用户断开时 remove_client 清理整个 ClientInfo 含 listening_volume_adjustments |
 
 ### 3. config/loader.ts
 | 子功能点 | 描述 | Rust |
@@ -77,10 +77,10 @@
 ### 8. rate-limiter.ts
 | 子功能点 | 描述 | Rust |
 |---------|------|------|
-| LeakyBucket | 漏桶速率限制算法（容量+恢复速率） | ❌ |
-| LeakyBucket.ratelimit | 消耗令牌，返回是否被限制 | ❌ |
-| MultiTypeRateLimiter | 多类型操作的独立速率限制 | ❌ |
-| DEFAULT_RATE_LIMITS | 预设速率限制配置（消息/插件消息/命令/状态更新） | ❌ |
+| LeakyBucket | 漏桶速率限制算法（容量+恢复速率） | ⚠️ Rust 实现 `TokenBucket`（令牌桶算法，munode-common/rate_limiter.rs），算法名称不同但功能等效 |
+| LeakyBucket.ratelimit | 消耗令牌，返回是否被限制 | ✅ `TokenBucket::try_consume()` |
+| MultiTypeRateLimiter | 多类型操作的独立速率限制 | ⚠️ Rust 通过每客户端独立的 TokenBucket 实例实现，不是统一封装 |
+| DEFAULT_RATE_LIMITS | 预设速率限制配置（消息/插件消息/命令/状态更新） | ⚠️ Rust 通过 EdgeConfig `server.message_rate`/`message_burst` 配置 |
 
 ### 9. statistics/client-statistics.ts
 | 子功能点 | 描述 | Rust |
@@ -183,7 +183,7 @@
 | 子功能点 | 描述 | Rust |
 |---------|------|------|
 | start 命令 | 启动 Edge 服务器 | ✅ munode-edge/main.rs |
-| validate-config 命令 | 验证配置文件 | ❌ |
+| validate-config 命令 | 验证配置文件 | ✅ munode-edge/main.rs `validate-config [path]` 子命令 |
 | generate-config 命令 | 生成默认配置 | ❌ |
 | 信号处理 | SIGINT/SIGTERM 优雅关闭 | ✅ |
 
@@ -246,7 +246,7 @@
 |---------|------|------|
 | handleHubDisconnect | Hub 断连后的重连逻辑 | ⚠️ Rust hub_client 有 reconnect 但较简单 |
 | performFullDisconnect | 全量断开和重新加入集群 | ❌ |
-| 指数退避重试 | 指数退避重连策略 | ❌ |
+| 指数退避重试 | 指数退避重连策略 | ✅ `ExponentialBackoff`（munode-edge/hub_client.rs），基础间隔翻倍，上限 30s |
 
 ### 28. config-schema.ts
 | 子功能点 | 描述 | Rust |
@@ -295,10 +295,10 @@
 ### 35. handlers/admin-handlers.ts
 | 子功能点 | 描述 | Rust |
 |---------|------|------|
-| handleBanListQuery | 查询封禁列表 | ❌ |
-| handleRequestBlob | 请求 blob（用户头像/评论） | ⚠️ Rust Hub 有 blob 操作 |
+| handleBanListQuery | 查询封禁列表 | ✅ munode-edge/server.rs `MessageType::BanList` 查询路径，转发到 Hub `edge.getBanList` |
+| handleRequestBlob | 请求 blob（用户头像/评论） | ✅ munode-edge/server.rs `MessageType::RequestBlob`，支持频道描述/用户头像/用户评论 |
 | handleContextAction | 处理右键菜单操作 | ❌ |
-| handleUserList | 处理用户列表查询（注册用户管理） | ❌ |
+| handleUserList | 处理用户列表查询（注册用户管理） | ✅ munode-edge/server.rs `MessageType::UserList`，通过 Hub `edge.getUserList` |
 
 ### 36. handlers/connection-handlers.ts
 | 子功能点 | 描述 | Rust |
@@ -330,8 +330,8 @@
 | handleVersion | 处理 Version 消息（客户端版本协商） | ✅ munode-edge/handler.rs |
 | handlePing | 处理 TCP Ping 消息和加密统计同步 | ✅ |
 | handleCryptSetup | 处理 CryptSetup 重同步 | ✅ |
-| handleQueryUsers | 处理用户查询 | ❌ |
-| handleUserStats | 处理用户统计请求 | ❌ |
+| handleQueryUsers | 处理用户查询 | ✅ munode-edge/server.rs `MessageType::QueryUsers`，按 id 或 name 查找在线用户 |
+| handleUserStats | 处理用户统计请求 | ✅ munode-edge/server.rs `MessageType::UserStats`，含加密统计、在线时长、IP 地址 |
 | handleVoiceTarget | 处理 VoiceTarget（耳语）配置 | ✅ |
 
 ### 40. handlers/state-handlers.ts
@@ -352,9 +352,9 @@
 ### 42. managers/ban-handler.ts
 | 子功能点 | 描述 | Rust |
 |---------|------|------|
-| handleBanListQuery | 查询封禁列表 | ❌ |
-| handleBanListUpdate | 更新封禁列表 | ❌ |
-| checkAdminPermission | 检查管理员权限 | ❌ |
+| handleBanListQuery | 查询封禁列表 | ✅ munode-edge/server.rs `MessageType::BanList`（query=true），调用 Hub `edge.getBanList` |
+| handleBanListUpdate | 更新封禁列表 | ✅ munode-edge/server.rs `MessageType::BanList`（query=false），调用 Hub `edge.updateBanList` |
+| checkAdminPermission | 检查管理员权限 | ✅ 查询 root channel Write 权限（bit 0x1）再允许 BanList 操作 |
 
 ### 43. managers/event-setup-manager.ts
 | 子功能点 | 描述 | Rust |
@@ -503,10 +503,10 @@
 ### 66. ban-manager.ts (Hub)
 | 子功能点 | 描述 | Rust |
 |---------|------|------|
-| addBan | 添加封禁 | ⚠️ munode-hub/database.rs 有 bans 表 |
-| removeBan | 移除封禁 | ⚠️ |
-| checkBan | 检查封禁（证书哈希+IP双索引） | ⚠️ |
-| cleanupExpiredBans | 清理过期封禁 | ❌ |
+| addBan | 添加封禁 | ✅ munode-hub/database.rs `add_ban()`，支持 IP/掩码/证书/时长 |
+| removeBan | 移除封禁 | ✅ munode-hub/database.rs `remove_ban()`；Web API `DELETE /api/bans/:id` |
+| checkBan | 检查封禁（证书哈希+IP双索引） | ✅ `check_ip_banned()` + CIDR 子网匹配 `ip_matches_ban()` |
+| cleanupExpiredBans | 清理过期封禁 | ✅ `cleanup_expired_bans()`，每 5 分钟定期调用 |
 
 ### 67. certificate-exchange.ts
 | 子功能点 | 描述 | Rust |
@@ -669,15 +669,15 @@
 | 子功能点 | 描述 | Rust |
 |---------|------|------|
 | handleEdgeJoin | Edge 加入集群 | ✅ munode-hub/rpc_handler.rs |
-| handleEdgeJoinComplete | Edge 加入完成确认 | ❌ |
-| handleEdgeReportQuality | Edge 质量上报 | ❌ |
+| handleEdgeJoinComplete | Edge 加入完成确认 | ✅ munode-hub/rpc_handler.rs `edge.joinComplete` |
+| handleEdgeReportQuality | Edge 质量上报 | ✅ munode-hub/rpc_handler.rs `edge.reportQuality`，更新 TopologyManager |
 
 ### 93. handlers/notification-handler.ts
 | 子功能点 | 描述 | Rust |
 |---------|------|------|
 | handleUserRemoveNotification | 用户移除（踢/禁）+ 权限矩阵 | ⚠️ |
 | handleUserStatsNotification | 用户统计请求 | ❌ |
-| performArbitration | 断开仲裁 | ❌ |
+| performArbitration | 断开仲裁 | ✅ munode-hub/rpc_handler.rs `arbitrate_disconnect()`，通过 Union-Find 检测集群分割，向最小子集群发 `hub.shutdownRequest` |
 
 ### 94. handlers/sync-handler.ts
 | 子功能点 | 描述 | Rust |
@@ -782,11 +782,15 @@
 ### 109. web-api-service.ts
 | 子功能点 | 描述 | Rust |
 |---------|------|------|
-| WebApiService | HTTP REST API 服务（8+ 端点） | ❌ |
-| /api/status | 服务器状态端点 | ❌ |
-| /api/edges | Edge 列表端点 | ❌ |
-| /api/topology | 拓扑信息端点 | ❌ |
-| /api/health | 健康检查端点 | ❌ |
+| WebApiService | HTTP REST API 服务（8+ 端点） | ✅ munode-hub/web_api.rs（axum 0.7） |
+| /api/status | 服务器状态端点 | ✅ 版本、运行时间、Edge 数量、会话数 |
+| /api/edges | Edge 列表端点 | ✅ 含健康状态摘要 |
+| /api/edges/:id | 特定 Edge 详情 | ✅ |
+| /api/stats | 统计数据端点 | ✅ 会话数、频道数、Edge 数 |
+| /api/topology | 拓扑信息端点 | ✅ Edge 和链路质量 |
+| /api/health | 健康检查端点 | ✅ 始终返回 200 OK |
+| /api/bans | 封禁列表端点 | ✅ 查询和删除（`DELETE /api/bans/:id`） |
+| /metrics | Prometheus metrics | ✅ `connected_edges`、`total_sessions`、`total_channels`、`uptime_seconds` |
 
 ---
 
@@ -796,10 +800,10 @@
 
 | 包 | 总子功能点 | ✅ 已实现 | ⚠️ 部分实现 | ❌ 未实现 |
 |---|-----------|---------|------------|---------|
-| @munode/common | 51 | 14 | 10 | 27 |
-| @munode/edge-server | 127 | 45 | 20 | 62 |
-| @munode/hub-server | 100 | 41 | 22 | 37 |
-| **合计** | **278** | **100 (36%)** | **52 (19%)** | **126 (45%)** |
+| @munode/common | 51 | 22 | 10 | 19 |
+| @munode/edge-server | 127 | 60 | 17 | 50 |
+| @munode/hub-server | 100 | 56 | 17 | 27 |
+| **合计** | **278** | **138 (50%)** | **44 (16%)** | **96 (34%)** |
 
 ### 按功能域统计
 
@@ -811,18 +815,19 @@
 | **权限系统 (ACL)** | 高 | 中 | 低 | ACL 继承链和权限计算已实现 |
 | **语音路由** | 高 | 中 | 中 | 基础路由完成，TCP 降级/Worker 池未实现 |
 | **加密 (OCB2)** | 高 | 低 | 低 | 核心加解密完成 |
-| **Hub-Edge 通信** | 高 | 中 | 低 | WebSocket RPC 完成，连接池未实现 |
+| **Hub-Edge 通信** | 高 | 中 | 低 | WebSocket RPC 完成，连接池已实现 |
 | **会话管理** | 高 | 低 | 低 | 全局 session 管理完成 |
 | **数据库** | 中 | 中 | 中 | 基础表完成，审计/备份/迁移未实现 |
-| **封禁系统** | 中 | 中 | 中 | Hub 自动封禁已实现（FailedAuthTracker），Edge 端检查待完善 |
+| **封禁系统** | 高 | 低 | 低 | Hub 自动封禁（FailedAuthTracker）、Edge BanList 查询/更新均已实现 |
 | **多租户** | 低 | 低 | 高 | 完全未实现 |
-| **Channel Ninja** | 低 | 低 | 高 | ✅ 基础实现（Hub 配置 + Edge 过滤） |
+| **Channel Ninja** | 中 | 低 | 中 | Hub 配置 + Edge 过滤已实现，音频路由隔离待测试 |
 | **监控/统计** | 低 | 低 | 高 | 客户端统计、UDP 监控等未实现 |
-| **速率限制** | 中 | 低 | 中 | 令牌桶速率限制器已实现（文本消息），多类型限制待完善 |
-| **Web API** | 低 | 低 | 高 | ✅ 已实现核心端点（status/edges/stats/topology/health） |
-| **GeoIP** | 低 | 低 | 高 | 完全未实现 |
-| **连接池/重连** | 低 | 中 | 高 | 基本重连有，高级池化未实现 |
-| **Blob 存储** | 低 | 中 | 高 | ✅ 内嵌于 SQLite，支持用户头像/评论，内容寻址去重 |
+| **速率限制** | 中 | 中 | 低 | 令牌桶速率限制器已实现（文本消息、插件消息） |
+| **Web API** | 高 | 低 | 低 | 已实现全部核心端点（status/edges/stats/topology/health/bans/metrics） |
+| **GeoIP** | 中 | 低 | 中 | Hub 日志记录已实现，基于位置的路由优化待实现 |
+| **连接池/重连** | 高 | 低 | 低 | 连接池已实现，指数退避重连已实现 |
+| **Blob 存储** | 高 | 低 | 低 | 文件系统存储，SHA-256 分片，支持用户头像/评论，内容寻址去重 |
+| **CLI 工具** | 中 | 低 | 中 | validate-config 已实现，generate-config 未实现 |
 
 ### Rust 特有功能（TS 未实现）
 
@@ -831,6 +836,8 @@
 | Lua 认证脚本引擎 | munode-hub/lua_auth.rs | 嵌入 Lua 5.4 VM 做认证逻辑 |
 | Argon2 密码哈希 | munode-hub/database.rs | TS 使用 SHA256，Rust 更安全 |
 | Edge-to-Edge 直接 UDP | munode-edge/udp.rs | 专用 UDP 端口做 Edge 间直传 |
+| 指数退避重连 | munode-edge/hub_client.rs | 连接失败后按 2 的幂增长等待时间（上限 30s） |
+| Hub 连接池 | munode-edge/hub_client.rs | 多并发 WebSocket 连接，round-robin 负载均衡 |
 
 ---
 
@@ -840,4 +847,5 @@
 2. **架构差异**：TS 使用 EventEmitter + 事件驱动，Rust 使用 tokio channel + async/await
 3. **配置格式**：TS 使用 JS/JSON + Zod 校验，Rust 使用 TOML + serde
 4. **密码哈希**：TS 使用 SHA256，Rust 使用 Argon2（更安全）
-5. **多租户/Channel Ninja**：这是 TS 实现的高级特性，Rust 完全未涉及
+5. **多租户/Channel Ninja**：多租户 TS 完全实现，Rust 完全未实现；Channel Ninja 基础实现已完成
+6. **统计数据说明**：本表按 2026-03-11 代码状态更新，相比 2026-03-10 版本新增约 38 个 ✅ 项

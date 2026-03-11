@@ -14,9 +14,34 @@ async fn main() -> Result<()> {
         .install_default()
         .expect("Failed to install rustls aws-lc-rs crypto provider");
 
-    let config_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "config/edge.toml".to_string());
+    let args: Vec<String> = std::env::args().collect();
+
+    // Subcommand: `validate-config [path]`
+    if args.get(1).map(|s| s.as_str()) == Some("validate-config") {
+        let config_path = args.get(2)
+            .map(|s| s.as_str())
+            .unwrap_or("config/edge.toml");
+        match load_edge_config(config_path) {
+            Ok(cfg) => {
+                println!("✅ Edge config '{}' is valid.", config_path);
+                println!("   {:<14} {}", "server_id:", cfg.server_id);
+                println!("   {:<14} {}", "name:", cfg.name);
+                println!("   {:<14} {}", "port:", cfg.network.port);
+                println!("   {:<14} {}:{}", "hub:", cfg.hub_server.host, cfg.hub_server.control_port);
+                println!("   {:<14} {}", "log_level:", cfg.log_level);
+            }
+            Err(e) => {
+                eprintln!("❌ Edge config '{}' is invalid: {}", config_path, e);
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    let config_path = args.get(1)
+        .map(|s| s.as_str())
+        .unwrap_or("config/edge.toml")
+        .to_string();
 
     let config = load_edge_config(&config_path)?;
     init_logging_with_format(&config.log_level, &config.log_format);

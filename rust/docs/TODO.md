@@ -651,11 +651,11 @@ Edge 向客户端发送建议：
 ### 3. 运维工具
 
 **优先级**: P2  
-**状态**: 📋 计划中
+**状态**: 🚧 进行中（配置验证已实现）
 
 #### 任务
 - [ ] 数据库迁移工具
-- [ ] 配置验证工具
+- [x] 配置验证工具（`validate-config [path]` 子命令，Hub/Edge 均已实现）
 - [ ] 备份/恢复工具
 - [ ] 诊断和调试工具
 - [ ] 批量管理脚本
@@ -676,7 +676,7 @@ Edge 向客户端发送建议：
 | ACL 权限 | ✅ | tests/integration/suites/acl*.test.ts |
 | 用户状态同步 | ✅ | tests/integration/suites/user-state-broadcast.test.ts |
 | Hub 重启恢复 | ✅ | tests/integration/suites/hub-restart.test.ts |
-| Web API | ❌ | 未实现 |
+| Web API | ✅ | tests/integration/suites/web-api.test.ts (Rust only) |
 | Blob 存储 | ✅ | tests/integration/suites/blob-storage.test.ts (TS only) |
 | 自动封禁 | ✅ | tests/integration/suites/auto-ban.test.ts |
 | 频道记忆 | ✅ | tests/integration/suites/channel-memory.test.ts |
@@ -698,7 +698,7 @@ Edge 向客户端发送建议：
 | 包丢失计算 | ✅ | tests/integration/suites/edge-packet-loss-calculation.test.ts |
 | 多租户 SNI | ✅ | tests/integration/suites/multi-tenant-sni.test.ts (TS only) |
 | GeoIP | ❌ | 未实现 |
-| 连接池 | ❌ | 待添加 |
+| 连接池 | ✅ | Hub 连接池已实现（pool_size 配置项，默认 1 连接，可扩展为多连接） |
 | 经由 Peer Edge 中继控制信道 | ❌ | 待实现（TS 和 Rust 均未有此功能） |
 
 ---
@@ -714,34 +714,34 @@ Edge 向客户端发送建议：
    - 监听者状态管理、跨频道音频路由实现
 
 ### 尽快实现（P1）
-4. **语音路由策略配置（Hub）** (Hub #11) - 🚧 进行中
-   - 正在实现，需要完善配置和策略
-5. **详细的语音路由配置（Edge）** (Edge #1) - 🚧 进行中
-   - 正在实现，需要完善配置和降级逻辑
+4. **语音路由策略配置（Hub）** (Hub #11) - ✅ 已完成（基础配置）
+   - 质量指标收集和动态路由切换留待后续
+5. **详细的语音路由配置（Edge）** (Edge #1) - ✅ 已完成（基础配置）
+   - 质量探测和自动降级留待后续
 6. **集群分割探测与处置** (Hub #12) - ✅ 已完成
    - Hub 侧 shutdownRequest 处置、Edge 侧 hub.shutdownRequest 处理、集成测试
-7. **Blob 存储系统** (Hub #2) - 📋 计划中
-   - 头像、图片等附件存储
+7. **Blob 存储系统** (Hub #2) - ✅ 已完成
+   - 文件系统存储，SHA-256 分片目录，支持用户头像/评论，内容寻址去重
 8. **自动封禁系统** (Hub #5) - ✅ 已完成（基础实现）
    - 配置结构、IP 追踪、时间窗口滑动计数、自动封禁写入 DB、集成测试
 9. **客户端建议配置** (Hub #7 / Edge) - ✅ 已完成
    - EdgeConfig suggest 结构、SuggestConfig 消息发送
-10. **Hub 连接池** (Edge #3) - 📋 计划中
-    - 可靠性和负载分散
+10. **Hub 连接池** (Edge #3) - ✅ 已完成
+    - 多并发 WebSocket 连接、round-robin 负载均衡、per-slot 独立重连（含指数退避）
 11. **性能优化** (其他 #1) - 📋 计划中
     - 持续优化性能和内存使用
 
 ### 可以延后（P2）
-12. **Web API 接口** (Hub #1) - 📋 计划中
-    - 管理和监控接口
+12. **Web API 接口** (Hub #1) - ✅ 已完成
+    - 管理和监控接口：status/edges/stats/topology/health/bans/metrics
 13. **用户名和频道名验证规则** (Hub #4) - ✅ 已完成
     - 正则验证规则（`validation.username_regex`、`validation.channel_name_regex`）
 14. **经由 Peer Edge 中继控制信道** (Edge #5) - 📋 计划中
     - Hub 不可达时通过 Peer Edge 代理控制信道，防止 Edge 孤岛
-15. **监控和可观测性** (其他 #2) - 📋 计划中
-    - Prometheus metrics 和追踪
-16. **运维工具** (其他 #3) - 📋 计划中
-    - 数据库迁移、备份等工具
+15. **监控和可观测性** (其他 #2) - 🚧 进行中
+    - Prometheus metrics 和结构化日志已实现，分布式追踪待实现
+16. **运维工具** (其他 #3) - 🚧 进行中
+    - 配置验证工具已实现，数据库迁移/备份等待实现
 
 ### 按需实现（P3）
 17. **Channel Ninja 功能** (Hub #9) - 暂不实现
@@ -788,3 +788,6 @@ Edge 向客户端发送建议：
 
 - 2026-03-10: 初始版本，列出所有未实现功能
 - 2026-03-10: 实现 Hub #4 用户名/频道名验证规则（`validation.username_regex`、`validation.channel_name_regex`），添加集成测试 `validation-rules.test.ts`
+- 2026-03-11: 实现运维工具 #配置验证（`validate-config [path]` 子命令，Hub/Edge main.rs 均已添加）
+- 2026-03-11: 实现 Edge 重连指数退避（`ExponentialBackoff`，hub_client.rs，基础间隔翻倍上限 30s）
+- 2026-03-11: 更新 ts-rust-feature-comparison.md（修正大量已实现但标记为 ❌ 的条目：BanList 管理、RequestBlob、QueryUsers、UserStats、UserList、Web API、Blob store、BanManager、集群处理器等），实现覆盖率从 36% 提升至约 50%

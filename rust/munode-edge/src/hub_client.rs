@@ -34,6 +34,40 @@ use crate::state::{EdgeEvent, EdgeState, PeerEdgeInfo};
 const SECONDARY_SLOT_WAIT_POLL_INTERVAL_MS: u64 = 100;
 const SECONDARY_SLOT_WAIT_MAX_POLLS: u32 = 100;
 
+/// Exponential backoff helper for reconnection loops.
+///
+/// Starts at `base_ms` milliseconds and doubles on each failed attempt, up to
+/// a maximum of 30 seconds.  A successful connection resets the counter to zero.
+struct ExponentialBackoff {
+    base_ms: u64,
+    current_ms: u64,
+    attempt: u32,
+}
+
+impl ExponentialBackoff {
+    const MAX_DELAY_MS: u64 = 30_000;
+
+    fn new(base_ms: u64) -> Self {
+        let base_ms = base_ms.max(100); // minimum 100 ms
+        Self { base_ms, current_ms: base_ms, attempt: 0 }
+    }
+
+    /// Return the delay for the next reconnect attempt and advance the counter.
+    fn next_delay(&mut self) -> Duration {
+        let delay = self.current_ms;
+        self.attempt += 1;
+        // Double the delay on every failure, capped at MAX_DELAY_MS.
+        self.current_ms = (self.current_ms.saturating_mul(2)).min(Self::MAX_DELAY_MS);
+        Duration::from_millis(delay)
+    }
+
+    /// Reset the backoff after a successful connection.
+    fn reset(&mut self) {
+        self.attempt = 0;
+        self.current_ms = self.base_ms;
+    }
+}
+
 /// Connection state for the Hub client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HubConnectionState {
@@ -150,10 +184,14 @@ impl HubClient {
                     me.run_secondary_slot(slot).await;
                 });
             }
-            // Keep primary alive with reconnection loop.
+            // Keep primary alive with reconnection loop (exponential backoff).
+            let mut backoff = ExponentialBackoff::new(self.config.reconnect_interval);
             loop {
                 match self.try_connect_slot(0, true).await {
-                    Ok(()) => info!("Primary Hub connection closed, reconnecting…"),
+                    Ok(()) => {
+                        info!("Primary Hub connection closed, reconnecting…");
+                        backoff.reset();
+                    }
                     Err(e) => error!("Primary Hub connection error: {}", e),
                 }
                 self.clear_slot(0).await;
@@ -163,7 +201,7 @@ impl HubClient {
                     self.pending.lock().await.clear();
                     self.edge_state.emit(EdgeEvent::HubDisconnected);
                 }
-                let delay = Duration::from_millis(self.config.reconnect_interval);
+                let delay = backoff.next_delay();
                 warn!("Primary: reconnecting to Hub in {:?}", delay);
                 time::sleep(delay).await;
             }
@@ -171,11 +209,15 @@ impl HubClient {
         Ok(())
     }
 
-    /// Run the single-slot (no pool) reconnect loop.
+    /// Run the single-slot (no pool) reconnect loop with exponential backoff.
     async fn run_single_slot(self: &Arc<Self>, slot: usize, is_primary: bool) {
+        let mut backoff = ExponentialBackoff::new(self.config.reconnect_interval);
         loop {
             match self.try_connect_slot(slot, is_primary).await {
-                Ok(()) => info!("Hub connection closed normally"),
+                Ok(()) => {
+                    info!("Hub connection closed normally");
+                    backoff.reset();
+                }
                 Err(e) => error!("Hub connection error: {}", e),
             }
             // Clean up state
@@ -184,7 +226,7 @@ impl HubClient {
             self.pending.lock().await.clear();
             self.edge_state.emit(EdgeEvent::HubDisconnected);
 
-            let delay = Duration::from_millis(self.config.reconnect_interval);
+            let delay = backoff.next_delay();
             warn!("Reconnecting to Hub in {:?}", delay);
             time::sleep(delay).await;
         }
@@ -196,16 +238,20 @@ impl HubClient {
         self.try_connect_slot(0, true).await
     }
 
-    /// Background reconnect loop for a secondary pool slot.
+    /// Background reconnect loop for a secondary pool slot with exponential backoff.
     async fn run_secondary_slot(self: &Arc<Self>, slot: usize) {
+        let mut backoff = ExponentialBackoff::new(self.config.reconnect_interval);
         loop {
             match self.try_connect_secondary_slot(slot).await {
-                Ok(()) => debug!("Pool slot {} closed", slot),
+                Ok(()) => {
+                    debug!("Pool slot {} closed", slot);
+                    backoff.reset();
+                }
                 Err(e) => warn!("Pool slot {} error: {}", slot, e),
             }
             self.clear_slot(slot).await;
 
-            let delay = Duration::from_millis(self.config.reconnect_interval);
+            let delay = backoff.next_delay();
             debug!("Pool slot {} reconnecting in {:?}", slot, delay);
             time::sleep(delay).await;
         }
