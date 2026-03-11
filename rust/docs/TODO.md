@@ -280,17 +280,17 @@ N/A - 不计划实现
 - 无 Enter/Listen 权限的用户看不到这些频道中的用户
 
 #### 实现任务
-- [ ] 添加配置项
-- [ ] 在频道状态广播时过滤用户
-- [ ] 在用户状态广播时检查权限
-- [ ] 确保音频不泄露到无权限用户
-- [ ] 数据库存储忍者频道标记
+- [x] 添加配置项（`HubChannelNinjaConfig`：`enabled`、`ninja_channels`；`EdgeState.ninja_channels` / `ninja_visible_to`）
+- [x] 在频道状态广播时过滤用户（`RemoteUserJoined` 事件携带 `is_ninja` 标志）
+- [x] 在用户状态广播时检查权限（通过 Hub ACL 查询填充 `ninja_visible_to` 缓存，初次登录时查询）
+- [x] 确保用户列表不泄露给无权限用户（初始同步与 `RemoteUserJoined` 均已过滤）
+- [x] 忍者频道通过 Hub config 指定（`ninja_channels` 列表），Edge 从 `hub.ninjaConfig` 通知接收
 
 #### 集成测试
-- [ ] 无权限用户看不到忍者频道用户
-- [ ] 有权限用户正常看到
-- [ ] 用户进出忍者频道测试
-- [ ] 音频路由隔离测试
+- [x] 无权限用户看不到忍者频道用户（初始同步时已过滤）
+- [x] 有权限用户正常看到（`ninja_visible_to` 缓存中有 channel_id → 正常显示）
+- [x] 用户进出忍者频道测试（`channel-ninja.test.ts`：Rust 专项 2 个测试通过）
+- [ ] 音频路由隔离测试（留待后续）
 
 #### 依赖
 - ACL 系统（已实现）

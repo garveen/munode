@@ -288,9 +288,27 @@ pub struct HubConfig {
     /// Voice routing policy configuration.
     #[serde(default)]
     pub voice_routing: HubVoiceRoutingConfig,
+    /// Channel Ninja configuration.
+    #[serde(default)]
+    pub channel_ninja: HubChannelNinjaConfig,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
+}
+
+/// Channel Ninja configuration.
+///
+/// When enabled, users who lack both Enter AND Listen permission on a channel
+/// will not see that channel or its occupants.  This hides privileged channels
+/// from unprivileged users entirely.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct HubChannelNinjaConfig {
+    /// Enable Channel Ninja feature.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Channel IDs that are ninja channels.  Only used when `enabled` is true.
+    #[serde(default)]
+    pub ninja_channels: Vec<u32>,
 }
 
 /// Hub-side voice routing policy configuration.

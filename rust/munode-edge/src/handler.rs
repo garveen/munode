@@ -185,6 +185,20 @@ impl<'a> LoginHandler<'a> {
             if local_sessions.contains(&user.session_id) {
                 continue;
             }
+            // Channel Ninja: skip users in ninja channels that this client cannot enter
+            {
+                let ninja_channels = self.edge_state.ninja_channels.read().await;
+                if ninja_channels.contains(&user.channel_id) {
+                    let visible_cache = self.edge_state.ninja_visible_to.read().await;
+                    let can_see = visible_cache
+                        .get(&self_session)
+                        .map(|set| set.contains(&user.channel_id))
+                        .unwrap_or(false);
+                    if !can_see {
+                        continue;
+                    }
+                }
+            }
             let msg = mumbleproto::UserState {
                 session: Some(user.session_id),
                 user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
@@ -206,6 +220,20 @@ impl<'a> LoginHandler<'a> {
         for client in &local_clients {
             if client.session == self_session {
                 continue;
+            }
+            // Channel Ninja: skip users in ninja channels that this client cannot enter
+            {
+                let ninja_channels = self.edge_state.ninja_channels.read().await;
+                if ninja_channels.contains(&client.channel_id) {
+                    let visible_cache = self.edge_state.ninja_visible_to.read().await;
+                    let can_see = visible_cache
+                        .get(&self_session)
+                        .map(|set| set.contains(&client.channel_id))
+                        .unwrap_or(false);
+                    if !can_see {
+                        continue;
+                    }
+                }
             }
             let listening_volume_adjustment: Vec<mumbleproto::user_state::VolumeAdjustment> = client
                 .listening_volume_adjustments

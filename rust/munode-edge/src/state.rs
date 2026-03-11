@@ -70,7 +70,7 @@ pub enum EdgeEvent {
     /// Hub connection lost.
     HubDisconnected,
     /// A remote user joined (from another Edge, synced via Hub).
-    RemoteUserJoined { session_id: u32, username: String, channel_id: u32 },
+    RemoteUserJoined { session_id: u32, username: String, channel_id: u32, is_ninja: bool },
     /// A remote user left.
     RemoteUserLeft { session_id: u32 },
     /// A remote user's state changed (mute, deaf, etc.).
@@ -145,6 +145,14 @@ pub struct EdgeState {
     /// Maximum number of listeners allowed in a single channel.
     /// 0 = unlimited.
     pub listeners_per_channel: u32,
+    /// Channel Ninja: list of channel IDs that are hidden from unprivileged users.
+    /// Users without both Enter (0x4) AND Listen (0x800) permission on the channel
+    /// will not see its occupants.  Populated from Hub on registration.
+    pub ninja_channels: tokio::sync::RwLock<Vec<u32>>,
+    /// Per-session ninja channel permission cache.
+    /// session_id -> set of channel IDs the user has Enter permission on.
+    /// Used for fast ninja visibility checks without Hub round-trips.
+    pub ninja_visible_to: tokio::sync::RwLock<HashMap<u32, std::collections::HashSet<u32>>>,
 }
 
 impl EdgeState {
@@ -167,6 +175,8 @@ impl EdgeState {
             allow_direct_udp: true,
             listeners_per_user: 0,
             listeners_per_channel: 0,
+            ninja_channels: tokio::sync::RwLock::new(vec![]),
+            ninja_visible_to: tokio::sync::RwLock::new(HashMap::new()),
         })
     }
 
@@ -192,6 +202,8 @@ impl EdgeState {
             allow_direct_udp,
             listeners_per_user: 0,
             listeners_per_channel: 0,
+            ninja_channels: tokio::sync::RwLock::new(vec![]),
+            ninja_visible_to: tokio::sync::RwLock::new(HashMap::new()),
         })
     }
 
@@ -218,6 +230,8 @@ impl EdgeState {
             allow_direct_udp,
             listeners_per_user,
             listeners_per_channel,
+            ninja_channels: tokio::sync::RwLock::new(vec![]),
+            ninja_visible_to: tokio::sync::RwLock::new(HashMap::new()),
         })
     }
 

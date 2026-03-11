@@ -396,6 +396,24 @@ async fn handle_client_connection(
                     client_state = ClientState::Ready;
                     edge_state.client_manager.set_client_state(sid, ClientState::Ready).await;
 
+                    // Populate ninja channel permission cache for this client
+                    {
+                        let ninja_channels = edge_state.ninja_channels.read().await.clone();
+                        if !ninja_channels.is_empty() {
+                            let mut visible_set = std::collections::HashSet::new();
+                            for &ch_id in &ninja_channels {
+                                let can_enter = match hub_client.handle_permission_query(sid, ch_id).await {
+                                    Ok(r) => r.permissions.map(|p| p & 0x4 != 0).unwrap_or(false),
+                                    Err(_) => false,
+                                };
+                                if can_enter {
+                                    visible_set.insert(ch_id);
+                                }
+                            }
+                            edge_state.ninja_visible_to.write().await.insert(sid, visible_set);
+                        }
+                    }
+
                     // If suppress was set by permission check, notify the client itself
                     if client.suppress && !auth_result.suppress.unwrap_or(false) {
                         let suppress_msg = mumbleproto::UserState {
@@ -1153,6 +1171,8 @@ async fn handle_client_connection(
     // Cleanup
     if let Some(sid) = session_id {
         edge_state.client_manager.remove_client(sid).await;
+        // Clean up ninja channel permission cache for this session
+        edge_state.ninja_visible_to.write().await.remove(&sid);
 
         // Broadcast UserRemove to all remaining clients
         let remove_msg = handler::build_user_remove_msg(sid, None);
@@ -2067,6 +2087,7 @@ mod tests {
             session_id: 10,
             username: "remote10".to_string(),
             channel_id: 0,
+            is_ninja: false,
         });
 
         let msg = decode_user_state(&rx_obs.recv().await.expect("must receive join announcement"));
@@ -2103,6 +2124,7 @@ mod tests {
             session_id: 11,
             username: "remote11".to_string(),
             channel_id: 0,
+            is_ninja: false,
         });
 
         let msg = decode_user_state(&rx_obs.recv().await.unwrap());
@@ -2194,7 +2216,7 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
         match event_rx.recv().await {
             Ok(event) => {
                 match event {
-                    EdgeEvent::RemoteUserJoined { session_id, username, channel_id } => {
+                    EdgeEvent::RemoteUserJoined { session_id, username, channel_id, is_ninja } => {
                         // Only broadcast for REMOTE users (not local clients - handled by main task)
                         if state.client_manager.get_client(session_id).await.is_none() {
                             if let Some(user) = state.channel_manager.get_remote_user(session_id).await {
@@ -2220,10 +2242,26 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                                     hash: user.cert_hash.clone(),
                                     ..Default::default()
                                 };
-                                state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                                if is_ninja {
+                                    // Channel Ninja: only send to clients who have Enter permission
+                                    // Clients lacking both Enter+Listen permission won't see the user
+                                    let local_clients = state.client_manager.get_all_clients().await;
+                                    let visible_cache = state.ninja_visible_to.read().await;
+                                    for client in local_clients {
+                                        let can_see = visible_cache
+                                            .get(&client.session)
+                                            .map(|set| set.contains(&channel_id))
+                                            .unwrap_or(false);
+                                        if can_see {
+                                            state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
+                                        }
+                                    }
+                                } else {
+                                    state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                                }
                             }
                         }
-                        debug!("Broadcast remote user joined: {} (session {}, channel {})", username, session_id, channel_id);
+                        debug!("Broadcast remote user joined: {} (session {}, channel {}, ninja={})", username, session_id, channel_id, is_ninja);
                     }
                     EdgeEvent::RemoteUserLeft { session_id } => {
                         let msg = handler::build_user_remove_msg(session_id, None);

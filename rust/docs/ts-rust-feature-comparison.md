@@ -27,7 +27,7 @@
 ### 2. channel-listener-manager.ts
 | 子功能点 | 描述 | Rust |
 |---------|------|------|
-| setVolumeAdjustment | 设置用户对监听频道的音量因子（0~10.0） | ❌ |
+| setVolumeAdjustment | 设置用户对监听频道的音量因子（0~10.0） | ✅ |
 | getVolumeAdjustment | 获取用户对某频道的音量因子，默认1.0 | ❌ |
 | getAllVolumeAdjustments | 批量获取用户所有非默认音量设置 | ❌ |
 | removeVolumeAdjustment | 移除单个音量调节 | ❌ |
@@ -239,7 +239,7 @@
 | handleUserStateBroadcastFromHub | 处理 Hub 广播的用户状态更新 | ✅ munode-edge/hub_client.rs |
 | handleChannelStateBroadcastFromHub | 处理 Hub 广播的频道状态更新 | ✅ |
 | handleRouteTableUpdateFromHub | 处理路由表更新 | ⚠️ |
-| Channel Ninja 模式过滤 | 根据 ninja 模式过滤频道可见性 | ❌ |
+| Channel Ninja 模式过滤 | 根据 ninja 模式过滤频道可见性 | ✅（基础实现） |
 
 ### 27. cluster/reconnect-manager.ts
 | 子功能点 | 描述 | Rust |
@@ -321,7 +321,7 @@
 | sendChannelTree | 频道树广播 | ✅ |
 | sendUserListToClient | 用户列表同步 | ✅ |
 | broadcastUserStateToAuthenticatedClients | 广播用户状态给所有已认证客户端 | ✅ |
-| Channel Ninja 过滤 | 根据 ninja 模式过滤消息 | ❌ |
+| Channel Ninja 过滤 | 根据 ninja 模式过滤消息 | ✅（用户列表已过滤） |
 | sendPermissionDenied | 发送权限拒绝通知 | ✅ |
 
 ### 39. handlers/protocol-handlers.ts
@@ -816,7 +816,7 @@
 | **数据库** | 中 | 中 | 中 | 基础表完成，审计/备份/迁移未实现 |
 | **封禁系统** | 中 | 中 | 中 | Hub 自动封禁已实现（FailedAuthTracker），Edge 端检查待完善 |
 | **多租户** | 低 | 低 | 高 | 完全未实现 |
-| **Channel Ninja** | 低 | 低 | 高 | 完全未实现 |
+| **Channel Ninja** | 低 | 低 | 高 | ✅ 基础实现（Hub 配置 + Edge 过滤） |
 | **监控/统计** | 低 | 低 | 高 | 客户端统计、UDP 监控等未实现 |
 | **速率限制** | 中 | 低 | 中 | 令牌桶速率限制器已实现（文本消息），多类型限制待完善 |
 | **Web API** | 低 | 低 | 高 | ✅ 已实现核心端点（status/edges/stats/topology/health） |

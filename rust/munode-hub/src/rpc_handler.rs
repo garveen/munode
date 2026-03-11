@@ -2306,6 +2306,33 @@ impl RpcHandler {
         }
     }
 
+    /// Send a notification to a single specific edge.
+    pub(crate) async fn send_notification_to_edge<F>(&self, edge_id: u32, method: &str, build: F)
+    where
+        F: FnOnce(&mut TypedRpcNotification),
+    {
+        let mut notification = TypedRpcNotification {
+            method: method.to_string(),
+            timestamp: Some(current_millis() as i64),
+            ..Default::default()
+        };
+        build(&mut notification);
+
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+
+        let data = packet.encode_to_vec();
+        let edges = self.state.edge_connections.read().await;
+        if let Some(sender) = edges.get(&edge_id) {
+            if let Err(e) = sender.try_send(data) {
+                warn!("Failed to send notification to edge {}: {}", edge_id, e);
+            }
+        }
+    }
+
     fn make_error_packet(
         &self,
         request_id: &str,

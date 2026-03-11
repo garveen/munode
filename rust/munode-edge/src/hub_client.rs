@@ -495,11 +495,16 @@ impl HubClient {
                             listening_channels: vec![],
                         };
                         info!("Remote user joined: {} (session {})", user.username, user.session_id);
+                        let channel_id = user.channel_id;
                         self.edge_state.channel_manager.upsert_remote_user(user.clone()).await;
+
+                        // Check if this is a ninja channel
+                        let is_ninja = self.edge_state.ninja_channels.read().await.contains(&channel_id);
                         self.edge_state.emit(EdgeEvent::RemoteUserJoined {
                             session_id: user.session_id,
                             username: user.username,
                             channel_id: user.channel_id,
+                            is_ninja,
                         });
                     } else {
                         info!("Local user joined (hub.userJoined echo): {} (session {})", params.username, params.session_id);
@@ -711,7 +716,27 @@ impl HubClient {
                 }
             }
             _ => {
-                debug!("Unhandled notification: {}", method);
+                // Check for hub.ninjaConfig (uses unknown_params_json)
+                if method == "hub.ninjaConfig" {
+                    if let Some(json_str) = &notification.unknown_params_json {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                            if val.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                let channels: Vec<u32> = val
+                                    .get("ninja_channels")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| arr.iter()
+                                        .filter_map(|v| v.as_u64().map(|n| n as u32))
+                                        .collect())
+                                    .unwrap_or_default();
+                                let mut nc = self.edge_state.ninja_channels.write().await;
+                                *nc = channels;
+                                debug!("Ninja channels updated from Hub: {:?}", &*nc);
+                            }
+                        }
+                    }
+                } else {
+                    debug!("Unhandled notification: {}", method);
+                }
             }
         }
     }
