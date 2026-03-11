@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { TestEnvironment, setupTestEnvironment } from '../setup';
+import { TestEnvironment, setupTestEnvironment, USE_RUST } from '../setup.js';
 import { MumbleClient } from '../../../packages/client/src/index.js';
 
 describe('Listening Channel Integration Tests', () => {
@@ -238,4 +238,170 @@ describe('Listening Channel Integration Tests', () => {
       await client3.disconnect();
     });
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Listener limit tests (Rust mode)
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+describe.skipIf(!USE_RUST)('Listener Limit Tests (Rust)', () => {
+  let limitEnv: TestEnvironment;
+
+  beforeAll(async () => {
+    limitEnv = await setupTestEnvironment(8304, {
+      startHub: true,
+      startEdge: true,
+      startEdge2: false,
+      startAuth: true,
+      silent: true,
+      isolated: true,
+      rustEdgeExtraConfig: {
+        server: {
+          capacity: 1000,
+          max_bandwidth: 558000,
+          listeners_per_user: 2,
+          listeners_per_channel: 1,
+        },
+      },
+    });
+  }, 60000);
+
+  afterAll(async () => {
+    await limitEnv?.cleanup();
+  }, 30000);
+
+  it('should deny listening beyond listeners_per_user limit', async () => {
+    // Create 3 channels: user connects then tries to listen to 3 channels (limit=2)
+    const client = new MumbleClient();
+    await client.connect({
+      host: 'localhost',
+      port: limitEnv.edgePort,
+      username: 'user1',
+      password: 'password1',
+      rejectUnauthorized: false,
+    });
+    await new Promise(r => setTimeout(r, 300));
+
+    // Listen to channel 1
+    let permDeniedCount = 0;
+    client.on('permissionDenied', () => { permDeniedCount++; });
+
+    client.sendUserState({ listening_channel_add: [1] });
+    await new Promise(r => setTimeout(r, 300));
+
+    // Listen to channel 2 (should succeed, limit=2)
+    client.sendUserState({ listening_channel_add: [2] });
+    await new Promise(r => setTimeout(r, 300));
+
+    // Listen to channel 3 (should fail, limit=2 already reached)
+    client.sendUserState({ listening_channel_add: [3] });
+    await new Promise(r => setTimeout(r, 500));
+
+    try { await client.disconnect(); } catch {}
+
+    // At limit or exceeded: PermissionDenied should have been sent
+    expect(permDeniedCount).toBeGreaterThanOrEqual(1);
+  }, 15000);
+
+  it('should deny second listener beyond listeners_per_channel limit', async () => {
+    const client1 = new MumbleClient();
+    const client2 = new MumbleClient();
+
+    await client1.connect({
+      host: 'localhost', port: limitEnv.edgePort,
+      username: 'user2', password: 'password2', rejectUnauthorized: false,
+    });
+    await client2.connect({
+      host: 'localhost', port: limitEnv.edgePort,
+      username: 'guest', password: 'guest123', rejectUnauthorized: false,
+    });
+    await new Promise(r => setTimeout(r, 300));
+
+    // Both try to listen to channel 1 – only the first should succeed
+    let client2Denied = false;
+    client2.on('permissionDenied', () => { client2Denied = true; });
+
+    client1.sendUserState({ listening_channel_add: [1] });
+    await new Promise(r => setTimeout(r, 300));
+
+    client2.sendUserState({ listening_channel_add: [1] });
+    await new Promise(r => setTimeout(r, 500));
+
+    try { await client1.disconnect(); } catch {}
+    try { await client2.disconnect(); } catch {}
+
+    expect(client2Denied).toBe(true);
+  }, 15000);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Volume adjustment tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Volume Adjustment Tests', () => {
+  let volEnv: TestEnvironment;
+
+  beforeAll(async () => {
+    volEnv = await setupTestEnvironment(8354, {
+      startHub: true,
+      startEdge: true,
+      startEdge2: false,
+      startAuth: true,
+      silent: true,
+      isolated: true,
+    });
+  }, 60000);
+
+  afterAll(async () => {
+    await volEnv?.cleanup();
+  }, 30000);
+
+  it('should broadcast listening_volume_adjustment to peers', async () => {
+    const client1 = new MumbleClient();
+    const client2 = new MumbleClient();
+
+    await client1.connect({
+      host: 'localhost', port: volEnv.edgePort,
+      username: 'user1', password: 'password1', rejectUnauthorized: false,
+    });
+    await client2.connect({
+      host: 'localhost', port: volEnv.edgePort,
+      username: 'user2', password: 'password2', rejectUnauthorized: false,
+    });
+    await new Promise(r => setTimeout(r, 300));
+
+    const session1 = client1.getStateManager().getSession()?.session;
+
+    // First add listening channel 1
+    client1.sendUserState({ listening_channel_add: [1] });
+    await new Promise(r => setTimeout(r, 300));
+
+    // Now set volume adjustment for channel 1
+    let receivedVolumeAdj = false;
+    const volPromise = new Promise<void>((resolve) => {
+      client2.on('userState', (state: any) => {
+        if (state.session === session1
+          && state.listening_volume_adjustment
+          && state.listening_volume_adjustment.length > 0) {
+          const va = state.listening_volume_adjustment[0];
+          if (va.listening_channel === 1 && Math.abs(va.volume_adjustment - 0.5) < 0.01) {
+            receivedVolumeAdj = true;
+            resolve();
+          }
+        }
+      });
+    });
+
+    client1.sendUserState({
+      listening_volume_adjustment: [{ listening_channel: 1, volume_adjustment: 0.5 }],
+    });
+
+    await Promise.race([volPromise, new Promise(r => setTimeout(r, 3000))]);
+
+    try { await client1.disconnect(); } catch {}
+    try { await client2.disconnect(); } catch {}
+
+    expect(receivedVolumeAdj).toBe(true);
+  }, 15000);
 });

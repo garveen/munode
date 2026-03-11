@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -206,6 +207,14 @@ impl<'a> LoginHandler<'a> {
             if client.session == self_session {
                 continue;
             }
+            let listening_volume_adjustment: Vec<mumbleproto::user_state::VolumeAdjustment> = client
+                .listening_volume_adjustments
+                .iter()
+                .map(|(&ch, &vol)| mumbleproto::user_state::VolumeAdjustment {
+                    listening_channel: Some(ch),
+                    volume_adjustment: Some(vol),
+                })
+                .collect();
             let msg = mumbleproto::UserState {
                 session: Some(client.session),
                 user_id: if client.user_id > 0 { Some(client.user_id) } else { None },
@@ -219,6 +228,8 @@ impl<'a> LoginHandler<'a> {
                 priority_speaker: if client.priority_speaker { Some(true) } else { None },
                 recording: if client.recording { Some(true) } else { None },
                 hash: client.cert_hash.clone(),
+                listening_channel_add: client.listening_channels.clone(),
+                listening_volume_adjustment,
                 ..Default::default()
             };
             self.send(MessageType::UserState, &msg).await?;
@@ -495,6 +506,7 @@ mod tests {
             groups: vec![],
             opus_supported: true,
             listening_channels: vec![],
+            listening_volume_adjustments: HashMap::new(),
             texture_hash: None,
             comment_hash: None,
         };

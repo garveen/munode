@@ -69,6 +69,9 @@ pub struct ClientInfo {
     pub opus_supported: bool,
     /// Channels this client is listening to (beyond their current channel).
     pub listening_channels: Vec<u32>,
+    /// Per-channel volume adjustments for listened channels.
+    /// Maps channel_id → volume factor (0.0–10.0, default 1.0).
+    pub listening_volume_adjustments: HashMap<u32, f32>,
     /// SHA-256 hash of this user's texture blob (if any).
     /// Broadcast to peers so they can request the full texture via RequestBlob.
     pub texture_hash: Option<Vec<u8>>,
@@ -333,6 +336,7 @@ mod tests {
             groups: vec![],
             opus_supported: true,
             listening_channels: vec![],
+            listening_volume_adjustments: HashMap::new(),
             texture_hash: None,
             comment_hash: None,
         }

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -359,6 +360,7 @@ async fn handle_client_connection(
                         groups: vec![],
                         opus_supported: opus,
                         listening_channels: vec![],
+            listening_volume_adjustments: HashMap::new(),
             texture_hash: None,
             comment_hash: None,
                     };
@@ -1354,6 +1356,24 @@ async fn handle_user_state_update(
                 }
             }
             client.listening_channels.retain(|ch| !user_state.listening_channel_remove.contains(ch));
+            // Remove volume adjustments for channels that were removed
+            for &ch in &user_state.listening_channel_remove {
+                client.listening_volume_adjustments.remove(&ch);
+            }
+            needs_broadcast = true;
+        }
+
+        // Volume adjustments for listened channels
+        if !user_state.listening_volume_adjustment.is_empty() {
+            for va in &user_state.listening_volume_adjustment {
+                if let (Some(ch), Some(vol)) = (va.listening_channel, va.volume_adjustment) {
+                    if vol == 1.0 {
+                        client.listening_volume_adjustments.remove(&ch);
+                    } else {
+                        client.listening_volume_adjustments.insert(ch, vol);
+                    }
+                }
+            }
             needs_broadcast = true;
         }
 
@@ -1452,6 +1472,9 @@ async fn handle_user_state_update(
             if !user_state.listening_channel_remove.is_empty() {
                 broadcast_msg.listening_channel_remove = user_state.listening_channel_remove.clone();
             }
+            if !user_state.listening_volume_adjustment.is_empty() {
+                broadcast_msg.listening_volume_adjustment = user_state.listening_volume_adjustment.clone();
+            }
 
             edge_state.client_manager.broadcast(MessageType::UserState, &broadcast_msg, None).await;
 
@@ -1478,6 +1501,7 @@ async fn handle_user_state_update(
                     || broadcast_msg.recording.is_some()
                     || !listening_channel_add.is_empty()
                     || !listening_channel_remove.is_empty()
+                    || !broadcast_msg.listening_volume_adjustment.is_empty()
                 {
                     hub_client.notify_user_state_changed(
                         session_id,
@@ -1780,6 +1804,7 @@ mod tests {
             groups: vec![],
             opus_supported: true,
             listening_channels: vec![],
+            listening_volume_adjustments: HashMap::new(),
             texture_hash: None,
             comment_hash: None,
         }

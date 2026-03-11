@@ -91,7 +91,25 @@ export class ConnectionManager {
 
       this.tcpSocket.on('error', (error) => {
         this.setState(ConnectionState.Disconnected);
+        // If the promise has already resolved (connected), this is a post-connect
+        // error (e.g. ECONNRESET when the server closes the connection).  Emit it
+        // as a client event so callers can handle it; don't leave the error unhandled.
         reject(error);
+      });
+
+      // Once connected, replace the error handler with a silent one so that
+      // post-connection RSTs don't become unhandled errors.
+      this.tcpSocket.once('connect', () => {
+        this.tcpSocket?.removeAllListeners('error');
+        this.tcpSocket?.on('error', (error) => {
+          // Silently absorb post-connection errors (ECONNRESET, EPIPE, etc.).
+          // The 'close' event will fire next and update state.
+          if ((error as NodeJS.ErrnoException).code !== 'ECONNRESET'
+            && (error as NodeJS.ErrnoException).code !== 'EPIPE') {
+            console.warn('TCP connection error:', error.message);
+          }
+          this.setState(ConnectionState.Disconnected);
+        });
       });
 
       this.tcpSocket.on('timeout', () => {

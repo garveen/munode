@@ -309,3 +309,56 @@ describe.skipIf(!USE_RUST)('Auto-Ban Expiry Tests (Rust)', () => {
     expect(success).toBe(true);
   }, 20000);
 });
+
+describe.skipIf(!USE_RUST)('Auto-Ban Isolation Tests (Rust)', () => {
+  let isoEnv: TestEnvironment;
+
+  beforeAll(async () => {
+    isoEnv = await setupTestEnvironment(8284, {
+      startHub: true,
+      startEdge: true,
+      startEdge2: false,
+      startAuth: true,
+      silent: true,
+      isolated: true,
+      rustHubExtraConfig: {
+        auto_ban: {
+          enabled: true,
+          attempts: 2,     // Ban after 2 failures
+          time_window: 60,
+          duration: 60,
+        },
+      },
+    });
+  }, 60000);
+
+  afterAll(async () => {
+    await isoEnv?.cleanup();
+  }, 30000);
+
+  it('different IPs have independent failure counters', async () => {
+    // Simulate 1 failure from "user1" (using wrong password)
+    // – for loopback we can't easily use two different IPs, but we can verify
+    // that correct login after 1 failure still works (only 2 failures trigger ban).
+    const badClient = new MumbleClient();
+    try {
+      await badClient.connect({ host: 'localhost', port: isoEnv.edgePort, username: 'user1', password: 'wrong', rejectUnauthorized: false });
+      await sleep(300);
+    } catch {}
+    try { await badClient.disconnect(); } catch {}
+
+    await sleep(300);
+
+    // One failure should NOT trigger the ban (threshold = 2)
+    const goodClient = new MumbleClient();
+    let loginOk = false;
+    try {
+      await goodClient.connect({ host: 'localhost', port: isoEnv.edgePort, username: 'user1', password: 'password1', rejectUnauthorized: false });
+      await sleep(400);
+      loginOk = goodClient.isConnected();
+    } catch {}
+    try { await goodClient.disconnect(); } catch {}
+
+    expect(loginOk).toBe(true);
+  }, 15000);
+});

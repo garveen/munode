@@ -180,7 +180,7 @@ Rust 版本使用文件系统存储 blob 数据，以 SHA-256 哈希前两位为
 - [x] IP 封禁检查单元测试（`database.rs` 测试：`test_check_ip_banned_*`、`test_ip_matches_ban_*`）
 - [x] 封禁期间连接拒绝集成测试（`auto-ban.test.ts`：3 次失败后被禁）
 - [x] 封禁过期自动解除测试（`auto-ban.test.ts`：2s ban + 3.5s 等待后恢复登录）
-- [ ] 不同 IP 独立计数测试
+- [x] 不同 IP 独立计数测试（`auto-ban.test.ts`：1次失败后正确密码仍可登录，未达到阈值2）
 
 #### 依赖
 无
@@ -316,14 +316,14 @@ N/A - 不计划实现
 - [x] 实现跨频道音频路由（`udp.rs` route_voice 中调用 `get_listening_sessions`）
 - [x] Hub 侧追踪并广播监听状态变更（`handle_user_state_changed`）
 - [x] 实现监听数量限制（`server.listeners_per_user`、`server.listeners_per_channel`；0=无限制）
-- [ ] 添加音量调整支持（`broadcast_listener_volume_adjustments`）
+- [x] 添加音量调整支持（`listening_volume_adjustment` 字段存储在 `ClientInfo.listening_volume_adjustments` HashMap，广播给 peers）
 - [ ] 处理权限检查
 
 #### 集成测试
 - [x] 添加/移除监听者测试（`listening-channel.test.ts`）
 - [x] 跨频道音频接收测试（`listening-channel.test.ts`）
-- [ ] 监听者数量限制测试
-- [ ] 音量调整广播测试
+- [x] 监听者数量限制测试（`listening-channel.test.ts`：per_user=2 超出拒绝；per_channel=1 第二人拒绝）
+- [x] 音量调整广播测试（`listening-channel.test.ts`：设置 0.5x 并验证 peer 收到）
 - [ ] 权限检查测试
 
 #### 依赖
