@@ -211,6 +211,12 @@ pub struct ServerConfig {
     /// Token bucket burst size for text messages (default: 5).
     #[serde(default = "default_message_burst")]
     pub message_burst: u32,
+    /// Maximum number of channels a user can listen to simultaneously. 0 = unlimited.
+    #[serde(default)]
+    pub listeners_per_user: u32,
+    /// Maximum number of listeners per channel. 0 = unlimited.
+    #[serde(default)]
+    pub listeners_per_channel: u32,
 }
 
 impl Default for ServerConfig {
@@ -225,6 +231,8 @@ impl Default for ServerConfig {
             image_message_length: default_image_message_length(),
             message_rate: default_message_rate(),
             message_burst: default_message_burst(),
+            listeners_per_user: 0,
+            listeners_per_channel: 0,
         }
     }
 }
@@ -462,6 +470,12 @@ pub struct HubLimitsConfig {
     /// Token bucket burst size for text messages.
     #[serde(default = "default_message_burst")]
     pub message_burst: u32,
+    /// Maximum number of channel listeners per channel. 0 = unlimited.
+    #[serde(default)]
+    pub listeners_per_channel: u32,
+    /// Maximum number of channels a single user may listen to at once. 0 = unlimited.
+    #[serde(default)]
+    pub listeners_per_user: u32,
 }
 
 impl Default for HubLimitsConfig {
@@ -473,6 +487,8 @@ impl Default for HubLimitsConfig {
             image_message_length: default_image_message_length(),
             message_rate: default_message_rate(),
             message_burst: default_message_burst(),
+            listeners_per_channel: 0,
+            listeners_per_user: 0,
         }
     }
 }

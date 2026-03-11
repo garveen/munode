@@ -51,7 +51,14 @@ impl EdgeServer {
                 (!self.config.server.disable_hub_relay, true)
             }
         };
-        let edge_state = EdgeState::new_with_strategy(channel_manager, client_manager, allow_hub_relay, allow_direct_udp);
+        let edge_state = EdgeState::new_with_config(
+            channel_manager,
+            client_manager,
+            allow_hub_relay,
+            allow_direct_udp,
+            self.config.server.listeners_per_user,
+            self.config.server.listeners_per_channel,
+        );
 
         // Set up TLS
         let tls_acceptor = create_tls_acceptor(&self.config.tls)?;
@@ -1248,6 +1255,49 @@ async fn handle_user_state_update(
         let mut actually_added_channels: Vec<u32> = Vec::new();
         if !user_state.listening_channel_add.is_empty() || !user_state.listening_channel_remove.is_empty() {
             for &ch in &user_state.listening_channel_add {
+                // Check per-user listener limit
+                let per_user_limit = edge_state.listeners_per_user;
+                if per_user_limit > 0 && client.listening_channels.len() as u32 >= per_user_limit {
+                    debug!("Listener limit ({}) reached for session {}", per_user_limit, session_id);
+                    if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                        let pq = mumbleproto::PermissionDenied {
+                            r#type: Some(mumbleproto::permission_denied::DenyType::ChannelFull as i32),
+                            channel_id: Some(ch),
+                            reason: Some(format!(
+                                "Listener limit reached: you may listen to at most {} channel(s) simultaneously",
+                                per_user_limit
+                            )),
+                            ..Default::default()
+                        };
+                        sender.send_message(MessageType::PermissionDenied, &pq).await;
+                    }
+                    continue;
+                }
+
+                // Check per-channel listener limit
+                let per_channel_limit = edge_state.listeners_per_channel;
+                if per_channel_limit > 0 {
+                    let listener_count = edge_state.client_manager
+                        .get_listening_count(ch)
+                        .await;
+                    if listener_count >= per_channel_limit {
+                        debug!("Channel {} listener limit ({}) reached", ch, per_channel_limit);
+                        if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                            let pq = mumbleproto::PermissionDenied {
+                                r#type: Some(mumbleproto::permission_denied::DenyType::ChannelFull as i32),
+                                channel_id: Some(ch),
+                                reason: Some(format!(
+                                    "Channel listener limit reached: this channel allows at most {} listener(s)",
+                                    per_channel_limit
+                                )),
+                                ..Default::default()
+                            };
+                            sender.send_message(MessageType::PermissionDenied, &pq).await;
+                        }
+                        continue;
+                    }
+                }
+
                 // Check Listen permission (0x800) before adding
                 let can_listen = match hub_client.handle_permission_query(session_id, ch).await {
                     Ok(r) => r.permissions.map(|p| p & 0x800 != 0).unwrap_or(true), // LISTEN

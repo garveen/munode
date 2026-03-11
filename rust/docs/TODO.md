@@ -315,7 +315,7 @@ N/A - 不计划实现
 - [x] 实现监听者状态管理（`ClientInfo.listening_channels`，`RemoteUser.listening_channels`）
 - [x] 实现跨频道音频路由（`udp.rs` route_voice 中调用 `get_listening_sessions`）
 - [x] Hub 侧追踪并广播监听状态变更（`handle_user_state_changed`）
-- [ ] 实现监听数量限制（`listeners_per_channel`、`listeners_per_user`）
+- [x] 实现监听数量限制（`server.listeners_per_user`、`server.listeners_per_channel`；0=无限制）
 - [ ] 添加音量调整支持（`broadcast_listener_volume_adjustments`）
 - [ ] 处理权限检查
 

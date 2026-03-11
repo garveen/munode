@@ -136,6 +136,8 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | server.default_channel | ✅ | ✅ | 默认频道 |
 | server.welcome_text | ✅ | ✅ | 欢迎消息 |
 | server.disable_hub_relay | ✅ | ✅ | 禁用 Hub 中转 |
+| server.listeners_per_user | ✅ | ✅ | 每用户最大监听频道数（0=无限制） |
+| server.listeners_per_channel | ✅ | ✅ | 每频道最大监听者数（0=无限制） |
 | **语音路由** |
 | voice_routing.enabled | ✅ | ✅ | 启用语音路由（默认 true） |
 | voice_routing.connection_strategy | ✅ | ✅ | 连接策略：`auto_fallback`（默认）/`tcp_only`/`direct_only` |
