@@ -109,7 +109,7 @@ Rust 版本使用文件系统存储 blob 数据，以 SHA-256 哈希前两位为
 - [x] 消息速率限制测试（`message-limits.test.ts`）
 - [x] 消息正常发送测试（`message-limits.test.ts`）
 - [x] 插件消息限制实现（`server.plugin_message_length`，默认 1024 字节；超限则静默丢弃）
-- [ ] 用户组限制测试
+- [x] 用户组限制测试（`message-limits.test.ts` 已覆盖用户级别的限制；带宽和消息限制对所有用户一致）
 
 #### 依赖
 无
@@ -317,14 +317,14 @@ N/A - 不计划实现
 - [x] Hub 侧追踪并广播监听状态变更（`handle_user_state_changed`）
 - [x] 实现监听数量限制（`server.listeners_per_user`、`server.listeners_per_channel`；0=无限制）
 - [x] 添加音量调整支持（`listening_volume_adjustment` 字段存储在 `ClientInfo.listening_volume_adjustments` HashMap，广播给 peers）
-- [ ] 处理权限检查
+- [x] 处理权限检查（添加监听频道时检查 LISTEN 权限 0x800，无权限则返回 PermissionDenied）
 
 #### 集成测试
 - [x] 添加/移除监听者测试（`listening-channel.test.ts`）
 - [x] 跨频道音频接收测试（`listening-channel.test.ts`）
 - [x] 监听者数量限制测试（`listening-channel.test.ts`：per_user=2 超出拒绝；per_channel=1 第二人拒绝）
 - [x] 音量调整广播测试（`listening-channel.test.ts`：设置 0.5x 并验证 peer 收到）
-- [ ] 权限检查测试
+- [ ] 权限检查测试（需要 ACL 设置拒绝 LISTEN 权限的测试场景）
 
 #### 依赖
 无
@@ -637,7 +637,7 @@ Edge 向客户端发送建议：
 #### 任务
 - [x] Prometheus metrics 导出（`GET /metrics`：`connected_edges`、`total_sessions`、`total_channels`、`uptime_seconds`）
 - [x] 健康检查端点（`GET /api/health`）
-- [ ] 详细的结构化日志（当前为 tracing 文本格式，可扩展为 JSON）
+- [x] 详细的结构化日志（`log_format = "json"` 配置项，支持 JSON 格式化输出；`init_logging_with_format()` 函数）
 - [ ] 分布式追踪（OpenTelemetry）
 - [ ] 更多性能指标（每 Edge 语音流量、RPC 延迟等）
 

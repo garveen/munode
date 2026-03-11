@@ -25,6 +25,13 @@ pub struct EdgeConfig {
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// Logging format: "text" (default) or "json" (structured JSON for log aggregation).
+    #[serde(default = "default_log_format")]
+    pub log_format: String,
+}
+
+fn default_log_format() -> String {
+    "text".to_string()
 }
 
 /// Connection strategy for Edge-to-Edge voice routing.
@@ -294,6 +301,9 @@ pub struct HubConfig {
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// Logging format: "text" (default) or "json" (structured JSON for log aggregation).
+    #[serde(default = "default_log_format")]
+    pub log_format: String,
 }
 
 /// Channel Ninja configuration.
