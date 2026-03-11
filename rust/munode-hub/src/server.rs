@@ -116,6 +116,8 @@ pub struct HubState {
     pub lua_engine: Option<Arc<LuaAuthEngine>>,
     /// Failed authentication attempt tracker (for auto-ban).
     pub failed_auth_tracker: RwLock<FailedAuthTracker>,
+    /// GeoIP lookup service (optional, present when `geoip.database_path` is set).
+    pub geoip: Arc<crate::geoip::GeoIpService>,
     /// Server start time for uptime calculation.
     pub started_at: std::time::Instant,
 }
@@ -160,6 +162,12 @@ impl HubServer {
             None
         };
 
+        // Initialise GeoIP service (optional)
+        let geoip = Arc::new(crate::geoip::GeoIpService::new(&self.config.geoip.database_path));
+        if geoip.is_available() {
+            info!("GeoIP service initialised from '{}'", &self.config.geoip.database_path);
+        }
+
         let state = Arc::new(HubState {
             config: self.config.clone(),
             session_manager: SessionManager::new(),
@@ -174,6 +182,7 @@ impl HubServer {
             auth_service: auth_service.clone(),
             lua_engine,
             failed_auth_tracker: RwLock::new(FailedAuthTracker::default()),
+            geoip,
             started_at: std::time::Instant::now(),
         });
 

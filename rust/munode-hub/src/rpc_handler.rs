@@ -1019,10 +1019,38 @@ impl RpcHandler {
 
         self.state.session_manager.add_session(session_info.clone()).await;
 
-        info!(
-            "User authenticated: {} (session={}, edge={}, channel={})",
-            username, params.session_id, edge_server_id, channel_id
-        );
+        // GeoIP lookup for this user's IP address
+        if self.state.geoip.is_available() && self.state.config.geoip.log_location {
+            let ip_str = params.client_info.as_ref()
+                .map(|c| c.ip_address.as_str())
+                .unwrap_or("");
+            if let Ok(ip) = ip_str.parse::<std::net::IpAddr>() {
+                if let Some(loc) = self.state.geoip.lookup(&ip) {
+                    info!(
+                        "User authenticated: {} (session={}, edge={}, channel={}, ip={}, country={}, city={})",
+                        username, params.session_id, edge_server_id, channel_id,
+                        ip_str,
+                        loc.country_code.as_deref().unwrap_or("??"),
+                        loc.city_name.as_deref().unwrap_or("unknown"),
+                    );
+                } else {
+                    info!(
+                        "User authenticated: {} (session={}, edge={}, channel={})",
+                        username, params.session_id, edge_server_id, channel_id
+                    );
+                }
+            } else {
+                info!(
+                    "User authenticated: {} (session={}, edge={}, channel={})",
+                    username, params.session_id, edge_server_id, channel_id
+                );
+            }
+        } else {
+            info!(
+                "User authenticated: {} (session={}, edge={}, channel={})",
+                username, params.session_id, edge_server_id, channel_id
+            );
+        }
 
         // Broadcast hub.userJoined to all edges
         let cert_hash = params

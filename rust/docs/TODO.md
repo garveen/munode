@@ -482,16 +482,16 @@ Edge 端的语音路由配置：
 - 用于基于地理位置的路由优化
 
 #### 实现任务
-- [ ] 集成 GeoIP 库（maxminddb-rust）
-- [ ] 加载 GeoLite2 数据库
-- [ ] 在用户连接时查询位置
-- [ ] 存储位置信息（内存/日志）
-- [ ] 可选：基于位置的 Edge 分配建议
+- [x] 集成 GeoIP 库（maxminddb-rust）
+- [x] 加载 GeoLite2 数据库（`GeoIpService::new()` 支持 City/Country MMDB 格式）
+- [x] 在用户连接时查询位置（`handle_authenticate_user` 中查询并记录地理位置）
+- [x] 存储位置信息（通过日志记录 country/city；配置 `geoip.log_location`）
+- [ ] 可选：基于位置的 Edge 分配建议（待后续实现）
 
 #### 集成测试
-- [ ] GeoIP 数据库加载测试
-- [ ] IP 位置查询测试
-- [ ] 边界情况测试（无效 IP、私有 IP）
+- [x] GeoIP 数据库加载测试（`geoip.rs` 单元测试：无 DB、无效路径均正确处理）
+- [x] IP 位置查询测试（单元测试：私有 IP 跳过、公网 IP 非私有验证）
+- [x] 边界情况测试（单元测试：127.0.0.1 loopback、192.168.x.x 私有地址）
 
 #### 依赖
 - GeoLite2 数据库文件
@@ -553,13 +553,13 @@ Edge 向客户端发送建议：
 - `client.suggest_push_to_talk` - PTT
 
 #### 实现任务
-- [ ] 添加 `client` 配置结构
-- [ ] 在 ServerConfig 消息中包含
-- [ ] 客户端连接时发送
+- [ ] 添加 `client` 配置结构（暂不实现：与 Hub suggest 功能重复）
+- [ ] 在 ServerConfig 消息中包含（暂不实现）
+- [ ] 客户端连接时发送（暂不实现）
 
 #### 集成测试
-- [ ] ServerConfig 包含建议测试
-- [ ] 各种建议组合测试
+- [ ] ServerConfig 包含建议测试（暂不实现）
+- [ ] 各种建议组合测试（暂不实现）
 
 #### 依赖
 无

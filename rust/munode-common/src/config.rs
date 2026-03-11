@@ -298,6 +298,9 @@ pub struct HubConfig {
     /// Channel Ninja configuration.
     #[serde(default)]
     pub channel_ninja: HubChannelNinjaConfig,
+    /// GeoIP configuration (optional IP geolocation).
+    #[serde(default)]
+    pub geoip: HubGeoIpConfig,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -739,3 +742,20 @@ fn default_direct_rtt_threshold() -> u32 {
 fn default_direct_loss_threshold() -> f32 {
     0.05
 }
+
+/// GeoIP configuration.
+///
+/// When a GeoLite2 database path is provided, the Hub will look up connecting
+/// clients' geographic location and log it.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct HubGeoIpConfig {
+    /// Path to the GeoLite2-City or GeoLite2-Country MMDB database file.
+    /// If empty or not provided, GeoIP lookups are disabled.
+    #[serde(default)]
+    pub database_path: String,
+    /// Whether to log geographic location for each connecting user.
+    #[serde(default = "default_geoip_log")]
+    pub log_location: bool,
+}
+
+fn default_geoip_log() -> bool { true }

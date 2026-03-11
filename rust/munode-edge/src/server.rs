@@ -1799,6 +1799,7 @@ mod tests {
             voice_routing: munode_common::config::EdgeVoiceRoutingConfig::default(),
             suggest: None,
             log_level: "info".to_string(),
+            log_format: "text".to_string(),
         }
     }
 
