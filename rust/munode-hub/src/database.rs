@@ -658,16 +658,33 @@ impl Database {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let bans = self.load_bans()?;
-        for ban in bans {
-            // Skip expired bans (duration=0 means permanent)
-            if ban.duration > 0 {
-                let expiry = ban.start_time.saturating_add(ban.duration as i64);
-                if now >= expiry {
-                    continue;
-                }
-            }
-            // Check if IP matches the ban (CIDR mask)
+        // Only load active (non-expired) bans from the database.
+        // duration=0 means permanent; duration>0 bans must not have expired.
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, address, mask, name, cert_hash, reason, start_time, duration
+               FROM bans
+              WHERE duration = 0 OR (start_time + duration) > ?1"
+        )?;
+        let rows = stmt.query_map(params![now], |row| {
+            let addr_blob: Vec<u8> = row.get(1)?;
+            let mut address = [0u8; 16];
+            let copy_len = addr_blob.len().min(16);
+            address[..copy_len].copy_from_slice(&addr_blob[..copy_len]);
+            Ok(BanRecord {
+                id: row.get(0)?,
+                address,
+                mask: row.get(2)?,
+                name: row.get(3)?,
+                cert_hash: row.get(4)?,
+                reason: row.get(5)?,
+                start_time: row.get(6)?,
+                duration: row.get(7)?,
+            })
+        })?;
+
+        for row in rows {
+            let ban = row?;
             if ip_matches_ban(ip_bytes, &ban.address, ban.mask) {
                 return Ok(Some(ban));
             }
