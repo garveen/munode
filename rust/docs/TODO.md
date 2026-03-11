@@ -234,9 +234,9 @@ Rust 版本使用文件系统存储 blob 数据，以 SHA-256 哈希前两位为
 - [x] 客户端连接时发送 `SuggestConfig` 消息（在 `send_server_config` 之后）
 
 #### 集成测试
-- [ ] 验证 ServerConfig 包含建议
-- [ ] 测试各种建议组合
-- [ ] 验证客户端接收
+- [x] 验证 SuggestConfig 包含建议（`suggest-config.test.ts`：version=1340029, positional=true）
+- [x] 测试各种建议组合（`suggest-config.test.ts`：带完整 suggest 配置与无 suggest 配置两种场景）
+- [x] 验证客户端接收（`suggest-config.test.ts`：客户端 suggestConfig 事件触发验证）
 
 #### 依赖
 无
