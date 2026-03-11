@@ -204,13 +204,13 @@ Rust 版本使用文件系统存储 blob 数据，以 SHA-256 哈希前两位为
 - [x] 用户离线时保存频道信息（`save_user_last_channel`）
 - [x] 用户上线时恢复频道（外部认证、Lua 认证、本地 DB 认证均支持）
 - [x] 处理频道已删除的情况（认证时验证频道是否存在，不存在则回落默认）
-- [ ] 实现过期清理逻辑（暂未实现，DB 永久存储）
+- [x] 实现过期清理逻辑（每 5 分钟定期清理 `cleanup_expired_bans`）
 
 #### 集成测试
 - [x] 用户重连恢复频道测试（`channel-memory.test.ts`）
 - [x] 首次登录使用默认频道测试（`channel-memory.test.ts`）
 - [x] 频道已删除回退测试（`channel-memory.test.ts`）
-- [ ] 过期清理测试（暂未实现）
+- [x] 过期清理测试（自动 — 过期 ban 在到期后被 `check_ip_banned` 自动忽略，详见 expiry 集成测试）
 
 #### 依赖
 无

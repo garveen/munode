@@ -1181,6 +1181,30 @@ async fn handle_user_state_update(
                     Err(_) => true, // Fail open if Hub unreachable
                 };
                 if can_enter {
+                    // Check channel user limit (max_users from channel config)
+                    let channel_full = if let Some(ch) = edge_state.channel_manager.get_channel(target_channel_id).await {
+                        if ch.max_users > 0 {
+                            let user_count = edge_state.client_manager.count_in_channel(target_channel_id).await;
+                            user_count >= ch.max_users
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if channel_full {
+                        debug!("Channel {} is full, denying move for session {}", target_channel_id, session_id);
+                        if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                            let pq = mumbleproto::PermissionDenied {
+                                r#type: Some(mumbleproto::permission_denied::DenyType::ChannelFull as i32),
+                                channel_id: Some(target_channel_id),
+                                reason: Some("Channel is full".to_string()),
+                                ..Default::default()
+                            };
+                            sender.send_message(MessageType::PermissionDenied, &pq).await;
+                        }
+                        return;
+                    }
                     debug!("User {} moving to channel {}", session_id, target_channel_id);
                     let sender = edge_state.client_manager.get_sender(session_id).await;
                     edge_state.client_manager.remove_client(session_id).await;

@@ -295,6 +295,16 @@ impl ClientManager {
             })
             .count() as u32
     }
+
+    /// Count how many local clients are currently in the given channel.
+    pub async fn count_in_channel(&self, channel_id: u32) -> u32 {
+        self.clients
+            .read()
+            .await
+            .values()
+            .filter(|c| c.channel_id == channel_id)
+            .count() as u32
+    }
 }
 
 #[cfg(test)]

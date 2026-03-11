@@ -202,6 +202,25 @@ impl HubServer {
             health_check_loop(health_state, health_rpc, heartbeat_timeout).await;
         });
 
+        // Periodically clean up expired ban records (every 5 minutes)
+        {
+            let ban_db = state.database.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                    match ban_db.cleanup_expired_bans() {
+                        Ok(removed) if removed > 0 => {
+                            tracing::info!("Cleaned up {} expired ban record(s)", removed);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to clean up expired bans: {}", e);
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
+
         // Start Web API if enabled
         if self.config.web_api.enabled {
             let web_state = state.clone();
