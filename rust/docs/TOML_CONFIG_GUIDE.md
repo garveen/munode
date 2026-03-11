@@ -136,6 +136,11 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | server.default_channel | ✅ | ✅ | 默认频道 |
 | server.welcome_text | ✅ | ✅ | 欢迎消息 |
 | server.disable_hub_relay | ✅ | ✅ | 禁用 Hub 中转 |
+| server.text_message_length | ✅ | ✅ | 最大文本消息长度（字节，默认 5000） |
+| server.image_message_length | ✅ | ✅ | 最大图片消息长度（字节，默认 131072） |
+| server.message_rate | ✅ | ✅ | 消息频率限制（每秒，令牌桶） |
+| server.message_burst | ✅ | ✅ | 消息突发限制（令牌桶，默认 5） |
+| server.plugin_message_length | ✅ | ✅ | 最大插件数据消息长度（字节，默认 1024；0=无限制） |
 | server.listeners_per_user | ✅ | ✅ | 每用户最大监听频道数（0=无限制） |
 | server.listeners_per_channel | ✅ | ✅ | 每频道最大监听者数（0=无限制） |
 | **语音路由** |

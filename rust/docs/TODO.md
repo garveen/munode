@@ -108,7 +108,7 @@ Rust 版本使用文件系统存储 blob 数据，以 SHA-256 哈希前两位为
 - [x] 消息长度限制测试（`message-limits.test.ts`）
 - [x] 消息速率限制测试（`message-limits.test.ts`）
 - [x] 消息正常发送测试（`message-limits.test.ts`）
-- [ ] 插件消息限制测试
+- [x] 插件消息限制实现（`server.plugin_message_length`，默认 1024 字节；超限则静默丢弃）
 - [ ] 用户组限制测试
 
 #### 依赖

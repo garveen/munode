@@ -975,6 +975,15 @@ async fn handle_client_connection(
                     let Ok(plugin) = mumbleproto::PluginDataTransmission::decode(&frame.payload[..]) else { continue; };
                     debug!("PluginData from {}: dataId={:?}", peer_addr, plugin.data_id);
 
+                    // Enforce plugin message size limit
+                    let plugin_limit = config.server.plugin_message_length;
+                    let plugin_data_len = plugin.data.as_deref().map(|d| d.len()).unwrap_or(0) as u32;
+                    if plugin_limit > 0 && plugin_data_len > plugin_limit {
+                        debug!("PluginData from {} exceeds limit ({} > {})", peer_addr, plugin_data_len, plugin_limit);
+                        // Silently drop oversized plugin messages (no PermissionDenied per Mumble protocol convention)
+                        continue;
+                    }
+
                     let hub = hub_client.clone();
                     let sid = session_id.unwrap_or(0);
                     let client_info = edge_state.client_manager.get_client(sid).await;
