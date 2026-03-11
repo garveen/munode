@@ -129,10 +129,6 @@ pub struct EdgeState {
     pub voice_targets: Mutex<HashMap<u32, HashMap<u32, VoiceTargetConfig>>>,
     /// Registry of peer Edges and their UDP endpoints for direct voice routing.
     pub peer_registry: Mutex<PeerRegistry>,
-    /// When true, skip Hub relay and only use direct Edge-to-Edge UDP.
-    /// Used in integration tests to verify the direct connection path.
-    /// Deprecated in favour of `voice_routing.connection_strategy = "direct_only"`.
-    pub disable_hub_relay: bool,
     /// Whether Hub-mediated TCP relay is allowed for cross-Edge voice.
     /// Derived from `voice_routing.connection_strategy`.
     pub allow_hub_relay: bool,
@@ -170,36 +166,8 @@ impl EdgeState {
             event_tx,
             voice_targets: Mutex::new(HashMap::new()),
             peer_registry: Mutex::new(PeerRegistry::default()),
-            disable_hub_relay,
             allow_hub_relay: !disable_hub_relay,
             allow_direct_udp: true,
-            listeners_per_user: 0,
-            listeners_per_channel: 0,
-            ninja_channels: tokio::sync::RwLock::new(vec![]),
-            ninja_visible_to: tokio::sync::RwLock::new(HashMap::new()),
-        })
-    }
-
-    /// Create EdgeState with explicit voice routing strategy flags.
-    pub fn new_with_strategy(
-        channel_manager: Arc<ChannelManager>,
-        client_manager: Arc<ClientManager>,
-        allow_hub_relay: bool,
-        allow_direct_udp: bool,
-    ) -> Arc<Self> {
-        let (event_tx, _) = broadcast::channel(256);
-        Arc::new(Self {
-            edge_id: RwLock::new(None),
-            cert_required: RwLock::new(false),
-            channel_manager,
-            client_manager,
-            event_tx,
-            voice_targets: Mutex::new(HashMap::new()),
-            peer_registry: Mutex::new(PeerRegistry::default()),
-            // disable_hub_relay kept for backwards compat; derived from allow_hub_relay
-            disable_hub_relay: !allow_hub_relay,
-            allow_hub_relay,
-            allow_direct_udp,
             listeners_per_user: 0,
             listeners_per_channel: 0,
             ninja_channels: tokio::sync::RwLock::new(vec![]),
@@ -225,7 +193,6 @@ impl EdgeState {
             event_tx,
             voice_targets: Mutex::new(HashMap::new()),
             peer_registry: Mutex::new(PeerRegistry::default()),
-            disable_hub_relay: !allow_hub_relay,
             allow_hub_relay,
             allow_direct_udp,
             listeners_per_user,

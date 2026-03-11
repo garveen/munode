@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -177,6 +176,23 @@ impl<'a> LoginHandler<'a> {
         let local_sessions: std::collections::HashSet<u32> =
             local_clients.iter().map(|c| c.session).collect();
 
+        // Snapshot the ninja channel config and this client's visibility cache once,
+        // before the loops, to avoid repeated lock acquisitions per user.
+        // Note: There is a benign TOCTOU window between the two lock acquisitions; in
+        // practice ninja_channels only changes on Hub config updates (rare), so a brief
+        // inconsistency here is acceptable.
+        let ninja_channels_snapshot: std::collections::HashSet<u32> = {
+            self.edge_state.ninja_channels.read().await.iter().copied().collect()
+        };
+        let ninja_visible_set: std::collections::HashSet<u32> = if ninja_channels_snapshot.is_empty() {
+            std::collections::HashSet::new()
+        } else {
+            self.edge_state.ninja_visible_to.read().await
+                .get(&self_session)
+                .cloned()
+                .unwrap_or_default()
+        };
+
         for user in &remote_users {
             if user.session_id == self_session {
                 continue;
@@ -185,19 +201,11 @@ impl<'a> LoginHandler<'a> {
             if local_sessions.contains(&user.session_id) {
                 continue;
             }
-            // Channel Ninja: skip users in ninja channels that this client cannot enter
+            // Channel Ninja: skip users in ninja channels that this client cannot see
+            if ninja_channels_snapshot.contains(&user.channel_id)
+                && !ninja_visible_set.contains(&user.channel_id)
             {
-                let ninja_channels = self.edge_state.ninja_channels.read().await;
-                if ninja_channels.contains(&user.channel_id) {
-                    let visible_cache = self.edge_state.ninja_visible_to.read().await;
-                    let can_see = visible_cache
-                        .get(&self_session)
-                        .map(|set| set.contains(&user.channel_id))
-                        .unwrap_or(false);
-                    if !can_see {
-                        continue;
-                    }
-                }
+                continue;
             }
             let msg = mumbleproto::UserState {
                 session: Some(user.session_id),
@@ -221,19 +229,11 @@ impl<'a> LoginHandler<'a> {
             if client.session == self_session {
                 continue;
             }
-            // Channel Ninja: skip users in ninja channels that this client cannot enter
+            // Channel Ninja: skip users in ninja channels that this client cannot see
+            if ninja_channels_snapshot.contains(&client.channel_id)
+                && !ninja_visible_set.contains(&client.channel_id)
             {
-                let ninja_channels = self.edge_state.ninja_channels.read().await;
-                if ninja_channels.contains(&client.channel_id) {
-                    let visible_cache = self.edge_state.ninja_visible_to.read().await;
-                    let can_see = visible_cache
-                        .get(&self_session)
-                        .map(|set| set.contains(&client.channel_id))
-                        .unwrap_or(false);
-                    if !can_see {
-                        continue;
-                    }
-                }
+                continue;
             }
             let listening_volume_adjustment: Vec<mumbleproto::user_state::VolumeAdjustment> = client
                 .listening_volume_adjustments
@@ -456,6 +456,7 @@ pub fn build_channel_state_msg(channel: &ChannelData) -> mumbleproto::ChannelSta
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use prost::Message;
     use munode_protocol::transport::decode_frame;
     use crate::client::ClientState;

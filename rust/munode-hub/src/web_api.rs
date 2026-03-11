@@ -165,7 +165,6 @@ async fn handle_status(State(state): State<AppState>) -> Json<StatusResponse> {
 async fn handle_edges(State(state): State<AppState>) -> Json<Vec<EdgeSummary>> {
     let health_map = state.edge_health.read().await;
     let edge_reg = state.edge_registry.read().await;
-    let topo = state.topology.read().await;
 
     let mut result = Vec::new();
 
@@ -189,8 +188,6 @@ async fn handle_edges(State(state): State<AppState>) -> Json<Vec<EdgeSummary>> {
             is_online,
         });
     }
-    // Hold topo lock through the end of this function for a consistent read snapshot
-    drop(topo);
 
     Json(result)
 }

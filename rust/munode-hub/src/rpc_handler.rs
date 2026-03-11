@@ -2587,7 +2587,6 @@ impl RpcHandler {
         }
     }
 
-
     // ==================== Cluster RPC Handlers ====================
 
     /// edge.join — Edge requests to join the cluster.
