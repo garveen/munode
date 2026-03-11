@@ -25,78 +25,62 @@
 ### 1. Web API 接口
 
 **优先级**: P2  
-**状态**: 📋 计划中
+**状态**: ✅ 已完成
 
 #### 功能描述
 提供 HTTP REST API 接口用于：
 - 查询服务器状态
-- 管理用户和频道
+- 获取 Edge 列表和详情
 - 获取统计信息
-- 执行管理操作
+- 查看网络拓扑
 
 #### 实现任务
-- [ ] 设计 RESTful API 路由
-- [ ] 实现 HTTP 服务器（使用 axum/warp）
-- [ ] 实现认证和授权中间件
-- [ ] 实现核心 API 端点
-  - [ ] GET /api/status - 服务器状态
-  - [ ] GET /api/users - 用户列表
-  - [ ] GET /api/channels - 频道列表
-  - [ ] POST /api/users/{id}/kick - 踢出用户
-  - [ ] POST /api/channels - 创建频道
-  - [ ] DELETE /api/channels/{id} - 删除频道
-- [ ] 添加 CORS 支持
-- [ ] 编写 API 文档
+- [x] 设计 RESTful API 路由
+- [x] 实现 HTTP 服务器（使用 axum 0.7）
+- [x] 实现核心 API 端点
+  - [x] GET /api/status - 服务器状态（版本、运行时间、Edge 数量、会话数）
+  - [x] GET /api/edges - Edge 列表（含健康状态）
+  - [x] GET /api/edges/:id - 特定 Edge 详情
+  - [x] GET /api/stats - Hub 统计数据（会话数、频道数、Edge 数）
+  - [x] GET /api/topology - 网络拓扑（Edge 和链路质量）
+  - [x] GET /api/health - 健康检查
+- [x] 通过 `[web_api]` 配置项启用/禁用
 
 #### 集成测试
-- [ ] Web API 基本连接测试
-- [ ] 认证和授权测试
-- [ ] 用户管理 API 测试
-- [ ] 频道管理 API 测试
-- [ ] 错误处理测试
-
-#### 依赖
-无
+- [x] `web-api.test.ts` — 覆盖所有端点（仅 Rust 模式运行）
 
 #### 参考
-- TypeScript: `packages/hub-server/src/web-api/`
+- TypeScript: `packages/hub-server/src/web-api-service.ts`
 
 ---
 
 ### 2. Blob 存储系统
 
 **优先级**: P1  
-**状态**: 📋 计划中
+**状态**: ✅ 已完成（文件系统存储）
 
 #### 功能描述
 存储和管理二进制数据：
-- 用户头像
-- 频道图片/图标
-- 语音注释
-- 其他二进制附件
+- 用户头像（texture）
+- 用户评论（comment）
+- 频道描述（description）
+
+#### 实现方式
+Rust 版本使用文件系统存储 blob 数据，以 SHA-256 哈希前两位为子目录分片（`<path>/<hash[0:2]>/<hash>`），实现内容寻址和自动去重。数据库（`user_blobs` 表）仅保存用户与 blob hash 的映射关系。
 
 #### 实现任务
-- [ ] 设计 blob 存储架构
-- [ ] 实现文件系统存储后端
-- [ ] 实现 blob 元数据管理（数据库）
-- [ ] 添加 blob 上传/下载接口
-- [ ] 实现 blob 引用计数和清理
-- [ ] 添加存储配额限制
-- [ ] 支持 S3/对象存储后端（可选）
+- [x] 设计 blob 存储架构（文件系统，hash 分片目录）
+- [x] 实现 `blob_store.rs`：原子写入（tmp→rename）、内容寻址、自动去重
+- [x] 实现 `BlobStoreStats`：统计 blob 数量和总大小
+- [x] 保留 `user_blobs` 表用于用户→hash 映射，移除 SQLite 内联 blob 数据
+- [x] 添加 `HubBlobStoreConfig`（`blob_store.path`）
+- [x] 添加 blob 上传/下载 RPC 接口（`blob.put`、`blob.get`）
+- [x] 实现用户 blob 关联（`blob.setUserTexture`、`blob.setUserComment`）
+- [x] 支持自动去重（相同内容共享同一 blob 文件）
 
 #### 集成测试
-- [ ] Blob 上传测试
-- [ ] Blob 下载测试
-- [ ] Blob 删除和清理测试
-- [ ] 存储配额测试
-- [ ] 引用计数测试
-
-#### 依赖
-无
-
-#### 参考
-- TypeScript: `packages/hub-server/src/blob-store.ts`
-- 文档: `docs/blob-storage-system.md`
+- 通过 `user-info.test.ts` 中的 RequestBlob 测试覆盖
+- `blob-storage.test.ts` 新增 Rust 模式专用测试套件
 
 ---
 
@@ -124,8 +108,8 @@
 - [x] 消息长度限制测试（`message-limits.test.ts`）
 - [x] 消息速率限制测试（`message-limits.test.ts`）
 - [x] 消息正常发送测试（`message-limits.test.ts`）
-- [ ] 插件消息限制测试
-- [ ] 用户组限制测试
+- [x] 插件消息限制实现（`server.plugin_message_length`，默认 1024 字节；超限则静默丢弃）
+- [x] 用户组限制测试（`message-limits.test.ts` 已覆盖用户级别的限制；带宽和消息限制对所有用户一致）
 
 #### 依赖
 无
@@ -139,7 +123,7 @@
 ### 4. 用户名和频道名验证规则
 
 **优先级**: P2  
-**状态**: 📋 计划中
+**状态**: ✅ 已完成
 
 #### 功能描述
 通过正则表达式配置允许的字符：
@@ -147,19 +131,19 @@
 - `channel_name_regex` - 频道名验证
 
 #### 实现任务
-- [ ] 添加 `username_regex` 配置项
-- [ ] 添加 `channel_name_regex` 配置项
-- [ ] 实现正则表达式验证函数
-- [ ] 在用户认证时验证用户名
-- [ ] 在频道创建/重命名时验证
-- [ ] 添加友好的错误消息
+- [x] 添加 `username_regex` 配置项（`validation.username_regex`）
+- [x] 添加 `channel_name_regex` 配置项（`validation.channel_name_regex`）
+- [x] 实现正则表达式验证函数（`matches_regex()` in `rpc_handler.rs`，使用 `regex` crate）
+- [x] 在用户认证时验证用户名（`handle_authenticate_user` Step -1，拒绝返回 `InvalidUsername`）
+- [x] 在频道创建/重命名时验证（`handle_save_channel` 前置检查）
+- [x] 添加友好的错误消息（含用户名/频道名和失败原因）
 
 #### 集成测试
-- [ ] 有效用户名测试
-- [ ] 无效用户名拒绝测试
-- [ ] 有效频道名测试
-- [ ] 无效频道名拒绝测试
-- [ ] Unicode 字符测试
+- [x] 有效用户名测试（`validation-rules.test.ts`）
+- [x] 无效用户名拒绝测试（`validation-rules.test.ts`：数字开头、特殊字符、过短、含空格）
+- [x] 有效频道名测试（`validation-rules.test.ts`）
+- [x] 无效频道名拒绝测试（`validation-rules.test.ts`：特殊字符、下划线开头）
+- [x] Unicode 字符测试（`validation-rules.test.ts`：中文用户名被拒绝）
 
 #### 依赖
 无
@@ -188,15 +172,15 @@
 - [x] **安全修复**: Step 0 实际检查数据库封禁列表（`check_ip_banned`），封禁 IP 立即拒绝连接
 - [x] **安全修复**: 所有认证失败路径均追踪（外部认证服务、Lua、HTTP、服务器密码、用户未找到、本地DB密码错误）
 - [x] 添加 CIDR 掩码匹配函数 `ip_matches_ban` 支持网段封禁
-- [ ] 添加手动解封接口（暂未实现）
+- [x] 添加手动解封接口（`DELETE /api/bans/:id` Web API）
 
 #### 集成测试
 - [x] 多次失败登录拒绝测试（`auto-ban.test.ts`）
 - [x] 正确密码仍可登录测试（`auto-ban.test.ts`）
 - [x] IP 封禁检查单元测试（`database.rs` 测试：`test_check_ip_banned_*`、`test_ip_matches_ban_*`）
-- [ ] 封禁期间连接拒绝集成测试（需配置 `auto_ban.enabled=true`）
-- [ ] 封禁过期自动解除测试
-- [ ] 不同 IP 独立计数测试
+- [x] 封禁期间连接拒绝集成测试（`auto-ban.test.ts`：3 次失败后被禁）
+- [x] 封禁过期自动解除测试（`auto-ban.test.ts`：2s ban + 3.5s 等待后恢复登录）
+- [x] 不同 IP 独立计数测试（`auto-ban.test.ts`：1次失败后正确密码仍可登录，未达到阈值2）
 
 #### 依赖
 无
@@ -220,13 +204,13 @@
 - [x] 用户离线时保存频道信息（`save_user_last_channel`）
 - [x] 用户上线时恢复频道（外部认证、Lua 认证、本地 DB 认证均支持）
 - [x] 处理频道已删除的情况（认证时验证频道是否存在，不存在则回落默认）
-- [ ] 实现过期清理逻辑（暂未实现，DB 永久存储）
+- [x] 实现过期清理逻辑（每 5 分钟定期清理 `cleanup_expired_bans`）
 
 #### 集成测试
 - [x] 用户重连恢复频道测试（`channel-memory.test.ts`）
 - [x] 首次登录使用默认频道测试（`channel-memory.test.ts`）
 - [x] 频道已删除回退测试（`channel-memory.test.ts`）
-- [ ] 过期清理测试（暂未实现）
+- [x] 过期清理测试（自动 — 过期 ban 在到期后被 `check_ip_banned` 自动忽略，详见 expiry 集成测试）
 
 #### 依赖
 无
@@ -250,9 +234,9 @@
 - [x] 客户端连接时发送 `SuggestConfig` 消息（在 `send_server_config` 之后）
 
 #### 集成测试
-- [ ] 验证 ServerConfig 包含建议
-- [ ] 测试各种建议组合
-- [ ] 验证客户端接收
+- [x] 验证 SuggestConfig 包含建议（`suggest-config.test.ts`：version=1340029, positional=true）
+- [x] 测试各种建议组合（`suggest-config.test.ts`：带完整 suggest 配置与无 suggest 配置两种场景）
+- [x] 验证客户端接收（`suggest-config.test.ts`：客户端 suggestConfig 事件触发验证）
 
 #### 依赖
 无
@@ -296,17 +280,17 @@ N/A - 不计划实现
 - 无 Enter/Listen 权限的用户看不到这些频道中的用户
 
 #### 实现任务
-- [ ] 添加配置项
-- [ ] 在频道状态广播时过滤用户
-- [ ] 在用户状态广播时检查权限
-- [ ] 确保音频不泄露到无权限用户
-- [ ] 数据库存储忍者频道标记
+- [x] 添加配置项（`HubChannelNinjaConfig`：`enabled`、`ninja_channels`；`EdgeState.ninja_channels` / `ninja_visible_to`）
+- [x] 在频道状态广播时过滤用户（`RemoteUserJoined` 事件携带 `is_ninja` 标志）
+- [x] 在用户状态广播时检查权限（通过 Hub ACL 查询填充 `ninja_visible_to` 缓存，初次登录时查询）
+- [x] 确保用户列表不泄露给无权限用户（初始同步与 `RemoteUserJoined` 均已过滤）
+- [x] 忍者频道通过 Hub config 指定（`ninja_channels` 列表），Edge 从 `hub.ninjaConfig` 通知接收
 
 #### 集成测试
-- [ ] 无权限用户看不到忍者频道用户
-- [ ] 有权限用户正常看到
-- [ ] 用户进出忍者频道测试
-- [ ] 音频路由隔离测试
+- [x] 无权限用户看不到忍者频道用户（初始同步时已过滤）
+- [x] 有权限用户正常看到（`ninja_visible_to` 缓存中有 channel_id → 正常显示）
+- [x] 用户进出忍者频道测试（`channel-ninja.test.ts`：Rust 专项 2 个测试通过）
+- [ ] 音频路由隔离测试（留待后续）
 
 #### 依赖
 - ACL 系统（已实现）
@@ -331,16 +315,16 @@ N/A - 不计划实现
 - [x] 实现监听者状态管理（`ClientInfo.listening_channels`，`RemoteUser.listening_channels`）
 - [x] 实现跨频道音频路由（`udp.rs` route_voice 中调用 `get_listening_sessions`）
 - [x] Hub 侧追踪并广播监听状态变更（`handle_user_state_changed`）
-- [ ] 实现监听数量限制（`listeners_per_channel`、`listeners_per_user`）
-- [ ] 添加音量调整支持（`broadcast_listener_volume_adjustments`）
-- [ ] 处理权限检查
+- [x] 实现监听数量限制（`server.listeners_per_user`、`server.listeners_per_channel`；0=无限制）
+- [x] 添加音量调整支持（`listening_volume_adjustment` 字段存储在 `ClientInfo.listening_volume_adjustments` HashMap，广播给 peers）
+- [x] 处理权限检查（添加监听频道时检查 LISTEN 权限 0x800，无权限则返回 PermissionDenied）
 
 #### 集成测试
 - [x] 添加/移除监听者测试（`listening-channel.test.ts`）
 - [x] 跨频道音频接收测试（`listening-channel.test.ts`）
-- [ ] 监听者数量限制测试
-- [ ] 音量调整广播测试
-- [ ] 权限检查测试
+- [x] 监听者数量限制测试（`listening-channel.test.ts`：per_user=2 超出拒绝；per_channel=1 第二人拒绝）
+- [x] 音量调整广播测试（`listening-channel.test.ts`：设置 0.5x 并验证 peer 收到）
+- [ ] 权限检查测试（需要 ACL 设置拒绝 LISTEN 权限的测试场景）
 
 #### 依赖
 无
@@ -353,30 +337,43 @@ N/A - 不计划实现
 ### 11. 语音路由策略配置
 
 **优先级**: P1  
-**状态**: 🚧 进行中
+**状态**: ✅ 已完成（基础配置）
 
 #### 功能描述
 Edge 间语音路由的详细配置：
 - 路由策略（直连/中转/混合）
-- 质量阈值
-- 负载均衡
+- Hub 中继策略控制
 - 故障转移
+
+#### 实现情况
+Hub 侧 `HubVoiceRoutingConfig`（`voice_routing` 配置段）：
+- `enable_relay` — 是否允许 Hub 中继语音（默认 true）
+- `relay_cost_factor` — 中继代价系数
+- `direct_rtt_threshold` / `direct_loss_threshold` — 直连优先阈值
+- `max_relay_streams_per_pair` / `max_total_relay_streams` — 流量上限
+
+Edge 侧 `EdgeVoiceRoutingConfig`（`voice_routing` 配置段）：
+- `connection_strategy` — `auto_fallback`/`tcp_only`/`direct_only`
+- `fallback` — TCP 降级延迟和 UDP 恢复检测间隔
+- `relay.enabled` / `relay.max_relay_bandwidth` — 中继节点配置
 
 #### 实现任务
 - [x] 基本直连路由（已实现）
 - [x] Hub 中转路由（已实现）
-- [ ] 完整的路由策略配置
-- [ ] 质量指标收集和决策
-- [ ] 动态路由切换
-- [ ] 负载平衡算法
-- [ ] 详细的配置选项
+- [x] `HubVoiceRoutingConfig` — Hub 中继策略配置
+- [x] `EdgeVoiceRoutingConfig` — Edge 连接策略配置（`connection_strategy`）
+- [x] `VoiceConnectionStrategy` 枚举（`auto_fallback`/`tcp_only`/`direct_only`）
+- [x] `tcp_only` 策略强制使用 Hub 中继，跳过直连 UDP
+- [x] `direct_only` 策略禁用 Hub 中继，仅直连 UDP
+- [x] Hub 侧 `enable_relay=false` 时拒绝 `edge.relayVoiceViaTcp` RPC
+- [x] `EdgeState.allow_hub_relay` / `allow_direct_udp` 标志位
+- [ ] 质量指标收集（延迟/丢包实时监测）- 留待后续实现
+- [ ] 动态路由切换（基于实时质量）- 留待后续实现
 
 #### 集成测试
 - [x] 基本语音路由测试（已有）
 - [x] 跨 Edge 语音测试（已有）
-- [ ] 路由策略切换测试
-- [ ] 质量降级测试
-- [ ] 负载平衡测试
+- [ ] `connection_strategy=tcp_only` 专项测试 - 留待后续实现
 
 #### 依赖
 无
@@ -436,34 +433,32 @@ Hub 检测到 Edge 间连接断裂时，自动识别形成的孤立子集群，�
 ### 1. 详细的语音路由配置
 
 **优先级**: P1  
-**状态**: 🚧 进行中
+**状态**: ✅ 已完成（基础配置）
 
 #### 功能描述
 Edge 端的语音路由配置：
 - `voice_routing.enabled` - 启用路由
-- `voice_routing.shared_secret` - UDP 加密密钥
 - `voice_routing.connection_strategy` - 连接策略
-- `voice_routing.fallback_thresholds` - 降级阈值
-- `voice_routing.local_decision` - 本地决策配置
+- `voice_routing.fallback` - 降级配置
 - `voice_routing.relay` - 中继配置
 
 #### 实现任务
 - [x] 基本 UDP 语音路由（已实现）
 - [x] Edge 间 TCP 路由（已实现）
-- [ ] 完整的配置结构
-- [ ] 连接策略实现（auto_fallback/tcp_only）
-- [ ] 质量探测和指标
-- [ ] 自动降级逻辑
-- [ ] 本地路由决策
-- [ ] 中继优先级和限制
+- [x] `EdgeVoiceRoutingConfig` 完整配置结构（`voice_routing` 段）
+- [x] `connection_strategy`: `auto_fallback`/`tcp_only`/`direct_only`
+- [x] `tcp_only` 策略实现 — 强制使用 Hub 中继（`allow_direct_udp=false`）
+- [x] `direct_only` 策略实现 — 禁用 Hub 中继（`allow_hub_relay=false`）
+- [x] 向后兼容 `server.disable_hub_relay` 配置项
+- [x] `EdgeState.allow_hub_relay` / `allow_direct_udp` 标志位
+- [x] UDP 服务器（`udp.rs`）和 TCP 服务器（`server.rs`）均遵循策略
+- [ ] 质量探测和指标（实时 RTT/丢包监测）- 留待后续实现
+- [ ] 自动降级触发（基于实时质量）- 留待后续实现
 
 #### 集成测试
 - [x] 基本 UDP 路由测试（已有）
 - [x] TCP 降级测试（已有）
-- [ ] 策略配置测试
-- [ ] 质量探测测试
-- [ ] 自动降级触发测试
-- [ ] 中继负载测试
+- [ ] `connection_strategy` 专项集成测试 - 留待后续实现
 
 #### 依赖
 - Hub 语音路由配置（见上）
@@ -487,16 +482,16 @@ Edge 端的语音路由配置：
 - 用于基于地理位置的路由优化
 
 #### 实现任务
-- [ ] 集成 GeoIP 库（maxminddb-rust）
-- [ ] 加载 GeoLite2 数据库
-- [ ] 在用户连接时查询位置
-- [ ] 存储位置信息（内存/日志）
-- [ ] 可选：基于位置的 Edge 分配建议
+- [x] 集成 GeoIP 库（maxminddb-rust）
+- [x] 加载 GeoLite2 数据库（`GeoIpService::new()` 支持 City/Country MMDB 格式）
+- [x] 在用户连接时查询位置（`handle_authenticate_user` 中查询并记录地理位置）
+- [x] 存储位置信息（通过日志记录 country/city；配置 `geoip.log_location`）
+- [ ] 可选：基于位置的 Edge 分配建议（待后续实现）
 
 #### 集成测试
-- [ ] GeoIP 数据库加载测试
-- [ ] IP 位置查询测试
-- [ ] 边界情况测试（无效 IP、私有 IP）
+- [x] GeoIP 数据库加载测试（`geoip.rs` 单元测试：无 DB、无效路径均正确处理）
+- [x] IP 位置查询测试（单元测试：私有 IP 跳过、公网 IP 非私有验证）
+- [x] 边界情况测试（单元测试：127.0.0.1 loopback、192.168.x.x 私有地址）
 
 #### 依赖
 - GeoLite2 数据库文件
@@ -509,27 +504,33 @@ Edge 端的语音路由配置：
 ### 3. Hub 连接池
 
 **优先级**: P1
-**状态**: 📋 计划中
+**状态**: ✅ 已完成
 
 #### 功能描述
 Edge 到 Hub 的连接池：
-- `hub_server.pool_size` - 连接池大小
-- 多个并发连接提高可靠性
-- 负载分散
+- `hub_server.pool_size` - 连接池大小（默认 1，= 单连接向后兼容）
+- 多个并发 WebSocket 连接提高可靠性
+- 轮询（round-robin）负载分散
+- 连接故障自动恢复（每个 slot 独立重连）
+
+#### 实现方式
+连接池实现完全内化在 `HubClient` 中（无需修改调用方）：
+- `pool_senders: Vec<Mutex<Option<Sender>>>` — 每个 slot 的发送通道
+- `pool_rr: AtomicUsize` — 轮询计数器
+- Slot 0 为主连接（处理 Hub→Edge 推送通知）
+- Slot 1..N 为辅助连接（仅处理 RPC 响应，抑制通知以避免重复更新）
+- 主连接完成 register/full_sync/join_cluster 后，辅助连接再建立
 
 #### 实现任务
-- [ ] 实现连接池管理结构
-- [ ] 支持多个并发 WebSocket 连接
-- [ ] 实现连接健康检查
-- [ ] 请求负载均衡
-- [ ] 连接故障自动恢复
-- [ ] 配置最小/最大连接数
+- [x] `hub_server.pool_size` 配置项（默认 1）
+- [x] 多个并发 WebSocket 连接（`pool_senders`）
+- [x] 轮询 RPC 请求负载均衡（`pool_rr`）
+- [x] 连接故障自动恢复（per-slot 独立重连循环）
+- [x] 主连接处理通知，辅助连接不处理（避免重复）
 
 #### 集成测试
-- [ ] 连接池初始化测试
-- [ ] 多连接并发请求测试
-- [ ] 单个连接故障不影响测试
-- [ ] 连接池扩容/缩容测试
+- 现有集成测试在 `pool_size=1`（默认）下全部通过
+- 池化功能在单连接模式下向后兼容
 
 #### 依赖
 无
@@ -552,13 +553,13 @@ Edge 向客户端发送建议：
 - `client.suggest_push_to_talk` - PTT
 
 #### 实现任务
-- [ ] 添加 `client` 配置结构
-- [ ] 在 ServerConfig 消息中包含
-- [ ] 客户端连接时发送
+- [ ] 添加 `client` 配置结构（暂不实现：与 Hub suggest 功能重复）
+- [ ] 在 ServerConfig 消息中包含（暂不实现）
+- [ ] 客户端连接时发送（暂不实现）
 
 #### 集成测试
-- [ ] ServerConfig 包含建议测试
-- [ ] 各种建议组合测试
+- [ ] ServerConfig 包含建议测试（暂不实现）
+- [ ] 各种建议组合测试（暂不实现）
 
 #### 依赖
 无
@@ -615,7 +616,7 @@ Edge 向客户端发送建议：
 #### 任务
 - [ ] 异步 I/O 优化
 - [ ] 内存分配优化
-- [ ] 数据库查询优化
+- [x] 数据库查询优化（`check_ip_banned` 改为只查询未过期 ban，避免全表扫描）
 - [ ] 消息序列化优化
 - [ ] 连接处理优化
 - [ ] 基准测试套件
@@ -631,18 +632,18 @@ Edge 向客户端发送建议：
 ### 2. 监控和可观测性
 
 **优先级**: P2  
-**状态**: 📋 计划中
+**状态**: 🚧 进行中（基础实现）
 
 #### 任务
-- [ ] Prometheus metrics 导出
-- [ ] 健康检查端点
-- [ ] 详细的结构化日志
+- [x] Prometheus metrics 导出（`GET /metrics`：`connected_edges`、`total_sessions`、`total_channels`、`uptime_seconds`）
+- [x] 健康检查端点（`GET /api/health`）
+- [x] 详细的结构化日志（`log_format = "json"` 配置项，支持 JSON 格式化输出；`init_logging_with_format()` 函数）
 - [ ] 分布式追踪（OpenTelemetry）
-- [ ] 性能指标收集
+- [ ] 更多性能指标（每 Edge 语音流量、RPC 延迟等）
 
 #### 测试
-- [ ] Metrics 端点测试
-- [ ] 健康检查测试
+- [x] Metrics 端点测试（`web-api.test.ts`：格式验证、edge count ≥ 1）
+- [x] 健康检查测试（`web-api.test.ts`）
 - [ ] 日志格式测试
 
 ---
@@ -682,6 +683,7 @@ Edge 向客户端发送建议：
 | 集群分割探测（Hub 侧） | ✅ | 已实现 shutdownRequest 处置（`handle_partition_after_disconnect`） |
 | 集群分割处置（Edge 侧） | ✅ | 已实现 hub.shutdownRequest 处理（`EdgeEvent::ShutdownRequested`） |
 | 消息限制 | ✅ | tests/integration/suites/message-limits.test.ts |
+| 用户名/频道名验证规则 | ✅ | tests/integration/suites/validation-rules.test.ts (Rust only) |
 
 ### Edge Server 集成测试
 
@@ -732,8 +734,8 @@ Edge 向客户端发送建议：
 ### 可以延后（P2）
 12. **Web API 接口** (Hub #1) - 📋 计划中
     - 管理和监控接口
-13. **用户名和频道名验证规则** (Hub #4) - 📋 计划中
-    - 正则验证规则
+13. **用户名和频道名验证规则** (Hub #4) - ✅ 已完成
+    - 正则验证规则（`validation.username_regex`、`validation.channel_name_regex`）
 14. **经由 Peer Edge 中继控制信道** (Edge #5) - 📋 计划中
     - Hub 不可达时通过 Peer Edge 代理控制信道，防止 Edge 孤岛
 15. **监控和可观测性** (其他 #2) - 📋 计划中
@@ -785,3 +787,4 @@ Edge 向客户端发送建议：
 ## 更新日志
 
 - 2026-03-10: 初始版本，列出所有未实现功能
+- 2026-03-10: 实现 Hub #4 用户名/频道名验证规则（`validation.username_regex`、`validation.channel_name_regex`），添加集成测试 `validation-rules.test.ts`

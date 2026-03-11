@@ -7,6 +7,15 @@
 #   3. Edge servers connect to 'hub:8443' within the Docker network
 
 # ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+log_level  = "info"                    # trace | debug | info | warn | error
+log_format = "text"                    # text (default, human-readable) | json (structured, for Loki/ELK)
+
+# Note: Log output goes to stdout/stderr and should be captured by your
+# process manager (Docker, systemd, etc.). No log file configuration needed.
+
+# ---------------------------------------------------------------------------
 # Network
 # ---------------------------------------------------------------------------
 [network]
@@ -166,9 +175,141 @@ end
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Logging
+# Server Limits (applied Hub-wide)
 # ---------------------------------------------------------------------------
-log_level = "info"                      # trace | debug | info | warn | error
+[limits]
+# Maximum total users across all edges (0 = unlimited)
+max_users            = 1000            # Default: 1000
 
-# Note: Log output goes to stdout/stderr and should be captured by your
-# process manager (Docker, systemd, etc.). No log file configuration needed.
+# Maximum users per channel (0 = unlimited)
+max_users_per_channel = 0              # Default: 0 (unlimited)
+
+# Maximum length of a text message in bytes (0 = unlimited)
+text_message_length  = 5000            # Default: 5000
+
+# Maximum length of an image message in bytes (0 = unlimited)
+image_message_length = 131072          # Default: 131072 (128 KB)
+
+# Maximum length of a plugin data message in bytes (0 = unlimited)
+plugin_message_length = 1024           # Default: 1024
+
+# Token-bucket rate limiter: maximum messages per second (sustained)
+message_rate  = 10.0                   # Default: 10.0 msg/s
+
+# Token-bucket burst size
+message_burst = 5                      # Default: 5
+
+# Maximum listeners per user (0 = unlimited)
+listeners_per_user    = 0              # Default: 0 (unlimited)
+
+# Maximum listeners per channel (0 = unlimited)
+listeners_per_channel = 0             # Default: 0 (unlimited)
+
+# ---------------------------------------------------------------------------
+# Auto-Ban (brute-force protection)
+# ---------------------------------------------------------------------------
+[auto_ban]
+# Enable automatic IP-based banning after repeated authentication failures
+enabled     = false                    # Default: false
+
+# Number of failed attempts before an IP is banned
+attempts    = 10                       # Default: 10
+
+# Time window in seconds for counting failures
+time_window = 120                      # Default: 120 seconds
+
+# Ban duration in seconds
+duration    = 300                      # Default: 300 seconds (5 minutes)
+
+# ---------------------------------------------------------------------------
+# Client Suggestions
+# Optional: send recommended settings to connecting Mumble clients.
+# ---------------------------------------------------------------------------
+# [suggest]
+# version      = 1340029               # Suggested minimum client version (numeric, e.g. 1.3.0.29 → 1340029)
+# positional   = false                 # Suggest enabling positional audio
+# push_to_talk = false                 # Suggest enabling push-to-talk
+
+# ---------------------------------------------------------------------------
+# Validation Rules
+# ---------------------------------------------------------------------------
+[validation]
+# Optional regex patterns to validate usernames and channel names
+# If set, names not matching the pattern will be rejected
+# username_regex     = "^[a-zA-Z0-9_]{3,32}$"  # Example: alphanumeric, 3-32 chars
+# channel_name_regex = "^[^\\x00-\\x1f]{1,64}$" # Example: no control chars, max 64 chars
+
+# ---------------------------------------------------------------------------
+# Web API
+# ---------------------------------------------------------------------------
+[web_api]
+# Enable the HTTP management API (metrics, ban management, etc.)
+enabled = true                         # Default: true
+
+# Bind host for the Web API server
+host    = "0.0.0.0"                    # Default: 0.0.0.0
+
+# Port for the Web API server
+port    = 8080                         # Default: 8080
+#
+# Available endpoints:
+#   GET  /api/health        – liveness probe
+#   GET  /metrics           – Prometheus metrics
+#   GET  /api/bans          – list active and expired bans
+#   DELETE /api/bans/:id    – remove a specific ban
+
+# ---------------------------------------------------------------------------
+# Blob Store (textures, user comments)
+# ---------------------------------------------------------------------------
+[blob_store]
+# Directory for storing user avatar textures and channel/user comments
+# Docker Compose: mount this directory as a volume for persistence
+path = "./data/blobs"                  # Default: data/blobs
+
+# ---------------------------------------------------------------------------
+# Voice Routing Policy
+# ---------------------------------------------------------------------------
+[voice_routing]
+# Enable Hub-mediated TCP voice relay for cross-edge routing
+enable_relay                 = true    # Default: true
+
+# Maximum simultaneous relay streams between any pair of edges
+max_relay_streams_per_pair   = 0       # Default: 0 (unlimited)
+
+# Maximum total relay streams across the whole cluster
+max_total_relay_streams      = 0       # Default: 0 (unlimited)
+
+# Cost multiplier applied to relay routes during path selection
+# (higher = relay is considered more expensive, direct preferred)
+relay_cost_factor            = 1.2     # Default: 1.2
+
+# RTT threshold (ms): prefer relay over direct when direct RTT exceeds this value
+direct_rtt_threshold         = 200     # Default: 200 ms
+
+# Packet-loss threshold: prefer relay when direct loss rate exceeds this value
+direct_loss_threshold        = 0.05    # Default: 0.05 (5%)
+
+# ---------------------------------------------------------------------------
+# Channel Ninja (invisible channels)
+# ---------------------------------------------------------------------------
+[channel_ninja]
+# When enabled, users who lack both Enter AND Listen permission on a ninja channel
+# will not see that channel's occupants at all (the privileged users appear offline).
+enabled        = false                 # Default: false
+
+# List of channel IDs to treat as ninja channels
+# Example: ninja_channels = [5, 12, 23]
+ninja_channels = []                    # Default: [] (no ninja channels)
+
+# ---------------------------------------------------------------------------
+# GeoIP (optional geographic lookup)
+# ---------------------------------------------------------------------------
+[geoip]
+# Path to a MaxMind GeoLite2-City.mmdb or GeoLite2-Country.mmdb file.
+# Download from: https://dev.maxmind.com/geoip/geolite2-free-geolocation-data
+# Leave empty to disable GeoIP lookups.
+database_path = ""                     # Default: "" (disabled)
+
+# Log geographic location (country, city) for each connecting user
+log_location  = true                   # Default: true
+

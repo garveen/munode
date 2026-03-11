@@ -26,15 +26,15 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | database.backup_dir | ✅ | ❌ | 备份目录 |
 | database.wal_mode | ✅ | ❌ | WAL 模式 |
 | **Blob 存储** |
-| blob_store.enabled | ✅ | ❌ | 启用 blob 存储 |
-| blob_store.path | ✅ | ❌ | 存储路径 |
+| blob_store.path | ✅ | ✅ | Blob 文件存储目录（默认 `data/blobs`），以 hash 前两位为子目录分片 |
 | **注册表** |
 | registry.hmac_secret | ✅ | ✅ | HMAC 密钥 |
 | registry.heartbeat_timeout | ✅ | ✅ | 心跳超时 |
 | registry.max_edges | ✅ | ❌ | 最大 Edge 数 |
 | **Web API** |
-| web_api.enabled | ✅ | ❌ | 启用 Web API |
-| web_api.port | ✅ | ❌ | API 端口 |
+| web_api.enabled | ✅ | ✅ | 启用 Web API |
+| web_api.port | ✅ | ✅ | API 端口 |
+| web_api.host | ✅ | ✅ | API 监听地址 |
 | **认证** |
 | auth.allow_guest | ✅ | ✅ | 允许游客 |
 | auth.default_channel | ✅ | ✅ | 默认频道 |
@@ -63,8 +63,8 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | cert_required | ✅ | ❌ | 要求证书 |
 | force_external_auth | ✅ | ❌ | 强制外部认证 |
 | **验证规则** |
-| username_regex | ✅ | ❌ | 用户名正则 |
-| channel_name_regex | ✅ | ❌ | 频道名正则 |
+| username_regex | ✅ | ✅ | 用户名正则（`validation.username_regex`） |
+| channel_name_regex | ✅ | ✅ | 频道名正则（`validation.channel_name_regex`） |
 | **自动封禁** |
 | auto_ban.enabled | ✅ | ✅ | 启用自动封禁 |
 | auto_ban.attempts | ✅ | ✅ | 触发封禁的失败次数（`auto_ban.attempts`） |
@@ -91,8 +91,13 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | log_level | ✅ | ✅ | 日志级别 |
 | log_file | ✅ | ❌ | 日志文件 |
 | log_days | ✅ | ❌ | 日志保留天数 |
-| **语音路由** |
-| voice_routing.* | ✅ | ❌ | 语音路由配置 |
+| **语音路由策略** |
+| voice_routing.enable_relay | ✅ | ✅ | Hub 侧允许中继语音（默认 true） |
+| voice_routing.relay_cost_factor | ✅ | ✅ | 中继路由代价系数（默认 1.2） |
+| voice_routing.direct_rtt_threshold | ✅ | ✅ | 直连 RTT 阈值 ms（默认 200） |
+| voice_routing.direct_loss_threshold | ✅ | ✅ | 直连丢包阈值 0-1（默认 0.05） |
+| voice_routing.max_relay_streams_per_pair | ✅ | ✅ | 每对 Edge 最大中继流数（0=无限制） |
+| voice_routing.max_total_relay_streams | ✅ | ✅ | Hub 总最大中继流数（0=无限制） |
 
 ### Edge Server 配置对照表
 
@@ -123,7 +128,7 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | hub_server.reconnect_interval | ✅ | ✅ | 重连间隔 |
 | hub_server.heartbeat_interval | ✅ | ✅ | 心跳间隔 |
 | hub_server.hmac_secret | ✅ | ✅ | HMAC 密钥 |
-| hub_server.pool_size | ✅ | ❌ | 连接池大小 |
+| hub_server.pool_size | ✅ | ✅ | 连接池大小（默认 1 = 单连接，>1 = 多连接轮询） |
 | hub_server.tls.* | ✅ | ❌ | Hub TLS 配置 |
 | **服务器配置** |
 | server.capacity | ✅ | ✅ | 最大用户数 |
@@ -131,12 +136,22 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | server.default_channel | ✅ | ✅ | 默认频道 |
 | server.welcome_text | ✅ | ✅ | 欢迎消息 |
 | server.disable_hub_relay | ✅ | ✅ | 禁用 Hub 中转 |
+| server.text_message_length | ✅ | ✅ | 最大文本消息长度（字节，默认 5000） |
+| server.image_message_length | ✅ | ✅ | 最大图片消息长度（字节，默认 131072） |
+| server.message_rate | ✅ | ✅ | 消息频率限制（每秒，令牌桶） |
+| server.message_burst | ✅ | ✅ | 消息突发限制（令牌桶，默认 5） |
+| server.plugin_message_length | ✅ | ✅ | 最大插件数据消息长度（字节，默认 1024；0=无限制） |
+| server.listeners_per_user | ✅ | ✅ | 每用户最大监听频道数（0=无限制） |
+| server.listeners_per_channel | ✅ | ✅ | 每频道最大监听者数（0=无限制） |
 | **语音路由** |
-| voice_routing.enabled | ✅ | ❌ | 启用语音路由 |
-| voice_routing.shared_secret | ✅ | ❌ | 共享密钥 |
-| voice_routing.connection_strategy | ✅ | ❌ | 连接策略 |
-| voice_routing.local_decision.* | ✅ | ❌ | 本地决策配置 |
-| voice_routing.relay.* | ✅ | ❌ | 中继配置 |
+| voice_routing.enabled | ✅ | ✅ | 启用语音路由（默认 true） |
+| voice_routing.connection_strategy | ✅ | ✅ | 连接策略：`auto_fallback`（默认）/`tcp_only`/`direct_only` |
+| voice_routing.fallback.enable_tcp_fallback | ✅ | ✅ | 启用 UDP 质量降级时切换 TCP（默认 false） |
+| voice_routing.fallback.tcp_fallback_delay | ✅ | ✅ | 切换 TCP 延迟（ms，默认 2000） |
+| voice_routing.relay.enabled | ✅ | ✅ | 允许本 Edge 作为中继节点（默认 true） |
+| voice_routing.relay.max_relay_bandwidth | ✅ | ✅ | 最大中继带宽 Kbps（默认 10000） |
+| voice_routing.shared_secret | ✅ | ❌ | 共享密钥（TS 专有） |
+| voice_routing.local_decision.* | ✅ | ❌ | 本地决策配置（TS 专有） |
 | **客户端建议** |
 | client.suggest_version | ✅ | ❌ | 建议版本 |
 | client.suggest_positional | ✅ | ❌ | 建议位置音频 |
@@ -166,19 +181,19 @@ Rust 版本有意简化配置选项，主要原因：
 - 带宽限制：558000 bps
 - 消息长度限制：根据协议规范
 - 超时值：标准默认值
-- 用户名和频道名验证：基本的 Unicode 字符验证
 
 ### 未实现的功能
 
 某些 TypeScript 功能在 Rust 版本中尚未实现：
 
-1. **Web API** - HTTP REST API 接口
-2. **Blob 存储** - 独立的 blob 存储系统
-3. **服务器注册** - 公共服务器列表注册
-4. **高级 ACL 功能** - channnel_ninja 等
-5. **详细的语音路由配置** - 完整的路由策略配置
+1. **服务器注册** - 公共服务器列表注册
+2. **高级 ACL 功能** - channnel_ninja 等
+3. **详细的语音路由配置** - 完整的路由策略配置
 
-这些功能可能在未来版本中添加。
+以下功能已在 Rust 版本中实现（但与 TypeScript 实现方式不同）：
+
+- **Web API** - 已实现 `/api/status`、`/api/edges`、`/api/stats`、`/api/topology`、`/api/health` 端点
+- **Blob 存储** - 已实现，直接内嵌于 SQLite 数据库（使用 SHA-256 内容寻址）
 
 ## 配置最佳实践
 
@@ -190,6 +205,9 @@ control_port = 8443              # 标准控制端口
 
 [database]
 path = "./data/hub.sqlite"       # 确保目录可写
+
+[blob_store]
+path = "./data/blobs"            # Blob 文件目录，以 hash 前两位为子目录分片
 
 [registry]
 hmac_secret = "CHANGE-ME-RANDOM-64-CHAR-STRING"  # 使用强密钥
@@ -217,6 +235,14 @@ attempts = 10                    # 触发封禁的失败次数
 time_window = 120                # 计数窗口（秒）
 duration = 300                   # 封禁时长（秒，0=永久）
 
+# 验证规则配置（可选）
+# 使用 Rust regex 语法，参考 https://docs.rs/regex
+[validation]
+# 用户名必须以字母开头，只能包含字母、数字和下划线，长度 2-30
+username_regex = '^[a-zA-Z][a-zA-Z0-9_]{1,29}$'
+# 频道名必须以字母或数字开头，只能包含字母、数字、空格、下划线和连字符，长度 1-60
+channel_name_regex = '^[a-zA-Z0-9][a-zA-Z0-9 _-]{0,59}$'
+
 log_level = "info"               # 生产环境使用 info
 ```
 
@@ -240,6 +266,7 @@ key = "./certs/edge-key.pem"
 host = "hub"                     # Docker: 使用服务名
 control_port = 8443
 hmac_secret = "SAME-AS-HUB"     # 必须与 Hub 匹配
+# pool_size = 2                  # 可选：多连接轮询提高可靠性（默认 1）
 
 [server]
 capacity = 1000                  # 根据资源调整
@@ -254,6 +281,19 @@ message_burst = 5                # 令牌桶突发容量（默认 5）
 # version = 1340029              # 建议客户端版本（数字格式，如 1.3.0.29 → 1340029）
 # positional = true              # 建议启用位置音频
 # push_to_talk = false           # 建议关闭 PTT（启用语音激活）
+
+# Web API 配置（可选）
+[web_api]
+enabled = false                  # 是否启用 HTTP Web API
+host = "0.0.0.0"                 # 监听地址
+port = 8080                      # 监听端口
+# 启用后可访问：
+# GET /api/health  — 健康探针
+# GET /api/status  — Hub 状态
+# GET /api/stats   — Hub 统计数据
+# GET /api/edges   — Edge 列表
+# GET /api/topology — 网络拓扑
+# GET /metrics     — Prometheus metrics（文本格式）
 
 log_level = "info"
 ```

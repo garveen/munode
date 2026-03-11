@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -28,6 +29,11 @@ use munode_protocol::hubedge::{
 use crate::channel_manager::{ChannelData, RemoteUser};
 use crate::state::{EdgeEvent, EdgeState, PeerEdgeInfo};
 
+/// Maximum time to wait for the primary pool slot to register before bringing
+/// up secondary slots.  100ms × 100 = 10 seconds.
+const SECONDARY_SLOT_WAIT_POLL_INTERVAL_MS: u64 = 100;
+const SECONDARY_SLOT_WAIT_MAX_POLLS: u32 = 100;
+
 /// Connection state for the Hub client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HubConnectionState {
@@ -43,6 +49,11 @@ struct PendingRequest {
 }
 
 /// Client for communicating with the Hub server via WebSocket + protobuf.
+///
+/// When `pool_size > 1`, multiple parallel WebSocket connections are maintained.
+/// RPC requests are distributed across connections in round-robin order.
+/// Hub-to-Edge notifications (push events) are only processed on the primary
+/// connection (slot 0) to avoid duplicate state updates.
 pub struct HubClient {
     config: HubServerConfig,
     server_id: u32,
@@ -59,10 +70,14 @@ pub struct HubClient {
     capacity: u32,
     state: RwLock<HubConnectionState>,
     edge_state: Arc<EdgeState>,
-    /// Pending RPC requests awaiting responses.
+    /// Pending RPC requests awaiting responses (shared across all pool slots).
     pending: Mutex<HashMap<String, PendingRequest>>,
-    /// Channel for sending packets to the WebSocket writer task.
-    send_tx: Mutex<Option<mpsc::Sender<Vec<u8>>>>,
+    /// Number of pool connections to maintain (1 = no pool, >1 = pool mode).
+    pool_size: usize,
+    /// Per-slot send channels.  Index 0 is the primary (handles notifications).
+    pool_senders: Vec<Mutex<Option<mpsc::Sender<Vec<u8>>>>>,
+    /// Round-robin index for distributing sends across pool slots.
+    pool_rr: AtomicUsize,
     /// Counter for generating unique request IDs.
     request_counter: Mutex<u64>,
     /// Time when this HubClient was created (for uptime reporting).
@@ -76,6 +91,8 @@ impl HubClient {
     ) -> Arc<Self> {
         let external_port = config.network.external_port.unwrap_or(config.network.port);
         let edge_port = config.network.edge_port.unwrap_or(config.network.port + 1);
+        let pool_size = config.hub_server.pool_size.max(1) as usize;
+        let pool_senders = (0..pool_size).map(|_| Mutex::new(None)).collect();
         Arc::new(Self {
             config: config.hub_server.clone(),
             server_id: config.server_id,
@@ -88,7 +105,9 @@ impl HubClient {
             state: RwLock::new(HubConnectionState::Disconnected),
             edge_state,
             pending: Mutex::new(HashMap::new()),
-            send_tx: Mutex::new(None),
+            pool_size,
+            pool_senders,
+            pool_rr: AtomicUsize::new(0),
             request_counter: Mutex::new(0),
             start_time: Instant::now(),
         })
@@ -111,20 +130,57 @@ impl HubClient {
     }
 
     /// Connect to the Hub and run the main communication loop with reconnection.
+    ///
+    /// When `pool_size > 1`, the primary connection (slot 0) is established first
+    /// so the Edge can register and do a full sync.  Then secondary connections are
+    /// started in background tasks.  Reconnection works per-slot independently.
     pub async fn connect_and_run(self: &Arc<Self>) -> Result<()> {
-        loop {
-            match self.try_connect().await {
-                Ok(()) => {
-                    info!("Hub connection closed normally");
-                }
-                Err(e) => {
-                    error!("Hub connection error: {}", e);
-                }
+        if self.pool_size == 1 {
+            // Single-connection mode: original behaviour.
+            self.run_single_slot(0, true).await;
+        } else {
+            info!("Hub connection pool mode: {} slots", self.pool_size);
+            // Start the primary slot first and wait for it to register.
+            self.run_primary_slot_init().await?;
+            // Start remaining slots in background (they only need to authenticate,
+            // not do full sync / cluster join, since the primary already did that).
+            for slot in 1..self.pool_size {
+                let me = self.clone();
+                tokio::spawn(async move {
+                    me.run_secondary_slot(slot).await;
+                });
             }
+            // Keep primary alive with reconnection loop.
+            loop {
+                match self.try_connect_slot(0, true).await {
+                    Ok(()) => info!("Primary Hub connection closed, reconnecting…"),
+                    Err(e) => error!("Primary Hub connection error: {}", e),
+                }
+                self.clear_slot(0).await;
+                // If ALL slots are gone, the edge is fully disconnected.
+                if !self.any_slot_connected().await {
+                    *self.state.write().await = HubConnectionState::Disconnected;
+                    self.pending.lock().await.clear();
+                    self.edge_state.emit(EdgeEvent::HubDisconnected);
+                }
+                let delay = Duration::from_millis(self.config.reconnect_interval);
+                warn!("Primary: reconnecting to Hub in {:?}", delay);
+                time::sleep(delay).await;
+            }
+        }
+        Ok(())
+    }
 
+    /// Run the single-slot (no pool) reconnect loop.
+    async fn run_single_slot(self: &Arc<Self>, slot: usize, is_primary: bool) {
+        loop {
+            match self.try_connect_slot(slot, is_primary).await {
+                Ok(()) => info!("Hub connection closed normally"),
+                Err(e) => error!("Hub connection error: {}", e),
+            }
             // Clean up state
             *self.state.write().await = HubConnectionState::Disconnected;
-            *self.send_tx.lock().await = None;
+            self.clear_slot(slot).await;
             self.pending.lock().await.clear();
             self.edge_state.emit(EdgeEvent::HubDisconnected);
 
@@ -134,66 +190,107 @@ impl HubClient {
         }
     }
 
-    /// Attempt a single connection to the Hub.
-    async fn try_connect(self: &Arc<Self>) -> Result<()> {
+    /// Connect the primary slot and wait until it has registered.  Returns an
+    /// error if the initial connection fails.
+    async fn run_primary_slot_init(self: &Arc<Self>) -> Result<()> {
+        self.try_connect_slot(0, true).await
+    }
+
+    /// Background reconnect loop for a secondary pool slot.
+    async fn run_secondary_slot(self: &Arc<Self>, slot: usize) {
+        loop {
+            match self.try_connect_secondary_slot(slot).await {
+                Ok(()) => debug!("Pool slot {} closed", slot),
+                Err(e) => warn!("Pool slot {} error: {}", slot, e),
+            }
+            self.clear_slot(slot).await;
+
+            let delay = Duration::from_millis(self.config.reconnect_interval);
+            debug!("Pool slot {} reconnecting in {:?}", slot, delay);
+            time::sleep(delay).await;
+        }
+    }
+
+    /// True if at least one pool slot has a live send channel.
+    async fn any_slot_connected(&self) -> bool {
+        for sender in &self.pool_senders {
+            if sender.lock().await.is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Clear a slot's send channel.
+    async fn clear_slot(&self, slot: usize) {
+        if let Some(s) = self.pool_senders.get(slot) {
+            *s.lock().await = None;
+        }
+    }
+
+    /// Attempt a single WebSocket connection on `slot`.
+    /// `is_primary` = true  → handles notifications + runs do_register/do_full_sync/do_join_cluster.
+    /// `is_primary` = false → secondary slot, only processes RPC responses.
+    async fn try_connect_slot(self: &Arc<Self>, slot: usize, is_primary: bool) -> Result<()> {
         *self.state.write().await = HubConnectionState::Connecting;
 
         let url = format!("ws://{}:{}", self.config.host, self.config.control_port);
-        info!("Connecting to Hub at {}", url);
+        info!("Connecting to Hub at {} (slot {})", url, slot);
 
         let (ws_stream, _) = tokio_tungstenite::connect_async(&url)
             .await
-            .context("Failed to connect to Hub WebSocket")?;
+            .with_context(|| format!("Failed to connect to Hub WebSocket (slot {})", slot))?;
 
-        info!("WebSocket connected to Hub");
-        *self.state.write().await = HubConnectionState::Connected;
+        info!("WebSocket connected to Hub (slot {})", slot);
+        if is_primary {
+            *self.state.write().await = HubConnectionState::Connected;
+        }
 
         let (mut ws_write, mut ws_read) = ws_stream.split();
 
         // Channel for sending outgoing messages
         let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(256);
-        *self.send_tx.lock().await = Some(send_tx);
+        if let Some(s) = self.pool_senders.get(slot) {
+            *s.lock().await = Some(send_tx);
+        }
 
-        // Writer task: forwards messages from send_rx to WebSocket
+        // Writer task
         let writer_handle = tokio::spawn(async move {
             while let Some(data) = send_rx.recv().await {
                 if let Err(e) = ws_write.send(tungstenite::Message::Binary(Bytes::from(data))).await {
-                    error!("WebSocket write error: {}", e);
+                    error!("WebSocket write error (slot {}): {}", slot, e);
                     break;
                 }
             }
         });
 
-        // Reader task: must be running BEFORE RPC calls so responses can be received.
-        // Uses a oneshot channel to signal when the connection closes.
+        // Reader task
         let (reader_done_tx, reader_done_rx) = tokio::sync::oneshot::channel::<()>();
         let reader_self = self.clone();
         let reader_handle = tokio::spawn(async move {
             loop {
                 match ws_read.next().await {
-                    Some(Ok(msg)) => {
-                        match msg {
-                            tungstenite::Message::Binary(data) => {
-                                if let Err(e) = reader_self.handle_incoming(&data).await {
-                                    warn!("Error handling Hub message: {}", e);
-                                }
+                    Some(Ok(msg)) => match msg {
+                        tungstenite::Message::Binary(data) => {
+                            if let Err(e) = reader_self.handle_incoming_slot(&data, is_primary).await {
+                                warn!("Error handling Hub message (slot {}): {}", slot, e);
                             }
-                            tungstenite::Message::Close(_) => {
-                                info!("Hub sent close frame");
-                                break;
-                            }
-                            tungstenite::Message::Ping(data) => {
-                                reader_self.send_raw(tungstenite::Message::Pong(data).into_data().to_vec()).await.ok();
-                            }
-                            _ => {}
                         }
-                    }
+                        tungstenite::Message::Close(_) => {
+                            info!("Hub sent close frame (slot {})", slot);
+                            break;
+                        }
+                        tungstenite::Message::Ping(data) => {
+                            reader_self.send_on_slot(slot, tungstenite::Message::Pong(data).into_data().to_vec()).await.ok();
+                        }
+                        _ => {}
+                    },
                     Some(Err(e)) => {
-                        error!("WebSocket read error: {}", e);
+                        error!("WebSocket read error (slot {}): {}", slot, e);
                         break;
                     }
                     None => {
-                        info!("WebSocket stream ended");
+                        info!("WebSocket stream ended (slot {})", slot);
                         break;
                     }
                 }
@@ -201,39 +298,74 @@ impl HubClient {
             let _ = reader_done_tx.send(());
         });
 
-        // Register with Hub (reader task is now running, so responses can arrive)
-        self.do_register().await?;
+        if is_primary {
+            // Register with Hub (reader task is now running)
+            self.do_register().await?;
+            // Request full sync
+            self.do_full_sync().await?;
+            // Join cluster topology
+            self.do_join_cluster().await?;
 
-        // Request full sync
-        self.do_full_sync().await?;
+            *self.state.write().await = HubConnectionState::Registered;
+            self.edge_state.emit(EdgeEvent::HubRegistered);
+            info!("Edge registered with Hub successfully (pool primary)");
+        }
 
-        // Join cluster topology so Hub can broadcast our address to peer Edges
-        self.do_join_cluster().await?;
-
-        *self.state.write().await = HubConnectionState::Registered;
-        self.edge_state.emit(EdgeEvent::HubRegistered);
-        info!("Edge registered with Hub successfully");
-
-        // Start heartbeat loop
+        // Heartbeat runs on every slot
         let heartbeat_self = self.clone();
         let heartbeat_handle = tokio::spawn(async move {
             heartbeat_self.heartbeat_loop().await;
         });
 
-        // Wait for the reader task to finish (connection closed)
         let _ = reader_done_rx.await;
-
         heartbeat_handle.abort();
         reader_handle.abort();
         writer_handle.abort();
         Ok(())
     }
 
-    /// Send raw bytes through the WebSocket.
-    async fn send_raw(&self, data: Vec<u8>) -> Result<()> {
-        if let Some(tx) = self.send_tx.lock().await.as_ref() {
-            tx.send(data).await.context("Send channel closed")?;
+    /// Connect a secondary slot: only authenticate / heartbeat (no full sync / cluster join).
+    async fn try_connect_secondary_slot(self: &Arc<Self>, slot: usize) -> Result<()> {
+        // Wait until primary is registered before bringing up secondary slots.
+        for _ in 0..SECONDARY_SLOT_WAIT_MAX_POLLS {
+            if self.state().await == HubConnectionState::Registered {
+                break;
+            }
+            time::sleep(Duration::from_millis(SECONDARY_SLOT_WAIT_POLL_INTERVAL_MS)).await;
         }
+        self.try_connect_slot(slot, false).await
+    }
+
+    /// Send raw bytes through a specific pool slot.
+    async fn send_on_slot(&self, slot: usize, data: Vec<u8>) -> Result<()> {
+        if let Some(s) = self.pool_senders.get(slot) {
+            if let Some(tx) = s.lock().await.as_ref() {
+                tx.send(data).await.context("Send channel closed")?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Send raw bytes through the WebSocket, using round-robin across live pool slots.
+    async fn send_raw(&self, data: Vec<u8>) -> Result<()> {
+        if self.pool_size == 1 {
+            return self.send_on_slot(0, data).await;
+        }
+        // Try each slot starting from the round-robin position.
+        let start = self.pool_rr.fetch_add(1, Ordering::Relaxed) % self.pool_size;
+        for i in 0..self.pool_size {
+            let slot = (start + i) % self.pool_size;
+            let sender_opt = {
+                let guard = self.pool_senders[slot].lock().await;
+                guard.as_ref().map(|s| s.clone())
+            };
+            if let Some(tx) = sender_opt {
+                if tx.send(data.clone()).await.is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+        // No live slot – fall back silently (Hub is down, caller handles errors)
         Ok(())
     }
 
@@ -271,8 +403,11 @@ impl HubClient {
         }
     }
 
-    /// Handle incoming WebSocket message.
-    async fn handle_incoming(&self, data: &[u8]) -> Result<()> {
+    /// Handle an incoming message from a specific pool slot.
+    /// `is_primary = true`  → process both RPC responses and push notifications.
+    /// `is_primary = false` → process RPC responses only (suppress notifications to
+    ///                        avoid duplicate state updates in pool mode).
+    async fn handle_incoming_slot(&self, data: &[u8], is_primary: bool) -> Result<()> {
         let packet = EdgeHubPacket::decode(data)
             .context("Failed to decode EdgeHubPacket")?;
 
@@ -288,8 +423,11 @@ impl HubClient {
                 }
             }
             Ok(PacketType::RpcNotification) => {
-                if let Some(notification) = packet.rpc_notification {
-                    self.handle_notification(notification).await;
+                // Only the primary slot processes push notifications.
+                if is_primary {
+                    if let Some(notification) = packet.rpc_notification {
+                        self.handle_notification(notification).await;
+                    }
                 }
             }
             Ok(PacketType::HeartbeatAck) => {
@@ -357,11 +495,16 @@ impl HubClient {
                             listening_channels: vec![],
                         };
                         info!("Remote user joined: {} (session {})", user.username, user.session_id);
+                        let channel_id = user.channel_id;
                         self.edge_state.channel_manager.upsert_remote_user(user.clone()).await;
+
+                        // Check if this is a ninja channel
+                        let is_ninja = self.edge_state.ninja_channels.read().await.contains(&channel_id);
                         self.edge_state.emit(EdgeEvent::RemoteUserJoined {
                             session_id: user.session_id,
                             username: user.username,
                             channel_id: user.channel_id,
+                            is_ninja,
                         });
                     } else {
                         info!("Local user joined (hub.userJoined echo): {} (session {})", params.username, params.session_id);
@@ -573,7 +716,27 @@ impl HubClient {
                 }
             }
             _ => {
-                debug!("Unhandled notification: {}", method);
+                // Check for hub.ninjaConfig (uses unknown_params_json)
+                if method == "hub.ninjaConfig" {
+                    if let Some(json_str) = &notification.unknown_params_json {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                            if val.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                let channels: Vec<u32> = val
+                                    .get("ninja_channels")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| arr.iter()
+                                        .filter_map(|v| v.as_u64().map(|n| n as u32))
+                                        .collect())
+                                    .unwrap_or_default();
+                                let mut nc = self.edge_state.ninja_channels.write().await;
+                                *nc = channels;
+                                debug!("Ninja channels updated from Hub: {:?}", &*nc);
+                            }
+                        }
+                    }
+                } else {
+                    debug!("Unhandled notification: {}", method);
+                }
             }
         }
     }

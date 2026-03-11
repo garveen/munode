@@ -320,19 +320,24 @@ impl UdpServer {
             };
 
             if let Some(peer_addr) = peer_udp_addr {
-                // Packet format for peer Edge: [EDGE_MAGIC(2B)][sender_session_u32_BE(4B)][raw plaintext voice]
-                // Receiver (handle_edge_packet) strips EDGE_MAGIC then reads 4B session + raw voice.
-                let mut direct_packet = Vec::with_capacity(2 + 4 + plaintext.len());
-                direct_packet.extend_from_slice(&EDGE_MAGIC);
-                direct_packet.extend_from_slice(&sender_session.to_be_bytes());
-                direct_packet.extend_from_slice(plaintext);
-                if let Err(e) = self.edge_socket.send_to(&direct_packet, peer_addr).await {
-                    warn!("Direct UDP to edge {} at {} failed: {}", target_edge_id, peer_addr, e);
-                    if !self.edge_state.disable_hub_relay {
-                        self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                if self.edge_state.allow_direct_udp {
+                    // Packet format for peer Edge: [EDGE_MAGIC(2B)][sender_session_u32_BE(4B)][raw plaintext voice]
+                    // Receiver (handle_edge_packet) strips EDGE_MAGIC then reads 4B session + raw voice.
+                    let mut direct_packet = Vec::with_capacity(2 + 4 + plaintext.len());
+                    direct_packet.extend_from_slice(&EDGE_MAGIC);
+                    direct_packet.extend_from_slice(&sender_session.to_be_bytes());
+                    direct_packet.extend_from_slice(plaintext);
+                    if let Err(e) = self.edge_socket.send_to(&direct_packet, peer_addr).await {
+                        warn!("Direct UDP to edge {} at {} failed: {}", target_edge_id, peer_addr, e);
+                        if self.edge_state.allow_hub_relay {
+                            self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                        }
                     }
+                } else if self.edge_state.allow_hub_relay {
+                    // Direct UDP disabled by connection_strategy=tcp_only
+                    self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                 }
-            } else if !self.edge_state.disable_hub_relay {
+            } else if self.edge_state.allow_hub_relay {
                 self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
             }
         }

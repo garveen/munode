@@ -274,4 +274,14 @@ impl TopologyManager {
     pub fn edge_count(&self) -> usize {
         self.edges.len()
     }
+
+    /// Get the raw edges map for read-only inspection (e.g., Web API).
+    pub fn get_edges(&self) -> &HashMap<u32, TopologyEdge> {
+        &self.edges
+    }
+
+    /// Get the raw link quality map for read-only inspection (e.g., Web API).
+    pub fn get_link_qualities(&self) -> &HashMap<(u32, u32), LinkQuality> {
+        &self.link_quality
+    }
 }

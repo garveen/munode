@@ -142,12 +142,12 @@ export class MumbleClient extends EventEmitter {
    * 用于移动到频道、静音/禁音等的低级API
    */
   async sendUserState(userState: UserStateUpdate): Promise<void> {
-    // Provide default values for required fields
+    // Provide default values for required fields (don't override user-provided lists)
     const fullUserState = {
-      ...userState,
       temporary_access_tokens: [],
       listening_channel_add: [],
       listening_channel_remove: [],
+      ...userState,
     };
     const serialized = mumbleproto.UserState.encode(fullUserState).finish();
     const wrappedMessage = this.connection.wrapMessage(MessageType.UserState, serialized);

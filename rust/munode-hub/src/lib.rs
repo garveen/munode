@@ -1,4 +1,5 @@
 pub mod server;
+pub mod blob_store;
 pub mod edge_connection;
 pub mod session_manager;
 pub mod channel_store;
@@ -8,3 +9,5 @@ pub mod acl_manager;
 pub mod topology_manager;
 pub mod auth_service;
 pub mod lua_auth;
+pub mod web_api;
+pub mod geoip;

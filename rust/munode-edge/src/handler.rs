@@ -176,12 +176,35 @@ impl<'a> LoginHandler<'a> {
         let local_sessions: std::collections::HashSet<u32> =
             local_clients.iter().map(|c| c.session).collect();
 
+        // Snapshot the ninja channel config and this client's visibility cache once,
+        // before the loops, to avoid repeated lock acquisitions per user.
+        // Note: There is a benign TOCTOU window between the two lock acquisitions; in
+        // practice ninja_channels only changes on Hub config updates (rare), so a brief
+        // inconsistency here is acceptable.
+        let ninja_channels_snapshot: std::collections::HashSet<u32> = {
+            self.edge_state.ninja_channels.read().await.iter().copied().collect()
+        };
+        let ninja_visible_set: std::collections::HashSet<u32> = if ninja_channels_snapshot.is_empty() {
+            std::collections::HashSet::new()
+        } else {
+            self.edge_state.ninja_visible_to.read().await
+                .get(&self_session)
+                .cloned()
+                .unwrap_or_default()
+        };
+
         for user in &remote_users {
             if user.session_id == self_session {
                 continue;
             }
             // Skip local users – they will be sent in the local_clients loop below.
             if local_sessions.contains(&user.session_id) {
+                continue;
+            }
+            // Channel Ninja: skip users in ninja channels that this client cannot see
+            if ninja_channels_snapshot.contains(&user.channel_id)
+                && !ninja_visible_set.contains(&user.channel_id)
+            {
                 continue;
             }
             let msg = mumbleproto::UserState {
@@ -206,6 +229,20 @@ impl<'a> LoginHandler<'a> {
             if client.session == self_session {
                 continue;
             }
+            // Channel Ninja: skip users in ninja channels that this client cannot see
+            if ninja_channels_snapshot.contains(&client.channel_id)
+                && !ninja_visible_set.contains(&client.channel_id)
+            {
+                continue;
+            }
+            let listening_volume_adjustment: Vec<mumbleproto::user_state::VolumeAdjustment> = client
+                .listening_volume_adjustments
+                .iter()
+                .map(|(&ch, &vol)| mumbleproto::user_state::VolumeAdjustment {
+                    listening_channel: Some(ch),
+                    volume_adjustment: Some(vol),
+                })
+                .collect();
             let msg = mumbleproto::UserState {
                 session: Some(client.session),
                 user_id: if client.user_id > 0 { Some(client.user_id) } else { None },
@@ -219,6 +256,8 @@ impl<'a> LoginHandler<'a> {
                 priority_speaker: if client.priority_speaker { Some(true) } else { None },
                 recording: if client.recording { Some(true) } else { None },
                 hash: client.cert_hash.clone(),
+                listening_channel_add: client.listening_channels.clone(),
+                listening_volume_adjustment,
                 ..Default::default()
             };
             self.send(MessageType::UserState, &msg).await?;
@@ -384,6 +423,8 @@ pub fn build_user_state_msg(client: &ClientInfo) -> mumbleproto::UserState {
         priority_speaker: if client.priority_speaker { Some(true) } else { None },
         recording: if client.recording { Some(true) } else { None },
         hash: client.cert_hash.clone(),
+        texture_hash: client.texture_hash.clone(),
+        comment_hash: client.comment_hash.clone(),
         ..Default::default()
     }
 }
@@ -415,6 +456,7 @@ pub fn build_channel_state_msg(channel: &ChannelData) -> mumbleproto::ChannelSta
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use prost::Message;
     use munode_protocol::transport::decode_frame;
     use crate::client::ClientState;
@@ -493,6 +535,9 @@ mod tests {
             groups: vec![],
             opus_supported: true,
             listening_channels: vec![],
+            listening_volume_adjustments: HashMap::new(),
+            texture_hash: None,
+            comment_hash: None,
         };
 
         let msg = build_user_state_msg(&client);

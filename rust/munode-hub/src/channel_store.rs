@@ -174,6 +174,11 @@ impl ChannelStore {
     pub fn next_channel_id(&self) -> u32 {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
+
+    /// Return the total number of channels.
+    pub async fn count(&self) -> usize {
+        self.channels.read().await.len()
+    }
 }
 
 #[cfg(test)]

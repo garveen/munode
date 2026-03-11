@@ -123,18 +123,25 @@ export class RustServerProcess {
  */
 function generateRustHubConfig(params: {
   controlPort: number;
+  webApiPort: number;
   dbPath: string;
+  blobStorePath: string;
   authHttpUrl: string;
   hmacSecret: string;
   logLevel: string;
+  /** Optional overrides merged into the generated config */
+  extraConfig?: Record<string, unknown>;
 }): object {
-  return {
+  const base: Record<string, unknown> = {
     network: {
       host: '127.0.0.1',
       control_port: params.controlPort,
     },
     database: {
       path: params.dbPath,
+    },
+    blob_store: {
+      path: params.blobStorePath,
     },
     auth: {
       allow_guest: true,
@@ -145,8 +152,17 @@ function generateRustHubConfig(params: {
       hmac_secret: params.hmacSecret,
       heartbeat_timeout: 90000,
     },
+    web_api: {
+      enabled: true,
+      host: '127.0.0.1',
+      port: params.webApiPort,
+    },
     log_level: params.logLevel,
   };
+  if (params.extraConfig) {
+    Object.assign(base, params.extraConfig);
+  }
+  return base;
 }
 
 /**
@@ -197,19 +213,26 @@ function generateRustEdgeConfig(params: {
 async function startRustHubServer(params: {
   basePort: number;
   controlPort: number;
+  webApiPort: number;
   authPort: number;
   dbPath: string;
   hmacSecret: string;
   silent: boolean;
+  /** Optional extra config fields merged into the Hub JSON config */
+  extraConfig?: Record<string, unknown>;
 }): Promise<RustServerProcess> {
   const configPath = join(PROJECT_ROOT, `tmp/rust-hub-${params.basePort}.json`);
+  const blobStorePath = join(PROJECT_ROOT, `tmp/rust-hub-blobs-${params.basePort}`);
   fs.mkdirSync(join(PROJECT_ROOT, 'tmp'), { recursive: true });
   const config = generateRustHubConfig({
     controlPort: params.controlPort,
+    webApiPort: params.webApiPort,
     dbPath: params.dbPath,
+    blobStorePath,
     authHttpUrl: `http://127.0.0.1:${params.authPort}/auth`,
     hmacSecret: params.hmacSecret,
     logLevel: params.silent ? 'error' : 'debug',
+    extraConfig: params.extraConfig,
   });
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
   debugLog(`[RUST] Hub config written to ${configPath}`);
@@ -232,10 +255,11 @@ async function startRustEdgeServer(
   basePort: number,
   hmacSecret: string,
   silent: boolean,
+  extraConfig?: Record<string, unknown>,
 ): Promise<RustServerProcess> {
   const configPath = join(PROJECT_ROOT, `tmp/rust-edge-${basePort}-${serverId}.json`);
   fs.mkdirSync(join(PROJECT_ROOT, 'tmp'), { recursive: true });
-  const config = generateRustEdgeConfig({
+  let config = generateRustEdgeConfig({
     serverId,
     name,
     port,
@@ -244,6 +268,9 @@ async function startRustEdgeServer(
     hmacSecret,
     logLevel: silent ? 'error' : 'debug',
   });
+  if (extraConfig) {
+    config = Object.assign({}, config, extraConfig);
+  }
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
   debugLog(`[RUST] Edge config written to ${configPath}`);
 
@@ -696,6 +723,10 @@ async function createIsolatedTestEnvironment(
     startEdge4?: boolean;
     startAuth?: boolean;
     silent?: boolean;
+    /** Extra fields merged into the Rust Hub JSON config (Rust mode only) */
+    rustHubExtraConfig?: Record<string, unknown>;
+    /** Extra fields merged into the Rust Edge JSON config (Rust mode only) */
+    rustEdgeExtraConfig?: Record<string, unknown>;
   }
 ): Promise<TestEnvironment> {
   const startHub = options.startHub !== false;
@@ -750,10 +781,12 @@ async function createIsolatedTestEnvironment(
     hubProcess = await startRustHubServer({
       basePort,
       controlPort,
+      webApiPort,
       authPort,
       dbPath,
       hmacSecret,
       silent,
+      extraConfig: options.rustHubExtraConfig,
     });
     await waitForCondition(
       async () => {
@@ -772,7 +805,7 @@ async function createIsolatedTestEnvironment(
 
   if (startEdge && USE_RUST) {
     const hmacSecret = 'test-hmac-secret-key-for-integration-tests';
-    edgeProcess = await startRustEdgeServer(1, 'Edge1-Isolated', edgePort, edgeEdgePort, controlPort, basePort, hmacSecret, silent);
+    edgeProcess = await startRustEdgeServer(1, 'Edge1-Isolated', edgePort, edgeEdgePort, controlPort, basePort, hmacSecret, silent, options.rustEdgeExtraConfig);
     await waitForCondition(
       async () => {
         try {
@@ -789,7 +822,7 @@ async function createIsolatedTestEnvironment(
 
   if (startEdge2 && USE_RUST) {
     const hmacSecret = 'test-hmac-secret-key-for-integration-tests';
-    edgeProcess2 = await startRustEdgeServer(2, 'Edge2-Isolated', edgePort2, edgeEdgePort2, controlPort, basePort, hmacSecret, silent);
+    edgeProcess2 = await startRustEdgeServer(2, 'Edge2-Isolated', edgePort2, edgeEdgePort2, controlPort, basePort, hmacSecret, silent, options.rustEdgeExtraConfig);
     await waitForCondition(
       async () => {
         try {
@@ -855,6 +888,10 @@ export async function setupTestEnvironment(
     startEdge4?: boolean;
     startAuth?: boolean;
     hubConfig?: Partial<HubConfig>;
+    /** Extra fields merged into the Rust Hub JSON config (Rust mode only) */
+    rustHubExtraConfig?: Record<string, unknown>;
+    /** Extra fields merged into the Rust Edge JSON config (Rust mode only) */
+    rustEdgeExtraConfig?: Record<string, unknown>;
     reuse?: boolean;
     silent?: boolean;
     /** When true, creates an isolated environment without affecting globalTestEnvironment */
@@ -1153,10 +1190,12 @@ export async function setupTestEnvironment(
         hubProcess = await startRustHubServer({
           basePort,
           controlPort,
+          webApiPort,
           authPort,
           dbPath,
           hmacSecret,
           silent,
+          extraConfig: (finalOptions as { rustHubExtraConfig?: Record<string, unknown> }).rustHubExtraConfig,
         });
         // Wait for Rust Hub control port to be listening
         await waitForCondition(

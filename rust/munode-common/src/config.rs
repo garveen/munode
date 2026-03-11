@@ -16,12 +16,111 @@ pub struct EdgeConfig {
     /// Server capacity and limits.
     #[serde(default)]
     pub server: ServerConfig,
+    /// Voice routing configuration.
+    #[serde(default)]
+    pub voice_routing: EdgeVoiceRoutingConfig,
     /// Client suggestion configuration.
     #[serde(default)]
     pub suggest: Option<EdgeSuggestConfig>,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// Logging format: "text" (default) or "json" (structured JSON for log aggregation).
+    #[serde(default = "default_log_format")]
+    pub log_format: String,
+}
+
+fn default_log_format() -> String {
+    "text".to_string()
+}
+
+/// Connection strategy for Edge-to-Edge voice routing.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceConnectionStrategy {
+    /// Try direct Edge-to-Edge UDP first; fall back to Hub TCP relay on failure.
+    #[default]
+    AutoFallback,
+    /// Always use Hub TCP relay; never attempt direct Edge-to-Edge UDP.
+    TcpOnly,
+    /// Always use direct Edge-to-Edge UDP; never use Hub TCP relay.
+    /// Primarily useful for testing direct connectivity.
+    DirectOnly,
+}
+
+/// Fallback thresholds for voice quality degradation detection.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EdgeVoiceFallbackConfig {
+    /// Whether to enable TCP fallback when UDP quality degrades.
+    #[serde(default)]
+    pub enable_tcp_fallback: bool,
+    /// Delay in ms before switching to TCP after UDP degradation is detected.
+    #[serde(default = "default_tcp_fallback_delay")]
+    pub tcp_fallback_delay: u64,
+    /// Interval in ms to check whether UDP has recovered after a TCP fallback.
+    #[serde(default = "default_udp_recovery_check_interval")]
+    pub udp_recovery_check_interval: u64,
+}
+
+impl Default for EdgeVoiceFallbackConfig {
+    fn default() -> Self {
+        Self {
+            enable_tcp_fallback: false,
+            tcp_fallback_delay: default_tcp_fallback_delay(),
+            udp_recovery_check_interval: default_udp_recovery_check_interval(),
+        }
+    }
+}
+
+/// Relay configuration for the Edge acting as a relay node.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EdgeVoiceRelayConfig {
+    /// Whether this Edge accepts Hub-mediated relay requests.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Maximum relay bandwidth in Kbps (0 = unlimited).
+    #[serde(default = "default_relay_bandwidth")]
+    pub max_relay_bandwidth: u32,
+}
+
+impl Default for EdgeVoiceRelayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_relay_bandwidth: default_relay_bandwidth(),
+        }
+    }
+}
+
+/// Voice routing configuration for the Edge server.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EdgeVoiceRoutingConfig {
+    /// Enable voice routing (default: true).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Connection strategy for cross-Edge voice packets.
+    /// - `auto_fallback` (default): UDP direct, fall back to Hub TCP relay.
+    /// - `tcp_only`: always use Hub TCP relay.
+    /// - `direct_only`: UDP direct only (no Hub relay).
+    #[serde(default)]
+    pub connection_strategy: VoiceConnectionStrategy,
+    /// Fallback / quality degradation configuration.
+    #[serde(default)]
+    pub fallback: EdgeVoiceFallbackConfig,
+    /// Relay node configuration.
+    #[serde(default)]
+    pub relay: EdgeVoiceRelayConfig,
+}
+
+impl Default for EdgeVoiceRoutingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            connection_strategy: VoiceConnectionStrategy::AutoFallback,
+            fallback: EdgeVoiceFallbackConfig::default(),
+            relay: EdgeVoiceRelayConfig::default(),
+        }
+    }
 }
 
 /// Client suggestion configuration for Edge.
@@ -81,6 +180,12 @@ pub struct HubServerConfig {
     pub heartbeat_interval: u64,
     /// Optional HMAC secret for authentication.
     pub hmac_secret: Option<String>,
+    /// Number of parallel WebSocket connections to maintain to the Hub (connection pool).
+    /// `1` (default) disables pooling.  Values `> 1` enable pool mode for improved
+    /// resilience: RPC requests are distributed across connections in round-robin order,
+    /// and Hub-to-Edge push notifications are only processed on the primary connection.
+    #[serde(default = "default_pool_size")]
+    pub pool_size: u32,
 }
 
 /// Server capacity and behavior configuration.
@@ -113,6 +218,15 @@ pub struct ServerConfig {
     /// Token bucket burst size for text messages (default: 5).
     #[serde(default = "default_message_burst")]
     pub message_burst: u32,
+    /// Maximum plugin data message length in bytes (default: 1024). 0 = unlimited.
+    #[serde(default = "default_plugin_message_length")]
+    pub plugin_message_length: u32,
+    /// Maximum number of channels a user can listen to simultaneously. 0 = unlimited.
+    #[serde(default)]
+    pub listeners_per_user: u32,
+    /// Maximum number of listeners per channel. 0 = unlimited.
+    #[serde(default)]
+    pub listeners_per_channel: u32,
 }
 
 impl Default for ServerConfig {
@@ -127,6 +241,9 @@ impl Default for ServerConfig {
             image_message_length: default_image_message_length(),
             message_rate: default_message_rate(),
             message_burst: default_message_burst(),
+            plugin_message_length: default_plugin_message_length(),
+            listeners_per_user: 0,
+            listeners_per_channel: 0,
         }
     }
 }
@@ -166,9 +283,100 @@ pub struct HubConfig {
     /// Client suggestion configuration (sent to connecting clients).
     #[serde(default)]
     pub suggest: HubSuggestConfig,
+    /// Validation rules for usernames and channel names.
+    #[serde(default)]
+    pub validation: HubValidationConfig,
+    /// Web API configuration.
+    #[serde(default)]
+    pub web_api: HubWebApiConfig,
+    /// Blob store configuration.
+    #[serde(default)]
+    pub blob_store: HubBlobStoreConfig,
+    /// Voice routing policy configuration.
+    #[serde(default)]
+    pub voice_routing: HubVoiceRoutingConfig,
+    /// Channel Ninja configuration.
+    #[serde(default)]
+    pub channel_ninja: HubChannelNinjaConfig,
+    /// GeoIP configuration (optional IP geolocation).
+    #[serde(default)]
+    pub geoip: HubGeoIpConfig,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// Logging format: "text" (default) or "json" (structured JSON for log aggregation).
+    #[serde(default = "default_log_format")]
+    pub log_format: String,
+}
+
+/// Channel Ninja configuration.
+///
+/// When enabled, users who lack both Enter AND Listen permission on a channel
+/// will not see that channel or its occupants.  This hides privileged channels
+/// from unprivileged users entirely.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct HubChannelNinjaConfig {
+    /// Enable Channel Ninja feature.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Channel IDs that are ninja channels.  Only used when `enabled` is true.
+    #[serde(default)]
+    pub ninja_channels: Vec<u32>,
+}
+
+/// Hub-side voice routing policy configuration.
+///
+/// Controls how the Hub mediates cross-Edge voice relay when Edges cannot
+/// establish direct connections.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HubVoiceRoutingConfig {
+    /// Enable Hub-mediated voice relay (default: true).
+    /// When false, `edge.relayVoiceViaTcp` RPC calls are rejected.
+    #[serde(default = "default_true")]
+    pub enable_relay: bool,
+    /// Maximum number of simultaneous relay streams per Edge pair.
+    /// 0 = unlimited.
+    #[serde(default)]
+    pub max_relay_streams_per_pair: u32,
+    /// Hard cap on total simultaneous relay streams on the Hub (0 = unlimited).
+    #[serde(default)]
+    pub max_total_relay_streams: u32,
+    /// Cost factor applied to relay routes vs. direct routes when suggesting
+    /// routing to Edges.  Higher values discourage relay use.
+    #[serde(default = "default_relay_cost_factor")]
+    pub relay_cost_factor: f32,
+    /// RTT threshold (ms) below which direct routes are preferred over relay.
+    #[serde(default = "default_direct_rtt_threshold")]
+    pub direct_rtt_threshold: u32,
+    /// Packet loss threshold (0.0–1.0) below which direct routes are preferred.
+    #[serde(default = "default_direct_loss_threshold")]
+    pub direct_loss_threshold: f32,
+}
+
+impl Default for HubVoiceRoutingConfig {
+    fn default() -> Self {
+        Self {
+            enable_relay: true,
+            max_relay_streams_per_pair: 0,
+            max_total_relay_streams: 0,
+            relay_cost_factor: default_relay_cost_factor(),
+            direct_rtt_threshold: default_direct_rtt_threshold(),
+            direct_loss_threshold: default_direct_loss_threshold(),
+        }
+    }
+}
+
+/// Validation rules configuration.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct HubValidationConfig {
+    /// Regular expression that usernames must match.
+    /// When set, authentication is rejected with InvalidUsername if the name doesn't match.
+    /// Uses Rust `regex` crate syntax. Example: `^[a-zA-Z][a-zA-Z0-9_]{1,29}$`
+    pub username_regex: Option<String>,
+    /// Regular expression that channel names must match.
+    /// When set, channel creation or rename is rejected with an error if the name doesn't match.
+    /// Uses Rust `regex` crate syntax. Example: `^[a-zA-Z0-9 _-]{1,60}$`
+    pub channel_name_regex: Option<String>,
 }
 
 /// Hub network configuration.
@@ -297,6 +505,15 @@ pub struct HubLimitsConfig {
     /// Token bucket burst size for text messages.
     #[serde(default = "default_message_burst")]
     pub message_burst: u32,
+    /// Maximum plugin data message length in bytes (default: 1024). 0 = unlimited.
+    #[serde(default = "default_plugin_message_length")]
+    pub plugin_message_length: u32,
+    /// Maximum number of channel listeners per channel. 0 = unlimited.
+    #[serde(default)]
+    pub listeners_per_channel: u32,
+    /// Maximum number of channels a single user may listen to at once. 0 = unlimited.
+    #[serde(default)]
+    pub listeners_per_user: u32,
 }
 
 impl Default for HubLimitsConfig {
@@ -308,6 +525,9 @@ impl Default for HubLimitsConfig {
             image_message_length: default_image_message_length(),
             message_rate: default_message_rate(),
             message_burst: default_message_burst(),
+            plugin_message_length: default_plugin_message_length(),
+            listeners_per_channel: 0,
+            listeners_per_user: 0,
         }
     }
 }
@@ -380,6 +600,47 @@ impl Default for HubRegistryConfig {
     }
 }
 
+/// Web API configuration for the Hub server.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HubWebApiConfig {
+    /// Enable the Web API HTTP server.
+    #[serde(default)]
+    pub enabled: bool,
+    /// HTTP listening port for the Web API.
+    #[serde(default = "default_web_api_port")]
+    pub port: u16,
+    /// HTTP listening host for the Web API.
+    #[serde(default = "default_host")]
+    pub host: String,
+}
+
+impl Default for HubWebApiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_web_api_port(),
+            host: default_host(),
+        }
+    }
+}
+
+/// Blob store configuration for the Hub server.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HubBlobStoreConfig {
+    /// Base directory for blob files.
+    /// Blobs are stored at `<path>/<hash[0..2]>/<hash>`.
+    #[serde(default = "default_blob_store_path")]
+    pub path: String,
+}
+
+impl Default for HubBlobStoreConfig {
+    fn default() -> Self {
+        Self {
+            path: default_blob_store_path(),
+        }
+    }
+}
+
 /// Load hub configuration from a TOML or JSON file (detected by extension).
 pub fn load_hub_config(path: &str) -> Result<HubConfig, anyhow::Error> {
     let content = std::fs::read_to_string(path)?;
@@ -405,6 +666,9 @@ fn default_reconnect_interval() -> u64 {
 }
 fn default_heartbeat_interval() -> u64 {
     30000
+}
+fn default_pool_size() -> u32 {
+    1
 }
 fn default_heartbeat_timeout() -> u64 {
     90000
@@ -436,6 +700,9 @@ fn default_text_message_length() -> u32 {
 fn default_image_message_length() -> u32 {
     131072
 }
+fn default_plugin_message_length() -> u32 {
+    1024
+}
 fn default_message_rate() -> f32 {
     10.0
 }
@@ -451,3 +718,44 @@ fn default_auto_ban_window() -> u64 {
 fn default_auto_ban_duration() -> u64 {
     300
 }
+fn default_web_api_port() -> u16 {
+    8080
+}
+fn default_blob_store_path() -> String {
+    "data/blobs".to_string()
+}
+fn default_tcp_fallback_delay() -> u64 {
+    2000
+}
+fn default_udp_recovery_check_interval() -> u64 {
+    5000
+}
+fn default_relay_bandwidth() -> u32 {
+    10000
+}
+fn default_relay_cost_factor() -> f32 {
+    1.2
+}
+fn default_direct_rtt_threshold() -> u32 {
+    200
+}
+fn default_direct_loss_threshold() -> f32 {
+    0.05
+}
+
+/// GeoIP configuration.
+///
+/// When a GeoLite2 database path is provided, the Hub will look up connecting
+/// clients' geographic location and log it.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct HubGeoIpConfig {
+    /// Path to the GeoLite2-City or GeoLite2-Country MMDB database file.
+    /// If empty or not provided, GeoIP lookups are disabled.
+    #[serde(default)]
+    pub database_path: String,
+    /// Whether to log geographic location for each connecting user.
+    #[serde(default = "default_geoip_log")]
+    pub log_location: bool,
+}
+
+fn default_geoip_log() -> bool { true }

@@ -138,6 +138,18 @@ impl EdgeConnection {
                         .send(response_data)
                         .await
                         .context("Failed to send RPC response")?;
+
+                    // After successful registration, send ninja config notification to the new edge
+                    if edge_id != 0 && self.state.config.channel_ninja.enabled {
+                        let ninja_channels = self.state.config.channel_ninja.ninja_channels.clone();
+                        self.rpc_handler.send_notification_to_edge(edge_id, "hub.ninjaConfig", |n| {
+                            let json = serde_json::json!({
+                                "enabled": true,
+                                "ninja_channels": ninja_channels
+                            });
+                            n.unknown_params_json = Some(json.to_string());
+                        }).await;
+                    }
                 }
             }
             Ok(PacketType::RpcNotification) => {

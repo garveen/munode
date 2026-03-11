@@ -35,10 +35,11 @@ tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+maxminddb = "0.24"
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Error handling
 thiserror = "2"
@@ -47,6 +48,7 @@ anyhow = "1"
 # Utilities
 bytes = "1"
 uuid = { version = "1", features = ["v4"] }
+regex = "1"
 
 # Crypto
 ring = "0.17"
@@ -56,6 +58,9 @@ argon2 = "0.5"
 # Embedded scripting
 mlua = { version = "0.10", features = ["lua54", "send", "serialize", "vendored"] }
 ureq = { version = "2", features = ["json"] }
+
+# Web API
+axum = { version = "0.7", features = [] }
 
 # Workspace crates
 munode-protocol = { path = "munode-protocol" }

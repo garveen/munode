@@ -70,7 +70,7 @@ pub enum EdgeEvent {
     /// Hub connection lost.
     HubDisconnected,
     /// A remote user joined (from another Edge, synced via Hub).
-    RemoteUserJoined { session_id: u32, username: String, channel_id: u32 },
+    RemoteUserJoined { session_id: u32, username: String, channel_id: u32, is_ninja: bool },
     /// A remote user left.
     RemoteUserLeft { session_id: u32 },
     /// A remote user's state changed (mute, deaf, etc.).
@@ -129,9 +129,26 @@ pub struct EdgeState {
     pub voice_targets: Mutex<HashMap<u32, HashMap<u32, VoiceTargetConfig>>>,
     /// Registry of peer Edges and their UDP endpoints for direct voice routing.
     pub peer_registry: Mutex<PeerRegistry>,
-    /// When true, skip Hub relay and only use direct Edge-to-Edge UDP.
-    /// Used in integration tests to verify the direct connection path.
-    pub disable_hub_relay: bool,
+    /// Whether Hub-mediated TCP relay is allowed for cross-Edge voice.
+    /// Derived from `voice_routing.connection_strategy`.
+    pub allow_hub_relay: bool,
+    /// Whether direct Edge-to-Edge UDP routing is attempted.
+    /// Derived from `voice_routing.connection_strategy`.
+    pub allow_direct_udp: bool,
+    /// Maximum number of channels a single user may listen to simultaneously.
+    /// 0 = unlimited.
+    pub listeners_per_user: u32,
+    /// Maximum number of listeners allowed in a single channel.
+    /// 0 = unlimited.
+    pub listeners_per_channel: u32,
+    /// Channel Ninja: list of channel IDs that are hidden from unprivileged users.
+    /// Users without both Enter (0x4) AND Listen (0x800) permission on the channel
+    /// will not see its occupants.  Populated from Hub on registration.
+    pub ninja_channels: tokio::sync::RwLock<Vec<u32>>,
+    /// Per-session ninja channel permission cache.
+    /// session_id -> set of channel IDs the user has Enter permission on.
+    /// Used for fast ninja visibility checks without Hub round-trips.
+    pub ninja_visible_to: tokio::sync::RwLock<HashMap<u32, std::collections::HashSet<u32>>>,
 }
 
 impl EdgeState {
@@ -149,7 +166,39 @@ impl EdgeState {
             event_tx,
             voice_targets: Mutex::new(HashMap::new()),
             peer_registry: Mutex::new(PeerRegistry::default()),
-            disable_hub_relay,
+            allow_hub_relay: !disable_hub_relay,
+            allow_direct_udp: true,
+            listeners_per_user: 0,
+            listeners_per_channel: 0,
+            ninja_channels: tokio::sync::RwLock::new(vec![]),
+            ninja_visible_to: tokio::sync::RwLock::new(HashMap::new()),
+        })
+    }
+
+    /// Create EdgeState with explicit voice routing strategy flags and listener limits.
+    pub fn new_with_config(
+        channel_manager: Arc<ChannelManager>,
+        client_manager: Arc<ClientManager>,
+        allow_hub_relay: bool,
+        allow_direct_udp: bool,
+        listeners_per_user: u32,
+        listeners_per_channel: u32,
+    ) -> Arc<Self> {
+        let (event_tx, _) = broadcast::channel(256);
+        Arc::new(Self {
+            edge_id: RwLock::new(None),
+            cert_required: RwLock::new(false),
+            channel_manager,
+            client_manager,
+            event_tx,
+            voice_targets: Mutex::new(HashMap::new()),
+            peer_registry: Mutex::new(PeerRegistry::default()),
+            allow_hub_relay,
+            allow_direct_udp,
+            listeners_per_user,
+            listeners_per_channel,
+            ninja_channels: tokio::sync::RwLock::new(vec![]),
+            ninja_visible_to: tokio::sync::RwLock::new(HashMap::new()),
         })
     }
 

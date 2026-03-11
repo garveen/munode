@@ -4,13 +4,6 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 use tracing::info;
 
-/// SHA-256 hex digest of arbitrary bytes.
-fn sha256_hex(data: &[u8]) -> String {
-    use ring::digest;
-    let digest = digest::digest(&digest::SHA256, data);
-    digest.as_ref().iter().map(|b| format!("{:02x}", b)).collect()
-}
-
 /// A user record from the database.
 #[derive(Debug, Clone)]
 pub struct UserRecord {
@@ -269,6 +262,48 @@ impl Database {
 
         // Create bans table
         Self::init_bans_table(&conn)?;
+
+        // Add cert_hash to bans table if missing (migration from older schema)
+        let bans_has_cert_hash: bool = {
+            let mut col_stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('bans') WHERE name = 'cert_hash'"
+            )?;
+            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+        };
+        if !bans_has_cert_hash {
+            conn.execute_batch(
+                "ALTER TABLE bans ADD COLUMN cert_hash TEXT NOT NULL DEFAULT '';"
+            )?;
+            info!("Migrated bans table: added 'cert_hash' column");
+        }
+
+        // Add start_time to bans table if missing (TS schema uses 'start')
+        let bans_has_start_time: bool = {
+            let mut col_stmt = conn.prepare(
+                "SELECT COUNT(*) FROM pragma_table_info('bans') WHERE name = 'start_time'"
+            )?;
+            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+        };
+        if !bans_has_start_time {
+            // Copy from 'start' column if present, otherwise default to 0
+            let has_start: bool = {
+                let mut s = conn.prepare(
+                    "SELECT COUNT(*) FROM pragma_table_info('bans') WHERE name = 'start'"
+                )?;
+                s.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
+            };
+            if has_start {
+                conn.execute_batch(
+                    "ALTER TABLE bans ADD COLUMN start_time INTEGER NOT NULL DEFAULT 0;
+                     UPDATE bans SET start_time = COALESCE(start, 0);"
+                )?;
+            } else {
+                conn.execute_batch(
+                    "ALTER TABLE bans ADD COLUMN start_time INTEGER NOT NULL DEFAULT 0;"
+                )?;
+            }
+            info!("Migrated bans table: added 'start_time' column");
+        }
 
         // Create blob storage tables
         Self::init_blob_tables(&conn)?;
@@ -623,16 +658,33 @@ impl Database {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let bans = self.load_bans()?;
-        for ban in bans {
-            // Skip expired bans (duration=0 means permanent)
-            if ban.duration > 0 {
-                let expiry = ban.start_time.saturating_add(ban.duration as i64);
-                if now >= expiry {
-                    continue;
-                }
-            }
-            // Check if IP matches the ban (CIDR mask)
+        // Only load active (non-expired) bans from the database.
+        // duration=0 means permanent; duration>0 bans must not have expired.
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, address, mask, name, cert_hash, reason, start_time, duration
+               FROM bans
+              WHERE duration = 0 OR (start_time + duration) > ?1"
+        )?;
+        let rows = stmt.query_map(params![now], |row| {
+            let addr_blob: Vec<u8> = row.get(1)?;
+            let mut address = [0u8; 16];
+            let copy_len = addr_blob.len().min(16);
+            address[..copy_len].copy_from_slice(&addr_blob[..copy_len]);
+            Ok(BanRecord {
+                id: row.get(0)?,
+                address,
+                mask: row.get(2)?,
+                name: row.get(3)?,
+                cert_hash: row.get(4)?,
+                reason: row.get(5)?,
+                start_time: row.get(6)?,
+                duration: row.get(7)?,
+            })
+        })?;
+
+        for row in rows {
+            let ban = row?;
             if ip_matches_ban(ip_bytes, &ban.address, ban.mask) {
                 return Ok(Some(ban));
             }
@@ -699,55 +751,28 @@ impl Database {
         Ok(count as u32)
     }
 
-    // ==================== Blob Storage ====================
+    /// Delete a specific ban by its row ID.  Returns `true` if a row was deleted.
+    pub fn delete_ban_by_id(&self, id: i64) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let count = conn.execute("DELETE FROM bans WHERE id = ?1", params![id])?;
+        Ok(count > 0)
+    }
 
-    /// Initialise blob tables.
+    // ==================== Blob Storage (user_blobs hash mapping) ====================
+
+    /// Initialise the user_blobs metadata table.
+    /// Blob data itself is stored on the filesystem by `BlobStore`; the database only tracks
+    /// which blob hash belongs to each user.
     fn init_blob_tables(conn: &Connection) -> Result<()> {
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS blobs (
-                hash TEXT PRIMARY KEY,
-                data BLOB NOT NULL,
-                created_at INTEGER NOT NULL DEFAULT 0
-            );
-
-            CREATE TABLE IF NOT EXISTS user_blobs (
+            "CREATE TABLE IF NOT EXISTS user_blobs (
                 user_id INTEGER NOT NULL,
                 blob_type TEXT NOT NULL,
                 blob_hash TEXT,
-                PRIMARY KEY (user_id, blob_type),
-                FOREIGN KEY (blob_hash) REFERENCES blobs(hash)
+                PRIMARY KEY (user_id, blob_type)
             );"
         )?;
         Ok(())
-    }
-
-    /// Store a blob and return its SHA-256 hex hash.
-    /// If a blob with the same hash already exists, it is not re-inserted.
-    pub fn put_blob(&self, data: &[u8]) -> Result<String> {
-        let hash = sha256_hex(data);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-
-        let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "INSERT OR IGNORE INTO blobs (hash, data, created_at) VALUES (?1, ?2, ?3)",
-            params![hash, data, now],
-        )?;
-        Ok(hash)
-    }
-
-    /// Retrieve a blob by its SHA-256 hex hash.
-    pub fn get_blob(&self, hash: &str) -> Result<Option<Vec<u8>>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT data FROM blobs WHERE hash = ?1")?;
-        let mut rows = stmt.query(params![hash])?;
-        if let Some(row) = rows.next()? {
-            Ok(Some(row.get(0)?))
-        } else {
-            Ok(None)
-        }
     }
 
     /// Get the blob hash for a user's texture or comment.
@@ -765,28 +790,15 @@ impl Database {
         }
     }
 
-    /// Get the blob data for a user's texture or comment.
-    pub fn get_user_blob(&self, user_id: u32, blob_type: &str) -> Result<Option<(String, Vec<u8>)>> {
-        let hash = match self.get_user_blob_hash(user_id, blob_type)? {
-            Some(h) => h,
-            None => return Ok(None),
-        };
-        match self.get_blob(&hash)? {
-            Some(data) => Ok(Some((hash, data))),
-            None => Ok(None),
-        }
-    }
-
-    /// Store a user's texture or comment blob.
-    /// Stores the blob data and updates the user_blobs mapping.
-    pub fn set_user_blob(&self, user_id: u32, blob_type: &str, data: &[u8]) -> Result<String> {
-        let hash = self.put_blob(data)?;
+    /// Associate `hash` with a user's blob type in the database.
+    /// Call after storing the actual blob data via `BlobStore::put`.
+    pub fn set_user_blob_hash(&self, user_id: u32, blob_type: &str, hash: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT OR REPLACE INTO user_blobs (user_id, blob_type, blob_hash) VALUES (?1, ?2, ?3)",
             params![user_id, blob_type, hash],
         )?;
-        Ok(hash)
+        Ok(())
     }
 }
 

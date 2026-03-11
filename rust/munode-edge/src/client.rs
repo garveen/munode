@@ -69,6 +69,15 @@ pub struct ClientInfo {
     pub opus_supported: bool,
     /// Channels this client is listening to (beyond their current channel).
     pub listening_channels: Vec<u32>,
+    /// Per-channel volume adjustments for listened channels.
+    /// Maps channel_id → volume factor (0.0–10.0, default 1.0).
+    pub listening_volume_adjustments: HashMap<u32, f32>,
+    /// SHA-256 hash of this user's texture blob (if any).
+    /// Broadcast to peers so they can request the full texture via RequestBlob.
+    pub texture_hash: Option<Vec<u8>>,
+    /// SHA-256 hash of this user's comment blob (if comment is > 128 bytes).
+    /// Broadcast to peers so they can request the full comment via RequestBlob.
+    pub comment_hash: Option<Vec<u8>>,
 }
 
 /// Manages all connected clients and their message senders.
@@ -277,6 +286,28 @@ impl ClientManager {
             .map(|c| c.session)
             .collect()
     }
+
+    /// Count how many local clients are currently listening to the given channel.
+    pub async fn get_listening_count(&self, channel_id: u32) -> u32 {
+        self.clients
+            .read()
+            .await
+            .values()
+            .filter(|c| {
+                c.channel_id != channel_id && c.listening_channels.contains(&channel_id)
+            })
+            .count() as u32
+    }
+
+    /// Count how many local clients are currently in the given channel.
+    pub async fn count_in_channel(&self, channel_id: u32) -> u32 {
+        self.clients
+            .read()
+            .await
+            .values()
+            .filter(|c| c.channel_id == channel_id)
+            .count() as u32
+    }
 }
 
 #[cfg(test)]
@@ -305,6 +336,9 @@ mod tests {
             groups: vec![],
             opus_supported: true,
             listening_channels: vec![],
+            listening_volume_adjustments: HashMap::new(),
+            texture_hash: None,
+            comment_hash: None,
         }
     }
 

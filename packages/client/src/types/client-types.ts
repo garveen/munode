@@ -154,6 +154,9 @@ export interface UserStateUpdate {
   self_deaf?: boolean;
   priority_speaker?: boolean;
   recording?: boolean;
+  listening_channel_add?: number[];
+  listening_channel_remove?: number[];
+  listening_volume_adjustment?: Array<{ listening_channel?: number; volume_adjustment?: number }>;
 }
 
 /**

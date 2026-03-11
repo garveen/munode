@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::SaltString;
 use prost::Message;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, info, trace, warn};
@@ -45,16 +46,7 @@ struct HttpAuthResponse {
 /// Sender type for pushing serialized packets to a specific edge.
 pub type EdgeSender = mpsc::Sender<Vec<u8>>;
 
-/// Information about a registered edge server.
-#[derive(Debug, Clone)]
-pub struct EdgeRegistration {
-    pub server_id: u32,
-    pub name: String,
-    pub host: String,
-    pub port: u32,
-    pub capacity: u32,
-    pub region: Option<String>,
-}
+use crate::server::EdgeRegistration;
 
 /// Voice target storage entry.
 #[derive(Debug, Clone)]
@@ -70,18 +62,37 @@ struct VoiceTargetEntry {
 /// Handles all incoming RPC requests from edges.
 pub struct RpcHandler {
     state: Arc<HubState>,
-    /// Registered edge info keyed by server_id.
-    edge_registry: RwLock<HashMap<u32, EdgeRegistration>>,
     /// Voice targets keyed by (client_session, target_id).
     voice_targets: RwLock<HashMap<(u32, u32), VoiceTargetEntry>>,
+    /// Pre-compiled username regex (cached from config at startup).
+    username_regex: Option<Regex>,
+    /// Pre-compiled channel name regex (cached from config at startup).
+    channel_name_regex: Option<Regex>,
 }
 
 impl RpcHandler {
     pub fn new(state: Arc<HubState>) -> Self {
+        let username_regex = state.config.validation.username_regex.as_deref()
+            .and_then(|p| match Regex::new(p) {
+                Ok(re) => Some(re),
+                Err(e) => {
+                    warn!("Invalid username_regex '{}': {}", p, e);
+                    None
+                }
+            });
+        let channel_name_regex = state.config.validation.channel_name_regex.as_deref()
+            .and_then(|p| match Regex::new(p) {
+                Ok(re) => Some(re),
+                Err(e) => {
+                    warn!("Invalid channel_name_regex '{}': {}", p, e);
+                    None
+                }
+            });
         Self {
             state,
-            edge_registry: RwLock::new(HashMap::new()),
             voice_targets: RwLock::new(HashMap::new()),
+            username_regex,
+            channel_name_regex,
         }
     }
 
@@ -251,14 +262,13 @@ impl RpcHandler {
             registration.name, registration.server_id, registration.host, registration.port
         );
 
-        self.edge_registry
+        self.state.edge_registry
             .write()
             .await
             .insert(params.server_id, registration);
 
         // Build edge list for response
-        let edge_list: Vec<EdgeInfo> = self
-            .edge_registry
+        let edge_list: Vec<EdgeInfo> = self.state.edge_registry
             .read()
             .await
             .values()
@@ -317,6 +327,30 @@ impl RpcHandler {
         let config = &self.state.config;
         let username = &params.username;
         let password = &params.password;
+
+        // ------------------------------------------------------------------
+        // Step -1: Validation rules — reject if username doesn't match regex
+        // ------------------------------------------------------------------
+        if let Some(re) = &self.username_regex {
+            if !re.is_match(username) {
+                warn!("Rejecting username '{}': does not match configured username_regex", username);
+                let result = EdgeAuthenticateUserResult {
+                    success: false,
+                    user_id: None, username: None, display_name: None,
+                    groups: vec![],
+                    reason: Some(format!("Invalid username: '{}' does not meet naming requirements", username)),
+                    reject_type: Some(2), // InvalidUsername
+                    channel_id: None,
+                    mute: None, deaf: None, suppress: None,
+                    self_mute: None, self_deaf: None,
+                    priority_speaker: None, recording: None,
+                    cert_required: None,
+                };
+                return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                    r.edge_authenticate_user = Some(result);
+                }));
+            }
+        }
 
         // ------------------------------------------------------------------
         // Step 0: Auto-ban check — reject if IP has been auto-banned
@@ -985,10 +1019,38 @@ impl RpcHandler {
 
         self.state.session_manager.add_session(session_info.clone()).await;
 
-        info!(
-            "User authenticated: {} (session={}, edge={}, channel={})",
-            username, params.session_id, edge_server_id, channel_id
-        );
+        // GeoIP lookup for this user's IP address
+        if self.state.geoip.is_available() && self.state.config.geoip.log_location {
+            let ip_str = params.client_info.as_ref()
+                .map(|c| c.ip_address.as_str())
+                .unwrap_or("");
+            if let Ok(ip) = ip_str.parse::<std::net::IpAddr>() {
+                if let Some(loc) = self.state.geoip.lookup(&ip) {
+                    info!(
+                        "User authenticated: {} (session={}, edge={}, channel={}, ip={}, country={}, city={})",
+                        username, params.session_id, edge_server_id, channel_id,
+                        ip_str,
+                        loc.country_code.as_deref().unwrap_or("??"),
+                        loc.city_name.as_deref().unwrap_or("unknown"),
+                    );
+                } else {
+                    info!(
+                        "User authenticated: {} (session={}, edge={}, channel={})",
+                        username, params.session_id, edge_server_id, channel_id
+                    );
+                }
+            } else {
+                info!(
+                    "User authenticated: {} (session={}, edge={}, channel={})",
+                    username, params.session_id, edge_server_id, channel_id
+                );
+            }
+        } else {
+            info!(
+                "User authenticated: {} (session={}, edge={}, channel={})",
+                username, params.session_id, edge_server_id, channel_id
+            );
+        }
 
         // Broadcast hub.userJoined to all edges
         let cert_hash = params
@@ -1188,8 +1250,7 @@ impl RpcHandler {
             .collect();
 
         // Build edge list
-        let edges: Vec<EdgeInfoProto> = self
-            .edge_registry
+        let edges: Vec<EdgeInfoProto> = self.state.edge_registry
             .read()
             .await
             .values()
@@ -1307,6 +1368,25 @@ impl RpcHandler {
     ) -> Result<EdgeHubPacket> {
         let params = request.edge_save_channel.as_ref()
             .context("Missing edge_save_channel params")?;
+
+        // Validate channel name against configured regex (for create and rename).
+        if let Some(channel_name) = &params.name {
+            if let Some(re) = &self.channel_name_regex {
+                if !re.is_match(channel_name) {
+                    warn!("Rejecting channel name '{}': does not match configured channel_name_regex", channel_name);
+                    return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                        r.edge_save_channel = Some(EdgeSaveChannelResult {
+                            success: false,
+                            channel_id: None,
+                            error: Some(format!(
+                                "Invalid channel name: '{}' does not meet naming requirements",
+                                channel_name
+                            )),
+                        });
+                    }));
+                }
+            }
+        }
 
         let is_new = params.id.is_none();
         let channel_id = if is_new {
@@ -2254,6 +2334,33 @@ impl RpcHandler {
         }
     }
 
+    /// Send a notification to a single specific edge.
+    pub(crate) async fn send_notification_to_edge<F>(&self, edge_id: u32, method: &str, build: F)
+    where
+        F: FnOnce(&mut TypedRpcNotification),
+    {
+        let mut notification = TypedRpcNotification {
+            method: method.to_string(),
+            timestamp: Some(current_millis() as i64),
+            ..Default::default()
+        };
+        build(&mut notification);
+
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+
+        let data = packet.encode_to_vec();
+        let edges = self.state.edge_connections.read().await;
+        if let Some(sender) = edges.get(&edge_id) {
+            if let Err(e) = sender.try_send(data) {
+                warn!("Failed to send notification to edge {}: {}", edge_id, e);
+            }
+        }
+    }
+
     fn make_error_packet(
         &self,
         request_id: &str,
@@ -2291,7 +2398,7 @@ impl RpcHandler {
             .await;
         }
 
-        self.edge_registry.write().await.remove(&server_id);
+        self.state.edge_registry.write().await.remove(&server_id);
 
         // Remove from cluster topology
         self.state.topology.write().await.remove_edge(server_id);
@@ -2313,7 +2420,7 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_put.as_ref().context("Missing blob_put params")?;
-        match self.state.database.put_blob(&params.data) {
+        match self.state.blob_store.put(&params.data) {
             Ok(hash) => Ok(self.make_response_packet(request_id, "blob.put", |r| {
                 r.blob_put = Some(BlobPutResult { success: true, hash: Some(hash), error: None });
             })),
@@ -2329,7 +2436,7 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_get.as_ref().context("Missing blob_get params")?;
-        match self.state.database.get_blob(&params.hash) {
+        match self.state.blob_store.get(&params.hash) {
             Ok(Some(data)) => Ok(self.make_response_packet(request_id, "blob.get", |r| {
                 r.blob_get = Some(BlobGetResult { success: true, data: Some(data), error: None });
             })),
@@ -2348,12 +2455,27 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_get_user_texture.as_ref().context("Missing blob_get_user_texture params")?;
-        match self.state.database.get_user_blob(params.user_id, "texture") {
-            Ok(Some((hash, data))) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
-                r.blob_get_user_texture = Some(BlobGetUserTextureResult {
-                    success: true, data: Some(data), hash: Some(hash), error: None,
-                });
-            })),
+        let hash_result = self.state.database.get_user_blob_hash(params.user_id, "texture");
+        match hash_result {
+            Ok(Some(hash)) => {
+                match self.state.blob_store.get(&hash) {
+                    Ok(Some(data)) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
+                        r.blob_get_user_texture = Some(BlobGetUserTextureResult {
+                            success: true, data: Some(data), hash: Some(hash.clone()), error: None,
+                        });
+                    })),
+                    Ok(None) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
+                        r.blob_get_user_texture = Some(BlobGetUserTextureResult {
+                            success: false, data: None, hash: None, error: Some("Blob data not found".into()),
+                        });
+                    })),
+                    Err(e) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
+                        r.blob_get_user_texture = Some(BlobGetUserTextureResult {
+                            success: false, data: None, hash: None, error: Some(e.to_string()),
+                        });
+                    })),
+                }
+            }
             Ok(None) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
                 r.blob_get_user_texture = Some(BlobGetUserTextureResult {
                     success: false, data: None, hash: None, error: Some("Not found".into()),
@@ -2373,12 +2495,27 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_get_user_comment.as_ref().context("Missing blob_get_user_comment params")?;
-        match self.state.database.get_user_blob(params.user_id, "comment") {
-            Ok(Some((hash, data))) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
-                r.blob_get_user_comment = Some(BlobGetUserCommentResult {
-                    success: true, data: Some(data), hash: Some(hash), error: None,
-                });
-            })),
+        let hash_result = self.state.database.get_user_blob_hash(params.user_id, "comment");
+        match hash_result {
+            Ok(Some(hash)) => {
+                match self.state.blob_store.get(&hash) {
+                    Ok(Some(data)) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
+                        r.blob_get_user_comment = Some(BlobGetUserCommentResult {
+                            success: true, data: Some(data), hash: Some(hash.clone()), error: None,
+                        });
+                    })),
+                    Ok(None) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
+                        r.blob_get_user_comment = Some(BlobGetUserCommentResult {
+                            success: false, data: None, hash: None, error: Some("Blob data not found".into()),
+                        });
+                    })),
+                    Err(e) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
+                        r.blob_get_user_comment = Some(BlobGetUserCommentResult {
+                            success: false, data: None, hash: None, error: Some(e.to_string()),
+                        });
+                    })),
+                }
+            }
             Ok(None) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
                 r.blob_get_user_comment = Some(BlobGetUserCommentResult {
                     success: false, data: None, hash: None, error: Some("Not found".into()),
@@ -2398,12 +2535,21 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_set_user_texture.as_ref().context("Missing blob_set_user_texture params")?;
-        match self.state.database.set_user_blob(params.user_id, "texture", &params.data) {
-            Ok(hash) => Ok(self.make_response_packet(request_id, "blob.setUserTexture", |r| {
-                r.blob_set_user_texture = Some(BlobSetUserTextureResult {
-                    success: true, hash: Some(hash), error: None,
-                });
-            })),
+        match self.state.blob_store.put(&params.data) {
+            Ok(hash) => {
+                match self.state.database.set_user_blob_hash(params.user_id, "texture", &hash) {
+                    Ok(()) => Ok(self.make_response_packet(request_id, "blob.setUserTexture", |r| {
+                        r.blob_set_user_texture = Some(BlobSetUserTextureResult {
+                            success: true, hash: Some(hash.clone()), error: None,
+                        });
+                    })),
+                    Err(e) => Ok(self.make_response_packet(request_id, "blob.setUserTexture", |r| {
+                        r.blob_set_user_texture = Some(BlobSetUserTextureResult {
+                            success: false, hash: None, error: Some(e.to_string()),
+                        });
+                    })),
+                }
+            }
             Err(e) => Ok(self.make_response_packet(request_id, "blob.setUserTexture", |r| {
                 r.blob_set_user_texture = Some(BlobSetUserTextureResult {
                     success: false, hash: None, error: Some(e.to_string()),
@@ -2418,12 +2564,21 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_set_user_comment.as_ref().context("Missing blob_set_user_comment params")?;
-        match self.state.database.set_user_blob(params.user_id, "comment", &params.data) {
-            Ok(hash) => Ok(self.make_response_packet(request_id, "blob.setUserComment", |r| {
-                r.blob_set_user_comment = Some(BlobSetUserCommentResult {
-                    success: true, hash: Some(hash), error: None,
-                });
-            })),
+        match self.state.blob_store.put(&params.data) {
+            Ok(hash) => {
+                match self.state.database.set_user_blob_hash(params.user_id, "comment", &hash) {
+                    Ok(()) => Ok(self.make_response_packet(request_id, "blob.setUserComment", |r| {
+                        r.blob_set_user_comment = Some(BlobSetUserCommentResult {
+                            success: true, hash: Some(hash.clone()), error: None,
+                        });
+                    })),
+                    Err(e) => Ok(self.make_response_packet(request_id, "blob.setUserComment", |r| {
+                        r.blob_set_user_comment = Some(BlobSetUserCommentResult {
+                            success: false, hash: None, error: Some(e.to_string()),
+                        });
+                    })),
+                }
+            }
             Err(e) => Ok(self.make_response_packet(request_id, "blob.setUserComment", |r| {
                 r.blob_set_user_comment = Some(BlobSetUserCommentResult {
                     success: false, hash: None, error: Some(e.to_string()),
@@ -2649,6 +2804,16 @@ impl RpcHandler {
     ) -> Result<EdgeHubPacket> {
         let params = request.edge_relay_voice_via_tcp.as_ref()
             .context("Missing edge_relay_voice_via_tcp params")?;
+
+        // Respect Hub voice routing policy: if relay is disabled, reject immediately.
+        if !self.state.config.voice_routing.enable_relay {
+            return Ok(self.make_response_packet(request_id, "edge.relayVoiceViaTcp", |r| {
+                r.edge_relay_voice_via_tcp = Some(EdgeRelayVoiceViaTcpResult {
+                    success: false,
+                    error: Some("Hub voice relay is disabled by configuration".to_string()),
+                });
+            }));
+        }
 
         let target_edge_id = params.target_edge_id;
         let voice_packet = params.voice_packet.clone();

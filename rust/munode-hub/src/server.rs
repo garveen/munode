@@ -12,6 +12,7 @@ use munode_common::config::HubConfig;
 use munode_protocol::hubedge::*;
 
 use crate::acl_manager::AclManager;
+use crate::blob_store::BlobStore;
 use crate::channel_store::ChannelStore;
 use crate::database::Database;
 use crate::edge_connection::EdgeConnection;
@@ -20,6 +21,22 @@ use crate::session_manager::SessionManager;
 use crate::topology_manager::TopologyManager;
 use crate::auth_service::{AuthServiceHandle, run_auth_service_listener};
 use crate::lua_auth::LuaAuthEngine;
+
+/// Information about a registered edge server (keyed by server_id in HubState).
+#[derive(Debug, Clone)]
+pub struct EdgeRegistration {
+    pub server_id: u32,
+    /// Human-readable server name.
+    pub name: String,
+    /// Hostname or IP for Edge-to-Edge connections.
+    pub host: String,
+    /// Mumble client port.
+    pub port: u32,
+    /// Maximum number of concurrent users this edge supports.
+    pub capacity: u32,
+    /// Optional geographic region tag (e.g. "us-east", "eu-west").
+    pub region: Option<String>,
+}
 
 /// Health data for a connected Edge server.
 #[derive(Debug, Clone)]
@@ -84,17 +101,25 @@ pub struct HubState {
     pub channel_store: Arc<ChannelStore>,
     pub database: Arc<Database>,
     pub acl_manager: AclManager,
+    /// Filesystem-backed blob storage.
+    pub blob_store: Arc<BlobStore>,
     pub edge_connections: RwLock<HashMap<u32, EdgeSender>>,
     /// Health records for each connected Edge, keyed by edge server_id.
     pub edge_health: RwLock<HashMap<u32, EdgeHealth>>,
     /// Cluster topology manager.
     pub topology: RwLock<TopologyManager>,
+    /// Registered edge info keyed by server_id (updated on edge.register).
+    pub edge_registry: RwLock<HashMap<u32, EdgeRegistration>>,
     /// External auth service handle.
     pub auth_service: AuthServiceHandle,
     /// Embedded Lua authentication engine (present when `auth.lua_script` is set).
     pub lua_engine: Option<Arc<LuaAuthEngine>>,
     /// Failed authentication attempt tracker (for auto-ban).
     pub failed_auth_tracker: RwLock<FailedAuthTracker>,
+    /// GeoIP lookup service (optional, present when `geoip.database_path` is set).
+    pub geoip: Arc<crate::geoip::GeoIpService>,
+    /// Server start time for uptime calculation.
+    pub started_at: std::time::Instant,
 }
 
 /// The main Hub server.
@@ -115,6 +140,10 @@ impl HubServer {
 
         let channel_store = Arc::new(ChannelStore::new());
 
+        // Open filesystem blob store
+        let blob_store = Arc::new(BlobStore::open(&self.config.blob_store.path)
+            .context("Failed to open blob store")?);
+
         // Create shared state
         let auth_service = AuthServiceHandle::new();
 
@@ -133,18 +162,28 @@ impl HubServer {
             None
         };
 
+        // Initialise GeoIP service (optional)
+        let geoip = Arc::new(crate::geoip::GeoIpService::new(&self.config.geoip.database_path));
+        if geoip.is_available() {
+            info!("GeoIP service initialised from '{}'", &self.config.geoip.database_path);
+        }
+
         let state = Arc::new(HubState {
             config: self.config.clone(),
             session_manager: SessionManager::new(),
             channel_store: channel_store.clone(),
             acl_manager: AclManager::new(database.clone(), channel_store.clone()),
             database,
+            blob_store,
             edge_connections: RwLock::new(HashMap::new()),
             edge_health: RwLock::new(HashMap::new()),
             topology: RwLock::new(TopologyManager::new()),
+            edge_registry: RwLock::new(HashMap::new()),
             auth_service: auth_service.clone(),
             lua_engine,
             failed_auth_tracker: RwLock::new(FailedAuthTracker::default()),
+            geoip,
+            started_at: std::time::Instant::now(),
         });
 
         // Load channels from database
@@ -171,6 +210,35 @@ impl HubServer {
         tokio::spawn(async move {
             health_check_loop(health_state, health_rpc, heartbeat_timeout).await;
         });
+
+        // Periodically clean up expired ban records (every 5 minutes)
+        {
+            let ban_db = state.database.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(300)).await;
+                    match ban_db.cleanup_expired_bans() {
+                        Ok(removed) if removed > 0 => {
+                            tracing::info!("Cleaned up {} expired ban record(s)", removed);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to clean up expired bans: {}", e);
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
+
+        // Start Web API if enabled
+        if self.config.web_api.enabled {
+            let web_state = state.clone();
+            let web_host = self.config.web_api.host.clone();
+            let web_port = self.config.web_api.port;
+            tokio::spawn(async move {
+                crate::web_api::run_web_api(&web_host, web_port, web_state).await;
+            });
+        }
 
         // Bind WebSocket listener
         let addr = format!(

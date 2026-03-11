@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -39,7 +40,26 @@ impl EdgeServer {
         // Create shared state
         let client_manager = ClientManager::new();
         let channel_manager = ChannelManager::new();
-        let edge_state = EdgeState::new(channel_manager, client_manager, self.config.server.disable_hub_relay);
+
+        // Derive voice routing flags from the new voice_routing config, falling back
+        // to the legacy `server.disable_hub_relay` for backwards compatibility.
+        use munode_common::config::VoiceConnectionStrategy;
+        let (allow_hub_relay, allow_direct_udp) = match &self.config.voice_routing.connection_strategy {
+            VoiceConnectionStrategy::TcpOnly => (true, false),
+            VoiceConnectionStrategy::DirectOnly => (false, true),
+            VoiceConnectionStrategy::AutoFallback => {
+                // Legacy override: disable_hub_relay forces DirectOnly behaviour.
+                (!self.config.server.disable_hub_relay, true)
+            }
+        };
+        let edge_state = EdgeState::new_with_config(
+            channel_manager,
+            client_manager,
+            allow_hub_relay,
+            allow_direct_udp,
+            self.config.server.listeners_per_user,
+            self.config.server.listeners_per_channel,
+        );
 
         // Set up TLS
         let tls_acceptor = create_tls_acceptor(&self.config.tls)?;
@@ -340,6 +360,9 @@ async fn handle_client_connection(
                         groups: vec![],
                         opus_supported: opus,
                         listening_channels: vec![],
+            listening_volume_adjustments: HashMap::new(),
+            texture_hash: None,
+            comment_hash: None,
                     };
                     // Add client to manager first so permission queries can resolve user_id
                     edge_state.client_manager.add_client(client.clone(), client_sender.clone()).await;
@@ -372,6 +395,24 @@ async fn handle_client_connection(
 
                     client_state = ClientState::Ready;
                     edge_state.client_manager.set_client_state(sid, ClientState::Ready).await;
+
+                    // Populate ninja channel permission cache for this client
+                    {
+                        let ninja_channels = edge_state.ninja_channels.read().await.clone();
+                        if !ninja_channels.is_empty() {
+                            let mut visible_set = std::collections::HashSet::new();
+                            for &ch_id in &ninja_channels {
+                                let can_enter = match hub_client.handle_permission_query(sid, ch_id).await {
+                                    Ok(r) => r.permissions.map(|p| p & 0x4 != 0).unwrap_or(false),
+                                    Err(_) => false,
+                                };
+                                if can_enter {
+                                    visible_set.insert(ch_id);
+                                }
+                            }
+                            edge_state.ninja_visible_to.write().await.insert(sid, visible_set);
+                        }
+                    }
 
                     // If suppress was set by permission check, notify the client itself
                     if client.suppress && !auth_result.suppress.unwrap_or(false) {
@@ -570,7 +611,7 @@ async fn handle_client_connection(
                                         // [header][session_varint][seq][voice_data]
                                         // (matches TS hub relay format)
                                         let relay_payload = inject_session_into_voice(&frame.payload, sid);
-                                        if !edge_state.disable_hub_relay {
+                                        if edge_state.allow_hub_relay {
                                             hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                                         }
                                     }
@@ -624,7 +665,7 @@ async fn handle_client_connection(
                                     // Relay format: standard Mumble server-to-client packet
                                     // [header][session_varint][seq][voice_data]
                                     let relay_payload = inject_session_into_voice(&frame.payload, sid);
-                                    if !edge_state.disable_hub_relay {
+                                    if edge_state.allow_hub_relay {
                                         hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                                     }
                                 }
@@ -954,6 +995,15 @@ async fn handle_client_connection(
                     let Ok(plugin) = mumbleproto::PluginDataTransmission::decode(&frame.payload[..]) else { continue; };
                     debug!("PluginData from {}: dataId={:?}", peer_addr, plugin.data_id);
 
+                    // Enforce plugin message size limit
+                    let plugin_limit = config.server.plugin_message_length;
+                    let plugin_data_len = plugin.data.as_deref().map(|d| d.len()).unwrap_or(0) as u32;
+                    if plugin_limit > 0 && plugin_data_len > plugin_limit {
+                        debug!("PluginData from {} exceeds limit ({} > {})", peer_addr, plugin_data_len, plugin_limit);
+                        // Silently drop oversized plugin messages (no PermissionDenied per Mumble protocol convention)
+                        continue;
+                    }
+
                     let hub = hub_client.clone();
                     let sid = session_id.unwrap_or(0);
                     let client_info = edge_state.client_manager.get_client(sid).await;
@@ -1121,6 +1171,8 @@ async fn handle_client_connection(
     // Cleanup
     if let Some(sid) = session_id {
         edge_state.client_manager.remove_client(sid).await;
+        // Clean up ninja channel permission cache for this session
+        edge_state.ninja_visible_to.write().await.remove(&sid);
 
         // Broadcast UserRemove to all remaining clients
         let remove_msg = handler::build_user_remove_msg(sid, None);
@@ -1160,6 +1212,30 @@ async fn handle_user_state_update(
                     Err(_) => true, // Fail open if Hub unreachable
                 };
                 if can_enter {
+                    // Check channel user limit (max_users from channel config)
+                    let channel_full = if let Some(ch) = edge_state.channel_manager.get_channel(target_channel_id).await {
+                        if ch.max_users > 0 {
+                            let user_count = edge_state.client_manager.count_in_channel(target_channel_id).await;
+                            user_count >= ch.max_users
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if channel_full {
+                        debug!("Channel {} is full, denying move for session {}", target_channel_id, session_id);
+                        if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                            let pq = mumbleproto::PermissionDenied {
+                                r#type: Some(mumbleproto::permission_denied::DenyType::ChannelFull as i32),
+                                channel_id: Some(target_channel_id),
+                                reason: Some("Channel is full".to_string()),
+                                ..Default::default()
+                            };
+                            sender.send_message(MessageType::PermissionDenied, &pq).await;
+                        }
+                        return;
+                    }
                     debug!("User {} moving to channel {}", session_id, target_channel_id);
                     let sender = edge_state.client_manager.get_sender(session_id).await;
                     edge_state.client_manager.remove_client(session_id).await;
@@ -1234,6 +1310,49 @@ async fn handle_user_state_update(
         let mut actually_added_channels: Vec<u32> = Vec::new();
         if !user_state.listening_channel_add.is_empty() || !user_state.listening_channel_remove.is_empty() {
             for &ch in &user_state.listening_channel_add {
+                // Check per-user listener limit
+                let per_user_limit = edge_state.listeners_per_user;
+                if per_user_limit > 0 && client.listening_channels.len() as u32 >= per_user_limit {
+                    debug!("Listener limit ({}) reached for session {}", per_user_limit, session_id);
+                    if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                        let pq = mumbleproto::PermissionDenied {
+                            r#type: Some(mumbleproto::permission_denied::DenyType::ChannelFull as i32),
+                            channel_id: Some(ch),
+                            reason: Some(format!(
+                                "Listener limit reached: you may listen to at most {} channel(s) simultaneously",
+                                per_user_limit
+                            )),
+                            ..Default::default()
+                        };
+                        sender.send_message(MessageType::PermissionDenied, &pq).await;
+                    }
+                    continue;
+                }
+
+                // Check per-channel listener limit
+                let per_channel_limit = edge_state.listeners_per_channel;
+                if per_channel_limit > 0 {
+                    let listener_count = edge_state.client_manager
+                        .get_listening_count(ch)
+                        .await;
+                    if listener_count >= per_channel_limit {
+                        debug!("Channel {} listener limit ({}) reached", ch, per_channel_limit);
+                        if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                            let pq = mumbleproto::PermissionDenied {
+                                r#type: Some(mumbleproto::permission_denied::DenyType::ChannelFull as i32),
+                                channel_id: Some(ch),
+                                reason: Some(format!(
+                                    "Channel listener limit reached: this channel allows at most {} listener(s)",
+                                    per_channel_limit
+                                )),
+                                ..Default::default()
+                            };
+                            sender.send_message(MessageType::PermissionDenied, &pq).await;
+                        }
+                        continue;
+                    }
+                }
+
                 // Check Listen permission (0x800) before adding
                 let can_listen = match hub_client.handle_permission_query(session_id, ch).await {
                     Ok(r) => r.permissions.map(|p| p & 0x800 != 0).unwrap_or(true), // LISTEN
@@ -1257,27 +1376,72 @@ async fn handle_user_state_update(
                 }
             }
             client.listening_channels.retain(|ch| !user_state.listening_channel_remove.contains(ch));
+            // Remove volume adjustments for channels that were removed
+            for &ch in &user_state.listening_channel_remove {
+                client.listening_volume_adjustments.remove(&ch);
+            }
             needs_broadcast = true;
         }
 
-        // Texture / comment blob updates (upload to Hub)
+        // Volume adjustments for listened channels
+        if !user_state.listening_volume_adjustment.is_empty() {
+            for va in &user_state.listening_volume_adjustment {
+                if let (Some(ch), Some(vol)) = (va.listening_channel, va.volume_adjustment) {
+                    if vol == 1.0 {
+                        client.listening_volume_adjustments.remove(&ch);
+                    } else {
+                        client.listening_volume_adjustments.insert(ch, vol);
+                    }
+                }
+            }
+            needs_broadcast = true;
+        }
+
+        // Texture / comment blob updates (upload to Hub and broadcast hash to peers)
         if let Some(texture_data) = &user_state.texture {
             if !texture_data.is_empty() {
                 let uid = client.user_id;
                 let data = texture_data.clone();
-                let hub = hub_client.clone();
-                tokio::spawn(async move {
-                    hub.blob_set_user_texture(uid, data).await;
-                });
+                if let Some(hash_hex) = hub_client.blob_set_user_texture(uid, data).await {
+                    // Convert hex hash to bytes for the Mumble texture_hash field
+                    if let Some(hash_bytes) = hex_to_bytes(&hash_hex) {
+                        // Broadcast the hash to all connected clients so they can
+                        // request the texture via RequestBlob.
+                        let hash_msg = mumbleproto::UserState {
+                            session: Some(session_id),
+                            actor: Some(session_id),
+                            texture_hash: Some(hash_bytes.clone()),
+                            ..Default::default()
+                        };
+                        client.texture_hash = Some(hash_bytes);
+                        edge_state.client_manager.update_client(client.clone()).await;
+                        edge_state.client_manager.broadcast(MessageType::UserState, &hash_msg, None).await;
+                    }
+                }
             }
         }
         if let Some(comment) = &user_state.comment {
             let uid = client.user_id;
             let data = comment.as_bytes().to_vec();
-            let hub = hub_client.clone();
-            tokio::spawn(async move {
-                hub.blob_set_user_comment(uid, data).await;
-            });
+            let data_len = data.len();
+            if let Some(hash_hex) = hub_client.blob_set_user_comment(uid, data).await {
+                if let Some(hash_bytes) = hex_to_bytes(&hash_hex) {
+                    // Only broadcast comment_hash for long comments (> 128 bytes),
+                    // matching the Mumble protocol convention.  Short comments are
+                    // sent inline (comment field) rather than by reference.
+                    if data_len > 128 {
+                        let hash_msg = mumbleproto::UserState {
+                            session: Some(session_id),
+                            actor: Some(session_id),
+                            comment_hash: Some(hash_bytes.clone()),
+                            ..Default::default()
+                        };
+                        client.comment_hash = Some(hash_bytes);
+                        edge_state.client_manager.update_client(client.clone()).await;
+                        edge_state.client_manager.broadcast(MessageType::UserState, &hash_msg, None).await;
+                    }
+                }
+            }
         }
 
         if needs_broadcast {
@@ -1328,6 +1492,9 @@ async fn handle_user_state_update(
             if !user_state.listening_channel_remove.is_empty() {
                 broadcast_msg.listening_channel_remove = user_state.listening_channel_remove.clone();
             }
+            if !user_state.listening_volume_adjustment.is_empty() {
+                broadcast_msg.listening_volume_adjustment = user_state.listening_volume_adjustment.clone();
+            }
 
             edge_state.client_manager.broadcast(MessageType::UserState, &broadcast_msg, None).await;
 
@@ -1354,6 +1521,7 @@ async fn handle_user_state_update(
                     || broadcast_msg.recording.is_some()
                     || !listening_channel_add.is_empty()
                     || !listening_channel_remove.is_empty()
+                    || !broadcast_msg.listening_volume_adjustment.is_empty()
                 {
                     hub_client.notify_user_state_changed(
                         session_id,
@@ -1505,6 +1673,18 @@ async fn broadcast_codec_version(edge_state: &Arc<EdgeState>) {
     edge_state.client_manager.broadcast(MessageType::CodecVersion, &msg, None).await;
 }
 
+/// Decode a hex string into bytes.  Returns `None` if the string is not valid hex.
+fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let bytes: Option<Vec<u8>> = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect();
+    bytes
+}
+
 /// Encode a u32 as a Mumble varint (NOT protobuf varint).
 /// Mumble varint format: 0x00-0x7F = 1 byte, 0x80-0x3FFF = 2 bytes (10xxxxxx), etc.
 fn encode_mumble_varint(value: u32) -> Vec<u8> {
@@ -1613,10 +1793,13 @@ mod tests {
                 reconnect_interval: 5000,
                 heartbeat_interval: 10000,
                 hmac_secret: None,
+                pool_size: 1,
             },
             server: ServerConfig::default(),
+            voice_routing: munode_common::config::EdgeVoiceRoutingConfig::default(),
             suggest: None,
             log_level: "info".to_string(),
+            log_format: "text".to_string(),
         }
     }
 
@@ -1642,6 +1825,9 @@ mod tests {
             groups: vec![],
             opus_supported: true,
             listening_channels: vec![],
+            listening_volume_adjustments: HashMap::new(),
+            texture_hash: None,
+            comment_hash: None,
         }
     }
 
@@ -1902,6 +2088,7 @@ mod tests {
             session_id: 10,
             username: "remote10".to_string(),
             channel_id: 0,
+            is_ninja: false,
         });
 
         let msg = decode_user_state(&rx_obs.recv().await.expect("must receive join announcement"));
@@ -1938,6 +2125,7 @@ mod tests {
             session_id: 11,
             username: "remote11".to_string(),
             channel_id: 0,
+            is_ninja: false,
         });
 
         let msg = decode_user_state(&rx_obs.recv().await.unwrap());
@@ -2029,7 +2217,7 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
         match event_rx.recv().await {
             Ok(event) => {
                 match event {
-                    EdgeEvent::RemoteUserJoined { session_id, username, channel_id } => {
+                    EdgeEvent::RemoteUserJoined { session_id, username, channel_id, is_ninja } => {
                         // Only broadcast for REMOTE users (not local clients - handled by main task)
                         if state.client_manager.get_client(session_id).await.is_none() {
                             if let Some(user) = state.channel_manager.get_remote_user(session_id).await {
@@ -2055,10 +2243,26 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                                     hash: user.cert_hash.clone(),
                                     ..Default::default()
                                 };
-                                state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                                if is_ninja {
+                                    // Channel Ninja: only send to clients who have Enter permission
+                                    // Clients lacking both Enter+Listen permission won't see the user
+                                    let local_clients = state.client_manager.get_all_clients().await;
+                                    let visible_cache = state.ninja_visible_to.read().await;
+                                    for client in local_clients {
+                                        let can_see = visible_cache
+                                            .get(&client.session)
+                                            .map(|set| set.contains(&channel_id))
+                                            .unwrap_or(false);
+                                        if can_see {
+                                            state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
+                                        }
+                                    }
+                                } else {
+                                    state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                                }
                             }
                         }
-                        debug!("Broadcast remote user joined: {} (session {}, channel {})", username, session_id, channel_id);
+                        debug!("Broadcast remote user joined: {} (session {}, channel {}, ninja={})", username, session_id, channel_id, is_ninja);
                     }
                     EdgeEvent::RemoteUserLeft { session_id } => {
                         let msg = handler::build_user_remove_msg(session_id, None);

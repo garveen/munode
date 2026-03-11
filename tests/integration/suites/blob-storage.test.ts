@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { setupTestEnvironment, createClients, cleanupClients, USE_RUST } from '../setup.js';
 import type { TestEnvironment } from '../setup.js';
+import type { MumbleClient } from '../../../packages/client/src/index.js';
 
 describe.skipIf(USE_RUST)('Blob Storage Integration Tests', () => {
   let testEnv: TestEnvironment;
@@ -233,5 +234,140 @@ describe.skipIf(USE_RUST)('Blob Storage Integration Tests', () => {
       expect(stats.totalBlobs).toBeGreaterThanOrEqual(0);
       expect(stats.totalSize).toBeGreaterThanOrEqual(0);
     }, 10000);
+  });
+});
+
+// ─── Rust-mode blob storage tests ────────────────────────────────────────────
+// These tests run against the Rust Hub + Edge binary pair using the Mumble
+// client protocol only (no direct server API access).
+describe.skipIf(!USE_RUST)('Blob Storage Integration Tests (Rust)', () => {
+  let testEnv: TestEnvironment;
+
+  /** Find a user from client[1]'s user list by name, accepting 'admin' or 'Administrator'. */
+  function findAdminUser(clients: MumbleClient[]) {
+    const users = clients[1].getUsers();
+    return users.find(u => u.name === 'admin' || u.name === 'Administrator');
+  }
+
+  beforeAll(async () => {
+    testEnv = await setupTestEnvironment(15210, {
+      startHub: true,
+      startEdge: true,
+      startEdge2: false,
+      startAuth: true,
+      silent: false,
+    });
+  }, 60000);
+
+  afterAll(async () => {
+    await testEnv.cleanup();
+  }, 30000);
+
+  describe('User Texture Storage', () => {
+    it('should store and retrieve a texture via the Mumble protocol', async () => {
+      const clients = await createClients(testEnv, [
+        { username: 'admin', edge: 1 },
+        { username: 'user1', edge: 1 },
+      ]);
+
+      try {
+        // Upload a texture from client 0
+        const texture = Buffer.alloc(200);
+        for (let i = 0; i < 200; i++) texture[i] = i % 256;
+
+        await clients[0].setTexture(texture);
+        await new Promise(r => setTimeout(r, 800));
+
+        // client1 should receive a texture_hash for admin in a UserState broadcast
+        const admin = findAdminUser(clients);
+        expect(admin).toBeDefined();
+        // texture_hash is sent for blobs > 128 bytes (Mumble protocol)
+        expect(admin!.texture_hash).toBeTruthy();
+      } finally {
+        await cleanupClients(clients);
+      }
+    }, 20000);
+
+    it('should deduplicate identical textures (idempotent put)', async () => {
+      const clients = await createClients(testEnv, [
+        { username: 'admin', edge: 1 },
+        { username: 'user1', edge: 1 },
+      ]);
+
+      try {
+        const texture = Buffer.alloc(200, 0xab);
+
+        // Upload the same texture twice from two different clients
+        await clients[0].setTexture(texture);
+        await new Promise(r => setTimeout(r, 500));
+        const hash0 = findAdminUser(clients)?.texture_hash;
+
+        await clients[1].setTexture(texture);
+        await new Promise(r => setTimeout(r, 500));
+        const hash1 = clients[0].getUsers().find(u => u.name === 'user1')?.texture_hash;
+
+        // Both uploads of the same bytes should produce the same content hash
+        expect(hash0).toBeTruthy();
+        expect(hash1).toBeTruthy();
+        expect(hash0).toEqual(hash1);
+      } finally {
+        await cleanupClients(clients);
+      }
+    }, 20000);
+  });
+
+  describe('User Comment Storage', () => {
+    it('should broadcast comment_hash for long comments (> 128 bytes)', async () => {
+      const clients = await createClients(testEnv, [
+        { username: 'admin', edge: 1 },
+        { username: 'user1', edge: 1 },
+      ]);
+
+      const longComment = 'X'.repeat(200);
+
+      try {
+        await new Promise(r => setTimeout(r, 500));
+
+        await clients[0].setComment(longComment);
+        await new Promise(r => setTimeout(r, 1000));
+
+        // user1 should see admin's comment_hash
+        const admin = findAdminUser(clients);
+        expect(admin).toBeDefined();
+        expect(admin!.comment_hash).toBeTruthy();
+      } finally {
+        await cleanupClients(clients);
+      }
+    }, 20000);
+
+    it('should retrieve full comment via RequestBlob', async () => {
+      const clients = await createClients(testEnv, [
+        { username: 'admin', edge: 1 },
+        { username: 'user1', edge: 1 },
+      ]);
+
+      const longComment = 'Long comment for RequestBlob test. '.repeat(6);
+      expect(longComment.length).toBeGreaterThan(128);
+
+      try {
+        await new Promise(r => setTimeout(r, 500));
+
+        await clients[0].setComment(longComment);
+        await new Promise(r => setTimeout(r, 1000));
+
+        // Request the full comment blob for admin
+        const adminSession = clients[0].getStateManager().getSession()?.session;
+        if (adminSession !== undefined) {
+          await clients[1].requestUserComment(adminSession);
+          await new Promise(r => setTimeout(r, 800));
+
+          const users = clients[1].getUsers();
+          const admin = users.find(u => u.session === adminSession);
+          expect(admin?.comment).toBe(longComment);
+        }
+      } finally {
+        await cleanupClients(clients);
+      }
+    }, 20000);
   });
 });
