@@ -91,8 +91,13 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | log_level | ✅ | ✅ | 日志级别 |
 | log_file | ✅ | ❌ | 日志文件 |
 | log_days | ✅ | ❌ | 日志保留天数 |
-| **语音路由** |
-| voice_routing.* | ✅ | ❌ | 语音路由配置 |
+| **语音路由策略** |
+| voice_routing.enable_relay | ✅ | ✅ | Hub 侧允许中继语音（默认 true） |
+| voice_routing.relay_cost_factor | ✅ | ✅ | 中继路由代价系数（默认 1.2） |
+| voice_routing.direct_rtt_threshold | ✅ | ✅ | 直连 RTT 阈值 ms（默认 200） |
+| voice_routing.direct_loss_threshold | ✅ | ✅ | 直连丢包阈值 0-1（默认 0.05） |
+| voice_routing.max_relay_streams_per_pair | ✅ | ✅ | 每对 Edge 最大中继流数（0=无限制） |
+| voice_routing.max_total_relay_streams | ✅ | ✅ | Hub 总最大中继流数（0=无限制） |
 
 ### Edge Server 配置对照表
 
@@ -132,11 +137,14 @@ Rust 版本使用 TOML 格式配置，相比 TypeScript 版本的 JavaScript 配
 | server.welcome_text | ✅ | ✅ | 欢迎消息 |
 | server.disable_hub_relay | ✅ | ✅ | 禁用 Hub 中转 |
 | **语音路由** |
-| voice_routing.enabled | ✅ | ❌ | 启用语音路由 |
-| voice_routing.shared_secret | ✅ | ❌ | 共享密钥 |
-| voice_routing.connection_strategy | ✅ | ❌ | 连接策略 |
-| voice_routing.local_decision.* | ✅ | ❌ | 本地决策配置 |
-| voice_routing.relay.* | ✅ | ❌ | 中继配置 |
+| voice_routing.enabled | ✅ | ✅ | 启用语音路由（默认 true） |
+| voice_routing.connection_strategy | ✅ | ✅ | 连接策略：`auto_fallback`（默认）/`tcp_only`/`direct_only` |
+| voice_routing.fallback.enable_tcp_fallback | ✅ | ✅ | 启用 UDP 质量降级时切换 TCP（默认 false） |
+| voice_routing.fallback.tcp_fallback_delay | ✅ | ✅ | 切换 TCP 延迟（ms，默认 2000） |
+| voice_routing.relay.enabled | ✅ | ✅ | 允许本 Edge 作为中继节点（默认 true） |
+| voice_routing.relay.max_relay_bandwidth | ✅ | ✅ | 最大中继带宽 Kbps（默认 10000） |
+| voice_routing.shared_secret | ✅ | ❌ | 共享密钥（TS 专有） |
+| voice_routing.local_decision.* | ✅ | ❌ | 本地决策配置（TS 专有） |
 | **客户端建议** |
 | client.suggest_version | ✅ | ❌ | 建议版本 |
 | client.suggest_positional | ✅ | ❌ | 建议位置音频 |

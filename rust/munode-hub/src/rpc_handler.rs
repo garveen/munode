@@ -2751,6 +2751,16 @@ impl RpcHandler {
         let params = request.edge_relay_voice_via_tcp.as_ref()
             .context("Missing edge_relay_voice_via_tcp params")?;
 
+        // Respect Hub voice routing policy: if relay is disabled, reject immediately.
+        if !self.state.config.voice_routing.enable_relay {
+            return Ok(self.make_response_packet(request_id, "edge.relayVoiceViaTcp", |r| {
+                r.edge_relay_voice_via_tcp = Some(EdgeRelayVoiceViaTcpResult {
+                    success: false,
+                    error: Some("Hub voice relay is disabled by configuration".to_string()),
+                });
+            }));
+        }
+
         let target_edge_id = params.target_edge_id;
         let voice_packet = params.voice_packet.clone();
         let from_edge_id = params.from_edge_id;

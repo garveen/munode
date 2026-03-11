@@ -16,12 +16,104 @@ pub struct EdgeConfig {
     /// Server capacity and limits.
     #[serde(default)]
     pub server: ServerConfig,
+    /// Voice routing configuration.
+    #[serde(default)]
+    pub voice_routing: EdgeVoiceRoutingConfig,
     /// Client suggestion configuration.
     #[serde(default)]
     pub suggest: Option<EdgeSuggestConfig>,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
+}
+
+/// Connection strategy for Edge-to-Edge voice routing.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceConnectionStrategy {
+    /// Try direct Edge-to-Edge UDP first; fall back to Hub TCP relay on failure.
+    #[default]
+    AutoFallback,
+    /// Always use Hub TCP relay; never attempt direct Edge-to-Edge UDP.
+    TcpOnly,
+    /// Always use direct Edge-to-Edge UDP; never use Hub TCP relay.
+    /// Primarily useful for testing direct connectivity.
+    DirectOnly,
+}
+
+/// Fallback thresholds for voice quality degradation detection.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EdgeVoiceFallbackConfig {
+    /// Whether to enable TCP fallback when UDP quality degrades.
+    #[serde(default)]
+    pub enable_tcp_fallback: bool,
+    /// Delay in ms before switching to TCP after UDP degradation is detected.
+    #[serde(default = "default_tcp_fallback_delay")]
+    pub tcp_fallback_delay: u64,
+    /// Interval in ms to check whether UDP has recovered after a TCP fallback.
+    #[serde(default = "default_udp_recovery_check_interval")]
+    pub udp_recovery_check_interval: u64,
+}
+
+impl Default for EdgeVoiceFallbackConfig {
+    fn default() -> Self {
+        Self {
+            enable_tcp_fallback: false,
+            tcp_fallback_delay: default_tcp_fallback_delay(),
+            udp_recovery_check_interval: default_udp_recovery_check_interval(),
+        }
+    }
+}
+
+/// Relay configuration for the Edge acting as a relay node.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EdgeVoiceRelayConfig {
+    /// Whether this Edge accepts Hub-mediated relay requests.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Maximum relay bandwidth in Kbps (0 = unlimited).
+    #[serde(default = "default_relay_bandwidth")]
+    pub max_relay_bandwidth: u32,
+}
+
+impl Default for EdgeVoiceRelayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_relay_bandwidth: default_relay_bandwidth(),
+        }
+    }
+}
+
+/// Voice routing configuration for the Edge server.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EdgeVoiceRoutingConfig {
+    /// Enable voice routing (default: true).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Connection strategy for cross-Edge voice packets.
+    /// - `auto_fallback` (default): UDP direct, fall back to Hub TCP relay.
+    /// - `tcp_only`: always use Hub TCP relay.
+    /// - `direct_only`: UDP direct only (no Hub relay).
+    #[serde(default)]
+    pub connection_strategy: VoiceConnectionStrategy,
+    /// Fallback / quality degradation configuration.
+    #[serde(default)]
+    pub fallback: EdgeVoiceFallbackConfig,
+    /// Relay node configuration.
+    #[serde(default)]
+    pub relay: EdgeVoiceRelayConfig,
+}
+
+impl Default for EdgeVoiceRoutingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            connection_strategy: VoiceConnectionStrategy::AutoFallback,
+            fallback: EdgeVoiceFallbackConfig::default(),
+            relay: EdgeVoiceRelayConfig::default(),
+        }
+    }
 }
 
 /// Client suggestion configuration for Edge.
@@ -181,9 +273,54 @@ pub struct HubConfig {
     /// Blob store configuration.
     #[serde(default)]
     pub blob_store: HubBlobStoreConfig,
+    /// Voice routing policy configuration.
+    #[serde(default)]
+    pub voice_routing: HubVoiceRoutingConfig,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
+}
+
+/// Hub-side voice routing policy configuration.
+///
+/// Controls how the Hub mediates cross-Edge voice relay when Edges cannot
+/// establish direct connections.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HubVoiceRoutingConfig {
+    /// Enable Hub-mediated voice relay (default: true).
+    /// When false, `edge.relayVoiceViaTcp` RPC calls are rejected.
+    #[serde(default = "default_true")]
+    pub enable_relay: bool,
+    /// Maximum number of simultaneous relay streams per Edge pair.
+    /// 0 = unlimited.
+    #[serde(default)]
+    pub max_relay_streams_per_pair: u32,
+    /// Hard cap on total simultaneous relay streams on the Hub (0 = unlimited).
+    #[serde(default)]
+    pub max_total_relay_streams: u32,
+    /// Cost factor applied to relay routes vs. direct routes when suggesting
+    /// routing to Edges.  Higher values discourage relay use.
+    #[serde(default = "default_relay_cost_factor")]
+    pub relay_cost_factor: f32,
+    /// RTT threshold (ms) below which direct routes are preferred over relay.
+    #[serde(default = "default_direct_rtt_threshold")]
+    pub direct_rtt_threshold: u32,
+    /// Packet loss threshold (0.0–1.0) below which direct routes are preferred.
+    #[serde(default = "default_direct_loss_threshold")]
+    pub direct_loss_threshold: f32,
+}
+
+impl Default for HubVoiceRoutingConfig {
+    fn default() -> Self {
+        Self {
+            enable_relay: true,
+            max_relay_streams_per_pair: 0,
+            max_total_relay_streams: 0,
+            relay_cost_factor: default_relay_cost_factor(),
+            direct_rtt_threshold: default_direct_rtt_threshold(),
+            direct_loss_threshold: default_direct_loss_threshold(),
+        }
+    }
 }
 
 /// Validation rules configuration.
@@ -528,4 +665,22 @@ fn default_web_api_port() -> u16 {
 }
 fn default_blob_store_path() -> String {
     "data/blobs".to_string()
+}
+fn default_tcp_fallback_delay() -> u64 {
+    2000
+}
+fn default_udp_recovery_check_interval() -> u64 {
+    5000
+}
+fn default_relay_bandwidth() -> u32 {
+    10000
+}
+fn default_relay_cost_factor() -> f32 {
+    1.2
+}
+fn default_direct_rtt_threshold() -> u32 {
+    200
+}
+fn default_direct_loss_threshold() -> f32 {
+    0.05
 }

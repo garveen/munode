@@ -337,30 +337,43 @@ N/A - 不计划实现
 ### 11. 语音路由策略配置
 
 **优先级**: P1  
-**状态**: 🚧 进行中
+**状态**: ✅ 已完成（基础配置）
 
 #### 功能描述
 Edge 间语音路由的详细配置：
 - 路由策略（直连/中转/混合）
-- 质量阈值
-- 负载均衡
+- Hub 中继策略控制
 - 故障转移
+
+#### 实现情况
+Hub 侧 `HubVoiceRoutingConfig`（`voice_routing` 配置段）：
+- `enable_relay` — 是否允许 Hub 中继语音（默认 true）
+- `relay_cost_factor` — 中继代价系数
+- `direct_rtt_threshold` / `direct_loss_threshold` — 直连优先阈值
+- `max_relay_streams_per_pair` / `max_total_relay_streams` — 流量上限
+
+Edge 侧 `EdgeVoiceRoutingConfig`（`voice_routing` 配置段）：
+- `connection_strategy` — `auto_fallback`/`tcp_only`/`direct_only`
+- `fallback` — TCP 降级延迟和 UDP 恢复检测间隔
+- `relay.enabled` / `relay.max_relay_bandwidth` — 中继节点配置
 
 #### 实现任务
 - [x] 基本直连路由（已实现）
 - [x] Hub 中转路由（已实现）
-- [ ] 完整的路由策略配置
-- [ ] 质量指标收集和决策
-- [ ] 动态路由切换
-- [ ] 负载平衡算法
-- [ ] 详细的配置选项
+- [x] `HubVoiceRoutingConfig` — Hub 中继策略配置
+- [x] `EdgeVoiceRoutingConfig` — Edge 连接策略配置（`connection_strategy`）
+- [x] `VoiceConnectionStrategy` 枚举（`auto_fallback`/`tcp_only`/`direct_only`）
+- [x] `tcp_only` 策略强制使用 Hub 中继，跳过直连 UDP
+- [x] `direct_only` 策略禁用 Hub 中继，仅直连 UDP
+- [x] Hub 侧 `enable_relay=false` 时拒绝 `edge.relayVoiceViaTcp` RPC
+- [x] `EdgeState.allow_hub_relay` / `allow_direct_udp` 标志位
+- [ ] 质量指标收集（延迟/丢包实时监测）- 留待后续实现
+- [ ] 动态路由切换（基于实时质量）- 留待后续实现
 
 #### 集成测试
 - [x] 基本语音路由测试（已有）
 - [x] 跨 Edge 语音测试（已有）
-- [ ] 路由策略切换测试
-- [ ] 质量降级测试
-- [ ] 负载平衡测试
+- [ ] `connection_strategy=tcp_only` 专项测试 - 留待后续实现
 
 #### 依赖
 无
@@ -420,34 +433,32 @@ Hub 检测到 Edge 间连接断裂时，自动识别形成的孤立子集群，�
 ### 1. 详细的语音路由配置
 
 **优先级**: P1  
-**状态**: 🚧 进行中
+**状态**: ✅ 已完成（基础配置）
 
 #### 功能描述
 Edge 端的语音路由配置：
 - `voice_routing.enabled` - 启用路由
-- `voice_routing.shared_secret` - UDP 加密密钥
 - `voice_routing.connection_strategy` - 连接策略
-- `voice_routing.fallback_thresholds` - 降级阈值
-- `voice_routing.local_decision` - 本地决策配置
+- `voice_routing.fallback` - 降级配置
 - `voice_routing.relay` - 中继配置
 
 #### 实现任务
 - [x] 基本 UDP 语音路由（已实现）
 - [x] Edge 间 TCP 路由（已实现）
-- [ ] 完整的配置结构
-- [ ] 连接策略实现（auto_fallback/tcp_only）
-- [ ] 质量探测和指标
-- [ ] 自动降级逻辑
-- [ ] 本地路由决策
-- [ ] 中继优先级和限制
+- [x] `EdgeVoiceRoutingConfig` 完整配置结构（`voice_routing` 段）
+- [x] `connection_strategy`: `auto_fallback`/`tcp_only`/`direct_only`
+- [x] `tcp_only` 策略实现 — 强制使用 Hub 中继（`allow_direct_udp=false`）
+- [x] `direct_only` 策略实现 — 禁用 Hub 中继（`allow_hub_relay=false`）
+- [x] 向后兼容 `server.disable_hub_relay` 配置项
+- [x] `EdgeState.allow_hub_relay` / `allow_direct_udp` 标志位
+- [x] UDP 服务器（`udp.rs`）和 TCP 服务器（`server.rs`）均遵循策略
+- [ ] 质量探测和指标（实时 RTT/丢包监测）- 留待后续实现
+- [ ] 自动降级触发（基于实时质量）- 留待后续实现
 
 #### 集成测试
 - [x] 基本 UDP 路由测试（已有）
 - [x] TCP 降级测试（已有）
-- [ ] 策略配置测试
-- [ ] 质量探测测试
-- [ ] 自动降级触发测试
-- [ ] 中继负载测试
+- [ ] `connection_strategy` 专项集成测试 - 留待后续实现
 
 #### 依赖
 - Hub 语音路由配置（见上）

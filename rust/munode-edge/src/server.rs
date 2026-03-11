@@ -39,7 +39,19 @@ impl EdgeServer {
         // Create shared state
         let client_manager = ClientManager::new();
         let channel_manager = ChannelManager::new();
-        let edge_state = EdgeState::new(channel_manager, client_manager, self.config.server.disable_hub_relay);
+
+        // Derive voice routing flags from the new voice_routing config, falling back
+        // to the legacy `server.disable_hub_relay` for backwards compatibility.
+        use munode_common::config::VoiceConnectionStrategy;
+        let (allow_hub_relay, allow_direct_udp) = match &self.config.voice_routing.connection_strategy {
+            VoiceConnectionStrategy::TcpOnly => (true, false),
+            VoiceConnectionStrategy::DirectOnly => (false, true),
+            VoiceConnectionStrategy::AutoFallback => {
+                // Legacy override: disable_hub_relay forces DirectOnly behaviour.
+                (!self.config.server.disable_hub_relay, true)
+            }
+        };
+        let edge_state = EdgeState::new_with_strategy(channel_manager, client_manager, allow_hub_relay, allow_direct_udp);
 
         // Set up TLS
         let tls_acceptor = create_tls_acceptor(&self.config.tls)?;
@@ -572,7 +584,7 @@ async fn handle_client_connection(
                                         // [header][session_varint][seq][voice_data]
                                         // (matches TS hub relay format)
                                         let relay_payload = inject_session_into_voice(&frame.payload, sid);
-                                        if !edge_state.disable_hub_relay {
+                                        if edge_state.allow_hub_relay {
                                             hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                                         }
                                     }
@@ -626,7 +638,7 @@ async fn handle_client_connection(
                                     // Relay format: standard Mumble server-to-client packet
                                     // [header][session_varint][seq][voice_data]
                                     let relay_payload = inject_session_into_voice(&frame.payload, sid);
-                                    if !edge_state.disable_hub_relay {
+                                    if edge_state.allow_hub_relay {
                                         hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                                     }
                                 }
@@ -1657,6 +1669,7 @@ mod tests {
                 pool_size: 1,
             },
             server: ServerConfig::default(),
+            voice_routing: munode_common::config::EdgeVoiceRoutingConfig::default(),
             suggest: None,
             log_level: "info".to_string(),
         }
