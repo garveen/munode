@@ -18,12 +18,12 @@ COPY rust/munode-common/Cargo.toml munode-common/
 COPY rust/munode-edge/Cargo.toml munode-edge/
 COPY rust/munode-hub/Cargo.toml munode-hub/
 # Dummy sources for cargo metadata + prepare + cook dependencies (cached until Cargo.* changes)
-RUN mkdir -p munode-protocol/src munode-common/src munode-edge/src munode-hub/src \
-    && touch munode-protocol/src/lib.rs munode-common/src/lib.rs \
+RUN mkdir -p munode-protocol/src munode-common/src munode-edge/src munode-hub/src
+RUN touch munode-protocol/src/lib.rs munode-common/src/lib.rs \
            munode-edge/src/lib.rs munode-edge/src/main.rs \
-           munode-hub/src/lib.rs munode-hub/src/main.rs \
-    && cargo chef prepare --recipe-path recipe.json \
-    && cargo chef cook --release --recipe-path recipe.json
+           munode-hub/src/lib.rs munode-hub/src/main.rs
+RUN cargo chef prepare --recipe-path recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
 
 # Proto files only needed at actual build time (build.rs codegen), not during dependency cook
 COPY packages/protocol/proto/ /proto/
