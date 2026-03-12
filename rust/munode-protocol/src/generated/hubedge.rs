@@ -717,6 +717,11 @@ pub struct EdgeRegisterParams {
     pub challenge: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "9")]
     pub challenge_response: ::core::option::Option<::prost::alloc::string::String>,
+    /// Optional proxy server port for peer-to-peer control relay.
+    /// When non-zero, this Edge can act as a transparent WebSocket proxy for
+    /// other Edges that cannot reach the Hub directly.
+    #[prost(uint32, optional, tag = "10")]
+    pub proxy_port: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeRegisterResult {
@@ -1308,6 +1313,9 @@ pub struct PeerInfoProto {
     pub voice_port: u32,
     #[prost(string, optional, tag = "6")]
     pub cert_hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Optional proxy server port.  Non-zero means this peer supports proxy relay.
+    #[prost(uint32, optional, tag = "7")]
+    pub proxy_port: ::core::option::Option<u32>,
 }
 /// ---------------------------------------------------------------------------
 /// edge.joinComplete - Edge 完成集群加入
@@ -1908,6 +1916,10 @@ pub struct HubClusterPeerJoinedParams {
     pub host: ::prost::alloc::string::String,
     #[prost(uint32, required, tag = "4")]
     pub voice_port: u32,
+    /// Optional proxy server port. When non-zero, this peer can relay
+    /// control-channel traffic for Edges that cannot reach Hub directly.
+    #[prost(uint32, optional, tag = "5")]
+    pub proxy_port: ::core::option::Option<u32>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct HubClusterPeerLeftParams {

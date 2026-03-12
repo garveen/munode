@@ -97,6 +97,25 @@ impl EdgeServer {
             }
         });
 
+        // Start proxy server if configured
+        let proxy_ws_port = if self.config.hub_server.allow_peer_proxy {
+            if self.config.hub_server.proxy_ws_port > 0 {
+                self.config.hub_server.proxy_ws_port
+            } else {
+                edge_port as u16 + 2
+            }
+        } else {
+            0
+        };
+        if proxy_ws_port > 0 {
+            let hub_host = self.config.hub_server.host.clone();
+            let hub_port = self.config.hub_server.control_port;
+            info!("Starting peer proxy server on port {}", proxy_ws_port);
+            tokio::spawn(async move {
+                crate::proxy_server::run_proxy_server(proxy_ws_port, hub_host, hub_port).await;
+            });
+        }
+
         // Start TLS server
         let listen_addr: SocketAddr = format!("{}:{}", self.config.network.host, self.config.network.port)
             .parse()?;

@@ -7,11 +7,17 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use crate::channel_manager::ChannelManager;
 use crate::client::ClientManager;
 
-/// Information about a peer Edge node for direct UDP routing.
+/// Information about a peer Edge node.
 #[derive(Debug, Clone)]
 pub struct PeerEdgeInfo {
     /// Edge-to-Edge UDP endpoint (dedicated `edge_port`).
     pub udp_addr: SocketAddr,
+    /// Hostname of the peer Edge (same as used for UDP routing).
+    pub host: String,
+    /// Optional proxy server port for peer control relay.
+    /// When `Some(port)`, this peer can transparently forward
+    /// WebSocket traffic to Hub on behalf of Edges that cannot reach Hub directly.
+    pub proxy_port: Option<u16>,
 }
 
 /// Registry of known peer Edges, populated from `hub.peerJoined` notifications.
@@ -31,6 +37,18 @@ impl PeerRegistry {
 
     pub fn get(&self, edge_id: u32) -> Option<&PeerEdgeInfo> {
         self.peers.get(&edge_id)
+    }
+
+    /// Collect all peers that have a proxy_port set (i.e. can act as proxy).
+    /// Returns a snapshot `Vec<(peer_id, host, proxy_port)>` so the caller
+    /// does not need to hold the lock while iterating.
+    pub fn proxy_peers(&self) -> Vec<(u32, String, u16)> {
+        self.peers
+            .iter()
+            .filter_map(|(id, info)| {
+                info.proxy_port.map(|p| (*id, info.host.clone(), p))
+            })
+            .collect()
     }
 }
 

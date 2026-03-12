@@ -106,6 +106,8 @@ pub struct HubClient {
     region: Option<String>,
     /// Maximum number of users for this Edge.
     capacity: u32,
+    /// Proxy server port advertised to Hub (0 = no proxy).
+    proxy_ws_port: u16,
     state: RwLock<HubConnectionState>,
     edge_state: Arc<EdgeState>,
     /// Pending RPC requests awaiting responses (shared across all pool slots).
@@ -131,6 +133,16 @@ impl HubClient {
         let edge_port = config.network.edge_port.unwrap_or(config.network.port + 1);
         let pool_size = config.hub_server.pool_size.max(1) as usize;
         let pool_senders = (0..pool_size).map(|_| Mutex::new(None)).collect();
+        // Compute the proxy WS port: use configured value if set, else edge_port + 2 if proxy enabled
+        let proxy_ws_port = if config.hub_server.allow_peer_proxy {
+            if config.hub_server.proxy_ws_port > 0 {
+                config.hub_server.proxy_ws_port
+            } else {
+                edge_port + 2
+            }
+        } else {
+            0
+        };
         Arc::new(Self {
             config: config.hub_server.clone(),
             server_id: config.server_id,
@@ -140,6 +152,7 @@ impl HubClient {
             edge_port,
             region: config.network.region.clone(),
             capacity: config.server.capacity,
+            proxy_ws_port,
             state: RwLock::new(HubConnectionState::Disconnected),
             edge_state,
             pending: Mutex::new(HashMap::new()),
@@ -214,15 +227,38 @@ impl HubClient {
     }
 
     /// Run the single-slot (no pool) reconnect loop with exponential backoff.
+    /// After `PROXY_FALLBACK_THRESHOLD` consecutive direct-connect failures,
+    /// attempts to connect via a known peer's proxy port.
     async fn run_single_slot(self: &Arc<Self>, slot: usize, is_primary: bool) {
         let mut backoff = ExponentialBackoff::new(self.config.reconnect_interval);
+        let mut direct_fail_count: u32 = 0;
+        const PROXY_FALLBACK_THRESHOLD: u32 = 3;
+
         loop {
-            match self.try_connect_slot(slot, is_primary).await {
+            // After several direct failures, try peer proxy if peers are available
+            let use_proxy = direct_fail_count >= PROXY_FALLBACK_THRESHOLD
+                && self.config.allow_peer_proxy == false; // We're looking for *peer* proxies, not being one
+            let connect_result = if use_proxy {
+                self.try_connect_via_peer_proxy(slot, is_primary).await
+            } else {
+                self.try_connect_slot(slot, is_primary).await
+            };
+
+            match connect_result {
                 Ok(()) => {
                     info!("Hub connection closed normally");
                     backoff.reset();
+                    direct_fail_count = 0;
                 }
-                Err(e) => error!("Hub connection error: {}", e),
+                Err(e) => {
+                    error!("Hub connection error: {}", e);
+                    if !use_proxy {
+                        direct_fail_count += 1;
+                        if direct_fail_count == PROXY_FALLBACK_THRESHOLD {
+                            info!("Direct connection to Hub failed {} times — will try peer proxy on next attempt", direct_fail_count);
+                        }
+                    }
+                }
             }
             // Clean up state
             *self.state.write().await = HubConnectionState::Disconnected;
@@ -234,6 +270,116 @@ impl HubClient {
             warn!("Reconnecting to Hub in {:?}", delay);
             time::sleep(delay).await;
         }
+    }
+
+    /// Try to connect to Hub via a peer's proxy port.
+    ///
+    /// Iterates over known peers that have a proxy_port set and tries each one
+    /// in turn.  Returns `Ok(())` if the proxy connection ran and closed normally,
+    /// or an error if no proxy was reachable.
+    async fn try_connect_via_peer_proxy(self: &Arc<Self>, slot: usize, is_primary: bool) -> Result<()> {
+        let proxies = self.edge_state.peer_registry.lock().await.proxy_peers();
+        if proxies.is_empty() {
+            return Err(anyhow::anyhow!("No peer proxy available (no peers with proxy_port)"));
+        }
+        for (peer_id, host, proxy_port) in &proxies {
+            let proxy_url = format!("ws://{}:{}", host, proxy_port);
+            info!("Attempting Hub connection via peer {} proxy at {}", peer_id, proxy_url);
+            match self.try_connect_via_url(&proxy_url, slot, is_primary).await {
+                Ok(()) => {
+                    info!("Peer proxy connection (peer {}) closed normally", peer_id);
+                    return Ok(());
+                }
+                Err(e) => {
+                    warn!("Peer proxy via {} failed: {}", proxy_url, e);
+                }
+            }
+        }
+        Err(anyhow::anyhow!("All peer proxy attempts failed"))
+    }
+
+    /// Connect via a specific WebSocket URL (used for both direct and proxy connections).
+    async fn try_connect_via_url(self: &Arc<Self>, url: &str, slot: usize, is_primary: bool) -> Result<()> {
+        *self.state.write().await = HubConnectionState::Connecting;
+        info!("Connecting to Hub via {} (slot {})", url, slot);
+
+        let (ws_stream, _) = tokio_tungstenite::connect_async(url)
+            .await
+            .with_context(|| format!("Failed to connect to Hub WebSocket via {} (slot {})", url, slot))?;
+
+        info!("WebSocket connected via {} (slot {})", url, slot);
+        if is_primary {
+            *self.state.write().await = HubConnectionState::Connected;
+        }
+
+        let (mut ws_write, mut ws_read) = ws_stream.split();
+
+        let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(256);
+        if let Some(s) = self.pool_senders.get(slot) {
+            *s.lock().await = Some(send_tx);
+        }
+
+        let writer_handle = tokio::spawn(async move {
+            while let Some(data) = send_rx.recv().await {
+                if let Err(e) = ws_write.send(tungstenite::Message::Binary(Bytes::from(data))).await {
+                    error!("WebSocket write error (slot {}): {}", slot, e);
+                    break;
+                }
+            }
+        });
+
+        let (reader_done_tx, reader_done_rx) = tokio::sync::oneshot::channel::<()>();
+        let reader_self = self.clone();
+        let reader_handle = tokio::spawn(async move {
+            loop {
+                match ws_read.next().await {
+                    Some(Ok(msg)) => match msg {
+                        tungstenite::Message::Binary(data) => {
+                            if let Err(e) = reader_self.handle_incoming_slot(&data, is_primary).await {
+                                warn!("Error handling Hub message (slot {}): {}", slot, e);
+                            }
+                        }
+                        tungstenite::Message::Close(_) => {
+                            info!("Hub sent close frame (slot {})", slot);
+                            break;
+                        }
+                        tungstenite::Message::Ping(data) => {
+                            reader_self.send_on_slot(slot, tungstenite::Message::Pong(data).into_data().to_vec()).await.ok();
+                        }
+                        _ => {}
+                    },
+                    Some(Err(e)) => {
+                        error!("WebSocket read error (slot {}): {}", slot, e);
+                        break;
+                    }
+                    None => {
+                        info!("WebSocket stream ended (slot {})", slot);
+                        break;
+                    }
+                }
+            }
+            let _ = reader_done_tx.send(());
+        });
+
+        if is_primary {
+            self.do_register().await?;
+            self.do_full_sync().await?;
+            self.do_join_cluster().await?;
+            *self.state.write().await = HubConnectionState::Registered;
+            self.edge_state.emit(EdgeEvent::HubRegistered);
+            info!("Edge registered with Hub successfully (via {}, slot {})", url, slot);
+        }
+
+        let heartbeat_self = self.clone();
+        let heartbeat_handle = tokio::spawn(async move {
+            heartbeat_self.heartbeat_loop().await;
+        });
+
+        let _ = reader_done_rx.await;
+        heartbeat_handle.abort();
+        reader_handle.abort();
+        writer_handle.abort();
+        Ok(())
     }
 
     /// Connect the primary slot and wait until it has registered.  Returns an
@@ -747,12 +893,20 @@ impl HubClient {
                     let name = &p.name;
                     let host = &p.host;
                     let voice_port = p.voice_port as u16;
+                    let proxy_port = p.proxy_port.filter(|&pp| pp > 0).map(|pp| pp as u16);
                     info!("Peer edge joined cluster: {} (id {}) at {}:{}", name, peer_edge_id, host, voice_port);
                     if !host.is_empty() && voice_port > 0 {
                         if let Ok(udp_addr) = format!("{}:{}", host, voice_port).parse() {
                             let mut reg = self.edge_state.peer_registry.lock().await;
-                            reg.upsert(peer_edge_id, PeerEdgeInfo { udp_addr });
+                            reg.upsert(peer_edge_id, PeerEdgeInfo {
+                                udp_addr,
+                                host: host.clone(),
+                                proxy_port,
+                            });
                             info!("Registered direct UDP route to peer edge {} at {}", peer_edge_id, udp_addr);
+                            if let Some(pp) = proxy_port {
+                                info!("  Peer edge {} supports proxy relay on port {}", peer_edge_id, pp);
+                            }
                         }
                     }
                 }
@@ -806,6 +960,7 @@ impl HubClient {
             certificate: String::new(),
             challenge: None,
             challenge_response: None,
+            proxy_port: if self.proxy_ws_port > 0 { Some(self.proxy_ws_port as u32) } else { None },
         };
 
         let request = TypedRpcRequest {
@@ -863,6 +1018,7 @@ impl HubClient {
             certificate: String::new(),
             challenge: Some(challenge.to_string()),
             challenge_response: Some(challenge_response),
+            proxy_port: if self.proxy_ws_port > 0 { Some(self.proxy_ws_port as u32) } else { None },
         };
 
         let request = TypedRpcRequest {
@@ -968,9 +1124,17 @@ impl HubClient {
             // Register each existing peer's UDP address
             if !peer.host.is_empty() && peer.voice_port > 0 {
                 if let Ok(udp_addr) = format!("{}:{}", peer.host, peer.voice_port).parse() {
+                    let proxy_port = peer.proxy_port.filter(|&pp| pp > 0).map(|pp| pp as u16);
                     let mut reg = self.edge_state.peer_registry.lock().await;
-                    reg.upsert(peer.id, PeerEdgeInfo { udp_addr });
+                    reg.upsert(peer.id, PeerEdgeInfo {
+                        udp_addr,
+                        host: peer.host.clone(),
+                        proxy_port,
+                    });
                     info!("Registered direct UDP route to existing peer edge {} at {}", peer.id, udp_addr);
+                    if let Some(pp) = proxy_port {
+                        info!("  Peer edge {} supports proxy relay on port {}", peer.id, pp);
+                    }
                 }
             }
         }

@@ -186,6 +186,15 @@ pub struct HubServerConfig {
     /// and Hub-to-Edge push notifications are only processed on the primary connection.
     #[serde(default = "default_pool_size")]
     pub pool_size: u32,
+    /// Allow this Edge to act as a transparent WebSocket proxy for other Edges that
+    /// cannot reach the Hub directly (Peer Edge Control Relay).  When `true`, a proxy
+    /// server is started on `proxy_ws_port`.  Default: `false`.
+    #[serde(default)]
+    pub allow_peer_proxy: bool,
+    /// Port for the peer proxy WebSocket server.  `0` (default) means "auto-assign":
+    /// uses `network.edge_port + 2` when `allow_peer_proxy = true`.
+    #[serde(default)]
+    pub proxy_ws_port: u16,
 }
 
 /// Server capacity and behavior configuration.
