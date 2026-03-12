@@ -13,8 +13,14 @@ services:
       - ${EDGE_CONFIG:-./config/edge.toml}:/app/config/edge.toml:ro
       - ${LOG_DIR:-./logs}/edge:/app/logs
     secrets:
-      - tls_cert
-      - tls_key
+      - source: tls_cert
+        uid: "${MUNODE_UID:-1000}"
+        gid: "${MUNODE_GID:-1000}"
+        mode: 0440
+      - source: tls_key
+        uid: "${MUNODE_UID:-1000}"
+        gid: "${MUNODE_GID:-1000}"
+        mode: 0440
     environment:
       - RUST_LOG=${RUST_LOG:-info}
       - MUNODE_UID=${MUNODE_UID:-1000}
@@ -35,11 +41,5 @@ networks:
 secrets:
   tls_cert:
     file: ${TLS_CERT:-./certs/server.pem}
-    uid: "${MUNODE_UID:-1000}"
-    gid: "${MUNODE_GID:-1000}"
-    mode: 0440
   tls_key:
     file: ${TLS_KEY:-./certs/server.key}
-    uid: "${MUNODE_UID:-1000}"
-    gid: "${MUNODE_GID:-1000}"
-    mode: 0440
