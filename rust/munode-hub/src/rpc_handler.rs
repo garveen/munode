@@ -27,6 +27,14 @@ struct HttpAuthRequest {
     password: String,
     tokens: Vec<String>,
     server_id: u32,
+    session_id: u32,
+    ip: String,
+    ip_version: String,
+    release: String,
+    version: Option<u32>,
+    os: String,
+    osversion: String,
+    certificate_hash: Option<String>,
 }
 
 /// HTTP auth response from an external authentication endpoint.
@@ -743,12 +751,15 @@ impl RpcHandler {
         // Step 2: HTTP URL authentication (if configured)
         // ------------------------------------------------------------------
         if let Some(ref http_url) = config.auth.http_url.clone() {
+            let client_info = params.client_info.as_ref();
             let http_result = self.authenticate_via_http(
                 http_url,
                 username,
                 password,
                 &params.tokens,
                 params.server_id,
+                params.session_id,
+                client_info,
                 config.auth.http_timeout_ms,
             ).await;
 
@@ -1124,6 +1135,8 @@ impl RpcHandler {
         password: &str,
         tokens: &[String],
         server_id: u32,
+        session_id: u32,
+        client_info: Option<&ClientInfo>,
         timeout_ms: u64,
     ) -> Result<Option<HttpAuthResponse>> {
         let body = HttpAuthRequest {
@@ -1131,6 +1144,14 @@ impl RpcHandler {
             password: password.to_string(),
             tokens: tokens.to_vec(),
             server_id,
+            session_id,
+            ip: client_info.map(|c| c.ip_address.clone()).unwrap_or_default(),
+            ip_version: client_info.map(|c| c.ip_version.clone()).unwrap_or_default(),
+            release: client_info.map(|c| c.release.clone()).unwrap_or_default(),
+            version: client_info.and_then(|c| c.version),
+            os: client_info.map(|c| c.os.clone()).unwrap_or_default(),
+            osversion: client_info.map(|c| c.os_version.clone()).unwrap_or_default(),
+            certificate_hash: client_info.and_then(|c| c.certificate_hash.clone()),
         };
 
         let client = reqwest::Client::builder()

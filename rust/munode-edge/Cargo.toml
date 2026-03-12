@@ -27,3 +27,5 @@ uuid = { workspace = true }
 prost = { workspace = true }
 ring = { workspace = true }
 aes = { workspace = true }
+sha1 = { workspace = true }
+hex = { workspace = true }

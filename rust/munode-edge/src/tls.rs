@@ -15,8 +15,62 @@ pub fn create_tls_acceptor(tls_config: &TlsConfig) -> Result<TlsAcceptor> {
     let key = load_private_key(&tls_config.key)
         .context("Failed to load TLS private key")?;
 
+    // Use a verifier that requests but doesn't require client certificates
+    // This allows optional client certificate authentication (Mumble behavior)
+    use rustls::server::danger::{ClientCertVerifier, ClientCertVerified};
+    
+    #[derive(Debug)]
+    struct OptionalClientCertVerifier;
+    
+    impl ClientCertVerifier for OptionalClientCertVerifier {
+        fn offer_client_auth(&self) -> bool {
+            true // Request client certificate
+        }
+        
+        fn client_auth_mandatory(&self) -> bool {
+            false // But don't require it
+        }
+        
+        fn verify_client_cert(
+            &self,
+            _end_entity: &rustls::pki_types::CertificateDer<'_>,
+            _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+            _now: rustls::pki_types::UnixTime,
+        ) -> Result<ClientCertVerified, rustls::Error> {
+            // Accept any client certificate (we only use it for identification, not authentication)
+            Ok(ClientCertVerified::assertion())
+        }
+        
+        fn verify_tls12_signature(
+            &self,
+            _message: &[u8],
+            _cert: &rustls::pki_types::CertificateDer<'_>,
+            _dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+        
+        fn verify_tls13_signature(
+            &self,
+            _message: &[u8],
+            _cert: &rustls::pki_types::CertificateDer<'_>,
+            _dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+        
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            vec![
+                rustls::SignatureScheme::RSA_PKCS1_SHA256,
+                rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+                rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+                rustls::SignatureScheme::ED25519,
+            ]
+        }
+    }
+    
     let config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
+        .with_client_cert_verifier(Arc::new(OptionalClientCertVerifier))
         .with_single_cert(certs, key)
         .context("Failed to build TLS server config")?;
 

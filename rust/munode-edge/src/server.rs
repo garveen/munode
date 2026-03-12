@@ -177,6 +177,26 @@ async fn handle_client_connection(
     stream.set_nodelay(true)?;
 
     let tls_stream = acceptor.accept(stream).await?;
+    
+    // Extract client certificate hash BEFORE splitting the stream
+    // Mumble uses SHA-1 hash of the client certificate (not SHA-256)
+    let certificate_hash: Option<String> = tls_stream
+        .get_ref()
+        .1 // Get the TLS session (ServerConnection)
+        .peer_certificates()
+        .and_then(|certs| certs.first())
+        .map(|cert| {
+            use sha1::{Sha1, Digest};
+            let mut hasher = Sha1::new();
+            hasher.update(cert.as_ref());
+            let result = hasher.finalize();
+            hex::encode(result)
+        });
+    
+    if let Some(ref hash) = certificate_hash {
+        info!("Client {} certificate hash: {}...", peer_addr, &hash[..16]);
+    }
+    
     let (mut reader, mut writer) = tokio::io::split(tls_stream);
 
     info!("TLS handshake complete with {}", peer_addr);
@@ -206,6 +226,11 @@ async fn handle_client_connection(
     // Pre-connect state: sent by client before Authenticate message
     let mut preconnect_self_mute: Option<bool> = None;
     let mut preconnect_self_deaf: Option<bool> = None;
+    // Client version info from Version message
+    let mut client_version: Option<u32> = None;
+    let mut client_release = String::new();
+    let mut client_os = String::new();
+    let mut client_os_version = String::new();
     // Per-client rate limiter for text messages.
     // Prefer hub-pushed limits over edge-local config (hub limits are set after registration).
     let hub_limits_snapshot = edge_state.hub_limits.read().await.clone();
@@ -248,6 +273,17 @@ async fn handle_client_connection(
             };
             match frame.message_type {
                 MessageType::Version => {
+                    // Parse client version message and save info
+                    if let Ok(version_msg) = mumbleproto::Version::decode(&frame.payload[..]) {
+                        client_version = version_msg.version;
+                        client_release = version_msg.release.unwrap_or_default();
+                        client_os = version_msg.os.unwrap_or_default();
+                        client_os_version = version_msg.os_version.unwrap_or_default();
+                        info!(
+                            "Client {} version: v={:?} release={} os={} os_version={}",
+                            peer_addr, client_version, client_release, client_os, client_os_version
+                        );
+                    }
                     let Ok(response) = handler::encode_version_response(&frame.payload, &peer_addr.to_string()) else {
                         continue;
                     };
@@ -301,15 +337,15 @@ async fn handle_client_connection(
                         }
                     };
 
-                    // Build client info for Hub
+                    // Build client info for Hub (use data from Version message)
                     let client_info = hubedge::ClientInfo {
                         ip_address: peer_addr.ip().to_string(),
                         ip_version: if peer_addr.is_ipv4() { "IPv4" } else { "IPv6" }.to_string(),
-                        release: String::new(),
-                        version: None,
-                        os: String::new(),
-                        os_version: String::new(),
-                        certificate_hash: None,
+                        release: client_release.clone(),
+                        version: client_version,
+                        os: client_os.clone(),
+                        os_version: client_os_version.clone(),
+                        certificate_hash: certificate_hash.clone(),
                     };
 
                     // Authenticate via Hub
@@ -377,7 +413,7 @@ async fn handle_client_connection(
                         ip_address: peer_addr.ip().to_string(),
                         connected_at: std::time::Instant::now(),
                         last_active: std::time::Instant::now(),
-                        cert_hash: None,
+                        cert_hash: certificate_hash.clone(),
                         groups: vec![],
                         opus_supported: opus,
                         listening_channels: vec![],

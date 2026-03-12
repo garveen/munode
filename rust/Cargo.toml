@@ -54,6 +54,8 @@ regex = "1"
 ring = "0.17"
 aes = "0.8"
 argon2 = "0.5"
+sha1 = "0.10"
+hex = "0.4"
 
 # Embedded scripting
 mlua = { version = "0.10", features = ["lua54", "send", "serialize", "vendored"] }
