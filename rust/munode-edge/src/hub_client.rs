@@ -176,8 +176,9 @@ impl HubClient {
     }
 
     /// Get the current edge ID (our registered ID from Hub, or fallback to server_id).
-    async fn edge_id(&self) -> u32 {
-        self.edge_state.edge_id.read().await.unwrap_or(self.server_id)
+    fn edge_id(&self) -> u32 {
+        let id = self.edge_state.get_edge_id();
+        if id != 0 { id } else { self.server_id }
     }
 
     /// Generate a unique request ID.
@@ -311,7 +312,7 @@ impl HubClient {
         }
 
         // 2. Dynamically discovered peers (from hub.peerJoined notifications)
-        let dynamic_peers = self.edge_state.peer_registry.lock().await.relay_peers();
+        let dynamic_peers = self.edge_state.peer_registry.read().await.relay_peers();
         if dynamic_peers.is_empty() && self.static_relay_peers.is_empty() {
             return Err(anyhow::anyhow!("No relay peers available"));
         }
@@ -689,7 +690,7 @@ impl HubClient {
     /// Handle a notification from the Hub.
     async fn handle_notification(&self, notification: TypedRpcNotification) {
         let method = &notification.method;
-        let eid = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+        let eid = self.edge_id();
         // High-frequency voice relay notifications are trace-level to avoid log flooding.
         if method == "hub.relayVoicePacket" {
             trace!("Hub notification: {} (edge={})", method, eid);
@@ -700,7 +701,7 @@ impl HubClient {
         match method.as_str() {
             "hub.userJoined" => {
                 if let Some(params) = &notification.user_joined {
-                    let local_edge_id = self.edge_state.edge_id.read().await.unwrap_or(self.server_id);
+                    let local_edge_id = self.edge_id();
                     let is_local = params.edge_id == local_edge_id;
                     // Only add REMOTE users (from other edges) to channel_manager.remote_users.
                     // Local users are tracked by their own connection handler via client_manager;
@@ -893,7 +894,7 @@ impl HubClient {
                                 group: c.group.clone(),
                             }
                         }).collect();
-                        let mut vt_cache = self.edge_state.voice_targets.lock().await;
+                        let mut vt_cache = self.edge_state.voice_targets.write().await;
                         let session_vts = vt_cache.entry(client_session).or_default();
                         if sessions.is_empty() && channels.is_empty() {
                             session_vts.remove(&target_id);
@@ -903,7 +904,7 @@ impl HubClient {
                         debug!("Synced voice target {} for session {}", target_id, client_session);
                     } else {
                         // No config means clear the target
-                        let mut vt_cache = self.edge_state.voice_targets.lock().await;
+                        let mut vt_cache = self.edge_state.voice_targets.write().await;
                         if let Some(session_vts) = vt_cache.get_mut(&client_session) {
                             session_vts.remove(&target_id);
                         }
@@ -930,7 +931,7 @@ impl HubClient {
                     if !host.is_empty() && voice_port > 0 {
                         if let Ok(udp_addr) = format!("{}:{}", host, voice_port).parse() {
                             let relay_port = p.relay_port.filter(|&pp| pp > 0).map(|pp| pp as u16);
-                            let mut reg = self.edge_state.peer_registry.lock().await;
+                            let mut reg = self.edge_state.peer_registry.write().await;
                             reg.upsert(peer_edge_id, PeerEdgeInfo {
                                 udp_addr,
                                 host: host.clone(),
@@ -949,7 +950,7 @@ impl HubClient {
                 if let Some(p) = &notification.cluster_peer_left {
                     let peer_edge_id = p.edge_id;
                     warn!("Peer edge left cluster: id {}", peer_edge_id);
-                    self.edge_state.peer_registry.lock().await.remove(peer_edge_id);
+                    self.edge_state.peer_registry.write().await.remove(peer_edge_id);
                 }
             }
             "hub.routeTableUpdate" => {
@@ -1046,7 +1047,9 @@ impl HubClient {
         }
 
         // Store our edge_id (Hub may assign it)
-        *self.edge_state.edge_id.write().await = result.hub_server_id;
+        if let Some(id) = result.hub_server_id {
+            self.edge_state.set_edge_id(id);
+        }
 
         Ok(())
     }
@@ -1092,7 +1095,9 @@ impl HubClient {
             anyhow::bail!("Registration with challenge failed: {:?}", result.error);
         }
 
-        *self.edge_state.edge_id.write().await = result.hub_server_id;
+        if let Some(id) = result.hub_server_id {
+            self.edge_state.set_edge_id(id);
+        }
         info!("Registered with Hub via HMAC challenge-response");
         Ok(())
     }
@@ -1178,7 +1183,7 @@ impl HubClient {
             if !peer.host.is_empty() && peer.voice_port > 0 {
                 if let Ok(udp_addr) = format!("{}:{}", peer.host, peer.voice_port).parse() {
                     let relay_port = peer.relay_port.filter(|&pp| pp > 0).map(|pp| pp as u16);
-                    let mut reg = self.edge_state.peer_registry.lock().await;
+                    let mut reg = self.edge_state.peer_registry.write().await;
                     reg.upsert(peer.id, PeerEdgeInfo {
                         udp_addr,
                         host: peer.host.clone(),
@@ -1228,7 +1233,7 @@ impl HubClient {
             let packet = EdgeHubPacket {
                 r#type: PacketType::Heartbeat as i32,
                 heartbeat: Some(hubedge::Heartbeat {
-                    edge_id: self.edge_id().await,
+                    edge_id: self.edge_id(),
                     sequence,
                     stats: Some(hubedge::ServerStats {
                         user_count,
@@ -1294,7 +1299,7 @@ impl HubClient {
 
     /// Notify the Hub that a local user has disconnected.
     pub async fn notify_user_left(&self, session_id: u32, reason: Option<&str>) {
-        let edge_id = self.edge_id().await;
+        let edge_id = self.edge_id();
         let notification = TypedRpcNotification {
             method: "hub.handleUserLeft".to_string(),
             timestamp: Some(current_millis() as i64),
@@ -1325,7 +1330,7 @@ impl HubClient {
         reason: &str,
         ban: bool,
     ) {
-        let edge_id = self.edge_id().await;
+        let edge_id = self.edge_id();
         let notification = TypedRpcNotification {
             method: "hub.handleUserRemove".to_string(),
             timestamp: Some(current_millis() as i64),
@@ -1352,7 +1357,7 @@ impl HubClient {
 
     /// Notify the Hub about a user channel move.
     pub async fn notify_user_moved(&self, session_id: u32, channel_id: u32) {
-        let edge_id = self.edge_id().await;
+        let edge_id = self.edge_id();
         let notification = TypedRpcNotification {
             method: "hub.handleUserMoved".to_string(),
             timestamp: Some(current_millis() as i64),
@@ -1387,7 +1392,7 @@ impl HubClient {
         listening_channel_add: Vec<u32>,
         listening_channel_remove: Vec<u32>,
     ) {
-        let edge_id = self.edge_id().await;
+        let edge_id = self.edge_id();
         let notification = TypedRpcNotification {
             method: "hub.handleUserStateChanged".to_string(),
             timestamp: Some(current_millis() as i64),
@@ -1423,7 +1428,7 @@ impl HubClient {
         channel_id: u32,
     ) -> Result<hubedge::EdgeHandlePermissionQueryResult> {
         let request_id = self.next_request_id().await;
-        let edge_id = self.edge_id().await;
+        let edge_id = self.edge_id();
 
         // Get actor info from client
         let (user_id, username) = if let Some(client) = self.edge_state.client_manager.get_client(session_id).await {
@@ -1459,7 +1464,7 @@ impl HubClient {
         config: Option<hubedge::VoiceTargetConfigProto>,
     ) -> Result<hubedge::EdgeSyncVoiceTargetResult> {
         let request_id = self.next_request_id().await;
-        let edge_id = self.edge_id().await;
+        let edge_id = self.edge_id();
         let request = TypedRpcRequest {
             request_id,
             method: "edge.syncVoiceTarget".to_string(),
@@ -1481,7 +1486,7 @@ impl HubClient {
     /// Allocate a session ID from the Hub.
     pub async fn allocate_session_id(&self) -> Result<u32> {
         let request_id = self.next_request_id().await;
-        let edge_id = self.edge_id().await;
+        let edge_id = self.edge_id();
         let request = TypedRpcRequest {
             request_id,
             method: "edge.allocateSessionId".to_string(),
@@ -1543,7 +1548,7 @@ impl HubClient {
         links_add: Vec<u32>,
         links_remove: Vec<u32>,
     ) {
-        let edge_id = self.edge_id().await;
+        let edge_id = self.edge_id();
         let notification = TypedRpcNotification {
             method: "hub.handleChannelState".to_string(),
             timestamp: Some(current_millis() as i64),
@@ -1571,7 +1576,7 @@ impl HubClient {
 
     /// Notify Hub about a channel removal request.
     pub async fn notify_channel_remove(&self, channel_id: u32) {
-        let edge_id = self.edge_id().await;
+        let edge_id = self.edge_id();
         let notification = TypedRpcNotification {
             method: "hub.handleChannelRemove".to_string(),
             timestamp: Some(current_millis() as i64),
@@ -1593,7 +1598,7 @@ impl HubClient {
 
     /// Forward a text message to Hub for cross-edge delivery.
     pub async fn notify_text_message(&self, sender_session: u32, text_msg: &munode_protocol::mumbleproto::TextMessage) {
-        let edge_id = self.edge_id().await;
+        let edge_id = self.edge_id();
         let notification = TypedRpcNotification {
             method: "hub.handleTextMessage".to_string(),
             timestamp: Some(current_millis() as i64),
@@ -1639,7 +1644,7 @@ impl HubClient {
             request_id: self.next_request_id().await,
             method: "edge.updateBanList".to_string(),
             edge_handle_acl: Some(EdgeHandleAclParams {
-                edge_id: self.edge_id().await,
+                edge_id: self.edge_id(),
                 actor_session: 0,
                 actor_user_id: 0,
                 actor_username: String::new(),
@@ -1669,7 +1674,7 @@ impl HubClient {
             request_id: self.next_request_id().await,
             method: "edge.handleACL".to_string(),
             edge_handle_acl: Some(EdgeHandleAclParams {
-                edge_id: self.edge_id().await,
+                edge_id: self.edge_id(),
                 actor_session,
                 actor_user_id,
                 actor_username: actor_username.to_string(),
@@ -1710,7 +1715,7 @@ impl HubClient {
             request_id: self.next_request_id().await,
             method: "edge.updateUserList".to_string(),
             edge_handle_acl: Some(EdgeHandleAclParams {
-                edge_id: self.edge_id().await,
+                edge_id: self.edge_id(),
                 actor_session: 0,
                 actor_user_id: 0,
                 actor_username: String::new(),
@@ -1738,7 +1743,7 @@ impl HubClient {
         data: &[u8],
         receiver_sessions: &[u32],
     ) {
-        let edge_id = self.edge_id().await;
+        let edge_id = self.edge_id();
         let notification = TypedRpcNotification {
             method: "hub.handlePluginDataTransmission".to_string(),
             timestamp: Some(current_millis() as i64),
@@ -1856,7 +1861,7 @@ impl HubClient {
     /// Relay a voice packet to a target Edge via Hub TCP tunnel.
     /// Called when a local sender needs to reach a remote user on another edge.
     pub async fn relay_voice_via_hub(&self, target_edge_id: u32, voice_packet: Vec<u8>) {
-        let from_edge_id = self.edge_id().await;
+        let from_edge_id = self.edge_id();
         let request_id = self.next_request_id().await;
 
         let request = TypedRpcRequest {
@@ -1879,7 +1884,7 @@ impl HubClient {
 
     /// Report link quality to a peer Edge to Hub for route table computation.
     pub async fn report_quality(&self, target_edge_id: u32, rtt_ms: f32, packet_loss: f32, jitter_ms: f32, samples: u32) {
-        let from_edge_id = self.edge_id().await;
+        let from_edge_id = self.edge_id();
         let request_id = self.next_request_id().await;
         let request = TypedRpcRequest {
             request_id,

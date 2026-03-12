@@ -544,7 +544,7 @@ async fn handle_client_connection(
                             } else if voice_target >= 1 && voice_target <= 30 {
                                 // Whisper/voice target: route to configured sessions/channels
                                 let vt_config = {
-                                    let cache = edge_state.voice_targets.lock().await;
+                                    let cache = edge_state.voice_targets.read().await;
                                     cache.get(&sid).and_then(|m| m.get(&voice_target)).cloned()
                                 };
                                 if let Some(vt) = vt_config {
@@ -609,12 +609,12 @@ async fn handle_client_connection(
                                     // Send to remote edges via Hub relay
                                     // For session targets: relay those specific sessions
                                     // For channel targets: also relay to remote users in those channels
-                                    let local_edge_id = *edge_state.edge_id.read().await;
+                                    let local_edge_id = edge_state.get_edge_id();
                                     let remote_users = edge_state.channel_manager.get_all_remote_users().await;
                                     let mut by_edge: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
                                     for ru in &remote_users {
                                         if ru.deaf || ru.self_deaf { continue; }
-                                        if let Some(lid) = local_edge_id { if ru.edge_id == lid { continue; } }
+                                        if local_edge_id != 0 && ru.edge_id == local_edge_id { continue; }
                                         let in_session_target = target_sessions.contains(&ru.session_id);
                                         let in_channel_target = !channel_target_ids.is_empty() && channel_target_ids.contains(&ru.channel_id);
                                         if in_session_target || in_channel_target {
@@ -664,14 +664,14 @@ async fn handle_client_connection(
                                 }
 
                                 // Remote users (other edges) in any linked channel
-                                let local_edge_id = *edge_state.edge_id.read().await;
+                                let local_edge_id = edge_state.get_edge_id();
                                 let remote_users = edge_state.channel_manager
                                     .get_remote_users_in_channels(&linked_channels)
                                     .await;
                                 let mut by_edge: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
                                 for ru in &remote_users {
                                     if !ru.deaf && !ru.self_deaf {
-                                        if let Some(lid) = local_edge_id { if ru.edge_id == lid { continue; } }
+                                        if local_edge_id != 0 && ru.edge_id == local_edge_id { continue; }
                                         by_edge.insert(ru.edge_id, true);
                                     }
                                 }
@@ -726,7 +726,7 @@ async fn handle_client_connection(
                             {
                                 use crate::state::{VoiceTargetChannelConfig, VoiceTargetConfig};
                                 use std::collections::HashMap;
-                                let mut vt_cache = edge_state.voice_targets.lock().await;
+                                let mut vt_cache = edge_state.voice_targets.write().await;
                                 let session_vts = vt_cache.entry(sid).or_insert_with(HashMap::new);
                                 if vt.targets.is_empty() {
                                     session_vts.remove(&(target_id as u32));
@@ -1809,6 +1809,8 @@ mod tests {
                 heartbeat_interval: 10000,
                 hmac_secret: None,
                 pool_size: 1,
+                relay_port: 0,
+                static_peers: vec![],
             },
             server: ServerConfig::default(),
             voice_routing: munode_common::config::EdgeVoiceRoutingConfig::default(),
@@ -2399,7 +2401,7 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                             }
                         };
 
-                        let my_edge_id = state.edge_id.read().await.unwrap_or(0);
+                        let my_edge_id = state.get_edge_id();
 
                         // Trace: log first 16 bytes of voice_packet to verify format
                         {
@@ -2454,7 +2456,7 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                             1..=30 => {
                                 // Whisper: use synced VoiceTarget config for sender's session
                                 let vt_config = {
-                                    let cache = state.voice_targets.lock().await;
+                                    let cache = state.voice_targets.read().await;
                                     cache.get(&sender_session).and_then(|m| m.get(&voice_target)).cloned()
                                 };
                                 if let Some(vt) = vt_config {

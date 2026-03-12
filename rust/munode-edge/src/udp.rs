@@ -178,7 +178,7 @@ impl UdpServer {
                     tokio::select! {
                         _ = ping_interval.tick() => {
                             let peers = {
-                                let reg = probe_state.peer_registry.lock().await;
+                                let reg = probe_state.peer_registry.read().await;
                                 reg.all_udp_peers()
                             };
                             let now_ms = probe_current_millis();
@@ -201,8 +201,8 @@ impl UdpServer {
                             }
                         }
                         _ = report_interval.tick() => {
-                            let my_edge_id = *probe_state.edge_id.read().await;
-                            if my_edge_id.is_none() { continue; }
+                            let my_edge_id = probe_state.get_edge_id();
+                            if my_edge_id == 0 { continue; }
                             let entries: Vec<(u32, f32, f32)> = {
                                 let mut pq = probe_quality.lock().await;
                                 let result = pq.iter().map(|(&eid, pqs)| {
@@ -381,106 +381,107 @@ impl UdpServer {
             return;
         }
 
-        let my_edge_id = *self.edge_state.edge_id.read().await;
+        // Lock-free read of our own edge ID (AtomicU32).
+        let my_edge_id = self.edge_state.get_edge_id();
 
-        // Get all linked channels (sender's channel + any linked channels)
-        let linked_channels = self.edge_state.channel_manager
+        // Get all linked channels (sender's channel + any linked channels), as Vec for slicing
+        let linked_channels: Vec<u32> = self.edge_state.channel_manager
             .get_all_linked_channels(sender_channel)
-            .await;
+            .await
+            .into_iter()
+            .collect();
 
         // Inject sender session ID into voice packet for forwarding to local clients.
         // Client-to-server format: [header(1B)][sequence_varint][audio]
         // Server-to-client format: [header(1B)][sender_session_varint][sequence_varint][audio]
         let forwarded = inject_session_into_voice(plaintext, sender_session);
 
-        // --- Local clients (same edge, all linked channels) ---
+        // --- Local clients (same edge, all linked channels + listeners) ---
+        // Batch lookup: one `clients.read` + one `crypt_states.read` for all targets.
+        let targets = self.edge_state.client_manager
+            .get_channel_voice_targets_with_listeners(&linked_channels, sender_session)
+            .await;
+
         let session_addrs = self.session_to_addr.read().await;
 
-        for ch_id in &linked_channels {
-            let targets = self.edge_state.client_manager.get_channel_sessions(*ch_id).await;
-            for target in targets {
-                if target == sender_session {
-                    continue;
-                }
-                if let Some(target_client) = self.edge_state.client_manager.get_client(target).await {
-                    if target_client.deaf || target_client.self_deaf {
-                        continue;
-                    }
-                }
-                if let Some(&addr) = session_addrs.get(&target) {
-                    // Has UDP address: encrypt with session-injected voice and send
-                    if let Some(cs_arc) = self.edge_state.client_manager.get_crypt_state(target).await {
-                        let mut encrypted = Vec::new();
-                        cs_arc.lock().unwrap().encrypt(&forwarded, &mut encrypted);
-                        if let Err(e) = self.socket.send_to(&encrypted, addr).await {
-                            warn!("UDP send to session {} failed: {}", target, e);
-                        }
-                    }
-                } else {
-                    // No UDP address: deliver via TCP UDPTunnel (includes session ID)
-                    self.fallback_to_tcp(target, &forwarded).await;
-                }
+        for (target, is_deaf, cs_opt) in &targets {
+            if *is_deaf || *target == sender_session {
+                continue;
             }
-
-            // --- Listeners: clients on this edge that are listening to this channel ---
-            let listeners = self.edge_state.client_manager.get_listening_sessions(*ch_id).await;
-            for target in listeners {
-                if target == sender_session {
-                    continue;
-                }
-                if let Some(target_client) = self.edge_state.client_manager.get_client(target).await {
-                    if target_client.deaf || target_client.self_deaf {
-                        continue;
+            if let Some(&addr) = session_addrs.get(target) {
+                // Has UDP address: OCB2-encrypt and send
+                if let Some(cs_arc) = cs_opt {
+                    let mut encrypted = Vec::with_capacity(forwarded.len() + 16);
+                    cs_arc.lock().unwrap().encrypt(&forwarded, &mut encrypted);
+                    if let Err(e) = self.socket.send_to(&encrypted, addr).await {
+                        warn!("UDP send to session {} failed: {}", target, e);
                     }
                 }
-                if let Some(&addr) = session_addrs.get(&target) {
-                    if let Some(cs_arc) = self.edge_state.client_manager.get_crypt_state(target).await {
-                        let mut encrypted = Vec::new();
-                        cs_arc.lock().unwrap().encrypt(&forwarded, &mut encrypted);
-                        if let Err(e) = self.socket.send_to(&encrypted, addr).await {
-                            warn!("UDP send to listener session {} failed: {}", target, e);
-                        }
-                    }
-                } else {
-                    self.fallback_to_tcp(target, &forwarded).await;
-                }
+            } else {
+                // No UDP address: deliver via TCP UDPTunnel (includes session ID)
+                self.fallback_to_tcp(*target, &forwarded).await;
             }
         }
         drop(session_addrs);
 
-        // --- Remote users (on other edges) via Hub TCP relay ---
-        // Use get_remote_users_in_channels to cover all linked channels
+        // --- Remote users (on other edges) ---
+        // Compute relay_payload once — it is the same for all remote edges.
+        let relay_payload = forwarded; // forwarded == inject_session_into_voice(plaintext, session)
+
+        let linked_channels_set: std::collections::HashSet<u32> = linked_channels.iter().copied().collect();
         let remote_users = self.edge_state.channel_manager
-            .get_remote_users_in_channels(&linked_channels)
+            .get_remote_users_in_channels(&linked_channels_set)
             .await;
 
-        // Group by edge (broadcast to each edge once; receiver edge handles local delivery)
+        // Group by edge (send once per edge; the receiving edge delivers to its local clients)
         let mut by_edge: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
         for ru in &remote_users {
             if ru.deaf || ru.self_deaf { continue; }
-            if let Some(lid) = my_edge_id { if ru.edge_id == lid { continue; } }
+            if my_edge_id != 0 && ru.edge_id == my_edge_id { continue; }
             by_edge.insert(ru.edge_id, true);
         }
 
-        for target_edge_id in by_edge.into_keys() {
-            debug!("edge={:?} UDP voice: routing from session {} to edge {}", my_edge_id, sender_session, target_edge_id);
-            let relay_payload = inject_session_into_voice(plaintext, sender_session);
+        if by_edge.is_empty() {
+            return;
+        }
 
-            // Use Hub-provided route decision if available
-            let route = {
-                let table = self.edge_state.route_table.read().await;
-                table.get(&target_edge_id).cloned()
-            };
+        // Snapshot route_table and peer_registry once — avoids N async lock
+        // acquisitions (one per remote edge) in the loop below.
+        let route_snapshot: std::collections::HashMap<u32, crate::state::RouteDecision> = {
+            let table = self.edge_state.route_table.read().await;
+            by_edge
+                .keys()
+                .filter_map(|eid| table.get(eid).map(|r| (*eid, r.clone())))
+                .collect()
+        };
+        let peer_snapshot: std::collections::HashMap<u32, std::net::SocketAddr> = {
+            let reg = self.edge_state.peer_registry.read().await;
+            // Collect UDP addresses for all edges referenced by route decisions
+            let mut map = std::collections::HashMap::new();
+            for eid in by_edge.keys() {
+                if let Some(info) = reg.get(*eid) {
+                    map.insert(*eid, info.udp_addr);
+                }
+            }
+            // Also collect relay intermediary addresses
+            for decision in route_snapshot.values() {
+                if let crate::state::RouteDecision::RelayVia { relay_edge_id } = decision {
+                    if let Some(info) = reg.get(*relay_edge_id) {
+                        map.insert(*relay_edge_id, info.udp_addr);
+                    }
+                }
+            }
+            map
+        };
+
+        for target_edge_id in by_edge.into_keys() {
+            debug!("edge={} UDP voice: routing from session {} to edge {}",
+                my_edge_id, sender_session, target_edge_id);
 
             use crate::state::RouteDecision;
-            match route {
+            match route_snapshot.get(&target_edge_id) {
                 Some(RouteDecision::Direct) | None => {
-                    // Direct UDP (or no route info yet)
-                    let peer_addr = {
-                        let reg = self.edge_state.peer_registry.lock().await;
-                        reg.get(target_edge_id).map(|p| p.udp_addr)
-                    };
-                    if let Some(peer_addr) = peer_addr {
+                    if let Some(&peer_addr) = peer_snapshot.get(&target_edge_id) {
                         if self.edge_state.allow_direct_udp {
                             // [0x01][session_BE(4)][voice...]
                             let mut pkt = Vec::with_capacity(1 + 4 + plaintext.len());
@@ -490,22 +491,18 @@ impl UdpServer {
                             if let Err(e) = self.edge_socket.send_to(&pkt, peer_addr).await {
                                 warn!("Direct UDP to edge {} failed: {}; trying Hub TCP", target_edge_id, e);
                                 if self.edge_state.allow_hub_relay {
-                                    self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                                    self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
                                 }
                             }
                         } else if self.edge_state.allow_hub_relay {
-                            self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                            self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
                         }
                     } else if self.edge_state.allow_hub_relay {
-                        self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                        self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
                     }
                 }
                 Some(RouteDecision::RelayVia { relay_edge_id }) => {
-                    let relay_addr = {
-                        let reg = self.edge_state.peer_registry.lock().await;
-                        reg.get(relay_edge_id).map(|p| p.udp_addr)
-                    };
-                    if let Some(relay_addr) = relay_addr {
+                    if let Some(&relay_addr) = peer_snapshot.get(relay_edge_id) {
                         // [0x02][target_edge_id_BE(4)][session_BE(4)][voice...]
                         let mut pkt = Vec::with_capacity(1 + 4 + 4 + plaintext.len());
                         pkt.push(EDGE_PKT_RELAY);
@@ -513,20 +510,21 @@ impl UdpServer {
                         pkt.extend_from_slice(&sender_session.to_be_bytes());
                         pkt.extend_from_slice(plaintext);
                         if let Err(e) = self.edge_socket.send_to(&pkt, relay_addr).await {
-                            warn!("Relay via edge {} to {} failed: {}; Hub TCP fallback", relay_edge_id, target_edge_id, e);
+                            warn!("Relay via edge {} to {} failed: {}; Hub TCP fallback",
+                                relay_edge_id, target_edge_id, e);
                             if self.edge_state.allow_hub_relay {
-                                self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                                self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
                             }
                         } else {
                             debug!("Voice relayed via edge {} → {}", relay_edge_id, target_edge_id);
                         }
                     } else if self.edge_state.allow_hub_relay {
-                        self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                        self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
                     }
                 }
                 Some(RouteDecision::HubTcp) => {
                     if self.edge_state.allow_hub_relay {
-                        self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                        self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
                     }
                 }
             }
@@ -569,7 +567,7 @@ impl UdpServer {
         let voice_data = &data[8..];
 
         let peer_addr = {
-            let reg = self.edge_state.peer_registry.lock().await;
+            let reg = self.edge_state.peer_registry.read().await;
             reg.get(target_edge_id).map(|p| p.udp_addr)
         };
 
@@ -652,7 +650,7 @@ impl UdpServer {
             // Pong — update quality measurement
             let now_ms = probe_current_millis();
             let sender_edge_id = {
-                let reg = self.edge_state.peer_registry.lock().await;
+                let reg = self.edge_state.peer_registry.read().await;
                 reg.all_udp_peers().into_iter().find(|(_, addr)| *addr == from_addr).map(|(id, _)| id)
             };
             if let Some(edge_id) = sender_edge_id {

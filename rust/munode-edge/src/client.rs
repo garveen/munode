@@ -87,6 +87,11 @@ pub struct ClientManager {
     channel_users: RwLock<HashMap<u32, Vec<u32>>>,
     /// Per-session OCB2-AES128 cryptographic states.
     crypt_states: RwLock<HashMap<u32, Arc<Mutex<CryptState>>>>,
+    /// Listening index: channel_id → Vec<session_id> of clients listening to
+    /// that channel but whose primary channel is different.  This is maintained
+    /// in sync with `clients.listening_channels` to provide O(1) lookup instead
+    /// of the O(N clients) linear scan that `get_listening_sessions` previously did.
+    listening_index: RwLock<HashMap<u32, Vec<u32>>>,
 }
 
 impl ClientManager {
@@ -96,6 +101,7 @@ impl ClientManager {
             senders: RwLock::new(HashMap::new()),
             channel_users: RwLock::new(HashMap::new()),
             crypt_states: RwLock::new(HashMap::new()),
+            listening_index: RwLock::new(HashMap::new()),
         })
     }
 
@@ -103,6 +109,13 @@ impl ClientManager {
     pub async fn add_client(&self, client: ClientInfo, sender: ClientSender) {
         let session = client.session;
         let channel_id = client.channel_id;
+        // Update listening_index for any pre-configured listening channels
+        if !client.listening_channels.is_empty() {
+            let mut idx = self.listening_index.write().await;
+            for &ch in &client.listening_channels {
+                idx.entry(ch).or_default().push(session);
+            }
+        }
         self.senders.write().await.insert(session, sender);
         self.clients.write().await.insert(session, client);
         self.channel_users
@@ -114,9 +127,39 @@ impl ClientManager {
     }
 
     /// Update a client's info (without changing the sender).
+    /// Also keeps the listening_index in sync when listening_channels changes.
     pub async fn update_client(&self, client: ClientInfo) {
         let session = client.session;
-        self.clients.write().await.insert(session, client);
+        let new_listening = client.listening_channels.clone();
+        {
+            let mut clients = self.clients.write().await;
+            let old_listening = clients
+                .get(&session)
+                .map(|c| c.listening_channels.clone())
+                .unwrap_or_default();
+            clients.insert(session, client);
+
+            // Update listening_index for changed channels
+            if old_listening != new_listening {
+                drop(clients); // release write lock before taking listening_index write
+                let mut idx = self.listening_index.write().await;
+                // Remove from channels no longer listened to
+                for ch in &old_listening {
+                    if !new_listening.contains(ch) {
+                        if let Some(sessions) = idx.get_mut(ch) {
+                            sessions.retain(|&s| s != session);
+                        }
+                    }
+                }
+                // Add to newly listened channels
+                for ch in &new_listening {
+                    if !old_listening.contains(ch) {
+                        idx.entry(*ch).or_default().push(session);
+                    }
+                }
+                return;
+            }
+        }
     }
 
     /// Remove a client by session ID.
@@ -127,6 +170,15 @@ impl ClientManager {
         if let Some(ref c) = client {
             if let Some(users) = self.channel_users.write().await.get_mut(&c.channel_id) {
                 users.retain(|&s| s != session);
+            }
+            // Remove from listening_index
+            if !c.listening_channels.is_empty() {
+                let mut idx = self.listening_index.write().await;
+                for ch in &c.listening_channels {
+                    if let Some(sessions) = idx.get_mut(ch) {
+                        sessions.retain(|&s| s != session);
+                    }
+                }
             }
         }
         client
@@ -167,6 +219,109 @@ impl ClientManager {
         self.clients.read().await.keys().copied().collect()
     }
 
+    /// Batch voice dispatch target lookup for local UDP delivery.
+    ///
+    /// For each session in `channels` (excluding `exclude_session`), returns a tuple
+    /// `(session, is_deaf, Option<Arc<Mutex<CryptState>>>)` in a **single pair of
+    /// lock acquisitions** (`clients.read` + `crypt_states.read`), rather than the
+    /// prior N×2 per-session lock pattern.
+    ///
+    /// The caller is responsible for the actual UDP send (which happens outside any lock).
+    pub async fn get_channel_voice_targets(
+        &self,
+        channels: &[u32],
+        exclude_session: u32,
+    ) -> Vec<(u32, bool, Option<Arc<Mutex<CryptState>>>)> {
+        let sessions: Vec<u32> = {
+            let ch_users = self.channel_users.read().await;
+            channels
+                .iter()
+                .flat_map(|ch| {
+                    ch_users
+                        .get(ch)
+                        .map(|v| v.as_slice())
+                        .unwrap_or(&[])
+                        .iter()
+                        .copied()
+                })
+                .filter(|&s| s != exclude_session)
+                .collect()
+        };
+
+        if sessions.is_empty() {
+            return Vec::new();
+        }
+
+        let clients = self.clients.read().await;
+        let crypt_states = self.crypt_states.read().await;
+
+        sessions
+            .into_iter()
+            .map(|s| {
+                let is_deaf = clients
+                    .get(&s)
+                    .map(|c| c.deaf || c.self_deaf)
+                    .unwrap_or(false);
+                let cs = crypt_states.get(&s).cloned();
+                (s, is_deaf, cs)
+            })
+            .collect()
+    }
+
+    /// Batch voice dispatch target lookup including listening clients.
+    ///
+    /// Like `get_channel_voice_targets` but also includes sessions listening to
+    /// the given channels (via `listening_index`), excluding `exclude_session`.
+    pub async fn get_channel_voice_targets_with_listeners(
+        &self,
+        channels: &[u32],
+        exclude_session: u32,
+    ) -> Vec<(u32, bool, Option<Arc<Mutex<CryptState>>>)> {
+        let sessions: Vec<u32> = {
+            let ch_users = self.channel_users.read().await;
+            let listen_idx = self.listening_index.read().await;
+            let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+            let mut result = Vec::new();
+            for &ch in channels {
+                // Channel members
+                if let Some(members) = ch_users.get(&ch) {
+                    for &s in members {
+                        if s != exclude_session && seen.insert(s) {
+                            result.push(s);
+                        }
+                    }
+                }
+                // Listeners for this channel (from index — O(listeners) not O(all clients))
+                if let Some(listeners) = listen_idx.get(&ch) {
+                    for &s in listeners {
+                        if s != exclude_session && seen.insert(s) {
+                            result.push(s);
+                        }
+                    }
+                }
+            }
+            result
+        };
+
+        if sessions.is_empty() {
+            return Vec::new();
+        }
+
+        let clients = self.clients.read().await;
+        let crypt_states = self.crypt_states.read().await;
+
+        sessions
+            .into_iter()
+            .map(|s| {
+                let is_deaf = clients
+                    .get(&s)
+                    .map(|c| c.deaf || c.self_deaf)
+                    .unwrap_or(false);
+                let cs = crypt_states.get(&s).cloned();
+                (s, is_deaf, cs)
+            })
+            .collect()
+    }
     /// Store a CryptState for a session.
     pub async fn set_crypt_state(&self, session: u32, state: CryptState) {
         self.crypt_states
@@ -273,30 +428,24 @@ impl ClientManager {
     }
 
     /// Get all sessions that are currently listening to the given channel.
-    /// This returns sessions whose `listening_channels` contains `channel_id`
-    /// but whose `channel_id` is different (to avoid double-delivery).
+    /// Uses the O(1) listening_index for fast lookup instead of scanning all clients.
     pub async fn get_listening_sessions(&self, channel_id: u32) -> Vec<u32> {
-        self.clients
+        self.listening_index
             .read()
             .await
-            .values()
-            .filter(|c| {
-                c.channel_id != channel_id && c.listening_channels.contains(&channel_id)
-            })
-            .map(|c| c.session)
-            .collect()
+            .get(&channel_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Count how many local clients are currently listening to the given channel.
     pub async fn get_listening_count(&self, channel_id: u32) -> u32 {
-        self.clients
+        self.listening_index
             .read()
             .await
-            .values()
-            .filter(|c| {
-                c.channel_id != channel_id && c.listening_channels.contains(&channel_id)
-            })
-            .count() as u32
+            .get(&channel_id)
+            .map(|v| v.len() as u32)
+            .unwrap_or(0)
     }
 
     /// Count how many local clients are currently in the given channel.
