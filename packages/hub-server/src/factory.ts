@@ -48,6 +48,7 @@ function buildServerLimitsConfig(config: HubConfig): ServerLimitsConfig {
     suggest_version: config.suggest?.version !== undefined ? Number(config.suggest.version) : undefined,
     suggest_positional: config.suggest?.positional ?? undefined,
     suggest_push_to_talk: config.suggest?.push_to_talk ?? undefined,
+    welcome_text: config.welcome_text,
   };
 }
 

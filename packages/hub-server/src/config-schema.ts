@@ -238,6 +238,7 @@ export const HubConfigSchema = z.object({
   default_channel: z.number().int().min(0).default(0),
   remember_channel: z.boolean().default(true),
   remember_channel_duration: z.number().int().min(0).default(0), // 0 = forever
+  welcome_text: z.string().optional(), // 推送给所有连接客户端的欢迎消息
   
   // 高级功能
   allow_html: z.boolean().default(true),
