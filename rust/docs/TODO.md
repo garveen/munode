@@ -324,7 +324,7 @@ N/A - 不计划实现
 - [x] 跨频道音频接收测试（`listening-channel.test.ts`）
 - [x] 监听者数量限制测试（`listening-channel.test.ts`：per_user=2 超出拒绝；per_channel=1 第二人拒绝）
 - [x] 音量调整广播测试（`listening-channel.test.ts`：设置 0.5x 并验证 peer 收到）
-- [ ] 权限检查测试（需要 ACL 设置拒绝 LISTEN 权限的测试场景）
+- [x] 权限检查测试（`acl.test.ts`：'should deny second user from listening to restricted channel'）
 
 #### 依赖
 无
@@ -373,7 +373,9 @@ Edge 侧 `EdgeVoiceRoutingConfig`（`voice_routing` 配置段）：
 #### 集成测试
 - [x] 基本语音路由测试（已有）
 - [x] 跨 Edge 语音测试（已有）
-- [ ] `connection_strategy=tcp_only` 专项测试 - 留待后续实现
+- [x] `connection_strategy=tcp_only` 专项测试（`voice-routing-strategy.test.ts`）
+- [x] `connection_strategy=direct_only` 专项测试（`voice-routing-strategy.test.ts`）
+- [x] `connection_strategy=auto_fallback` 专项测试（`voice-routing-strategy.test.ts`）
 
 #### 依赖
 无
@@ -458,7 +460,7 @@ Edge 端的语音路由配置：
 #### 集成测试
 - [x] 基本 UDP 路由测试（已有）
 - [x] TCP 降级测试（已有）
-- [ ] `connection_strategy` 专项集成测试 - 留待后续实现
+- [x] `connection_strategy` 专项集成测试（`voice-routing-strategy.test.ts`：tcp_only / direct_only / auto_fallback）
 
 #### 依赖
 - Hub 语音路由配置（见上）
@@ -670,7 +672,7 @@ Edge 向客户端发送建议：
 |---------|---------|------|
 | 认证（本地数据库） | ✅ | tests/integration/suites/auth.test.ts |
 | 认证（HTTP） | ✅ | tests/integration/suites/auth.test.ts |
-| 认证（Lua） | ❌ | 待添加 |
+| 认证（Lua） | ✅ | tests/integration/suites/lua-auth.test.ts (Rust only) |
 | Edge 注册 | ✅ | tests/integration/suites/edge-cluster-join.test.ts |
 | 频道管理 | ✅ | tests/integration/suites/channel.test.ts |
 | ACL 权限 | ✅ | tests/integration/suites/acl*.test.ts |
@@ -693,12 +695,14 @@ Edge 向客户端发送建议：
 | UDP 连接 | ✅ | tests/integration/suites/udp-connection.test.ts |
 | TCP 语音 | ✅ | tests/integration/suites/tcp-voice.test.ts |
 | 语音路由 | ✅ | tests/integration/suites/voice*.test.ts |
+| 语音路由策略（tcp_only / direct_only / auto_fallback） | ✅ | tests/integration/suites/voice-routing-strategy.test.ts (Rust only) |
 | Edge 间连接 | ✅ | tests/integration/suites/edge-cluster-join.test.ts |
 | 语音加密 | ✅ | tests/integration/suites/edge-voice-encryption.test.ts |
 | 包丢失计算 | ✅ | tests/integration/suites/edge-packet-loss-calculation.test.ts |
 | 多租户 SNI | ✅ | tests/integration/suites/multi-tenant-sni.test.ts (TS only) |
 | GeoIP | ❌ | 未实现 |
 | 连接池 | ✅ | Hub 连接池已实现（pool_size 配置项，默认 1 连接，可扩展为多连接） |
+| LISTEN 权限检查 | ✅ | tests/integration/suites/acl.test.ts（'should deny second user from listening to restricted channel'） |
 | 经由 Peer Edge 中继控制信道 | ❌ | 待实现（TS 和 Rust 均未有此功能） |
 
 ---
@@ -790,4 +794,6 @@ Edge 向客户端发送建议：
 - 2026-03-10: 实现 Hub #4 用户名/频道名验证规则（`validation.username_regex`、`validation.channel_name_regex`），添加集成测试 `validation-rules.test.ts`
 - 2026-03-11: 实现运维工具 #配置验证（`validate-config [path]` 子命令，Hub/Edge main.rs 均已添加）
 - 2026-03-11: 实现 Edge 重连指数退避（`ExponentialBackoff`，hub_client.rs，基础间隔翻倍上限 30s）
-- 2026-03-11: 更新 ts-rust-feature-comparison.md（修正大量已实现但标记为 ❌ 的条目：BanList 管理、RequestBlob、QueryUsers、UserStats、UserList、Web API、Blob store、BanManager、集群处理器等），实现覆盖率从 36% 提升至约 50%
+- 2026-03-12: 新增集成测试 `lua-auth.test.ts`（Rust 专用，9 个用例：有效凭据连接成功、无效密码/用户名拒绝、多用户并发连接、ServerSync 验证）
+- 2026-03-12: 新增集成测试 `voice-routing-strategy.test.ts`（Rust 专用，9 个用例：tcp_only / direct_only / auto_fallback 三种策略各 3 个测试）
+- 2026-03-12: 更新 TODO.md：将 Lua 认证测试、connection_strategy 专项测试、LISTEN 权限测试标记为 ✅ 已完成；更新测试覆盖率追踪表

@@ -38,6 +38,10 @@ const SECONDARY_SLOT_WAIT_MAX_POLLS: u32 = 100;
 ///
 /// Starts at `base_ms` milliseconds and doubles on each failed attempt, up to
 /// a maximum of 30 seconds.  A successful connection resets the counter to zero.
+/// Minimum allowed base delay in milliseconds.  Prevents accidentally-zero intervals
+/// (e.g. when `reconnect_interval = 0` is set in config) from causing a tight reconnect loop.
+const MIN_BACKOFF_MS: u64 = 100;
+
 struct ExponentialBackoff {
     base_ms: u64,
     current_ms: u64,
@@ -48,7 +52,7 @@ impl ExponentialBackoff {
     const MAX_DELAY_MS: u64 = 30_000;
 
     fn new(base_ms: u64) -> Self {
-        let base_ms = base_ms.max(100); // minimum 100 ms
+        let base_ms = base_ms.max(MIN_BACKOFF_MS); // enforce minimum
         Self { base_ms, current_ms: base_ms, attempt: 0 }
     }
 

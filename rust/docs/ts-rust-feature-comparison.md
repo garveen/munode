@@ -848,4 +848,4 @@
 3. **配置格式**：TS 使用 JS/JSON + Zod 校验，Rust 使用 TOML + serde
 4. **密码哈希**：TS 使用 SHA256，Rust 使用 Argon2（更安全）
 5. **多租户/Channel Ninja**：多租户 TS 完全实现，Rust 完全未实现；Channel Ninja 基础实现已完成
-6. **统计数据说明**：本表按 2026-03-11 代码状态更新，相比 2026-03-10 版本新增约 38 个 ✅ 项
+6. **统计数据说明**：本表按 2026-03-12 代码状态更新，相比 2026-03-10 版本新增约 38 个 ✅ 项；新增集成测试 `lua-auth.test.ts`（Lua 认证，9 用例）、`voice-routing-strategy.test.ts`（三种 connection_strategy，9 用例）
