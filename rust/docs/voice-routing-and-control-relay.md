@@ -1,7 +1,7 @@
 # Rust 实现：语音路由 & 控制信道中继
 
-> 文档版本: 1.0  
-> 日期: 2026-03-12  
+> 文档版本: 2.0
+> 日期: 2026-03-12
 > 覆盖范围: `munode-edge` / `munode-hub` Rust 实现
 
 ---
@@ -15,152 +15,217 @@ MuNode Rust 版本的跨 Edge 通信分为两个独立的平面：
 | **语音平面** | 音频包的低延迟传输 | UDP（主）/ Hub TCP 兜底 | `udp.rs`, `hub_client.rs` |
 | **控制平面** | RPC 通知、用户/频道同步 | WebSocket over TCP | `hub_client.rs`, `relay_server.rs` |
 
-这两个平面都实现了三级路由策略，但实现方式不同：
+### 路由决策模型
+
+语音平面使用 **Hub 驱动的质量感知路由**，不再是简单的"直连优先"策略：
 
 ```
-语音平面（UDP）:
-  ① 直连 UDP  →  ② 三跳 UDP relay（A→B→C）  →  ③ Hub TCP 兜底
+质量感知路由流程:
+  1. Edge 定期发送 UDP 探针测量到 peer 的 RTT 和丢包率
+  2. Edge 定期上报质量数据 → Hub (edge.reportQuality RPC)
+  3. Hub 用 Dijkstra 算法计算最优路由表
+  4. Hub 推送路由表 → Edge (hub.routeTableUpdate 通知)
+  5. Edge 按 Hub 指定路由转发语音包:
+     - Direct   → 直连 UDP
+     - RelayVia → 三跳 UDP relay (A→B→C)
+     - HubTcp   → Hub TCP 中继兜底
+```
 
-控制平面（WebSocket）:
-  ① 直连 Hub WS  →  ② 静态 peer relay  →  ③ 动态 peer relay
+控制平面使用渐进式回退：
+```
+① 直连 Hub WS  →（3 次失败后）→  ② 静态 peer relay  →  ③ 动态 peer relay
 ```
 
 ---
 
-## 一、语音平面：UDP 路由
+## 一、语音平面：质量感知 UDP 路由
 
 ### 1.1 整体架构
 
 ```
-Client A (Edge 1, UDP port)
-        │ OCB2-AES128 加密包
-        ▼
-  Edge 1 UdpServer (udp.rs)
-  ┌──────────────────────────────────────────────┐
-  │  handle_client_datagram()                    │
-  │    └─ handle_known_client()                  │
-  │         └─ route_voice(sender, plaintext)    │
-  │              │                               │
-  │              ├── 本地客户端（同 channel）     │
-  │              │     OCB2 重加密 → UDP send     │
-  │              │     fallback_to_tcp()          │
-  │              │                               │
-  │              └── 远程 Edge（其他 Edge）       │
-  │                    见 1.2 三级路由决策        │
-  └──────────────────────────────────────────────┘
+Edge A (UdpServer)
+┌─────────────────────────────────────────────────────┐
+│  run() loop                                         │
+│    ├── 接收客户端 OCB2 加密包                         │
+│    │     └─ route_voice(sender, plaintext)          │
+│    │          ├── 本地客户端: OCB2 重加密 → UDP send  │
+│    │          └── 远程 Edge: 按 Hub 路由决策发送      │
+│    ├── 接收 peer Edge 包                             │
+│    │     ├── EDGE_MAGIC   → handle_edge_packet()    │
+│    │     ├── RELAY_MAGIC  → handle_relay_packet()   │
+│    │     └── PROBE_MAGIC  → handle_probe_packet()   │
+│    └── 探针任务 (probe_task, 独立 tokio::spawn)      │
+│          ├── 每 10s 发送 UDP 探针 → 所有 peer Edges  │
+│          └── 每 30s 上报质量 → Hub (reportQuality)  │
+└─────────────────────────────────────────────────────┘
 ```
 
-### 1.2 跨 Edge 语音三级路由决策
+### 1.2 质量测量：UDP 探针协议
 
-`route_voice()` 对每个目标 Edge 按以下优先级依次尝试：
+每个 Edge 在 `edge_socket` 上发送和响应 UDP 探针：
 
+**探针包格式（15 字节）：**
 ```
-目标 Edge N
-    │
-    ├── [策略允许直连 UDP？]
-    │    └── EdgeState.allow_direct_udp == true
-    │         └── PeerRegistry 中有 N 的 UDP 地址？
-    │              ├── 是 → 发送直连 UDP 包（EDGE_MAGIC 格式）
-    │              │         发送失败 → 尝试三跳 relay
-    │              └── 否 → 尝试三跳 relay（try_relay_via_peer）
-    │
-    ├── [三跳 relay] try_relay_via_peer(target_edge_id)
-    │         从 PeerRegistry 选取中间节点 M（排除 target 和自己）
-    │         发送 RELAY_MAGIC 格式包给 M
-    │         M.handle_relay_packet() → 转发 EDGE_MAGIC 包给 N
-    │
-    └── [Hub TCP 兜底] EdgeState.allow_hub_relay == true
-              hub_client.relay_voice_via_hub(target_edge_id, payload)
-              → RPC: edge.relayVoiceViaTcp
-              → Hub 将包推送给目标 Edge（hub.relayVoicePacket 通知）
+[PROBE_MAGIC(2B): 0xC2, 0xDE][type(1B): 0=ping, 1=pong][seq_BE(4B)][sent_ms_BE(8B)]
 ```
 
-### 1.3 包格式
+**探针流程：**
+```
+Edge A                              Edge B
+  │ ─── PROBE_MAGIC + ping + seq ─→ │
+  │                                  │ handle_probe_packet()
+  │                                  │ → 原样回送 pong（相同 seq + 原始 timestamp）
+  │ ←── PROBE_MAGIC + pong + seq ── │
+  │ 计算 RTT = now - sent_ms        │
+  │ 更新 PeerQualityState           │
+```
+
+**探针常量（`udp.rs`）：**
+```rust
+const PROBE_PING_INTERVAL_SECS: u64 = 10;    // 探针发送间隔
+const PROBE_REPORT_INTERVAL_SECS: u64 = 30;  // 质量上报间隔
+const PROBE_MAGIC: [u8; 2] = [0xC2, 0xDE];   // 探针包魔术字节
+```
+
+**PeerQualityState（`udp.rs`）：**
+```rust
+struct PeerQualityState {
+    pending_pings: HashMap<u32, u64>,          // seq → sent_ms
+    rtt_samples: VecDeque<f32>,                // 最近 10 次 RTT
+    probes_sent: u32,                          // 本窗口发送数
+    pongs_received: u32,                       // 本窗口收到数
+    next_seq: u32,                             // 下一个序列号
+}
+```
+
+### 1.3 质量上报与路由表生成
+
+**Edge → Hub 质量上报：**
+```
+Edge (report_quality RPC)
+  edge_id, target_edge_id, rtt_ms, packet_loss, jitter_ms, samples
+  → hub.handle_report_quality()
+  → topology_manager.report_quality(from, to, LinkQuality)
+  → 触发 push_route_tables_to_all()
+```
+
+**Hub 路由表计算（`topology_manager.rs`）：**
+```
+compute_route_table(for_edge_id):
+  对每个目标 Edge 执行 Dijkstra(from=for_edge_id, to=target_id):
+    │
+    ├── path.len() == 1 or 0  → 无路径 (route_type=0, cost=9999)
+    │
+    ├── path.len() == 2 → 直连 (route_type=0, Direct)
+    │     cost = rtt_ms + packet_loss * 500.0
+    │
+    └── path.len() >= 3 → 中继 (route_type=1, RelayVia)
+          next_hop = path[1]
+          cost = sum(each hop: rtt + loss * 500)
+```
+
+路由成本公式：`cost = RTT(ms) + 丢包率 × 500`（500 为丢包惩罚系数 `PACKET_LOSS_PENALTY_MS`）
+
+**Hub → Edge 路由表推送：**
+- 触发时机：`edge.reportQuality` 收到后；新 Edge 注册完成后
+- 方法：`push_route_tables_to_all()` → `hub.routeTableUpdate` 通知
+- 每个 Edge 收到自己的定制路由表（其他 Edge 对自己的最优路径）
+
+### 1.4 Edge 路由决策（`udp.rs route_voice()`）
+
+```
+for each target_edge_id (远程 Edge):
+    route = EdgeState.route_table.get(target_edge_id)
+    
+    match route:
+        Direct | None     → 直连 UDP (EDGE_MAGIC 格式)
+                            失败 → Hub TCP 兜底
+        RelayVia(relay_id) → 三跳 relay (RELAY_MAGIC 格式)
+                            失败 → Hub TCP 兜底
+        HubTcp             → Hub TCP relay (edge.relayVoiceViaTcp RPC)
+```
+
+**`connection_strategy` 配置覆盖：**
+
+| 策略 | allow_direct_udp | allow_hub_relay | 效果 |
+|------|-----------------|-----------------|------|
+| `auto_fallback`（默认） | true | true | 按 Hub 路由决策执行，HubTcp/失败时走 Hub TCP |
+| `tcp_only` | false | true | 跳过 UDP，始终走 Hub TCP relay |
+| `direct_only` | true | false | 仅 UDP，不允许 Hub TCP 兜底 |
+
+### 1.5 包格式汇总
 
 **客户端→Edge（OCB2 加密层）：**
 ```
-[OCB2 密文]  （包含内部 Mumble 语音包）
+[OCB2 密文]
 ```
 
-**Edge→Edge 直连（edge_socket，edge_port）：**
+**Edge→Edge 直连（EDGE_MAGIC）：**
 ```
-[EDGE_MAGIC (2B): 0x4D4D] [sender_session_BE (4B)] [raw plaintext voice...]
+[EDGE_MAGIC(2B): 0x4D4D][sender_session_BE(4B)][plaintext voice...]
 ```
 
-**Edge→Edge 三跳 relay（中间节点接收格式）：**
+**三跳 relay（RELAY_MAGIC，发给中间节点）：**
 ```
-[RELAY_MAGIC (2B): 0xC1 0xDE] [target_edge_id_BE (4B)] [EDGE_MAGIC (2B)] [sender_session_BE (4B)] [voice...]
+[RELAY_MAGIC(2B): 0xC1,0xDE][target_edge_id_BE(4B)][EDGE_MAGIC(2B)][sender_session_BE(4B)][voice...]
 ```
-中间节点 `handle_relay_packet()` 收到后：
-1. 读取 `target_edge_id`（前 4 字节，RELAY_MAGIC 已由调用方剥离）
-2. 在 PeerRegistry 中查找 target 的 UDP 地址
-3. 将后面的 `[EDGE_MAGIC][session][voice]` 原样转发给目标 Edge
 
-**Hub TCP 兜底（RPC edge.relayVoiceViaTcp）：**
+**Hub TCP relay（`edge.relayVoiceViaTcp` RPC）：**
 ```
-Edge A → Hub：EdgeRelayVoiceViaTcpParams { from_edge_id, target_edge_id, voice_packet }
-Hub → Edge B：hub.relayVoicePacket 通知 { voice_packet（含 session 的 Mumble 格式） }
+EdgeRelayVoiceViaTcpParams { from_edge_id, target_edge_id, voice_packet }
+→ Hub 推送 hub.relayVoicePacket 到目标 Edge
 ```
-接收端 Edge B 的 `server.rs` 处理 `RelayedVoice` 事件，解析并分发给本地客户端。
 
-### 1.4 本地客户端语音路由
+**UDP 探针（PROBE_MAGIC）：**
+```
+[PROBE_MAGIC(2B): 0xC2,0xDE][type(1B)][seq_BE(4B)][sent_ms_BE(8B)]
+```
+
+### 1.6 本地客户端语音路由
 
 **普通 PTT（target=0）：**
-- 遍历 `sender_channel` 及所有链接频道（`get_all_linked_channels`）
-- 本地客户端：OCB2 重加密 → UDP；无 UDP 地址则走 TCP UDPTunnel
-- 监听者（Listening）：同上处理
+- 遍历 sender_channel 及所有链接频道（`get_all_linked_channels`）
+- 本地客户端：OCB2 重加密 → UDP；无地址则走 TCP UDPTunnel
+- 远程 Edge：按 Hub 路由决策（见 1.4）
 
 **Whisper（target 1-30）：**
-- 从 `voice_targets` 缓存查 sender_session 的 VoiceTarget 配置
-- 支持直接 session 列表 + 频道目标（含 links / children 递归）
-- 跨 Edge：按 `allow_hub_relay` 走 Hub TCP 中继（UDP 路径暂不支持 whisper 的 edge 间路由）
+- 从 `voice_targets` 缓存查 VoiceTarget 配置
+- 支持 session 目标 + 频道目标（含 links/children 递归）
+- 跨 Edge：使用 Hub TCP relay（whisper 跨 Edge 不走 UDP relay）
 
 **Loopback（target=31）：**
 - 注入 session 后直接回发给发送者
 
 **Suppress 静默：**
-- `client.suppress=true` 且不是 loopback → 直接丢弃
+- `client.suppress=true` 且不是 loopback → 丢弃
 
-### 1.5 TCP UDPTunnel 回退（本地客户端）
+### 1.7 路由表数据结构
 
-当本地客户端无 UDP 地址（仅 TCP 连接）时：
-```rust
-fn fallback_to_tcp(session_id, plaintext) {
-    // 封装成 Mumble UdpTunnel 帧（明文，TLS 层保护）
-    build_udp_tunnel_packet(plaintext)  // Type=1 + Len(4B) + data
+**Protocol（`hubedge.proto` / `hubedge.rs`）：**
+```protobuf
+message HubRouteEntryProto {
+  required uint32 target_edge_id = 1;
+  required uint32 route_type = 2;  // 0=direct, 1=relay, 2=hub_tcp
+  optional uint32 next_hop = 3;    // relay 时的中间节点 edge_id
+  required float cost = 4;
+}
+
+message HubRouteTableUpdateParams {
+  repeated HubRouteEntryProto routes = 1;
 }
 ```
-TCP 隧道包在 TLS 连接内传输，无需额外加密。
 
-### 1.6 连接策略配置
-
-通过 `voice_routing.connection_strategy` 控制行为：
-
-| 策略 | allow_direct_udp | allow_hub_relay | 说明 |
-|------|-----------------|-----------------|------|
-| `auto_fallback`（默认） | true | true | 先 UDP 直连，失败走三跳 relay，再走 Hub TCP |
-| `tcp_only` | false | true | 跳过 UDP，始终走 Hub TCP 中继 |
-| `direct_only` | true | false | 仅 UDP，不允许 Hub TCP 兜底 |
-
-向后兼容：旧版 `server.disable_hub_relay = true` 等价于 `direct_only`。
-
-### 1.7 关键数据结构
-
-**PeerRegistry（`state.rs`）：**
+**Edge 存储（`state.rs`）：**
 ```rust
-pub struct PeerEdgeInfo {
-    pub udp_addr: SocketAddr,  // edge_port 的 UDP 地址（语音用）
-    pub host: String,
-    pub relay_port: Option<u16>,  // 控制信道中继端口
+pub enum RouteDecision {
+    Direct,
+    RelayVia { relay_edge_id: u32 },
+    HubTcp,
 }
-```
-- `all_udp_peers()` — 用于三跳 relay 候选选择
-- `relay_peers()` — 用于控制信道中继候选选择
 
-**UdpServer（`udp.rs`）：**
-- `socket` — Mumble 客户端端口（client_port）
-- `edge_socket` — Edge 间专用端口（edge_port，可与 socket 相同）
-- `addr_to_session` / `session_to_addr` — UDP 地址↔session 双向映射
+// EdgeState 字段:
+pub route_table: RwLock<HashMap<u32, RouteDecision>>,
+```
 
 ---
 
@@ -194,87 +259,67 @@ pub struct PeerEdgeInfo {
   3. 双向中继所有 Binary / Text 帧，直到任一侧关闭
 - **单跳限制**：不接受来自其他 relay 的链式转发
 - **TLS**：relay 监听为明文 WS（集群内可信网络；TLS 终止在 Edge→Hub 的那条连接上）
-- **透明性**：Hub 完全无感知，看到的是 Edge B 建立的普通 WS 连接
 
 ### 2.3 hub_client.rs — 控制信道三级回退
 
-`run_single_slot()` 的连接逻辑（每轮循环）：
+`run_single_slot()` 的连接逻辑：
 
 ```
 direct_fail_count = 0
-┌─────────────────────────────────────────────────────┐
-│ LOOP                                                │
-│   if direct_fail_count >= 3:                        │
-│     try_connect_via_relay()                         │
-│       ① 静态 peers (hub_server.static_peers)        │
-│       ② 动态 peers (PeerRegistry.relay_peers())     │
-│   else:                                             │
-│     try_connect_slot() → ws://hub:port/             │
-│                                                     │
-│   成功 → reset direct_fail_count                   │
-│   失败 → direct_fail_count++                       │
-│   等待 exponential backoff                          │
-└─────────────────────────────────────────────────────┘
+RELAY_FALLBACK_THRESHOLD = 3
+
+LOOP:
+  if direct_fail_count >= RELAY_FALLBACK_THRESHOLD:
+    try_connect_via_relay()
+      ① 静态 peers (hub_server.static_peers)
+      ② 动态 peers (PeerRegistry.relay_peers())
+  else:
+    try_connect_slot() → ws://hub:port/
+
+  成功 → reset direct_fail_count
+  失败 → direct_fail_count++
+  等待 exponential backoff
 ```
 
-**连接成功后的正常流程**（无论直连还是 relay，完全相同）：
-1. 发送 `edge.register`（携带 `relay_port` 字段）
-2. 接收 Hub 响应（edge_id、加密密钥、peer 列表）
-3. 执行 `edge.fullSync` 同步频道树和用户状态
+连接成功后（无论直连还是 relay，完全相同）：
+1. 发送 `edge.register`（携带 `relay_port`）
+2. 接收 Hub 响应
+3. 执行 `edge.fullSync` 同步频道树
 4. 发送 `edge.joinComplete`
 5. 进入消息收发循环
 
-### 2.4 relay_port 的发现和传播
+### 2.4 relay_port 发现与传播
 
 ```
 Edge 启动
-  └─ hub_client::new()
-       └─ 从 config.hub_server.relay_port 或 edge_port+2 计算 relay_port
+  → hub_client::new()
+       → relay_port = config.hub_server.relay_port 或 edge_port+2
 
 Edge 注册
-  └─ edge.register { ..., relay_port: <my_relay_port> }
-       └─ Hub 保存，并在广播 hub.peerJoined 时携带
+  → edge.register { relay_port: <my_relay_port> }
+       → Hub 保存，广播 hub.peerJoined 时携带
 
-收到 hub.peerJoined { id, host, relay_port, ... }
-  └─ PeerRegistry.upsert(id, PeerEdgeInfo { udp_addr, host, relay_port })
-
-Edge B 断开后直连失败 3 次
-  └─ try_connect_via_relay()
-       └─ 读取 PeerRegistry.relay_peers()
-            └─ ws://peer_host:peer_relay_port/
-```
-
-### 2.5 静态 peer 的作用
-
-**场景**：Hub 完全不可达时新 Edge 冷启动。
-此时 `hub.peerJoined` 通知还没有收到，PeerRegistry 为空。
-静态配置的 `hub_server.static_peers` 提供引导路径：
-
-```toml
-[hub_server]
-host = "hub.example.com"
-control_port = 8443
-relay_port = 0          # 0 = 自动 (edge_port + 2)
-static_peers = [
-  { host = "10.0.0.2", relay_port = 19335 },  # 预知的其他 Edge
-  { host = "10.0.0.3", relay_port = 19336 },
-]
+收到 hub.peerJoined { id, host, relay_port }
+  → PeerRegistry.upsert(id, PeerEdgeInfo { host, relay_port })
+  → PeerRegistry.relay_peers() 返回有 relay_port 的 peer
 ```
 
 ---
 
-## 三、两个平面的对照
+## 三、两个平面对照
 
 | 特征 | 语音平面 | 控制信道平面 |
 |------|---------|------------|
-| 传输协议 | UDP（edge_socket） | WebSocket over TCP |
-| 主路径 | 直连 Edge UDP | 直连 Hub WebSocket |
-| 中继包格式 | `[RELAY_MAGIC(2B)][target_id(4B)][EDGE_MAGIC(2B)][session(4B)][voice]` | 透明 WebSocket 帧转发 |
-| 兜底路径 | Hub TCP relay（`edge.relayVoiceViaTcp`） | 无兜底（失败则重试） |
-| Peer 发现 | `PeerRegistry.all_udp_peers()` | `PeerRegistry.relay_peers()` |
+| 传输协议 | UDP (`edge_socket`) | WebSocket over TCP |
+| 路由决策者 | Hub（Dijkstra + 质量数据） | Edge 自身（失败计数） |
+| 主路径 | Hub 指定的最优路径 | 直连 Hub WebSocket |
+| 质量测量 | UDP probe ping/pong | WebSocket 连接成功率 |
+| 回退逻辑 | Direct → RelayVia → HubTcp | 直连 → static peer → dynamic peer |
+| 回退触发 | Hub 路由决策（质量感知） | 连续 3 次连接失败 |
+| 魔术字节 | EDGE: 0x4D4D / RELAY: 0xC1,0xDE / PROBE: 0xC2,0xDE | N/A（WebSocket 协议） |
+| 单跳限制 | relay 仅支持一次中间节点 | relay_server 不接受链式 relay |
+| Peer 发现 | PeerRegistry.all_udp_peers() | PeerRegistry.relay_peers() |
 | 静态配置 | 无（UDP 地址从 peerJoined 获取） | `hub_server.static_peers` |
-| 失败计数 | 每次发送 I/O 错误 | `direct_fail_count`（连续 3 次 → 切 relay） |
-| 单跳限制 | 仅支持一次中继（A→B→C，不支持 A→B→C→D） | 同（relay_server 不接受链式 relay） |
 
 ---
 
@@ -290,8 +335,6 @@ connection_strategy = "auto_fallback"
 
 [voice_routing.fallback]
 enable_tcp_fallback = true
-tcp_fallback_delay = 0       # ms，切换前等待时间
-udp_recovery_check_interval = 30000  # ms，探测 UDP 是否恢复
 
 [voice_routing.relay]
 enabled = true               # 本 Edge 是否作为中转节点接受 relay 请求
@@ -303,11 +346,9 @@ max_relay_bandwidth = 0      # Kbps，0 = 不限制
 ```toml
 [voice_routing]
 enable_relay = true          # false = 拒绝所有 edge.relayVoiceViaTcp 请求
-relay_cost_factor = 1.5      # 中继路由的成本系数（用于路由决策建议）
-direct_rtt_threshold = 500   # ms，RTT 低于此值优先选直连
-direct_loss_threshold = 0.05 # 丢包率，低于此值优先选直连
-max_relay_streams_per_pair = 0  # 0 = 不限
-max_total_relay_streams = 0     # 0 = 不限
+relay_cost_factor = 1.5
+direct_rtt_threshold = 500   # ms
+direct_loss_threshold = 0.05
 ```
 
 ### Edge 控制信道中继（`hub_server` 段）
@@ -317,7 +358,7 @@ max_total_relay_streams = 0     # 0 = 不限
 host = "hub.example.com"
 control_port = 8443
 relay_port = 0               # 0 = 自动（edge_port + 2）
-static_peers = [             # 可选，用于 Hub 不可达时冷启动
+static_peers = [
   { host = "10.0.0.2", relay_port = 19335 },
 ]
 ```
@@ -328,13 +369,15 @@ static_peers = [             # 可选，用于 Hub 不可达时冷启动
 
 | 文件 | 职责 |
 |------|------|
-| `rust/munode-edge/src/udp.rs` | UDP 语音包接收、OCB2 解密、路由决策（直连/三跳/Hub TCP）、relay 包收发 |
+| `rust/munode-edge/src/udp.rs` | UDP 接收、OCB2 解密、路由决策（按 Hub 路由表）、探针发送/接收、三跳 relay 收发 |
 | `rust/munode-edge/src/relay_server.rs` | 控制信道透明 WebSocket relay 服务器 |
-| `rust/munode-edge/src/hub_client.rs` | Hub WebSocket 连接管理（直连+relay 回退）、relay_voice_via_hub RPC |
-| `rust/munode-edge/src/state.rs` | `EdgeState`（allow_hub_relay/allow_direct_udp 标志）、`PeerRegistry`（UDP+relay 地址） |
-| `rust/munode-edge/src/server.rs` | TCP UDPTunnel 语音处理、whisper/VoiceTarget 路由、`RelayedVoice` 事件处理 |
-| `rust/munode-hub/src/rpc_handler.rs` | `handle_relay_voice_via_tcp()`、`handle_partition_after_disconnect()` |
+| `rust/munode-edge/src/hub_client.rs` | Hub WS 连接管理（直连+relay 回退）、`hub.routeTableUpdate` 处理、`report_quality` RPC |
+| `rust/munode-edge/src/state.rs` | `RouteDecision` 枚举、`EdgeState.route_table`、`PeerRegistry`（UDP+relay 地址） |
+| `rust/munode-edge/src/server.rs` | TCP UDPTunnel 语音处理、whisper 路由、`RelayedVoice` 事件处理 |
+| `rust/munode-hub/src/topology_manager.rs` | Dijkstra 路径计算、质量更新、`compute_route_table()` |
+| `rust/munode-hub/src/rpc_handler.rs` | `handle_report_quality()`、`push_route_tables_to_all()`、`handle_relay_voice_via_tcp()` |
 | `rust/munode-common/src/config.rs` | `EdgeVoiceRoutingConfig`、`VoiceConnectionStrategy`、`HubVoiceRoutingConfig`、`StaticPeerConfig` |
+| `rust/munode-protocol/src/generated/hubedge.rs` | `HubRouteEntryProto`、`HubRouteTableUpdateParams`（tag=36 in TypedRpcNotification） |
 
 ---
 
@@ -342,15 +385,15 @@ static_peers = [             # 可选，用于 Hub 不可达时冷启动
 
 ### 已知限制
 
-1. **三跳 relay 中间节点选择**：当前实现遍历 PeerRegistry 中所有已知 peer，选第一个发送成功的作为中间节点，没有基于质量数据的最优节点选择。
-2. **whisper 跨 Edge**：Whisper（target 1-30）的跨 Edge 路由仅支持 Hub TCP 中继，不支持直连 UDP 和三跳 relay（语义复杂，当前实现省略）。
-3. **relay 健康检查**：控制信道 relay 链路没有独立的超时/健康检查；依赖 WebSocket 层面的关闭检测（见 `relay_server.rs` — 留待后续实现）。
-4. **质量指标**：无实时 RTT/丢包监测，无法基于实时质量动态切换路由（留待后续实现）。
-5. **control relay 单跳限制**：relay_server.rs 中的 `run_relay_server()` 不接受来自其他 relay 的链式转发。
+1. **relay 健康检查**：控制信道 relay 链路没有独立的超时/健康检查（留待后续实现）
+2. **whisper 跨 Edge**：Whisper（target 1-30）的跨 Edge 路由仅支持 Hub TCP relay，不支持直连 UDP 和三跳 relay
+3. **路由表更新延迟**：质量数据 30s 上报一次，加上 Dijkstra 计算时间，路由表更新有 30-60s 延迟
+4. **无数据时的默认路由**：当没有质量数据时（新节点），Hub 给出 `cost=9999` 的 direct 路由；Edge 仍会尝试直连 UDP，失败后回退 Hub TCP
 
 ### 后续工作
 
-- [ ] relay 链路健康检查和超时（`relay_server.rs`）
+- [ ] relay 链路健康检查（`relay_server.rs`）
 - [ ] whisper 跨 Edge 的 UDP 三跳 relay 路径
-- [ ] 基于实时 RTT/丢包的动态路由切换
-- [ ] 三跳 relay 中间节点质量排序
+- [ ] 缩短质量上报间隔（可配置化 `PROBE_REPORT_INTERVAL_SECS`）
+- [ ] 路由表 TTL — 过期时自动降级为 Direct 直连兜底
+- [ ] 控制信道失败率追踪 → 动态调整 `RELAY_FALLBACK_THRESHOLD`

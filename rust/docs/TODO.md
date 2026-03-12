@@ -337,13 +337,14 @@ N/A - 不计划实现
 ### 11. 语音路由策略配置
 
 **优先级**: P1  
-**状态**: ✅ 已完成（基础配置）
+**状态**: ✅ 已完成（含质量感知智能路由）
 
 #### 功能描述
 Edge 间语音路由的详细配置：
 - 路由策略（直连/中转/混合）
 - Hub 中继策略控制
 - 故障转移
+- **质量感知智能路由**：Hub 收集质量数据并推送最优路由表到 Edge
 
 #### 实现情况
 Hub 侧 `HubVoiceRoutingConfig`（`voice_routing` 配置段）：
@@ -367,8 +368,12 @@ Edge 侧 `EdgeVoiceRoutingConfig`（`voice_routing` 配置段）：
 - [x] `direct_only` 策略禁用 Hub 中继，仅直连 UDP
 - [x] Hub 侧 `enable_relay=false` 时拒绝 `edge.relayVoiceViaTcp` RPC
 - [x] `EdgeState.allow_hub_relay` / `allow_direct_udp` 标志位
-- [ ] 质量指标收集（延迟/丢包实时监测）- 留待后续实现
-- [ ] 动态路由切换（基于实时质量）- 留待后续实现
+- [x] **质量指标收集**：UDP 探针（ping/pong，PROBE_MAGIC=0xC2,0xDE），每 10s 测量 RTT 和丢包率
+- [x] **质量上报**：`edge.reportQuality` RPC，每 30s 上报到 Hub
+- [x] **Hub 路由计算**：`compute_route_table()` 用 Dijkstra 计算最优路由（direct/relay/hub_tcp）
+- [x] **路由表推送**：Hub 在质量更新和 Edge 注册后推送 `hub.routeTableUpdate` 通知
+- [x] **路由表应用**：Edge 按 `RouteDecision`（Direct/RelayVia/HubTcp）路由语音包
+- [x] **协议**：新增 `HubRouteEntryProto`、`HubRouteTableUpdateParams`（protobuf tag=36）
 
 #### 集成测试
 - [x] 基本语音路由测试（已有）
@@ -436,7 +441,7 @@ Hub 检测到 Edge 间连接断裂时，自动识别形成的孤立子集群，�
 ### 1. 详细的语音路由配置
 
 **优先级**: P1  
-**状态**: ✅ 已完成（基础配置）
+**状态**: ✅ 已完成（含质量感知智能路由）
 
 #### 功能描述
 Edge 端的语音路由配置：
@@ -455,8 +460,9 @@ Edge 端的语音路由配置：
 - [x] 向后兼容 `server.disable_hub_relay` 配置项
 - [x] `EdgeState.allow_hub_relay` / `allow_direct_udp` 标志位
 - [x] UDP 服务器（`udp.rs`）和 TCP 服务器（`server.rs`）均遵循策略
-- [ ] 质量探测和指标（实时 RTT/丢包监测）- 留待后续实现
-- [ ] 自动降级触发（基于实时质量）- 留待后续实现
+- [x] **质量探测**：UDP ping/pong（`PROBE_MAGIC=[0xC2,0xDE]`），每 10s 探测 RTT 和丢包率
+- [x] **智能路由决策**：按 Hub 推送的 `RouteDecision`（Direct/RelayVia/HubTcp）路由语音包
+- [x] **`edge.reportQuality` RPC**：每 30s 上报质量数据到 Hub
 
 #### 集成测试
 - [x] 基本 UDP 路由测试（已有）
@@ -734,7 +740,8 @@ Hub 侧无需任何修改（relay 完全透明）。
 | TCP 语音 | ✅ | tests/integration/suites/tcp-voice.test.ts |
 | 语音路由 | ✅ | tests/integration/suites/voice*.test.ts |
 | 语音路由策略（tcp_only / direct_only / auto_fallback） | ✅ | tests/integration/suites/voice-routing-strategy.test.ts (Rust only) |
-| 语音三跳 relay 路由（A→B→C UDP） | ⚠️ | `RELAY_MAGIC` 已实现（`udp.rs`），端到端测试需要特殊拓扑 |
+| 语音三跳 relay 路由（A→B→C UDP） | ⚠️ | `RELAY_MAGIC` + `RouteDecision::RelayVia` 已实现，端到端测试需要特殊拓扑 |
+| 质量感知路由（UDP probe + Hub 路由表推送） | ⚠️ | 核心逻辑已实现（probe/reportQuality/routeTableUpdate），端到端质量路由测试需多 Edge 拓扑 |
 | Edge 间连接 | ✅ | tests/integration/suites/edge-cluster-join.test.ts |
 | 语音加密 | ✅ | tests/integration/suites/edge-voice-encryption.test.ts |
 | 包丢失计算 | ✅ | tests/integration/suites/edge-packet-loss-calculation.test.ts |
@@ -765,10 +772,10 @@ Hub 侧无需任何修改（relay 完全透明）。
    - 监听者状态管理、跨频道音频路由实现
 
 ### 尽快实现（P1）
-4. **语音路由策略配置（Hub）** (Hub #11) - ✅ 已完成（基础配置）
-   - 质量指标收集和动态路由切换留待后续（不实现）
-5. **详细的语音路由配置（Edge）** (Edge #1) - ✅ 已完成（基础配置）
-   - 质量探测和自动降级留待后续（不实现）
+4. **语音路由策略配置（Hub）** (Hub #11) - ✅ 已完成（含质量感知路由）
+   - 质量指标收集（UDP 探针）、Hub 路由表计算和推送、Edge 路由决策应用
+5. **详细的语音路由配置（Edge）** (Edge #1) - ✅ 已完成（含质量感知路由）
+   - UDP 质量探测（ping/pong）、edge.reportQuality 上报、按 Hub 路由表智能路由
 6. **集群分割探测与处置** (Hub #12) - ✅ 已完成
    - Hub 侧 shutdownRequest 处置、Edge 侧 hub.shutdownRequest 处理、集成测试
 7. **Blob 存储系统** (Hub #2) - ✅ 已完成
@@ -857,6 +864,7 @@ Hub 侧无需任何修改（relay 完全透明）。
 - 2026-03-12: 实现语音三跳 relay 路由（`RELAY_MAGIC [0xC1,0xDE]`）：`try_relay_via_peer()` + `handle_relay_packet()`，当直连 UDP 失败时通过任意已知 peer 转发，与 Hub TCP relay 互为补充
 - 2026-03-12: 更新 `peer-proxy-design.md` 详细记录新设计；更新集成测试 `peer-proxy.test.ts` 匹配新 API（7 用例）；标记 OpenTelemetry / GeoIP 位置路由 / Ninja 音频隔离 / 集群分区网络测试 / 性能基准 ❌ 不实现
 - 2026-03-12: 新增 `rust/docs/voice-routing-and-control-relay.md`，全面记录 Rust 语音平面（UDP 三级路由、包格式、连接策略配置）和控制信道平面（透明 WebSocket relay、三级回退、peer 发现）的实现细节；更新 TODO.md 相关条目的参考链接；标记"直连恢复后自动切回直连"为已完成（`run_single_slot` 逻辑已实现）
+- 2026-03-12: **全面实现质量感知智能路由系统**：新增 UDP 探针协议（PROBE_MAGIC=0xC2,0xDE，每 10s ping/pong）、PeerQualityState RTT/丢包跟踪、report_quality RPC 每 30s 上报到 Hub；Hub 新增 compute_route_table()（Dijkstra + PACKET_LOSS_PENALTY_MS=500）和 push_route_tables_to_all()；Edge 新增 RouteDecision 枚举（Direct/RelayVia/HubTcp）和 route_table 存储；路由决策从"直连优先"改为"按 Hub 路由表决策"；新增 HubRouteEntryProto + HubRouteTableUpdateParams protobuf 消息（tag=36）；更新文档 voice-routing-and-control-relay.md 至版本 2.0
 
 ---
 
@@ -869,9 +877,7 @@ Hub 侧无需任何修改（relay 完全透明）。
 | TODO | 未完成子项 | 说明 |
 |------|-----------|------|
 | Hub #10 监听者功能 | 音频路由隔离测试 | ❌ 不实现 |
-| Hub #11 语音路由策略 | 质量指标收集、动态路由切换 | ❌ 不实现 |
 | Hub #12 集群分割 | 仲裁测试、最小子集群关停测试 | ❌ 不实现（需可控网络断开） |
-| Edge #1 语音路由配置 | 质量探测和指标、自动降级触发 | ❌ 不实现 |
 | Edge #2 GeoIP | 基于位置的 Edge 分配 | ❌ 不实现 |
 | Edge #4 客户端建议配置 | 全部子项 | ❌ 不实现（与 Hub 功能重复） |
 | Edge #5 控制信道中继 | relay 超时健康检查；网络分区端到端测试；语音三跳 relay E2E 测试 | 超时健康检查留待后续；测试需可控网络断开 |
