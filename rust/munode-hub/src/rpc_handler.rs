@@ -713,7 +713,7 @@ impl RpcHandler {
                     }));
                 }
                 Ok(Err(e)) => {
-                    warn!("Lua auth error for '{}': {}; falling back to next auth method", username, e);
+                    warn!("Lua auth error for '{}': {:#}; falling back to next auth method", username, e);
                     if config.auth.require_auth_service {
                         let result = EdgeAuthenticateUserResult {
                             success: false,

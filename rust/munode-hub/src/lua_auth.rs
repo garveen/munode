@@ -216,7 +216,8 @@ impl LuaAuthEngine {
 
         let result = func
             .call::<Value>(lua_req)
-            .context("Lua authenticate() raised an error")?;
+            .context("Lua authenticate() raised an error")
+            .inspect_err(|e| debug!("Lua authenticate() error detail: {:?}", e))?;
 
         let resp: LuaAuthResponse = lua
             .from_value(result)
