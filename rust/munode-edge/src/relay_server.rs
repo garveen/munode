@@ -25,10 +25,15 @@
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
+use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info, warn};
 
 type WsMessage = tokio_tungstenite::tungstenite::Message;
 type WsError = tokio_tungstenite::tungstenite::Error;
+
+/// Idle timeout for relay connections: drop connections that carry no traffic
+/// for this duration. This prevents resource leaks from stale/zombie relays.
+const RELAY_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Start the control-relay WebSocket server.
 ///
@@ -70,7 +75,8 @@ pub async fn run_relay_server(relay_port: u16, hub_host: String, hub_port: u16) 
 }
 
 /// Handle a single proxy connection: upgrade to WebSocket, connect to Hub,
-/// then relay frames bidirectionally until either side closes.
+/// then relay frames bidirectionally until either side closes or the
+/// connection is idle for more than [`RELAY_IDLE_TIMEOUT`].
 async fn handle_proxy_connection(
     stream: tokio::net::TcpStream,
     peer_addr: std::net::SocketAddr,
@@ -86,16 +92,19 @@ async fn handle_proxy_connection(
     let (hub_ws, _) = tokio_tungstenite::connect_async(&hub_url).await?;
     debug!("Control relay: connected to Hub at {} for peer {}", hub_url, peer_addr);
 
-    let (client_write, client_read) = client_ws.split();
-    let (hub_write, hub_read) = hub_ws.split();
+    let (mut client_write, client_read) = client_ws.split();
+    let (mut hub_write, hub_read) = hub_ws.split();
 
     // Relay in both directions concurrently; stop when either side closes
+    // or when the connection is idle for RELAY_IDLE_TIMEOUT.
+    let c2h = format!("client→hub ({})", peer_addr);
+    let h2c = format!("hub→client ({})", peer_addr);
     tokio::select! {
-        r = relay_frames(client_read, hub_write, "client→hub") => {
-            debug!("Peer proxy relay client→hub ended for {}: {:?}", peer_addr, r);
+        r = relay_frames(client_read, &mut hub_write, &c2h) => {
+            debug!("Peer proxy relay {} ended: {:?}", c2h, r);
         }
-        r = relay_frames(hub_read, client_write, "hub→client") => {
-            debug!("Peer proxy relay hub→client ended for {}: {:?}", peer_addr, r);
+        r = relay_frames(hub_read, &mut client_write, &h2c) => {
+            debug!("Peer proxy relay {} ended: {:?}", h2c, r);
         }
     }
 
@@ -106,17 +115,33 @@ async fn handle_proxy_connection(
 /// Relay WebSocket frames from `src` to `dst`.
 ///
 /// Only binary and text frames are forwarded; ping/pong/close frames are
-/// handled transparently by tungstenite.
+/// handled transparently by tungstenite.  Each individual frame read is
+/// subject to [`RELAY_IDLE_TIMEOUT`], so a stalled stream will be detected
+/// even if the connection itself stays open.
+///
+/// `label` should describe the relay direction **and** the peer address for
+/// traceability when multiple relay connections run concurrently, e.g.
+/// `"client→hub (1.2.3.4:50000)"`.
 async fn relay_frames<R, W>(
     mut src: R,
-    mut dst: W,
-    label: &'static str,
+    dst: &mut W,
+    label: &str,
 ) -> Result<()>
 where
     R: StreamExt<Item = Result<WsMessage, WsError>> + Unpin,
     W: SinkExt<WsMessage, Error = WsError> + Unpin,
 {
-    while let Some(msg) = src.next().await {
+    loop {
+        // Apply per-frame idle timeout so a stalled sender is detected.
+        let msg = match timeout(RELAY_IDLE_TIMEOUT, src.next()).await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => break, // stream ended cleanly
+            Err(_) => {
+                debug!("Relay {}: per-frame idle timeout ({:?}), closing", label, RELAY_IDLE_TIMEOUT);
+                return Err(anyhow::anyhow!("relay {}: idle timeout", label));
+            }
+        };
+
         match msg {
             Ok(WsMessage::Binary(data)) => {
                 dst.send(WsMessage::Binary(data)).await?;

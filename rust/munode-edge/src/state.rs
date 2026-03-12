@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{broadcast, RwLock};
 
 use crate::channel_manager::ChannelManager;
 use crate::client::ClientManager;
@@ -154,7 +155,9 @@ pub enum RouteDecision {
 /// Shared state accessible by all components of the Edge server.
 pub struct EdgeState {
     /// Our assigned edge ID (from Hub registration).
-    pub edge_id: RwLock<Option<u32>>,
+    /// Stored as an AtomicU32 for lock-free reads in the voice hot path.
+    /// Value 0 means "not yet registered"; all real edge IDs are non-zero.
+    pub edge_id: AtomicU32,
     /// Whether the Hub requires client certificates.
     pub cert_required: RwLock<bool>,
     /// Channel manager (channels + remote users synced from Hub).
@@ -163,10 +166,14 @@ pub struct EdgeState {
     pub client_manager: Arc<ClientManager>,
     /// Event bus for internal notifications.
     pub event_tx: broadcast::Sender<EdgeEvent>,
-    /// Voice target cache: session_id -> target_id -> VoiceTargetConfig
-    pub voice_targets: Mutex<HashMap<u32, HashMap<u32, VoiceTargetConfig>>>,
+    /// Voice target cache: session_id -> target_id -> VoiceTargetConfig.
+    /// Uses RwLock because reads happen on every whisper voice packet and
+    /// writes only occur when the client sends a VoiceTarget message (rare).
+    pub voice_targets: RwLock<HashMap<u32, HashMap<u32, VoiceTargetConfig>>>,
     /// Registry of peer Edges and their UDP endpoints for direct voice routing.
-    pub peer_registry: Mutex<PeerRegistry>,
+    /// Uses RwLock because reads happen on every cross-edge voice packet and
+    /// writes only occur on peerJoined / peerLeft notifications (rare).
+    pub peer_registry: RwLock<PeerRegistry>,
     /// Whether Hub-mediated TCP relay is allowed for cross-Edge voice.
     /// Derived from `voice_routing.connection_strategy`.
     pub allow_hub_relay: bool,
@@ -182,13 +189,13 @@ pub struct EdgeState {
     /// Channel Ninja: list of channel IDs that are hidden from unprivileged users.
     /// Users without both Enter (0x4) AND Listen (0x800) permission on the channel
     /// will not see its occupants.  Populated from Hub on registration.
-    pub ninja_channels: tokio::sync::RwLock<Vec<u32>>,
+    pub ninja_channels: RwLock<Vec<u32>>,
     /// Per-session ninja channel permission cache.
     /// session_id -> set of channel IDs the user has Enter permission on.
     /// Used for fast ninja visibility checks without Hub round-trips.
-    pub ninja_visible_to: tokio::sync::RwLock<HashMap<u32, std::collections::HashSet<u32>>>,
+    pub ninja_visible_to: RwLock<HashMap<u32, std::collections::HashSet<u32>>>,
     /// Route table from Hub. Maps target_edge_id → RouteDecision.
-    pub route_table: tokio::sync::RwLock<std::collections::HashMap<u32, RouteDecision>>,
+    pub route_table: RwLock<std::collections::HashMap<u32, RouteDecision>>,
 }
 
 impl EdgeState {
@@ -199,20 +206,20 @@ impl EdgeState {
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(256);
         Arc::new(Self {
-            edge_id: RwLock::new(None),
+            edge_id: AtomicU32::new(0),
             cert_required: RwLock::new(false),
             channel_manager,
             client_manager,
             event_tx,
-            voice_targets: Mutex::new(HashMap::new()),
-            peer_registry: Mutex::new(PeerRegistry::default()),
+            voice_targets: RwLock::new(HashMap::new()),
+            peer_registry: RwLock::new(PeerRegistry::default()),
             allow_hub_relay: !disable_hub_relay,
             allow_direct_udp: true,
             listeners_per_user: 0,
             listeners_per_channel: 0,
-            ninja_channels: tokio::sync::RwLock::new(vec![]),
-            ninja_visible_to: tokio::sync::RwLock::new(HashMap::new()),
-            route_table: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+            ninja_channels: RwLock::new(vec![]),
+            ninja_visible_to: RwLock::new(HashMap::new()),
+            route_table: RwLock::new(std::collections::HashMap::new()),
         })
     }
 
@@ -227,21 +234,33 @@ impl EdgeState {
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(256);
         Arc::new(Self {
-            edge_id: RwLock::new(None),
+            edge_id: AtomicU32::new(0),
             cert_required: RwLock::new(false),
             channel_manager,
             client_manager,
             event_tx,
-            voice_targets: Mutex::new(HashMap::new()),
-            peer_registry: Mutex::new(PeerRegistry::default()),
+            voice_targets: RwLock::new(HashMap::new()),
+            peer_registry: RwLock::new(PeerRegistry::default()),
             allow_hub_relay,
             allow_direct_udp,
             listeners_per_user,
             listeners_per_channel,
-            ninja_channels: tokio::sync::RwLock::new(vec![]),
-            ninja_visible_to: tokio::sync::RwLock::new(HashMap::new()),
-            route_table: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+            ninja_channels: RwLock::new(vec![]),
+            ninja_visible_to: RwLock::new(HashMap::new()),
+            route_table: RwLock::new(std::collections::HashMap::new()),
         })
+    }
+
+    /// Get the current edge ID (0 = not yet registered with Hub).
+    /// Lock-free: uses atomic load for hot-path reads.
+    #[inline(always)]
+    pub fn get_edge_id(&self) -> u32 {
+        self.edge_id.load(Ordering::Relaxed)
+    }
+
+    /// Set the edge ID after Hub registration.
+    pub fn set_edge_id(&self, id: u32) {
+        self.edge_id.store(id, Ordering::Release);
     }
 
     /// Get a receiver for edge events.

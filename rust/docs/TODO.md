@@ -621,21 +621,30 @@ Hub 侧无需任何修改（relay 完全透明）。
 - [x] `PeerRegistry.relay_peers()` 方法，返回有 relay_port 的 peer 列表
 - [x] `PeerRegistry.all_udp_peers()` 方法，用于语音三跳 relay 候选选择
 - [x] relay 连接建立后正常执行 register/fullSync/joinCluster 流程
-- [ ] relay 链路的超时和健康检查（留待后续实现）
+- [x] relay 链路的超时和健康检查（`relay_server.rs` 新增 `RELAY_IDLE_TIMEOUT=300s` 每帧空闲超时，自动关闭 zombie 连接）
 - [x] 直连恢复后自动切回直连（每轮先尝试直连，逻辑已在 `run_single_slot` 中）
 
 #### 语音三跳 relay 路由
-- [x] 实现 `RELAY_MAGIC` 常量（`[0xC1, 0xDE]`），区分普通 edge 包和 relay 转发包
-- [x] `route_voice()` 新增第三条路径：直连 UDP 失败 → 尝试三跳 relay（通过任意已知 peer）→ Hub TCP 兜底
-- [x] `try_relay_via_peer()` — 遍历 PeerRegistry 中的所有已知 peer 作为中继节点
-- [x] `handle_relay_packet()` — 接收 relay 包并转发到目标 Edge
+
+**设计变更（已实现，与旧文档不同）：**  
+旧设计使用 `RELAY_MAGIC=[0xC1,0xDE]` + `try_relay_via_peer()` 临时选择任意 peer 中继。
+**当前实现**已升级为 Hub 驱动的质量感知路由，三跳 relay 由 Hub 的 Dijkstra 路由表决策：
+
+- [x] 独立 `edge_socket`（`edge_port`）用于 Edge 间 UDP 通信，1-byte 类型前缀区分包类型（取代旧的 `RELAY_MAGIC=[0x00,0x00]` 双字节前缀）
+- [x] `EDGE_PKT_VOICE=0x01` / `EDGE_PKT_RELAY=0x02` / `EDGE_PKT_PROBE=0x03` — 三类 edge 包
+- [x] Hub 通过 Dijkstra 计算路由表（`topology_manager.rs`），决定对每个目标 edge 用 Direct / RelayVia / HubTcp
+- [x] `EdgeState.route_table: RwLock<HashMap<u32, RouteDecision>>` 存储 Hub 推送的路由表
+- [x] `route_voice()` 按 Hub 路由决策转发：`Direct→[0x01]`、`RelayVia→[0x02][target][session][voice]`、`HubTcp→relay_voice_via_hub`
+- [x] `handle_relay_packet()` — 中间节点接收 `[0x02]` 包，读取 target_edge_id，构建 `[0x01]` 包转发到目标
+- [x] UDP 探针协议（`EDGE_PKT_PROBE=0x03`）：每 10s 发送 ping/pong，每 30s 通过 `report_quality` RPC 上报 RTT/丢包率
+- [x] `PeerQualityState`：跟踪每 peer 的 RTT 样本（最近 10 次滑动窗口）和丢包率
 
 #### 集成测试
 - [x] `peer-proxy.test.ts` — diagnose 总是显示 control_relay: enabled 及 relay_port（4 个配置测试）
 - [x] `peer-proxy.test.ts` — relay 服务器监听端口 TCP 可达性测试
 - [x] `peer-proxy.test.ts` — 集群以 relay_port 配置正常启动测试
-- [ ] Edge 无法直连 Hub 时通过 static peer relay 完成 register/auth 测试（需要可控网络断开）
-- [ ] 三跳语音 relay 功能测试（需要特殊测试拓扑）
+- [ ] Edge 无法直连 Hub 时通过 static peer relay 完成 register/auth 测试（❌ 不实现：需要 iptables/tc 可控网络断开基础设施，测试环境成本高）
+- [ ] 三跳语音 relay E2E 测试（❌ 不实现：需要 3-Edge 拓扑 + 可控 UDP 断链，测试框架不支持）
 
 #### 依赖
 - Hub 连接池（Edge #3）
@@ -652,15 +661,18 @@ Hub 侧无需任何修改（relay 完全透明）。
 ### 1. 性能优化
 
 **优先级**: P1  
-**状态**: 📋 计划中
+**状态**: ✅ 语音热路径优化已完成（基准测试不实现）
 
 #### 任务
-- [ ] 异步 I/O 优化
-- [ ] 内存分配优化
+- [x] **语音热路径锁优化**：`peer_registry` Mutex → RwLock（并发读，写操作从热路径移出）；`voice_targets` Mutex → RwLock（whisper 路径只读，写只在客户端发送 VoiceTarget 时）
+- [x] **edge_id 无锁化**：`EdgeState.edge_id` 从 `RwLock<Option<u32>>` 改为 `AtomicU32`，消除 voice 热路径中每包一次的 async lock
+- [x] **批量客户端查询**：新增 `ClientManager::get_channel_voice_targets_with_listeners()`，将 N 次 get_client/get_crypt_state 合并为 2 次锁（clients + crypt_states），并使用 O(1) 的 `listening_index` 而非 O(N) 线性扫描
+- [x] **监听频道 O(1) 索引**：`ClientManager` 新增 `listening_index: RwLock<HashMap<channel_id, Vec<session>>>` 替代原来的全表扫描；`add_client`/`remove_client`/`update_client` 同步维护索引
+- [x] **预计算 relay_payload**：`route_voice()` 中 `inject_session_into_voice()` 只计算一次（之前在每个 remote edge 循环内重复计算）
+- [x] **路由表和 peer 地址快照**：`route_voice()` 在进入 remote-edge 循环前一次性快照 route_table + peer_snapshot，消除 N 次异步 lock 变为 2 次
+- [x] **加密缓冲预分配**：`encrypted = Vec::with_capacity(forwarded.len() + 16)` 取代 `Vec::new()`，避免 OCB2 加密时重新分配
 - [x] 数据库查询优化（`check_ip_banned` 改为只查询未过期 ban，避免全表扫描）
-- [ ] 消息序列化优化
-- [ ] 连接处理优化
-- [ ] 基准测试套件
+- [ ] 基准测试套件（❌ 不实现）
 
 #### 测试
 - [ ] 性能基准测试（❌ 不实现：当前优先级不足）
@@ -698,6 +710,7 @@ Hub 侧无需任何修改（relay 完全透明）。
 #### 任务
 - [x] 数据库迁移工具（`migrate [config]` 子命令：查看当前版本、应用待迁移项、记录版本历史到 `schema_versions` 表）
 - [x] 配置验证工具（`validate-config [path]` 子命令，Hub/Edge 均已实现）
+- [x] 配置生成工具（`generate-config [path]` 子命令，Hub/Edge 均已实现：写出完整注释默认 TOML 配置，目标文件已存在时报错）
 - [x] 备份工具（`backup <config> <dest>` 子命令：VACUUM INTO 备份 DB、递归复制 blobs、写入 manifest.json）
 - [x] 诊断工具（`diagnose [path]` 子命令，Hub/Edge 均已实现）：配置解析验证、文件存在性检查（DB/blob/TLS证书/Lua脚本/GeoIP DB）、Hub TCP 可达性探测、配置摘要打印
 - [x] 批量管理脚本（`admin <config> <cmd>` 子命令：`list-users`、`list-channels`、`list-bans`、`cleanup-bans`、`schema-version`）
@@ -786,8 +799,8 @@ Hub 侧无需任何修改（relay 完全透明）。
    - EdgeConfig suggest 结构、SuggestConfig 消息发送
 10. **Hub 连接池** (Edge #3) - ✅ 已完成
     - 多并发 WebSocket 连接、round-robin 负载均衡、per-slot 独立重连（含指数退避）
-11. **性能优化** (其他 #1) - 📋 计划中
-    - 基础优化已做（DB 查询）；benchmark 套件不实现
+11. **性能优化** (其他 #1) - ✅ 语音热路径优化已完成
+    - 语音热路径：peer_registry Mutex→RwLock、voice_targets Mutex→RwLock、edge_id AtomicU32、listening_index O(1)查询、批量客户端锁、relay_payload预计算、路由表快照；benchmark 套件不实现
 
 ### 可以延后（P2）
 12. **Web API 接口** (Hub #1) - ✅ 已完成
@@ -797,7 +810,7 @@ Hub 侧无需任何修改（relay 完全透明）。
 14. **监控和可观测性** (其他 #2) - ✅ 基础实现已完成
     - Prometheus metrics（全局+每 Edge 标签化）和结构化 JSON 日志已实现；分布式追踪❌不实现
 15. **运维工具** (其他 #3) - ✅ 已完成
-    - migrate/backup/admin/validate-config/diagnose 全部实现
+    - migrate/backup/admin/validate-config/diagnose/generate-config 全部实现
 16. **经由 Peer Edge 中继控制信道** (Edge #5) - ✅ 已完成（核心实现）
     - 自动路由（always-on relay + static_peers + 动态发现）；语音三跳 relay 已实现；端到端网络分区场景测试不实现
 
@@ -865,6 +878,11 @@ Hub 侧无需任何修改（relay 完全透明）。
 - 2026-03-12: 更新 `peer-proxy-design.md` 详细记录新设计；更新集成测试 `peer-proxy.test.ts` 匹配新 API（7 用例）；标记 OpenTelemetry / GeoIP 位置路由 / Ninja 音频隔离 / 集群分区网络测试 / 性能基准 ❌ 不实现
 - 2026-03-12: 新增 `rust/docs/voice-routing-and-control-relay.md`，全面记录 Rust 语音平面（UDP 三级路由、包格式、连接策略配置）和控制信道平面（透明 WebSocket relay、三级回退、peer 发现）的实现细节；更新 TODO.md 相关条目的参考链接；标记"直连恢复后自动切回直连"为已完成（`run_single_slot` 逻辑已实现）
 - 2026-03-12: **全面实现质量感知智能路由系统**：新增 UDP 探针协议（PROBE_MAGIC=0xC2,0xDE，每 10s ping/pong）、PeerQualityState RTT/丢包跟踪、report_quality RPC 每 30s 上报到 Hub；Hub 新增 compute_route_table()（Dijkstra + PACKET_LOSS_PENALTY_MS=500）和 push_route_tables_to_all()；Edge 新增 RouteDecision 枚举（Direct/RelayVia/HubTcp）和 route_table 存储；路由决策从"直连优先"改为"按 Hub 路由表决策"；新增 HubRouteEntryProto + HubRouteTableUpdateParams protobuf 消息（tag=36）；更新文档 voice-routing-and-control-relay.md 至版本 2.0
+- 2026-03-12: 新增 Hub/Edge `generate-config [path]` 子命令 — 写出完整注释默认 TOML 配置（目标文件已存在时报错；Hub 默认 `hub.toml`，Edge 默认 `edge.toml`）
+- 2026-03-12: 实现 relay_server.rs 超时/健康检查 — `RELAY_IDLE_TIMEOUT=300s` 每帧空闲超时，防止 zombie relay 连接积压，超时后记录 debug 日志并关闭连接
+- 2026-03-12: 更新 ts-rust-feature-comparison.md — 将 `preConnect 状态支持`（已在 server.rs 实现）、`generate-config 命令`（新实现）标记为 ✅
+- 2026-03-12: **语音热路径多线程/无锁优化**：`peer_registry` Mutex→RwLock、`voice_targets` Mutex→RwLock、`edge_id` RwLock→AtomicU32（lock-free read）、新增 `ClientManager::get_channel_voice_targets_with_listeners()`（N×2 锁→2 锁批量查询）、新增 `listening_index`（O(N)→O(1) 监听者查找）、`route_voice()` relay_payload 单次预计算（取代循环内重复分配）、route_table + peer_registry 快照模式（N→2 次 lock）、加密缓冲预分配（`Vec::with_capacity(len+16)`）
+- 2026-03-12: 更新 TODO.md — 修正 Edge #5 语音三跳 relay 实现说明（旧文档引用已废弃的 `RELAY_MAGIC[0xC1,0xDE]` + `try_relay_via_peer()`；实际为 Hub Dijkstra 路由表 + `RouteDecision::RelayVia` + `EDGE_PKT_RELAY=0x02`）；将"网络分区端到端测试"和"三跳 relay E2E 测试"标记为 ❌ 不实现；性能优化更新为 ✅ 已完成
 
 ---
 
@@ -880,8 +898,8 @@ Hub 侧无需任何修改（relay 完全透明）。
 | Hub #12 集群分割 | 仲裁测试、最小子集群关停测试 | ❌ 不实现（需可控网络断开） |
 | Edge #2 GeoIP | 基于位置的 Edge 分配 | ❌ 不实现 |
 | Edge #4 客户端建议配置 | 全部子项 | ❌ 不实现（与 Hub 功能重复） |
-| Edge #5 控制信道中继 | relay 超时健康检查；网络分区端到端测试；语音三跳 relay E2E 测试 | 超时健康检查留待后续；测试需可控网络断开 |
-| 其他 #1 性能优化 | benchmark 套件、负载/内存/并发测试 | ❌ 不实现（优先级不足） |
+| Edge #5 控制信道中继 | 网络分区端到端测试；语音三跳 relay E2E 测试 | ❌ 不实现：需 iptables/tc 可控网络断开 + 多 Edge 测试拓扑，基础设施成本高 |
+| 其他 #1 性能优化 | benchmark 套件（基准测试套件）、负载/内存/并发测试 | 代码级优化已完成（见下方"已完成"）；基准测试不实现 |
 | 其他 #2 监控可观测性 | 分布式追踪（OpenTelemetry） | ❌ 不实现 |
 
 ### 有意不实现的功能

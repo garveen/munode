@@ -152,7 +152,7 @@
 | handleAuthFailure | 发送 Reject 消息 | ✅ munode-edge/handler.rs |
 | sendChannelTree | 向客户端发送完整频道树 | ✅ munode-edge/handler.rs (send_channel_tree) |
 | sendUserListToClient | 向客户端发送所有在线用户状态 | ✅ munode-edge/handler.rs (send_user_states) |
-| preConnect 状态支持 | 在认证前缓存 self_mute/self_deaf 等状态 | ❌ |
+| preConnect 状态支持 | 在认证前缓存 self_mute/self_deaf 等状态 | ✅ munode-edge/server.rs (`preconnect_self_mute`/`preconnect_self_deaf` 在认证前缓存，认证后同步到 Hub) |
 
 ### 18. auth/auth-manager.ts
 | 子功能点 | 描述 | Rust |
@@ -184,7 +184,7 @@
 |---------|------|------|
 | start 命令 | 启动 Edge 服务器 | ✅ munode-edge/main.rs |
 | validate-config 命令 | 验证配置文件 | ✅ munode-edge/main.rs `validate-config [path]` 子命令 |
-| generate-config 命令 | 生成默认配置 | ❌ |
+| generate-config 命令 | 生成默认配置 | ✅ munode-edge/main.rs `generate-config [path]` 子命令，输出完整默认 TOML 配置 |
 | 信号处理 | SIGINT/SIGTERM 优雅关闭 | ✅ |
 
 ### 22. client/client-manager.ts
@@ -537,6 +537,7 @@
 | 子功能点 | 描述 | Rust |
 |---------|------|------|
 | 启动入口 | 命令行启动和优雅关闭 | ✅ munode-hub/main.rs |
+| generate-config 命令 | 生成默认配置文件 | ✅ munode-hub/main.rs `generate-config [path]` 子命令，输出完整默认 TOML 配置 |
 
 ### 71. config-defaults.ts
 | 子功能点 | 描述 | Rust |
@@ -827,7 +828,7 @@
 | **GeoIP** | 中 | 低 | 中 | Hub 日志记录已实现，基于位置的路由优化待实现 |
 | **连接池/重连** | 高 | 低 | 低 | 连接池已实现，指数退避重连已实现 |
 | **Blob 存储** | 高 | 低 | 低 | 文件系统存储，SHA-256 分片，支持用户头像/评论，内容寻址去重 |
-| **CLI 工具** | 中 | 低 | 中 | validate-config 已实现，generate-config 未实现 |
+| **CLI 工具** | 中 | 低 | 低 | validate-config / generate-config / diagnose 均已实现（Hub 和 Edge） |
 
 ### Rust 特有功能（TS 未实现）
 
