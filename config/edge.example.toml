@@ -56,9 +56,11 @@ region = "asia-east"                    # Default: not set (recommended to set f
 #
 # 1. Docker Compose (recommended):
 #    Secrets are injected via Docker secrets and mounted read-only inside the
-#    container at /run/secrets/<name>. Use the paths below as-is.
-#      cert = "/run/secrets/tls_cert"
-#      key  = "/run/secrets/tls_key"
+#    container at /run/secrets/<name>. The entrypoint copies them to
+#    /app/secrets/ with correct ownership so the unprivileged process can
+#    read them.  Use the paths below as-is.
+#      cert = "/app/secrets/tls_cert"
+#      key  = "/app/secrets/tls_key"
 #    Configure the source files in docker-compose.edge.yml (TLS_CERT / TLS_KEY
 #    env vars), e.g.:
 #      TLS_CERT=/etc/letsencrypt/live/example.com/fullchain.pem
@@ -69,8 +71,8 @@ region = "asia-east"                    # Default: not set (recommended to set f
 #      cert = "./certs/edge-cert.pem"
 #      key  = "./certs/edge-key.pem"
 #
-cert = "/run/secrets/tls_cert"          # Docker: /run/secrets/tls_cert  |  Bare: ./certs/edge-cert.pem
-key  = "/run/secrets/tls_key"           # Docker: /run/secrets/tls_key   |  Bare: ./certs/edge-key.pem
+cert = "/app/secrets/tls_cert"          # Docker: /app/secrets/tls_cert  |  Bare: ./certs/edge-cert.pem
+key  = "/app/secrets/tls_key"           # Docker: /app/secrets/tls_key   |  Bare: ./certs/edge-key.pem
 # ca = "./certs/ca-chain.pem"           # Optional: CA chain for client certificate validation
 
 # ---------------------------------------------------------------------------
