@@ -217,9 +217,12 @@ export class ConnectionManager {
     this.stopPing();
     
     if (this.tcpSocket) {
-      this.tcpSocket.removeAllListeners();
-      this.tcpSocket.end();
+      const socket = this.tcpSocket;
       this.tcpSocket = null;
+      socket.removeAllListeners();
+      // Absorb any ECONNRESET/EPIPE that may arrive during graceful close.
+      socket.once('error', () => {});
+      socket.destroy();
     }
     
     if (this.udpSocket) {

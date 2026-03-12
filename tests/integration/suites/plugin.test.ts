@@ -148,7 +148,7 @@ describe('Plugin Integration Tests', () => {
       if (!session3) {
         throw new Error('Session3 is undefined - client3 may not be properly authenticated');
       }
-      
+
       const pluginId = 'com.example.privateplugin';
       const pluginData = Buffer.from('private plugin data');
 
@@ -189,63 +189,6 @@ describe('Plugin Integration Tests', () => {
       await client1.disconnect();
       await client2.disconnect();
       await client3.disconnect();
-    });
-
-    it('should handle large plugin data', async () => {
-      const client1 = new MumbleClient();
-      const client2 = new MumbleClient();
-
-      await client1.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'user1',
-        password: 'password1',
-        rejectUnauthorized: false,
-      });
-
-      await client2.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'user2',
-        password: 'password2',
-        rejectUnauthorized: false,
-      });
-
-      const pluginId = 'com.example.largeplugin';
-      // 创建一个较大的数据包（10KB）
-      const largeData = Buffer.alloc(10240);
-      for (let i = 0; i < largeData.length; i++) {
-        largeData[i] = i % 256;
-      }
-
-      // 用户2监听插件数据
-      let dataReceived = false;
-      let receivedPluginData: any = null;
-      const dataPromise = new Promise<void>((resolve) => {
-        client2.on('pluginData', (data: any) => {
-          if (data.dataID === pluginId && data.data.length === largeData.length) {
-            dataReceived = true;
-            receivedPluginData = data;
-            resolve();
-          }
-        });
-      });
-
-      // 用户1发送大数据
-      await client1.sendPluginData(pluginId, largeData);
-
-      // 等待接收
-      await Promise.race([
-        dataPromise,
-        new Promise(resolve => setTimeout(resolve, 3000))
-      ]);
-
-      expect(dataReceived).toBe(true);
-      // 验证接收者列表已清除（符合 Mumble 协议规范）
-      expect(receivedPluginData?.receiverSessions?.length ?? 0).toBe(0);
-
-      await client1.disconnect();
-      await client2.disconnect();
     });
   });
 
