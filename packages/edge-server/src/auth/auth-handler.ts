@@ -10,6 +10,7 @@
 
 import type { Logger } from 'winston';
 import { mumbleproto, MessageType, ClientState } from '@munode/protocol';
+import { DEFAULT_RATE_LIMITS } from '@munode/common';
 import { randomFillSync } from 'crypto';
 import type { ClientInfo, AuthResult } from '../types.js';
 import type { HandlerFactory } from '../core/handler-factory.js';
@@ -236,10 +237,11 @@ export class AuthHandlers {
 
       // 9. 发送 ServerSync 消息
       // Hub 会通过 hub.userJoined 通知所有 Edge（包括本 Edge），广播给其他客户端
+      const hubLimits = this.factory.hubLimits;
       const serverSyncMessage = mumbleproto.ServerSync.encode({
         session: session_id,
-        max_bandwidth: this.config.server.max_bandwidth || 128000,
-        welcome_text: this.config.server.welcome_text || 'Welcome to Shitspeak Server',
+        max_bandwidth: hubLimits?.max_bandwidth ?? this.config.server.max_bandwidth ?? 128000,
+        welcome_text: hubLimits?.welcome_text ?? this.config.server.welcome_text ?? 'Welcome to Munode Server',
         permissions: 0, // TODO: 计算权限
       }).finish();
 
@@ -249,16 +251,16 @@ export class AuthHandlers {
       // 注意：cert_required 配置不发送给客户端，由服务器端在连接时强制执行
       // welcome_text 已在 ServerSync 中发送，此处不再重复发送
       const serverConfigMessage = mumbleproto.ServerConfig.encode({
-        max_bandwidth: this.config.server.max_bandwidth,
-        allow_html: true, // TODO: 从Hub配置获取
-        message_length: 5000, // TODO: 从Hub配置获取
-        image_message_length: 131072, // TODO: 从Hub配置获取
-        max_users: this.config.server.capacity,
-        recording_allowed: true, // TODO: 从Hub配置获取
+        max_bandwidth: hubLimits?.max_bandwidth ?? this.config.server.max_bandwidth,
+        allow_html: true,
+        message_length: hubLimits?.text_message_length ?? 5000,
+        image_message_length: hubLimits?.image_message_length ?? 131072,
+        max_users: hubLimits?.max_users ?? this.config.server.capacity,
+        recording_allowed: true,
       }).finish();
       this.messageHandler.sendMessage(session_id, MessageType.ServerConfig, Buffer.from(serverConfigMessage));
 
-      // 9.6. 发送 SuggestConfig 消息（如果配置了建议）
+      // 9.6. 发送 SuggestConfig 消息（优先使用 Hub 下发的限制配置）
       const suggestConfig: {
         version?: number;
         positional?: boolean;
@@ -266,15 +268,24 @@ export class AuthHandlers {
       } = {};
       let hasSuggestion = false;
 
-      if (this.config.client.suggest_version !== undefined && this.config.client.suggest_version > 0) {
+      if (hubLimits?.suggest_version !== undefined && hubLimits.suggest_version > 0) {
+        suggestConfig.version = hubLimits.suggest_version;
+        hasSuggestion = true;
+      } else if (this.config.client.suggest_version !== undefined && this.config.client.suggest_version > 0) {
         suggestConfig.version = this.config.client.suggest_version;
         hasSuggestion = true;
       }
-      if (this.config.client.suggest_positional !== undefined) {
+      if (hubLimits?.suggest_positional !== undefined) {
+        suggestConfig.positional = hubLimits.suggest_positional;
+        hasSuggestion = true;
+      } else if (this.config.client.suggest_positional !== undefined) {
         suggestConfig.positional = this.config.client.suggest_positional;
         hasSuggestion = true;
       }
-      if (this.config.client.suggest_push_to_talk !== undefined) {
+      if (hubLimits?.suggest_push_to_talk !== undefined) {
+        suggestConfig.push_to_talk = hubLimits.suggest_push_to_talk;
+        hasSuggestion = true;
+      } else if (this.config.client.suggest_push_to_talk !== undefined) {
         suggestConfig.push_to_talk = this.config.client.suggest_push_to_talk;
         hasSuggestion = true;
       }
@@ -288,6 +299,15 @@ export class AuthHandlers {
       this.clientManager.updateClient(session_id, {
         state: ClientState.Ready,
       });
+
+      // 应用 Hub 下发的速率限制（如果已收到）
+      if (hubLimits?.message_rate && hubLimits.message_rate > 0) {
+        this.clientManager.applyHubMessageRateLimits(
+          session_id,
+          hubLimits.message_rate,
+          hubLimits.message_burst ?? DEFAULT_RATE_LIMITS.message.capacity,
+        );
+      }
       
       // 11. 处理待处理的UserState（如果有）
       // 在认证期间收到的UserState会被延迟到这里处理

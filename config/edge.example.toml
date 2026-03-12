@@ -52,9 +52,25 @@ region = "asia-east"                    # Default: not set (recommended to set f
 # TLS/SSL
 # ---------------------------------------------------------------------------
 [tls]
-# Docker Compose: Mount certificates to /app/certs/ volume
-cert = "./certs/edge-cert.pem"          # Server certificate (PEM format)
-key  = "./certs/edge-key.pem"           # Private key (PEM format)
+# Two deployment scenarios:
+#
+# 1. Docker Compose (recommended):
+#    Secrets are injected via Docker secrets and mounted read-only inside the
+#    container at /run/secrets/<name>. Use the paths below as-is.
+#      cert = "/run/secrets/tls_cert"
+#      key  = "/run/secrets/tls_key"
+#    Configure the source files in docker-compose.edge.yml (TLS_CERT / TLS_KEY
+#    env vars), e.g.:
+#      TLS_CERT=/etc/letsencrypt/live/example.com/fullchain.pem
+#      TLS_KEY=/etc/letsencrypt/live/example.com/privkey.pem
+#
+# 2. Bare-metal / standalone:
+#    Point directly to the certificate files on disk.
+#      cert = "./certs/edge-cert.pem"
+#      key  = "./certs/edge-key.pem"
+#
+cert = "/run/secrets/tls_cert"          # Docker: /run/secrets/tls_cert  |  Bare: ./certs/edge-cert.pem
+key  = "/run/secrets/tls_key"           # Docker: /run/secrets/tls_key   |  Bare: ./certs/edge-key.pem
 # ca = "./certs/ca-chain.pem"           # Optional: CA chain for client certificate validation
 
 # ---------------------------------------------------------------------------

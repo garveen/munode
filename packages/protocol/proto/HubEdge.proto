@@ -209,6 +209,9 @@ message HeartbeatAck {
   
   // 可选的配置更新
   optional ConfigUpdate config_update = 4;
+
+  // 如果 Hub 的客户端限制配置有变更，通过心跳确认包推送新配置
+  optional ServerLimitsConfig server_limits = 5;
 }
 
 /**

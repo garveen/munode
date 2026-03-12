@@ -206,11 +206,17 @@ async fn handle_client_connection(
     // Pre-connect state: sent by client before Authenticate message
     let mut preconnect_self_mute: Option<bool> = None;
     let mut preconnect_self_deaf: Option<bool> = None;
-    // Per-client rate limiter for text messages
-    let mut text_rate_limiter = if config.server.message_rate > 0.0 {
+    // Per-client rate limiter for text messages.
+    // Prefer hub-pushed limits over edge-local config (hub limits are set after registration).
+    let hub_limits_snapshot = edge_state.hub_limits.read().await.clone();
+    let (effective_message_rate, effective_message_burst) = hub_limits_snapshot
+        .as_ref()
+        .map(|l| (l.message_rate.unwrap_or(0.0), l.message_burst.unwrap_or(0)))
+        .unwrap_or((config.server.message_rate, config.server.message_burst));
+    let mut text_rate_limiter = if effective_message_rate > 0.0 {
         Some(munode_common::rate_limiter::TokenBucket::new(
-            config.server.message_rate,
-            config.server.message_burst,
+            effective_message_rate,
+            effective_message_burst,
         ))
     } else {
         None

@@ -11,8 +11,10 @@ services:
       - "${EDGE_PORT:-64739}:64739/udp"
     volumes:
       - ${EDGE_CONFIG:-./config/edge.toml}:/app/config/edge.toml:ro
-      - ${CERTS_DIR:-./certs}:/app/certs:ro
       - ${LOG_DIR:-./logs}/edge:/app/logs
+    secrets:
+      - tls_cert
+      - tls_key
     environment:
       - RUST_LOG=${RUST_LOG:-info}
     networks:
@@ -27,3 +29,9 @@ services:
 networks:
   munode-network:
     driver: bridge
+
+secrets:
+  tls_cert:
+    file: ${TLS_CERT:-./certs/server.pem}
+  tls_key:
+    file: ${TLS_KEY:-./certs/server.key}

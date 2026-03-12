@@ -89,6 +89,9 @@ export interface RegisterResponse extends RPCResponse {
   session_expired?: boolean; // 标识会话已过期，需要冷启动
   cold_restart?: boolean; // 标识这是冷重启（Edge 进程重启，所有旧客户端已断开）
   need_cleanup?: boolean; // 标识需要清理旧会话（Edge 重连时）
+
+  // Hub 下发的服务器限制配置
+  server_limits?: ServerLimitsConfig;
 }
 
 // Edge server information
@@ -105,6 +108,23 @@ export interface EdgeInfo {
   last_seen: number;
 }
 
+// Server limits pushed from Hub to Edge, then relayed to clients
+export interface ServerLimitsConfig {
+  max_bandwidth?: number;
+  text_message_length?: number;
+  image_message_length?: number;
+  plugin_message_length?: number;
+  message_rate?: number;
+  message_burst?: number;
+  max_users?: number;
+  listeners_per_channel?: number;
+  listeners_per_user?: number;
+  suggest_version?: number;
+  suggest_positional?: boolean;
+  suggest_push_to_talk?: boolean;
+  welcome_text?: string;
+}
+
 // Heartbeat request/response types
 export interface HeartbeatRequest {
   server_id: number;
@@ -113,6 +133,7 @@ export interface HeartbeatRequest {
 
 export interface HeartbeatResponse extends RPCResponse {
   updated_edges?: EdgeInfo[];
+  server_limits?: ServerLimitsConfig;
 }
 
 // Server statistics

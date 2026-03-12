@@ -388,7 +388,7 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
           edge_id: p.edge_id,
           client_session: p.client_session,
           target_id: p.target_id,
-          config_json: typeof p.config === 'string' ? p.config : JSON.stringify(p.config),
+          config: typeof p.config === 'object' && p.config !== null ? p.config as import('../generated/proto/HubEdgeRPC.js').VoiceTargetConfigProto : undefined,
         };
         break;
       }
@@ -714,22 +714,11 @@ export class RPCChannel extends EventEmitter implements IRPCChannel {
         break;
       case 'hub.syncVoiceTarget':
         if (typedNotification.sync_voice_target) {
-          // Parse config_json back to object if it's a string
-          let config = typedNotification.sync_voice_target.config_json;
-          if (typeof config === 'string') {
-            try {
-              config = JSON.parse(config);
-            } catch (error) {
-              this.logger.error('Failed to parse config_json:', error);
-              config = null;
-            }
-          }
-          
           result.params = {
             edge_id: typedNotification.sync_voice_target.edge_id,
             client_session: typedNotification.sync_voice_target.client_session,
             target_id: typedNotification.sync_voice_target.target_id,
-            config: config,
+            config: typedNotification.sync_voice_target.config ?? null,
             timestamp: typedNotification.sync_voice_target.timestamp,
           };
         }

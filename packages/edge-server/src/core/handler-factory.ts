@@ -14,7 +14,7 @@ import { EdgeControlClient } from '../cluster/hub-client.js';
 import { BanManager } from '../ban/ban-manager.js';
 import { ContextActions } from '../handlers/context-action.js';
 import { EdgeStateManager } from '../state/state-manager.js';
-import { PermissionManager, type ACLEntry } from '@munode/protocol';
+import { PermissionManager, type ACLEntry, type ServerLimitsConfig } from '@munode/protocol';
 import { EdgeConfig } from '../types.js';
 
 import { ProtocolHandlers } from '../handlers/protocol-handlers.js';
@@ -48,7 +48,11 @@ export class HandlerFactory {
   public readonly aclMap: Map<number, ACLEntry[]>;
   
   // EdgeServer 引用（用于访问服务器级别的状态）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   public edgeServer?: any; // 使用 any 避免循环依赖
+
+  // Hub 下发的服务器限制配置（从 Hub 注册/心跳响应中更新）
+  public hubLimits?: ServerLimitsConfig;
 
   // Logger实例
   public readonly logger: Logger;

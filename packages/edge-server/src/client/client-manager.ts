@@ -576,6 +576,23 @@ export class ClientManager extends TypedEventEmitter<ClientManagerEvents> {
   }
 
   /**
+   * 应用 Hub 下发的速率限制到已有客户端
+   * @param sessionId 客户端会话ID
+   * @param messageRate Hub 下发的消息速率（条/秒）
+   * @param messageBurst Hub 下发的突发容量
+   */
+  applyHubMessageRateLimits(sessionId: number, messageRate: number, messageBurst: number): void {
+    const rateLimiter = this.rateLimiters.get(sessionId);
+    if (!rateLimiter) {
+      return;
+    }
+    if (messageRate > 0) {
+      rateLimiter.register('message', { tokensPerSecond: messageRate, capacity: messageBurst });
+      this.logger.debug(`Applied hub rate limits for client: session=${sessionId}, rate=${messageRate}, burst=${messageBurst}`);
+    }
+  }
+
+  /**
    * 获取客户端统计收集器
    */
   getStatisticsCollector(sessionId: number): ClientStatisticsCollector | undefined {

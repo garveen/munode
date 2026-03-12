@@ -258,6 +258,7 @@ export type {
   GetACLsRequest,
   SaveChannelRequest,
   SaveACLRequest,
+  ServerLimitsConfig,
 } from './hub-edge-types.js';
 
 // Transport layer

@@ -456,9 +456,13 @@ export class EventSetupManager {
       // 为了避免重复调用 fullSync，我们只在 'registered' 和 'reconnected' 事件中处理，
       // 不在 'connected' 事件中处理（因为 connected 总是在 registered/reconnected 之后触发）
 
-      this.hubClient.on('registered', () => {
+      this.hubClient.on('registered', (response: ExtendedRegisterResponse) => {
         void (async () => {
           this.logger.info('Successfully registered with Hub (first time or after cold restart)');
+          if (response.server_limits) {
+            this.handlerFactory.hubLimits = response.server_limits;
+            this.logger.info('Received server limits from Hub', { max_bandwidth: response.server_limits.max_bandwidth, max_users: response.server_limits.max_users });
+          }
           await performFullSync();
         })();
       });
@@ -466,6 +470,10 @@ export class EventSetupManager {
       this.hubClient.on('reconnected', (response: ExtendedRegisterResponse) => {
         void (async () => {
           this.logger.info('Successfully reconnected to Hub (session restored)');
+          if (response.server_limits) {
+            this.handlerFactory.hubLimits = response.server_limits;
+            this.logger.info('Updated server limits from Hub on reconnect', { max_bandwidth: response.server_limits.max_bandwidth });
+          }
           
           // 如果 Hub 要求清理会话，断开所有本地客户端
           if (response.need_cleanup) {
@@ -514,6 +522,10 @@ export class EventSetupManager {
       });
 
       this.hubClient.on('heartbeat', (response) => {
+        if (response.server_limits) {
+          this.handlerFactory.hubLimits = response.server_limits;
+          this.logger.debug('Updated server limits from Hub heartbeat');
+        }
         this.logger.debug('Hub heartbeat response:', response);
       });
 

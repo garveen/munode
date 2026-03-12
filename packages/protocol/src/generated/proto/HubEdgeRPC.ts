@@ -9,6 +9,65 @@ import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 
 export const protobufPackage = "hubedge";
 
+/**
+ * ---------------------------------------------------------------------------
+ * ServerLimitsConfig - Hub 下发给 Edge 的客户端限制配置
+ * Edge 在向客户端发送 ServerSync / ServerConfig / SuggestConfig 时使用这些值
+ * ---------------------------------------------------------------------------
+ */
+export interface ServerLimitsConfig {
+  /** 每个客户端的最大带宽（bps）。0 = 无限制。 */
+  max_bandwidth?:
+    | number
+    | undefined;
+  /** 文本消息最大长度（字节）。 */
+  text_message_length?:
+    | number
+    | undefined;
+  /** 图片消息最大长度（字节）。 */
+  image_message_length?:
+    | number
+    | undefined;
+  /** 插件数据消息最大长度（字节）。 */
+  plugin_message_length?:
+    | number
+    | undefined;
+  /** 每秒最大文本消息数（令牌桶速率）。0 = 无限制。 */
+  message_rate?:
+    | number
+    | undefined;
+  /** 文本消息令牌桶突发大小。 */
+  message_burst?:
+    | number
+    | undefined;
+  /** 服务器最大用户数。0 = 无限制。 */
+  max_users?:
+    | number
+    | undefined;
+  /** 每频道最大监听者数。0 = 无限制。 */
+  listeners_per_channel?:
+    | number
+    | undefined;
+  /** 每用户最大监听频道数。0 = 无限制。 */
+  listeners_per_user?:
+    | number
+    | undefined;
+  /** 建议客户端版本（数字格式，如 1340029 表示 1.3.4.29）。 */
+  suggest_version?:
+    | number
+    | undefined;
+  /** 建议开启位置音频。 */
+  suggest_positional?:
+    | boolean
+    | undefined;
+  /** 建议开启按键通话。 */
+  suggest_push_to_talk?:
+    | boolean
+    | undefined;
+  /** 欢迎消息（MOTD）。 */
+  welcome_text?: string | undefined;
+}
+
 export interface EdgeInfo {
   server_id?: number | undefined;
   name?: string | undefined;
@@ -44,7 +103,11 @@ export interface EdgeRegisterResult {
   edge_list?: EdgeInfo[] | undefined;
   challenge?: string | undefined;
   challenge_timeout?: number | undefined;
-  error?: string | undefined;
+  error?:
+    | string
+    | undefined;
+  /** Hub 下发的客户端限制配置，Edge 注册成功后立即生效 */
+  server_limits?: ServerLimitsConfig | undefined;
 }
 
 /**
@@ -69,7 +132,11 @@ export interface EdgeServerStats {
 export interface EdgeHeartbeatResult {
   success?: boolean | undefined;
   updated_edges?: EdgeInfo[] | undefined;
-  error?: string | undefined;
+  error?:
+    | string
+    | undefined;
+  /** 如果 Hub 配置有变更，通过心跳响应推送更新后的限制 */
+  server_limits?: ServerLimitsConfig | undefined;
 }
 
 /**
@@ -836,9 +903,113 @@ export interface HubSyncVoiceTargetParams {
   target_id?:
     | number
     | undefined;
-  /** VoiceTarget config as JSON (complex nested structure) */
-  config_json?: string | undefined;
+  /** VoiceTarget config (typed) */
+  config?: VoiceTargetConfigProto | undefined;
   timestamp?: number | undefined;
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Edge → Hub 通知消息 (替代 unknown_params_json)
+ * ---------------------------------------------------------------------------
+ */
+export interface EdgeHandleUserLeftParams {
+  session_id?: number | undefined;
+  edge_id?: number | undefined;
+  reason?: string | undefined;
+}
+
+export interface EdgeHandleUserRemoveParams {
+  edge_id?: number | undefined;
+  actor_session?: number | undefined;
+  actor_user_id?: number | undefined;
+  actor_username?: string | undefined;
+  target_session?: number | undefined;
+  reason?: string | undefined;
+  ban?: boolean | undefined;
+}
+
+export interface EdgeHandleUserMovedParams {
+  session_id?: number | undefined;
+  edge_id?: number | undefined;
+  channel_id?: number | undefined;
+}
+
+export interface EdgeHandleUserStateChangedParams {
+  session_id?: number | undefined;
+  edge_id?: number | undefined;
+  self_mute?: boolean | undefined;
+  self_deaf?: boolean | undefined;
+  mute?: boolean | undefined;
+  deaf?: boolean | undefined;
+  suppress?: boolean | undefined;
+  priority_speaker?: boolean | undefined;
+  recording?: boolean | undefined;
+  listening_channel_add?: number[] | undefined;
+  listening_channel_remove?: number[] | undefined;
+}
+
+export interface EdgeHandleTextMessageParams {
+  actor?: number | undefined;
+  edge_id?: number | undefined;
+  message?: string | undefined;
+  channel_id?: number[] | undefined;
+  tree_id?: number[] | undefined;
+  session?: number[] | undefined;
+}
+
+export interface EdgeHandleChannelStateParams {
+  edge_id?: number | undefined;
+  channel_id?: number | undefined;
+  links_add?: number[] | undefined;
+  links_remove?: number[] | undefined;
+  name?: string | undefined;
+  description?: string | undefined;
+  position?: number | undefined;
+  parent_id?: number | undefined;
+}
+
+export interface EdgeHandleChannelRemoveParams {
+  edge_id?: number | undefined;
+  channel_id?: number | undefined;
+}
+
+/**
+ * ---------------------------------------------------------------------------
+ * Hub → Edge 广播消息 (替代 unknown_params_json)
+ * ---------------------------------------------------------------------------
+ */
+export interface HubUserStateBroadcastParams {
+  session_id?: number | undefined;
+  edge_id?: number | undefined;
+  self_mute?: boolean | undefined;
+  self_deaf?: boolean | undefined;
+  mute?: boolean | undefined;
+  deaf?: boolean | undefined;
+  suppress?: boolean | undefined;
+  priority_speaker?: boolean | undefined;
+  recording?: boolean | undefined;
+  listening_channel_add?: number[] | undefined;
+  listening_channel_remove?: number[] | undefined;
+}
+
+export interface HubTextMessageForwardParams {
+  actor?: number | undefined;
+  message?: string | undefined;
+  channel_id?: number[] | undefined;
+  tree_id?: number[] | undefined;
+  session?: number[] | undefined;
+}
+
+export interface HubClusterPeerJoinedParams {
+  edge_id?: number | undefined;
+  name?: string | undefined;
+  host?: string | undefined;
+  voice_port?: number | undefined;
+}
+
+export interface HubClusterPeerLeftParams {
+  edge_id?: number | undefined;
 }
 
 /**
@@ -949,6 +1120,25 @@ export interface TypedRPCResponse {
   blob_set_user_comment?: BlobSetUserCommentResult | undefined;
 }
 
+/**
+ * ---------------------------------------------------------------------------
+ * hub.routeTableUpdate - Hub pushes quality-aware route table to Edge
+ * ---------------------------------------------------------------------------
+ */
+export interface HubRouteEntryProto {
+  target_edge_id?:
+    | number
+    | undefined;
+  /** 0=direct, 1=relay via next_hop, 2=hub_tcp */
+  route_type?: number | undefined;
+  next_hop?: number | undefined;
+  cost?: number | undefined;
+}
+
+export interface HubRouteTableUpdateParams {
+  routes?: HubRouteEntryProto[] | undefined;
+}
+
 /** TypedRPCNotification - 类型安全的 RPC 通知 */
 export interface TypedRPCNotification {
   method?: string | undefined;
@@ -972,9 +1162,300 @@ export interface TypedRPCNotification {
   relay_voice_packet?:
     | HubRelayVoicePacketParams
     | undefined;
+  /** Typed replacements for unknown_params_json */
+  handle_user_left?: EdgeHandleUserLeftParams | undefined;
+  handle_user_remove?: EdgeHandleUserRemoveParams | undefined;
+  handle_user_moved?: EdgeHandleUserMovedParams | undefined;
+  handle_user_state_changed?: EdgeHandleUserStateChangedParams | undefined;
+  handle_text_message?: EdgeHandleTextMessageParams | undefined;
+  handle_channel_state?: EdgeHandleChannelStateParams | undefined;
+  handle_channel_remove?: EdgeHandleChannelRemoveParams | undefined;
+  user_state_broadcast?: HubUserStateBroadcastParams | undefined;
+  text_message_forward?: HubTextMessageForwardParams | undefined;
+  cluster_peer_joined?: HubClusterPeerJoinedParams | undefined;
+  cluster_peer_left?: HubClusterPeerLeftParams | undefined;
+  route_table_update?:
+    | HubRouteTableUpdateParams
+    | undefined;
   /** For unknown notification types, store params as JSON string */
   unknown_params_json?: string | undefined;
 }
+
+function createBaseServerLimitsConfig(): ServerLimitsConfig {
+  return {
+    max_bandwidth: undefined,
+    text_message_length: undefined,
+    image_message_length: undefined,
+    plugin_message_length: undefined,
+    message_rate: undefined,
+    message_burst: undefined,
+    max_users: undefined,
+    listeners_per_channel: undefined,
+    listeners_per_user: undefined,
+    suggest_version: undefined,
+    suggest_positional: undefined,
+    suggest_push_to_talk: undefined,
+    welcome_text: undefined,
+  };
+}
+
+export const ServerLimitsConfig: MessageFns<ServerLimitsConfig> = {
+  encode(message: ServerLimitsConfig, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.max_bandwidth !== undefined) {
+      writer.uint32(8).uint32(message.max_bandwidth);
+    }
+    if (message.text_message_length !== undefined) {
+      writer.uint32(16).uint32(message.text_message_length);
+    }
+    if (message.image_message_length !== undefined) {
+      writer.uint32(24).uint32(message.image_message_length);
+    }
+    if (message.plugin_message_length !== undefined) {
+      writer.uint32(32).uint32(message.plugin_message_length);
+    }
+    if (message.message_rate !== undefined) {
+      writer.uint32(45).float(message.message_rate);
+    }
+    if (message.message_burst !== undefined) {
+      writer.uint32(48).uint32(message.message_burst);
+    }
+    if (message.max_users !== undefined) {
+      writer.uint32(56).uint32(message.max_users);
+    }
+    if (message.listeners_per_channel !== undefined) {
+      writer.uint32(64).uint32(message.listeners_per_channel);
+    }
+    if (message.listeners_per_user !== undefined) {
+      writer.uint32(72).uint32(message.listeners_per_user);
+    }
+    if (message.suggest_version !== undefined) {
+      writer.uint32(80).uint32(message.suggest_version);
+    }
+    if (message.suggest_positional !== undefined) {
+      writer.uint32(88).bool(message.suggest_positional);
+    }
+    if (message.suggest_push_to_talk !== undefined) {
+      writer.uint32(96).bool(message.suggest_push_to_talk);
+    }
+    if (message.welcome_text !== undefined) {
+      writer.uint32(106).string(message.welcome_text);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ServerLimitsConfig {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseServerLimitsConfig();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.max_bandwidth = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.text_message_length = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.image_message_length = reader.uint32();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.plugin_message_length = reader.uint32();
+          continue;
+        }
+        case 5: {
+          if (tag !== 45) {
+            break;
+          }
+
+          message.message_rate = reader.float();
+          continue;
+        }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.message_burst = reader.uint32();
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.max_users = reader.uint32();
+          continue;
+        }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.listeners_per_channel = reader.uint32();
+          continue;
+        }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.listeners_per_user = reader.uint32();
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.suggest_version = reader.uint32();
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.suggest_positional = reader.bool();
+          continue;
+        }
+        case 12: {
+          if (tag !== 96) {
+            break;
+          }
+
+          message.suggest_push_to_talk = reader.bool();
+          continue;
+        }
+        case 13: {
+          if (tag !== 106) {
+            break;
+          }
+
+          message.welcome_text = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ServerLimitsConfig {
+    return {
+      max_bandwidth: isSet(object.max_bandwidth) ? globalThis.Number(object.max_bandwidth) : undefined,
+      text_message_length: isSet(object.text_message_length)
+        ? globalThis.Number(object.text_message_length)
+        : undefined,
+      image_message_length: isSet(object.image_message_length)
+        ? globalThis.Number(object.image_message_length)
+        : undefined,
+      plugin_message_length: isSet(object.plugin_message_length)
+        ? globalThis.Number(object.plugin_message_length)
+        : undefined,
+      message_rate: isSet(object.message_rate) ? globalThis.Number(object.message_rate) : undefined,
+      message_burst: isSet(object.message_burst) ? globalThis.Number(object.message_burst) : undefined,
+      max_users: isSet(object.max_users) ? globalThis.Number(object.max_users) : undefined,
+      listeners_per_channel: isSet(object.listeners_per_channel)
+        ? globalThis.Number(object.listeners_per_channel)
+        : undefined,
+      listeners_per_user: isSet(object.listeners_per_user) ? globalThis.Number(object.listeners_per_user) : undefined,
+      suggest_version: isSet(object.suggest_version) ? globalThis.Number(object.suggest_version) : undefined,
+      suggest_positional: isSet(object.suggest_positional) ? globalThis.Boolean(object.suggest_positional) : undefined,
+      suggest_push_to_talk: isSet(object.suggest_push_to_talk)
+        ? globalThis.Boolean(object.suggest_push_to_talk)
+        : undefined,
+      welcome_text: isSet(object.welcome_text) ? globalThis.String(object.welcome_text) : undefined,
+    };
+  },
+
+  toJSON(message: ServerLimitsConfig): unknown {
+    const obj: any = {};
+    if (message.max_bandwidth !== undefined) {
+      obj.max_bandwidth = Math.round(message.max_bandwidth);
+    }
+    if (message.text_message_length !== undefined) {
+      obj.text_message_length = Math.round(message.text_message_length);
+    }
+    if (message.image_message_length !== undefined) {
+      obj.image_message_length = Math.round(message.image_message_length);
+    }
+    if (message.plugin_message_length !== undefined) {
+      obj.plugin_message_length = Math.round(message.plugin_message_length);
+    }
+    if (message.message_rate !== undefined) {
+      obj.message_rate = message.message_rate;
+    }
+    if (message.message_burst !== undefined) {
+      obj.message_burst = Math.round(message.message_burst);
+    }
+    if (message.max_users !== undefined) {
+      obj.max_users = Math.round(message.max_users);
+    }
+    if (message.listeners_per_channel !== undefined) {
+      obj.listeners_per_channel = Math.round(message.listeners_per_channel);
+    }
+    if (message.listeners_per_user !== undefined) {
+      obj.listeners_per_user = Math.round(message.listeners_per_user);
+    }
+    if (message.suggest_version !== undefined) {
+      obj.suggest_version = Math.round(message.suggest_version);
+    }
+    if (message.suggest_positional !== undefined) {
+      obj.suggest_positional = message.suggest_positional;
+    }
+    if (message.suggest_push_to_talk !== undefined) {
+      obj.suggest_push_to_talk = message.suggest_push_to_talk;
+    }
+    if (message.welcome_text !== undefined) {
+      obj.welcome_text = message.welcome_text;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ServerLimitsConfig>, I>>(base?: I): ServerLimitsConfig {
+    return ServerLimitsConfig.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ServerLimitsConfig>, I>>(object: I): ServerLimitsConfig {
+    const message = createBaseServerLimitsConfig();
+    message.max_bandwidth = object.max_bandwidth ?? undefined;
+    message.text_message_length = object.text_message_length ?? undefined;
+    message.image_message_length = object.image_message_length ?? undefined;
+    message.plugin_message_length = object.plugin_message_length ?? undefined;
+    message.message_rate = object.message_rate ?? undefined;
+    message.message_burst = object.message_burst ?? undefined;
+    message.max_users = object.max_users ?? undefined;
+    message.listeners_per_channel = object.listeners_per_channel ?? undefined;
+    message.listeners_per_user = object.listeners_per_user ?? undefined;
+    message.suggest_version = object.suggest_version ?? undefined;
+    message.suggest_positional = object.suggest_positional ?? undefined;
+    message.suggest_push_to_talk = object.suggest_push_to_talk ?? undefined;
+    message.welcome_text = object.welcome_text ?? undefined;
+    return message;
+  },
+};
 
 function createBaseEdgeInfo(): EdgeInfo {
   return {
@@ -1380,6 +1861,7 @@ function createBaseEdgeRegisterResult(): EdgeRegisterResult {
     challenge: undefined,
     challenge_timeout: undefined,
     error: undefined,
+    server_limits: undefined,
   };
 }
 
@@ -1404,6 +1886,9 @@ export const EdgeRegisterResult: MessageFns<EdgeRegisterResult> = {
     }
     if (message.error !== undefined) {
       writer.uint32(50).string(message.error);
+    }
+    if (message.server_limits !== undefined) {
+      ServerLimitsConfig.encode(message.server_limits, writer.uint32(58).fork()).join();
     }
     return writer;
   },
@@ -1466,6 +1951,14 @@ export const EdgeRegisterResult: MessageFns<EdgeRegisterResult> = {
           message.error = reader.string();
           continue;
         }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.server_limits = ServerLimitsConfig.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1485,6 +1978,7 @@ export const EdgeRegisterResult: MessageFns<EdgeRegisterResult> = {
       challenge: isSet(object.challenge) ? globalThis.String(object.challenge) : undefined,
       challenge_timeout: isSet(object.challenge_timeout) ? globalThis.Number(object.challenge_timeout) : undefined,
       error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+      server_limits: isSet(object.server_limits) ? ServerLimitsConfig.fromJSON(object.server_limits) : undefined,
     };
   },
 
@@ -1508,6 +2002,9 @@ export const EdgeRegisterResult: MessageFns<EdgeRegisterResult> = {
     if (message.error !== undefined) {
       obj.error = message.error;
     }
+    if (message.server_limits !== undefined) {
+      obj.server_limits = ServerLimitsConfig.toJSON(message.server_limits);
+    }
     return obj;
   },
 
@@ -1522,6 +2019,9 @@ export const EdgeRegisterResult: MessageFns<EdgeRegisterResult> = {
     message.challenge = object.challenge ?? undefined;
     message.challenge_timeout = object.challenge_timeout ?? undefined;
     message.error = object.error ?? undefined;
+    message.server_limits = (object.server_limits !== undefined && object.server_limits !== null)
+      ? ServerLimitsConfig.fromPartial(object.server_limits)
+      : undefined;
     return message;
   },
 };
@@ -1752,7 +2252,7 @@ export const EdgeServerStats: MessageFns<EdgeServerStats> = {
 };
 
 function createBaseEdgeHeartbeatResult(): EdgeHeartbeatResult {
-  return { success: undefined, updated_edges: [], error: undefined };
+  return { success: undefined, updated_edges: [], error: undefined, server_limits: undefined };
 }
 
 export const EdgeHeartbeatResult: MessageFns<EdgeHeartbeatResult> = {
@@ -1767,6 +2267,9 @@ export const EdgeHeartbeatResult: MessageFns<EdgeHeartbeatResult> = {
     }
     if (message.error !== undefined) {
       writer.uint32(26).string(message.error);
+    }
+    if (message.server_limits !== undefined) {
+      ServerLimitsConfig.encode(message.server_limits, writer.uint32(34).fork()).join();
     }
     return writer;
   },
@@ -1805,6 +2308,14 @@ export const EdgeHeartbeatResult: MessageFns<EdgeHeartbeatResult> = {
           message.error = reader.string();
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.server_limits = ServerLimitsConfig.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1821,6 +2332,7 @@ export const EdgeHeartbeatResult: MessageFns<EdgeHeartbeatResult> = {
         ? object.updated_edges.map((e: any) => EdgeInfo.fromJSON(e))
         : [],
       error: isSet(object.error) ? globalThis.String(object.error) : undefined,
+      server_limits: isSet(object.server_limits) ? ServerLimitsConfig.fromJSON(object.server_limits) : undefined,
     };
   },
 
@@ -1835,6 +2347,9 @@ export const EdgeHeartbeatResult: MessageFns<EdgeHeartbeatResult> = {
     if (message.error !== undefined) {
       obj.error = message.error;
     }
+    if (message.server_limits !== undefined) {
+      obj.server_limits = ServerLimitsConfig.toJSON(message.server_limits);
+    }
     return obj;
   },
 
@@ -1846,6 +2361,9 @@ export const EdgeHeartbeatResult: MessageFns<EdgeHeartbeatResult> = {
     message.success = object.success ?? undefined;
     message.updated_edges = object.updated_edges?.map((e) => EdgeInfo.fromPartial(e)) || [];
     message.error = object.error ?? undefined;
+    message.server_limits = (object.server_limits !== undefined && object.server_limits !== null)
+      ? ServerLimitsConfig.fromPartial(object.server_limits)
+      : undefined;
     return message;
   },
 };
@@ -10508,7 +11026,7 @@ function createBaseHubSyncVoiceTargetParams(): HubSyncVoiceTargetParams {
     edge_id: undefined,
     client_session: undefined,
     target_id: undefined,
-    config_json: undefined,
+    config: undefined,
     timestamp: undefined,
   };
 }
@@ -10524,8 +11042,8 @@ export const HubSyncVoiceTargetParams: MessageFns<HubSyncVoiceTargetParams> = {
     if (message.target_id !== undefined) {
       writer.uint32(24).uint32(message.target_id);
     }
-    if (message.config_json !== undefined) {
-      writer.uint32(34).string(message.config_json);
+    if (message.config !== undefined) {
+      VoiceTargetConfigProto.encode(message.config, writer.uint32(34).fork()).join();
     }
     if (message.timestamp !== undefined) {
       writer.uint32(40).int64(message.timestamp);
@@ -10569,7 +11087,7 @@ export const HubSyncVoiceTargetParams: MessageFns<HubSyncVoiceTargetParams> = {
             break;
           }
 
-          message.config_json = reader.string();
+          message.config = VoiceTargetConfigProto.decode(reader, reader.uint32());
           continue;
         }
         case 5: {
@@ -10594,7 +11112,7 @@ export const HubSyncVoiceTargetParams: MessageFns<HubSyncVoiceTargetParams> = {
       edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
       client_session: isSet(object.client_session) ? globalThis.Number(object.client_session) : undefined,
       target_id: isSet(object.target_id) ? globalThis.Number(object.target_id) : undefined,
-      config_json: isSet(object.config_json) ? globalThis.String(object.config_json) : undefined,
+      config: isSet(object.config) ? VoiceTargetConfigProto.fromJSON(object.config) : undefined,
       timestamp: isSet(object.timestamp) ? globalThis.Number(object.timestamp) : undefined,
     };
   },
@@ -10610,8 +11128,8 @@ export const HubSyncVoiceTargetParams: MessageFns<HubSyncVoiceTargetParams> = {
     if (message.target_id !== undefined) {
       obj.target_id = Math.round(message.target_id);
     }
-    if (message.config_json !== undefined) {
-      obj.config_json = message.config_json;
+    if (message.config !== undefined) {
+      obj.config = VoiceTargetConfigProto.toJSON(message.config);
     }
     if (message.timestamp !== undefined) {
       obj.timestamp = Math.round(message.timestamp);
@@ -10627,8 +11145,1675 @@ export const HubSyncVoiceTargetParams: MessageFns<HubSyncVoiceTargetParams> = {
     message.edge_id = object.edge_id ?? undefined;
     message.client_session = object.client_session ?? undefined;
     message.target_id = object.target_id ?? undefined;
-    message.config_json = object.config_json ?? undefined;
+    message.config = (object.config !== undefined && object.config !== null)
+      ? VoiceTargetConfigProto.fromPartial(object.config)
+      : undefined;
     message.timestamp = object.timestamp ?? undefined;
+    return message;
+  },
+};
+
+function createBaseEdgeHandleUserLeftParams(): EdgeHandleUserLeftParams {
+  return { session_id: undefined, edge_id: undefined, reason: undefined };
+}
+
+export const EdgeHandleUserLeftParams: MessageFns<EdgeHandleUserLeftParams> = {
+  encode(message: EdgeHandleUserLeftParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.session_id !== undefined) {
+      writer.uint32(8).uint32(message.session_id);
+    }
+    if (message.edge_id !== undefined) {
+      writer.uint32(16).uint32(message.edge_id);
+    }
+    if (message.reason !== undefined) {
+      writer.uint32(26).string(message.reason);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EdgeHandleUserLeftParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseEdgeHandleUserLeftParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.session_id = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.edge_id = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.reason = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): EdgeHandleUserLeftParams {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
+    };
+  },
+
+  toJSON(message: EdgeHandleUserLeftParams): unknown {
+    const obj: any = {};
+    if (message.session_id !== undefined) {
+      obj.session_id = Math.round(message.session_id);
+    }
+    if (message.edge_id !== undefined) {
+      obj.edge_id = Math.round(message.edge_id);
+    }
+    if (message.reason !== undefined) {
+      obj.reason = message.reason;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EdgeHandleUserLeftParams>, I>>(base?: I): EdgeHandleUserLeftParams {
+    return EdgeHandleUserLeftParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EdgeHandleUserLeftParams>, I>>(object: I): EdgeHandleUserLeftParams {
+    const message = createBaseEdgeHandleUserLeftParams();
+    message.session_id = object.session_id ?? undefined;
+    message.edge_id = object.edge_id ?? undefined;
+    message.reason = object.reason ?? undefined;
+    return message;
+  },
+};
+
+function createBaseEdgeHandleUserRemoveParams(): EdgeHandleUserRemoveParams {
+  return {
+    edge_id: undefined,
+    actor_session: undefined,
+    actor_user_id: undefined,
+    actor_username: undefined,
+    target_session: undefined,
+    reason: undefined,
+    ban: undefined,
+  };
+}
+
+export const EdgeHandleUserRemoveParams: MessageFns<EdgeHandleUserRemoveParams> = {
+  encode(message: EdgeHandleUserRemoveParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.edge_id !== undefined) {
+      writer.uint32(8).uint32(message.edge_id);
+    }
+    if (message.actor_session !== undefined) {
+      writer.uint32(16).uint32(message.actor_session);
+    }
+    if (message.actor_user_id !== undefined) {
+      writer.uint32(24).uint32(message.actor_user_id);
+    }
+    if (message.actor_username !== undefined) {
+      writer.uint32(34).string(message.actor_username);
+    }
+    if (message.target_session !== undefined) {
+      writer.uint32(40).uint32(message.target_session);
+    }
+    if (message.reason !== undefined) {
+      writer.uint32(50).string(message.reason);
+    }
+    if (message.ban !== undefined) {
+      writer.uint32(56).bool(message.ban);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EdgeHandleUserRemoveParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseEdgeHandleUserRemoveParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.edge_id = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.actor_session = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.actor_user_id = reader.uint32();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.actor_username = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.target_session = reader.uint32();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.reason = reader.string();
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.ban = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): EdgeHandleUserRemoveParams {
+    return {
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      actor_session: isSet(object.actor_session) ? globalThis.Number(object.actor_session) : undefined,
+      actor_user_id: isSet(object.actor_user_id) ? globalThis.Number(object.actor_user_id) : undefined,
+      actor_username: isSet(object.actor_username) ? globalThis.String(object.actor_username) : undefined,
+      target_session: isSet(object.target_session) ? globalThis.Number(object.target_session) : undefined,
+      reason: isSet(object.reason) ? globalThis.String(object.reason) : undefined,
+      ban: isSet(object.ban) ? globalThis.Boolean(object.ban) : undefined,
+    };
+  },
+
+  toJSON(message: EdgeHandleUserRemoveParams): unknown {
+    const obj: any = {};
+    if (message.edge_id !== undefined) {
+      obj.edge_id = Math.round(message.edge_id);
+    }
+    if (message.actor_session !== undefined) {
+      obj.actor_session = Math.round(message.actor_session);
+    }
+    if (message.actor_user_id !== undefined) {
+      obj.actor_user_id = Math.round(message.actor_user_id);
+    }
+    if (message.actor_username !== undefined) {
+      obj.actor_username = message.actor_username;
+    }
+    if (message.target_session !== undefined) {
+      obj.target_session = Math.round(message.target_session);
+    }
+    if (message.reason !== undefined) {
+      obj.reason = message.reason;
+    }
+    if (message.ban !== undefined) {
+      obj.ban = message.ban;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EdgeHandleUserRemoveParams>, I>>(base?: I): EdgeHandleUserRemoveParams {
+    return EdgeHandleUserRemoveParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EdgeHandleUserRemoveParams>, I>>(object: I): EdgeHandleUserRemoveParams {
+    const message = createBaseEdgeHandleUserRemoveParams();
+    message.edge_id = object.edge_id ?? undefined;
+    message.actor_session = object.actor_session ?? undefined;
+    message.actor_user_id = object.actor_user_id ?? undefined;
+    message.actor_username = object.actor_username ?? undefined;
+    message.target_session = object.target_session ?? undefined;
+    message.reason = object.reason ?? undefined;
+    message.ban = object.ban ?? undefined;
+    return message;
+  },
+};
+
+function createBaseEdgeHandleUserMovedParams(): EdgeHandleUserMovedParams {
+  return { session_id: undefined, edge_id: undefined, channel_id: undefined };
+}
+
+export const EdgeHandleUserMovedParams: MessageFns<EdgeHandleUserMovedParams> = {
+  encode(message: EdgeHandleUserMovedParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.session_id !== undefined) {
+      writer.uint32(8).uint32(message.session_id);
+    }
+    if (message.edge_id !== undefined) {
+      writer.uint32(16).uint32(message.edge_id);
+    }
+    if (message.channel_id !== undefined) {
+      writer.uint32(24).uint32(message.channel_id);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EdgeHandleUserMovedParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseEdgeHandleUserMovedParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.session_id = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.edge_id = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.channel_id = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): EdgeHandleUserMovedParams {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+    };
+  },
+
+  toJSON(message: EdgeHandleUserMovedParams): unknown {
+    const obj: any = {};
+    if (message.session_id !== undefined) {
+      obj.session_id = Math.round(message.session_id);
+    }
+    if (message.edge_id !== undefined) {
+      obj.edge_id = Math.round(message.edge_id);
+    }
+    if (message.channel_id !== undefined) {
+      obj.channel_id = Math.round(message.channel_id);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EdgeHandleUserMovedParams>, I>>(base?: I): EdgeHandleUserMovedParams {
+    return EdgeHandleUserMovedParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EdgeHandleUserMovedParams>, I>>(object: I): EdgeHandleUserMovedParams {
+    const message = createBaseEdgeHandleUserMovedParams();
+    message.session_id = object.session_id ?? undefined;
+    message.edge_id = object.edge_id ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseEdgeHandleUserStateChangedParams(): EdgeHandleUserStateChangedParams {
+  return {
+    session_id: undefined,
+    edge_id: undefined,
+    self_mute: undefined,
+    self_deaf: undefined,
+    mute: undefined,
+    deaf: undefined,
+    suppress: undefined,
+    priority_speaker: undefined,
+    recording: undefined,
+    listening_channel_add: [],
+    listening_channel_remove: [],
+  };
+}
+
+export const EdgeHandleUserStateChangedParams: MessageFns<EdgeHandleUserStateChangedParams> = {
+  encode(message: EdgeHandleUserStateChangedParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.session_id !== undefined) {
+      writer.uint32(8).uint32(message.session_id);
+    }
+    if (message.edge_id !== undefined) {
+      writer.uint32(16).uint32(message.edge_id);
+    }
+    if (message.self_mute !== undefined) {
+      writer.uint32(24).bool(message.self_mute);
+    }
+    if (message.self_deaf !== undefined) {
+      writer.uint32(32).bool(message.self_deaf);
+    }
+    if (message.mute !== undefined) {
+      writer.uint32(40).bool(message.mute);
+    }
+    if (message.deaf !== undefined) {
+      writer.uint32(48).bool(message.deaf);
+    }
+    if (message.suppress !== undefined) {
+      writer.uint32(56).bool(message.suppress);
+    }
+    if (message.priority_speaker !== undefined) {
+      writer.uint32(64).bool(message.priority_speaker);
+    }
+    if (message.recording !== undefined) {
+      writer.uint32(72).bool(message.recording);
+    }
+    if (message.listening_channel_add !== undefined && message.listening_channel_add.length !== 0) {
+      for (const v of message.listening_channel_add) {
+        writer.uint32(80).uint32(v!);
+      }
+    }
+    if (message.listening_channel_remove !== undefined && message.listening_channel_remove.length !== 0) {
+      for (const v of message.listening_channel_remove) {
+        writer.uint32(88).uint32(v!);
+      }
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EdgeHandleUserStateChangedParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseEdgeHandleUserStateChangedParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.session_id = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.edge_id = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.self_mute = reader.bool();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.self_deaf = reader.bool();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.mute = reader.bool();
+          continue;
+        }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.deaf = reader.bool();
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.suppress = reader.bool();
+          continue;
+        }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.priority_speaker = reader.bool();
+          continue;
+        }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.recording = reader.bool();
+          continue;
+        }
+        case 10: {
+          if (tag === 80) {
+            message.listening_channel_add!.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 82) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.listening_channel_add!.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+        case 11: {
+          if (tag === 88) {
+            message.listening_channel_remove!.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 90) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.listening_channel_remove!.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): EdgeHandleUserStateChangedParams {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      self_mute: isSet(object.self_mute) ? globalThis.Boolean(object.self_mute) : undefined,
+      self_deaf: isSet(object.self_deaf) ? globalThis.Boolean(object.self_deaf) : undefined,
+      mute: isSet(object.mute) ? globalThis.Boolean(object.mute) : undefined,
+      deaf: isSet(object.deaf) ? globalThis.Boolean(object.deaf) : undefined,
+      suppress: isSet(object.suppress) ? globalThis.Boolean(object.suppress) : undefined,
+      priority_speaker: isSet(object.priority_speaker) ? globalThis.Boolean(object.priority_speaker) : undefined,
+      recording: isSet(object.recording) ? globalThis.Boolean(object.recording) : undefined,
+      listening_channel_add: globalThis.Array.isArray(object?.listening_channel_add)
+        ? object.listening_channel_add.map((e: any) => globalThis.Number(e))
+        : [],
+      listening_channel_remove: globalThis.Array.isArray(object?.listening_channel_remove)
+        ? object.listening_channel_remove.map((e: any) => globalThis.Number(e))
+        : [],
+    };
+  },
+
+  toJSON(message: EdgeHandleUserStateChangedParams): unknown {
+    const obj: any = {};
+    if (message.session_id !== undefined) {
+      obj.session_id = Math.round(message.session_id);
+    }
+    if (message.edge_id !== undefined) {
+      obj.edge_id = Math.round(message.edge_id);
+    }
+    if (message.self_mute !== undefined) {
+      obj.self_mute = message.self_mute;
+    }
+    if (message.self_deaf !== undefined) {
+      obj.self_deaf = message.self_deaf;
+    }
+    if (message.mute !== undefined) {
+      obj.mute = message.mute;
+    }
+    if (message.deaf !== undefined) {
+      obj.deaf = message.deaf;
+    }
+    if (message.suppress !== undefined) {
+      obj.suppress = message.suppress;
+    }
+    if (message.priority_speaker !== undefined) {
+      obj.priority_speaker = message.priority_speaker;
+    }
+    if (message.recording !== undefined) {
+      obj.recording = message.recording;
+    }
+    if (message.listening_channel_add?.length) {
+      obj.listening_channel_add = message.listening_channel_add.map((e) => Math.round(e));
+    }
+    if (message.listening_channel_remove?.length) {
+      obj.listening_channel_remove = message.listening_channel_remove.map((e) => Math.round(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EdgeHandleUserStateChangedParams>, I>>(
+    base?: I,
+  ): EdgeHandleUserStateChangedParams {
+    return EdgeHandleUserStateChangedParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EdgeHandleUserStateChangedParams>, I>>(
+    object: I,
+  ): EdgeHandleUserStateChangedParams {
+    const message = createBaseEdgeHandleUserStateChangedParams();
+    message.session_id = object.session_id ?? undefined;
+    message.edge_id = object.edge_id ?? undefined;
+    message.self_mute = object.self_mute ?? undefined;
+    message.self_deaf = object.self_deaf ?? undefined;
+    message.mute = object.mute ?? undefined;
+    message.deaf = object.deaf ?? undefined;
+    message.suppress = object.suppress ?? undefined;
+    message.priority_speaker = object.priority_speaker ?? undefined;
+    message.recording = object.recording ?? undefined;
+    message.listening_channel_add = object.listening_channel_add?.map((e) => e) || [];
+    message.listening_channel_remove = object.listening_channel_remove?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseEdgeHandleTextMessageParams(): EdgeHandleTextMessageParams {
+  return { actor: undefined, edge_id: undefined, message: undefined, channel_id: [], tree_id: [], session: [] };
+}
+
+export const EdgeHandleTextMessageParams: MessageFns<EdgeHandleTextMessageParams> = {
+  encode(message: EdgeHandleTextMessageParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.actor !== undefined) {
+      writer.uint32(8).uint32(message.actor);
+    }
+    if (message.edge_id !== undefined) {
+      writer.uint32(16).uint32(message.edge_id);
+    }
+    if (message.message !== undefined) {
+      writer.uint32(26).string(message.message);
+    }
+    if (message.channel_id !== undefined && message.channel_id.length !== 0) {
+      for (const v of message.channel_id) {
+        writer.uint32(32).uint32(v!);
+      }
+    }
+    if (message.tree_id !== undefined && message.tree_id.length !== 0) {
+      for (const v of message.tree_id) {
+        writer.uint32(40).uint32(v!);
+      }
+    }
+    if (message.session !== undefined && message.session.length !== 0) {
+      for (const v of message.session) {
+        writer.uint32(48).uint32(v!);
+      }
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EdgeHandleTextMessageParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseEdgeHandleTextMessageParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.actor = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.edge_id = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.message = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag === 32) {
+            message.channel_id!.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 34) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.channel_id!.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+        case 5: {
+          if (tag === 40) {
+            message.tree_id!.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 42) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.tree_id!.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+        case 6: {
+          if (tag === 48) {
+            message.session!.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 50) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.session!.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): EdgeHandleTextMessageParams {
+    return {
+      actor: isSet(object.actor) ? globalThis.Number(object.actor) : undefined,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      message: isSet(object.message) ? globalThis.String(object.message) : undefined,
+      channel_id: globalThis.Array.isArray(object?.channel_id)
+        ? object.channel_id.map((e: any) => globalThis.Number(e))
+        : [],
+      tree_id: globalThis.Array.isArray(object?.tree_id) ? object.tree_id.map((e: any) => globalThis.Number(e)) : [],
+      session: globalThis.Array.isArray(object?.session) ? object.session.map((e: any) => globalThis.Number(e)) : [],
+    };
+  },
+
+  toJSON(message: EdgeHandleTextMessageParams): unknown {
+    const obj: any = {};
+    if (message.actor !== undefined) {
+      obj.actor = Math.round(message.actor);
+    }
+    if (message.edge_id !== undefined) {
+      obj.edge_id = Math.round(message.edge_id);
+    }
+    if (message.message !== undefined) {
+      obj.message = message.message;
+    }
+    if (message.channel_id?.length) {
+      obj.channel_id = message.channel_id.map((e) => Math.round(e));
+    }
+    if (message.tree_id?.length) {
+      obj.tree_id = message.tree_id.map((e) => Math.round(e));
+    }
+    if (message.session?.length) {
+      obj.session = message.session.map((e) => Math.round(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EdgeHandleTextMessageParams>, I>>(base?: I): EdgeHandleTextMessageParams {
+    return EdgeHandleTextMessageParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EdgeHandleTextMessageParams>, I>>(object: I): EdgeHandleTextMessageParams {
+    const message = createBaseEdgeHandleTextMessageParams();
+    message.actor = object.actor ?? undefined;
+    message.edge_id = object.edge_id ?? undefined;
+    message.message = object.message ?? undefined;
+    message.channel_id = object.channel_id?.map((e) => e) || [];
+    message.tree_id = object.tree_id?.map((e) => e) || [];
+    message.session = object.session?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseEdgeHandleChannelStateParams(): EdgeHandleChannelStateParams {
+  return {
+    edge_id: undefined,
+    channel_id: undefined,
+    links_add: [],
+    links_remove: [],
+    name: undefined,
+    description: undefined,
+    position: undefined,
+    parent_id: undefined,
+  };
+}
+
+export const EdgeHandleChannelStateParams: MessageFns<EdgeHandleChannelStateParams> = {
+  encode(message: EdgeHandleChannelStateParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.edge_id !== undefined) {
+      writer.uint32(8).uint32(message.edge_id);
+    }
+    if (message.channel_id !== undefined) {
+      writer.uint32(16).uint32(message.channel_id);
+    }
+    if (message.links_add !== undefined && message.links_add.length !== 0) {
+      for (const v of message.links_add) {
+        writer.uint32(24).uint32(v!);
+      }
+    }
+    if (message.links_remove !== undefined && message.links_remove.length !== 0) {
+      for (const v of message.links_remove) {
+        writer.uint32(32).uint32(v!);
+      }
+    }
+    if (message.name !== undefined) {
+      writer.uint32(42).string(message.name);
+    }
+    if (message.description !== undefined) {
+      writer.uint32(50).string(message.description);
+    }
+    if (message.position !== undefined) {
+      writer.uint32(56).int32(message.position);
+    }
+    if (message.parent_id !== undefined) {
+      writer.uint32(64).uint32(message.parent_id);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EdgeHandleChannelStateParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseEdgeHandleChannelStateParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.edge_id = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.channel_id = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag === 24) {
+            message.links_add!.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 26) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.links_add!.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+        case 4: {
+          if (tag === 32) {
+            message.links_remove!.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 34) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.links_remove!.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.name = reader.string();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.description = reader.string();
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.position = reader.int32();
+          continue;
+        }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.parent_id = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): EdgeHandleChannelStateParams {
+    return {
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+      links_add: globalThis.Array.isArray(object?.links_add)
+        ? object.links_add.map((e: any) => globalThis.Number(e))
+        : [],
+      links_remove: globalThis.Array.isArray(object?.links_remove)
+        ? object.links_remove.map((e: any) => globalThis.Number(e))
+        : [],
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      description: isSet(object.description) ? globalThis.String(object.description) : undefined,
+      position: isSet(object.position) ? globalThis.Number(object.position) : undefined,
+      parent_id: isSet(object.parent_id) ? globalThis.Number(object.parent_id) : undefined,
+    };
+  },
+
+  toJSON(message: EdgeHandleChannelStateParams): unknown {
+    const obj: any = {};
+    if (message.edge_id !== undefined) {
+      obj.edge_id = Math.round(message.edge_id);
+    }
+    if (message.channel_id !== undefined) {
+      obj.channel_id = Math.round(message.channel_id);
+    }
+    if (message.links_add?.length) {
+      obj.links_add = message.links_add.map((e) => Math.round(e));
+    }
+    if (message.links_remove?.length) {
+      obj.links_remove = message.links_remove.map((e) => Math.round(e));
+    }
+    if (message.name !== undefined) {
+      obj.name = message.name;
+    }
+    if (message.description !== undefined) {
+      obj.description = message.description;
+    }
+    if (message.position !== undefined) {
+      obj.position = Math.round(message.position);
+    }
+    if (message.parent_id !== undefined) {
+      obj.parent_id = Math.round(message.parent_id);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EdgeHandleChannelStateParams>, I>>(base?: I): EdgeHandleChannelStateParams {
+    return EdgeHandleChannelStateParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EdgeHandleChannelStateParams>, I>>(object: I): EdgeHandleChannelStateParams {
+    const message = createBaseEdgeHandleChannelStateParams();
+    message.edge_id = object.edge_id ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    message.links_add = object.links_add?.map((e) => e) || [];
+    message.links_remove = object.links_remove?.map((e) => e) || [];
+    message.name = object.name ?? undefined;
+    message.description = object.description ?? undefined;
+    message.position = object.position ?? undefined;
+    message.parent_id = object.parent_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseEdgeHandleChannelRemoveParams(): EdgeHandleChannelRemoveParams {
+  return { edge_id: undefined, channel_id: undefined };
+}
+
+export const EdgeHandleChannelRemoveParams: MessageFns<EdgeHandleChannelRemoveParams> = {
+  encode(message: EdgeHandleChannelRemoveParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.edge_id !== undefined) {
+      writer.uint32(8).uint32(message.edge_id);
+    }
+    if (message.channel_id !== undefined) {
+      writer.uint32(16).uint32(message.channel_id);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): EdgeHandleChannelRemoveParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseEdgeHandleChannelRemoveParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.edge_id = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.channel_id = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): EdgeHandleChannelRemoveParams {
+    return {
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      channel_id: isSet(object.channel_id) ? globalThis.Number(object.channel_id) : undefined,
+    };
+  },
+
+  toJSON(message: EdgeHandleChannelRemoveParams): unknown {
+    const obj: any = {};
+    if (message.edge_id !== undefined) {
+      obj.edge_id = Math.round(message.edge_id);
+    }
+    if (message.channel_id !== undefined) {
+      obj.channel_id = Math.round(message.channel_id);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<EdgeHandleChannelRemoveParams>, I>>(base?: I): EdgeHandleChannelRemoveParams {
+    return EdgeHandleChannelRemoveParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<EdgeHandleChannelRemoveParams>, I>>(
+    object: I,
+  ): EdgeHandleChannelRemoveParams {
+    const message = createBaseEdgeHandleChannelRemoveParams();
+    message.edge_id = object.edge_id ?? undefined;
+    message.channel_id = object.channel_id ?? undefined;
+    return message;
+  },
+};
+
+function createBaseHubUserStateBroadcastParams(): HubUserStateBroadcastParams {
+  return {
+    session_id: undefined,
+    edge_id: undefined,
+    self_mute: undefined,
+    self_deaf: undefined,
+    mute: undefined,
+    deaf: undefined,
+    suppress: undefined,
+    priority_speaker: undefined,
+    recording: undefined,
+    listening_channel_add: [],
+    listening_channel_remove: [],
+  };
+}
+
+export const HubUserStateBroadcastParams: MessageFns<HubUserStateBroadcastParams> = {
+  encode(message: HubUserStateBroadcastParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.session_id !== undefined) {
+      writer.uint32(8).uint32(message.session_id);
+    }
+    if (message.edge_id !== undefined) {
+      writer.uint32(16).uint32(message.edge_id);
+    }
+    if (message.self_mute !== undefined) {
+      writer.uint32(24).bool(message.self_mute);
+    }
+    if (message.self_deaf !== undefined) {
+      writer.uint32(32).bool(message.self_deaf);
+    }
+    if (message.mute !== undefined) {
+      writer.uint32(40).bool(message.mute);
+    }
+    if (message.deaf !== undefined) {
+      writer.uint32(48).bool(message.deaf);
+    }
+    if (message.suppress !== undefined) {
+      writer.uint32(56).bool(message.suppress);
+    }
+    if (message.priority_speaker !== undefined) {
+      writer.uint32(64).bool(message.priority_speaker);
+    }
+    if (message.recording !== undefined) {
+      writer.uint32(72).bool(message.recording);
+    }
+    if (message.listening_channel_add !== undefined && message.listening_channel_add.length !== 0) {
+      for (const v of message.listening_channel_add) {
+        writer.uint32(80).uint32(v!);
+      }
+    }
+    if (message.listening_channel_remove !== undefined && message.listening_channel_remove.length !== 0) {
+      for (const v of message.listening_channel_remove) {
+        writer.uint32(88).uint32(v!);
+      }
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): HubUserStateBroadcastParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseHubUserStateBroadcastParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.session_id = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.edge_id = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.self_mute = reader.bool();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.self_deaf = reader.bool();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.mute = reader.bool();
+          continue;
+        }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.deaf = reader.bool();
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.suppress = reader.bool();
+          continue;
+        }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.priority_speaker = reader.bool();
+          continue;
+        }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.recording = reader.bool();
+          continue;
+        }
+        case 10: {
+          if (tag === 80) {
+            message.listening_channel_add!.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 82) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.listening_channel_add!.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+        case 11: {
+          if (tag === 88) {
+            message.listening_channel_remove!.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 90) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.listening_channel_remove!.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): HubUserStateBroadcastParams {
+    return {
+      session_id: isSet(object.session_id) ? globalThis.Number(object.session_id) : undefined,
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      self_mute: isSet(object.self_mute) ? globalThis.Boolean(object.self_mute) : undefined,
+      self_deaf: isSet(object.self_deaf) ? globalThis.Boolean(object.self_deaf) : undefined,
+      mute: isSet(object.mute) ? globalThis.Boolean(object.mute) : undefined,
+      deaf: isSet(object.deaf) ? globalThis.Boolean(object.deaf) : undefined,
+      suppress: isSet(object.suppress) ? globalThis.Boolean(object.suppress) : undefined,
+      priority_speaker: isSet(object.priority_speaker) ? globalThis.Boolean(object.priority_speaker) : undefined,
+      recording: isSet(object.recording) ? globalThis.Boolean(object.recording) : undefined,
+      listening_channel_add: globalThis.Array.isArray(object?.listening_channel_add)
+        ? object.listening_channel_add.map((e: any) => globalThis.Number(e))
+        : [],
+      listening_channel_remove: globalThis.Array.isArray(object?.listening_channel_remove)
+        ? object.listening_channel_remove.map((e: any) => globalThis.Number(e))
+        : [],
+    };
+  },
+
+  toJSON(message: HubUserStateBroadcastParams): unknown {
+    const obj: any = {};
+    if (message.session_id !== undefined) {
+      obj.session_id = Math.round(message.session_id);
+    }
+    if (message.edge_id !== undefined) {
+      obj.edge_id = Math.round(message.edge_id);
+    }
+    if (message.self_mute !== undefined) {
+      obj.self_mute = message.self_mute;
+    }
+    if (message.self_deaf !== undefined) {
+      obj.self_deaf = message.self_deaf;
+    }
+    if (message.mute !== undefined) {
+      obj.mute = message.mute;
+    }
+    if (message.deaf !== undefined) {
+      obj.deaf = message.deaf;
+    }
+    if (message.suppress !== undefined) {
+      obj.suppress = message.suppress;
+    }
+    if (message.priority_speaker !== undefined) {
+      obj.priority_speaker = message.priority_speaker;
+    }
+    if (message.recording !== undefined) {
+      obj.recording = message.recording;
+    }
+    if (message.listening_channel_add?.length) {
+      obj.listening_channel_add = message.listening_channel_add.map((e) => Math.round(e));
+    }
+    if (message.listening_channel_remove?.length) {
+      obj.listening_channel_remove = message.listening_channel_remove.map((e) => Math.round(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<HubUserStateBroadcastParams>, I>>(base?: I): HubUserStateBroadcastParams {
+    return HubUserStateBroadcastParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<HubUserStateBroadcastParams>, I>>(object: I): HubUserStateBroadcastParams {
+    const message = createBaseHubUserStateBroadcastParams();
+    message.session_id = object.session_id ?? undefined;
+    message.edge_id = object.edge_id ?? undefined;
+    message.self_mute = object.self_mute ?? undefined;
+    message.self_deaf = object.self_deaf ?? undefined;
+    message.mute = object.mute ?? undefined;
+    message.deaf = object.deaf ?? undefined;
+    message.suppress = object.suppress ?? undefined;
+    message.priority_speaker = object.priority_speaker ?? undefined;
+    message.recording = object.recording ?? undefined;
+    message.listening_channel_add = object.listening_channel_add?.map((e) => e) || [];
+    message.listening_channel_remove = object.listening_channel_remove?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseHubTextMessageForwardParams(): HubTextMessageForwardParams {
+  return { actor: undefined, message: undefined, channel_id: [], tree_id: [], session: [] };
+}
+
+export const HubTextMessageForwardParams: MessageFns<HubTextMessageForwardParams> = {
+  encode(message: HubTextMessageForwardParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.actor !== undefined) {
+      writer.uint32(8).uint32(message.actor);
+    }
+    if (message.message !== undefined) {
+      writer.uint32(18).string(message.message);
+    }
+    if (message.channel_id !== undefined && message.channel_id.length !== 0) {
+      for (const v of message.channel_id) {
+        writer.uint32(24).uint32(v!);
+      }
+    }
+    if (message.tree_id !== undefined && message.tree_id.length !== 0) {
+      for (const v of message.tree_id) {
+        writer.uint32(32).uint32(v!);
+      }
+    }
+    if (message.session !== undefined && message.session.length !== 0) {
+      for (const v of message.session) {
+        writer.uint32(40).uint32(v!);
+      }
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): HubTextMessageForwardParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseHubTextMessageForwardParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.actor = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.message = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag === 24) {
+            message.channel_id!.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 26) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.channel_id!.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+        case 4: {
+          if (tag === 32) {
+            message.tree_id!.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 34) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.tree_id!.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+        case 5: {
+          if (tag === 40) {
+            message.session!.push(reader.uint32());
+
+            continue;
+          }
+
+          if (tag === 42) {
+            const end2 = reader.uint32() + reader.pos;
+            while (reader.pos < end2) {
+              message.session!.push(reader.uint32());
+            }
+
+            continue;
+          }
+
+          break;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): HubTextMessageForwardParams {
+    return {
+      actor: isSet(object.actor) ? globalThis.Number(object.actor) : undefined,
+      message: isSet(object.message) ? globalThis.String(object.message) : undefined,
+      channel_id: globalThis.Array.isArray(object?.channel_id)
+        ? object.channel_id.map((e: any) => globalThis.Number(e))
+        : [],
+      tree_id: globalThis.Array.isArray(object?.tree_id) ? object.tree_id.map((e: any) => globalThis.Number(e)) : [],
+      session: globalThis.Array.isArray(object?.session) ? object.session.map((e: any) => globalThis.Number(e)) : [],
+    };
+  },
+
+  toJSON(message: HubTextMessageForwardParams): unknown {
+    const obj: any = {};
+    if (message.actor !== undefined) {
+      obj.actor = Math.round(message.actor);
+    }
+    if (message.message !== undefined) {
+      obj.message = message.message;
+    }
+    if (message.channel_id?.length) {
+      obj.channel_id = message.channel_id.map((e) => Math.round(e));
+    }
+    if (message.tree_id?.length) {
+      obj.tree_id = message.tree_id.map((e) => Math.round(e));
+    }
+    if (message.session?.length) {
+      obj.session = message.session.map((e) => Math.round(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<HubTextMessageForwardParams>, I>>(base?: I): HubTextMessageForwardParams {
+    return HubTextMessageForwardParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<HubTextMessageForwardParams>, I>>(object: I): HubTextMessageForwardParams {
+    const message = createBaseHubTextMessageForwardParams();
+    message.actor = object.actor ?? undefined;
+    message.message = object.message ?? undefined;
+    message.channel_id = object.channel_id?.map((e) => e) || [];
+    message.tree_id = object.tree_id?.map((e) => e) || [];
+    message.session = object.session?.map((e) => e) || [];
+    return message;
+  },
+};
+
+function createBaseHubClusterPeerJoinedParams(): HubClusterPeerJoinedParams {
+  return { edge_id: undefined, name: undefined, host: undefined, voice_port: undefined };
+}
+
+export const HubClusterPeerJoinedParams: MessageFns<HubClusterPeerJoinedParams> = {
+  encode(message: HubClusterPeerJoinedParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.edge_id !== undefined) {
+      writer.uint32(8).uint32(message.edge_id);
+    }
+    if (message.name !== undefined) {
+      writer.uint32(18).string(message.name);
+    }
+    if (message.host !== undefined) {
+      writer.uint32(26).string(message.host);
+    }
+    if (message.voice_port !== undefined) {
+      writer.uint32(32).uint32(message.voice_port);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): HubClusterPeerJoinedParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseHubClusterPeerJoinedParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.edge_id = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.name = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.host = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.voice_port = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): HubClusterPeerJoinedParams {
+    return {
+      edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : undefined,
+      host: isSet(object.host) ? globalThis.String(object.host) : undefined,
+      voice_port: isSet(object.voice_port) ? globalThis.Number(object.voice_port) : undefined,
+    };
+  },
+
+  toJSON(message: HubClusterPeerJoinedParams): unknown {
+    const obj: any = {};
+    if (message.edge_id !== undefined) {
+      obj.edge_id = Math.round(message.edge_id);
+    }
+    if (message.name !== undefined) {
+      obj.name = message.name;
+    }
+    if (message.host !== undefined) {
+      obj.host = message.host;
+    }
+    if (message.voice_port !== undefined) {
+      obj.voice_port = Math.round(message.voice_port);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<HubClusterPeerJoinedParams>, I>>(base?: I): HubClusterPeerJoinedParams {
+    return HubClusterPeerJoinedParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<HubClusterPeerJoinedParams>, I>>(object: I): HubClusterPeerJoinedParams {
+    const message = createBaseHubClusterPeerJoinedParams();
+    message.edge_id = object.edge_id ?? undefined;
+    message.name = object.name ?? undefined;
+    message.host = object.host ?? undefined;
+    message.voice_port = object.voice_port ?? undefined;
+    return message;
+  },
+};
+
+function createBaseHubClusterPeerLeftParams(): HubClusterPeerLeftParams {
+  return { edge_id: undefined };
+}
+
+export const HubClusterPeerLeftParams: MessageFns<HubClusterPeerLeftParams> = {
+  encode(message: HubClusterPeerLeftParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.edge_id !== undefined) {
+      writer.uint32(8).uint32(message.edge_id);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): HubClusterPeerLeftParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseHubClusterPeerLeftParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.edge_id = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): HubClusterPeerLeftParams {
+    return { edge_id: isSet(object.edge_id) ? globalThis.Number(object.edge_id) : undefined };
+  },
+
+  toJSON(message: HubClusterPeerLeftParams): unknown {
+    const obj: any = {};
+    if (message.edge_id !== undefined) {
+      obj.edge_id = Math.round(message.edge_id);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<HubClusterPeerLeftParams>, I>>(base?: I): HubClusterPeerLeftParams {
+    return HubClusterPeerLeftParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<HubClusterPeerLeftParams>, I>>(object: I): HubClusterPeerLeftParams {
+    const message = createBaseHubClusterPeerLeftParams();
+    message.edge_id = object.edge_id ?? undefined;
     return message;
   },
 };
@@ -12272,6 +14457,181 @@ export const TypedRPCResponse: MessageFns<TypedRPCResponse> = {
   },
 };
 
+function createBaseHubRouteEntryProto(): HubRouteEntryProto {
+  return { target_edge_id: undefined, route_type: undefined, next_hop: undefined, cost: undefined };
+}
+
+export const HubRouteEntryProto: MessageFns<HubRouteEntryProto> = {
+  encode(message: HubRouteEntryProto, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.target_edge_id !== undefined) {
+      writer.uint32(8).uint32(message.target_edge_id);
+    }
+    if (message.route_type !== undefined) {
+      writer.uint32(16).uint32(message.route_type);
+    }
+    if (message.next_hop !== undefined) {
+      writer.uint32(24).uint32(message.next_hop);
+    }
+    if (message.cost !== undefined) {
+      writer.uint32(37).float(message.cost);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): HubRouteEntryProto {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseHubRouteEntryProto();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.target_edge_id = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.route_type = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.next_hop = reader.uint32();
+          continue;
+        }
+        case 4: {
+          if (tag !== 37) {
+            break;
+          }
+
+          message.cost = reader.float();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): HubRouteEntryProto {
+    return {
+      target_edge_id: isSet(object.target_edge_id) ? globalThis.Number(object.target_edge_id) : undefined,
+      route_type: isSet(object.route_type) ? globalThis.Number(object.route_type) : undefined,
+      next_hop: isSet(object.next_hop) ? globalThis.Number(object.next_hop) : undefined,
+      cost: isSet(object.cost) ? globalThis.Number(object.cost) : undefined,
+    };
+  },
+
+  toJSON(message: HubRouteEntryProto): unknown {
+    const obj: any = {};
+    if (message.target_edge_id !== undefined) {
+      obj.target_edge_id = Math.round(message.target_edge_id);
+    }
+    if (message.route_type !== undefined) {
+      obj.route_type = Math.round(message.route_type);
+    }
+    if (message.next_hop !== undefined) {
+      obj.next_hop = Math.round(message.next_hop);
+    }
+    if (message.cost !== undefined) {
+      obj.cost = message.cost;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<HubRouteEntryProto>, I>>(base?: I): HubRouteEntryProto {
+    return HubRouteEntryProto.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<HubRouteEntryProto>, I>>(object: I): HubRouteEntryProto {
+    const message = createBaseHubRouteEntryProto();
+    message.target_edge_id = object.target_edge_id ?? undefined;
+    message.route_type = object.route_type ?? undefined;
+    message.next_hop = object.next_hop ?? undefined;
+    message.cost = object.cost ?? undefined;
+    return message;
+  },
+};
+
+function createBaseHubRouteTableUpdateParams(): HubRouteTableUpdateParams {
+  return { routes: [] };
+}
+
+export const HubRouteTableUpdateParams: MessageFns<HubRouteTableUpdateParams> = {
+  encode(message: HubRouteTableUpdateParams, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.routes !== undefined && message.routes.length !== 0) {
+      for (const v of message.routes) {
+        HubRouteEntryProto.encode(v!, writer.uint32(10).fork()).join();
+      }
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): HubRouteTableUpdateParams {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseHubRouteTableUpdateParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          const el = HubRouteEntryProto.decode(reader, reader.uint32());
+          if (el !== undefined) {
+            message.routes!.push(el);
+          }
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): HubRouteTableUpdateParams {
+    return {
+      routes: globalThis.Array.isArray(object?.routes)
+        ? object.routes.map((e: any) => HubRouteEntryProto.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: HubRouteTableUpdateParams): unknown {
+    const obj: any = {};
+    if (message.routes?.length) {
+      obj.routes = message.routes.map((e) => HubRouteEntryProto.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<HubRouteTableUpdateParams>, I>>(base?: I): HubRouteTableUpdateParams {
+    return HubRouteTableUpdateParams.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<HubRouteTableUpdateParams>, I>>(object: I): HubRouteTableUpdateParams {
+    const message = createBaseHubRouteTableUpdateParams();
+    message.routes = object.routes?.map((e) => HubRouteEntryProto.fromPartial(e)) || [];
+    return message;
+  },
+};
+
 function createBaseTypedRPCNotification(): TypedRPCNotification {
   return {
     method: undefined,
@@ -12290,6 +14650,18 @@ function createBaseTypedRPCNotification(): TypedRPCNotification {
     plugin_data_broadcast: undefined,
     plugin_data_transmission: undefined,
     relay_voice_packet: undefined,
+    handle_user_left: undefined,
+    handle_user_remove: undefined,
+    handle_user_moved: undefined,
+    handle_user_state_changed: undefined,
+    handle_text_message: undefined,
+    handle_channel_state: undefined,
+    handle_channel_remove: undefined,
+    user_state_broadcast: undefined,
+    text_message_forward: undefined,
+    cluster_peer_joined: undefined,
+    cluster_peer_left: undefined,
+    route_table_update: undefined,
     unknown_params_json: undefined,
   };
 }
@@ -12343,6 +14715,42 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
     }
     if (message.relay_voice_packet !== undefined) {
       HubRelayVoicePacketParams.encode(message.relay_voice_packet, writer.uint32(186).fork()).join();
+    }
+    if (message.handle_user_left !== undefined) {
+      EdgeHandleUserLeftParams.encode(message.handle_user_left, writer.uint32(194).fork()).join();
+    }
+    if (message.handle_user_remove !== undefined) {
+      EdgeHandleUserRemoveParams.encode(message.handle_user_remove, writer.uint32(202).fork()).join();
+    }
+    if (message.handle_user_moved !== undefined) {
+      EdgeHandleUserMovedParams.encode(message.handle_user_moved, writer.uint32(210).fork()).join();
+    }
+    if (message.handle_user_state_changed !== undefined) {
+      EdgeHandleUserStateChangedParams.encode(message.handle_user_state_changed, writer.uint32(218).fork()).join();
+    }
+    if (message.handle_text_message !== undefined) {
+      EdgeHandleTextMessageParams.encode(message.handle_text_message, writer.uint32(226).fork()).join();
+    }
+    if (message.handle_channel_state !== undefined) {
+      EdgeHandleChannelStateParams.encode(message.handle_channel_state, writer.uint32(234).fork()).join();
+    }
+    if (message.handle_channel_remove !== undefined) {
+      EdgeHandleChannelRemoveParams.encode(message.handle_channel_remove, writer.uint32(242).fork()).join();
+    }
+    if (message.user_state_broadcast !== undefined) {
+      HubUserStateBroadcastParams.encode(message.user_state_broadcast, writer.uint32(250).fork()).join();
+    }
+    if (message.text_message_forward !== undefined) {
+      HubTextMessageForwardParams.encode(message.text_message_forward, writer.uint32(258).fork()).join();
+    }
+    if (message.cluster_peer_joined !== undefined) {
+      HubClusterPeerJoinedParams.encode(message.cluster_peer_joined, writer.uint32(266).fork()).join();
+    }
+    if (message.cluster_peer_left !== undefined) {
+      HubClusterPeerLeftParams.encode(message.cluster_peer_left, writer.uint32(274).fork()).join();
+    }
+    if (message.route_table_update !== undefined) {
+      HubRouteTableUpdateParams.encode(message.route_table_update, writer.uint32(290).fork()).join();
     }
     if (message.unknown_params_json !== undefined) {
       writer.uint32(794).string(message.unknown_params_json);
@@ -12485,6 +14893,102 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
           message.relay_voice_packet = HubRelayVoicePacketParams.decode(reader, reader.uint32());
           continue;
         }
+        case 24: {
+          if (tag !== 194) {
+            break;
+          }
+
+          message.handle_user_left = EdgeHandleUserLeftParams.decode(reader, reader.uint32());
+          continue;
+        }
+        case 25: {
+          if (tag !== 202) {
+            break;
+          }
+
+          message.handle_user_remove = EdgeHandleUserRemoveParams.decode(reader, reader.uint32());
+          continue;
+        }
+        case 26: {
+          if (tag !== 210) {
+            break;
+          }
+
+          message.handle_user_moved = EdgeHandleUserMovedParams.decode(reader, reader.uint32());
+          continue;
+        }
+        case 27: {
+          if (tag !== 218) {
+            break;
+          }
+
+          message.handle_user_state_changed = EdgeHandleUserStateChangedParams.decode(reader, reader.uint32());
+          continue;
+        }
+        case 28: {
+          if (tag !== 226) {
+            break;
+          }
+
+          message.handle_text_message = EdgeHandleTextMessageParams.decode(reader, reader.uint32());
+          continue;
+        }
+        case 29: {
+          if (tag !== 234) {
+            break;
+          }
+
+          message.handle_channel_state = EdgeHandleChannelStateParams.decode(reader, reader.uint32());
+          continue;
+        }
+        case 30: {
+          if (tag !== 242) {
+            break;
+          }
+
+          message.handle_channel_remove = EdgeHandleChannelRemoveParams.decode(reader, reader.uint32());
+          continue;
+        }
+        case 31: {
+          if (tag !== 250) {
+            break;
+          }
+
+          message.user_state_broadcast = HubUserStateBroadcastParams.decode(reader, reader.uint32());
+          continue;
+        }
+        case 32: {
+          if (tag !== 258) {
+            break;
+          }
+
+          message.text_message_forward = HubTextMessageForwardParams.decode(reader, reader.uint32());
+          continue;
+        }
+        case 33: {
+          if (tag !== 266) {
+            break;
+          }
+
+          message.cluster_peer_joined = HubClusterPeerJoinedParams.decode(reader, reader.uint32());
+          continue;
+        }
+        case 34: {
+          if (tag !== 274) {
+            break;
+          }
+
+          message.cluster_peer_left = HubClusterPeerLeftParams.decode(reader, reader.uint32());
+          continue;
+        }
+        case 36: {
+          if (tag !== 290) {
+            break;
+          }
+
+          message.route_table_update = HubRouteTableUpdateParams.decode(reader, reader.uint32());
+          continue;
+        }
         case 99: {
           if (tag !== 794) {
             break;
@@ -12537,6 +15041,42 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
         : undefined,
       relay_voice_packet: isSet(object.relay_voice_packet)
         ? HubRelayVoicePacketParams.fromJSON(object.relay_voice_packet)
+        : undefined,
+      handle_user_left: isSet(object.handle_user_left)
+        ? EdgeHandleUserLeftParams.fromJSON(object.handle_user_left)
+        : undefined,
+      handle_user_remove: isSet(object.handle_user_remove)
+        ? EdgeHandleUserRemoveParams.fromJSON(object.handle_user_remove)
+        : undefined,
+      handle_user_moved: isSet(object.handle_user_moved)
+        ? EdgeHandleUserMovedParams.fromJSON(object.handle_user_moved)
+        : undefined,
+      handle_user_state_changed: isSet(object.handle_user_state_changed)
+        ? EdgeHandleUserStateChangedParams.fromJSON(object.handle_user_state_changed)
+        : undefined,
+      handle_text_message: isSet(object.handle_text_message)
+        ? EdgeHandleTextMessageParams.fromJSON(object.handle_text_message)
+        : undefined,
+      handle_channel_state: isSet(object.handle_channel_state)
+        ? EdgeHandleChannelStateParams.fromJSON(object.handle_channel_state)
+        : undefined,
+      handle_channel_remove: isSet(object.handle_channel_remove)
+        ? EdgeHandleChannelRemoveParams.fromJSON(object.handle_channel_remove)
+        : undefined,
+      user_state_broadcast: isSet(object.user_state_broadcast)
+        ? HubUserStateBroadcastParams.fromJSON(object.user_state_broadcast)
+        : undefined,
+      text_message_forward: isSet(object.text_message_forward)
+        ? HubTextMessageForwardParams.fromJSON(object.text_message_forward)
+        : undefined,
+      cluster_peer_joined: isSet(object.cluster_peer_joined)
+        ? HubClusterPeerJoinedParams.fromJSON(object.cluster_peer_joined)
+        : undefined,
+      cluster_peer_left: isSet(object.cluster_peer_left)
+        ? HubClusterPeerLeftParams.fromJSON(object.cluster_peer_left)
+        : undefined,
+      route_table_update: isSet(object.route_table_update)
+        ? HubRouteTableUpdateParams.fromJSON(object.route_table_update)
         : undefined,
       unknown_params_json: isSet(object.unknown_params_json)
         ? globalThis.String(object.unknown_params_json)
@@ -12593,6 +15133,42 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
     }
     if (message.relay_voice_packet !== undefined) {
       obj.relay_voice_packet = HubRelayVoicePacketParams.toJSON(message.relay_voice_packet);
+    }
+    if (message.handle_user_left !== undefined) {
+      obj.handle_user_left = EdgeHandleUserLeftParams.toJSON(message.handle_user_left);
+    }
+    if (message.handle_user_remove !== undefined) {
+      obj.handle_user_remove = EdgeHandleUserRemoveParams.toJSON(message.handle_user_remove);
+    }
+    if (message.handle_user_moved !== undefined) {
+      obj.handle_user_moved = EdgeHandleUserMovedParams.toJSON(message.handle_user_moved);
+    }
+    if (message.handle_user_state_changed !== undefined) {
+      obj.handle_user_state_changed = EdgeHandleUserStateChangedParams.toJSON(message.handle_user_state_changed);
+    }
+    if (message.handle_text_message !== undefined) {
+      obj.handle_text_message = EdgeHandleTextMessageParams.toJSON(message.handle_text_message);
+    }
+    if (message.handle_channel_state !== undefined) {
+      obj.handle_channel_state = EdgeHandleChannelStateParams.toJSON(message.handle_channel_state);
+    }
+    if (message.handle_channel_remove !== undefined) {
+      obj.handle_channel_remove = EdgeHandleChannelRemoveParams.toJSON(message.handle_channel_remove);
+    }
+    if (message.user_state_broadcast !== undefined) {
+      obj.user_state_broadcast = HubUserStateBroadcastParams.toJSON(message.user_state_broadcast);
+    }
+    if (message.text_message_forward !== undefined) {
+      obj.text_message_forward = HubTextMessageForwardParams.toJSON(message.text_message_forward);
+    }
+    if (message.cluster_peer_joined !== undefined) {
+      obj.cluster_peer_joined = HubClusterPeerJoinedParams.toJSON(message.cluster_peer_joined);
+    }
+    if (message.cluster_peer_left !== undefined) {
+      obj.cluster_peer_left = HubClusterPeerLeftParams.toJSON(message.cluster_peer_left);
+    }
+    if (message.route_table_update !== undefined) {
+      obj.route_table_update = HubRouteTableUpdateParams.toJSON(message.route_table_update);
     }
     if (message.unknown_params_json !== undefined) {
       obj.unknown_params_json = message.unknown_params_json;
@@ -12651,6 +15227,44 @@ export const TypedRPCNotification: MessageFns<TypedRPCNotification> = {
         : undefined;
     message.relay_voice_packet = (object.relay_voice_packet !== undefined && object.relay_voice_packet !== null)
       ? HubRelayVoicePacketParams.fromPartial(object.relay_voice_packet)
+      : undefined;
+    message.handle_user_left = (object.handle_user_left !== undefined && object.handle_user_left !== null)
+      ? EdgeHandleUserLeftParams.fromPartial(object.handle_user_left)
+      : undefined;
+    message.handle_user_remove = (object.handle_user_remove !== undefined && object.handle_user_remove !== null)
+      ? EdgeHandleUserRemoveParams.fromPartial(object.handle_user_remove)
+      : undefined;
+    message.handle_user_moved = (object.handle_user_moved !== undefined && object.handle_user_moved !== null)
+      ? EdgeHandleUserMovedParams.fromPartial(object.handle_user_moved)
+      : undefined;
+    message.handle_user_state_changed =
+      (object.handle_user_state_changed !== undefined && object.handle_user_state_changed !== null)
+        ? EdgeHandleUserStateChangedParams.fromPartial(object.handle_user_state_changed)
+        : undefined;
+    message.handle_text_message = (object.handle_text_message !== undefined && object.handle_text_message !== null)
+      ? EdgeHandleTextMessageParams.fromPartial(object.handle_text_message)
+      : undefined;
+    message.handle_channel_state = (object.handle_channel_state !== undefined && object.handle_channel_state !== null)
+      ? EdgeHandleChannelStateParams.fromPartial(object.handle_channel_state)
+      : undefined;
+    message.handle_channel_remove =
+      (object.handle_channel_remove !== undefined && object.handle_channel_remove !== null)
+        ? EdgeHandleChannelRemoveParams.fromPartial(object.handle_channel_remove)
+        : undefined;
+    message.user_state_broadcast = (object.user_state_broadcast !== undefined && object.user_state_broadcast !== null)
+      ? HubUserStateBroadcastParams.fromPartial(object.user_state_broadcast)
+      : undefined;
+    message.text_message_forward = (object.text_message_forward !== undefined && object.text_message_forward !== null)
+      ? HubTextMessageForwardParams.fromPartial(object.text_message_forward)
+      : undefined;
+    message.cluster_peer_joined = (object.cluster_peer_joined !== undefined && object.cluster_peer_joined !== null)
+      ? HubClusterPeerJoinedParams.fromPartial(object.cluster_peer_joined)
+      : undefined;
+    message.cluster_peer_left = (object.cluster_peer_left !== undefined && object.cluster_peer_left !== null)
+      ? HubClusterPeerLeftParams.fromPartial(object.cluster_peer_left)
+      : undefined;
+    message.route_table_update = (object.route_table_update !== undefined && object.route_table_update !== null)
+      ? HubRouteTableUpdateParams.fromPartial(object.route_table_update)
       : undefined;
     message.unknown_params_json = object.unknown_params_json ?? undefined;
     return message;

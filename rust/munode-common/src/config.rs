@@ -1,3 +1,4 @@
+use anyhow::Context;
 use serde::Deserialize;
 
 /// The main Edge server configuration.
@@ -273,7 +274,8 @@ impl Default for ServerConfig {
 
 /// Load edge configuration from a TOML or JSON file (detected by extension).
 pub fn load_edge_config(path: &str) -> Result<EdgeConfig, anyhow::Error> {
-    let content = std::fs::read_to_string(path)?;
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read edge config file: {}", path))?;
     let config: EdgeConfig = if path.ends_with(".json") {
         serde_json::from_str(&content)?
     } else {
@@ -516,6 +518,9 @@ pub struct HubLimitsConfig {
     /// Maximum number of users per channel. 0 = unlimited.
     #[serde(default)]
     pub max_users_per_channel: u32,
+    /// Maximum per-client bandwidth in bits per second. 0 = unlimited.
+    #[serde(default = "default_max_bandwidth")]
+    pub max_bandwidth: u32,
     /// Maximum text message length in bytes.
     #[serde(default = "default_text_message_length")]
     pub text_message_length: u32,
@@ -544,6 +549,7 @@ impl Default for HubLimitsConfig {
         Self {
             max_users: default_max_users(),
             max_users_per_channel: 0,
+            max_bandwidth: default_max_bandwidth(),
             text_message_length: default_text_message_length(),
             image_message_length: default_image_message_length(),
             message_rate: default_message_rate(),
@@ -666,7 +672,8 @@ impl Default for HubBlobStoreConfig {
 
 /// Load hub configuration from a TOML or JSON file (detected by extension).
 pub fn load_hub_config(path: &str) -> Result<HubConfig, anyhow::Error> {
-    let content = std::fs::read_to_string(path)?;
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read hub config file: {}", path))?;
     let config: HubConfig = if path.ends_with(".json") {
         serde_json::from_str(&content)?
     } else {

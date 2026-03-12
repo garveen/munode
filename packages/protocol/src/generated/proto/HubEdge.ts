@@ -6,7 +6,7 @@
 
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
-import { TypedRPCNotification, TypedRPCRequest, TypedRPCResponse } from "./HubEdgeRPC";
+import { ServerLimitsConfig, TypedRPCNotification, TypedRPCRequest, TypedRPCResponse } from "./HubEdgeRPC";
 import { SyncData } from "./HubEdgeSync";
 import {
   ACL,
@@ -376,7 +376,11 @@ export interface HeartbeatAck {
     | number
     | undefined;
   /** 可选的配置更新 */
-  config_update?: ConfigUpdate | undefined;
+  config_update?:
+    | ConfigUpdate
+    | undefined;
+  /** 如果 Hub 的客户端限制配置有变更，通过心跳确认包推送新配置 */
+  server_limits?: ServerLimitsConfig | undefined;
 }
 
 /** 服务器统计信息 */
@@ -1606,7 +1610,13 @@ export const Heartbeat: MessageFns<Heartbeat> = {
 };
 
 function createBaseHeartbeatAck(): HeartbeatAck {
-  return { edge_id: undefined, sequence: undefined, hub_timestamp: undefined, config_update: undefined };
+  return {
+    edge_id: undefined,
+    sequence: undefined,
+    hub_timestamp: undefined,
+    config_update: undefined,
+    server_limits: undefined,
+  };
 }
 
 export const HeartbeatAck: MessageFns<HeartbeatAck> = {
@@ -1622,6 +1632,9 @@ export const HeartbeatAck: MessageFns<HeartbeatAck> = {
     }
     if (message.config_update !== undefined) {
       ConfigUpdate.encode(message.config_update, writer.uint32(34).fork()).join();
+    }
+    if (message.server_limits !== undefined) {
+      ServerLimitsConfig.encode(message.server_limits, writer.uint32(42).fork()).join();
     }
     return writer;
   },
@@ -1665,6 +1678,14 @@ export const HeartbeatAck: MessageFns<HeartbeatAck> = {
           message.config_update = ConfigUpdate.decode(reader, reader.uint32());
           continue;
         }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.server_limits = ServerLimitsConfig.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1680,6 +1701,7 @@ export const HeartbeatAck: MessageFns<HeartbeatAck> = {
       sequence: isSet(object.sequence) ? globalThis.Number(object.sequence) : undefined,
       hub_timestamp: isSet(object.hub_timestamp) ? globalThis.Number(object.hub_timestamp) : undefined,
       config_update: isSet(object.config_update) ? ConfigUpdate.fromJSON(object.config_update) : undefined,
+      server_limits: isSet(object.server_limits) ? ServerLimitsConfig.fromJSON(object.server_limits) : undefined,
     };
   },
 
@@ -1697,6 +1719,9 @@ export const HeartbeatAck: MessageFns<HeartbeatAck> = {
     if (message.config_update !== undefined) {
       obj.config_update = ConfigUpdate.toJSON(message.config_update);
     }
+    if (message.server_limits !== undefined) {
+      obj.server_limits = ServerLimitsConfig.toJSON(message.server_limits);
+    }
     return obj;
   },
 
@@ -1710,6 +1735,9 @@ export const HeartbeatAck: MessageFns<HeartbeatAck> = {
     message.hub_timestamp = object.hub_timestamp ?? undefined;
     message.config_update = (object.config_update !== undefined && object.config_update !== null)
       ? ConfigUpdate.fromPartial(object.config_update)
+      : undefined;
+    message.server_limits = (object.server_limits !== undefined && object.server_limits !== null)
+      ? ServerLimitsConfig.fromPartial(object.server_limits)
       : undefined;
     return message;
   },

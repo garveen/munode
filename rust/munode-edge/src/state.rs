@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use tokio::sync::{broadcast, RwLock};
 
+use munode_protocol::hubedge::ServerLimitsConfig;
+
 use crate::channel_manager::ChannelManager;
 use crate::client::ClientManager;
 
@@ -196,6 +198,9 @@ pub struct EdgeState {
     pub ninja_visible_to: RwLock<HashMap<u32, std::collections::HashSet<u32>>>,
     /// Route table from Hub. Maps target_edge_id → RouteDecision.
     pub route_table: RwLock<std::collections::HashMap<u32, RouteDecision>>,
+    /// Client-facing limits pushed from Hub on registration (and updated via heartbeat).
+    /// When set, overrides Edge-local config for ServerSync/ServerConfig/rate limiting.
+    pub hub_limits: RwLock<Option<ServerLimitsConfig>>,
 }
 
 impl EdgeState {
@@ -220,6 +225,7 @@ impl EdgeState {
             ninja_channels: RwLock::new(vec![]),
             ninja_visible_to: RwLock::new(HashMap::new()),
             route_table: RwLock::new(std::collections::HashMap::new()),
+            hub_limits: RwLock::new(None),
         })
     }
 
@@ -248,6 +254,7 @@ impl EdgeState {
             ninja_channels: RwLock::new(vec![]),
             ninja_visible_to: RwLock::new(HashMap::new()),
             route_table: RwLock::new(std::collections::HashMap::new()),
+            hub_limits: RwLock::new(None),
         })
     }
 

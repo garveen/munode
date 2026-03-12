@@ -6,6 +6,39 @@ package hubedge;
 // Common Types
 // ============================================================================
 
+// ---------------------------------------------------------------------------
+// ServerLimitsConfig - Hub 下发给 Edge 的客户端限制配置
+// Edge 在向客户端发送 ServerSync / ServerConfig / SuggestConfig 时使用这些值
+// ---------------------------------------------------------------------------
+message ServerLimitsConfig {
+  // 每个客户端的最大带宽（bps）。0 = 无限制。
+  optional uint32 max_bandwidth = 1;
+  // 文本消息最大长度（字节）。
+  optional uint32 text_message_length = 2;
+  // 图片消息最大长度（字节）。
+  optional uint32 image_message_length = 3;
+  // 插件数据消息最大长度（字节）。
+  optional uint32 plugin_message_length = 4;
+  // 每秒最大文本消息数（令牌桶速率）。0 = 无限制。
+  optional float message_rate = 5;
+  // 文本消息令牌桶突发大小。
+  optional uint32 message_burst = 6;
+  // 服务器最大用户数。0 = 无限制。
+  optional uint32 max_users = 7;
+  // 每频道最大监听者数。0 = 无限制。
+  optional uint32 listeners_per_channel = 8;
+  // 每用户最大监听频道数。0 = 无限制。
+  optional uint32 listeners_per_user = 9;
+  // 建议客户端版本（数字格式，如 1340029 表示 1.3.4.29）。
+  optional uint32 suggest_version = 10;
+  // 建议开启位置音频。
+  optional bool suggest_positional = 11;
+  // 建议开启按键通话。
+  optional bool suggest_push_to_talk = 12;
+  // 欢迎消息（MOTD）。
+  optional string welcome_text = 13;
+}
+
 message EdgeInfo {
   required uint32 server_id = 1;
   required string name = 2;
@@ -44,6 +77,8 @@ message EdgeRegisterResult {
   optional string challenge = 4;
   optional uint32 challenge_timeout = 5;
   optional string error = 6;
+  // Hub 下发的客户端限制配置，Edge 注册成功后立即生效
+  optional ServerLimitsConfig server_limits = 7;
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +102,8 @@ message EdgeHeartbeatResult {
   required bool success = 1;
   repeated EdgeInfo updated_edges = 2;
   optional string error = 3;
+  // 如果 Hub 配置有变更，通过心跳响应推送更新后的限制
+  optional ServerLimitsConfig server_limits = 4;
 }
 
 // ---------------------------------------------------------------------------

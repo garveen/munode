@@ -188,6 +188,7 @@ impl EdgeConnection {
                             sequence: heartbeat.sequence,
                             hub_timestamp: current_millis() as i64,
                             config_update: None,
+                            server_limits: Some(self.rpc_handler.build_server_limits()),
                         }),
                         ..Default::default()
                     };

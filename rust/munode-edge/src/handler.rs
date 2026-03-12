@@ -308,11 +308,18 @@ impl<'a> LoginHandler<'a> {
 
     /// Send ServerSync.
     async fn send_server_sync(&self, session_id: u32) -> Result<()> {
-        let welcome = self.config.server.welcome_text.clone()
+        let hub_limits = self.edge_state.hub_limits.read().await;
+        let max_bandwidth = hub_limits.as_ref()
+            .and_then(|l| l.max_bandwidth)
+            .unwrap_or(self.config.server.max_bandwidth);
+        let welcome = hub_limits.as_ref()
+            .and_then(|l| l.welcome_text.clone())
+            .or_else(|| self.config.server.welcome_text.clone())
             .unwrap_or_else(|| "Welcome to MuNode Server".to_string());
+        drop(hub_limits);
         let msg = mumbleproto::ServerSync {
             session: Some(session_id),
-            max_bandwidth: Some(self.config.server.max_bandwidth),
+            max_bandwidth: Some(max_bandwidth),
             welcome_text: Some(welcome),
             permissions: Some(0),
         };
@@ -327,28 +334,61 @@ impl<'a> LoginHandler<'a> {
     /// in `ServerSync`. Including it again would cause duplicate MOTD
     /// notifications on some clients.
     async fn send_server_config(&self) -> Result<()> {
+        let hub_limits = self.edge_state.hub_limits.read().await;
+        let max_bandwidth = hub_limits.as_ref()
+            .and_then(|l| l.max_bandwidth)
+            .unwrap_or(self.config.server.max_bandwidth);
+        let text_message_length = hub_limits.as_ref()
+            .and_then(|l| l.text_message_length)
+            .unwrap_or(self.config.server.text_message_length);
+        let image_message_length = hub_limits.as_ref()
+            .and_then(|l| l.image_message_length)
+            .unwrap_or(self.config.server.image_message_length);
+        let max_users = hub_limits.as_ref()
+            .and_then(|l| l.max_users)
+            .unwrap_or(self.config.server.capacity);
+        let suggest_version = hub_limits.as_ref().and_then(|l| l.suggest_version);
+        let suggest_positional = hub_limits.as_ref().and_then(|l| l.suggest_positional);
+        let suggest_push_to_talk = hub_limits.as_ref().and_then(|l| l.suggest_push_to_talk);
+        drop(hub_limits);
+
         let msg = mumbleproto::ServerConfig {
-            max_bandwidth: Some(self.config.server.max_bandwidth),
+            max_bandwidth: Some(max_bandwidth),
             welcome_text: None,
             allow_html: Some(true),
-            message_length: Some(self.config.server.text_message_length),
-            image_message_length: Some(self.config.server.image_message_length),
-            max_users: Some(self.config.server.capacity),
+            message_length: Some(text_message_length),
+            image_message_length: Some(image_message_length),
+            max_users: Some(max_users),
             recording_allowed: Some(true),
         };
         self.send(MessageType::ServerConfig, &msg).await?;
         debug!("Sent ServerConfig");
 
-        // Send SuggestConfig if any suggestions are configured
-        if let Some(suggest) = self.config.suggest.as_ref() {
-            if suggest.version.is_some() || suggest.positional.is_some() || suggest.push_to_talk.is_some() {
-                let suggest_msg = mumbleproto::SuggestConfig {
-                    version: suggest.version.clone(),
-                    positional: suggest.positional,
-                    push_to_talk: suggest.push_to_talk,
-                };
-                self.send(MessageType::SuggestConfig, &suggest_msg).await?;
-                debug!("Sent SuggestConfig");
+        // Send SuggestConfig if Hub provided suggestions (or edge config has them)
+        let has_hub_suggest = suggest_version.is_some() || suggest_positional.is_some() || suggest_push_to_talk.is_some();
+        let has_edge_suggest = self.config.suggest.as_ref()
+            .map(|s| s.version.is_some() || s.positional.is_some() || s.push_to_talk.is_some())
+            .unwrap_or(false);
+
+        if has_hub_suggest {
+            let suggest_msg = mumbleproto::SuggestConfig {
+                version: suggest_version,
+                positional: suggest_positional,
+                push_to_talk: suggest_push_to_talk,
+            };
+            self.send(MessageType::SuggestConfig, &suggest_msg).await?;
+            debug!("Sent SuggestConfig (from Hub)");
+        } else if has_edge_suggest {
+            if let Some(suggest) = self.config.suggest.as_ref() {
+                if suggest.version.is_some() || suggest.positional.is_some() || suggest.push_to_talk.is_some() {
+                    let suggest_msg = mumbleproto::SuggestConfig {
+                        version: suggest.version.clone(),
+                        positional: suggest.positional,
+                        push_to_talk: suggest.push_to_talk,
+                    };
+                    self.send(MessageType::SuggestConfig, &suggest_msg).await?;
+                    debug!("Sent SuggestConfig (from Edge config)");
+                }
             }
         }
 

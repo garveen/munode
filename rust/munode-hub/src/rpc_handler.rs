@@ -220,6 +220,7 @@ impl RpcHandler {
                     challenge: Some(challenge),
                     challenge_timeout: Some(30000),
                     error: None,
+                    server_limits: None,
                 };
                 return Ok(self.make_response_packet(request_id, "edge.register", |r| {
                     r.edge_register = Some(result);
@@ -239,6 +240,7 @@ impl RpcHandler {
                         challenge: None,
                         challenge_timeout: None,
                         error: Some("HMAC verification failed".to_string()),
+                        server_limits: None,
                     };
                     return Ok(self.make_response_packet(request_id, "edge.register", |r| {
                         r.edge_register = Some(result);
@@ -255,7 +257,7 @@ impl RpcHandler {
             port: params.port,
             capacity: params.capacity,
             region: params.region.clone(),
-            relay_port: params.relay_port.filter(|&p| p > 0),
+            relay_port: None,
         };
 
         info!(
@@ -293,6 +295,7 @@ impl RpcHandler {
             challenge: None,
             challenge_timeout: None,
             error: None,
+            server_limits: Some(self.build_server_limits()),
         };
 
         let response = self.make_response_packet(request_id, "edge.register", |r| {
@@ -2265,7 +2268,7 @@ impl RpcHandler {
             let shutdown_notif = TypedRpcNotification {
                 method: "hub.shutdownRequest".to_string(),
                 timestamp: Some(current_millis() as i64),
-                shutdown_request: Some(HubShutdownRequestParams {
+                force_disconnect: Some(HubForceDisconnectParams {
                     reason: format!(
                         "Network partition detected: your cluster partition ({} users) is smaller. Please reconnect.",
                         count
@@ -2313,6 +2316,29 @@ impl RpcHandler {
             if let Err(e) = sender.try_send(data.clone()) {
                 warn!("Failed to send notification to edge {}: {}", edge_id, e);
             }
+        }
+    }
+
+    /// Build a ServerLimitsConfig from the current Hub configuration.
+    /// This is sent to Edge on registration and via heartbeat ack when limits change.
+    pub(crate) fn build_server_limits(&self) -> ServerLimitsConfig {
+        let limits = &self.state.config.limits;
+        let suggest = &self.state.config.suggest;
+        let welcome = self.state.config.auth.welcome_text.clone();
+        ServerLimitsConfig {
+            max_bandwidth: Some(limits.max_bandwidth),
+            text_message_length: Some(limits.text_message_length),
+            image_message_length: Some(limits.image_message_length),
+            plugin_message_length: Some(limits.plugin_message_length),
+            message_rate: Some(limits.message_rate),
+            message_burst: Some(limits.message_burst),
+            max_users: Some(limits.max_users),
+            listeners_per_channel: Some(limits.listeners_per_channel),
+            listeners_per_user: Some(limits.listeners_per_user),
+            suggest_version: suggest.version,
+            suggest_positional: suggest.positional,
+            suggest_push_to_talk: suggest.push_to_talk,
+            welcome_text: welcome,
         }
     }
 
@@ -2650,12 +2676,6 @@ impl RpcHandler {
             connected_peers: std::collections::HashSet::new(),
         };
 
-        // Snapshot of edge registrations for relay_port lookup
-        let reg_snapshot: std::collections::HashMap<u32, Option<u32>> = {
-            let reg = self.state.edge_registry.read().await;
-            reg.iter().map(|(id, r)| (*id, r.relay_port)).collect()
-        };
-
         let peers_snapshot: Vec<PeerInfoProto> = {
             let mut topo = self.state.topology.write().await;
             topo.add_edge(topo_edge)
@@ -2667,13 +2687,9 @@ impl RpcHandler {
                     port: p.port,
                     voice_port: p.voice_port,
                     cert_hash: None,
-                    relay_port: reg_snapshot.get(&p.edge_id).and_then(|pp| *pp),
                 })
                 .collect()
         };
-
-        // Relay port for the joining edge
-        let joining_relay_port = reg_snapshot.get(&join_edge_id).and_then(|pp| *pp);
 
         // Notify existing edges about the new peer
         let notification = TypedRpcNotification {
@@ -2684,7 +2700,6 @@ impl RpcHandler {
                 name: params.name.clone(),
                 host: params.host.clone(),
                 voice_port: params.voice_port,
-                relay_port: joining_relay_port,
             }),
             ..Default::default()
         };

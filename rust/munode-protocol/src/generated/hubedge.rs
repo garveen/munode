@@ -673,6 +673,52 @@ impl ConnectionEventType {
         }
     }
 }
+/// ---------------------------------------------------------------------------
+/// ServerLimitsConfig - Hub 下发给 Edge 的客户端限制配置
+/// Edge 在向客户端发送 ServerSync / ServerConfig / SuggestConfig 时使用这些值
+/// ---------------------------------------------------------------------------
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ServerLimitsConfig {
+    /// 每个客户端的最大带宽（bps）。0 = 无限制。
+    #[prost(uint32, optional, tag = "1")]
+    pub max_bandwidth: ::core::option::Option<u32>,
+    /// 文本消息最大长度（字节）。
+    #[prost(uint32, optional, tag = "2")]
+    pub text_message_length: ::core::option::Option<u32>,
+    /// 图片消息最大长度（字节）。
+    #[prost(uint32, optional, tag = "3")]
+    pub image_message_length: ::core::option::Option<u32>,
+    /// 插件数据消息最大长度（字节）。
+    #[prost(uint32, optional, tag = "4")]
+    pub plugin_message_length: ::core::option::Option<u32>,
+    /// 每秒最大文本消息数（令牌桶速率）。0 = 无限制。
+    #[prost(float, optional, tag = "5")]
+    pub message_rate: ::core::option::Option<f32>,
+    /// 文本消息令牌桶突发大小。
+    #[prost(uint32, optional, tag = "6")]
+    pub message_burst: ::core::option::Option<u32>,
+    /// 服务器最大用户数。0 = 无限制。
+    #[prost(uint32, optional, tag = "7")]
+    pub max_users: ::core::option::Option<u32>,
+    /// 每频道最大监听者数。0 = 无限制。
+    #[prost(uint32, optional, tag = "8")]
+    pub listeners_per_channel: ::core::option::Option<u32>,
+    /// 每用户最大监听频道数。0 = 无限制。
+    #[prost(uint32, optional, tag = "9")]
+    pub listeners_per_user: ::core::option::Option<u32>,
+    /// 建议客户端版本（数字格式，如 1340029 表示 1.3.4.29）。
+    #[prost(uint32, optional, tag = "10")]
+    pub suggest_version: ::core::option::Option<u32>,
+    /// 建议开启位置音频。
+    #[prost(bool, optional, tag = "11")]
+    pub suggest_positional: ::core::option::Option<bool>,
+    /// 建议开启按键通话。
+    #[prost(bool, optional, tag = "12")]
+    pub suggest_push_to_talk: ::core::option::Option<bool>,
+    /// 欢迎消息（MOTD）。
+    #[prost(string, optional, tag = "13")]
+    pub welcome_text: ::core::option::Option<::prost::alloc::string::String>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeInfo {
     #[prost(uint32, required, tag = "1")]
@@ -717,11 +763,6 @@ pub struct EdgeRegisterParams {
     pub challenge: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "9")]
     pub challenge_response: ::core::option::Option<::prost::alloc::string::String>,
-    /// Optional proxy server port for peer-to-peer control relay.
-    /// When non-zero, this Edge can act as a transparent WebSocket proxy for
-    /// other Edges that cannot reach the Hub directly.
-    #[prost(uint32, optional, tag = "10")]
-    pub relay_port: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeRegisterResult {
@@ -737,6 +778,9 @@ pub struct EdgeRegisterResult {
     pub challenge_timeout: ::core::option::Option<u32>,
     #[prost(string, optional, tag = "6")]
     pub error: ::core::option::Option<::prost::alloc::string::String>,
+    /// Hub 下发的客户端限制配置，Edge 注册成功后立即生效
+    #[prost(message, optional, tag = "7")]
+    pub server_limits: ::core::option::Option<ServerLimitsConfig>,
 }
 /// ---------------------------------------------------------------------------
 /// edge.heartbeat - Edge 发送心跳
@@ -771,6 +815,9 @@ pub struct EdgeHeartbeatResult {
     pub updated_edges: ::prost::alloc::vec::Vec<EdgeInfo>,
     #[prost(string, optional, tag = "3")]
     pub error: ::core::option::Option<::prost::alloc::string::String>,
+    /// 如果 Hub 配置有变更，通过心跳响应推送更新后的限制
+    #[prost(message, optional, tag = "4")]
+    pub server_limits: ::core::option::Option<ServerLimitsConfig>,
 }
 /// ---------------------------------------------------------------------------
 /// edge.allocateSessionId - Edge 分配 Session ID
@@ -1313,9 +1360,6 @@ pub struct PeerInfoProto {
     pub voice_port: u32,
     #[prost(string, optional, tag = "6")]
     pub cert_hash: ::core::option::Option<::prost::alloc::string::String>,
-    /// Optional proxy server port.  Non-zero means this peer supports proxy relay.
-    #[prost(uint32, optional, tag = "7")]
-    pub relay_port: ::core::option::Option<u32>,
 }
 /// ---------------------------------------------------------------------------
 /// edge.joinComplete - Edge 完成集群加入
@@ -1916,46 +1960,11 @@ pub struct HubClusterPeerJoinedParams {
     pub host: ::prost::alloc::string::String,
     #[prost(uint32, required, tag = "4")]
     pub voice_port: u32,
-    /// Optional proxy server port. When non-zero, this peer can relay
-    /// control-channel traffic for Edges that cannot reach Hub directly.
-    #[prost(uint32, optional, tag = "5")]
-    pub relay_port: ::core::option::Option<u32>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct HubClusterPeerLeftParams {
     #[prost(uint32, required, tag = "1")]
     pub edge_id: u32,
-}
-/// ---------------------------------------------------------------------------
-/// hub.shutdownRequest - Hub 请求 Edge 优雅关闭（集群分割处理）
-/// ---------------------------------------------------------------------------
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct HubShutdownRequestParams {
-    /// Human-readable reason for the shutdown request.
-    #[prost(string, required, tag = "1")]
-    pub reason: ::prost::alloc::string::String,
-}
-/// ---------------------------------------------------------------------------
-/// hub.routeTableUpdate - Hub pushes quality-aware route table to Edge
-/// ---------------------------------------------------------------------------
-/// Hub route entry (route_type: 0=direct, 1=relay via next_hop, 2=hub_tcp)
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct HubRouteEntryProto {
-    #[prost(uint32, required, tag = "1")]
-    pub target_edge_id: u32,
-    #[prost(uint32, required, tag = "2")]
-    pub route_type: u32,
-    #[prost(uint32, optional, tag = "3")]
-    pub next_hop: ::core::option::Option<u32>,
-    #[prost(float, required, tag = "4")]
-    pub cost: f32,
-}
-
-/// hub.routeTableUpdate params.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct HubRouteTableUpdateParams {
-    #[prost(message, repeated, tag = "1")]
-    pub routes: ::prost::alloc::vec::Vec<HubRouteEntryProto>,
 }
 /// ---------------------------------------------------------------------------
 /// hub.pluginDataBroadcast - Hub 广播插件数据到 Edge
@@ -2139,6 +2148,26 @@ pub struct TypedRpcResponse {
     #[prost(message, optional, tag = "37")]
     pub blob_set_user_comment: ::core::option::Option<BlobSetUserCommentResult>,
 }
+/// ---------------------------------------------------------------------------
+/// hub.routeTableUpdate - Hub pushes quality-aware route table to Edge
+/// ---------------------------------------------------------------------------
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct HubRouteEntryProto {
+    #[prost(uint32, required, tag = "1")]
+    pub target_edge_id: u32,
+    /// 0=direct, 1=relay via next_hop, 2=hub_tcp
+    #[prost(uint32, required, tag = "2")]
+    pub route_type: u32,
+    #[prost(uint32, optional, tag = "3")]
+    pub next_hop: ::core::option::Option<u32>,
+    #[prost(float, required, tag = "4")]
+    pub cost: f32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HubRouteTableUpdateParams {
+    #[prost(message, repeated, tag = "1")]
+    pub routes: ::prost::alloc::vec::Vec<HubRouteEntryProto>,
+}
 /// *
 /// TypedRPCNotification - 类型安全的 RPC 通知
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2203,10 +2232,6 @@ pub struct TypedRpcNotification {
     pub cluster_peer_joined: ::core::option::Option<HubClusterPeerJoinedParams>,
     #[prost(message, optional, tag = "34")]
     pub cluster_peer_left: ::core::option::Option<HubClusterPeerLeftParams>,
-    /// hub.shutdownRequest - Hub requests Edge to gracefully shut down (cluster partition)
-    #[prost(message, optional, tag = "35")]
-    pub shutdown_request: ::core::option::Option<HubShutdownRequestParams>,
-    /// hub.routeTableUpdate - Hub pushes quality-aware route table to Edge
     #[prost(message, optional, tag = "36")]
     pub route_table_update: ::core::option::Option<HubRouteTableUpdateParams>,
     /// For unknown notification types, store params as JSON string
@@ -2389,6 +2414,9 @@ pub struct HeartbeatAck {
     /// 可选的配置更新
     #[prost(message, optional, tag = "4")]
     pub config_update: ::core::option::Option<ConfigUpdate>,
+    /// 如果 Hub 的客户端限制配置有变更，通过心跳确认包推送新配置
+    #[prost(message, optional, tag = "5")]
+    pub server_limits: ::core::option::Option<ServerLimitsConfig>,
 }
 /// *
 /// 服务器统计信息

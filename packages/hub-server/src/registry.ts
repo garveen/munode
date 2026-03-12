@@ -11,6 +11,7 @@ import type {
 } from './types.js';
 import { EdgeConnectionState } from './types.js';
 import type { HubDatabase } from './database.js';
+import type { ServerLimitsConfig } from '@munode/protocol';
 
 
 /**
@@ -30,6 +31,7 @@ export class ServiceRegistry {
   private edges = new Map<number, RegisteredEdge>();
   private heartbeatTimers = new Map<number, NodeJS.Timeout>();
   private config: RegistryConfig;
+  private serverLimitsConfig?: ServerLimitsConfig;
   
   // HMAC 挑战-响应认证
   private challenges = new Map<string, ChallengeInfo>(); // challenge -> ChallengeInfo
@@ -39,9 +41,10 @@ export class ServiceRegistry {
 
     private logger: Logger;
 
-  constructor(config: RegistryConfig, _database: HubDatabase, logger: Logger) {
+  constructor(config: RegistryConfig, _database: HubDatabase, logger: Logger, serverLimitsConfig?: ServerLimitsConfig) {
     this.logger = logger;
     this.config = config;
+    this.serverLimitsConfig = serverLimitsConfig;
     // database参数保留以兼容旧代码，但不再使用
     
     // 启动挑战码清理定时器
@@ -146,6 +149,7 @@ export class ServiceRegistry {
           edge_list: this.getEdgeList(),
           reconnected: true, // 标识这是重连
           need_cleanup: true, // 标识需要清理旧会话
+          server_limits: this.serverLimitsConfig,
         };
       } else if (existingEdge.connectionState === EdgeConnectionState.DISCONNECTED_TIMEOUT) {
         // Edge已经超时被清理，允许重新注册，但需要清理
@@ -171,6 +175,7 @@ export class ServiceRegistry {
           edge_list: this.getEdgeList(),
           reconnected: true,
           need_cleanup: true, // 标识需要清理旧会话
+          server_limits: this.serverLimitsConfig,
         };
       } else {
         this.logger.warn(`Edge Server ${server_id} already registered in CONNECTED state, updating...`);
@@ -226,6 +231,7 @@ export class ServiceRegistry {
       success: true,
       hub_server_id: 0, // Hub Server ID
       edge_list: this.getEdgeList(),
+      server_limits: this.serverLimitsConfig,
     };
   }
 
@@ -265,6 +271,7 @@ export class ServiceRegistry {
     return {
       success: true,
       updated_edges: updates.length > 0 ? updates : undefined,
+      server_limits: this.serverLimitsConfig,
     };
   }
 

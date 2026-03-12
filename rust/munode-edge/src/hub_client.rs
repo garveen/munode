@@ -107,6 +107,7 @@ pub struct HubClient {
     /// Maximum number of users for this Edge.
     capacity: u32,
     /// Control-relay port advertised to Hub (always active; auto-derived if 0).
+    #[allow(dead_code)]
     relay_port: u16,
     /// Statically configured peers for bootstrap relay (from config).
     /// These are tried first before dynamically-discovered peers.
@@ -662,6 +663,12 @@ impl HubClient {
             }
             Ok(PacketType::HeartbeatAck) => {
                 debug!("Heartbeat ack received");
+                if let Some(ack) = packet.heartbeat_ack {
+                    if let Some(limits) = ack.server_limits {
+                        debug!("Received updated server limits from Hub heartbeat");
+                        *self.edge_state.hub_limits.write().await = Some(limits);
+                    }
+                }
             }
             _ => {
                 debug!("Unknown packet type: {}", packet.r#type);
@@ -841,9 +848,7 @@ impl HubClient {
             }
             "hub.shutdownRequest" => {
                 // Hub requests this Edge to gracefully shut down (cluster partition handling)
-                let reason = notification.shutdown_request.as_ref()
-                    .map(|p| p.reason.as_str())
-                    .unwrap_or("Network partition detected");
+                let reason = "Network partition detected";
                 warn!("Hub shutdown request received: {}", reason);
                 // Emit shutdown event so server can gracefully disconnect all clients
                 self.edge_state.emit(EdgeEvent::ShutdownRequested {
@@ -930,17 +935,13 @@ impl HubClient {
                     info!("Peer edge joined cluster: {} (id {}) at {}:{}", name, peer_edge_id, host, voice_port);
                     if !host.is_empty() && voice_port > 0 {
                         if let Ok(udp_addr) = format!("{}:{}", host, voice_port).parse() {
-                            let relay_port = p.relay_port.filter(|&pp| pp > 0).map(|pp| pp as u16);
                             let mut reg = self.edge_state.peer_registry.write().await;
                             reg.upsert(peer_edge_id, PeerEdgeInfo {
                                 udp_addr,
                                 host: host.clone(),
-                                relay_port,
+                                relay_port: None,
                             });
                             info!("Registered direct UDP route to peer edge {} at {}", peer_edge_id, udp_addr);
-                            if let Some(rp) = relay_port {
-                                info!("  Peer edge {} control-relay available on port {}", peer_edge_id, rp);
-                            }
                         }
                     }
                 }
@@ -1014,7 +1015,6 @@ impl HubClient {
             certificate: String::new(),
             challenge: None,
             challenge_response: None,
-            relay_port: Some(self.relay_port as u32),
         };
 
         let request = TypedRpcRequest {
@@ -1051,6 +1051,12 @@ impl HubClient {
             self.edge_state.set_edge_id(id);
         }
 
+        // Store server limits received from Hub
+        if let Some(limits) = result.server_limits {
+            *self.edge_state.hub_limits.write().await = Some(limits);
+            debug!("Stored server limits from Hub registration");
+        }
+
         Ok(())
     }
 
@@ -1074,7 +1080,6 @@ impl HubClient {
             certificate: String::new(),
             challenge: Some(challenge.to_string()),
             challenge_response: Some(challenge_response),
-            relay_port: Some(self.relay_port as u32),
         };
 
         let request = TypedRpcRequest {
@@ -1099,6 +1104,13 @@ impl HubClient {
             self.edge_state.set_edge_id(id);
         }
         info!("Registered with Hub via HMAC challenge-response");
+
+        // Store server limits received from Hub
+        if let Some(limits) = result.server_limits {
+            *self.edge_state.hub_limits.write().await = Some(limits);
+            debug!("Stored server limits from Hub registration (challenge)");
+        }
+
         Ok(())
     }
 
@@ -1182,17 +1194,13 @@ impl HubClient {
             // Register each existing peer's UDP address
             if !peer.host.is_empty() && peer.voice_port > 0 {
                 if let Ok(udp_addr) = format!("{}:{}", peer.host, peer.voice_port).parse() {
-                    let relay_port = peer.relay_port.filter(|&pp| pp > 0).map(|pp| pp as u16);
                     let mut reg = self.edge_state.peer_registry.write().await;
                     reg.upsert(peer.id, PeerEdgeInfo {
                         udp_addr,
                         host: peer.host.clone(),
-                        relay_port,
+                        relay_port: None,
                     });
                     info!("Registered direct UDP route to existing peer edge {} at {}", peer.id, udp_addr);
-                    if let Some(rp) = relay_port {
-                        info!("  Peer edge {} control-relay available on port {}", peer.id, rp);
-                    }
                 }
             }
         }

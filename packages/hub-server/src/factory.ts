@@ -30,6 +30,26 @@ import { ClusterHandler, type IClusterHandler } from './handlers/cluster-handler
 import { BlobHandler, type IBlobHandler } from './handlers/blob-handler.js';
 import { HubControlService } from './control-service.js';
 import { PermissionWorkerManager } from './permission-worker-manager.js';
+import type { ServerLimitsConfig } from '@munode/protocol';
+
+/**
+ * Build ServerLimitsConfig from HubConfig to push down to Edge servers.
+ */
+function buildServerLimitsConfig(config: HubConfig): ServerLimitsConfig {
+  return {
+    max_bandwidth: config.bandwidth,
+    text_message_length: config.text_message_length,
+    image_message_length: config.image_message_length,
+    message_rate: config.message_limit,
+    message_burst: config.message_burst,
+    max_users: config.max_users,
+    listeners_per_channel: config.listeners_per_channel,
+    listeners_per_user: config.listeners_per_user,
+    suggest_version: config.suggest?.version !== undefined ? Number(config.suggest.version) : undefined,
+    suggest_positional: config.suggest?.positional ?? undefined,
+    suggest_push_to_talk: config.suggest?.push_to_talk ?? undefined,
+  };
+}
 
 
 /**
@@ -89,7 +109,7 @@ export class HubHandlerFactory {
     this.banManager = new BanManager(this.database, this.logger);
 
     // 初始化核心服务
-    this.registry = new ServiceRegistry(this.config.registry, this.database, this.logger);
+    this.registry = new ServiceRegistry(this.config.registry, this.database, this.logger, buildServerLimitsConfig(this.config));
     this.sessionManager = new GlobalSessionManager(this.logger); // 传递logger
     this.voiceTargetSync = new VoiceTargetSyncService(this.sessionManager, this.logger);
     this.certExchange = new CertificateExchangeService(this.registry, this.logger);
