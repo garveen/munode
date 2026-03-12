@@ -36,9 +36,10 @@ pub struct EdgeRegistration {
     pub capacity: u32,
     /// Optional geographic region tag (e.g. "us-east", "eu-west").
     pub region: Option<String>,
-    /// Optional proxy server port for peer control relay.
-    /// When non-zero, this Edge accepts proxy WebSocket connections from peers.
-    pub proxy_port: Option<u32>,
+    /// Control-relay port for peer-to-peer relay connections.
+    /// Every Edge exposes a relay server; `None` means the relay port was not
+    /// advertised (older protocol version).
+    pub relay_port: Option<u32>,
 }
 
 /// Health data for a connected Edge server.

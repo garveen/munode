@@ -1,25 +1,25 @@
-//! Peer Edge Control Relay — transparent WebSocket proxy server.
+//! Peer Edge Control Relay — transparent WebSocket relay server.
 //!
-//! When `allow_peer_proxy = true` in the Edge configuration, this module starts
-//! a lightweight TCP/WebSocket listener that accepts incoming WebSocket connections
-//! from peer Edges that cannot reach the Hub directly.
+//! Every Edge starts a lightweight TCP/WebSocket relay listener (always-on, no opt-in flag).
+//! Peer Edges that cannot reach Hub directly connect to this relay port and have their
+//! traffic forwarded transparently.
 //!
-//! For each incoming client WebSocket, the proxy opens **one new WebSocket
+//! For each incoming client WebSocket, the relay opens **one new WebSocket
 //! connection to the Hub** and relays all binary frames bidirectionally.
-//! The proxy does not parse or interpret any messages — it is purely transparent.
+//! The relay does not parse or interpret any messages — it is purely transparent.
 //!
 //! ```text
 //!   Edge A (cannot reach Hub)
-//!        │ ws://edge-b-host:proxy_ws_port/
+//!        │ ws://edge-b-host:relay_port/
 //!        ▼
-//!   Edge B (proxy server)  ───ws://hub-host:hub-port/──►  Hub
+//!   Edge B (relay server)  ───ws://hub-host:hub-port/──►  Hub
 //!        ▲                                                    │
 //!        └────────────────── relay ──────────────────────────┘
 //! ```
 //!
 //! Limitations:
-//! - Single-hop only: Edge B does **not** accept further proxy chains.
-//! - Plain WebSocket (no TLS): The proxy listener does not use TLS.
+//! - Single-hop only: Edge B does **not** accept further relay chains.
+//! - Plain WebSocket (no TLS): The relay listener does not use TLS.
 //!   This is acceptable for in-cluster connections on a trusted network.
 
 use anyhow::Result;
@@ -27,22 +27,22 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, warn};
 
-/// Start the peer proxy WebSocket server.
+/// Start the control-relay WebSocket server.
 ///
-/// Binds to `0.0.0.0:proxy_port` and for every incoming WebSocket connection
+/// Binds to `0.0.0.0:relay_port` and for every incoming WebSocket connection
 /// opens a new WebSocket to the Hub (`ws://hub_host:hub_port/`) and relays
 /// frames bidirectionally until either side closes.
 ///
 /// This function never returns under normal operation.
-pub async fn run_proxy_server(proxy_port: u16, hub_host: String, hub_port: u16) {
-    let bind_addr = format!("0.0.0.0:{}", proxy_port);
+pub async fn run_relay_server(relay_port: u16, hub_host: String, hub_port: u16) {
+    let bind_addr = format!("0.0.0.0:{}", relay_port);
     let listener = match TcpListener::bind(&bind_addr).await {
         Ok(l) => {
-            info!("Peer proxy server listening on {}", bind_addr);
+            info!("Control relay server listening on {}", bind_addr);
             l
         }
         Err(e) => {
-            error!("Failed to bind peer proxy server on {}: {}", bind_addr, e);
+            error!("Failed to bind control relay server on {}: {}", bind_addr, e);
             return;
         }
     };

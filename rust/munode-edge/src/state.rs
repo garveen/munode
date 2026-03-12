@@ -14,10 +14,11 @@ pub struct PeerEdgeInfo {
     pub udp_addr: SocketAddr,
     /// Hostname of the peer Edge (same as used for UDP routing).
     pub host: String,
-    /// Optional proxy server port for peer control relay.
-    /// When `Some(port)`, this peer can transparently forward
-    /// WebSocket traffic to Hub on behalf of Edges that cannot reach Hub directly.
-    pub proxy_port: Option<u16>,
+    /// Control-relay port of the peer Edge.
+    /// Every Edge exposes a relay server on this port; it transparently
+    /// forwards WebSocket traffic to Hub on behalf of Edges that cannot reach
+    /// Hub directly.  `None` means the relay port was not yet advertised.
+    pub relay_port: Option<u16>,
 }
 
 /// Registry of known peer Edges, populated from `hub.peerJoined` notifications.
@@ -39,15 +40,23 @@ impl PeerRegistry {
         self.peers.get(&edge_id)
     }
 
-    /// Collect all peers that have a proxy_port set (i.e. can act as proxy).
-    /// Returns a snapshot `Vec<(peer_id, host, proxy_port)>` so the caller
+    /// Collect all peers that have a relay_port advertised.
+    /// Returns a snapshot `Vec<(peer_id, host, relay_port)>` so the caller
     /// does not need to hold the lock while iterating.
-    pub fn proxy_peers(&self) -> Vec<(u32, String, u16)> {
+    pub fn relay_peers(&self) -> Vec<(u32, String, u16)> {
         self.peers
             .iter()
             .filter_map(|(id, info)| {
-                info.proxy_port.map(|p| (*id, info.host.clone(), p))
+                info.relay_port.map(|p| (*id, info.host.clone(), p))
             })
+            .collect()
+    }
+
+    /// Returns all known peer edge IDs and their UDP addresses (for voice relay).
+    pub fn all_udp_peers(&self) -> Vec<(u32, SocketAddr)> {
+        self.peers
+            .iter()
+            .map(|(id, info)| (*id, info.udp_addr))
             .collect()
     }
 }

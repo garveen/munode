@@ -113,16 +113,19 @@ async fn main() -> Result<()> {
             munode_common::config::VoiceConnectionStrategy::DirectOnly => "direct_only",
         };
         println!("   {:<22} {}", "connection_strategy:", strategy);
-        if cfg.hub_server.allow_peer_proxy {
-            let edge_port = cfg.network.edge_port.unwrap_or(cfg.network.port + 1);
-            let proxy_port = if cfg.hub_server.proxy_ws_port > 0 {
-                cfg.hub_server.proxy_ws_port
-            } else {
-                edge_port + 2
-            };
-            println!("   {:<22} {} (port {})", "peer_proxy:", "enabled", proxy_port);
+        // Control relay is always active — show effective port
+        let edge_port = cfg.network.edge_port.unwrap_or(cfg.network.port + 1);
+        let relay_port = if cfg.hub_server.relay_port > 0 {
+            cfg.hub_server.relay_port
         } else {
-            println!("   {:<22} disabled", "peer_proxy:");
+            edge_port + 2
+        };
+        println!("   {:<22} {} (port {})", "control_relay:", "enabled", relay_port);
+        if !cfg.hub_server.static_peers.is_empty() {
+            let peers: Vec<String> = cfg.hub_server.static_peers.iter()
+                .map(|p| format!("{}:{}", p.host, p.relay_port))
+                .collect();
+            println!("   {:<22} {}", "static_peers:", peers.join(", "));
         }
         println!("   {:<22} {}", "log_level:", cfg.log_level);
         println!("   {:<22} {}", "log_format:", cfg.log_format);

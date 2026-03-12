@@ -255,7 +255,7 @@ impl RpcHandler {
             port: params.port,
             capacity: params.capacity,
             region: params.region.clone(),
-            proxy_port: params.proxy_port.filter(|&p| p > 0),
+            relay_port: params.relay_port.filter(|&p| p > 0),
         };
 
         info!(
@@ -2611,10 +2611,10 @@ impl RpcHandler {
             connected_peers: std::collections::HashSet::new(),
         };
 
-        // Snapshot of edge registrations for proxy_port lookup
+        // Snapshot of edge registrations for relay_port lookup
         let reg_snapshot: std::collections::HashMap<u32, Option<u32>> = {
             let reg = self.state.edge_registry.read().await;
-            reg.iter().map(|(id, r)| (*id, r.proxy_port)).collect()
+            reg.iter().map(|(id, r)| (*id, r.relay_port)).collect()
         };
 
         let peers_snapshot: Vec<PeerInfoProto> = {
@@ -2628,13 +2628,13 @@ impl RpcHandler {
                     port: p.port,
                     voice_port: p.voice_port,
                     cert_hash: None,
-                    proxy_port: reg_snapshot.get(&p.edge_id).and_then(|pp| *pp),
+                    relay_port: reg_snapshot.get(&p.edge_id).and_then(|pp| *pp),
                 })
                 .collect()
         };
 
-        // Proxy port for the joining edge
-        let joining_proxy_port = reg_snapshot.get(&join_edge_id).and_then(|pp| *pp);
+        // Relay port for the joining edge
+        let joining_relay_port = reg_snapshot.get(&join_edge_id).and_then(|pp| *pp);
 
         // Notify existing edges about the new peer
         let notification = TypedRpcNotification {
@@ -2645,7 +2645,7 @@ impl RpcHandler {
                 name: params.name.clone(),
                 host: params.host.clone(),
                 voice_port: params.voice_port,
-                proxy_port: joining_proxy_port,
+                relay_port: joining_relay_port,
             }),
             ..Default::default()
         };

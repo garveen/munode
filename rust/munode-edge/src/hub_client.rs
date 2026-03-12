@@ -106,8 +106,11 @@ pub struct HubClient {
     region: Option<String>,
     /// Maximum number of users for this Edge.
     capacity: u32,
-    /// Proxy server port advertised to Hub (0 = no proxy).
-    proxy_ws_port: u16,
+    /// Control-relay port advertised to Hub (always active; auto-derived if 0).
+    relay_port: u16,
+    /// Statically configured peers for bootstrap relay (from config).
+    /// These are tried first before dynamically-discovered peers.
+    static_relay_peers: Vec<(String, u16)>,
     state: RwLock<HubConnectionState>,
     edge_state: Arc<EdgeState>,
     /// Pending RPC requests awaiting responses (shared across all pool slots).
@@ -133,16 +136,19 @@ impl HubClient {
         let edge_port = config.network.edge_port.unwrap_or(config.network.port + 1);
         let pool_size = config.hub_server.pool_size.max(1) as usize;
         let pool_senders = (0..pool_size).map(|_| Mutex::new(None)).collect();
-        // Compute the proxy WS port: use configured value if set, else edge_port + 2 if proxy enabled
-        let proxy_ws_port = if config.hub_server.allow_peer_proxy {
-            if config.hub_server.proxy_ws_port > 0 {
-                config.hub_server.proxy_ws_port
-            } else {
-                edge_port + 2
-            }
+        // The relay port is always active.  Use configured value if set, else edge_port + 2.
+        let relay_port = if config.hub_server.relay_port > 0 {
+            config.hub_server.relay_port
         } else {
-            0
+            edge_port + 2
         };
+        // Static peers from config (for bootstrap before Hub connection).
+        let static_relay_peers: Vec<(String, u16)> = config
+            .hub_server
+            .static_peers
+            .iter()
+            .map(|p| (p.host.clone(), p.relay_port))
+            .collect();
         Arc::new(Self {
             config: config.hub_server.clone(),
             server_id: config.server_id,
@@ -152,7 +158,8 @@ impl HubClient {
             edge_port,
             region: config.network.region.clone(),
             capacity: config.server.capacity,
-            proxy_ws_port,
+            relay_port,
+            static_relay_peers,
             state: RwLock::new(HubConnectionState::Disconnected),
             edge_state,
             pending: Mutex::new(HashMap::new()),
@@ -227,19 +234,22 @@ impl HubClient {
     }
 
     /// Run the single-slot (no pool) reconnect loop with exponential backoff.
-    /// After `PROXY_FALLBACK_THRESHOLD` consecutive direct-connect failures,
-    /// attempts to connect via a known peer's proxy port.
+    ///
+    /// After `RELAY_FALLBACK_THRESHOLD` consecutive direct-connect failures,
+    /// attempts to connect via a known peer Edge's control-relay port.
+    /// Relay candidates are tried in priority order:
+    ///   1. Statically configured peers (`hub_server.static_peers` in config)
+    ///   2. Dynamically discovered peers (received via `hub.peerJoined` notifications)
     async fn run_single_slot(self: &Arc<Self>, slot: usize, is_primary: bool) {
         let mut backoff = ExponentialBackoff::new(self.config.reconnect_interval);
         let mut direct_fail_count: u32 = 0;
-        const PROXY_FALLBACK_THRESHOLD: u32 = 3;
+        const RELAY_FALLBACK_THRESHOLD: u32 = 3;
 
         loop {
-            // After several direct failures, try peer proxy if peers are available.
-            // Any Edge can use a peer's proxy regardless of whether it also runs one.
-            let use_proxy = direct_fail_count >= PROXY_FALLBACK_THRESHOLD;
-            let connect_result = if use_proxy {
-                self.try_connect_via_peer_proxy(slot, is_primary).await
+            // After several consecutive direct failures, try relay via a peer Edge.
+            let use_relay = direct_fail_count >= RELAY_FALLBACK_THRESHOLD;
+            let connect_result = if use_relay {
+                self.try_connect_via_relay(slot, is_primary).await
             } else {
                 self.try_connect_slot(slot, is_primary).await
             };
@@ -252,10 +262,14 @@ impl HubClient {
                 }
                 Err(e) => {
                     error!("Hub connection error: {}", e);
-                    if !use_proxy {
+                    if !use_relay {
                         direct_fail_count += 1;
-                        if direct_fail_count == PROXY_FALLBACK_THRESHOLD {
-                            info!("Direct connection to Hub failed {} times — will try peer proxy on next attempt", direct_fail_count);
+                        if direct_fail_count == RELAY_FALLBACK_THRESHOLD {
+                            info!(
+                                "Direct Hub connection failed {} times — \
+                                 will try peer relay on next attempt",
+                                direct_fail_count
+                            );
                         }
                     }
                 }
@@ -272,33 +286,52 @@ impl HubClient {
         }
     }
 
-    /// Try to connect to Hub via a peer's proxy port.
+    /// Try to connect to Hub via a peer Edge's control-relay port.
     ///
-    /// Iterates over known peers that have a proxy_port set and tries each one
-    /// in turn.  Returns `Ok(())` if the proxy connection ran and closed normally,
-    /// or an error if no proxy was reachable.
-    async fn try_connect_via_peer_proxy(self: &Arc<Self>, slot: usize, is_primary: bool) -> Result<()> {
-        let proxies = self.edge_state.peer_registry.lock().await.proxy_peers();
-        if proxies.is_empty() {
-            return Err(anyhow::anyhow!("No peer proxy available (no peers with proxy_port)"));
-        }
-        for (peer_id, host, proxy_port) in &proxies {
-            let proxy_url = format!("ws://{}:{}", host, proxy_port);
-            info!("Attempting Hub connection via peer {} proxy at {}", peer_id, proxy_url);
-            match self.try_connect_via_url(&proxy_url, slot, is_primary).await {
+    /// Candidates are tried in priority order:
+    ///   1. Static peers from `hub_server.static_peers` (available before Hub connection)
+    ///   2. Dynamic peers discovered via `hub.peerJoined` notifications
+    ///
+    /// Returns `Ok(())` if a relay connection ran and closed normally, or an error if all
+    /// candidates failed.
+    async fn try_connect_via_relay(self: &Arc<Self>, slot: usize, is_primary: bool) -> Result<()> {
+        // 1. Static peers from config (for bootstrap before Hub connection)
+        for (host, relay_port) in &self.static_relay_peers {
+            let relay_url = format!("ws://{}:{}", host, relay_port);
+            info!("Attempting Hub relay via static peer at {}", relay_url);
+            match self.try_connect_via_url(&relay_url, slot, is_primary).await {
                 Ok(()) => {
-                    info!("Peer proxy connection (peer {}) closed normally", peer_id);
+                    info!("Static peer relay connection ({}) closed normally", relay_url);
                     return Ok(());
                 }
                 Err(e) => {
-                    warn!("Peer proxy via {} failed: {}", proxy_url, e);
+                    warn!("Static peer relay via {} failed: {}", relay_url, e);
                 }
             }
         }
-        Err(anyhow::anyhow!("All peer proxy attempts failed"))
+
+        // 2. Dynamically discovered peers (from hub.peerJoined notifications)
+        let dynamic_peers = self.edge_state.peer_registry.lock().await.relay_peers();
+        if dynamic_peers.is_empty() && self.static_relay_peers.is_empty() {
+            return Err(anyhow::anyhow!("No relay peers available"));
+        }
+        for (peer_id, host, relay_port) in &dynamic_peers {
+            let relay_url = format!("ws://{}:{}", host, relay_port);
+            info!("Attempting Hub relay via peer {} at {}", peer_id, relay_url);
+            match self.try_connect_via_url(&relay_url, slot, is_primary).await {
+                Ok(()) => {
+                    info!("Dynamic peer relay (peer {}) closed normally", peer_id);
+                    return Ok(());
+                }
+                Err(e) => {
+                    warn!("Dynamic peer relay via {} failed: {}", relay_url, e);
+                }
+            }
+        }
+        Err(anyhow::anyhow!("All relay attempts failed"))
     }
 
-    /// Connect via a specific WebSocket URL (used for both direct and proxy connections).
+    /// Connect via a specific WebSocket URL (used for both direct and relay connections).
     async fn try_connect_via_url(self: &Arc<Self>, url: &str, slot: usize, is_primary: bool) -> Result<()> {
         *self.state.write().await = HubConnectionState::Connecting;
         info!("Connecting to Hub via {} (slot {})", url, slot);
@@ -893,19 +926,19 @@ impl HubClient {
                     let name = &p.name;
                     let host = &p.host;
                     let voice_port = p.voice_port as u16;
-                    let proxy_port = p.proxy_port.filter(|&pp| pp > 0).map(|pp| pp as u16);
                     info!("Peer edge joined cluster: {} (id {}) at {}:{}", name, peer_edge_id, host, voice_port);
                     if !host.is_empty() && voice_port > 0 {
                         if let Ok(udp_addr) = format!("{}:{}", host, voice_port).parse() {
+                            let relay_port = p.relay_port.filter(|&pp| pp > 0).map(|pp| pp as u16);
                             let mut reg = self.edge_state.peer_registry.lock().await;
                             reg.upsert(peer_edge_id, PeerEdgeInfo {
                                 udp_addr,
                                 host: host.clone(),
-                                proxy_port,
+                                relay_port,
                             });
                             info!("Registered direct UDP route to peer edge {} at {}", peer_edge_id, udp_addr);
-                            if let Some(pp) = proxy_port {
-                                info!("  Peer edge {} supports proxy relay on port {}", peer_edge_id, pp);
+                            if let Some(rp) = relay_port {
+                                info!("  Peer edge {} control-relay available on port {}", peer_edge_id, rp);
                             }
                         }
                     }
@@ -960,7 +993,7 @@ impl HubClient {
             certificate: String::new(),
             challenge: None,
             challenge_response: None,
-            proxy_port: if self.proxy_ws_port > 0 { Some(self.proxy_ws_port as u32) } else { None },
+            relay_port: Some(self.relay_port as u32),
         };
 
         let request = TypedRpcRequest {
@@ -1018,7 +1051,7 @@ impl HubClient {
             certificate: String::new(),
             challenge: Some(challenge.to_string()),
             challenge_response: Some(challenge_response),
-            proxy_port: if self.proxy_ws_port > 0 { Some(self.proxy_ws_port as u32) } else { None },
+            relay_port: Some(self.relay_port as u32),
         };
 
         let request = TypedRpcRequest {
@@ -1124,16 +1157,16 @@ impl HubClient {
             // Register each existing peer's UDP address
             if !peer.host.is_empty() && peer.voice_port > 0 {
                 if let Ok(udp_addr) = format!("{}:{}", peer.host, peer.voice_port).parse() {
-                    let proxy_port = peer.proxy_port.filter(|&pp| pp > 0).map(|pp| pp as u16);
+                    let relay_port = peer.relay_port.filter(|&pp| pp > 0).map(|pp| pp as u16);
                     let mut reg = self.edge_state.peer_registry.lock().await;
                     reg.upsert(peer.id, PeerEdgeInfo {
                         udp_addr,
                         host: peer.host.clone(),
-                        proxy_port,
+                        relay_port,
                     });
                     info!("Registered direct UDP route to existing peer edge {} at {}", peer.id, udp_addr);
-                    if let Some(pp) = proxy_port {
-                        info!("  Peer edge {} supports proxy relay on port {}", peer.id, pp);
+                    if let Some(rp) = relay_port {
+                        info!("  Peer edge {} control-relay available on port {}", peer.id, rp);
                     }
                 }
             }

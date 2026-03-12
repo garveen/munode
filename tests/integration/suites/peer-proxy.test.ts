@@ -1,14 +1,12 @@
 /**
  * Peer Edge Control Relay 集成测试（Rust 模式）
  *
- * 测试 Peer Edge 透明 WebSocket 代理功能：
- * - Edge config 中 allow_peer_proxy=true 时启动代理服务器
- * - diagnose 命令正确显示代理端口
- * - proxy_port 通过 hub.peerJoined 传播到其他 Edge（cluster-level test）
- * - 代理服务器接受来自其他 Edge 的 WebSocket 连接并转发到 Hub
- *
- * 注：端到端网络分区测试（强制断开 Edge A 直连）在受控测试环境中
- * 实现困难，留待后续实现。本测试套件验证代理功能的基础部分。
+ * 测试 Edge 间控制信道中继（always-on relay，无需 allow_peer_proxy 标志）：
+ * - 所有 Edge 自动启动 relay server，relay_port = edge_port + 2（或显式配置）
+ * - diagnose 命令总是显示 control_relay: enabled 及端口号
+ * - static_peers 配置用于启动前已知的 peer 地址
+ * - relay 服务器接受 WebSocket 连接并转发到 Hub
+ * - hub.peerJoined 广播 relay_port，动态发现 relay 节点
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -27,7 +25,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.join(__dirname, '..', '..', '..');
 const CERTS_DIR = path.join(PROJECT_ROOT, 'tests', 'integration', 'certs');
-const TMP = path.join(PROJECT_ROOT, 'tmp', 'proxy-tests');
+const TMP = path.join(PROJECT_ROOT, 'tmp', 'relay-tests');
 
 function findBinary(name: string): string {
   const debug = path.join(PROJECT_ROOT, `rust/target/debug/${name}`);
@@ -46,11 +44,11 @@ function run(bin: string, args: string[]): { stdout: string; stderr: string; exi
   };
 }
 
-/** Write an Edge config with allow_peer_proxy=true */
-function proxyEdgeConfig(port: number, proxyPort: number) {
+/** Build a minimal Edge config. relay_port=0 means auto (edge_port+2). */
+function relayEdgeConfig(port: number, relayPort: number, staticPeers?: Array<{host: string; relay_port: number}>) {
   return {
     server_id: 1,
-    name: 'ProxyEdge',
+    name: 'RelayEdge',
     network: {
       host: '0.0.0.0',
       port,
@@ -66,15 +64,15 @@ function proxyEdgeConfig(port: number, proxyPort: number) {
       host: '127.0.0.1',
       control_port: 19300,
       hmac_secret: 'test-secret',
-      allow_peer_proxy: true,
-      proxy_ws_port: proxyPort,
+      ...(relayPort > 0 ? { relay_port: relayPort } : {}),
+      ...(staticPeers ? { static_peers: staticPeers } : {}),
     },
   };
 }
 
 // ─── Config / diagnose tests (no live servers needed) ────────────────────────
 
-describe.skipIf(!USE_RUST)('Peer proxy config & diagnose', () => {
+describe.skipIf(!USE_RUST)('Control relay config & diagnose', () => {
   const EDGE_BIN = () => findBinary('munode-edge');
 
   beforeAll(() => { fs.mkdirSync(TMP, { recursive: true }); });
@@ -82,89 +80,65 @@ describe.skipIf(!USE_RUST)('Peer proxy config & diagnose', () => {
     try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
-  it('diagnose shows peer_proxy enabled with explicit port', () => {
-    const cfgPath = path.join(TMP, 'proxy-explicit.json');
-    fs.writeFileSync(cfgPath, JSON.stringify(proxyEdgeConfig(19310, 19315)));
+  it('diagnose always shows control_relay enabled with auto port (edge_port+2)', () => {
+    const cfgPath = path.join(TMP, 'relay-auto.json');
+    fs.writeFileSync(cfgPath, JSON.stringify(relayEdgeConfig(19310, 0)));
     const { stdout, exitCode } = run(EDGE_BIN(), ['diagnose', cfgPath]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain('peer_proxy:');
+    expect(stdout).toContain('control_relay:');
     expect(stdout).toContain('enabled');
-    expect(stdout).toContain('19315');
+    // Auto port = edge_port + 2 = (19310+1) + 2 = 19313
+    expect(stdout).toContain('19313');
   });
 
-  it('diagnose shows peer_proxy enabled with auto port when proxy_ws_port=0', () => {
-    const cfg = proxyEdgeConfig(19320, 0);
-    const cfgPath = path.join(TMP, 'proxy-auto.json');
-    fs.writeFileSync(cfgPath, JSON.stringify(cfg));
+  it('diagnose shows control_relay enabled with explicit relay_port', () => {
+    const cfgPath = path.join(TMP, 'relay-explicit.json');
+    fs.writeFileSync(cfgPath, JSON.stringify(relayEdgeConfig(19320, 19325)));
     const { stdout, exitCode } = run(EDGE_BIN(), ['diagnose', cfgPath]);
     expect(exitCode).toBe(0);
+    expect(stdout).toContain('control_relay:');
     expect(stdout).toContain('enabled');
-    // Auto port = edge_port + 2 = (19320+1) + 2 = 19323
-    expect(stdout).toContain('19323');
+    expect(stdout).toContain('19325');
   });
 
-  it('diagnose shows peer_proxy disabled when allow_peer_proxy=false', () => {
-    const cfg = {
-      ...proxyEdgeConfig(19330, 0),
-      hub_server: {
-        ...proxyEdgeConfig(19330, 0).hub_server,
-        allow_peer_proxy: false,
-      },
-    };
-    const cfgPath = path.join(TMP, 'proxy-disabled.json');
+  it('diagnose shows static_peers when configured', () => {
+    const cfg = relayEdgeConfig(19330, 0, [
+      { host: '10.0.0.2', relay_port: 19335 },
+      { host: '10.0.0.3', relay_port: 19336 },
+    ]);
+    const cfgPath = path.join(TMP, 'relay-static-peers.json');
     fs.writeFileSync(cfgPath, JSON.stringify(cfg));
     const { stdout, exitCode } = run(EDGE_BIN(), ['diagnose', cfgPath]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain('peer_proxy:');
-    expect(stdout).toContain('disabled');
+    expect(stdout).toContain('static_peers:');
+    expect(stdout).toContain('10.0.0.2:19335');
+    expect(stdout).toContain('10.0.0.3:19336');
   });
 
-  it('diagnose shows peer_proxy disabled by default (no config key)', () => {
-    const cfg = {
-      server_id: 2,
-      name: 'DefaultEdge',
-      network: {
-        host: '0.0.0.0',
-        port: 19340,
-        edge_port: 19341,
-        external_host: '127.0.0.1',
-      },
-      tls: {
-        cert: path.join(CERTS_DIR, 'server.pem'),
-        key: path.join(CERTS_DIR, 'server.key'),
-        ca: path.join(CERTS_DIR, 'ca.pem'),
-      },
-      hub_server: {
-        host: '127.0.0.1',
-        control_port: 19300,
-        hmac_secret: 'test-secret',
-        // allow_peer_proxy intentionally absent — should default to false
-      },
-    };
-    const cfgPath = path.join(TMP, 'proxy-default.json');
-    fs.writeFileSync(cfgPath, JSON.stringify(cfg));
+  it('diagnose shows no static_peers when not configured', () => {
+    const cfgPath = path.join(TMP, 'relay-no-static.json');
+    fs.writeFileSync(cfgPath, JSON.stringify(relayEdgeConfig(19340, 0)));
     const { stdout, exitCode } = run(EDGE_BIN(), ['diagnose', cfgPath]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain('disabled');
+    expect(stdout).not.toContain('static_peers:');
   });
 });
 
-// ─── Live proxy server test ───────────────────────────────────────────────────
+// ─── Live relay server test ───────────────────────────────────────────────────
 
-describe.skipIf(!USE_RUST)('Peer proxy server accepts connections', () => {
+describe.skipIf(!USE_RUST)('Relay server accepts connections (always-on)', () => {
   let env: TestEnvironment | null = null;
-  const PROXY_PORT = 19355;
+  const RELAY_PORT = 19355;
   const BASE_PORT = 19350;
 
   beforeAll(async () => {
-    // Start Hub + Edge with proxy enabled
+    // Start Hub + Edge — relay server is always started, no special config needed
     env = await setupTestEnvironment(BASE_PORT, {
       isolated: true,
       silent: true,
       rustEdgeExtraConfig: {
         hub_server: {
-          allow_peer_proxy: true,
-          proxy_ws_port: PROXY_PORT,
+          relay_port: RELAY_PORT,
         },
       },
     });
@@ -174,18 +148,17 @@ describe.skipIf(!USE_RUST)('Peer proxy server accepts connections', () => {
     if (env) await env.cleanup();
   });
 
-  it('Edge proxy server port is reachable via TCP after startup', async () => {
-    // Give Edge a moment to start the proxy server
+  it('Edge relay server port is reachable via TCP after startup', async () => {
     await new Promise(r => setTimeout(r, 2000));
 
     await new Promise<void>((resolve, reject) => {
       const socket = new net.Socket();
       const timeout = setTimeout(() => {
         socket.destroy();
-        reject(new Error(`Proxy port ${PROXY_PORT} not reachable within timeout`));
+        reject(new Error(`Relay port ${RELAY_PORT} not reachable within timeout`));
       }, 5000);
 
-      socket.connect(PROXY_PORT, '127.0.0.1', () => {
+      socket.connect(RELAY_PORT, '127.0.0.1', () => {
         clearTimeout(timeout);
         socket.destroy();
         resolve();
@@ -197,58 +170,22 @@ describe.skipIf(!USE_RUST)('Peer proxy server accepts connections', () => {
       });
     });
   }, 30_000);
-
-  it('WebSocket connection to proxy port is accepted', async () => {
-    const wsModule = await import('ws').catch(() => null);
-    const WebSocketCtor = wsModule?.WebSocket ?? wsModule?.default;
-    await new Promise<void>((resolve, reject) => {
-      if (!WebSocketCtor) {
-        resolve(); // Skip if ws not available
-        return;
-      }
-      const ws = new WebSocketCtor(`ws://127.0.0.1:${PROXY_PORT}`);
-      const timeout = setTimeout(() => {
-        ws.close();
-        // It's ok if the proxy closes after WS handshake without Hub data
-        resolve();
-      }, 3000);
-
-      ws.on('open', () => {
-        clearTimeout(timeout);
-        ws.close();
-        resolve();
-      });
-
-      ws.on('error', (err: Error) => {
-        clearTimeout(timeout);
-        // The proxy may close immediately if it can't reach Hub — that's expected
-        // in isolated mode.  The important thing is it accepted the TCP/WS connection.
-        if (err.message.includes('ECONNREFUSED') || err.message.includes('1006') || err.message.includes('close')) {
-          resolve();
-        } else {
-          reject(err);
-        }
-      });
-    });
-  }, 30_000);
 });
 
-// ─── Cluster-level proxy_port propagation test ───────────────────────────────
+// ─── Static peers config test ─────────────────────────────────────────────────
 
-describe.skipIf(!USE_RUST)('Peer proxy port propagated via hub.peerJoined', () => {
+describe.skipIf(!USE_RUST)('Hub broadcasts relay_port in peerJoined', () => {
   let env: TestEnvironment | null = null;
   const BASE_PORT = 19360;
-  const PROXY_PORT = 19367;
+  const RELAY_PORT = 19367;
 
   beforeAll(async () => {
     env = await setupTestEnvironment(BASE_PORT, {
       isolated: true,
       silent: true,
-      // Start both Edge1 and Edge2 with proxy enabled on Edge1
       rustEdgeExtraConfig: {
         hub_server: {
-          allow_peer_proxy: true,
-          proxy_ws_port: PROXY_PORT,
+          relay_port: RELAY_PORT,
         },
       },
     });
@@ -258,13 +195,7 @@ describe.skipIf(!USE_RUST)('Peer proxy port propagated via hub.peerJoined', () =
     if (env) await env.cleanup();
   });
 
-  it('Hub cluster topology includes Edge nodes', () => {
-    // We test the cluster is up via the web API topology endpoint
-    // (This indirectly validates that Edge registered with proxy_port)
-    // The actual proxy_port propagation is visible in the Hub logs (info level)
+  it('cluster starts successfully with relay_port configured', () => {
     expect(env).not.toBeNull();
-    if (!env) return;
-    // At minimum the environment was set up successfully, meaning Edge registered
-    // and joined the cluster (including sending proxy_port in edge.register).
   });
 });

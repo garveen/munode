@@ -14,6 +14,12 @@ use munode_protocol::transport::EDGE_MAGIC;
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 
+/// Two-byte magic prefix for "relay-forward" packets.
+/// When Edge B receives a packet with this prefix, it reads a 4-byte target edge ID and
+/// forwards the remainder (an EDGE_MAGIC packet) to that target Edge via direct UDP.
+/// Packet format: [RELAY_MAGIC(2B)][target_edge_id_BE(4B)][EDGE_MAGIC(2B)][sender_session_BE(4B)][plaintext_voice...]
+const RELAY_MAGIC: [u8; 2] = [0xC1, 0xDE];
+
 /// UDP server for Mumble voice data with OCB2-AES128 encryption.
 ///
 /// Workflow:
@@ -103,7 +109,10 @@ impl UdpServer {
                     }
                     res = self.edge_socket.recv_from(&mut edge_buf) => {
                         let (len, peer_addr) = res?;
-                        if len >= 6 && edge_buf[0] == EDGE_MAGIC[0] && edge_buf[1] == EDGE_MAGIC[1] {
+                        if len >= 6 && edge_buf[0] == RELAY_MAGIC[0] && edge_buf[1] == RELAY_MAGIC[1] {
+                            // Relay-forward packet: forward the inner edge packet to target edge
+                            self.handle_relay_packet(&edge_buf[2..len]).await;
+                        } else if len >= 6 && edge_buf[0] == EDGE_MAGIC[0] && edge_buf[1] == EDGE_MAGIC[1] {
                             self.handle_edge_packet(&edge_buf[2..len], peer_addr).await;
                         } else {
                             debug!("Unexpected packet on edge socket from {} ({} bytes)", peer_addr, len);
@@ -313,7 +322,7 @@ impl UdpServer {
             // Relay format: [EDGE_MAGIC(2B)][sender_session_u32_BE(4B)][plaintext_voice]
             let relay_payload = inject_session_into_voice(plaintext, sender_session);
 
-            // Try direct UDP to peer edge first; fall back to Hub relay if not known.
+            // Try direct UDP to peer edge first; fall back to relay-via-peer then Hub TCP relay.
             let peer_udp_addr = {
                 let reg = self.edge_state.peer_registry.lock().await;
                 reg.get(target_edge_id).map(|p| p.udp_addr)
@@ -329,7 +338,10 @@ impl UdpServer {
                     direct_packet.extend_from_slice(plaintext);
                     if let Err(e) = self.edge_socket.send_to(&direct_packet, peer_addr).await {
                         warn!("Direct UDP to edge {} at {} failed: {}", target_edge_id, peer_addr, e);
-                        if self.edge_state.allow_hub_relay {
+                        // Try relay via a third peer edge before falling back to Hub TCP
+                        if !self.try_relay_via_peer(target_edge_id, sender_session, plaintext).await
+                            && self.edge_state.allow_hub_relay
+                        {
                             self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                         }
                     }
@@ -339,6 +351,9 @@ impl UdpServer {
                 }
             } else if self.edge_state.allow_hub_relay {
                 self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+            } else {
+                // No direct route and Hub relay disabled — try voice relay via third peer
+                self.try_relay_via_peer(target_edge_id, sender_session, plaintext).await;
             }
         }
     }
@@ -359,6 +374,91 @@ impl UdpServer {
         let data = build_udp_tunnel_packet(plaintext);
         if let Some(sender) = self.edge_state.client_manager.get_sender(session_id).await {
             sender.send_raw(data).await;
+        }
+    }
+
+    /// Try to route a voice packet to `target_edge_id` via any known intermediate peer Edge
+    /// (automatic relay routing).
+    ///
+    /// Packet format sent to the relay peer:
+    ///   [RELAY_MAGIC(2B)] [target_edge_id_BE(4B)] [EDGE_MAGIC(2B)] [sender_session_BE(4B)] [voice...]
+    ///
+    /// The relay peer calls `handle_relay_packet` which strips the RELAY_MAGIC + target_edge_id,
+    /// then forwards the inner [EDGE_MAGIC…] packet to the real target via its direct UDP channel.
+    ///
+    /// Returns `true` if at least one relay attempt succeeded (packet sent without I/O error).
+    async fn try_relay_via_peer(&self, target_edge_id: u32, sender_session: u32, plaintext: &[u8]) -> bool {
+        let my_edge_id = *self.edge_state.edge_id.read().await;
+        // Collect all peers whose UDP address we know, excluding the target and ourselves
+        let relay_candidates: Vec<(u32, SocketAddr)> = {
+            let reg = self.edge_state.peer_registry.lock().await;
+            reg.all_udp_peers()
+                .into_iter()
+                .filter(|(id, _)| *id != target_edge_id && Some(*id) != my_edge_id)
+                .collect()
+        };
+
+        if relay_candidates.is_empty() {
+            return false;
+        }
+
+        // Build the relay packet once
+        let mut relay_packet = Vec::with_capacity(2 + 4 + 2 + 4 + plaintext.len());
+        relay_packet.extend_from_slice(&RELAY_MAGIC);
+        relay_packet.extend_from_slice(&target_edge_id.to_be_bytes());
+        relay_packet.extend_from_slice(&EDGE_MAGIC);
+        relay_packet.extend_from_slice(&sender_session.to_be_bytes());
+        relay_packet.extend_from_slice(plaintext);
+
+        for (relay_id, relay_addr) in &relay_candidates {
+            match self.edge_socket.send_to(&relay_packet, relay_addr).await {
+                Ok(_) => {
+                    debug!(
+                        "Voice relay via edge {} at {} → target edge {}",
+                        relay_id, relay_addr, target_edge_id
+                    );
+                    return true;
+                }
+                Err(e) => {
+                    warn!(
+                        "Voice relay via edge {} at {} failed: {}",
+                        relay_id, relay_addr, e
+                    );
+                }
+            }
+        }
+        false
+    }
+
+    /// Handle a relay-forward packet received on the edge socket.
+    ///
+    /// Format: [target_edge_id_BE(4B)] [EDGE_MAGIC(2B)] [sender_session_BE(4B)] [voice...]
+    /// (RELAY_MAGIC prefix has already been stripped by the caller.)
+    ///
+    /// Forwards the [EDGE_MAGIC…] portion to the target edge via direct UDP.
+    async fn handle_relay_packet(&self, data: &[u8]) {
+        // Minimum: 4 (target_edge_id) + 2 (EDGE_MAGIC) + 4 (sender_session) + 1 (voice) = 11
+        if data.len() < 11 {
+            debug!("Relay packet too short ({} bytes)", data.len());
+            return;
+        }
+        let target_edge_id = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+        let inner = &data[4..]; // starts with EDGE_MAGIC + sender_session + voice
+
+        let peer_addr = {
+            let reg = self.edge_state.peer_registry.lock().await;
+            reg.get(target_edge_id).map(|p| p.udp_addr)
+        };
+
+        if let Some(addr) = peer_addr {
+            if let Err(e) = self.edge_socket.send_to(inner, addr).await {
+                warn!("Forward relay packet to edge {} at {} failed: {}", target_edge_id, addr, e);
+            } else {
+                debug!("Forwarded relay packet to edge {} at {}", target_edge_id, addr);
+            }
+        } else {
+            // Target not directly reachable; deliver locally if we have its sessions
+            debug!("Relay target edge {} not in peer registry — dropping relay packet", target_edge_id);
         }
     }
 

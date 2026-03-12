@@ -721,7 +721,7 @@ pub struct EdgeRegisterParams {
     /// When non-zero, this Edge can act as a transparent WebSocket proxy for
     /// other Edges that cannot reach the Hub directly.
     #[prost(uint32, optional, tag = "10")]
-    pub proxy_port: ::core::option::Option<u32>,
+    pub relay_port: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeRegisterResult {
@@ -1315,7 +1315,7 @@ pub struct PeerInfoProto {
     pub cert_hash: ::core::option::Option<::prost::alloc::string::String>,
     /// Optional proxy server port.  Non-zero means this peer supports proxy relay.
     #[prost(uint32, optional, tag = "7")]
-    pub proxy_port: ::core::option::Option<u32>,
+    pub relay_port: ::core::option::Option<u32>,
 }
 /// ---------------------------------------------------------------------------
 /// edge.joinComplete - Edge 完成集群加入
@@ -1919,7 +1919,7 @@ pub struct HubClusterPeerJoinedParams {
     /// Optional proxy server port. When non-zero, this peer can relay
     /// control-channel traffic for Edges that cannot reach Hub directly.
     #[prost(uint32, optional, tag = "5")]
-    pub proxy_port: ::core::option::Option<u32>,
+    pub relay_port: ::core::option::Option<u32>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct HubClusterPeerLeftParams {

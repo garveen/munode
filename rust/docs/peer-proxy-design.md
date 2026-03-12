@@ -1,203 +1,130 @@
-# Peer Edge Control Relay — 概要设计文档
+# Peer Edge 控制信道中继设计文档
 
-**版本**: 1.0  
-**状态**: ✅ 已实现  
-**优先级**: P2  
-**实现日期**: 2026-03-12
+## 1. 背景
 
----
+在 MuNode Hub-Edge 集群中，每个 Edge 需要与 Hub 维持一条 WebSocket 控制信道连接。
+当 Edge 所在网络存在防火墙限制或网络分区时，Edge 可能无法直接连接 Hub，但可以通过
+集群内其他 Edge 中继控制信道流量，从而实现完整的集群功能。
 
-## 1. 背景与目标
+## 2. 设计原则
 
-### 1.1 问题描述
+### 自动路由（与语音路由类比）
 
-在分布式 Edge 集群中，当 Edge A 与 Hub 之间发生网络分区或临时故障时，Edge A 无法向 Hub 注册或发送控制消息，导致用户无法登录或者 Edge 被孤立。
+| 语音路由层 | 控制信道中继层 |
+|---|---|
+| 直连 UDP（Edge A → Edge C） | 直连 Hub WebSocket |
+| Hub TCP 中继 | ——（Hub 不可达时无意义） |
+| 三跳 UDP relay（A→B→C） | Peer relay（A 通过 B 连接 Hub） |
+| `PeerRegistry` 存 UDP 地址 | `PeerRegistry` 存 relay_port |
 
-### 1.2 解决思路
+**关键原则**：
+- **无需 opt-in 标志**：每个 Edge 自动启动 relay 服务器
+- **静态 + 动态 peer 发现**：静态配置用于 Hub 完全不可达时的启动引导，动态发现用于正常运行
+- **对 Hub 完全透明**：relay 服务器在传输层转发，Hub 感知不到中继的存在
 
-允许同一 Hub 集群内其他已连接的 Edge（Peer Edge B）作为控制信道的透明代理。Edge A 通过 Edge B 的代理端口，把 WebSocket 控制流量转发到 Hub。
-
-### 1.3 范围限制
-
-- **仅适用于控制信道**（Edge-Hub WebSocket RPC），不用于语音流量（语音已有 Hub TCP 中继）。
-- 代理链路最多**一跳**（Edge A → Edge B → Hub），防止环路。
-- Hub 侧**无需任何修改**；代理在 Edge-to-Edge 层面完全透明地转发 WebSocket 帧。
-
----
-
-## 2. 架构设计
-
-### 2.1 整体流程
+## 3. 架构
 
 ```
-正常模式:
-  Edge A ──WS──► Hub
-
-代理模式（Hub 不可达时）:
-  Edge A ──WS──► Edge B（代理服务器）──WS──► Hub
-                 ↑
-                 透明转发所有二进制帧
+Edge A（无法直连 Hub）
+    │  ws://edge-b:relay_port/
+    ▼
+Edge B（relay server — relay_server.rs）
+    │  ws://hub:control_port/
+    ▼
+Hub（看到的是一条普通 WebSocket 连接）
 ```
 
-### 2.2 代理服务器设计（Edge B 侧）
+每个 Edge 的 relay 服务器：
+- 监听 `0.0.0.0:{relay_port}`（默认 `edge_port + 2`，可通过 `hub_server.relay_port` 配置）
+- 对每个传入连接，向 Hub 开一条新 WebSocket 连接
+- 双向透明转发所有二进制帧
+- 单跳限制：不接受来自其他 relay 的链式转发
 
-- Edge B 在 `proxy_ws_port`（默认 `edge_port + 2`）上监听 HTTP/WebSocket 连接。
-- 当收到来自 Edge A 的 WebSocket 连接时：
-  1. Edge B 主动向 Hub 建立一个新的 WebSocket 连接（`ws://hub_host:hub_port/`）。
-  2. 同时在两个 WebSocket 连接间**双向透明转发**所有二进制帧。
-  3. 任意一侧断开时，关闭另一侧连接并清理资源。
-- 代理服务器无需解析帧内容，仅负责透明转发。
+## 4. 配置
 
-### 2.3 代理客户端设计（Edge A 侧）
+### Edge 配置（`edge.json` 中的 `hub_server` 段）
 
-在 `HubClient.connect_and_run()` 中增加代理回退逻辑：
-
-1. **正常尝试**：直连 Hub（现有行为）。
-2. **代理回退**：当直连失败次数超过 `direct_fail_threshold`（默认 3 次）时，遍历已知 Peer Edge 列表，尝试通过 peer 的 proxy_ws_port 连接。
-3. **恢复优先直连**：每次重连时，优先尝试直连 Hub；直连成功则切回正常模式，清除代理状态。
-
-### 2.4 Proxy Port 发现机制
-
-Edge A 如何知道 Edge B 的代理端口？
-
-- Edge B 在向 Hub 注册时（`edge.register` RPC），在 `EdgeRegisterParams` 中携带 `proxy_port` 字段（可选，`tag = 10`）。
-- Hub 在广播 `hub.clusterPeerJoined` 通知时，将 `proxy_port` 包含在 `HubClusterPeerJoinedParams` 中（`tag = 5`）。
-- Edge A 收到通知后，更新本地 `PeerRegistry` 中对应 Peer 的 `proxy_port`。
-
----
-
-## 3. 配置项
-
-### 3.1 Edge 配置（`config/edge.toml`）
-
-```toml
-[hub_server]
-# 允许本 Edge 被其他 Edge 用作控制信道代理（默认 false）
-allow_peer_proxy = true
-
-# 代理服务器监听端口（默认 0 = 禁用代理服务器）
-# 若 allow_peer_proxy = true 且此值为 0，自动使用 edge_port + 2
-proxy_ws_port = 0
-```
-
-### 3.2 配置说明
-
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `hub_server.allow_peer_proxy` | `bool` | `false` | 是否允许作为代理节点 |
-| `hub_server.proxy_ws_port` | `u16` | `0`（自动） | 代理服务器监听端口 |
-
----
-
-## 4. 协议变更
-
-### 4.1 `EdgeRegisterParams` 新增字段
-
-```protobuf
-// tag = 10（可选）— 代理服务器端口；0 或缺失表示不支持代理
-optional uint32 proxy_port = 10;
-```
-
-### 4.2 `HubClusterPeerJoinedParams` 新增字段
-
-```protobuf
-// tag = 5（可选）— 该 Peer 的代理服务器端口；0 或缺失表示不支持代理
-optional uint32 proxy_port = 5;
-```
-
-由于两个字段均为 `optional`，对不携带该字段的旧版客户端完全向后兼容。
-
----
-
-## 5. 关键实现文件
-
-| 文件 | 变更 |
-|------|------|
-| `rust/munode-protocol/src/generated/hubedge.rs` | 添加 `proxy_port` 可选字段 |
-| `rust/munode-common/src/config.rs` | 添加 `allow_peer_proxy`、`proxy_ws_port` 配置项 |
-| `rust/munode-edge/src/proxy_server.rs` | **新建** — 代理服务器实现 |
-| `rust/munode-edge/src/hub_client.rs` | 注册时携带 proxy_port；代理回退逻辑 |
-| `rust/munode-edge/src/state.rs` | `PeerEdgeInfo` 添加 `proxy_port` 字段 |
-| `rust/munode-hub/src/rpc_handler.rs` | 注册时保存并广播 proxy_port |
-| `rust/munode-hub/src/server.rs` | `EdgeRegistration` 添加 `proxy_port` 字段 |
-| `rust/munode-edge/src/lib.rs` | 注册 `proxy_server` 模块 |
-| `rust/munode-edge/src/server.rs` | 启动代理服务器 task |
-
----
-
-## 6. 代理服务器核心逻辑（伪代码）
-
-```rust
-// proxy_server.rs
-
-pub async fn run_proxy_server(port: u16, hub_host: String, hub_port: u16) {
-    let listener = TcpListener::bind(("0.0.0.0", port)).await?;
-    while let Ok((stream, peer_addr)) = listener.accept().await {
-        let hub_url = format!("ws://{}:{}", hub_host, hub_port);
-        tokio::spawn(async move {
-            if let Err(e) = handle_proxy_connection(stream, hub_url).await {
-                warn!("Proxy connection from {} ended: {}", peer_addr, e);
-            }
-        });
-    }
-}
-
-async fn handle_proxy_connection(client_stream: TcpStream, hub_url: String) -> Result<()> {
-    // Upgrade incoming TCP connection to WebSocket
-    let client_ws = tokio_tungstenite::accept_async(client_stream).await?;
-    // Connect to Hub
-    let (hub_ws, _) = tokio_tungstenite::connect_async(&hub_url).await?;
-    // Bidirectional relay
-    let (client_write, client_read) = client_ws.split();
-    let (hub_write, hub_read) = hub_ws.split();
-    tokio::select! {
-        _ = relay(client_read, hub_write) => {}
-        _ = relay(hub_read, client_write) => {}
-    }
-    Ok(())
+```json
+{
+  "hub_server": {
+    "host": "hub.example.com",
+    "control_port": 8443,
+    "hmac_secret": "...",
+    "relay_port": 0,          // 0 = 自动 (edge_port + 2)；可显式指定
+    "static_peers": [         // 可选：Hub 完全不可达时的启动 peer 列表
+      { "host": "10.0.0.2", "relay_port": 19335 },
+      { "host": "10.0.0.3", "relay_port": 19336 }
+    ]
+  }
 }
 ```
 
----
+### 配置项说明
 
-## 7. 代理回退逻辑（伪代码）
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `relay_port` | `u16` | `0` | relay 监听端口；`0` = 自动使用 `edge_port + 2` |
+| `static_peers` | `[]` | `[]` | 静态 peer 列表，用于 Hub 不可达时的启动引导 |
+| `static_peers[].host` | `string` | — | peer Edge 的主机名或 IP |
+| `static_peers[].relay_port` | `u16` | — | peer Edge 的 relay 端口 |
 
-```rust
-// hub_client.rs — connect_and_run 修改
+## 5. 协议变更
 
-async fn try_proxy_connect(self: &Arc<Self>) -> Result<()> {
-    let peers = self.edge_state.peer_registry.read().await;
-    for (peer_id, info) in peers.iter() {
-        if let Some(proxy_port) = info.proxy_port {
-            let proxy_url = format!("ws://{}:{}", info.host, proxy_port);
-            info!("Trying peer proxy via Edge {} at {}", peer_id, proxy_url);
-            if let Ok(()) = self.try_connect_via_url(proxy_url, slot, is_primary).await {
-                return Ok(());
-            }
-        }
-    }
-    Err(anyhow!("No available peer proxy"))
-}
+### Protobuf 字段（tag 不变，向后兼容）
+
+| 消息 | 字段 | Tag | 说明 |
+|------|------|-----|------|
+| `EdgeRegisterParams` | `relay_port` | 10 | Edge 注册时告知 Hub 自己的 relay 端口 |
+| `HubClusterPeerJoinedParams` | `relay_port` | 5 | Hub 广播新 peer 时包含其 relay 端口 |
+| `PeerInfoProto` | `relay_port` | 7 | `edge.join` 响应包含已有 peer 的 relay 端口 |
+
+## 6. 连接回退逻辑
+
+`hub_client.rs` 中的 `run_single_slot()` 实现：
+
+```
+loop:
+  if direct_fail_count >= RELAY_FALLBACK_THRESHOLD (3):
+    try_connect_via_relay():
+      1. 遍历 static_peers（config 中配置）
+      2. 遍历 dynamic_peers（从 hub.peerJoined 动态发现）
+      3. 每个 peer: try_connect_via_url(ws://peer_host:relay_port/)
+  else:
+    try_connect_slot() → direct ws://hub:control_port/
 ```
 
----
+当任意连接（直连或 relay）恢复正常后，`direct_fail_count` 重置，下一轮优先尝试直连 Hub。
 
-## 8. 集成测试场景
+## 7. 语音三跳 Relay 路由（补充实现）
 
-| 测试场景 | 描述 |
-|----------|------|
-| 基本代理功能 | Edge A 通过 Edge B 代理成功注册到 Hub |
-| 用户登录代理 | 通过代理的 Edge A 可以正常认证用户 |
-| 无可用代理 | 无 proxy 时直接报错（不影响正常模式） |
-| 代理端口可达性 | diagnose 命令正确报告代理端口状态 |
+在 `udp.rs` 中实现了与控制信道中继类比的语音三跳 relay：
 
-> 注：端到端的网络分区测试（强制断开 Edge A 到 Hub 的连接）在受控测试环境中实现困难，暂不实现该用例。基本代理功能通过直接向代理端口发起连接来测试。
+```
+RELAY_MAGIC = [0xC1, 0xDE]
 
----
+relay 包格式：
+  [RELAY_MAGIC(2B)] [target_edge_id_BE(4B)] [EDGE_MAGIC(2B)] [sender_session_BE(4B)] [voice...]
 
-## 9. 已知限制
+路由决策（route_voice）：
+  1. 直连 UDP → peer edge（优先）
+  2. 失败：try_relay_via_peer() → 通过任意已知 peer 中转（三跳）
+  3. 失败：Hub TCP relay（兜底）
+```
 
-1. **不支持 TLS 的代理链路**：Edge A → Edge B 之间的代理通信是明文 WebSocket。在生产环境中，建议代理通信也走 TLS（待后续实现）。
-2. **单跳限制**：Edge B 不会继续代理给 Edge C，防止环路。
-3. **Hub 通知路径**：Hub 推送的通知（如用户加入/离开）会正常通过代理链路到达 Edge A，因为代理是透明的。
-4. **连接数**：每个代理连接在 Edge B 上打开两个 WebSocket（一个客户侧，一个 Hub 侧），要注意连接数限制。
+中继节点（Edge B）收到 RELAY_MAGIC 包后：
+1. 读取 `target_edge_id`
+2. 在 PeerRegistry 中查找目标 Edge 的 UDP 地址
+3. 将内层 `[EDGE_MAGIC...]` 包直接发送给目标 Edge
+
+## 8. 已知限制
+
+- **单跳限制**：控制信道 relay 只允许一跳（A→B→Hub），不支持 A→B→C→Hub
+- **语音 relay 无质量感知**：三跳 relay 候选按 PeerRegistry 顺序遍历，未考虑网络质量
+- **无超时健康检查**：relay 连接不主动检测中间节点是否存活（WebSocket 读超时作为被动检测）
+- **端到端测试缺失**：需要可控制的网络断开基础设施才能做完整的网络分区测试
+
+## 9. 变更历史
+
+- 2026-03-12（v1）：初始实现（错误：`allow_peer_proxy` opt-in 模型 + 独立 `proxy_ws_port`）
+- 2026-03-12（v2）：重新设计——移除 opt-in 标志，改为 always-on relay + static_peers + 动态发现；
+  添加语音三跳 relay（`RELAY_MAGIC`）；与语音路由机制对齐
