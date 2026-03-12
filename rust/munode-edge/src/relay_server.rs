@@ -27,6 +27,9 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tracing::{debug, error, info, warn};
 
+type WsMessage = tokio_tungstenite::tungstenite::Message;
+type WsError = tokio_tungstenite::tungstenite::Error;
+
 /// Start the control-relay WebSocket server.
 ///
 /// Binds to `0.0.0.0:relay_port` and for every incoming WebSocket connection
@@ -110,27 +113,26 @@ async fn relay_frames<R, W>(
     label: &'static str,
 ) -> Result<()>
 where
-    R: StreamExt<Item = Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
-    W: SinkExt<tokio_tungstenite::tungstenite::Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+    R: StreamExt<Item = Result<WsMessage, WsError>> + Unpin,
+    W: SinkExt<WsMessage, Error = WsError> + Unpin,
 {
-    use tokio_tungstenite::tungstenite::Message;
     while let Some(msg) = src.next().await {
         match msg {
-            Ok(Message::Binary(data)) => {
-                dst.send(Message::Binary(data)).await?;
+            Ok(WsMessage::Binary(data)) => {
+                dst.send(WsMessage::Binary(data)).await?;
             }
-            Ok(Message::Text(text)) => {
-                dst.send(Message::Text(text)).await?;
+            Ok(WsMessage::Text(text)) => {
+                dst.send(WsMessage::Text(text)).await?;
             }
-            Ok(Message::Close(frame)) => {
+            Ok(WsMessage::Close(frame)) => {
                 debug!("Relay {}: received Close frame, forwarding and stopping", label);
-                let _ = dst.send(Message::Close(frame)).await;
+                let _ = dst.send(WsMessage::Close(frame)).await;
                 break;
             }
-            Ok(Message::Ping(data)) => {
-                dst.send(Message::Pong(data)).await?;
+            Ok(WsMessage::Ping(data)) => {
+                dst.send(WsMessage::Pong(data)).await?;
             }
-            Ok(Message::Pong(_)) => {
+            Ok(WsMessage::Pong(_)) => {
                 // Ignore pong responses
             }
             Ok(_) => {}

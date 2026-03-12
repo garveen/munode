@@ -383,6 +383,7 @@ Edge 侧 `EdgeVoiceRoutingConfig`（`voice_routing` 配置段）：
 #### 参考
 - TypeScript: `voice_routing` config section
 - 文档: `docs/Edge*.md`
+- Rust 详细文档: `rust/docs/voice-routing-and-control-relay.md`
 
 ---
 
@@ -468,6 +469,7 @@ Edge 端的语音路由配置：
 #### 参考
 - TypeScript: `voice_routing` config in Edge
 - 文档: `docs/Edge语音路由实现总结.md`
+- Rust 详细文档: `rust/docs/voice-routing-and-control-relay.md`
 
 ---
 
@@ -614,7 +616,7 @@ Hub 侧无需任何修改（relay 完全透明）。
 - [x] `PeerRegistry.all_udp_peers()` 方法，用于语音三跳 relay 候选选择
 - [x] relay 连接建立后正常执行 register/fullSync/joinCluster 流程
 - [ ] relay 链路的超时和健康检查（留待后续实现）
-- [ ] 直连恢复后自动切回直连（每轮先尝试直连，逻辑已在 `run_single_slot` 中）
+- [x] 直连恢复后自动切回直连（每轮先尝试直连，逻辑已在 `run_single_slot` 中）
 
 #### 语音三跳 relay 路由
 - [x] 实现 `RELAY_MAGIC` 常量（`[0xC1, 0xDE]`），区分普通 edge 包和 relay 转发包
@@ -632,6 +634,10 @@ Hub 侧无需任何修改（relay 完全透明）。
 #### 依赖
 - Hub 连接池（Edge #3）
 - Edge 间连接可靠性机制
+
+#### 参考
+- 设计文档: `rust/docs/peer-proxy-design.md`
+- 实现文档: `rust/docs/voice-routing-and-control-relay.md`
 
 ---
 
@@ -850,6 +856,7 @@ Hub 侧无需任何修改（relay 完全透明）。
 - 2026-03-12: 重新设计控制信道中继——移除 `allow_peer_proxy` opt-in 标志和 `proxy_ws_port`；改为 always-on `relay_server.rs` + `hub_server.relay_port`（自动派生 `edge_port+2`）+ `hub_server.static_peers`；动态发现仍通过 `hub.peerJoined` 广播 `relay_port`；与语音路由机制完全对齐
 - 2026-03-12: 实现语音三跳 relay 路由（`RELAY_MAGIC [0xC1,0xDE]`）：`try_relay_via_peer()` + `handle_relay_packet()`，当直连 UDP 失败时通过任意已知 peer 转发，与 Hub TCP relay 互为补充
 - 2026-03-12: 更新 `peer-proxy-design.md` 详细记录新设计；更新集成测试 `peer-proxy.test.ts` 匹配新 API（7 用例）；标记 OpenTelemetry / GeoIP 位置路由 / Ninja 音频隔离 / 集群分区网络测试 / 性能基准 ❌ 不实现
+- 2026-03-12: 新增 `rust/docs/voice-routing-and-control-relay.md`，全面记录 Rust 语音平面（UDP 三级路由、包格式、连接策略配置）和控制信道平面（透明 WebSocket relay、三级回退、peer 发现）的实现细节；更新 TODO.md 相关条目的参考链接；标记"直连恢复后自动切回直连"为已完成（`run_single_slot` 逻辑已实现）
 
 ---
 

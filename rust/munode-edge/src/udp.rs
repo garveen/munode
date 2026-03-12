@@ -19,9 +19,11 @@ use crate::state::EdgeState;
 /// forwards the remainder (an EDGE_MAGIC packet) to that target Edge via direct UDP.
 /// Packet format: [RELAY_MAGIC(2B)][target_edge_id_BE(4B)][EDGE_MAGIC(2B)][sender_session_BE(4B)][OCB2-encrypted voice...]
 ///
-/// Note: The TypeScript implementation uses a different relay prefix (0xFF, 1 byte) because
-/// TS edges communicate over TCP/WebSocket, not raw UDP.  TS and Rust relay packets are never
-/// exchanged between each other.
+/// The TypeScript implementation uses a different relay prefix (0xFF, 1 byte).
+/// The two implementations are never interoperable: Rust edges exchange voice packets
+/// over raw UDP (no framing), while TS edges use TCP/WebSocket (length-prefixed frames).
+/// Choosing distinct magic values ensures that a stray cross-implementation packet
+/// is never silently misinterpreted as a valid relay request.
 const RELAY_MAGIC: [u8; 2] = [0xC1, 0xDE];
 
 /// UDP server for Mumble voice data with OCB2-AES128 encryption.

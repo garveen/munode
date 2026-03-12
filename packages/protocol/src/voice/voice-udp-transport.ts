@@ -62,20 +62,24 @@ export interface VoiceEncryptionConfig {
 }
 
 /**
- * 中继包魔术字节（TS 实现专用）。
+ * Relay packet magic byte (TS implementation only).
  *
- * 当 Edge A 想将语音包经由 Edge B 转发给 Edge C 时，发给 Edge B 的包以此字节开头。
- * 包格式：[RELAY_MAGIC(1B)][finalTargetEdgeId_BE(4B)][加密的内层 VoicePacket 数据]
+ * When Edge A wants to forward a voice packet to Edge C via Edge B (3-hop relay),
+ * the packet sent to Edge B starts with this byte.
+ * Packet format: [RELAY_MAGIC(1B)][finalTargetEdgeId_BE(4B)][encrypted inner VoicePacket data]
  *
- * RELAY_MAGIC 字节本身不加密（接收方先检测它以区分普通包和中继包），
- * 其后的内层数据保持与普通包相同的加密状态。
+ * RELAY_MAGIC itself is unencrypted (the receiver checks it first to distinguish relay
+ * packets from normal packets); the inner payload retains the same encryption as a
+ * normal voice packet.
  *
- * Edge B 收到此包后，提取 finalTargetEdgeId：
- * - 若等于自己：按普通包处理内层数据（解密 → 反序列化 → emit）
- * - 否则：原样转发 [RELAY_MAGIC][finalTargetEdgeId][内层数据] 给 finalTargetEdgeId
+ * When Edge B receives this:
+ * - If finalTargetEdgeId == self: deliver the inner data as a normal packet (decrypt → deserialize → emit)
+ * - Otherwise: forward [RELAY_MAGIC][finalTargetEdgeId][inner data] unchanged to finalTargetEdgeId
  *
- * 注意：Rust 实现使用不同的魔术字节（[0xC1, 0xDE]，2字节），因为 Rust 边缘节点
- * 之间通过裸 UDP 通信，与 TS 实现的 TCP/WebSocket 传输层互不兼容，不会互相收发中继包。
+ * Note: The Rust implementation uses different magic bytes ([0xC1, 0xDE], 2 bytes).
+ * The two implementations are never interoperable: Rust edges exchange voice over raw UDP,
+ * while TS edges use TCP/WebSocket.  Distinct magic values ensure that a stray
+ * cross-implementation packet is never silently misinterpreted as a valid relay request.
  */
 const RELAY_MAGIC = 0xFF;
 
