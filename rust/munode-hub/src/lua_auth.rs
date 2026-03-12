@@ -45,6 +45,7 @@ use std::sync::Mutex;
 
 use anyhow::{anyhow, Context, Result};
 use mlua::{Lua, LuaSerdeExt, Table, Value};
+use tracing::debug;
 use serde::{Deserialize, Serialize};
 
 /// Authentication request passed into the Lua `authenticate(req)` function.
@@ -145,6 +146,14 @@ impl LuaAuthEngine {
                             )));
                         }
                     };
+
+                    debug!(
+                        url = %url,
+                        status = status_code,
+                        ok = is_ok,
+                        body = %body_text,
+                        "http_post response"
+                    );
 
                     // Build Lua result table
                     let result = lua_ctx.create_table()?;
