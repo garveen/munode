@@ -34,6 +34,44 @@ use crate::state::{EdgeEvent, EdgeState, PeerEdgeInfo};
 const SECONDARY_SLOT_WAIT_POLL_INTERVAL_MS: u64 = 100;
 const SECONDARY_SLOT_WAIT_MAX_POLLS: u32 = 100;
 
+/// Exponential backoff helper for reconnection loops.
+///
+/// Starts at `base_ms` milliseconds and doubles on each failed attempt, up to
+/// a maximum of 30 seconds.  A successful connection resets the counter to zero.
+/// Minimum allowed base delay in milliseconds.  Prevents accidentally-zero intervals
+/// (e.g. when `reconnect_interval = 0` is set in config) from causing a tight reconnect loop.
+const MIN_BACKOFF_MS: u64 = 100;
+
+struct ExponentialBackoff {
+    base_ms: u64,
+    current_ms: u64,
+    attempt: u32,
+}
+
+impl ExponentialBackoff {
+    const MAX_DELAY_MS: u64 = 30_000;
+
+    fn new(base_ms: u64) -> Self {
+        let base_ms = base_ms.max(MIN_BACKOFF_MS); // enforce minimum
+        Self { base_ms, current_ms: base_ms, attempt: 0 }
+    }
+
+    /// Return the delay for the next reconnect attempt and advance the counter.
+    fn next_delay(&mut self) -> Duration {
+        let delay = self.current_ms;
+        self.attempt += 1;
+        // Double the delay on every failure, capped at MAX_DELAY_MS.
+        self.current_ms = (self.current_ms.saturating_mul(2)).min(Self::MAX_DELAY_MS);
+        Duration::from_millis(delay)
+    }
+
+    /// Reset the backoff after a successful connection.
+    fn reset(&mut self) {
+        self.attempt = 0;
+        self.current_ms = self.base_ms;
+    }
+}
+
 /// Connection state for the Hub client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HubConnectionState {
@@ -68,6 +106,11 @@ pub struct HubClient {
     region: Option<String>,
     /// Maximum number of users for this Edge.
     capacity: u32,
+    /// Control-relay port advertised to Hub (always active; auto-derived if 0).
+    relay_port: u16,
+    /// Statically configured peers for bootstrap relay (from config).
+    /// These are tried first before dynamically-discovered peers.
+    static_relay_peers: Vec<(String, u16)>,
     state: RwLock<HubConnectionState>,
     edge_state: Arc<EdgeState>,
     /// Pending RPC requests awaiting responses (shared across all pool slots).
@@ -93,6 +136,19 @@ impl HubClient {
         let edge_port = config.network.edge_port.unwrap_or(config.network.port + 1);
         let pool_size = config.hub_server.pool_size.max(1) as usize;
         let pool_senders = (0..pool_size).map(|_| Mutex::new(None)).collect();
+        // The relay port is always active.  Use configured value if set, else edge_port + 2.
+        let relay_port = if config.hub_server.relay_port > 0 {
+            config.hub_server.relay_port
+        } else {
+            edge_port + 2
+        };
+        // Static peers from config (for bootstrap before Hub connection).
+        let static_relay_peers: Vec<(String, u16)> = config
+            .hub_server
+            .static_peers
+            .iter()
+            .map(|p| (p.host.clone(), p.relay_port))
+            .collect();
         Arc::new(Self {
             config: config.hub_server.clone(),
             server_id: config.server_id,
@@ -102,6 +158,8 @@ impl HubClient {
             edge_port,
             region: config.network.region.clone(),
             capacity: config.server.capacity,
+            relay_port,
+            static_relay_peers,
             state: RwLock::new(HubConnectionState::Disconnected),
             edge_state,
             pending: Mutex::new(HashMap::new()),
@@ -150,10 +208,14 @@ impl HubClient {
                     me.run_secondary_slot(slot).await;
                 });
             }
-            // Keep primary alive with reconnection loop.
+            // Keep primary alive with reconnection loop (exponential backoff).
+            let mut backoff = ExponentialBackoff::new(self.config.reconnect_interval);
             loop {
                 match self.try_connect_slot(0, true).await {
-                    Ok(()) => info!("Primary Hub connection closed, reconnecting…"),
+                    Ok(()) => {
+                        info!("Primary Hub connection closed, reconnecting…");
+                        backoff.reset();
+                    }
                     Err(e) => error!("Primary Hub connection error: {}", e),
                 }
                 self.clear_slot(0).await;
@@ -163,7 +225,7 @@ impl HubClient {
                     self.pending.lock().await.clear();
                     self.edge_state.emit(EdgeEvent::HubDisconnected);
                 }
-                let delay = Duration::from_millis(self.config.reconnect_interval);
+                let delay = backoff.next_delay();
                 warn!("Primary: reconnecting to Hub in {:?}", delay);
                 time::sleep(delay).await;
             }
@@ -171,12 +233,46 @@ impl HubClient {
         Ok(())
     }
 
-    /// Run the single-slot (no pool) reconnect loop.
+    /// Run the single-slot (no pool) reconnect loop with exponential backoff.
+    ///
+    /// After `RELAY_FALLBACK_THRESHOLD` consecutive direct-connect failures,
+    /// attempts to connect via a known peer Edge's control-relay port.
+    /// Relay candidates are tried in priority order:
+    ///   1. Statically configured peers (`hub_server.static_peers` in config)
+    ///   2. Dynamically discovered peers (received via `hub.peerJoined` notifications)
     async fn run_single_slot(self: &Arc<Self>, slot: usize, is_primary: bool) {
+        let mut backoff = ExponentialBackoff::new(self.config.reconnect_interval);
+        let mut direct_fail_count: u32 = 0;
+        const RELAY_FALLBACK_THRESHOLD: u32 = 3;
+
         loop {
-            match self.try_connect_slot(slot, is_primary).await {
-                Ok(()) => info!("Hub connection closed normally"),
-                Err(e) => error!("Hub connection error: {}", e),
+            // After several consecutive direct failures, try relay via a peer Edge.
+            let use_relay = direct_fail_count >= RELAY_FALLBACK_THRESHOLD;
+            let connect_result = if use_relay {
+                self.try_connect_via_relay(slot, is_primary).await
+            } else {
+                self.try_connect_slot(slot, is_primary).await
+            };
+
+            match connect_result {
+                Ok(()) => {
+                    info!("Hub connection closed normally");
+                    backoff.reset();
+                    direct_fail_count = 0;
+                }
+                Err(e) => {
+                    error!("Hub connection error: {}", e);
+                    if !use_relay {
+                        direct_fail_count += 1;
+                        if direct_fail_count == RELAY_FALLBACK_THRESHOLD {
+                            info!(
+                                "Direct Hub connection failed {} times — \
+                                 will try peer relay on next attempt",
+                                direct_fail_count
+                            );
+                        }
+                    }
+                }
             }
             // Clean up state
             *self.state.write().await = HubConnectionState::Disconnected;
@@ -184,10 +280,139 @@ impl HubClient {
             self.pending.lock().await.clear();
             self.edge_state.emit(EdgeEvent::HubDisconnected);
 
-            let delay = Duration::from_millis(self.config.reconnect_interval);
+            let delay = backoff.next_delay();
             warn!("Reconnecting to Hub in {:?}", delay);
             time::sleep(delay).await;
         }
+    }
+
+    /// Try to connect to Hub via a peer Edge's control-relay port.
+    ///
+    /// Candidates are tried in priority order:
+    ///   1. Static peers from `hub_server.static_peers` (available before Hub connection)
+    ///   2. Dynamic peers discovered via `hub.peerJoined` notifications
+    ///
+    /// Returns `Ok(())` if a relay connection ran and closed normally, or an error if all
+    /// candidates failed.
+    async fn try_connect_via_relay(self: &Arc<Self>, slot: usize, is_primary: bool) -> Result<()> {
+        // 1. Static peers from config (for bootstrap before Hub connection)
+        for (host, relay_port) in &self.static_relay_peers {
+            let relay_url = format!("ws://{}:{}", host, relay_port);
+            info!("Attempting Hub relay via static peer at {}", relay_url);
+            match self.try_connect_via_url(&relay_url, slot, is_primary).await {
+                Ok(()) => {
+                    info!("Static peer relay connection ({}) closed normally", relay_url);
+                    return Ok(());
+                }
+                Err(e) => {
+                    warn!("Static peer relay via {} failed: {}", relay_url, e);
+                }
+            }
+        }
+
+        // 2. Dynamically discovered peers (from hub.peerJoined notifications)
+        let dynamic_peers = self.edge_state.peer_registry.lock().await.relay_peers();
+        if dynamic_peers.is_empty() && self.static_relay_peers.is_empty() {
+            return Err(anyhow::anyhow!("No relay peers available"));
+        }
+        for (peer_id, host, relay_port) in &dynamic_peers {
+            let relay_url = format!("ws://{}:{}", host, relay_port);
+            info!("Attempting Hub relay via peer {} at {}", peer_id, relay_url);
+            match self.try_connect_via_url(&relay_url, slot, is_primary).await {
+                Ok(()) => {
+                    info!("Dynamic peer relay (peer {}) closed normally", peer_id);
+                    return Ok(());
+                }
+                Err(e) => {
+                    warn!("Dynamic peer relay via {} failed: {}", relay_url, e);
+                }
+            }
+        }
+        Err(anyhow::anyhow!("All relay attempts failed"))
+    }
+
+    /// Connect via a specific WebSocket URL (used for both direct and relay connections).
+    async fn try_connect_via_url(self: &Arc<Self>, url: &str, slot: usize, is_primary: bool) -> Result<()> {
+        *self.state.write().await = HubConnectionState::Connecting;
+        info!("Connecting to Hub via {} (slot {})", url, slot);
+
+        let (ws_stream, _) = tokio_tungstenite::connect_async(url)
+            .await
+            .with_context(|| format!("Failed to connect to Hub WebSocket via {} (slot {})", url, slot))?;
+
+        info!("WebSocket connected via {} (slot {})", url, slot);
+        if is_primary {
+            *self.state.write().await = HubConnectionState::Connected;
+        }
+
+        let (mut ws_write, mut ws_read) = ws_stream.split();
+
+        let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(256);
+        if let Some(s) = self.pool_senders.get(slot) {
+            *s.lock().await = Some(send_tx);
+        }
+
+        let writer_handle = tokio::spawn(async move {
+            while let Some(data) = send_rx.recv().await {
+                if let Err(e) = ws_write.send(tungstenite::Message::Binary(Bytes::from(data))).await {
+                    error!("WebSocket write error (slot {}): {}", slot, e);
+                    break;
+                }
+            }
+        });
+
+        let (reader_done_tx, reader_done_rx) = tokio::sync::oneshot::channel::<()>();
+        let reader_self = self.clone();
+        let reader_handle = tokio::spawn(async move {
+            loop {
+                match ws_read.next().await {
+                    Some(Ok(msg)) => match msg {
+                        tungstenite::Message::Binary(data) => {
+                            if let Err(e) = reader_self.handle_incoming_slot(&data, is_primary).await {
+                                warn!("Error handling Hub message (slot {}): {}", slot, e);
+                            }
+                        }
+                        tungstenite::Message::Close(_) => {
+                            info!("Hub sent close frame (slot {})", slot);
+                            break;
+                        }
+                        tungstenite::Message::Ping(data) => {
+                            reader_self.send_on_slot(slot, tungstenite::Message::Pong(data).into_data().to_vec()).await.ok();
+                        }
+                        _ => {}
+                    },
+                    Some(Err(e)) => {
+                        error!("WebSocket read error (slot {}): {}", slot, e);
+                        break;
+                    }
+                    None => {
+                        info!("WebSocket stream ended (slot {})", slot);
+                        break;
+                    }
+                }
+            }
+            let _ = reader_done_tx.send(());
+        });
+
+        if is_primary {
+            self.do_register().await?;
+            self.do_full_sync().await?;
+            self.do_join_cluster().await?;
+            *self.state.write().await = HubConnectionState::Registered;
+            self.edge_state.emit(EdgeEvent::HubRegistered);
+            info!("Edge registered with Hub successfully (via {}, slot {})", url, slot);
+        }
+
+        let heartbeat_self = self.clone();
+        let heartbeat_handle = tokio::spawn(async move {
+            heartbeat_self.heartbeat_loop().await;
+        });
+
+        let _ = reader_done_rx.await;
+        heartbeat_handle.abort();
+        reader_handle.abort();
+        writer_handle.abort();
+        Ok(())
     }
 
     /// Connect the primary slot and wait until it has registered.  Returns an
@@ -196,16 +421,20 @@ impl HubClient {
         self.try_connect_slot(0, true).await
     }
 
-    /// Background reconnect loop for a secondary pool slot.
+    /// Background reconnect loop for a secondary pool slot with exponential backoff.
     async fn run_secondary_slot(self: &Arc<Self>, slot: usize) {
+        let mut backoff = ExponentialBackoff::new(self.config.reconnect_interval);
         loop {
             match self.try_connect_secondary_slot(slot).await {
-                Ok(()) => debug!("Pool slot {} closed", slot),
+                Ok(()) => {
+                    debug!("Pool slot {} closed", slot);
+                    backoff.reset();
+                }
                 Err(e) => warn!("Pool slot {} error: {}", slot, e),
             }
             self.clear_slot(slot).await;
 
-            let delay = Duration::from_millis(self.config.reconnect_interval);
+            let delay = backoff.next_delay();
             debug!("Pool slot {} reconnecting in {:?}", slot, delay);
             time::sleep(delay).await;
         }
@@ -700,9 +929,17 @@ impl HubClient {
                     info!("Peer edge joined cluster: {} (id {}) at {}:{}", name, peer_edge_id, host, voice_port);
                     if !host.is_empty() && voice_port > 0 {
                         if let Ok(udp_addr) = format!("{}:{}", host, voice_port).parse() {
+                            let relay_port = p.relay_port.filter(|&pp| pp > 0).map(|pp| pp as u16);
                             let mut reg = self.edge_state.peer_registry.lock().await;
-                            reg.upsert(peer_edge_id, PeerEdgeInfo { udp_addr });
+                            reg.upsert(peer_edge_id, PeerEdgeInfo {
+                                udp_addr,
+                                host: host.clone(),
+                                relay_port,
+                            });
                             info!("Registered direct UDP route to peer edge {} at {}", peer_edge_id, udp_addr);
+                            if let Some(rp) = relay_port {
+                                info!("  Peer edge {} control-relay available on port {}", peer_edge_id, rp);
+                            }
                         }
                     }
                 }
@@ -713,6 +950,26 @@ impl HubClient {
                     let peer_edge_id = p.edge_id;
                     warn!("Peer edge left cluster: id {}", peer_edge_id);
                     self.edge_state.peer_registry.lock().await.remove(peer_edge_id);
+                }
+            }
+            "hub.routeTableUpdate" => {
+                if let Some(params) = &notification.route_table_update {
+                    use crate::state::RouteDecision;
+                    let mut table = self.edge_state.route_table.write().await;
+                    table.clear();
+                    for entry in &params.routes {
+                        let decision = match entry.route_type {
+                            1 => RouteDecision::RelayVia {
+                                relay_edge_id: entry.next_hop.unwrap_or(0),
+                            },
+                            2 => RouteDecision::HubTcp,
+                            _ => RouteDecision::Direct,
+                        };
+                        table.insert(entry.target_edge_id, decision);
+                    }
+                    let count = table.len();
+                    drop(table);
+                    debug!("Route table updated: {} entries", count);
                 }
             }
             _ => {
@@ -756,6 +1013,7 @@ impl HubClient {
             certificate: String::new(),
             challenge: None,
             challenge_response: None,
+            relay_port: Some(self.relay_port as u32),
         };
 
         let request = TypedRpcRequest {
@@ -813,6 +1071,7 @@ impl HubClient {
             certificate: String::new(),
             challenge: Some(challenge.to_string()),
             challenge_response: Some(challenge_response),
+            relay_port: Some(self.relay_port as u32),
         };
 
         let request = TypedRpcRequest {
@@ -918,9 +1177,17 @@ impl HubClient {
             // Register each existing peer's UDP address
             if !peer.host.is_empty() && peer.voice_port > 0 {
                 if let Ok(udp_addr) = format!("{}:{}", peer.host, peer.voice_port).parse() {
+                    let relay_port = peer.relay_port.filter(|&pp| pp > 0).map(|pp| pp as u16);
                     let mut reg = self.edge_state.peer_registry.lock().await;
-                    reg.upsert(peer.id, PeerEdgeInfo { udp_addr });
+                    reg.upsert(peer.id, PeerEdgeInfo {
+                        udp_addr,
+                        host: peer.host.clone(),
+                        relay_port,
+                    });
                     info!("Registered direct UDP route to existing peer edge {} at {}", peer.id, udp_addr);
+                    if let Some(rp) = relay_port {
+                        info!("  Peer edge {} control-relay available on port {}", peer.id, rp);
+                    }
                 }
             }
         }
@@ -1607,6 +1874,31 @@ impl HubClient {
 
         if let Err(e) = self.rpc_call(request).await {
             debug!("relay_voice_via_hub to edge {} failed: {}", target_edge_id, e);
+        }
+    }
+
+    /// Report link quality to a peer Edge to Hub for route table computation.
+    pub async fn report_quality(&self, target_edge_id: u32, rtt_ms: f32, packet_loss: f32, jitter_ms: f32, samples: u32) {
+        let from_edge_id = self.edge_id().await;
+        let request_id = self.next_request_id().await;
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.reportQuality".to_string(),
+            timeout_ms: Some(5000),
+            edge_report_quality: Some(hubedge::EdgeReportQualityParams {
+                edge_id: from_edge_id,
+                target_edge_id,
+                quality: hubedge::NetworkQualityProto {
+                    rtt: rtt_ms,
+                    packet_loss,
+                    jitter: jitter_ms,
+                    samples,
+                },
+            }),
+            ..Default::default()
+        };
+        if let Err(e) = self.rpc_call(request).await {
+            debug!("report_quality to edge {} failed: {}", target_edge_id, e);
         }
     }
 }

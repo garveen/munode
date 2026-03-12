@@ -62,6 +62,28 @@ export interface VoiceEncryptionConfig {
 }
 
 /**
+ * Relay packet magic byte (TS implementation only).
+ *
+ * When Edge A wants to forward a voice packet to Edge C via Edge B (3-hop relay),
+ * the packet sent to Edge B starts with this byte.
+ * Packet format: [RELAY_MAGIC(1B)][finalTargetEdgeId_BE(4B)][encrypted inner VoicePacket data]
+ *
+ * RELAY_MAGIC itself is unencrypted (the receiver checks it first to distinguish relay
+ * packets from normal packets); the inner payload retains the same encryption as a
+ * normal voice packet.
+ *
+ * When Edge B receives this:
+ * - If finalTargetEdgeId == self: deliver the inner data as a normal packet (decrypt → deserialize → emit)
+ * - Otherwise: forward [RELAY_MAGIC][finalTargetEdgeId][inner data] unchanged to finalTargetEdgeId
+ *
+ * Note: The Rust implementation uses different magic bytes ([0xC1, 0xDE], 2 bytes).
+ * The two implementations are never interoperable: Rust edges exchange voice over raw UDP,
+ * while TS edges use TCP/WebSocket.  Distinct magic values ensure that a stray
+ * cross-implementation packet is never silently misinterpreted as a valid relay request.
+ */
+const RELAY_MAGIC = 0xFF;
+
+/**
  * VoiceUDPTransport 事件类型定义
  */
 export interface VoiceUDPTransportEvents extends EventMap {
@@ -237,6 +259,45 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
     };
     
     await this.sendVoicePacket(targetEdgeId, packet);
+  }
+
+  /**
+   * 经由中继节点发送语音包（三跳路由：我 → relayEdgeId → finalTargetEdgeId）
+   *
+   * 构造的包格式：[RELAY_MAGIC(1B)][finalTargetEdgeId_BE(4B)][加密的内层语音包]
+   * relayEdgeId 收到后检测 RELAY_MAGIC，提取 finalTargetEdgeId，把内层数据原样转发。
+   * RELAY_MAGIC 字节本身不加密，内层数据保持与普通包一致的加密状态。
+   */
+  async sendViaRelay(
+    finalTargetEdgeId: number,
+    relayEdgeId: number,
+    header: VoicePacketHeader,
+    data: Buffer,
+  ): Promise<void> {
+    const innerPacket: VoicePacket = {
+      senderId: header.senderId,
+      targetId: header.targetId,
+      sequence: header.sequence,
+      data,
+    };
+    const serialized = this.serializeVoicePacket(innerPacket);
+    const encrypted = this.encryptionConfig ? this.encryptVoiceData(serialized) : serialized;
+
+    // 构造中继包：[0xFF][finalTargetEdgeId BE4][内层数据]
+    const relayBuf = Buffer.allocUnsafe(5 + encrypted.length);
+    relayBuf.writeUInt8(RELAY_MAGIC, 0);
+    relayBuf.writeUInt32BE(finalTargetEdgeId, 1);
+    encrypted.copy(relayBuf, 5);
+
+    try {
+      await this.connectionManager.send(relayEdgeId, relayBuf);
+      this.stats.packetsSent++;
+      this.stats.bytesSent += relayBuf.length;
+    } catch (error) {
+      this.stats.errors++;
+      this.logger.error(`Failed to send relay packet via edge ${relayEdgeId} to ${finalTargetEdgeId}:`, error);
+      throw error;
+    }
   }
 
   /**
@@ -434,7 +495,35 @@ export class VoiceUDPTransport extends TypedEventEmitter<VoiceUDPTransportEvents
    */
   private handleVoiceData(edgeId: number, data: Buffer, _timestamp: number): void {
     try {
-      // 解密
+      // 检测中继包（RELAY_MAGIC 前缀，未加密，因为加密后 0xFF 不保证出现在首字节）
+      // 中继包格式：[0xFF][finalTargetEdgeId_BE(4B)][加密的内层语音包...]
+      if (data.length >= 5 && data[0] === RELAY_MAGIC) {
+        const finalTargetEdgeId = data.readUInt32BE(1);
+        const innerData = data.subarray(5);
+
+        if (finalTargetEdgeId === this.localEdgeId) {
+          // 中继包的最终目标是自己 — 按正常语音包处理内层数据
+          this.handleVoiceData(edgeId, innerData, _timestamp);
+        } else {
+          // 中继包的最终目标是另一个 Edge — 直接转发内层数据（保持加密状态）
+          this.logger.debug(
+            `Relay forward: edge ${edgeId} → us → edge ${finalTargetEdgeId} (${innerData.length}B)`
+          );
+          const fwdBuf = Buffer.allocUnsafe(5 + innerData.length);
+          fwdBuf.writeUInt8(RELAY_MAGIC, 0);
+          fwdBuf.writeUInt32BE(finalTargetEdgeId, 1);
+          innerData.copy(fwdBuf, 5);
+          // 异步转发，忽略错误（转发失败不影响当前 edge 的正常处理）
+          this.connectionManager.send(finalTargetEdgeId, fwdBuf).catch((err: Error) => {
+            this.logger.warn(`Relay forward to edge ${finalTargetEdgeId} failed: ${err.message}`);
+          });
+          this.stats.packetsReceived++;
+          this.stats.bytesReceived += data.length;
+        }
+        return;
+      }
+
+      // 普通语音包：解密
       let decrypted = data;
       if (this.encryptionConfig) {
         decrypted = this.decryptVoiceData(data);

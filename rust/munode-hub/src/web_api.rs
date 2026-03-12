@@ -415,23 +415,42 @@ async fn handle_metrics(State(state): State<AppState>) -> Response {
     let heartbeat_timeout = state.config.registry.heartbeat_timeout;
     let online_threshold = std::time::Duration::from_millis(heartbeat_timeout + 10_000);
 
-    let connected_edges: usize = edge_regs
-        .keys()
-        .filter(|id| {
-            health_map
-                .get(id)
+    // Per-Edge snapshot: (id, name, is_online, user_count, channel_count, uptime_secs)
+    struct EdgeSnapshot {
+        id: u32,
+        name: String,
+        is_online: bool,
+        user_count: u32,
+        channel_count: u32,
+        uptime_secs: u64,
+    }
+    let mut edge_snapshots: Vec<EdgeSnapshot> = edge_regs
+        .iter()
+        .map(|(id, reg)| {
+            let health = health_map.get(id);
+            let is_online = health
                 .map(|h| h.last_heartbeat.elapsed() <= online_threshold)
-                .unwrap_or(false)
+                .unwrap_or(false);
+            EdgeSnapshot {
+                id: *id,
+                name: reg.name.clone(),
+                is_online,
+                user_count: health.map(|h| h.user_count).unwrap_or(0),
+                channel_count: health.map(|h| h.channel_count).unwrap_or(0),
+                uptime_secs: health.map(|h| h.uptime_seconds).unwrap_or(0),
+            }
         })
-        .count();
+        .collect();
+    edge_snapshots.sort_by_key(|e| e.id);
 
-    let total_sessions: u32 = health_map.values().map(|h| h.user_count).sum();
+    let connected_edges: usize = edge_snapshots.iter().filter(|e| e.is_online).count();
+    let total_sessions: u32 = edge_snapshots.iter().map(|e| e.user_count).sum();
     let total_channels = state.channel_store.count().await;
 
     drop(edge_regs);
     drop(health_map);
 
-    let mut buf = String::with_capacity(1024);
+    let mut buf = String::with_capacity(2048);
 
     // Helper macro to write a gauge metric in Prometheus text format
     macro_rules! gauge {
@@ -463,6 +482,61 @@ async fn handle_metrics(State(state): State<AppState>) -> Response {
         "Hub server uptime in seconds",
         uptime
     );
+
+    // Per-Edge metrics with labels
+    if !edge_snapshots.is_empty() {
+        // edge_user_count
+        buf.push_str(
+            "# HELP munode_hub_edge_user_count User session count per Edge node\n\
+             # TYPE munode_hub_edge_user_count gauge\n",
+        );
+        for e in &edge_snapshots {
+            let safe_name = e.name.replace('\\', "\\\\").replace('"', "\\\"");
+            buf.push_str(&format!(
+                "munode_hub_edge_user_count{{edge_id=\"{}\",edge_name=\"{}\"}} {}\n",
+                e.id, safe_name, e.user_count
+            ));
+        }
+
+        // edge_channel_count
+        buf.push_str(
+            "# HELP munode_hub_edge_channel_count Channel count reported by each Edge node\n\
+             # TYPE munode_hub_edge_channel_count gauge\n",
+        );
+        for e in &edge_snapshots {
+            let safe_name = e.name.replace('\\', "\\\\").replace('"', "\\\"");
+            buf.push_str(&format!(
+                "munode_hub_edge_channel_count{{edge_id=\"{}\",edge_name=\"{}\"}} {}\n",
+                e.id, safe_name, e.channel_count
+            ));
+        }
+
+        // edge_online
+        buf.push_str(
+            "# HELP munode_hub_edge_online Whether the Edge node is currently considered online (1=yes, 0=no)\n\
+             # TYPE munode_hub_edge_online gauge\n",
+        );
+        for e in &edge_snapshots {
+            let safe_name = e.name.replace('\\', "\\\\").replace('"', "\\\"");
+            buf.push_str(&format!(
+                "munode_hub_edge_online{{edge_id=\"{}\",edge_name=\"{}\"}} {}\n",
+                e.id, safe_name, if e.is_online { 1 } else { 0 }
+            ));
+        }
+
+        // edge_uptime_seconds
+        buf.push_str(
+            "# HELP munode_hub_edge_uptime_seconds Uptime of each Edge node in seconds\n\
+             # TYPE munode_hub_edge_uptime_seconds gauge\n",
+        );
+        for e in &edge_snapshots {
+            let safe_name = e.name.replace('\\', "\\\\").replace('"', "\\\"");
+            buf.push_str(&format!(
+                "munode_hub_edge_uptime_seconds{{edge_id=\"{}\",edge_name=\"{}\"}} {}\n",
+                e.id, safe_name, e.uptime_secs
+            ));
+        }
+    }
 
     (
         StatusCode::OK,

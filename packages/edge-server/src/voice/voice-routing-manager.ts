@@ -91,6 +91,13 @@ const DEFAULT_VOICE_ROUTING_CONFIG: Required<EdgeVoiceRoutingConfig> = {
 };
 
 /**
+ * 临时直连路由的初始成本（ms）。
+ * 选取 500ms 是 `direct_rtt_threshold`（默认值）的值，即"刚好在直连可用边界"，
+ * 保证在没有真实 RTT 数据时也优先使用直连，待质量数据到位后由定时器覆盖。
+ */
+const PROVISIONAL_ROUTE_COST = 500;
+
+/**
  * VoiceRoutingManager 事件类型定义
  */
 export interface VoiceRoutingManagerEvents extends EventMap {
@@ -132,6 +139,10 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
   
   // Hub 推送的路由表
   private hubRouteTable: Map<number, RouteEntry> = new Map();
+  
+  // 所有已知的集群 Edge ID（从 hub.peerJoined / edge.peerJoined 填充）
+  // 确保即使还没有收到语音包，路由表也能提前初始化
+  private knownEdgeIds: Set<number> = new Set();
   
   // 功能启用状态
   private _isEnabled: boolean = false;
@@ -308,6 +319,38 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
   }
 
   /**
+   * 添加已知的集群 Edge（当 Hub 通知 peerJoined 时调用）
+   *
+   * 将 edgeId 加入 knownEdgeIds，使路由决策定时器能为其计算路由。
+   * 同时立即创建临时直连路由，避免在质量数据收集之前没有路由而丢包。
+   */
+  addKnownEdge(edgeId: number): void {
+    if (edgeId === this.serverId) return;
+    this.knownEdgeIds.add(edgeId);
+    this.logger.debug(`Known edge added: ${edgeId} (total known: ${this.knownEdgeIds.size})`);
+    // 如果路由表中还没有该 Edge 的路由，立即创建临时直连路由
+    this.setProvisionalDirectRoute(edgeId);
+  }
+
+  /**
+   * 移除已知的集群 Edge（当 Hub 通知 peerLeft 时调用）
+   *
+   * 同时清理路由和质量数据。
+   */
+  removeKnownEdge(edgeId: number): void {
+    this.knownEdgeIds.delete(edgeId);
+    this.removeEdge(edgeId);
+    this.logger.debug(`Known edge removed: ${edgeId} (total known: ${this.knownEdgeIds.size})`);
+  }
+
+  /**
+   * 获取所有已知的集群 Edge ID
+   */
+  getKnownEdgeIds(): ReadonlySet<number> {
+    return this.knownEdgeIds;
+  }
+
+  /**
    * 设置功能启用状态（由 Hub 配置控制）
    */
   setEnabled(enabled: boolean): void {
@@ -365,6 +408,9 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
 
   /**
    * 处理 Hub 推送的路由表
+   *
+   * Hub 推送的路由表包含了所有 Edge 的路由信息，直接作为权威路由。
+   * 同时利用路由表隐式更新 knownEdgeIds（以防 peerJoined 通知丢失）。
    */
   handleHubRouteTable(routes: RouteEntry[]): void {
     this.logger.debug(`Received ${routes.length} routes from Hub`);
@@ -373,6 +419,9 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     for (const route of routes) {
       if (route.targetEdgeId !== this.serverId) {
         this.hubRouteTable.set(route.targetEdgeId, route);
+        
+        // 利用 Hub 路由表隐式维护 knownEdgeIds（防止 peerJoined 通知丢失）
+        this.knownEdgeIds.add(route.targetEdgeId);
         
         // 不允许 Hub 的 FALLBACK 路由覆盖本地已知的直连/中转路由
         // 直接的 TCP/UDP 连接始终优于经由 Hub 控制通道中转
@@ -473,7 +522,7 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
     this.updateRoute({
       targetEdgeId: edgeId,
       type: RouteType.DIRECT,
-      cost: 500, // 临时成本，待质量数据收集后由本地决策更新
+      cost: PROVISIONAL_ROUTE_COST, // 临时成本，待质量数据收集后由本地决策更新
       timestamp: Date.now(),
       source: 'local',
       connectionPurpose: ConnectionPurpose.DIRECT_VOICE,
@@ -769,18 +818,31 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
 
   /**
    * 执行本地路由决策
+   *
+   * 遍历所有已知的集群 Edge（knownEdgeIds），而不仅仅是有质量数据的 Edge。
+   * 对于没有质量数据的 Edge，先尝试使用 Hub 推送的路由；若也没有，则设置临时直连路由。
    */
   private performLocalRouteDecision(): void {
-    for (const [targetEdgeId, quality] of this.connectionQualities) {
+    // 收集所有需要计算路由的 Edge：已知的 + 有质量数据的（可能来自未注册的 peer）
+    const allTargets = new Set<number>([
+      ...this.knownEdgeIds,
+      ...this.connectionQualities.keys(),
+    ]);
+
+    for (const targetEdgeId of allTargets) {
+      if (targetEdgeId === this.serverId) continue;
+
       const currentRoute = this.routingTable.get(targetEdgeId);
       const hubRoute = this.hubRouteTable.get(targetEdgeId);
       
       // Hub 路由优先，但不允许 Hub 的 FALLBACK 路由阻止本地升级决策
       if (hubRoute && hubRoute.source === 'hub' && hubRoute.type !== RouteType.FALLBACK) {
+        // Hub 已有非 FALLBACK 路由，保持使用
         continue;
       }
       
-      // 执行本地决策
+      // 本地执行路由决策
+      const quality = this.connectionQualities.get(targetEdgeId);
       const newRoute = this.calculateLocalRoute(targetEdgeId, quality);
       
       if (newRoute) {
@@ -788,6 +850,9 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
         if (this.shouldSwitchRoute(currentRoute, newRoute)) {
           this.updateRoute(newRoute);
         }
+      } else if (!currentRoute) {
+        // 没有路由也没有质量数据 — 设置临时直连路由
+        this.setProvisionalDirectRoute(targetEdgeId);
       }
     }
   }
@@ -797,10 +862,22 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
    */
   private calculateLocalRoute(
     targetEdgeId: number, 
-    quality: EdgeConnectionQuality
+    quality: EdgeConnectionQuality | undefined,
   ): RouteEntry | null {
     const policy = this.voiceRoutingConfig.hub_policy;
     
+    // 没有质量数据时，直接返回临时直连路由（不足以判断是否需要中转）
+    if (!quality) {
+      return {
+        targetEdgeId,
+        type: RouteType.DIRECT,
+        cost: PROVISIONAL_ROUTE_COST, // 临时成本，等质量数据到位后会由定时器更新
+        timestamp: Date.now(),
+        source: 'local',
+        connectionPurpose: ConnectionPurpose.DIRECT_VOICE,
+      };
+    }
+
     // 检查直连是否可行
     if (this.isDirectRouteFeasible(quality)) {
       return {
@@ -863,27 +940,45 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
 
   /**
    * 寻找最佳中转路由
+   *
+   * 中转候选选择策略（与 Rust 实现保持一致）：
+   * 1. 从 hubRouteTable 中找出 Hub 认为有 DIRECT 路由的 Edge（说明网络可达）
+   * 2. 在本地 connectionQualities 中找出质量良好的 Edge 作为补充
+   *
+   * 成本估算：cost_to_relay（到中转节点的成本）× relay_cost_factor
+   * 注意：我们不知道中转节点到目标节点的质量，只能假设中转节点到目标可达。
+   * Hub 推送的 RELAY 路由已经包含了更精确的成本，优先使用。
    */
   private findBestRelayRoute(targetEdgeId: number): RouteEntry | null {
     const policy = this.voiceRoutingConfig.hub_policy;
     let bestRoute: RouteEntry | null = null;
     let bestCost = Infinity;
-    
-    // 遍历所有已知的 Edge
-    for (const [relayEdgeId, relayQuality] of this.connectionQualities) {
-      if (relayEdgeId === targetEdgeId || relayEdgeId === this.serverId) {
-        continue;
-      }
+
+    // 如果 Hub 已推送过此目标的 RELAY 路由，直接使用（Hub 路由成本最准确）
+    const hubRelayForTarget = this.hubRouteTable.get(targetEdgeId);
+    if (hubRelayForTarget && hubRelayForTarget.type === RouteType.RELAY && hubRelayForTarget.nextHop) {
+      return {
+        ...hubRelayForTarget,
+        source: 'hub',
+        timestamp: Date.now(),
+      };
+    }
+
+    // 候选中转节点集合：
+    // 优先使用 Hub 路由表中有 DIRECT 路由的 Edge（网络可达性已由 Hub 确认）
+    const relayCandidate = (relayEdgeId: number): void => {
+      if (relayEdgeId === targetEdgeId || relayEdgeId === this.serverId) return;
+
+      // 从本地质量数据获取到中转节点的成本
+      const relayQuality = this.connectionQualities.get(relayEdgeId);
       
-      // 检查中转 Edge 是否可达
-      if (!this.isDirectRouteFeasible(relayQuality)) {
-        continue;
-      }
-      
-      // 计算经过此 Edge 中转的成本
-      // 这里简化处理，假设中转 Edge 到目标的质量与到我们的质量相似
-      const relayCost = this.calculateDirectCost(relayQuality) * policy.relay_cost_factor;
-      
+      // 中转节点需要质量良好（否则中转后质量更差）
+      if (!this.isDirectRouteFeasible(relayQuality)) return;
+
+      // 估算中转成本
+      const baseCost = relayQuality ? this.calculateDirectCost(relayQuality) : 300; // 无质量数据时用估算值
+      const relayCost = baseCost * policy.relay_cost_factor;
+
       if (relayCost < bestCost) {
         bestCost = relayCost;
         bestRoute = {
@@ -893,7 +988,22 @@ export class VoiceRoutingManager extends TypedEventEmitter<VoiceRoutingManagerEv
           cost: relayCost,
           timestamp: Date.now(),
           source: 'local',
+          connectionPurpose: ConnectionPurpose.RELAY_ROUTING,
         };
+      }
+    };
+
+    // 1. 优先遍历 Hub 路由表中有 DIRECT 路由的已知 Edge
+    for (const [edgeId, hubRoute] of this.hubRouteTable) {
+      if (hubRoute.type === RouteType.DIRECT) {
+        relayCandidate(edgeId);
+      }
+    }
+
+    // 2. 若 Hub 路由表空（尚未收到推送），用本地质量数据中已知的所有 Edge
+    if (!bestRoute) {
+      for (const relayEdgeId of this.connectionQualities.keys()) {
+        relayCandidate(relayEdgeId);
       }
     }
     

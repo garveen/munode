@@ -113,6 +113,10 @@ export class ServerLifecycleManager {
             for (const peer of peers) {
               if (peer.id !== this.config.server_id) {
                 try {
+                  // 通知语音路由管理器已知 Edge 加入，立即设置临时直连路由
+                  if (this.voiceManager) {
+                    this.voiceManager.getVoiceRoutingManager().addKnownEdge(peer.id);
+                  }
                   // UDP 和 TCP 都使用 voicePort（即 edge_port），不再复用客户端主端口
                   const peerEdgePort = peer.voicePort || peer.port;
                   this.voiceTransport.registerEndpoint(peer.id, peer.host, peerEdgePort, undefined, peerEdgePort);

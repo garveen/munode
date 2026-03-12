@@ -165,6 +165,19 @@ pub struct TlsConfig {
     pub ca: Option<String>,
 }
 
+/// A statically configured peer Edge for control-channel relay bootstrap.
+///
+/// Used when the local Edge cannot reach Hub at startup.  The peer Edge's
+/// relay port is tried as a transparent WebSocket relay before falling back
+/// to a permanent error.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StaticPeerConfig {
+    /// Hostname or IP of the peer Edge.
+    pub host: String,
+    /// Control-relay port of the peer Edge (usually `edge_port + 2`).
+    pub relay_port: u16,
+}
+
 /// Hub server connection configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct HubServerConfig {
@@ -186,6 +199,16 @@ pub struct HubServerConfig {
     /// and Hub-to-Edge push notifications are only processed on the primary connection.
     #[serde(default = "default_pool_size")]
     pub pool_size: u32,
+    /// Port on which this Edge listens for control-relay connections from peer Edges.
+    /// `0` (default) means "auto-assign": uses `network.edge_port + 2`.
+    /// The relay server is **always** started; there is no opt-in flag.
+    #[serde(default)]
+    pub relay_port: u16,
+    /// Statically configured peer Edges used as relay fallback during Hub-unreachable
+    /// startup.  These are tried **before** dynamically-discovered peers (from
+    /// `hub.peerJoined` notifications).
+    #[serde(default)]
+    pub static_peers: Vec<StaticPeerConfig>,
 }
 
 /// Server capacity and behavior configuration.

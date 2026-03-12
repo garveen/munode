@@ -255,6 +255,7 @@ impl RpcHandler {
             port: params.port,
             capacity: params.capacity,
             region: params.region.clone(),
+            relay_port: params.relay_port.filter(|&p| p > 0),
         };
 
         info!(
@@ -294,9 +295,14 @@ impl RpcHandler {
             error: None,
         };
 
-        Ok(self.make_response_packet(request_id, "edge.register", |r| {
+        let response = self.make_response_packet(request_id, "edge.register", |r| {
             r.edge_register = Some(result);
-        }))
+        });
+
+        // Push route tables to all edges so new edge and existing edges see each other
+        self.push_route_tables_to_all().await;
+
+        Ok(response)
     }
 
     async fn handle_allocate_session_id(
@@ -2361,6 +2367,40 @@ impl RpcHandler {
         }
     }
 
+    /// Compute and push route tables to all connected edges.
+    async fn push_route_tables_to_all(&self) {
+        // Hold the topology read lock only for the Dijkstra computations; drop before
+        // sending (which involves I/O and may block).  Multiple concurrent readers are
+        // fine since this is a shared read lock — only topology writers are briefly
+        // paused.  For typical cluster sizes (2–20 edges) the total computation time
+        // is well under a millisecond.
+        let edge_data: Vec<(u32, Vec<(u32, u32, Option<u32>, f32)>)> = {
+            let topo = self.state.topology.read().await;
+            topo.get_all_edges()
+                .iter()
+                .map(|e| (e.edge_id, topo.compute_route_table(e.edge_id)))
+                .collect()
+        }; // lock released here
+
+        for (edge_id, routes) in edge_data {
+            if routes.is_empty() {
+                continue;
+            }
+            self.send_notification_to_edge(edge_id, "hub.routeTableUpdate", |n| {
+                n.route_table_update = Some(HubRouteTableUpdateParams {
+                    routes: routes.into_iter().map(|(target, rtype, nhop, cost)| {
+                        HubRouteEntryProto {
+                            target_edge_id: target,
+                            route_type: rtype,
+                            next_hop: nhop,
+                            cost,
+                        }
+                    }).collect(),
+                });
+            }).await;
+        }
+    }
+
     fn make_error_packet(
         &self,
         request_id: &str,
@@ -2610,6 +2650,12 @@ impl RpcHandler {
             connected_peers: std::collections::HashSet::new(),
         };
 
+        // Snapshot of edge registrations for relay_port lookup
+        let reg_snapshot: std::collections::HashMap<u32, Option<u32>> = {
+            let reg = self.state.edge_registry.read().await;
+            reg.iter().map(|(id, r)| (*id, r.relay_port)).collect()
+        };
+
         let peers_snapshot: Vec<PeerInfoProto> = {
             let mut topo = self.state.topology.write().await;
             topo.add_edge(topo_edge)
@@ -2621,9 +2667,13 @@ impl RpcHandler {
                     port: p.port,
                     voice_port: p.voice_port,
                     cert_hash: None,
+                    relay_port: reg_snapshot.get(&p.edge_id).and_then(|pp| *pp),
                 })
                 .collect()
         };
+
+        // Relay port for the joining edge
+        let joining_relay_port = reg_snapshot.get(&join_edge_id).and_then(|pp| *pp);
 
         // Notify existing edges about the new peer
         let notification = TypedRpcNotification {
@@ -2634,6 +2684,7 @@ impl RpcHandler {
                 name: params.name.clone(),
                 host: params.host.clone(),
                 voice_port: params.voice_port,
+                relay_port: joining_relay_port,
             }),
             ..Default::default()
         };
@@ -2752,6 +2803,8 @@ impl RpcHandler {
             let mut topo = self.state.topology.write().await;
             topo.report_quality(params.edge_id, params.target_edge_id, quality);
         }
+
+        self.push_route_tables_to_all().await;
 
         Ok(self.make_response_packet(request_id, "edge.reportQuality", |r| {
             r.edge_report_quality = Some(EdgeReportQualityResult { success: true });

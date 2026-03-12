@@ -3,6 +3,7 @@ pub mod client;
 pub mod crypto;
 pub mod handler;
 pub mod hub_client;
+pub mod relay_server;
 pub mod server;
 pub mod state;
 pub mod tls;

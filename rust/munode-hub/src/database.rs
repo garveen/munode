@@ -308,6 +308,145 @@ impl Database {
         // Create blob storage tables
         Self::init_blob_tables(&conn)?;
 
+        // Create schema_versions table (used by the migrate subcommand)
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_versions (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at INTEGER NOT NULL DEFAULT 0
+            );"
+        )?;
+
+        Ok(())
+    }
+
+    // ── Migration tool support ─────────────────────────────────────────────
+
+    /// Returns the highest applied schema version, or 0 if no migrations recorded.
+    pub fn schema_version(&self) -> Result<u32> {
+        let conn = self.conn.lock().unwrap();
+        let version: u32 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_versions",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        Ok(version)
+    }
+
+    /// Return all applied migrations as `(version, description, applied_at_unix_secs)`.
+    pub fn list_migrations(&self) -> Result<Vec<(u32, String, i64)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT version, description, applied_at FROM schema_versions ORDER BY version"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, u32>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// Record a migration as applied.
+    fn record_migration(&self, conn: &rusqlite::Connection, version: u32, description: &str) -> Result<()> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_versions (version, description, applied_at) VALUES (?1, ?2, ?3)",
+            params![version, description, now],
+        )?;
+        Ok(())
+    }
+
+    /// Apply all pending migrations (those with version > current schema version).
+    ///
+    /// Returns the list of applied migrations as `(version, description)`.
+    pub fn apply_migrations(&self) -> Result<Vec<(u32, String)>> {
+        let current = self.schema_version()?;
+        let all_migrations = Self::defined_migrations();
+        let pending: Vec<_> = all_migrations
+            .into_iter()
+            .filter(|(v, _, _)| *v > current)
+            .collect();
+
+        if pending.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let conn = self.conn.lock().unwrap();
+        let mut applied = Vec::new();
+        for (version, description, sql) in &pending {
+            conn.execute_batch(sql)
+                .with_context(|| format!("Migration v{} ({}) failed", version, description))?;
+            self.record_migration(&conn, *version, description)?;
+            applied.push((*version, description.to_string()));
+            info!("Applied migration v{}: {}", version, description);
+        }
+        Ok(applied)
+    }
+
+    /// The canonical list of all database migrations.
+    ///
+    /// Each entry is `(version, description, sql)`.  Add new entries at the end.
+    /// Versions must be monotonically increasing.
+    fn defined_migrations() -> Vec<(u32, &'static str, &'static str)> {
+        vec![
+            (
+                1,
+                "Add ext_users table for external authentication",
+                "CREATE TABLE IF NOT EXISTS ext_users (
+                    id INTEGER PRIMARY KEY,
+                    username TEXT NOT NULL UNIQUE
+                );",
+            ),
+            (
+                2,
+                "Add user_blobs table for avatar/comment storage",
+                "CREATE TABLE IF NOT EXISTS user_blobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    blob_type TEXT NOT NULL,
+                    hash TEXT NOT NULL,
+                    UNIQUE(user_id, blob_type)
+                );",
+            ),
+            (
+                3,
+                "Add bans table with full schema",
+                "CREATE TABLE IF NOT EXISTS bans (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    address BLOB NOT NULL,
+                    mask INTEGER NOT NULL DEFAULT 128,
+                    name TEXT NOT NULL DEFAULT '',
+                    cert_hash TEXT NOT NULL DEFAULT '',
+                    reason TEXT NOT NULL DEFAULT '',
+                    start_time INTEGER NOT NULL DEFAULT 0,
+                    duration INTEGER NOT NULL DEFAULT 0
+                );",
+            ),
+            (
+                4,
+                "Add schema_versions table",
+                "CREATE TABLE IF NOT EXISTS schema_versions (
+                    version INTEGER PRIMARY KEY,
+                    description TEXT NOT NULL,
+                    applied_at INTEGER NOT NULL DEFAULT 0
+                );",
+            ),
+        ]
+    }
+
+    // ── Backup support ─────────────────────────────────────────────────────
+
+    /// Create an online backup of the database to `dest_path` using SQLite's
+    /// backup API (via VACUUM INTO, which produces a clean, compacted copy).
+    pub fn backup_to(&self, dest_path: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch(&format!("VACUUM INTO '{}'", dest_path.replace('\'', "''")))?;
         Ok(())
     }
 

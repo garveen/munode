@@ -947,6 +947,20 @@ message TypedRPCResponse {
   optional BlobSetUserCommentResult blob_set_user_comment = 37;
 }
 
+// ---------------------------------------------------------------------------
+// hub.routeTableUpdate - Hub pushes quality-aware route table to Edge
+// ---------------------------------------------------------------------------
+message HubRouteEntryProto {
+  required uint32 target_edge_id = 1;
+  required uint32 route_type = 2;    // 0=direct, 1=relay via next_hop, 2=hub_tcp
+  optional uint32 next_hop = 3;
+  required float cost = 4;
+}
+
+message HubRouteTableUpdateParams {
+  repeated HubRouteEntryProto routes = 1;
+}
+
 /**
  * TypedRPCNotification - 类型安全的 RPC 通知
  */
@@ -981,7 +995,8 @@ message TypedRPCNotification {
   optional HubTextMessageForwardParams text_message_forward = 32;
   optional HubClusterPeerJoinedParams cluster_peer_joined = 33;
   optional HubClusterPeerLeftParams cluster_peer_left = 34;
-  
+  optional HubRouteTableUpdateParams route_table_update = 36;
+
   // For unknown notification types, store params as JSON string
   optional string unknown_params_json = 99;
 }

@@ -717,6 +717,11 @@ pub struct EdgeRegisterParams {
     pub challenge: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "9")]
     pub challenge_response: ::core::option::Option<::prost::alloc::string::String>,
+    /// Optional proxy server port for peer-to-peer control relay.
+    /// When non-zero, this Edge can act as a transparent WebSocket proxy for
+    /// other Edges that cannot reach the Hub directly.
+    #[prost(uint32, optional, tag = "10")]
+    pub relay_port: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeRegisterResult {
@@ -1308,6 +1313,9 @@ pub struct PeerInfoProto {
     pub voice_port: u32,
     #[prost(string, optional, tag = "6")]
     pub cert_hash: ::core::option::Option<::prost::alloc::string::String>,
+    /// Optional proxy server port.  Non-zero means this peer supports proxy relay.
+    #[prost(uint32, optional, tag = "7")]
+    pub relay_port: ::core::option::Option<u32>,
 }
 /// ---------------------------------------------------------------------------
 /// edge.joinComplete - Edge 完成集群加入
@@ -1908,6 +1916,10 @@ pub struct HubClusterPeerJoinedParams {
     pub host: ::prost::alloc::string::String,
     #[prost(uint32, required, tag = "4")]
     pub voice_port: u32,
+    /// Optional proxy server port. When non-zero, this peer can relay
+    /// control-channel traffic for Edges that cannot reach Hub directly.
+    #[prost(uint32, optional, tag = "5")]
+    pub relay_port: ::core::option::Option<u32>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct HubClusterPeerLeftParams {
@@ -1922,6 +1934,28 @@ pub struct HubShutdownRequestParams {
     /// Human-readable reason for the shutdown request.
     #[prost(string, required, tag = "1")]
     pub reason: ::prost::alloc::string::String,
+}
+/// ---------------------------------------------------------------------------
+/// hub.routeTableUpdate - Hub pushes quality-aware route table to Edge
+/// ---------------------------------------------------------------------------
+/// Hub route entry (route_type: 0=direct, 1=relay via next_hop, 2=hub_tcp)
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HubRouteEntryProto {
+    #[prost(uint32, required, tag = "1")]
+    pub target_edge_id: u32,
+    #[prost(uint32, required, tag = "2")]
+    pub route_type: u32,
+    #[prost(uint32, optional, tag = "3")]
+    pub next_hop: ::core::option::Option<u32>,
+    #[prost(float, required, tag = "4")]
+    pub cost: f32,
+}
+
+/// hub.routeTableUpdate params.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HubRouteTableUpdateParams {
+    #[prost(message, repeated, tag = "1")]
+    pub routes: ::prost::alloc::vec::Vec<HubRouteEntryProto>,
 }
 /// ---------------------------------------------------------------------------
 /// hub.pluginDataBroadcast - Hub 广播插件数据到 Edge
@@ -2172,6 +2206,9 @@ pub struct TypedRpcNotification {
     /// hub.shutdownRequest - Hub requests Edge to gracefully shut down (cluster partition)
     #[prost(message, optional, tag = "35")]
     pub shutdown_request: ::core::option::Option<HubShutdownRequestParams>,
+    /// hub.routeTableUpdate - Hub pushes quality-aware route table to Edge
+    #[prost(message, optional, tag = "36")]
+    pub route_table_update: ::core::option::Option<HubRouteTableUpdateParams>,
     /// For unknown notification types, store params as JSON string
     #[prost(string, optional, tag = "99")]
     pub unknown_params_json: ::core::option::Option<::prost::alloc::string::String>,

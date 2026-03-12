@@ -97,6 +97,21 @@ impl EdgeServer {
             }
         });
 
+        // Always start the control-relay server (every Edge acts as a relay for peers)
+        let relay_port = if self.config.hub_server.relay_port > 0 {
+            self.config.hub_server.relay_port
+        } else {
+            edge_port as u16 + 2
+        };
+        {
+            let hub_host = self.config.hub_server.host.clone();
+            let hub_port = self.config.hub_server.control_port;
+            info!("Starting control relay server on port {}", relay_port);
+            tokio::spawn(async move {
+                crate::relay_server::run_relay_server(relay_port, hub_host, hub_port).await;
+            });
+        }
+
         // Start TLS server
         let listen_addr: SocketAddr = format!("{}:{}", self.config.network.host, self.config.network.port)
             .parse()?;

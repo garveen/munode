@@ -7,11 +7,18 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use crate::channel_manager::ChannelManager;
 use crate::client::ClientManager;
 
-/// Information about a peer Edge node for direct UDP routing.
+/// Information about a peer Edge node.
 #[derive(Debug, Clone)]
 pub struct PeerEdgeInfo {
     /// Edge-to-Edge UDP endpoint (dedicated `edge_port`).
     pub udp_addr: SocketAddr,
+    /// Hostname of the peer Edge (same as used for UDP routing).
+    pub host: String,
+    /// Control-relay port of the peer Edge.
+    /// Every Edge exposes a relay server on this port; it transparently
+    /// forwards WebSocket traffic to Hub on behalf of Edges that cannot reach
+    /// Hub directly.  `None` means the relay port was not yet advertised.
+    pub relay_port: Option<u16>,
 }
 
 /// Registry of known peer Edges, populated from `hub.peerJoined` notifications.
@@ -31,6 +38,26 @@ impl PeerRegistry {
 
     pub fn get(&self, edge_id: u32) -> Option<&PeerEdgeInfo> {
         self.peers.get(&edge_id)
+    }
+
+    /// Collect all peers that have a relay_port advertised.
+    /// Returns a snapshot `Vec<(peer_id, host, relay_port)>` so the caller
+    /// does not need to hold the lock while iterating.
+    pub fn relay_peers(&self) -> Vec<(u32, String, u16)> {
+        self.peers
+            .iter()
+            .filter_map(|(id, info)| {
+                info.relay_port.map(|p| (*id, info.host.clone(), p))
+            })
+            .collect()
+    }
+
+    /// Returns all known peer edge IDs and their UDP addresses (for voice relay).
+    pub fn all_udp_peers(&self) -> Vec<(u32, SocketAddr)> {
+        self.peers
+            .iter()
+            .map(|(id, info)| (*id, info.udp_addr))
+            .collect()
     }
 }
 
@@ -113,6 +140,17 @@ pub enum EdgeEvent {
     },
 }
 
+/// Route decision for reaching a target Edge, derived from Hub's route table.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RouteDecision {
+    /// Send direct UDP to the target Edge.
+    Direct,
+    /// Send via intermediate relay Edge.
+    RelayVia { relay_edge_id: u32 },
+    /// Use Hub TCP relay (no quality UDP path).
+    HubTcp,
+}
+
 /// Shared state accessible by all components of the Edge server.
 pub struct EdgeState {
     /// Our assigned edge ID (from Hub registration).
@@ -149,6 +187,8 @@ pub struct EdgeState {
     /// session_id -> set of channel IDs the user has Enter permission on.
     /// Used for fast ninja visibility checks without Hub round-trips.
     pub ninja_visible_to: tokio::sync::RwLock<HashMap<u32, std::collections::HashSet<u32>>>,
+    /// Route table from Hub. Maps target_edge_id → RouteDecision.
+    pub route_table: tokio::sync::RwLock<std::collections::HashMap<u32, RouteDecision>>,
 }
 
 impl EdgeState {
@@ -172,6 +212,7 @@ impl EdgeState {
             listeners_per_channel: 0,
             ninja_channels: tokio::sync::RwLock::new(vec![]),
             ninja_visible_to: tokio::sync::RwLock::new(HashMap::new()),
+            route_table: tokio::sync::RwLock::new(std::collections::HashMap::new()),
         })
     }
 
@@ -199,6 +240,7 @@ impl EdgeState {
             listeners_per_channel,
             ninja_channels: tokio::sync::RwLock::new(vec![]),
             ninja_visible_to: tokio::sync::RwLock::new(HashMap::new()),
+            route_table: tokio::sync::RwLock::new(std::collections::HashMap::new()),
         })
     }
 

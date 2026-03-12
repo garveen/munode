@@ -4,6 +4,10 @@ use std::time::Instant;
 
 use tracing::{debug, info, warn};
 
+/// Weight applied to packet loss (0.0–1.0) when computing link cost.
+/// A value of 500.0 means 100% packet loss is penalised as 500ms extra RTT.
+const PACKET_LOSS_PENALTY_MS: f64 = 500.0;
+
 /// Info about a connected Edge in the cluster topology.
 #[derive(Debug, Clone)]
 pub struct TopologyEdge {
@@ -141,7 +145,7 @@ impl TopologyManager {
         }
 
         // Use edge quality data to build graph weights
-        // Weight = rtt_ms + packet_loss * 500.0 (penalise lossy links)
+        // Weight = rtt_ms + packet_loss * PACKET_LOSS_PENALTY_MS (penalise lossy links)
         let mut dist: HashMap<u32, f64> = self.edges.keys().map(|&id| (id, f64::INFINITY)).collect();
         let mut prev: HashMap<u32, u32> = HashMap::new();
         // BinaryHeap<Reverse<(ordered_float_bits, edge_id)>>
@@ -165,7 +169,7 @@ impl TopologyManager {
                     continue;
                 };
 
-                let link_weight = quality.rtt_ms + quality.packet_loss * 500.0;
+                let link_weight = quality.rtt_ms + quality.packet_loss * PACKET_LOSS_PENALTY_MS;
                 let next_cost = cost + link_weight;
 
                 if next_cost < *dist.get(&neighbor).unwrap_or(&f64::INFINITY) {
@@ -283,5 +287,56 @@ impl TopologyManager {
     /// Get the raw link quality map for read-only inspection (e.g., Web API).
     pub fn get_link_qualities(&self) -> &HashMap<(u32, u32), LinkQuality> {
         &self.link_quality
+    }
+
+    /// Compute route table for an Edge.
+    /// Returns: Vec<(target_edge_id, route_type, next_hop, cost)>
+    ///   route_type 0=direct, 1=relay via next_hop, 2=hub_tcp
+    pub fn compute_route_table(&self, for_edge_id: u32) -> Vec<(u32, u32, Option<u32>, f32)> {
+        let mut result = Vec::new();
+        let all_edge_ids: Vec<u32> = self.edges.keys().cloned().collect();
+
+        for target_id in all_edge_ids {
+            if target_id == for_edge_id {
+                continue;
+            }
+
+            let path = self.find_best_path(for_edge_id, target_id);
+
+            match path.len() {
+                0 | 1 => {
+                    // No path data — default direct with fallback cost
+                    result.push((target_id, 0, None, 9999.0));
+                }
+                2 => {
+                    // Direct route
+                    let cost = self.link_quality.get(&(for_edge_id, target_id))
+                        .map(|q| (q.rtt_ms + q.packet_loss * PACKET_LOSS_PENALTY_MS) as f32)
+                        .unwrap_or(100.0);
+                    result.push((target_id, 0, None, cost));
+                }
+                _ => {
+                    // Relay via path[1]
+                    let relay_id = path[1];
+                    let cost = self.path_cost(&path) as f32;
+                    result.push((target_id, 1, Some(relay_id), cost));
+                }
+            }
+        }
+        result
+    }
+
+    fn path_cost(&self, path: &[u32]) -> f64 {
+        let mut total = 0.0f64;
+        for i in 0..path.len().saturating_sub(1) {
+            let a = path[i];
+            let b = path[i + 1];
+            let cost = self.link_quality.get(&(a, b))
+                .or_else(|| self.link_quality.get(&(b, a)))
+                .map(|q| q.rtt_ms + q.packet_loss * PACKET_LOSS_PENALTY_MS)
+                .unwrap_or(100.0);
+            total += cost;
+        }
+        total
     }
 }

@@ -290,7 +290,7 @@ N/A - 不计划实现
 - [x] 无权限用户看不到忍者频道用户（初始同步时已过滤）
 - [x] 有权限用户正常看到（`ninja_visible_to` 缓存中有 channel_id → 正常显示）
 - [x] 用户进出忍者频道测试（`channel-ninja.test.ts`：Rust 专项 2 个测试通过）
-- [ ] 音频路由隔离测试（留待后续）
+- [ ] 音频路由隔离测试 ❌ **不实现**：忍者频道的用户可见性已隔离；UDP 层不区分频道来源，音频隔离需要在语音路由层额外过滤，工作量大且当前无需求
 
 #### 依赖
 - ACL 系统（已实现）
@@ -324,7 +324,7 @@ N/A - 不计划实现
 - [x] 跨频道音频接收测试（`listening-channel.test.ts`）
 - [x] 监听者数量限制测试（`listening-channel.test.ts`：per_user=2 超出拒绝；per_channel=1 第二人拒绝）
 - [x] 音量调整广播测试（`listening-channel.test.ts`：设置 0.5x 并验证 peer 收到）
-- [ ] 权限检查测试（需要 ACL 设置拒绝 LISTEN 权限的测试场景）
+- [x] 权限检查测试（`acl.test.ts`：'should deny second user from listening to restricted channel'）
 
 #### 依赖
 无
@@ -337,13 +337,14 @@ N/A - 不计划实现
 ### 11. 语音路由策略配置
 
 **优先级**: P1  
-**状态**: ✅ 已完成（基础配置）
+**状态**: ✅ 已完成（含质量感知智能路由）
 
 #### 功能描述
 Edge 间语音路由的详细配置：
 - 路由策略（直连/中转/混合）
 - Hub 中继策略控制
 - 故障转移
+- **质量感知智能路由**：Hub 收集质量数据并推送最优路由表到 Edge
 
 #### 实现情况
 Hub 侧 `HubVoiceRoutingConfig`（`voice_routing` 配置段）：
@@ -367,13 +368,19 @@ Edge 侧 `EdgeVoiceRoutingConfig`（`voice_routing` 配置段）：
 - [x] `direct_only` 策略禁用 Hub 中继，仅直连 UDP
 - [x] Hub 侧 `enable_relay=false` 时拒绝 `edge.relayVoiceViaTcp` RPC
 - [x] `EdgeState.allow_hub_relay` / `allow_direct_udp` 标志位
-- [ ] 质量指标收集（延迟/丢包实时监测）- 留待后续实现
-- [ ] 动态路由切换（基于实时质量）- 留待后续实现
+- [x] **质量指标收集**：UDP 探针（ping/pong，PROBE_MAGIC=0xC2,0xDE），每 10s 测量 RTT 和丢包率
+- [x] **质量上报**：`edge.reportQuality` RPC，每 30s 上报到 Hub
+- [x] **Hub 路由计算**：`compute_route_table()` 用 Dijkstra 计算最优路由（direct/relay/hub_tcp）
+- [x] **路由表推送**：Hub 在质量更新和 Edge 注册后推送 `hub.routeTableUpdate` 通知
+- [x] **路由表应用**：Edge 按 `RouteDecision`（Direct/RelayVia/HubTcp）路由语音包
+- [x] **协议**：新增 `HubRouteEntryProto`、`HubRouteTableUpdateParams`（protobuf tag=36）
 
 #### 集成测试
 - [x] 基本语音路由测试（已有）
 - [x] 跨 Edge 语音测试（已有）
-- [ ] `connection_strategy=tcp_only` 专项测试 - 留待后续实现
+- [x] `connection_strategy=tcp_only` 专项测试（`voice-routing-strategy.test.ts`）
+- [x] `connection_strategy=direct_only` 专项测试（`voice-routing-strategy.test.ts`）
+- [x] `connection_strategy=auto_fallback` 专项测试（`voice-routing-strategy.test.ts`）
 
 #### 依赖
 无
@@ -381,6 +388,7 @@ Edge 侧 `EdgeVoiceRoutingConfig`（`voice_routing` 配置段）：
 #### 参考
 - TypeScript: `voice_routing` config section
 - 文档: `docs/Edge*.md`
+- Rust 详细文档: `rust/docs/voice-routing-and-control-relay.md`
 
 ---
 
@@ -416,8 +424,8 @@ Hub 检测到 Edge 间连接断裂时，自动识别形成的孤立子集群，�
 #### 集成测试
 - [x] Edge 连接正常运行测试（`cluster-partition.test.ts`）
 - [x] Edge 断开优雅处理测试（`cluster-partition.test.ts`）
-- [ ] 两个 Edge 断开连接触发仲裁测试（需要可控制的网络断开）
-- [ ] 分割检测后最小子集群收到关停请求测试
+- [ ] 两个 Edge 断开连接触发仲裁测试 ❌ **不实现**：需要可控制的进程间网络断开基础设施（如 iptables/tc），测试基础设施成本高
+- [ ] 分割检测后最小子集群收到关停请求测试 ❌ **不实现**：同上
 
 #### 依赖
 - 无
@@ -433,7 +441,7 @@ Hub 检测到 Edge 间连接断裂时，自动识别形成的孤立子集群，�
 ### 1. 详细的语音路由配置
 
 **优先级**: P1  
-**状态**: ✅ 已完成（基础配置）
+**状态**: ✅ 已完成（含质量感知智能路由）
 
 #### 功能描述
 Edge 端的语音路由配置：
@@ -452,13 +460,14 @@ Edge 端的语音路由配置：
 - [x] 向后兼容 `server.disable_hub_relay` 配置项
 - [x] `EdgeState.allow_hub_relay` / `allow_direct_udp` 标志位
 - [x] UDP 服务器（`udp.rs`）和 TCP 服务器（`server.rs`）均遵循策略
-- [ ] 质量探测和指标（实时 RTT/丢包监测）- 留待后续实现
-- [ ] 自动降级触发（基于实时质量）- 留待后续实现
+- [x] **质量探测**：UDP ping/pong（`PROBE_MAGIC=[0xC2,0xDE]`），每 10s 探测 RTT 和丢包率
+- [x] **智能路由决策**：按 Hub 推送的 `RouteDecision`（Direct/RelayVia/HubTcp）路由语音包
+- [x] **`edge.reportQuality` RPC**：每 30s 上报质量数据到 Hub
 
 #### 集成测试
 - [x] 基本 UDP 路由测试（已有）
 - [x] TCP 降级测试（已有）
-- [ ] `connection_strategy` 专项集成测试 - 留待后续实现
+- [x] `connection_strategy` 专项集成测试（`voice-routing-strategy.test.ts`：tcp_only / direct_only / auto_fallback）
 
 #### 依赖
 - Hub 语音路由配置（见上）
@@ -466,6 +475,7 @@ Edge 端的语音路由配置：
 #### 参考
 - TypeScript: `voice_routing` config in Edge
 - 文档: `docs/Edge语音路由实现总结.md`
+- Rust 详细文档: `rust/docs/voice-routing-and-control-relay.md`
 
 ---
 
@@ -486,7 +496,7 @@ Edge 端的语音路由配置：
 - [x] 加载 GeoLite2 数据库（`GeoIpService::new()` 支持 City/Country MMDB 格式）
 - [x] 在用户连接时查询位置（`handle_authenticate_user` 中查询并记录地理位置）
 - [x] 存储位置信息（通过日志记录 country/city；配置 `geoip.log_location`）
-- [ ] 可选：基于位置的 Edge 分配建议（待后续实现）
+- [ ] 基于位置的 Edge 分配建议 ❌ **不实现**：需要复杂的 Hub 选路逻辑，当前部署规模下实用性有限
 
 #### 集成测试
 - [x] GeoIP 数据库加载测试（`geoip.rs` 单元测试：无 DB、无效路径均正确处理）
@@ -529,8 +539,8 @@ Edge 到 Hub 的连接池：
 - [x] 主连接处理通知，辅助连接不处理（避免重复）
 
 #### 集成测试
-- 现有集成测试在 `pool_size=1`（默认）下全部通过
-- 池化功能在单连接模式下向后兼容
+- [x] `pool_size=1` 向后兼容性验证（`hub-connection-pool.test.ts`）
+- [x] `pool_size=3` 多 slot 连接池功能测试（`hub-connection-pool.test.ts`：单/双 Edge 连接、多用户并发认证、跨 Edge 用户可见性、频道操作、用户加入离开事件传播）
 
 #### 依赖
 无
@@ -572,37 +582,68 @@ Edge 向客户端发送建议：
 ### 5. 经由 Peer Edge 中继控制信道
 
 **优先级**: P2  
-**状态**: 📋 计划中（TS 和 Rust 均未实现）
+**状态**: ✅ 已完成（核心实现）
 
 #### 功能描述
-当 Edge 无法直连 Hub 时（网络分区、临时故障），可借助集群内其他 Edge 作为中继，将控制信道消息代理到 Hub。  
-**注意**：该功能仅适用于控制信道（RPC/通知），不用于语音转发（语音已有 Hub TCP 中继）。
+当 Edge 无法直连 Hub 时（网络分区、临时故障），可借助集群内其他 Edge 作为中继，将控制信道消息转发到 Hub。
+**注意**：该功能仅适用于控制信道（RPC/通知），不用于语音转发（语音有单独的三跳 UDP 中继）。
 
-#### 设计要点
-- Edge A 直连 Hub 失败后，向已知 Peer Edge B 请求代理转发
-- Edge B 将控制消息转发给 Hub，并将响应回传给 Edge A
-- 需要在 Peer Edge 之间建立专用的控制代理通道（区别于语音路由通道）
-- 代理链路最多一跳（Edge → Peer Edge → Hub），避免环路
-- Hub 侧需要识别代理来源，正确记录原始 Edge ID
+#### 设计文档
+- `rust/docs/peer-proxy-design.md` — 详细的架构设计、协议变更、实现说明
+
+#### 实现方式
+**自动路由**（类似语音路由机制）：每个 Edge 自动启动 relay 服务器（无需任何 opt-in 标志），监听 `relay_port`（默认 `edge_port + 2`）。当 Edge 无法直连 Hub 时：
+1. 先尝试静态配置的 peers（`hub_server.static_peers`，用于 Hub 完全不可达时的启动引导）
+2. 再尝试动态发现的 peers（通过 `hub.peerJoined` 广播接收到的节点）
+
+Hub 侧无需任何修改（relay 完全透明）。
+
+#### 与语音路由类比
+| 语音路由 | 控制信道中继 |
+|---|---|
+| 直连 UDP | 直连 Hub WebSocket |
+| Hub TCP 中继 | Peer Edge relay（透明转发） |
+| 三跳 UDP relay（A→B→C） | 静态 peer + 动态 peer fallback |
+| `PeerRegistry` 存储 UDP 地址 | `PeerRegistry` 存储 relay_port |
 
 #### 实现任务
-- [ ] 设计 Edge 间控制代理协议（新 RPC 消息类型）
-- [ ] Edge: 实现检测 Hub 直连失败并发起代理请求的逻辑
-- [ ] Edge: 实现作为代理节点接收并转发控制消息的逻辑
-- [ ] Hub: 识别代理转发来源，正确处理 Edge ID 映射
-- [ ] 配置项：`hub_server.allow_peer_proxy` - 允许作为代理节点
-- [ ] 代理链路的超时和健康检查
-- [ ] 直连恢复后自动切回直连
+- [x] 设计 Edge 间控制中继协议（透明 WebSocket relay，无需新 RPC 消息类型）
+- [x] `EdgeRegisterParams` 添加 `relay_port` 字段（tag=10），Hub 注册时保存并广播
+- [x] `HubClusterPeerJoinedParams` 添加 `relay_port` 字段（tag=5），`hub.peerJoined` 通知携带
+- [x] `PeerInfoProto` 添加 `relay_port` 字段（tag=7），`edge.join` 响应携带已有 peer 的 relay 端口
+- [x] Edge: 实现 relay 服务器（`relay_server.rs`），接受 WebSocket 连接并中继到 Hub
+- [x] Edge: **每个 Edge 自动启动** relay 服务器（`server.rs`，无需 `allow_peer_proxy` 标志）
+- [x] Edge: 注册时携带 `relay_port`，接收 `hub.peerJoined` 时存储 peer 的 `relay_port`
+- [x] Edge: `run_single_slot` 中增加中继回退逻辑（3 次直连失败后依次尝试 static_peers 和 dynamic peers）
+- [x] 配置项：`hub_server.relay_port` — relay 监听端口（0 = 自动 `edge_port+2`）
+- [x] 配置项：`hub_server.static_peers` — 静态 peer 列表（`[{host, relay_port}]`），用于 Hub 完全不可达时的启动
+- [x] `EdgeState.PeerEdgeInfo` 添加 `host` 和 `relay_port` 字段（替代旧的 `proxy_port`）
+- [x] `PeerRegistry.relay_peers()` 方法，返回有 relay_port 的 peer 列表
+- [x] `PeerRegistry.all_udp_peers()` 方法，用于语音三跳 relay 候选选择
+- [x] relay 连接建立后正常执行 register/fullSync/joinCluster 流程
+- [ ] relay 链路的超时和健康检查（留待后续实现）
+- [x] 直连恢复后自动切回直连（每轮先尝试直连，逻辑已在 `run_single_slot` 中）
+
+#### 语音三跳 relay 路由
+- [x] 实现 `RELAY_MAGIC` 常量（`[0xC1, 0xDE]`），区分普通 edge 包和 relay 转发包
+- [x] `route_voice()` 新增第三条路径：直连 UDP 失败 → 尝试三跳 relay（通过任意已知 peer）→ Hub TCP 兜底
+- [x] `try_relay_via_peer()` — 遍历 PeerRegistry 中的所有已知 peer 作为中继节点
+- [x] `handle_relay_packet()` — 接收 relay 包并转发到目标 Edge
 
 #### 集成测试
-- [ ] Edge 无法直连 Hub 时通过 Peer 代理注册测试
-- [ ] 代理模式下控制消息（用户加入/离开/频道操作）正确传递测试
-- [ ] 直连恢复后自动切回直连测试
-- [ ] 代理节点断开时的降级处理测试
+- [x] `peer-proxy.test.ts` — diagnose 总是显示 control_relay: enabled 及 relay_port（4 个配置测试）
+- [x] `peer-proxy.test.ts` — relay 服务器监听端口 TCP 可达性测试
+- [x] `peer-proxy.test.ts` — 集群以 relay_port 配置正常启动测试
+- [ ] Edge 无法直连 Hub 时通过 static peer relay 完成 register/auth 测试（需要可控网络断开）
+- [ ] 三跳语音 relay 功能测试（需要特殊测试拓扑）
 
 #### 依赖
 - Hub 连接池（Edge #3）
 - Edge 间连接可靠性机制
+
+#### 参考
+- 设计文档: `rust/docs/peer-proxy-design.md`
+- 实现文档: `rust/docs/voice-routing-and-control-relay.md`
 
 ---
 
@@ -622,43 +663,48 @@ Edge 向客户端发送建议：
 - [ ] 基准测试套件
 
 #### 测试
-- [ ] 性能基准测试
-- [ ] 负载测试
-- [ ] 内存泄漏测试
-- [ ] 并发连接测试
+- [ ] 性能基准测试（❌ 不实现：当前优先级不足）
+- [ ] 负载测试（❌ 不实现：当前优先级不足）
+- [ ] 内存泄漏测试（❌ 不实现：当前优先级不足）
+- [ ] 并发连接测试（❌ 不实现：当前优先级不足）
 
 ---
 
 ### 2. 监控和可观测性
 
 **优先级**: P2  
-**状态**: 🚧 进行中（基础实现）
+**状态**: ✅ 基础实现已完成（分布式追踪不实现）
 
 #### 任务
 - [x] Prometheus metrics 导出（`GET /metrics`：`connected_edges`、`total_sessions`、`total_channels`、`uptime_seconds`）
 - [x] 健康检查端点（`GET /api/health`）
 - [x] 详细的结构化日志（`log_format = "json"` 配置项，支持 JSON 格式化输出；`init_logging_with_format()` 函数）
-- [ ] 分布式追踪（OpenTelemetry）
-- [ ] 更多性能指标（每 Edge 语音流量、RPC 延迟等）
+- [x] 更多性能指标（每 Edge 标签化指标：`edge_user_count`、`edge_channel_count`、`edge_online`、`edge_uptime_seconds`，附 `edge_id` / `edge_name` 标签）
+- [ ] 分布式追踪（OpenTelemetry）❌ **不实现**：引入 OTel SDK 属于重量级依赖，与当前架构优先级不符；结构化 JSON 日志已满足可观测性需求
 
 #### 测试
 - [x] Metrics 端点测试（`web-api.test.ts`：格式验证、edge count ≥ 1）
+- [x] 每 Edge 标签化指标测试（`web-api.test.ts`：per-edge 标签存在性、edge_id/edge_name 格式、online=1 验证）
 - [x] 健康检查测试（`web-api.test.ts`）
-- [ ] 日志格式测试
+- [x] 日志格式测试（`log-format.test.ts`：Hub/Edge JSON 日志逐行验证、文本格式检测、startup 结构化字段验证）
 
 ---
 
 ### 3. 运维工具
 
 **优先级**: P2  
-**状态**: 📋 计划中
+**状态**: ✅ 已完成
 
 #### 任务
-- [ ] 数据库迁移工具
-- [ ] 配置验证工具
-- [ ] 备份/恢复工具
-- [ ] 诊断和调试工具
-- [ ] 批量管理脚本
+- [x] 数据库迁移工具（`migrate [config]` 子命令：查看当前版本、应用待迁移项、记录版本历史到 `schema_versions` 表）
+- [x] 配置验证工具（`validate-config [path]` 子命令，Hub/Edge 均已实现）
+- [x] 备份工具（`backup <config> <dest>` 子命令：VACUUM INTO 备份 DB、递归复制 blobs、写入 manifest.json）
+- [x] 诊断工具（`diagnose [path]` 子命令，Hub/Edge 均已实现）：配置解析验证、文件存在性检查（DB/blob/TLS证书/Lua脚本/GeoIP DB）、Hub TCP 可达性探测、配置摘要打印
+- [x] 批量管理脚本（`admin <config> <cmd>` 子命令：`list-users`、`list-channels`、`list-bans`、`cleanup-bans`、`schema-version`）
+
+#### 测试
+- [x] `diagnose.test.ts` — Hub/Edge diagnose 全覆盖（13 个测试）
+- [x] `hub-admin.test.ts` — migrate、backup、admin 全覆盖（16 个测试）
 
 ---
 
@@ -670,13 +716,13 @@ Edge 向客户端发送建议：
 |---------|---------|------|
 | 认证（本地数据库） | ✅ | tests/integration/suites/auth.test.ts |
 | 认证（HTTP） | ✅ | tests/integration/suites/auth.test.ts |
-| 认证（Lua） | ❌ | 待添加 |
+| 认证（Lua） | ✅ | tests/integration/suites/lua-auth.test.ts (Rust only) |
 | Edge 注册 | ✅ | tests/integration/suites/edge-cluster-join.test.ts |
 | 频道管理 | ✅ | tests/integration/suites/channel.test.ts |
 | ACL 权限 | ✅ | tests/integration/suites/acl*.test.ts |
 | 用户状态同步 | ✅ | tests/integration/suites/user-state-broadcast.test.ts |
 | Hub 重启恢复 | ✅ | tests/integration/suites/hub-restart.test.ts |
-| Web API | ❌ | 未实现 |
+| Web API | ✅ | tests/integration/suites/web-api.test.ts (Rust only) |
 | Blob 存储 | ✅ | tests/integration/suites/blob-storage.test.ts (TS only) |
 | 自动封禁 | ✅ | tests/integration/suites/auto-ban.test.ts |
 | 频道记忆 | ✅ | tests/integration/suites/channel-memory.test.ts |
@@ -693,13 +739,25 @@ Edge 向客户端发送建议：
 | UDP 连接 | ✅ | tests/integration/suites/udp-connection.test.ts |
 | TCP 语音 | ✅ | tests/integration/suites/tcp-voice.test.ts |
 | 语音路由 | ✅ | tests/integration/suites/voice*.test.ts |
+| 语音路由策略（tcp_only / direct_only / auto_fallback） | ✅ | tests/integration/suites/voice-routing-strategy.test.ts (Rust only) |
+| 语音三跳 relay 路由（A→B→C UDP） | ⚠️ | `RELAY_MAGIC` + `RouteDecision::RelayVia` 已实现，端到端测试需要特殊拓扑 |
+| 质量感知路由（UDP probe + Hub 路由表推送） | ⚠️ | 核心逻辑已实现（probe/reportQuality/routeTableUpdate），端到端质量路由测试需多 Edge 拓扑 |
 | Edge 间连接 | ✅ | tests/integration/suites/edge-cluster-join.test.ts |
 | 语音加密 | ✅ | tests/integration/suites/edge-voice-encryption.test.ts |
 | 包丢失计算 | ✅ | tests/integration/suites/edge-packet-loss-calculation.test.ts |
 | 多租户 SNI | ✅ | tests/integration/suites/multi-tenant-sni.test.ts (TS only) |
-| GeoIP | ❌ | 未实现 |
-| 连接池 | ❌ | 待添加 |
-| 经由 Peer Edge 中继控制信道 | ❌ | 待实现（TS 和 Rust 均未有此功能） |
+| GeoIP（连接时查询位置） | ✅ | geoip.rs 单元测试（Rust only） |
+| GeoIP（基于位置的路由） | ❌ | 不实现 |
+| 连接池（pool_size=1 默认） | ✅ | Hub 连接池已实现，向后兼容性在 `hub-connection-pool.test.ts` 中验证 |
+| 连接池（pool_size=3 多 slot） | ✅ | tests/integration/suites/hub-connection-pool.test.ts (Rust only) |
+| LISTEN 权限检查 | ✅ | tests/integration/suites/acl.test.ts（'should deny second user from listening to restricted channel'） |
+| 结构化 JSON 日志格式 | ✅ | tests/integration/suites/log-format.test.ts (Rust only) |
+| 每 Edge 标签化 Prometheus 指标 | ✅ | tests/integration/suites/web-api.test.ts（per-edge 标签验证，Rust only） |
+| 诊断工具（`diagnose` 子命令） | ✅ | tests/integration/suites/diagnose.test.ts（Hub/Edge 各 6-7 用例，Rust only） |
+| 数据库迁移工具（`migrate` 子命令） | ✅ | tests/integration/suites/hub-admin.test.ts（4 用例，Rust only） |
+| 数据库备份工具（`backup` 子命令） | ✅ | tests/integration/suites/hub-admin.test.ts（5 用例，Rust only） |
+| 批量管理工具（`admin` 子命令） | ✅ | tests/integration/suites/hub-admin.test.ts（7 用例，Rust only） |
+| 控制信道中继（always-on relay，自动路由） | ✅ | tests/integration/suites/peer-proxy.test.ts（7 用例：配置/relay 端口/服务器可达性，Rust only） |
 
 ---
 
@@ -714,34 +772,34 @@ Edge 向客户端发送建议：
    - 监听者状态管理、跨频道音频路由实现
 
 ### 尽快实现（P1）
-4. **语音路由策略配置（Hub）** (Hub #11) - 🚧 进行中
-   - 正在实现，需要完善配置和策略
-5. **详细的语音路由配置（Edge）** (Edge #1) - 🚧 进行中
-   - 正在实现，需要完善配置和降级逻辑
+4. **语音路由策略配置（Hub）** (Hub #11) - ✅ 已完成（含质量感知路由）
+   - 质量指标收集（UDP 探针）、Hub 路由表计算和推送、Edge 路由决策应用
+5. **详细的语音路由配置（Edge）** (Edge #1) - ✅ 已完成（含质量感知路由）
+   - UDP 质量探测（ping/pong）、edge.reportQuality 上报、按 Hub 路由表智能路由
 6. **集群分割探测与处置** (Hub #12) - ✅ 已完成
    - Hub 侧 shutdownRequest 处置、Edge 侧 hub.shutdownRequest 处理、集成测试
-7. **Blob 存储系统** (Hub #2) - 📋 计划中
-   - 头像、图片等附件存储
+7. **Blob 存储系统** (Hub #2) - ✅ 已完成
+   - 文件系统存储，SHA-256 分片目录，支持用户头像/评论，内容寻址去重
 8. **自动封禁系统** (Hub #5) - ✅ 已完成（基础实现）
    - 配置结构、IP 追踪、时间窗口滑动计数、自动封禁写入 DB、集成测试
 9. **客户端建议配置** (Hub #7 / Edge) - ✅ 已完成
    - EdgeConfig suggest 结构、SuggestConfig 消息发送
-10. **Hub 连接池** (Edge #3) - 📋 计划中
-    - 可靠性和负载分散
+10. **Hub 连接池** (Edge #3) - ✅ 已完成
+    - 多并发 WebSocket 连接、round-robin 负载均衡、per-slot 独立重连（含指数退避）
 11. **性能优化** (其他 #1) - 📋 计划中
-    - 持续优化性能和内存使用
+    - 基础优化已做（DB 查询）；benchmark 套件不实现
 
 ### 可以延后（P2）
-12. **Web API 接口** (Hub #1) - 📋 计划中
-    - 管理和监控接口
+12. **Web API 接口** (Hub #1) - ✅ 已完成
+    - 管理和监控接口：status/edges/stats/topology/health/bans/metrics（含每 Edge 标签化 Prometheus 指标）
 13. **用户名和频道名验证规则** (Hub #4) - ✅ 已完成
     - 正则验证规则（`validation.username_regex`、`validation.channel_name_regex`）
-14. **经由 Peer Edge 中继控制信道** (Edge #5) - 📋 计划中
-    - Hub 不可达时通过 Peer Edge 代理控制信道，防止 Edge 孤岛
-15. **监控和可观测性** (其他 #2) - 📋 计划中
-    - Prometheus metrics 和追踪
-16. **运维工具** (其他 #3) - 📋 计划中
-    - 数据库迁移、备份等工具
+14. **监控和可观测性** (其他 #2) - ✅ 基础实现已完成
+    - Prometheus metrics（全局+每 Edge 标签化）和结构化 JSON 日志已实现；分布式追踪❌不实现
+15. **运维工具** (其他 #3) - ✅ 已完成
+    - migrate/backup/admin/validate-config/diagnose 全部实现
+16. **经由 Peer Edge 中继控制信道** (Edge #5) - ✅ 已完成（核心实现）
+    - 自动路由（always-on relay + static_peers + 动态发现）；语音三跳 relay 已实现；端到端网络分区场景测试不实现
 
 ### 按需实现（P3）
 17. **Channel Ninja 功能** (Hub #9) - 暂不实现
@@ -788,3 +846,52 @@ Edge 向客户端发送建议：
 
 - 2026-03-10: 初始版本，列出所有未实现功能
 - 2026-03-10: 实现 Hub #4 用户名/频道名验证规则（`validation.username_regex`、`validation.channel_name_regex`），添加集成测试 `validation-rules.test.ts`
+- 2026-03-11: 实现运维工具 #配置验证（`validate-config [path]` 子命令，Hub/Edge main.rs 均已添加）
+- 2026-03-11: 实现 Edge 重连指数退避（`ExponentialBackoff`，hub_client.rs，基础间隔翻倍上限 30s）
+- 2026-03-12: 新增集成测试 `lua-auth.test.ts`（Rust 专用，9 个用例：有效凭据连接成功、无效密码/用户名拒绝、多用户并发连接、ServerSync 验证）
+- 2026-03-12: 新增集成测试 `voice-routing-strategy.test.ts`（Rust 专用，9 个用例：tcp_only / direct_only / auto_fallback 三种策略各 3 个测试）
+- 2026-03-12: 新增集成测试 `log-format.test.ts`（Rust 专用，5 个用例：Hub/Edge JSON 格式验证、Hub/Edge startup 结构化字段检查、文本格式反例验证）
+- 2026-03-12: 新增集成测试 `hub-connection-pool.test.ts`（Rust 专用，7 个用例：pool_size=3 多用户连接、跨 Edge 用户同步、频道操作、join/leave 事件传播、pool_size=1 向后兼容）
+- 2026-03-12: 修改 `setup.ts` — `startRustEdgeServer` 对 `hub_server` 做深度合并，支持通过 `rustEdgeExtraConfig.hub_server.pool_size` 等字段覆盖单个 hub_server 属性而不替换整个块
+- 2026-03-12: 扩展 Hub `GET /metrics` — 新增每 Edge 标签化 Prometheus 指标（`edge_user_count`、`edge_channel_count`、`edge_online`、`edge_uptime_seconds`），`edge_id` / `edge_name` 标签，按 `edge_id` 排序
+- 2026-03-12: 新增 Hub `diagnose [path]` 子命令 — 配置解析、DB 目录可达性、blob 目录可达性、Lua 脚本文件存在性、GeoIP 文件存在性、Web API 地址、完整配置摘要
+- 2026-03-12: 新增 Edge `diagnose [path]` 子命令 — 配置解析、TLS cert/key/CA 文件存在性、Hub TCP 可达性探测（3s 超时）、连接池大小、连接策略、完整配置摘要
+- 2026-03-12: 新增集成测试 `diagnose.test.ts`（Rust 专用，13 个用例：Hub/Edge 各类检查项、无效配置退出码验证）
+- 2026-03-12: 扩展集成测试 `web-api.test.ts` — 新增 4 个每 Edge 标签化指标测试（HELP/TYPE 行存在性、标签格式、online=1 验证）
+- 2026-03-12: 更新 TODO.md：将 `更多性能指标`、`诊断工具` 标记为 ✅ 已完成；更新测试覆盖率追踪表；更新实现优先级排序
+- 2026-03-12: 新增 Hub `migrate` / `backup` / `admin` 子命令；新增集成测试 `hub-admin.test.ts`（16 用例）
+- 2026-03-12: 重新设计控制信道中继——移除 `allow_peer_proxy` opt-in 标志和 `proxy_ws_port`；改为 always-on `relay_server.rs` + `hub_server.relay_port`（自动派生 `edge_port+2`）+ `hub_server.static_peers`；动态发现仍通过 `hub.peerJoined` 广播 `relay_port`；与语音路由机制完全对齐
+- 2026-03-12: 实现语音三跳 relay 路由（`RELAY_MAGIC [0xC1,0xDE]`）：`try_relay_via_peer()` + `handle_relay_packet()`，当直连 UDP 失败时通过任意已知 peer 转发，与 Hub TCP relay 互为补充
+- 2026-03-12: 更新 `peer-proxy-design.md` 详细记录新设计；更新集成测试 `peer-proxy.test.ts` 匹配新 API（7 用例）；标记 OpenTelemetry / GeoIP 位置路由 / Ninja 音频隔离 / 集群分区网络测试 / 性能基准 ❌ 不实现
+- 2026-03-12: 新增 `rust/docs/voice-routing-and-control-relay.md`，全面记录 Rust 语音平面（UDP 三级路由、包格式、连接策略配置）和控制信道平面（透明 WebSocket relay、三级回退、peer 发现）的实现细节；更新 TODO.md 相关条目的参考链接；标记"直连恢复后自动切回直连"为已完成（`run_single_slot` 逻辑已实现）
+- 2026-03-12: **全面实现质量感知智能路由系统**：新增 UDP 探针协议（PROBE_MAGIC=0xC2,0xDE，每 10s ping/pong）、PeerQualityState RTT/丢包跟踪、report_quality RPC 每 30s 上报到 Hub；Hub 新增 compute_route_table()（Dijkstra + PACKET_LOSS_PENALTY_MS=500）和 push_route_tables_to_all()；Edge 新增 RouteDecision 枚举（Direct/RelayVia/HubTcp）和 route_table 存储；路由决策从"直连优先"改为"按 Hub 路由表决策"；新增 HubRouteEntryProto + HubRouteTableUpdateParams protobuf 消息（tag=36）；更新文档 voice-routing-and-control-relay.md 至版本 2.0
+
+---
+
+## 尚未完成的 TODO（汇总）
+
+以下为所有尚未完成或有子项目未完成的 TODO，供快速查阅：
+
+### 有子项目未完成（功能主体已实现）
+
+| TODO | 未完成子项 | 说明 |
+|------|-----------|------|
+| Hub #10 监听者功能 | 音频路由隔离测试 | ❌ 不实现 |
+| Hub #12 集群分割 | 仲裁测试、最小子集群关停测试 | ❌ 不实现（需可控网络断开） |
+| Edge #2 GeoIP | 基于位置的 Edge 分配 | ❌ 不实现 |
+| Edge #4 客户端建议配置 | 全部子项 | ❌ 不实现（与 Hub 功能重复） |
+| Edge #5 控制信道中继 | relay 超时健康检查；网络分区端到端测试；语音三跳 relay E2E 测试 | 超时健康检查留待后续；测试需可控网络断开 |
+| 其他 #1 性能优化 | benchmark 套件、负载/内存/并发测试 | ❌ 不实现（优先级不足） |
+| 其他 #2 监控可观测性 | 分布式追踪（OpenTelemetry） | ❌ 不实现 |
+
+### 有意不实现的功能
+
+| TODO | 原因 |
+|------|------|
+| Hub #8 服务器注册（公共列表） | 现代部署不需要 |
+| Hub #9 Channel Ninja 音频路由隔离 | 用户可见性已隔离；UDP 层过滤工作量大，无实际需求 |
+| Edge #4 客户端建议配置（Edge 侧） | 与 Hub #7 功能重复 |
+| GeoIP 基于位置的 Edge 路由 | Hub 选路逻辑复杂，当前规模实用性有限 |
+| 分布式追踪（OpenTelemetry） | 重量级依赖，结构化 JSON 日志已满足需求 |
+| 性能基准测试套件 | 当前优先级不足 |
+| 集群分区可控网络断开测试 | 需要 iptables/tc 等基础设施，测试成本高 |

@@ -638,6 +638,11 @@ export class EventSetupManager {
               this.logger.debug(`Saved cert hash for Edge ${data.id}: ${data.certHash.substring(0, 16)}...`);
             }
 
+            // 通知语音路由管理器新 Edge 加入，立即创建临时直连路由
+            if (this.voiceManager && data.id !== this.config.server_id) {
+              this.voiceManager.getVoiceRoutingManager().addKnownEdge(data.id);
+            }
+
             // 注册新 Edge 端点
             // UDP 使用 data.port（客户端主端口），TCP 使用 data.voicePort（edge_port 专用端口）
             if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.port && data.id !== this.config.server_id) {
@@ -662,6 +667,11 @@ export class EventSetupManager {
           case 'edge.peerLeft': {
             const data = message.params;
             this.logger.info('Edge left cluster:', data);
+
+            // 通知语音路由管理器 Edge 离开，清理路由和质量数据
+            if (this.voiceManager && data.id) {
+              this.voiceManager.getVoiceRoutingManager().removeKnownEdge(data.id);
+            }
 
             // 移除该Edge的语音端点注册
             if (this.voiceManager && this.voiceManager.getVoiceTransport() && data.id) {
