@@ -621,7 +621,7 @@ Hub 侧无需任何修改（relay 完全透明）。
 - [x] `PeerRegistry.relay_peers()` 方法，返回有 relay_port 的 peer 列表
 - [x] `PeerRegistry.all_udp_peers()` 方法，用于语音三跳 relay 候选选择
 - [x] relay 连接建立后正常执行 register/fullSync/joinCluster 流程
-- [ ] relay 链路的超时和健康检查（留待后续实现）
+- [x] relay 链路的超时和健康检查（`relay_server.rs` 新增 `RELAY_IDLE_TIMEOUT=300s` 每帧空闲超时，自动关闭 zombie 连接）
 - [x] 直连恢复后自动切回直连（每轮先尝试直连，逻辑已在 `run_single_slot` 中）
 
 #### 语音三跳 relay 路由
@@ -698,6 +698,7 @@ Hub 侧无需任何修改（relay 完全透明）。
 #### 任务
 - [x] 数据库迁移工具（`migrate [config]` 子命令：查看当前版本、应用待迁移项、记录版本历史到 `schema_versions` 表）
 - [x] 配置验证工具（`validate-config [path]` 子命令，Hub/Edge 均已实现）
+- [x] 配置生成工具（`generate-config [path]` 子命令，Hub/Edge 均已实现：写出完整注释默认 TOML 配置，目标文件已存在时报错）
 - [x] 备份工具（`backup <config> <dest>` 子命令：VACUUM INTO 备份 DB、递归复制 blobs、写入 manifest.json）
 - [x] 诊断工具（`diagnose [path]` 子命令，Hub/Edge 均已实现）：配置解析验证、文件存在性检查（DB/blob/TLS证书/Lua脚本/GeoIP DB）、Hub TCP 可达性探测、配置摘要打印
 - [x] 批量管理脚本（`admin <config> <cmd>` 子命令：`list-users`、`list-channels`、`list-bans`、`cleanup-bans`、`schema-version`）
@@ -797,7 +798,7 @@ Hub 侧无需任何修改（relay 完全透明）。
 14. **监控和可观测性** (其他 #2) - ✅ 基础实现已完成
     - Prometheus metrics（全局+每 Edge 标签化）和结构化 JSON 日志已实现；分布式追踪❌不实现
 15. **运维工具** (其他 #3) - ✅ 已完成
-    - migrate/backup/admin/validate-config/diagnose 全部实现
+    - migrate/backup/admin/validate-config/diagnose/generate-config 全部实现
 16. **经由 Peer Edge 中继控制信道** (Edge #5) - ✅ 已完成（核心实现）
     - 自动路由（always-on relay + static_peers + 动态发现）；语音三跳 relay 已实现；端到端网络分区场景测试不实现
 
@@ -865,6 +866,9 @@ Hub 侧无需任何修改（relay 完全透明）。
 - 2026-03-12: 更新 `peer-proxy-design.md` 详细记录新设计；更新集成测试 `peer-proxy.test.ts` 匹配新 API（7 用例）；标记 OpenTelemetry / GeoIP 位置路由 / Ninja 音频隔离 / 集群分区网络测试 / 性能基准 ❌ 不实现
 - 2026-03-12: 新增 `rust/docs/voice-routing-and-control-relay.md`，全面记录 Rust 语音平面（UDP 三级路由、包格式、连接策略配置）和控制信道平面（透明 WebSocket relay、三级回退、peer 发现）的实现细节；更新 TODO.md 相关条目的参考链接；标记"直连恢复后自动切回直连"为已完成（`run_single_slot` 逻辑已实现）
 - 2026-03-12: **全面实现质量感知智能路由系统**：新增 UDP 探针协议（PROBE_MAGIC=0xC2,0xDE，每 10s ping/pong）、PeerQualityState RTT/丢包跟踪、report_quality RPC 每 30s 上报到 Hub；Hub 新增 compute_route_table()（Dijkstra + PACKET_LOSS_PENALTY_MS=500）和 push_route_tables_to_all()；Edge 新增 RouteDecision 枚举（Direct/RelayVia/HubTcp）和 route_table 存储；路由决策从"直连优先"改为"按 Hub 路由表决策"；新增 HubRouteEntryProto + HubRouteTableUpdateParams protobuf 消息（tag=36）；更新文档 voice-routing-and-control-relay.md 至版本 2.0
+- 2026-03-12: 新增 Hub/Edge `generate-config [path]` 子命令 — 写出完整注释默认 TOML 配置（目标文件已存在时报错；Hub 默认 `hub.toml`，Edge 默认 `edge.toml`）
+- 2026-03-12: 实现 relay_server.rs 超时/健康检查 — `RELAY_IDLE_TIMEOUT=300s` 每帧空闲超时，防止 zombie relay 连接积压，超时后记录 debug 日志并关闭连接
+- 2026-03-12: 更新 ts-rust-feature-comparison.md — 将 `preConnect 状态支持`（已在 server.rs 实现）、`generate-config 命令`（新实现）标记为 ✅
 
 ---
 
@@ -880,7 +884,7 @@ Hub 侧无需任何修改（relay 完全透明）。
 | Hub #12 集群分割 | 仲裁测试、最小子集群关停测试 | ❌ 不实现（需可控网络断开） |
 | Edge #2 GeoIP | 基于位置的 Edge 分配 | ❌ 不实现 |
 | Edge #4 客户端建议配置 | 全部子项 | ❌ 不实现（与 Hub 功能重复） |
-| Edge #5 控制信道中继 | relay 超时健康检查；网络分区端到端测试；语音三跳 relay E2E 测试 | 超时健康检查留待后续；测试需可控网络断开 |
+| Edge #5 控制信道中继 | 网络分区端到端测试；语音三跳 relay E2E 测试 | relay 超时健康检查已实现；端到端测试需可控网络断开 |
 | 其他 #1 性能优化 | benchmark 套件、负载/内存/并发测试 | ❌ 不实现（优先级不足） |
 | 其他 #2 监控可观测性 | 分布式追踪（OpenTelemetry） | ❌ 不实现 |
 
