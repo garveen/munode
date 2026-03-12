@@ -235,9 +235,9 @@ impl HubClient {
         const PROXY_FALLBACK_THRESHOLD: u32 = 3;
 
         loop {
-            // After several direct failures, try peer proxy if peers are available
-            let use_proxy = direct_fail_count >= PROXY_FALLBACK_THRESHOLD
-                && self.config.allow_peer_proxy == false; // We're looking for *peer* proxies, not being one
+            // After several direct failures, try peer proxy if peers are available.
+            // Any Edge can use a peer's proxy regardless of whether it also runs one.
+            let use_proxy = direct_fail_count >= PROXY_FALLBACK_THRESHOLD;
             let connect_result = if use_proxy {
                 self.try_connect_via_peer_proxy(slot, is_primary).await
             } else {

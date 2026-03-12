@@ -127,7 +127,13 @@ describe.skipIf(!USE_RUST)('Hub backup subcommand', () => {
     run(HUB(), ['backup', cfg, dest]);
     const manifestPath = path.join(dest, 'manifest.json');
     expect(fs.existsSync(manifestPath)).toBe(true);
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as Record<string, unknown>;
+    interface ManifestFile {
+      created_at: number;
+      db_path: string;
+      blob_path: string;
+      version: string;
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as ManifestFile;
     expect(typeof manifest.created_at).toBe('number');
     expect(manifest.version).toBe('1');
   });
