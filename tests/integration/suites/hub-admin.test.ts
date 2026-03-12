@@ -19,6 +19,14 @@ const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.join(__dirname, '..', '..', '..');
 const TMP = path.join(PROJECT_ROOT, 'tmp', 'admin-tests');
 
+/** Structure of the manifest.json written by `hub backup`. */
+interface ManifestFile {
+  created_at: number;
+  db_path: string;
+  blob_path: string;
+  version: string;
+}
+
 function findBinary(name: string): string {
   const debug = path.join(PROJECT_ROOT, `rust/target/debug/${name}`);
   const release = path.join(PROJECT_ROOT, `rust/target/release/${name}`);
@@ -127,12 +135,6 @@ describe.skipIf(!USE_RUST)('Hub backup subcommand', () => {
     run(HUB(), ['backup', cfg, dest]);
     const manifestPath = path.join(dest, 'manifest.json');
     expect(fs.existsSync(manifestPath)).toBe(true);
-    interface ManifestFile {
-      created_at: number;
-      db_path: string;
-      blob_path: string;
-      version: string;
-    }
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as ManifestFile;
     expect(typeof manifest.created_at).toBe('number');
     expect(manifest.version).toBe('1');

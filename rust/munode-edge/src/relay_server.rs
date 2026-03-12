@@ -52,15 +52,15 @@ pub async fn run_relay_server(relay_port: u16, hub_host: String, hub_port: u16) 
             Ok((stream, peer_addr)) => {
                 let hub_host = hub_host.clone();
                 let hub_port = hub_port;
-                info!("Peer proxy: incoming connection from {}", peer_addr);
+                info!("Control relay: incoming connection from {}", peer_addr);
                 tokio::spawn(async move {
                     if let Err(e) = handle_proxy_connection(stream, peer_addr, hub_host, hub_port).await {
-                        debug!("Peer proxy connection from {} ended: {}", peer_addr, e);
+                        debug!("Control relay connection from {} ended: {}", peer_addr, e);
                     }
                 });
             }
             Err(e) => {
-                warn!("Peer proxy accept error: {}", e);
+                warn!("Control relay accept error: {}", e);
             }
         }
     }
@@ -76,12 +76,12 @@ async fn handle_proxy_connection(
 ) -> Result<()> {
     // Upgrade incoming TCP connection to WebSocket (server role)
     let client_ws = tokio_tungstenite::accept_async(stream).await?;
-    debug!("Peer proxy: WebSocket handshake complete with {}", peer_addr);
+    debug!("Control relay: WebSocket handshake complete with {}", peer_addr);
 
     // Connect to Hub as a WebSocket client
     let hub_url = format!("ws://{}:{}", hub_host, hub_port);
     let (hub_ws, _) = tokio_tungstenite::connect_async(&hub_url).await?;
-    debug!("Peer proxy: connected to Hub at {} for peer {}", hub_url, peer_addr);
+    debug!("Control relay: connected to Hub at {} for peer {}", hub_url, peer_addr);
 
     let (client_write, client_read) = client_ws.split();
     let (hub_write, hub_read) = hub_ws.split();
@@ -96,7 +96,7 @@ async fn handle_proxy_connection(
         }
     }
 
-    info!("Peer proxy connection from {} closed", peer_addr);
+    info!("Control relay connection from {} closed", peer_addr);
     Ok(())
 }
 

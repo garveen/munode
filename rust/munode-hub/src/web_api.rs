@@ -491,7 +491,7 @@ async fn handle_metrics(State(state): State<AppState>) -> Response {
              # TYPE munode_hub_edge_user_count gauge\n",
         );
         for e in &edge_snapshots {
-            let safe_name = e.name.replace('"', "'");
+            let safe_name = e.name.replace('\\', "\\\\").replace('"', "\\\"");
             buf.push_str(&format!(
                 "munode_hub_edge_user_count{{edge_id=\"{}\",edge_name=\"{}\"}} {}\n",
                 e.id, safe_name, e.user_count
@@ -504,7 +504,7 @@ async fn handle_metrics(State(state): State<AppState>) -> Response {
              # TYPE munode_hub_edge_channel_count gauge\n",
         );
         for e in &edge_snapshots {
-            let safe_name = e.name.replace('"', "'");
+            let safe_name = e.name.replace('\\', "\\\\").replace('"', "\\\"");
             buf.push_str(&format!(
                 "munode_hub_edge_channel_count{{edge_id=\"{}\",edge_name=\"{}\"}} {}\n",
                 e.id, safe_name, e.channel_count
@@ -517,7 +517,7 @@ async fn handle_metrics(State(state): State<AppState>) -> Response {
              # TYPE munode_hub_edge_online gauge\n",
         );
         for e in &edge_snapshots {
-            let safe_name = e.name.replace('"', "'");
+            let safe_name = e.name.replace('\\', "\\\\").replace('"', "\\\"");
             buf.push_str(&format!(
                 "munode_hub_edge_online{{edge_id=\"{}\",edge_name=\"{}\"}} {}\n",
                 e.id, safe_name, if e.is_online { 1 } else { 0 }
@@ -530,7 +530,7 @@ async fn handle_metrics(State(state): State<AppState>) -> Response {
              # TYPE munode_hub_edge_uptime_seconds gauge\n",
         );
         for e in &edge_snapshots {
-            let safe_name = e.name.replace('"', "'");
+            let safe_name = e.name.replace('\\', "\\\\").replace('"', "\\\"");
             buf.push_str(&format!(
                 "munode_hub_edge_uptime_seconds{{edge_id=\"{}\",edge_name=\"{}\"}} {}\n",
                 e.id, safe_name, e.uptime_secs
