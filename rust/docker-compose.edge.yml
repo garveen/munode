@@ -35,5 +35,11 @@ networks:
 secrets:
   tls_cert:
     file: ${TLS_CERT:-./certs/server.pem}
+    uid: "${MUNODE_UID:-1000}"
+    gid: "${MUNODE_GID:-1000}"
+    mode: 0440
   tls_key:
     file: ${TLS_KEY:-./certs/server.key}
+    uid: "${MUNODE_UID:-1000}"
+    gid: "${MUNODE_GID:-1000}"
+    mode: 0440

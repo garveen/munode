@@ -7,5 +7,4 @@ set -e
 RUN_UID="${MUNODE_UID:-1000}"
 RUN_GID="${MUNODE_GID:-1000}"
 chown -R "${RUN_UID}:${RUN_GID}" /app/logs /app/data
-chown -R "${RUN_UID}:${RUN_GID}" /run/secrets
 exec su-exec "${RUN_UID}:${RUN_GID}" "$@"
