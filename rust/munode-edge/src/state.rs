@@ -140,6 +140,17 @@ pub enum EdgeEvent {
     },
 }
 
+/// Route decision for reaching a target Edge, derived from Hub's route table.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RouteDecision {
+    /// Send direct UDP to the target Edge.
+    Direct,
+    /// Send via intermediate relay Edge.
+    RelayVia { relay_edge_id: u32 },
+    /// Use Hub TCP relay (no quality UDP path).
+    HubTcp,
+}
+
 /// Shared state accessible by all components of the Edge server.
 pub struct EdgeState {
     /// Our assigned edge ID (from Hub registration).
@@ -176,6 +187,8 @@ pub struct EdgeState {
     /// session_id -> set of channel IDs the user has Enter permission on.
     /// Used for fast ninja visibility checks without Hub round-trips.
     pub ninja_visible_to: tokio::sync::RwLock<HashMap<u32, std::collections::HashSet<u32>>>,
+    /// Route table from Hub. Maps target_edge_id → RouteDecision.
+    pub route_table: tokio::sync::RwLock<std::collections::HashMap<u32, RouteDecision>>,
 }
 
 impl EdgeState {
@@ -199,6 +212,7 @@ impl EdgeState {
             listeners_per_channel: 0,
             ninja_channels: tokio::sync::RwLock::new(vec![]),
             ninja_visible_to: tokio::sync::RwLock::new(HashMap::new()),
+            route_table: tokio::sync::RwLock::new(std::collections::HashMap::new()),
         })
     }
 
@@ -226,6 +240,7 @@ impl EdgeState {
             listeners_per_channel,
             ninja_channels: tokio::sync::RwLock::new(vec![]),
             ninja_visible_to: tokio::sync::RwLock::new(HashMap::new()),
+            route_table: tokio::sync::RwLock::new(std::collections::HashMap::new()),
         })
     }
 

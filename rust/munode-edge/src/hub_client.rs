@@ -952,6 +952,26 @@ impl HubClient {
                     self.edge_state.peer_registry.lock().await.remove(peer_edge_id);
                 }
             }
+            "hub.routeTableUpdate" => {
+                if let Some(params) = &notification.route_table_update {
+                    use crate::state::RouteDecision;
+                    let mut table = self.edge_state.route_table.write().await;
+                    table.clear();
+                    for entry in &params.routes {
+                        let decision = match entry.route_type {
+                            1 => RouteDecision::RelayVia {
+                                relay_edge_id: entry.next_hop.unwrap_or(0),
+                            },
+                            2 => RouteDecision::HubTcp,
+                            _ => RouteDecision::Direct,
+                        };
+                        table.insert(entry.target_edge_id, decision);
+                    }
+                    let count = table.len();
+                    drop(table);
+                    debug!("Route table updated: {} entries", count);
+                }
+            }
             _ => {
                 // Check for hub.ninjaConfig (uses unknown_params_json)
                 if method == "hub.ninjaConfig" {
@@ -1854,6 +1874,31 @@ impl HubClient {
 
         if let Err(e) = self.rpc_call(request).await {
             debug!("relay_voice_via_hub to edge {} failed: {}", target_edge_id, e);
+        }
+    }
+
+    /// Report link quality to a peer Edge to Hub for route table computation.
+    pub async fn report_quality(&self, target_edge_id: u32, rtt_ms: f32, packet_loss: f32, jitter_ms: f32, samples: u32) {
+        let from_edge_id = self.edge_id().await;
+        let request_id = self.next_request_id().await;
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.reportQuality".to_string(),
+            timeout_ms: Some(5000),
+            edge_report_quality: Some(hubedge::EdgeReportQualityParams {
+                edge_id: from_edge_id,
+                target_edge_id,
+                quality: hubedge::NetworkQualityProto {
+                    rtt: rtt_ms,
+                    packet_loss,
+                    jitter: jitter_ms,
+                    samples,
+                },
+            }),
+            ..Default::default()
+        };
+        if let Err(e) = self.rpc_call(request).await {
+            debug!("report_quality to edge {} failed: {}", target_edge_id, e);
         }
     }
 }

@@ -295,9 +295,14 @@ impl RpcHandler {
             error: None,
         };
 
-        Ok(self.make_response_packet(request_id, "edge.register", |r| {
+        let response = self.make_response_packet(request_id, "edge.register", |r| {
             r.edge_register = Some(result);
-        }))
+        });
+
+        // Push route tables to all edges so new edge and existing edges see each other
+        self.push_route_tables_to_all().await;
+
+        Ok(response)
     }
 
     async fn handle_allocate_session_id(
@@ -2362,6 +2367,35 @@ impl RpcHandler {
         }
     }
 
+    /// Compute and push route tables to all connected edges.
+    async fn push_route_tables_to_all(&self) {
+        let topo = self.state.topology.read().await;
+        let edge_data: Vec<(u32, Vec<(u32, u32, Option<u32>, f32)>)> = topo
+            .get_all_edges()
+            .iter()
+            .map(|e| (e.edge_id, topo.compute_route_table(e.edge_id)))
+            .collect();
+        drop(topo);
+
+        for (edge_id, routes) in edge_data {
+            if routes.is_empty() {
+                continue;
+            }
+            self.send_notification_to_edge(edge_id, "hub.routeTableUpdate", |n| {
+                n.route_table_update = Some(HubRouteTableUpdateParams {
+                    routes: routes.into_iter().map(|(target, rtype, nhop, cost)| {
+                        HubRouteEntryProto {
+                            target_edge_id: target,
+                            route_type: rtype,
+                            next_hop: nhop,
+                            cost,
+                        }
+                    }).collect(),
+                });
+            }).await;
+        }
+    }
+
     fn make_error_packet(
         &self,
         request_id: &str,
@@ -2764,6 +2798,8 @@ impl RpcHandler {
             let mut topo = self.state.topology.write().await;
             topo.report_quality(params.edge_id, params.target_edge_id, quality);
         }
+
+        self.push_route_tables_to_all().await;
 
         Ok(self.make_response_packet(request_id, "edge.reportQuality", |r| {
             r.edge_report_quality = Some(EdgeReportQualityResult { success: true });
