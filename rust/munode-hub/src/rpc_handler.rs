@@ -2369,13 +2369,18 @@ impl RpcHandler {
 
     /// Compute and push route tables to all connected edges.
     async fn push_route_tables_to_all(&self) {
-        let topo = self.state.topology.read().await;
-        let edge_data: Vec<(u32, Vec<(u32, u32, Option<u32>, f32)>)> = topo
-            .get_all_edges()
-            .iter()
-            .map(|e| (e.edge_id, topo.compute_route_table(e.edge_id)))
-            .collect();
-        drop(topo);
+        // Hold the topology read lock only for the Dijkstra computations; drop before
+        // sending (which involves I/O and may block).  Multiple concurrent readers are
+        // fine since this is a shared read lock — only topology writers are briefly
+        // paused.  For typical cluster sizes (2–20 edges) the total computation time
+        // is well under a millisecond.
+        let edge_data: Vec<(u32, Vec<(u32, u32, Option<u32>, f32)>)> = {
+            let topo = self.state.topology.read().await;
+            topo.get_all_edges()
+                .iter()
+                .map(|e| (e.edge_id, topo.compute_route_table(e.edge_id)))
+                .collect()
+        }; // lock released here
 
         for (edge_id, routes) in edge_data {
             if routes.is_empty() {

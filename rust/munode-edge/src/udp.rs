@@ -16,34 +16,61 @@ use munode_protocol::transport::EDGE_MAGIC;
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 
-/// Two-byte magic prefix for "relay-forward" packets (Rust implementation only).
-/// When Edge B receives a packet with this prefix, it reads a 4-byte target edge ID and
-/// forwards the remainder (an EDGE_MAGIC packet) to that target Edge via direct UDP.
-/// Packet format: [RELAY_MAGIC(2B)][target_edge_id_BE(4B)][EDGE_MAGIC(2B)][sender_session_BE(4B)][OCB2-encrypted voice...]
-///
-/// The TypeScript implementation uses a different relay prefix (0xFF, 1 byte).
-/// The two implementations are never interoperable: Rust edges exchange voice packets
-/// over raw UDP (no framing), while TS edges use TCP/WebSocket (length-prefixed frames).
-/// Choosing distinct magic values ensures that a stray cross-implementation packet
-/// is never silently misinterpreted as a valid relay request.
-const RELAY_MAGIC: [u8; 2] = [0xC1, 0xDE];
+// ── Edge-to-Edge packet type bytes (1-byte prefix on the dedicated edge socket) ─────────────────
+//
+// Because the `edge_socket` is bound to a **dedicated** `edge_port` separate from the
+// client-facing Mumble port, every datagram received on it is already known to be
+// Edge-to-Edge traffic.  A single type byte is therefore sufficient to distinguish the
+// three packet sub-types; no 2-byte magic prefix is needed.
+//
+// Wire formats on `edge_socket`:
+//
+//   Voice (direct, for this Edge):
+//     [0x01][sender_session BE(4B)][raw plaintext voice...]
+//     Overhead: 5 bytes total header (1 type + 4 session)
+//
+//   Relay-forward (this Edge is the intermediary; forward to target Edge):
+//     [0x02][target_edge_id BE(4B)][sender_session BE(4B)][raw plaintext voice...]
+//     Overhead: 9 bytes total header (1 type + 4 target + 4 session)
+//     The relay node strips the type byte, reads target+session, then builds a fresh
+//     Voice packet ([0x01][session][voice]) and sends it to the target's edge socket.
+//
+//   Quality probe (ping / pong):
+//     [0x03][subtype(1B): 0=ping 1=pong][seq BE(4B)][sent_ms BE(8B)]
+//     Total: 14 bytes
+//
+// Legacy / fallback (shared socket — no dedicated edge_port):
+//   When `edge_socket` is the same fd as `socket` (the Mumble client port), the old
+//   `EDGE_MAGIC=[0x00,0x00]` two-byte prefix is still used in `handle_client_datagram`
+//   so that edge packets can be disambiguated from encrypted OCB2 client datagrams.
+//   In that mode only direct-voice forwarding is supported; relay and probe are not.
 
-/// Magic prefix for Edge-to-Edge UDP quality probes.
-/// Probe format: [PROBE_MAGIC(2B)][type(1B): 0=ping, 1=pong][seq_BE(4B)][sent_ms_BE(8B)]
-const PROBE_MAGIC: [u8; 2] = [0xC2, 0xDE];
+/// Packet type: direct voice for this Edge.
+const EDGE_PKT_VOICE: u8 = 0x01;
+/// Packet type: relay-forward voice to another Edge (this node is intermediary).
+const EDGE_PKT_RELAY: u8 = 0x02;
+/// Packet type: quality probe (ping / pong).
+const EDGE_PKT_PROBE: u8 = 0x03;
 
 /// How often to send UDP ping probes to peer Edges (seconds).
+/// 10 s gives a reasonable balance: fresh enough to catch a link quality change
+/// within half a minute, but light enough that probes are <1% of voice traffic.
 const PROBE_PING_INTERVAL_SECS: u64 = 10;
 
 /// How often to report accumulated quality metrics to Hub (seconds).
+/// 30 s keeps Hub-side route tables up-to-date within one minute while avoiding
+/// a flood of RPC calls during the probe window.
 const PROBE_REPORT_INTERVAL_SECS: u64 = 30;
+
+/// Maximum number of RTT samples kept per peer for the rolling average.
+const MAX_RTT_SAMPLES: usize = 10;
 
 /// Per-edge quality tracking state.
 #[derive(Default)]
 struct PeerQualityState {
     /// Pending ping sequences: seq → sent_ms
     pending_pings: HashMap<u32, u64>,
-    /// Recent RTT samples (milliseconds)
+    /// Recent RTT samples (milliseconds); capped at MAX_RTT_SAMPLES
     rtt_samples: VecDeque<f32>,
     /// Total probes sent in current window
     probes_sent: u32,
@@ -62,10 +89,14 @@ struct PeerQualityState {
 ///    on success the UDP address is mapped to that session.
 /// 4. Subsequent packets are decrypted, routed, and re-encrypted per-recipient.
 ///
-/// Edge-to-Edge direct voice is handled on a separate `edge_socket` bound on
-/// `edge_port`.  Outbound packets include a 6-byte header:
-///   [EDGE_MAGIC(2B)] [sender_session_u32_BE(4B)] [plaintext_voice...]
-/// Inbound packets from peers are identified by the same magic prefix.
+/// Edge-to-Edge voice uses a separate `edge_socket` bound on `edge_port`.
+/// All datagrams on that socket are Edge-to-Edge; a single type byte distinguishes:
+///   [0x01][session_BE(4B)][voice]   — direct voice for this Edge (5-byte header)
+///   [0x02][target_BE(4B)][session_BE(4B)][voice] — relay-forward (9-byte header)
+///   [0x03][subtype(1B)][seq_BE(4B)][ts_BE(8B)]   — quality probe (14 bytes)
+///
+/// Fallback (no dedicated edge_port): packets arrive on the client socket and are
+/// identified by the legacy `EDGE_MAGIC=[0x00,0x00]` prefix in `handle_client_datagram`.
 pub struct UdpServer {
     /// Client-facing socket (Mumble port).
     socket: Arc<UdpSocket>,
@@ -161,9 +192,9 @@ impl UdpServer {
                                     entry.pending_pings.insert(s, now_ms);
                                     s
                                 };
-                                let mut pkt = Vec::with_capacity(2 + 1 + 4 + 8);
-                                pkt.extend_from_slice(&PROBE_MAGIC);
-                                pkt.push(0); // type=ping
+                                let mut pkt = Vec::with_capacity(1 + 1 + 4 + 8);
+                                pkt.push(EDGE_PKT_PROBE);
+                                pkt.push(0); // subtype=ping
                                 pkt.extend_from_slice(&seq.to_be_bytes());
                                 pkt.extend_from_slice(&now_ms.to_be_bytes());
                                 let _ = probe_udp.send_to(&pkt, peer_addr).await;
@@ -210,15 +241,26 @@ impl UdpServer {
                     }
                     res = self.edge_socket.recv_from(&mut edge_buf) => {
                         let (len, peer_addr) = res?;
-                        if len >= 6 && edge_buf[0] == RELAY_MAGIC[0] && edge_buf[1] == RELAY_MAGIC[1] {
-                            // Relay-forward packet: forward the inner edge packet to target edge
-                            self.handle_relay_packet(&edge_buf[2..len]).await;
-                        } else if len >= 6 && edge_buf[0] == EDGE_MAGIC[0] && edge_buf[1] == EDGE_MAGIC[1] {
-                            self.handle_edge_packet(&edge_buf[2..len], peer_addr).await;
-                        } else if len >= 15 && edge_buf[0] == PROBE_MAGIC[0] && edge_buf[1] == PROBE_MAGIC[1] {
-                            self.handle_probe_packet(&edge_buf[2..len], peer_addr).await;
-                        } else {
-                            debug!("Unexpected packet on edge socket from {} ({} bytes)", peer_addr, len);
+                        if len < 1 {
+                            continue;
+                        }
+                        match edge_buf[0] {
+                            // Direct voice for this Edge: [0x01][session_BE(4)][voice...]
+                            EDGE_PKT_VOICE if len >= 6 => {
+                                self.handle_edge_packet(&edge_buf[1..len], peer_addr).await;
+                            }
+                            // Relay-forward: [0x02][target_BE(4)][session_BE(4)][voice...]
+                            EDGE_PKT_RELAY if len >= 10 => {
+                                self.handle_relay_packet(&edge_buf[1..len]).await;
+                            }
+                            // Quality probe: [0x03][subtype(1)][seq_BE(4)][ts_BE(8)]
+                            EDGE_PKT_PROBE if len >= 14 => {
+                                self.handle_probe_packet(&edge_buf[1..len], peer_addr).await;
+                            }
+                            _ => {
+                                debug!("Unknown edge packet type 0x{:02X} from {} ({} bytes)",
+                                    edge_buf[0], peer_addr, len);
+                            }
                         }
                     }
                 }
@@ -440,8 +482,9 @@ impl UdpServer {
                     };
                     if let Some(peer_addr) = peer_addr {
                         if self.edge_state.allow_direct_udp {
-                            let mut pkt = Vec::with_capacity(2 + 4 + plaintext.len());
-                            pkt.extend_from_slice(&EDGE_MAGIC);
+                            // [0x01][session_BE(4)][voice...]
+                            let mut pkt = Vec::with_capacity(1 + 4 + plaintext.len());
+                            pkt.push(EDGE_PKT_VOICE);
                             pkt.extend_from_slice(&sender_session.to_be_bytes());
                             pkt.extend_from_slice(plaintext);
                             if let Err(e) = self.edge_socket.send_to(&pkt, peer_addr).await {
@@ -463,10 +506,10 @@ impl UdpServer {
                         reg.get(relay_edge_id).map(|p| p.udp_addr)
                     };
                     if let Some(relay_addr) = relay_addr {
-                        let mut pkt = Vec::with_capacity(2 + 4 + 2 + 4 + plaintext.len());
-                        pkt.extend_from_slice(&RELAY_MAGIC);
+                        // [0x02][target_edge_id_BE(4)][session_BE(4)][voice...]
+                        let mut pkt = Vec::with_capacity(1 + 4 + 4 + plaintext.len());
+                        pkt.push(EDGE_PKT_RELAY);
                         pkt.extend_from_slice(&target_edge_id.to_be_bytes());
-                        pkt.extend_from_slice(&EDGE_MAGIC);
                         pkt.extend_from_slice(&sender_session.to_be_bytes());
                         pkt.extend_from_slice(plaintext);
                         if let Err(e) = self.edge_socket.send_to(&pkt, relay_addr).await {
@@ -511,18 +554,19 @@ impl UdpServer {
 
     /// Handle a relay-forward packet received on the edge socket.
     ///
-    /// Format: [target_edge_id_BE(4B)] [EDGE_MAGIC(2B)] [sender_session_BE(4B)] [voice...]
-    /// (RELAY_MAGIC prefix has already been stripped by the caller.)
+    /// Format after stripping the type byte: [target_edge_id BE(4B)][sender_session BE(4B)][voice...]
     ///
-    /// Forwards the [EDGE_MAGIC…] portion to the target edge via direct UDP.
+    /// Builds a fresh Voice packet ([0x01][session][voice]) and forwards it to the target
+    /// Edge's edge socket.
     async fn handle_relay_packet(&self, data: &[u8]) {
-        // Minimum: 4 (target_edge_id) + 2 (EDGE_MAGIC) + 4 (sender_session) + 1 (voice) = 11
-        if data.len() < 11 {
+        // Minimum: 4 (target_edge_id) + 4 (sender_session) + 1 (voice) = 9
+        if data.len() < 9 {
             debug!("Relay packet too short ({} bytes)", data.len());
             return;
         }
         let target_edge_id = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let inner = &data[4..]; // starts with EDGE_MAGIC + sender_session + voice
+        let sender_session = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+        let voice_data = &data[8..];
 
         let peer_addr = {
             let reg = self.edge_state.peer_registry.lock().await;
@@ -530,13 +574,17 @@ impl UdpServer {
         };
 
         if let Some(addr) = peer_addr {
-            if let Err(e) = self.edge_socket.send_to(inner, addr).await {
+            // Build a Voice packet for the target Edge.
+            let mut forward = Vec::with_capacity(1 + 4 + voice_data.len());
+            forward.push(EDGE_PKT_VOICE);
+            forward.extend_from_slice(&sender_session.to_be_bytes());
+            forward.extend_from_slice(voice_data);
+            if let Err(e) = self.edge_socket.send_to(&forward, addr).await {
                 warn!("Forward relay packet to edge {} at {} failed: {}", target_edge_id, addr, e);
             } else {
                 debug!("Forwarded relay packet to edge {} at {}", target_edge_id, addr);
             }
         } else {
-            // Target not directly reachable; deliver locally if we have its sessions
             debug!("Relay target edge {} not in peer registry — dropping relay packet", target_edge_id);
         }
     }
@@ -585,7 +633,7 @@ impl UdpServer {
     }
 
     /// Handle a UDP quality probe packet (ping or pong).
-    /// Probe format: [type(1B)][seq_BE(4B)][sent_ms_BE(8B)]
+    /// Probe format after stripping type byte: [subtype(1B): 0=ping 1=pong][seq_BE(4B)][sent_ms_BE(8B)]
     async fn handle_probe_packet(&self, data: &[u8], from_addr: SocketAddr) {
         if data.len() < 13 { return; }
         let ptype = data[0];
@@ -593,10 +641,10 @@ impl UdpServer {
         let sent_ms = u64::from_be_bytes([data[5], data[6], data[7], data[8], data[9], data[10], data[11], data[12]]);
 
         if ptype == 0 {
-            // Ping — echo back as pong
-            let mut pkt = Vec::with_capacity(2 + 1 + 4 + 8);
-            pkt.extend_from_slice(&PROBE_MAGIC);
-            pkt.push(1); // type=pong
+            // Ping — echo back as pong using the new format
+            let mut pkt = Vec::with_capacity(1 + 1 + 4 + 8);
+            pkt.push(EDGE_PKT_PROBE);
+            pkt.push(1); // subtype=pong
             pkt.extend_from_slice(&seq.to_be_bytes());
             pkt.extend_from_slice(&sent_ms.to_be_bytes());
             let _ = self.edge_socket.send_to(&pkt, from_addr).await;
@@ -613,7 +661,7 @@ impl UdpServer {
                 if let Some(sent) = entry.pending_pings.remove(&seq) {
                     let rtt = (now_ms.saturating_sub(sent)) as f32;
                     entry.rtt_samples.push_back(rtt);
-                    if entry.rtt_samples.len() > 10 {
+                    if entry.rtt_samples.len() > MAX_RTT_SAMPLES {
                         entry.rtt_samples.pop_front();
                     }
                     entry.pongs_received += 1;

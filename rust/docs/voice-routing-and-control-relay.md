@@ -50,10 +50,10 @@ Edge A (UdpServer)
 │    │     └─ route_voice(sender, plaintext)          │
 │    │          ├── 本地客户端: OCB2 重加密 → UDP send  │
 │    │          └── 远程 Edge: 按 Hub 路由决策发送      │
-│    ├── 接收 peer Edge 包                             │
-│    │     ├── EDGE_MAGIC   → handle_edge_packet()    │
-│    │     ├── RELAY_MAGIC  → handle_relay_packet()   │
-│    │     └── PROBE_MAGIC  → handle_probe_packet()   │
+│    ├── 接收 peer Edge 包（按首字节类型分发）            │
+│    │     ├── 0x01 VOICE → handle_edge_packet()      │
+│    │     ├── 0x02 RELAY → handle_relay_packet()     │
+│    │     └── 0x03 PROBE → handle_probe_packet()     │
 │    └── 探针任务 (probe_task, 独立 tokio::spawn)      │
 │          ├── 每 10s 发送 UDP 探针 → 所有 peer Edges  │
 │          └── 每 30s 上报质量 → Hub (reportQuality)  │
@@ -64,18 +64,18 @@ Edge A (UdpServer)
 
 每个 Edge 在 `edge_socket` 上发送和响应 UDP 探针：
 
-**探针包格式（15 字节）：**
+**探针包格式（14 字节）：**
 ```
-[PROBE_MAGIC(2B): 0xC2, 0xDE][type(1B): 0=ping, 1=pong][seq_BE(4B)][sent_ms_BE(8B)]
+[0x03][subtype(1B): 0=ping 1=pong][seq_BE(4B)][sent_ms_BE(8B)]
 ```
 
 **探针流程：**
 ```
 Edge A                              Edge B
-  │ ─── PROBE_MAGIC + ping + seq ─→ │
+  │ ─── [0x03][0=ping][seq][ts] ─→ │
   │                                  │ handle_probe_packet()
-  │                                  │ → 原样回送 pong（相同 seq + 原始 timestamp）
-  │ ←── PROBE_MAGIC + pong + seq ── │
+  │                                  │ → 回送 pong（相同 seq + 原始 timestamp）
+  │ ←── [0x03][1=pong][seq][ts] ── │
   │ 计算 RTT = now - sent_ms        │
   │ 更新 PeerQualityState           │
 ```
@@ -84,7 +84,7 @@ Edge A                              Edge B
 ```rust
 const PROBE_PING_INTERVAL_SECS: u64 = 10;    // 探针发送间隔
 const PROBE_REPORT_INTERVAL_SECS: u64 = 30;  // 质量上报间隔
-const PROBE_MAGIC: [u8; 2] = [0xC2, 0xDE];   // 探针包魔术字节
+const EDGE_PKT_PROBE: u8 = 0x03;             // 探针包类型字节
 ```
 
 **PeerQualityState（`udp.rs`）：**
@@ -138,9 +138,9 @@ for each target_edge_id (远程 Edge):
     route = EdgeState.route_table.get(target_edge_id)
     
     match route:
-        Direct | None     → 直连 UDP (EDGE_MAGIC 格式)
+        Direct | None     → 直连 UDP [0x01][session][voice]
                             失败 → Hub TCP 兜底
-        RelayVia(relay_id) → 三跳 relay (RELAY_MAGIC 格式)
+        RelayVia(relay_id) → 三跳 relay [0x02][target][session][voice]
                             失败 → Hub TCP 兜底
         HubTcp             → Hub TCP relay (edge.relayVoiceViaTcp RPC)
 ```
@@ -153,22 +153,54 @@ for each target_edge_id (远程 Edge):
 | `tcp_only` | false | true | 跳过 UDP，始终走 Hub TCP relay |
 | `direct_only` | true | false | 仅 UDP，不允许 Hub TCP 兜底 |
 
-### 1.5 包格式汇总
+### 1.5 包格式设计：为什么用 1-byte 类型字节而不是 2-byte 魔术字节或 protobuf
 
-**客户端→Edge（OCB2 加密层）：**
+#### 设计决策分析
+
+Edge-to-Edge 流量走独立的 `edge_socket`（`edge_port`），与客户端 Mumble UDP 端口**完全隔离**。这一隔离使得端口层的包类型识别变得简单：
+
+**不需要 2-byte 魔术字节的原因：**
+- `EDGE_MAGIC=[0x00,0x00]` 的原始目的是在**共享端口**上区分 Edge 包和 OCB2 客户端包
+- 在独立 `edge_port` 上，所有流量已是 Edge-to-Edge，无需再检测 `[0x00,0x00]`
+- 1 字节已足够区分 3 种包类型（VOICE / RELAY / PROBE）
+
+**protobuf 开销对比（以 32kbps Opus 帧为例）：**
+
+| 方案 | voice(50B) 包 | relay(50B) 包 | probe(14B) |
+|------|-------------|-------------|----------|
+| 旧 2-byte 魔术字节 | 50+6=**56 B** | 50+12=**62 B** | **15 B** |
+| **新 1-byte 类型前缀**（当前实现）| 50+5=**55 B** | 50+9=**59 B** | **14 B** |
+| protobuf 封装 | 50+10~12=**62 B** | 50+14~16=**66 B** | **20~24 B** |
+
+- 语音包（最高频，50k+ pkt/s）：protobuf 比 1-byte 方案多 **10-14 bytes（+20%~+28%）**
+- 对 1000 并发频道（50 pkt/s）：protobuf 方案每秒多消耗 **~500 KB** 额外带宽
+- protobuf 还有序列化开销（heap allocation + varint 编解码），在 voice 热路径上不可接受
+
+**结论：**  
+→ 独立端口 + 1-byte 类型字节是最优选择，同时满足零歧义、最小开销、代码清晰三个目标。  
+→ protobuf 适合 Hub↔Edge 控制信道（低频 RPC），不适合 UDP 语音热路径。
+
+#### 包格式汇总
+
+**客户端→Edge（OCB2 加密层，Mumble 端口）：**
 ```
 [OCB2 密文]
 ```
 
-**Edge→Edge 直连（EDGE_MAGIC）：**
+**Edge→Edge 直连 Voice（`edge_port`，类型字节 0x01）：**
 ```
-[EDGE_MAGIC(2B): 0x4D4D][sender_session_BE(4B)][plaintext voice...]
+[0x01][sender_session_BE(4B)][plaintext voice...]
+   ↑
+   5-byte header (saves 1 byte vs old 2-byte EDGE_MAGIC)
 ```
 
-**三跳 relay（RELAY_MAGIC，发给中间节点）：**
+**Edge→Edge 三跳 Relay（`edge_port`，类型字节 0x02，发给中间节点）：**
 ```
-[RELAY_MAGIC(2B): 0xC1,0xDE][target_edge_id_BE(4B)][EDGE_MAGIC(2B)][sender_session_BE(4B)][voice...]
+[0x02][target_edge_id_BE(4B)][sender_session_BE(4B)][plaintext voice...]
+   ↑
+   9-byte header (saves 3 bytes vs old 12-byte RELAY_MAGIC+inner_EDGE_MAGIC)
 ```
+中间节点（Edge B）收到后，重建 Voice 包 `[0x01][session][voice]` 转发给 Edge C。
 
 **Hub TCP relay（`edge.relayVoiceViaTcp` RPC）：**
 ```
@@ -176,10 +208,18 @@ EdgeRelayVoiceViaTcpParams { from_edge_id, target_edge_id, voice_packet }
 → Hub 推送 hub.relayVoicePacket 到目标 Edge
 ```
 
-**UDP 探针（PROBE_MAGIC）：**
+**UDP 探针（`edge_port`，类型字节 0x03）：**
 ```
-[PROBE_MAGIC(2B): 0xC2,0xDE][type(1B)][seq_BE(4B)][sent_ms_BE(8B)]
+[0x03][subtype(1B): 0=ping 1=pong][seq_BE(4B)][sent_ms_BE(8B)]
+   ↑
+   14-byte total (saves 1 byte vs old 2-byte PROBE_MAGIC)
 ```
+
+**遗留/降级模式（共享端口，无独立 `edge_port`）：**
+```
+[EDGE_MAGIC(2B): 0x00,0x00][sender_session_BE(4B)][voice...]
+```
+仅在 `edge_socket == socket`（未配置 `edge_port`）时生效，不支持 relay 和 probe。
 
 ### 1.6 本地客户端语音路由
 
@@ -316,7 +356,7 @@ Edge 注册
 | 质量测量 | UDP probe ping/pong | WebSocket 连接成功率 |
 | 回退逻辑 | Direct → RelayVia → HubTcp | 直连 → static peer → dynamic peer |
 | 回退触发 | Hub 路由决策（质量感知） | 连续 3 次连接失败 |
-| 魔术字节 | EDGE: 0x4D4D / RELAY: 0xC1,0xDE / PROBE: 0xC2,0xDE | N/A（WebSocket 协议） |
+| 类型标识 | 1-byte 类型前缀（0x01/0x02/0x03），独立端口消除歧义 | N/A（WebSocket 协议） |
 | 单跳限制 | relay 仅支持一次中间节点 | relay_server 不接受链式 relay |
 | Peer 发现 | PeerRegistry.all_udp_peers() | PeerRegistry.relay_peers() |
 | 静态配置 | 无（UDP 地址从 peerJoined 获取） | `hub_server.static_peers` |
