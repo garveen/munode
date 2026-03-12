@@ -502,12 +502,11 @@ export class VoiceManager {
               break;
               
             case RouteType.RELAY:
-              // 中转模式：发送到中转 Edge
+              // 中转模式：经由 nextHop 转发到 targetEdgeId
               if (route.nextHop) {
         this.logger.debug(`Sending voice to Edge ${targetEdgeId} via relay Edge ${route.nextHop}`);
-                // TODO: 实现中转包装协议，传递 finalTarget 信息
-                // 暂时直接转发，假设中转节点会根据内容自行路由
-                this.voiceTransport.sendToEdge(route.nextHop, voicePacket, packetData);
+                // 使用中继包协议：nextHop 收到后会转发内层包给 finalTargetEdgeId
+                void this.voiceTransport.sendViaRelay(targetEdgeId, route.nextHop, voicePacket, packetData);
                 // 记录中转，传递目标节点 ID 用于调试
                 this.voiceRoutingManager.recordRelayedPacket(packetData.length, targetEdgeId);
               } else {
