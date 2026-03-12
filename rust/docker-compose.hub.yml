@@ -5,8 +5,7 @@ services:
       dockerfile: rust/Dockerfile
     container_name: munode-hub
     restart: unless-stopped
-    entrypoint: ["/app/munode-hub"]
-    command: ["config/hub.toml"]
+    command: ["/app/munode-hub", "config/hub.toml"]
     ports:
       - "${HUB_GRPC_PORT:-8443}:8443"
     volumes:
@@ -15,6 +14,8 @@ services:
       - ${LOG_DIR:-./logs}/hub:/app/logs
     environment:
       - RUST_LOG=${RUST_LOG:-info}
+      - MUNODE_UID=${MUNODE_UID:-1000}
+      - MUNODE_GID=${MUNODE_GID:-1000}
     networks:
       - munode-network
     healthcheck:

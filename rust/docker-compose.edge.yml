@@ -17,6 +17,8 @@ services:
       - tls_key
     environment:
       - RUST_LOG=${RUST_LOG:-info}
+      - MUNODE_UID=${MUNODE_UID:-1000}
+      - MUNODE_GID=${MUNODE_GID:-1000}
     networks:
       - munode-network
     healthcheck:

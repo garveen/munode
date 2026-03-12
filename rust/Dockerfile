@@ -38,18 +38,17 @@ RUN cargo build --release --bin munode-edge --bin munode-hub
 
 # Stage 3: Minimal runtime image
 FROM alpine:3.23 AS runtime
-RUN apk add --no-cache ca-certificates netcat-openbsd \
-    && addgroup -S munode && adduser -S -G munode munode \
-    && mkdir -p /app/config /app/certs /app/data /app/logs \
-    && chown -R munode:munode /app
+RUN apk add --no-cache ca-certificates netcat-openbsd su-exec \
+    && mkdir -p /app/config /app/certs /app/data /app/logs
 WORKDIR /app
 COPY --from=builder /build/target/release/munode-edge /build/target/release/munode-hub /app/
-USER munode
+COPY rust/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 64738/tcp 64738/udp 8443/tcp
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
     CMD nc -z localhost 64738 || exit 1
 
-ENTRYPOINT ["/app/munode-edge"]
-CMD ["config/edge.toml"]
+ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["/app/munode-edge", "config/edge.toml"]
