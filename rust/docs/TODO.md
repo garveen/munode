@@ -640,11 +640,12 @@ Edge 向客户端发送建议：
 - [x] Prometheus metrics 导出（`GET /metrics`：`connected_edges`、`total_sessions`、`total_channels`、`uptime_seconds`）
 - [x] 健康检查端点（`GET /api/health`）
 - [x] 详细的结构化日志（`log_format = "json"` 配置项，支持 JSON 格式化输出；`init_logging_with_format()` 函数）
+- [x] 更多性能指标（每 Edge 标签化指标：`edge_user_count`、`edge_channel_count`、`edge_online`、`edge_uptime_seconds`，附 `edge_id` / `edge_name` 标签）
 - [ ] 分布式追踪（OpenTelemetry）
-- [ ] 更多性能指标（每 Edge 语音流量、RPC 延迟等）
 
 #### 测试
 - [x] Metrics 端点测试（`web-api.test.ts`：格式验证、edge count ≥ 1）
+- [x] 每 Edge 标签化指标测试（`web-api.test.ts`：per-edge 标签存在性、edge_id/edge_name 格式、online=1 验证）
 - [x] 健康检查测试（`web-api.test.ts`）
 - [x] 日志格式测试（`log-format.test.ts`：Hub/Edge JSON 日志逐行验证、文本格式检测、startup 结构化字段验证）
 
@@ -653,13 +654,13 @@ Edge 向客户端发送建议：
 ### 3. 运维工具
 
 **优先级**: P2  
-**状态**: 🚧 进行中（配置验证已实现）
+**状态**: 🚧 进行中
 
 #### 任务
 - [ ] 数据库迁移工具
 - [x] 配置验证工具（`validate-config [path]` 子命令，Hub/Edge 均已实现）
 - [ ] 备份/恢复工具
-- [ ] 诊断和调试工具
+- [x] 诊断工具（`diagnose [path]` 子命令，Hub/Edge 均已实现）：配置解析验证、文件存在性检查（DB/blob/TLS证书/Lua脚本/GeoIP DB）、Hub TCP 可达性探测、配置摘要打印
 - [ ] 批量管理脚本
 
 ---
@@ -705,6 +706,8 @@ Edge 向客户端发送建议：
 | 连接池（pool_size=3 多 slot） | ✅ | tests/integration/suites/hub-connection-pool.test.ts (Rust only) |
 | LISTEN 权限检查 | ✅ | tests/integration/suites/acl.test.ts（'should deny second user from listening to restricted channel'） |
 | 结构化 JSON 日志格式 | ✅ | tests/integration/suites/log-format.test.ts (Rust only) |
+| 每 Edge 标签化 Prometheus 指标 | ✅ | tests/integration/suites/web-api.test.ts（per-edge 标签验证，Rust only） |
+| 诊断工具（`diagnose` 子命令） | ✅ | tests/integration/suites/diagnose.test.ts（Hub/Edge 各 6-7 用例，Rust only） |
 | 经由 Peer Edge 中继控制信道 | ❌ | 待实现（TS 和 Rust 均未有此功能） |
 
 ---
@@ -739,15 +742,15 @@ Edge 向客户端发送建议：
 
 ### 可以延后（P2）
 12. **Web API 接口** (Hub #1) - ✅ 已完成
-    - 管理和监控接口：status/edges/stats/topology/health/bans/metrics
+    - 管理和监控接口：status/edges/stats/topology/health/bans/metrics（含每 Edge 标签化 Prometheus 指标）
 13. **用户名和频道名验证规则** (Hub #4) - ✅ 已完成
     - 正则验证规则（`validation.username_regex`、`validation.channel_name_regex`）
-14. **经由 Peer Edge 中继控制信道** (Edge #5) - 📋 计划中
+14. **监控和可观测性** (其他 #2) - 🚧 进行中
+    - Prometheus metrics（全局+每 Edge 标签化）和结构化 JSON 日志已实现，分布式追踪待实现
+15. **运维工具** (其他 #3) - 🚧 进行中
+    - 配置验证工具（`validate-config`）、诊断工具（`diagnose`）已实现；数据库迁移/备份等待实现
+16. **经由 Peer Edge 中继控制信道** (Edge #5) - 📋 计划中
     - Hub 不可达时通过 Peer Edge 代理控制信道，防止 Edge 孤岛
-15. **监控和可观测性** (其他 #2) - 🚧 进行中
-    - Prometheus metrics 和结构化日志已实现，分布式追踪待实现
-16. **运维工具** (其他 #3) - 🚧 进行中
-    - 配置验证工具已实现，数据库迁移/备份等待实现
 
 ### 按需实现（P3）
 17. **Channel Ninja 功能** (Hub #9) - 暂不实现
@@ -801,4 +804,9 @@ Edge 向客户端发送建议：
 - 2026-03-12: 新增集成测试 `log-format.test.ts`（Rust 专用，5 个用例：Hub/Edge JSON 格式验证、Hub/Edge startup 结构化字段检查、文本格式反例验证）
 - 2026-03-12: 新增集成测试 `hub-connection-pool.test.ts`（Rust 专用，7 个用例：pool_size=3 多用户连接、跨 Edge 用户同步、频道操作、join/leave 事件传播、pool_size=1 向后兼容）
 - 2026-03-12: 修改 `setup.ts` — `startRustEdgeServer` 对 `hub_server` 做深度合并，支持通过 `rustEdgeExtraConfig.hub_server.pool_size` 等字段覆盖单个 hub_server 属性而不替换整个块
-- 2026-03-12: 更新 TODO.md：将 `日志格式测试` 和 `Hub 连接池集成测试` 标记为 ✅ 已完成；更新测试覆盖率追踪表
+- 2026-03-12: 扩展 Hub `GET /metrics` — 新增每 Edge 标签化 Prometheus 指标（`edge_user_count`、`edge_channel_count`、`edge_online`、`edge_uptime_seconds`），`edge_id` / `edge_name` 标签，按 `edge_id` 排序
+- 2026-03-12: 新增 Hub `diagnose [path]` 子命令 — 配置解析、DB 目录可达性、blob 目录可达性、Lua 脚本文件存在性、GeoIP 文件存在性、Web API 地址、完整配置摘要
+- 2026-03-12: 新增 Edge `diagnose [path]` 子命令 — 配置解析、TLS cert/key/CA 文件存在性、Hub TCP 可达性探测（3s 超时）、连接池大小、连接策略、完整配置摘要
+- 2026-03-12: 新增集成测试 `diagnose.test.ts`（Rust 专用，13 个用例：Hub/Edge 各类检查项、无效配置退出码验证）
+- 2026-03-12: 扩展集成测试 `web-api.test.ts` — 新增 4 个每 Edge 标签化指标测试（HELP/TYPE 行存在性、标签格式、online=1 验证）
+- 2026-03-12: 更新 TODO.md：将 `更多性能指标`、`诊断工具` 标记为 ✅ 已完成；更新测试覆盖率追踪表；更新实现优先级排序

@@ -191,6 +191,48 @@ describe.skipIf(!USE_RUST)('Hub Web API Integration Tests', () => {
       expect(match).not.toBeNull();
       expect(parseInt(match![1])).toBeGreaterThanOrEqual(1);
     }, 5000);
+
+    it('GET /metrics should include per-Edge labeled metrics', async () => {
+      const url = `http://127.0.0.1:${testEnv.webApiPort}/metrics`;
+      const res = await fetch(url);
+      const text = await res.text();
+      // Per-Edge labeled metrics should be present
+      expect(text).toContain('munode_hub_edge_user_count');
+      expect(text).toContain('munode_hub_edge_channel_count');
+      expect(text).toContain('munode_hub_edge_online');
+      expect(text).toContain('munode_hub_edge_uptime_seconds');
+      // Each metric must have HELP and TYPE lines
+      expect(text).toContain('# HELP munode_hub_edge_user_count');
+      expect(text).toContain('# TYPE munode_hub_edge_user_count gauge');
+      expect(text).toContain('# HELP munode_hub_edge_online');
+      expect(text).toContain('# TYPE munode_hub_edge_online gauge');
+    }, 5000);
+
+    it('GET /metrics per-Edge labels include edge_id and edge_name', async () => {
+      const url = `http://127.0.0.1:${testEnv.webApiPort}/metrics`;
+      const res = await fetch(url);
+      const text = await res.text();
+      // The per-Edge metric lines must contain label key-value pairs
+      const match = text.match(/munode_hub_edge_online\{edge_id="(\d+)",edge_name="([^"]+)"\} (\d+)/);
+      expect(match).not.toBeNull();
+      // edge_id must be a positive integer
+      expect(parseInt(match![1])).toBeGreaterThan(0);
+      // edge_name must be non-empty
+      expect(match![2].length).toBeGreaterThan(0);
+      // value must be 0 or 1
+      expect(['0', '1']).toContain(match![3]);
+    }, 5000);
+
+    it('GET /metrics connected edge should have edge_online = 1', async () => {
+      const url = `http://127.0.0.1:${testEnv.webApiPort}/metrics`;
+      const res = await fetch(url);
+      const text = await res.text();
+      // At least one Edge should be online (value = 1)
+      const onlineLines = text
+        .split('\n')
+        .filter(line => line.startsWith('munode_hub_edge_online{') && line.endsWith(' 1'));
+      expect(onlineLines.length).toBeGreaterThanOrEqual(1);
+    }, 5000);
   });
 
   describe('Ban Management', () => {
