@@ -531,8 +531,8 @@ Edge 到 Hub 的连接池：
 - [x] 主连接处理通知，辅助连接不处理（避免重复）
 
 #### 集成测试
-- 现有集成测试在 `pool_size=1`（默认）下全部通过
-- 池化功能在单连接模式下向后兼容
+- [x] `pool_size=1` 向后兼容性验证（`hub-connection-pool.test.ts`）
+- [x] `pool_size=3` 多 slot 连接池功能测试（`hub-connection-pool.test.ts`：单/双 Edge 连接、多用户并发认证、跨 Edge 用户可见性、频道操作、用户加入离开事件传播）
 
 #### 依赖
 无
@@ -646,7 +646,7 @@ Edge 向客户端发送建议：
 #### 测试
 - [x] Metrics 端点测试（`web-api.test.ts`：格式验证、edge count ≥ 1）
 - [x] 健康检查测试（`web-api.test.ts`）
-- [ ] 日志格式测试
+- [x] 日志格式测试（`log-format.test.ts`：Hub/Edge JSON 日志逐行验证、文本格式检测、startup 结构化字段验证）
 
 ---
 
@@ -701,8 +701,10 @@ Edge 向客户端发送建议：
 | 包丢失计算 | ✅ | tests/integration/suites/edge-packet-loss-calculation.test.ts |
 | 多租户 SNI | ✅ | tests/integration/suites/multi-tenant-sni.test.ts (TS only) |
 | GeoIP | ❌ | 未实现 |
-| 连接池 | ✅ | Hub 连接池已实现（pool_size 配置项，默认 1 连接，可扩展为多连接） |
+| 连接池（pool_size=1 默认） | ✅ | Hub 连接池已实现，向后兼容性在 `hub-connection-pool.test.ts` 中验证 |
+| 连接池（pool_size=3 多 slot） | ✅ | tests/integration/suites/hub-connection-pool.test.ts (Rust only) |
 | LISTEN 权限检查 | ✅ | tests/integration/suites/acl.test.ts（'should deny second user from listening to restricted channel'） |
+| 结构化 JSON 日志格式 | ✅ | tests/integration/suites/log-format.test.ts (Rust only) |
 | 经由 Peer Edge 中继控制信道 | ❌ | 待实现（TS 和 Rust 均未有此功能） |
 
 ---
@@ -796,4 +798,7 @@ Edge 向客户端发送建议：
 - 2026-03-11: 实现 Edge 重连指数退避（`ExponentialBackoff`，hub_client.rs，基础间隔翻倍上限 30s）
 - 2026-03-12: 新增集成测试 `lua-auth.test.ts`（Rust 专用，9 个用例：有效凭据连接成功、无效密码/用户名拒绝、多用户并发连接、ServerSync 验证）
 - 2026-03-12: 新增集成测试 `voice-routing-strategy.test.ts`（Rust 专用，9 个用例：tcp_only / direct_only / auto_fallback 三种策略各 3 个测试）
-- 2026-03-12: 更新 TODO.md：将 Lua 认证测试、connection_strategy 专项测试、LISTEN 权限测试标记为 ✅ 已完成；更新测试覆盖率追踪表
+- 2026-03-12: 新增集成测试 `log-format.test.ts`（Rust 专用，5 个用例：Hub/Edge JSON 格式验证、Hub/Edge startup 结构化字段检查、文本格式反例验证）
+- 2026-03-12: 新增集成测试 `hub-connection-pool.test.ts`（Rust 专用，7 个用例：pool_size=3 多用户连接、跨 Edge 用户同步、频道操作、join/leave 事件传播、pool_size=1 向后兼容）
+- 2026-03-12: 修改 `setup.ts` — `startRustEdgeServer` 对 `hub_server` 做深度合并，支持通过 `rustEdgeExtraConfig.hub_server.pool_size` 等字段覆盖单个 hub_server 属性而不替换整个块
+- 2026-03-12: 更新 TODO.md：将 `日志格式测试` 和 `Hub 连接池集成测试` 标记为 ✅ 已完成；更新测试覆盖率追踪表
