@@ -30,7 +30,7 @@ pub struct LoginHandler<'a> {
     sender: &'a ClientSender,
     config: &'a EdgeConfig,
     edge_state: &'a Arc<EdgeState>,
-    _hub_client: &'a Arc<HubClient>,
+    hub_client: &'a Arc<HubClient>,
 }
 
 impl<'a> LoginHandler<'a> {
@@ -40,7 +40,7 @@ impl<'a> LoginHandler<'a> {
         edge_state: &'a Arc<EdgeState>,
         hub_client: &'a Arc<HubClient>,
     ) -> Self {
-        Self { sender, config, edge_state, _hub_client: hub_client }
+        Self { sender, config, edge_state, hub_client }
     }
 
     /// Execute the full login sequence after authentication.
@@ -65,8 +65,15 @@ impl<'a> LoginHandler<'a> {
         // 5. Send self UserState
         self.send_self_user_state(session_id, auth_result).await?;
 
-        // 6. Send ServerSync
-        self.send_server_sync(session_id).await?;
+        // 6. Send ServerSync (include actual root-channel permissions so the
+        //    Mumble client caches them and doesn't spam PermissionQuery for
+        //    channel 0 on every UI event during startup).
+        let root_permissions = self.hub_client
+            .handle_permission_query(session_id, 0)
+            .await
+            .map(|r| r.permissions.unwrap_or(0))
+            .unwrap_or(0);
+        self.send_server_sync(session_id, root_permissions).await?;
 
         // 7. Send ServerConfig
         self.send_server_config().await?;
@@ -307,7 +314,13 @@ impl<'a> LoginHandler<'a> {
     }
 
     /// Send ServerSync.
-    async fn send_server_sync(&self, session_id: u32) -> Result<()> {
+    ///
+    /// `root_permissions` should be the user's effective permissions on channel 0
+    /// (queried from Hub). The Mumble client caches this value as `pPermissions` and
+    /// uses it to avoid sending repeated PermissionQuery messages for the root channel
+    /// on every UI event during startup. Sending 0 here causes the client to think it
+    /// has no permissions and to keep querying until an async reply arrives.
+    async fn send_server_sync(&self, session_id: u32, root_permissions: u32) -> Result<()> {
         let hub_limits = self.edge_state.hub_limits.read().await;
         let max_bandwidth = hub_limits.as_ref()
             .and_then(|l| l.max_bandwidth)
@@ -321,7 +334,7 @@ impl<'a> LoginHandler<'a> {
             session: Some(session_id),
             max_bandwidth: Some(max_bandwidth),
             welcome_text: Some(welcome),
-            permissions: Some(0),
+            permissions: Some(root_permissions.into()),
         };
         self.send(MessageType::ServerSync, &msg).await?;
         debug!("Sent ServerSync for session {}", session_id);
