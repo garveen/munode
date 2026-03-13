@@ -137,13 +137,3 @@ enabled            = true              # Default: true
 # Maximum total relay bandwidth across all streams (kbps)
 max_relay_bandwidth = 10000            # Default: 10000 kbps
 
-# ---------------------------------------------------------------------------
-# Client Suggestions (local fallback)
-# These are normally pushed from Hub (configure in hub.toml [suggest]).
-# Only takes effect if Hub has not pushed suggestion settings to this Edge.
-# ---------------------------------------------------------------------------
-[suggest]
-# version      = 1340029               # Suggested minimum client version (numeric, e.g. 1.3.0.29 → 1340029)
-# positional   = false                 # Suggest enabling positional audio
-# push_to_talk = false                 # Suggest enabling push-to-talk
-

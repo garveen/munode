@@ -591,13 +591,17 @@ message ServerConfig {
 // Sent by the server to inform the clients of suggested client configuration
 // specified by the server administrator.
 message SuggestConfig {
-	// Suggested client version.
+	// Suggested client version in the legacy format (major<<16 | minor<<8 | patch).
 	optional uint32 version = 1;
 	// True if the administrator suggests positional audio to be used on this
 	// server.
 	optional bool positional = 2;
 	// True if the administrator suggests push to talk to be used on this server.
 	optional bool push_to_talk = 3;
+	// Suggested client version in the new format (major<<48 | minor<<32 | patch<<16).
+	// Necessary since patch level may exceed 255.
+	// New clients prefer this field; old clients use version (field 1) as fallback.
+	optional uint64 version_v2 = 4;
 }
 
 // Used to send plugin messages between clients

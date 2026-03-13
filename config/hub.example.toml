@@ -172,14 +172,6 @@ end
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Client Suggestions
-# These are pushed to Edge nodes and forwarded to connecting Mumble clients.
-# ---------------------------------------------------------------------------
-[suggest]
-# version      = "1.3.4.29"           # Suggested minimum client version (string, e.g. "1.3.4.29")
-# positional   = false                 # Suggest enabling positional audio
-# push_to_talk = false                 # Suggest enabling push-to-talk
-
 # ---------------------------------------------------------------------------
 # Server Limits (applied Hub-wide)
 # All values in this section are pushed to Edge nodes at registration time
@@ -240,7 +232,8 @@ duration    = 300                      # Default: 300 seconds (5 minutes)
 # Optional: send recommended settings to connecting Mumble clients.
 # ---------------------------------------------------------------------------
 # [suggest]
-# version      = 1340029               # Suggested minimum client version (numeric, e.g. 1.3.0.29 → 1340029)
+# version      = "1.3.4"              # Suggested minimum client version (string, e.g. "1.3.4")
+#                                      # Encoded as v1 (major<<16|minor<<8|patch) and v2 (major<<48|minor<<32|patch<<16)
 # positional   = false                 # Suggest enabling positional audio
 # push_to_talk = false                 # Suggest enabling push-to-talk
 

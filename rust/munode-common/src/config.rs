@@ -20,9 +20,6 @@ pub struct EdgeConfig {
     /// Voice routing configuration.
     #[serde(default)]
     pub voice_routing: EdgeVoiceRoutingConfig,
-    /// Client suggestion configuration.
-    #[serde(default)]
-    pub suggest: Option<EdgeSuggestConfig>,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -124,16 +121,6 @@ impl Default for EdgeVoiceRoutingConfig {
     }
 }
 
-/// Client suggestion configuration for Edge.
-#[derive(Debug, Clone, Deserialize)]
-pub struct EdgeSuggestConfig {
-    /// Suggested client version (numeric, e.g., 1340029 for 1.3.0.29).
-    pub version: Option<u32>,
-    /// Suggest positional audio.
-    pub positional: Option<bool>,
-    /// Suggest push-to-talk.
-    pub push_to_talk: Option<bool>,
-}
 
 /// Network binding configuration.
 #[derive(Debug, Clone, Deserialize)]
@@ -592,12 +579,37 @@ impl Default for HubAutoBanConfig {
 /// Client suggestion configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct HubSuggestConfig {
-    /// Suggested client version (numeric, e.g., 1340029 for 1.3.0.29).
-    pub version: Option<u32>,
+    /// Suggested client version string (e.g. "1.3.4").
+    /// Parsed to v1 (major<<16|minor<<8|patch) and v2 (major<<48|minor<<32|patch<<16) at send time.
+    pub version: Option<String>,
     /// Suggest positional audio.
     pub positional: Option<bool>,
     /// Suggest push-to-talk.
     pub push_to_talk: Option<bool>,
+}
+
+impl HubSuggestConfig {
+    /// Parse version string to (v1: u32, v2: u64).
+    /// v1 format: major<<16 | minor<<8 | patch  (major up to 65535, minor/patch up to 255)
+    /// v2 format: major<<48 | minor<<32 | patch<<16  (all components up to 65535)
+    /// Matches C++ Version::toLegacyVersion() and Version::fromComponents() semantics.
+    pub fn parse_version(&self) -> Option<(u32, u64)> {
+        let s = self.version.as_deref()?;
+        let parts: Vec<&str> = s.splitn(4, '.').collect();
+        if parts.len() < 3 {
+            return None;
+        }
+        let major = parts[0].parse::<u64>().ok()?;
+        let minor = parts[1].parse::<u64>().ok()?;
+        let patch = parts[2].parse::<u64>().ok()?;
+        // v2: full precision
+        let v2: u64 = (major << 48) | (minor << 32) | (patch << 16);
+        // v1 legacy: major capped at u16::MAX, minor/patch capped at u8::MAX
+        let v1: u32 = ((major.min(0xFFFF) as u32) << 16)
+            | ((minor.min(0xFF) as u32) << 8)
+            | (patch.min(0xFF) as u32);
+        Some((v1, v2))
+    }
 }
 
 impl Default for HubSuggestConfig {

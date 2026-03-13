@@ -706,7 +706,7 @@ pub struct ServerLimitsConfig {
     /// 每用户最大监听频道数。0 = 无限制。
     #[prost(uint32, optional, tag = "9")]
     pub listeners_per_user: ::core::option::Option<u32>,
-    /// 建议客户端版本（数字格式，如 1340029 表示 1.3.4.29）。
+    /// 建议客户端版本（v1 格式：major<<16 | minor<<8 | patch，兼容旧客户端）。
     #[prost(uint32, optional, tag = "10")]
     pub suggest_version: ::core::option::Option<u32>,
     /// 建议开启位置音频。
@@ -718,6 +718,9 @@ pub struct ServerLimitsConfig {
     /// 欢迎消息（MOTD）。
     #[prost(string, optional, tag = "13")]
     pub welcome_text: ::core::option::Option<::prost::alloc::string::String>,
+    /// 建议客户端版本（v2 格式：major<<48 | minor<<32 | patch<<16，供新版客户端使用）。
+    #[prost(uint64, optional, tag = "14")]
+    pub suggest_version_v2: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeInfo {

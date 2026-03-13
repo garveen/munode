@@ -957,7 +957,7 @@ pub struct ServerConfig {
 /// specified by the server administrator.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct SuggestConfig {
-    /// Suggested client version.
+    /// Suggested client version in the legacy format (major<<16 | minor<<8 | patch).
     #[prost(uint32, optional, tag = "1")]
     pub version: ::core::option::Option<u32>,
     /// True if the administrator suggests positional audio to be used on this
@@ -967,6 +967,10 @@ pub struct SuggestConfig {
     /// True if the administrator suggests push to talk to be used on this server.
     #[prost(bool, optional, tag = "3")]
     pub push_to_talk: ::core::option::Option<bool>,
+    /// Suggested client version in the new format (major<<48 | minor<<32 | patch<<16).
+    /// New clients prefer this field; old clients use version (field 1) as fallback.
+    #[prost(uint64, optional, tag = "4")]
+    pub version_v2: ::core::option::Option<u64>,
 }
 /// Used to send plugin messages between clients
 #[derive(Clone, PartialEq, ::prost::Message)]

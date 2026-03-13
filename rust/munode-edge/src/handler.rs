@@ -348,6 +348,7 @@ impl<'a> LoginHandler<'a> {
             .and_then(|l| l.max_users)
             .unwrap_or(self.config.server.capacity);
         let suggest_version = hub_limits.as_ref().and_then(|l| l.suggest_version);
+        let suggest_version_v2 = hub_limits.as_ref().and_then(|l| l.suggest_version_v2);
         let suggest_positional = hub_limits.as_ref().and_then(|l| l.suggest_positional);
         let suggest_push_to_talk = hub_limits.as_ref().and_then(|l| l.suggest_push_to_talk);
         drop(hub_limits);
@@ -364,32 +365,20 @@ impl<'a> LoginHandler<'a> {
         self.send(MessageType::ServerConfig, &msg).await?;
         debug!("Sent ServerConfig");
 
-        // Send SuggestConfig if Hub provided suggestions (or edge config has them)
-        let has_hub_suggest = suggest_version.is_some() || suggest_positional.is_some() || suggest_push_to_talk.is_some();
-        let has_edge_suggest = self.config.suggest.as_ref()
-            .map(|s| s.version.is_some() || s.positional.is_some() || s.push_to_talk.is_some())
-            .unwrap_or(false);
-
-        if has_hub_suggest {
+        // Send SuggestConfig if Hub provided suggestions
+        // Only send if at least one field is set (matches murmur behavior)
+        // Send both version_v1 (field 1) and version_v2 (field 4) for full client compatibility:
+        //   - Old clients (< 1.5): use version field (v1) only
+        //   - New clients (>= 1.5): prefer version_v2, fall back to version
+        if suggest_version.is_some() || suggest_version_v2.is_some() || suggest_positional.is_some() || suggest_push_to_talk.is_some() {
             let suggest_msg = mumbleproto::SuggestConfig {
                 version: suggest_version,
                 positional: suggest_positional,
                 push_to_talk: suggest_push_to_talk,
+                version_v2: suggest_version_v2,
             };
             self.send(MessageType::SuggestConfig, &suggest_msg).await?;
-            debug!("Sent SuggestConfig (from Hub)");
-        } else if has_edge_suggest {
-            if let Some(suggest) = self.config.suggest.as_ref() {
-                if suggest.version.is_some() || suggest.positional.is_some() || suggest.push_to_talk.is_some() {
-                    let suggest_msg = mumbleproto::SuggestConfig {
-                        version: suggest.version.clone(),
-                        positional: suggest.positional,
-                        push_to_talk: suggest.push_to_talk,
-                    };
-                    self.send(MessageType::SuggestConfig, &suggest_msg).await?;
-                    debug!("Sent SuggestConfig (from Edge config)");
-                }
-            }
+            debug!("Sent SuggestConfig");
         }
 
         Ok(())

@@ -2345,6 +2345,9 @@ impl RpcHandler {
     pub(crate) fn build_server_limits(&self) -> ServerLimitsConfig {
         let limits = &self.state.config.limits;
         let suggest = &self.state.config.suggest;
+        let (suggest_version, suggest_version_v2) = suggest.parse_version()
+            .map(|(v1, v2)| (Some(v1), Some(v2)))
+            .unwrap_or((None, None));
         let welcome = self.state.config.auth.welcome_text.clone();
         ServerLimitsConfig {
             max_bandwidth: Some(limits.max_bandwidth),
@@ -2356,10 +2359,11 @@ impl RpcHandler {
             max_users: Some(limits.max_users),
             listeners_per_channel: Some(limits.listeners_per_channel),
             listeners_per_user: Some(limits.listeners_per_user),
-            suggest_version: suggest.version,
+            suggest_version,
             suggest_positional: suggest.positional,
             suggest_push_to_talk: suggest.push_to_talk,
             welcome_text: welcome,
+            suggest_version_v2,
         }
     }
 
