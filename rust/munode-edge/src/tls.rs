@@ -31,6 +31,11 @@ pub fn create_tls_acceptor(tls_config: &TlsConfig) -> Result<TlsAcceptor> {
             false // But don't require it
         }
         
+        fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
+            // Return empty list - we accept any certificate
+            &[]
+        }
+        
         fn verify_client_cert(
             &self,
             _end_entity: &rustls::pki_types::CertificateDer<'_>,
