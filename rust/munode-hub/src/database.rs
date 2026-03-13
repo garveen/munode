@@ -70,35 +70,55 @@ impl Database {
     }
 
     /// Create the required tables if they don't exist, and ensure root channel exists.
+    /// The schema is kept identical to the TypeScript Hub server so databases are
+    /// directly interchangeable without any migration.
     fn init_tables(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
 
         conn.execute_batch(
+            // ── Users (TS-compatible) ─────────────────────────────────────
             "CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                pw_hash TEXT NOT NULL DEFAULT '',
-                last_channel INTEGER NOT NULL DEFAULT 0,
-                cert_hash TEXT NOT NULL DEFAULT ''
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                email TEXT,
+                password_hash TEXT,
+                texture_blob TEXT,
+                comment_blob TEXT,
+                last_seen INTEGER,
+                last_channel INTEGER,
+                created_at INTEGER,
+                updated_at INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_users_name ON users(name);
+
+            -- TS stores last-visited channel here (primary storage)
+            CREATE TABLE IF NOT EXISTS user_last_channels (
+                id INTEGER PRIMARY KEY,
+                last_channel INTEGER
             );
 
+            -- ── Channels (TS-compatible, no 'temporary' column) ──────────
             CREATE TABLE IF NOT EXISTS channels (
-                id INTEGER PRIMARY KEY,
-                parent_id INTEGER,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                description_blob TEXT,
                 position INTEGER NOT NULL DEFAULT 0,
                 max_users INTEGER NOT NULL DEFAULT 0,
-                temporary INTEGER NOT NULL DEFAULT 0,
-                inherit_acl INTEGER NOT NULL DEFAULT 1
+                parent_id INTEGER NOT NULL DEFAULT 0,
+                inherit_acl INTEGER NOT NULL DEFAULT 1,
+                description_blob TEXT
             );
+            CREATE INDEX IF NOT EXISTS idx_channel_parentid ON channels(parent_id);
 
+            -- TS uses 'link_id' (not 'target_id')
             CREATE TABLE IF NOT EXISTS channel_links (
                 channel_id INTEGER NOT NULL,
-                target_id INTEGER NOT NULL,
-                PRIMARY KEY (channel_id, target_id)
+                link_id INTEGER NOT NULL,
+                PRIMARY KEY (channel_id, link_id),
+                FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+                FOREIGN KEY (link_id) REFERENCES channels(id) ON DELETE CASCADE
             );
 
+            -- ── ACLs ─────────────────────────────────────────────────────
             CREATE TABLE IF NOT EXISTS acls (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at DATETIME,
@@ -111,211 +131,74 @@ impl Database {
                 apply_subs INTEGER NOT NULL DEFAULT 1,
                 allow INTEGER NOT NULL DEFAULT 0,
                 deny INTEGER NOT NULL DEFAULT 0
-            );"
-        )?;
+            );
+            CREATE INDEX IF NOT EXISTS idx_acls_deleted_at ON acls(deleted_at);
+            CREATE INDEX IF NOT EXISTS idx_acl_channelid ON acls(channel_id);
 
-        // Migrate old schema: rename 'description' to 'description_blob' if needed
-        let has_description_col: bool = {
-            let mut col_stmt = conn.prepare(
-                "SELECT COUNT(*) FROM pragma_table_info('channels') WHERE name = 'description'"
-            )?;
-            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
-        };
-        let has_description_blob_col: bool = {
-            let mut col_stmt = conn.prepare(
-                "SELECT COUNT(*) FROM pragma_table_info('channels') WHERE name = 'description_blob'"
-            )?;
-            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
-        };
-        if has_description_col && !has_description_blob_col {
-            conn.execute_batch(
-                "ALTER TABLE channels RENAME COLUMN description TO description_blob;"
-            )?;
-            info!("Migrated channels table: renamed 'description' to 'description_blob'");
-        }
+            -- ── Channel groups ────────────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS channel_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                inherit INTEGER NOT NULL DEFAULT 1,
+                inheritable INTEGER NOT NULL DEFAULT 1,
+                created_at DATETIME,
+                updated_at DATETIME,
+                UNIQUE(channel_id, name),
+                FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_channel_groups_channel ON channel_groups(channel_id);
 
-        // Add 'temporary' column to channels if missing (TS schema doesn't have it)
-        let has_temporary_col: bool = {
-            let mut col_stmt = conn.prepare(
-                "SELECT COUNT(*) FROM pragma_table_info('channels') WHERE name = 'temporary'"
-            )?;
-            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
-        };
-        if !has_temporary_col {
-            conn.execute_batch(
-                "ALTER TABLE channels ADD COLUMN temporary INTEGER NOT NULL DEFAULT 0;"
-            )?;
-            info!("Migrated channels table: added 'temporary' column");
-        }
+            CREATE TABLE IF NOT EXISTS channel_group_members (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_group_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                is_add INTEGER NOT NULL,
+                created_at DATETIME,
+                FOREIGN KEY (channel_group_id) REFERENCES channel_groups(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_channel_group_members_group ON channel_group_members(channel_group_id);
 
-        // Migrate channel_links: TS uses 'link_id', Rust expects 'target_id'
-        let has_link_id_col: bool = {
-            let mut col_stmt = conn.prepare(
-                "SELECT COUNT(*) FROM pragma_table_info('channel_links') WHERE name = 'link_id'"
-            )?;
-            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
-        };
-        if has_link_id_col {
-            conn.execute_batch(
-                "ALTER TABLE channel_links RENAME COLUMN link_id TO target_id;"
-            )?;
-            info!("Migrated channel_links table: renamed 'link_id' to 'target_id'");
-        }
+            -- ── Bans (TS-compatible: nullable name/hash/reason, 'start' not 'start_time')
+            CREATE TABLE IF NOT EXISTS bans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at DATETIME,
+                updated_at DATETIME,
+                deleted_at DATETIME,
+                address BLOB NOT NULL,
+                mask INTEGER NOT NULL DEFAULT 128,
+                name TEXT,
+                hash TEXT,
+                reason TEXT,
+                start INTEGER NOT NULL DEFAULT 0,
+                duration INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_bans_deleted_at ON bans(deleted_at);
+            CREATE INDEX IF NOT EXISTS idx_bans_address ON bans(address);
+            CREATE INDEX IF NOT EXISTS idx_bans_hash ON bans(hash);
 
-        // Migrate users table: TS uses 'name'/'password_hash', Rust uses 'username'/'pw_hash'
-        let has_name_col: bool = {
-            let mut col_stmt = conn.prepare(
-                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'name'"
-            )?;
-            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
-        };
-        let has_username_col: bool = {
-            let mut col_stmt = conn.prepare(
-                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'username'"
-            )?;
-            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
-        };
-        if has_name_col && !has_username_col {
-            conn.execute_batch(
-                "ALTER TABLE users RENAME COLUMN name TO username;"
-            )?;
-            info!("Migrated users table: renamed 'name' to 'username'");
-        }
-        let has_pw_hash_col: bool = {
-            let mut col_stmt = conn.prepare(
-                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'pw_hash'"
-            )?;
-            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
-        };
-        let has_password_hash_col: bool = {
-            let mut col_stmt = conn.prepare(
-                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'password_hash'"
-            )?;
-            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
-        };
-        if has_password_hash_col && !has_pw_hash_col {
-            conn.execute_batch(
-                "ALTER TABLE users RENAME COLUMN password_hash TO pw_hash;"
-            )?;
-            info!("Migrated users table: renamed 'password_hash' to 'pw_hash'");
-        }
-        // Add cert_hash if missing
-        let has_cert_hash_col: bool = {
-            let mut col_stmt = conn.prepare(
-                "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'cert_hash'"
-            )?;
-            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
-        };
-        if !has_cert_hash_col {
-            conn.execute_batch(
-                "ALTER TABLE users ADD COLUMN cert_hash TEXT NOT NULL DEFAULT '';"
-            )?;
-            info!("Migrated users table: added 'cert_hash' column");
-        }
-
-        // Migrate old acls schema: rename 'group_name' to 'group' if needed
-        let has_group_name_col: bool = {
-            let mut col_stmt = conn.prepare(
-                "SELECT COUNT(*) FROM pragma_table_info('acls') WHERE name = 'group_name'"
-            )?;
-            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
-        };
-        if has_group_name_col {
-            // SQLite doesn't support RENAME COLUMN in older versions; recreate table
-            conn.execute_batch(
-                "CREATE TABLE IF NOT EXISTS acls_new (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    created_at DATETIME,
-                    updated_at DATETIME,
-                    deleted_at DATETIME,
-                    channel_id INTEGER NOT NULL,
-                    user_id INTEGER NOT NULL DEFAULT -1,
-                    \"group\" TEXT,
-                    apply_here INTEGER NOT NULL DEFAULT 1,
-                    apply_subs INTEGER NOT NULL DEFAULT 1,
-                    allow INTEGER NOT NULL DEFAULT 0,
-                    deny INTEGER NOT NULL DEFAULT 0
-                );
-                INSERT INTO acls_new (id, channel_id, user_id, \"group\", apply_here, apply_subs, allow, deny)
-                    SELECT id, channel_id, COALESCE(user_id, -1), group_name, apply_here, apply_subs, allow, deny FROM acls;
-                DROP TABLE acls;
-                ALTER TABLE acls_new RENAME TO acls;"
-            )?;
-            info!("Migrated acls table: renamed 'group_name' to '\"group\"'");
-        }
-
-        // Ensure root channel exists (id=0, name="Root")
-        let root_exists: bool = conn.query_row(
-            "SELECT COUNT(*) > 0 FROM channels WHERE id = 0",
-            [],
-            |row| row.get(0),
-        )?;
-
-        if !root_exists {
-            conn.execute(
-                "INSERT INTO channels (id, parent_id, name, description_blob, position, max_users, temporary, inherit_acl)
-                 VALUES (0, NULL, 'Root', '', 0, 0, 0, 1)",
-                [],
-            )?;
-            info!("Created root channel (id=0)");
-        }
-
-        // Create bans table
-        Self::init_bans_table(&conn)?;
-
-        // Add cert_hash to bans table if missing (migration from older schema)
-        let bans_has_cert_hash: bool = {
-            let mut col_stmt = conn.prepare(
-                "SELECT COUNT(*) FROM pragma_table_info('bans') WHERE name = 'cert_hash'"
-            )?;
-            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
-        };
-        if !bans_has_cert_hash {
-            conn.execute_batch(
-                "ALTER TABLE bans ADD COLUMN cert_hash TEXT NOT NULL DEFAULT '';"
-            )?;
-            info!("Migrated bans table: added 'cert_hash' column");
-        }
-
-        // Add start_time to bans table if missing (TS schema uses 'start')
-        let bans_has_start_time: bool = {
-            let mut col_stmt = conn.prepare(
-                "SELECT COUNT(*) FROM pragma_table_info('bans') WHERE name = 'start_time'"
-            )?;
-            col_stmt.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
-        };
-        if !bans_has_start_time {
-            // Copy from 'start' column if present, otherwise default to 0
-            let has_start: bool = {
-                let mut s = conn.prepare(
-                    "SELECT COUNT(*) FROM pragma_table_info('bans') WHERE name = 'start'"
-                )?;
-                s.query_row([], |row| row.get(0)).unwrap_or(0i64) > 0
-            };
-            if has_start {
-                conn.execute_batch(
-                    "ALTER TABLE bans ADD COLUMN start_time INTEGER NOT NULL DEFAULT 0;
-                     UPDATE bans SET start_time = COALESCE(start, 0);"
-                )?;
-            } else {
-                conn.execute_batch(
-                    "ALTER TABLE bans ADD COLUMN start_time INTEGER NOT NULL DEFAULT 0;"
-                )?;
-            }
-            info!("Migrated bans table: added 'start_time' column");
-        }
-
-        // Create blob storage tables
-        Self::init_blob_tables(&conn)?;
-
-        // Create schema_versions table (used by the migrate subcommand)
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS schema_versions (
+            -- ── Schema versions ───────────────────────────────────────────
+            CREATE TABLE IF NOT EXISTS schema_versions (
                 version INTEGER PRIMARY KEY,
                 description TEXT NOT NULL,
                 applied_at INTEGER NOT NULL DEFAULT 0
             );"
         )?;
+
+        // Ensure root channel exists (id=0, parent_id=-1 is the TS sentinel for "no parent")
+        let root_exists: bool = conn.query_row(
+            "SELECT COUNT(*) > 0 FROM channels WHERE id = 0",
+            [],
+            |row| row.get(0),
+        )?;
+        if !root_exists {
+            conn.execute(
+                "INSERT INTO channels (id, parent_id, name, description_blob, position, max_users, inherit_acl)
+                 VALUES (0, -1, 'Root', '', 0, 0, 1)",
+                [],
+            )?;
+            info!("Created root channel (id=0)");
+        }
 
         Ok(())
     }
@@ -453,22 +336,23 @@ impl Database {
     /// Load all channels from the database.
     pub fn load_channels(&self) -> Result<Vec<DbChannelRecord>> {
         let conn = self.conn.lock().unwrap();
+        // TS schema: no 'temporary' column; parent_id NOT NULL, -1 means root (no parent)
         let mut stmt = conn.prepare(
-            "SELECT id, parent_id, name, description_blob, position, max_users, temporary, inherit_acl FROM channels"
+            "SELECT id, parent_id, name, COALESCE(description_blob,''), position, max_users, inherit_acl FROM channels"
         )?;
 
         let rows = stmt.query_map([], |row| {
-            let parent_id_raw: Option<i64> = row.get(1)?;
-            let parent_id = parent_id_raw.and_then(|p| if p < 0 { None } else { Some(p as u32) });
+            let parent_id_raw: i64 = row.get::<_, i64>(1).unwrap_or(-1);
+            let parent_id = if parent_id_raw < 0 { None } else { Some(parent_id_raw as u32) };
             Ok(DbChannelRecord {
                 id: row.get(0)?,
                 parent_id,
                 name: row.get(2)?,
-                description: row.get::<_, String>(3).unwrap_or_default(),
+                description: row.get(3)?,
                 position: row.get(4)?,
                 max_users: row.get(5)?,
-                temporary: row.get::<_, i32>(6).unwrap_or(0) != 0,
-                inherit_acl: row.get::<_, i32>(7).unwrap_or(1) != 0,
+                temporary: false, // TS does not persist temporary channels
+                inherit_acl: row.get::<_, i32>(6).unwrap_or(1) != 0,
             })
         })?;
 
@@ -482,7 +366,7 @@ impl Database {
     /// Load all channel links from the database.
     pub fn load_channel_links(&self) -> Result<Vec<(u32, u32)>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT channel_id, target_id FROM channel_links")?;
+        let mut stmt = conn.prepare("SELECT channel_id, link_id FROM channel_links")?;
 
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?))
@@ -498,17 +382,18 @@ impl Database {
     /// Save (insert or replace) a channel.
     pub fn save_channel(&self, ch: &DbChannelRecord) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        // TS schema: no 'temporary' column; represent root's absent parent as -1
+        let parent_id: i64 = ch.parent_id.map(|p| p as i64).unwrap_or(-1);
         conn.execute(
-            "INSERT OR REPLACE INTO channels (id, parent_id, name, description_blob, position, max_users, temporary, inherit_acl)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT OR REPLACE INTO channels (id, parent_id, name, description_blob, position, max_users, inherit_acl)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 ch.id,
-                ch.parent_id,
+                parent_id,
                 ch.name,
                 ch.description,
                 ch.position,
                 ch.max_users,
-                ch.temporary as i32,
                 ch.inherit_acl as i32,
             ],
         )?;
@@ -519,11 +404,11 @@ impl Database {
     pub fn add_channel_link(&self, ch1: u32, ch2: u32) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT OR IGNORE INTO channel_links (channel_id, target_id) VALUES (?1, ?2)",
+            "INSERT OR IGNORE INTO channel_links (channel_id, link_id) VALUES (?1, ?2)",
             params![ch1, ch2],
         )?;
         conn.execute(
-            "INSERT OR IGNORE INTO channel_links (channel_id, target_id) VALUES (?1, ?2)",
+            "INSERT OR IGNORE INTO channel_links (channel_id, link_id) VALUES (?1, ?2)",
             params![ch2, ch1],
         )?;
         Ok(())
@@ -533,7 +418,7 @@ impl Database {
     pub fn remove_channel_link(&self, ch1: u32, ch2: u32) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "DELETE FROM channel_links WHERE (channel_id = ?1 AND target_id = ?2) OR (channel_id = ?2 AND target_id = ?1)",
+            "DELETE FROM channel_links WHERE (channel_id = ?1 AND link_id = ?2) OR (channel_id = ?2 AND link_id = ?1)",
             params![ch1, ch2],
         )?;
         Ok(())
@@ -543,15 +428,21 @@ impl Database {
     pub fn delete_channel(&self, channel_id: u32) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM channels WHERE id = ?1", params![channel_id])?;
-        conn.execute("DELETE FROM channel_links WHERE channel_id = ?1 OR target_id = ?1", params![channel_id])?;
+        conn.execute("DELETE FROM channel_links WHERE channel_id = ?1 OR link_id = ?1", params![channel_id])?;
         Ok(())
     }
 
     /// Find a user by username.
     pub fn find_user(&self, username: &str) -> Result<Option<UserRecord>> {
         let conn = self.conn.lock().unwrap();
+        // TS schema: 'name' not 'username', 'password_hash' not 'pw_hash', no cert_hash column.
+        // last_channel stored in user_last_channels (TS primary) with fallback to users.last_channel.
         let mut stmt = conn.prepare(
-            "SELECT id, username, pw_hash, last_channel, cert_hash FROM users WHERE username = ?1"
+            "SELECT u.id, u.name, COALESCE(u.password_hash,''),
+                    COALESCE(ulc.last_channel, COALESCE(u.last_channel, 0))
+             FROM users u
+             LEFT JOIN user_last_channels ulc ON ulc.id = u.id
+             WHERE u.name = ?1"
         )?;
 
         let mut rows = stmt.query(params![username])?;
@@ -560,8 +451,8 @@ impl Database {
                 id: row.get(0)?,
                 username: row.get(1)?,
                 pw_hash: row.get(2)?,
-                last_channel: row.get(3)?,
-                cert_hash: row.get(4)?,
+                last_channel: row.get::<_, u32>(3).unwrap_or(0),
+                cert_hash: String::new(),
             }))
         } else {
             Ok(None)
@@ -572,7 +463,7 @@ impl Database {
     pub fn create_user(&self, username: &str, pw_hash: &str) -> Result<u32> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO users (username, pw_hash, last_channel, cert_hash) VALUES (?1, ?2, 0, '')",
+            "INSERT INTO users (name, password_hash, last_channel) VALUES (?1, ?2, 0)",
             params![username, pw_hash],
         )?;
         Ok(conn.last_insert_rowid() as u32)
@@ -582,15 +473,19 @@ impl Database {
     pub fn list_users(&self) -> Result<Vec<UserRecord>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, username, pw_hash, last_channel, cert_hash FROM users ORDER BY id"
+            "SELECT u.id, u.name, COALESCE(u.password_hash,''),
+                    COALESCE(ulc.last_channel, COALESCE(u.last_channel, 0))
+             FROM users u
+             LEFT JOIN user_last_channels ulc ON ulc.id = u.id
+             ORDER BY u.id"
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(UserRecord {
                 id: row.get(0)?,
                 username: row.get(1)?,
                 pw_hash: row.get(2)?,
-                last_channel: row.get(3)?,
-                cert_hash: row.get(4)?,
+                last_channel: row.get::<_, u32>(3).unwrap_or(0),
+                cert_hash: String::new(),
             })
         })?;
         let mut users = Vec::new();
@@ -604,7 +499,7 @@ impl Database {
     pub fn rename_user(&self, user_id: u32, new_name: &str) -> Result<bool> {
         let conn = self.conn.lock().unwrap();
         let n = conn.execute(
-            "UPDATE users SET username = ?1 WHERE id = ?2",
+            "UPDATE users SET name = ?1 WHERE id = ?2",
             params![new_name, user_id],
         )?;
         Ok(n > 0)
@@ -618,32 +513,45 @@ impl Database {
     }
 
     /// Update the last channel for a user.
+    /// Uses user_last_channels as primary storage (same as TS), also keeps users.last_channel in sync.
     pub fn save_user_last_channel(&self, user_id: u32, channel_id: u32) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        // Use INSERT OR REPLACE to handle both existing and new user rows
+        conn.execute(
+            "INSERT OR REPLACE INTO user_last_channels (id, last_channel) VALUES (?1, ?2)",
+            params![user_id, channel_id],
+        )?;
+        // Also update users.last_channel if the row exists (for compatibility)
         conn.execute(
             "UPDATE users SET last_channel = ?1 WHERE id = ?2",
             params![channel_id, user_id],
         )?;
-        // If no rows were updated (user not in DB), insert a minimal row
-        if conn.changes() == 0 {
-            conn.execute(
-                "INSERT OR IGNORE INTO users (id, username, pw_hash, last_channel, cert_hash) VALUES (?1, '', '', ?2, '')",
-                params![user_id, channel_id],
-            )?;
-        }
         Ok(())
     }
 
     /// Get the last channel for a user (by user_id). Returns 0 if not found.
+    /// Checks user_last_channels first (TS primary), falls back to users.last_channel.
     pub fn get_user_last_channel(&self, user_id: u32) -> Result<u32> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT last_channel FROM users WHERE id = ?1")?;
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(ulc.last_channel, COALESCE(u.last_channel, 0))
+             FROM users u
+             LEFT JOIN user_last_channels ulc ON ulc.id = u.id
+             WHERE u.id = ?1"
+        )?;
         let mut rows = stmt.query(params![user_id])?;
         if let Some(row) = rows.next()? {
             Ok(row.get::<_, u32>(0).unwrap_or(0))
         } else {
-            Ok(0)
+            // User not in users table; try user_last_channels directly
+            let mut stmt2 = conn.prepare(
+                "SELECT last_channel FROM user_last_channels WHERE id = ?1"
+            )?;
+            let mut rows2 = stmt2.query(params![user_id])?;
+            if let Some(row) = rows2.next()? {
+                Ok(row.get::<_, u32>(0).unwrap_or(0))
+            } else {
+                Ok(0)
+            }
         }
     }
 
@@ -652,7 +560,7 @@ impl Database {
     pub fn upsert_ext_user(&self, user_id: u32, username: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT OR IGNORE INTO users (id, username, pw_hash, last_channel, cert_hash) VALUES (?1, ?2, '', 0, '')",
+            "INSERT OR IGNORE INTO users (id, name, password_hash, last_channel) VALUES (?1, ?2, '', 0)",
             params![user_id, username],
         )?;
         Ok(())
@@ -740,28 +648,15 @@ impl Database {
 
     // ==================== Ban Management ====================
 
-    /// Create bans table if not exists (called from init_tables).
-    fn init_bans_table(conn: &Connection) -> Result<()> {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS bans (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                address BLOB NOT NULL,
-                mask INTEGER NOT NULL DEFAULT 128,
-                name TEXT NOT NULL DEFAULT '',
-                cert_hash TEXT NOT NULL DEFAULT '',
-                reason TEXT NOT NULL DEFAULT '',
-                start_time INTEGER NOT NULL,
-                duration INTEGER NOT NULL DEFAULT 0
-            );"
-        )?;
-        Ok(())
-    }
+
 
     /// Load all ban records.
     pub fn load_bans(&self) -> Result<Vec<BanRecord>> {
         let conn = self.conn.lock().unwrap();
+        // TS schema: 'hash' (nullable) for cert hash, 'start' not 'start_time', nullable name/reason
         let mut stmt = conn.prepare(
-            "SELECT id, address, mask, name, cert_hash, reason, start_time, duration FROM bans"
+            "SELECT id, address, COALESCE(mask,128), COALESCE(name,''), COALESCE(hash,''),
+                    COALESCE(reason,''), COALESCE(start,0), COALESCE(duration,0) FROM bans"
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -801,9 +696,10 @@ impl Database {
         // duration=0 means permanent; duration>0 bans must not have expired.
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, address, mask, name, cert_hash, reason, start_time, duration
+            "SELECT id, address, COALESCE(mask,128), COALESCE(name,''), COALESCE(hash,''),
+                    COALESCE(reason,''), COALESCE(start,0), COALESCE(duration,0)
                FROM bans
-              WHERE duration = 0 OR (start_time + duration) > ?1"
+              WHERE COALESCE(duration,0) = 0 OR (COALESCE(start,0) + COALESCE(duration,0)) > ?1"
         )?;
         let rows = stmt.query_map(params![now], |row| {
             let addr_blob: Vec<u8> = row.get(1)?;
@@ -835,7 +731,7 @@ impl Database {
     pub fn add_ban(&self, ban: &BanRecord) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO bans (address, mask, name, cert_hash, reason, start_time, duration)
+            "INSERT INTO bans (address, mask, name, hash, reason, start, duration)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 ban.address.to_vec(),
@@ -856,7 +752,7 @@ impl Database {
         conn.execute("DELETE FROM bans", [])?;
 
         let mut stmt = conn.prepare(
-            "INSERT INTO bans (address, mask, name, cert_hash, reason, start_time, duration)
+            "INSERT INTO bans (address, mask, name, hash, reason, start, duration)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
         )?;
 
@@ -884,7 +780,7 @@ impl Database {
             .as_secs() as i64;
 
         let count = conn.execute(
-            "DELETE FROM bans WHERE duration > 0 AND (start_time + duration) < ?1",
+            "DELETE FROM bans WHERE COALESCE(duration,0) > 0 AND (COALESCE(start,0) + COALESCE(duration,0)) < ?1",
             params![now],
         )?;
         Ok(count as u32)
@@ -899,29 +795,22 @@ impl Database {
 
     // ==================== Blob Storage (user_blobs hash mapping) ====================
 
-    /// Initialise the user_blobs metadata table.
-    /// Blob data itself is stored on the filesystem by `BlobStore`; the database only tracks
-    /// which blob hash belongs to each user.
-    fn init_blob_tables(conn: &Connection) -> Result<()> {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS user_blobs (
-                user_id INTEGER NOT NULL,
-                blob_type TEXT NOT NULL,
-                blob_hash TEXT,
-                PRIMARY KEY (user_id, blob_type)
-            );"
-        )?;
-        Ok(())
-    }
+    // Blob storage: TS stores hashes directly in users.texture_blob / users.comment_blob.
+    // We use those columns directly for full TS-DB compatibility.
 
     /// Get the blob hash for a user's texture or comment.
-    /// `blob_type` should be `"texture"` or `"comment"`.
+    /// `blob_type` must be `"texture"` or `"comment"`.
     pub fn get_user_blob_hash(&self, user_id: u32, blob_type: &str) -> Result<Option<String>> {
+        let col = match blob_type {
+            "texture" => "texture_blob",
+            "comment" => "comment_blob",
+            _ => return Ok(None),
+        };
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT blob_hash FROM user_blobs WHERE user_id = ?1 AND blob_type = ?2"
+            &format!("SELECT {} FROM users WHERE id = ?1", col)
         )?;
-        let mut rows = stmt.query(params![user_id, blob_type])?;
+        let mut rows = stmt.query(params![user_id])?;
         if let Some(row) = rows.next()? {
             Ok(row.get(0)?)
         } else {
@@ -932,10 +821,15 @@ impl Database {
     /// Associate `hash` with a user's blob type in the database.
     /// Call after storing the actual blob data via `BlobStore::put`.
     pub fn set_user_blob_hash(&self, user_id: u32, blob_type: &str, hash: &str) -> Result<()> {
+        let col = match blob_type {
+            "texture" => "texture_blob",
+            "comment" => "comment_blob",
+            _ => return Ok(()),
+        };
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT OR REPLACE INTO user_blobs (user_id, blob_type, blob_hash) VALUES (?1, ?2, ?3)",
-            params![user_id, blob_type, hash],
+            &format!("UPDATE users SET {} = ?1 WHERE id = ?2", col),
+            params![hash, user_id],
         )?;
         Ok(())
     }

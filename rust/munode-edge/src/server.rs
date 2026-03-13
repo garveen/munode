@@ -171,12 +171,13 @@ async fn handle_client_connection(
     hub_client: Arc<HubClient>,
     edge_state: Arc<EdgeState>,
 ) -> Result<()> {
-    info!("New TCP connection from {}", peer_addr);
-
     // Disable Nagle's algorithm for real-time voice delivery
     stream.set_nodelay(true)?;
 
+    // Only log after TLS handshake succeeds to avoid noise from healthcheck probes (nc -z)
     let tls_stream = acceptor.accept(stream).await?;
+
+    info!("New TCP connection from {}", peer_addr);
     
     // Extract client certificate hash BEFORE splitting the stream
     // Mumble uses SHA-1 hash of the client certificate (not SHA-256)
@@ -198,8 +199,6 @@ async fn handle_client_connection(
     }
     
     let (mut reader, mut writer) = tokio::io::split(tls_stream);
-
-    info!("TLS handshake complete with {}", peer_addr);
 
     // Create per-client message sender channel
     let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(256);
