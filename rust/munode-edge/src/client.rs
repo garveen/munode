@@ -457,6 +457,33 @@ impl ClientManager {
             .filter(|c| c.channel_id == channel_id)
             .count() as u32
     }
+
+    /// Send a Reject message to all connected clients and close their connections.
+    ///
+    /// Used when Hub becomes completely unreachable (direct + relay both failed).
+    /// After sending the message, all sender channels are dropped so the writer
+    /// tasks exit and TLS connections are closed from the server side.
+    pub async fn close_all_connections(&self, reason: &str) {
+        use munode_protocol::mumbleproto;
+        let reject = mumbleproto::Reject {
+            r#type: Some(mumbleproto::reject::RejectType::None as i32),
+            reason: Some(reason.to_string()),
+        };
+        let mut buf = BytesMut::new();
+        encode_message(MessageType::Reject, &reject, &mut buf);
+        let data = buf.to_vec();
+
+        let mut senders = self.senders.write().await;
+        for sender in senders.values() {
+            // Best-effort send; ignore errors since we are about to drop the channel anyway.
+            sender.send_raw(data.clone()).await;
+        }
+        // Dropping all senders causes the per-client writer tasks to receive None from
+        // recv() and exit, which closes the write half of each TLS stream.  The client's
+        // read half will then get EOF, the connection handler task will break out of its
+        // read loop and run the normal cleanup path (remove_client, notify Hub, etc.).
+        senders.clear();
+    }
 }
 
 #[cfg(test)]

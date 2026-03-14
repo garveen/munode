@@ -99,6 +99,9 @@ pub enum EdgeEvent {
     HubRegistered,
     /// Hub connection lost.
     HubDisconnected,
+    /// Hub is completely unreachable: both direct and relay connections failed.
+    /// All connected clients should be disconnected and wait for Hub to recover.
+    HubUnreachable,
     /// A remote user joined (from another Edge, synced via Hub).
     RemoteUserJoined { session_id: u32, username: String, channel_id: u32, is_ninja: bool },
     /// A remote user left.

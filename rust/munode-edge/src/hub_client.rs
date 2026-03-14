@@ -273,6 +273,11 @@ impl HubClient {
                                 direct_fail_count
                             );
                         }
+                    } else {
+                        // Relay also failed — Hub is completely unreachable.
+                        // Signal that all connected clients should be disconnected.
+                        warn!("Hub relay connection also failed — Hub is unreachable, disconnecting all clients");
+                        self.edge_state.emit(EdgeEvent::HubUnreachable);
                     }
                 }
             }

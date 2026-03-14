@@ -2398,6 +2398,12 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                     EdgeEvent::HubDisconnected => {
                         warn!("Hub disconnected - local clients will continue but some features unavailable");
                     }
+                    EdgeEvent::HubUnreachable => {
+                        warn!("Hub is unreachable (direct and relay both failed) — disconnecting all clients");
+                        state.client_manager.close_all_connections(
+                            "Server temporarily unavailable, please reconnect later",
+                        ).await;
+                    }
                     EdgeEvent::TextMessageForward { actor, message, channel_id, tree_id, session } => {
                         let msg = mumbleproto::TextMessage {
                             actor: Some(actor),
