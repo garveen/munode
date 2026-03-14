@@ -1890,7 +1890,7 @@ impl RpcHandler {
             session_id: p.session_id,
             edge_id: p.edge_id,
             channel_id: p.channel_id,
-            actor_session: None,
+            actor_session: p.actor_session,
         };
         self.broadcast_notification("hub.userMoved", |n| {
             n.user_moved = Some(moved_params);

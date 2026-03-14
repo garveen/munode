@@ -111,7 +111,7 @@ pub enum EdgeEvent {
         listening_channel_remove: Vec<u32>,
     },
     /// A remote user moved channels.
-    RemoteUserMoved { session_id: u32, channel_id: u32 },
+    RemoteUserMoved { session_id: u32, channel_id: u32, actor_session: u32 },
     /// A channel was created.
     ChannelCreated { channel_id: u32 },
     /// A channel was removed.

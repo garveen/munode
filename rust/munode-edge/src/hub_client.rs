@@ -810,9 +810,14 @@ impl HubClient {
                         user.channel_id = params.channel_id;
                         self.edge_state.channel_manager.upsert_remote_user(user).await;
                     }
+                    // actor_session: 0 means server-initiated; fall back to session_id for user self-moves
+                    let actor_session = params.actor_session
+                        .filter(|&a| a != 0)
+                        .unwrap_or(params.session_id);
                     self.edge_state.emit(EdgeEvent::RemoteUserMoved {
                         session_id: params.session_id,
                         channel_id: params.channel_id,
+                        actor_session,
                     });
                 }
             }
@@ -1364,7 +1369,7 @@ impl HubClient {
     }
 
     /// Notify the Hub about a user channel move.
-    pub async fn notify_user_moved(&self, session_id: u32, channel_id: u32) {
+    pub async fn notify_user_moved(&self, session_id: u32, channel_id: u32, actor_session: u32) {
         let edge_id = self.edge_id();
         let notification = TypedRpcNotification {
             method: "hub.handleUserMoved".to_string(),
@@ -1373,6 +1378,7 @@ impl HubClient {
                 session_id,
                 edge_id,
                 channel_id,
+                actor_session: Some(actor_session),
             }),
             ..Default::default()
         };

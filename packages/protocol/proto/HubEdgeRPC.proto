@@ -803,6 +803,7 @@ message EdgeHandleUserMovedParams {
   required uint32 session_id = 1;
   required uint32 edge_id = 2;
   required uint32 channel_id = 3;
+  optional uint32 actor_session = 4;
 }
 
 message EdgeHandleUserStateChangedParams {

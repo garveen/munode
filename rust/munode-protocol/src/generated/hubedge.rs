@@ -1845,6 +1845,8 @@ pub struct EdgeHandleUserMovedParams {
     pub edge_id: u32,
     #[prost(uint32, required, tag = "3")]
     pub channel_id: u32,
+    #[prost(uint32, optional, tag = "4")]
+    pub actor_session: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeHandleUserStateChangedParams {

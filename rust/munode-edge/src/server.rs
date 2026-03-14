@@ -1257,6 +1257,7 @@ async fn handle_user_state_update(
 ) {
     let mut needs_broadcast = false;
     let mut channel_moved = false;
+    let mut suppress_changed = false;
 
     if let Some(mut client) = edge_state.client_manager.get_client(session_id).await {
         // 9.1 Channel move with permission check
@@ -1301,7 +1302,9 @@ async fn handle_user_state_update(
                         Ok(r) => r.permissions.map(|p| p & 0x8 != 0).unwrap_or(true), // SPEAK = 0x8
                         Err(_) => true,
                     };
-                    client.suppress = !can_speak;
+                    let new_suppress = !can_speak;
+                    suppress_changed = new_suppress != client.suppress;
+                    client.suppress = new_suppress;
                     if let Some(sender) = sender {
                         edge_state.client_manager.add_client(client.clone(), sender).await;
                     }
@@ -1517,8 +1520,12 @@ async fn handle_user_state_update(
 
             if channel_moved {
                 broadcast_msg.channel_id = Some(client.channel_id);
-                // Always include suppress on channel move (it may have changed).
-                broadcast_msg.suppress = Some(client.suppress);
+                // Only include suppress when it actually changed to avoid spurious
+                // "Server removed server mute" notifications when moving to a channel
+                // where the user already had (or still has) speak permission.
+                if suppress_changed {
+                    broadcast_msg.suppress = Some(client.suppress);
+                }
             }
 
             // Propagate self_deaf with coupling: self_deaf=true ⇒ self_mute=true.
@@ -1561,7 +1568,7 @@ async fn handle_user_state_update(
             // "Server opened mic/speaker" / "Server granted priority speaker"
             // notifications on their local clients.
             if channel_moved {
-                hub_client.notify_user_moved(session_id, client.channel_id).await;
+                hub_client.notify_user_moved(session_id, client.channel_id, session_id).await;
             } else {
                 let listening_channel_add = if !broadcast_msg.listening_channel_add.is_empty() {
                     broadcast_msg.listening_channel_add.clone()
@@ -1621,6 +1628,7 @@ async fn handle_admin_user_state_update(
 
         // Admin channel move (drag user to another channel)
         let mut channel_moved = false;
+        let mut suppress_changed = false;
         if let Some(target_channel_id) = user_state.channel_id {
             if client.channel_id != target_channel_id {
                 let sender = edge_state.client_manager.get_sender(target_session).await;
@@ -1631,7 +1639,9 @@ async fn handle_admin_user_state_update(
                     Ok(r) => r.permissions.map(|p| p & 0x8 != 0).unwrap_or(true),
                     Err(_) => true,
                 };
-                client.suppress = !can_speak;
+                let new_suppress = !can_speak;
+                suppress_changed = new_suppress != client.suppress;
+                client.suppress = new_suppress;
                 if let Some(sender) = sender {
                     edge_state.client_manager.add_client(client.clone(), sender).await;
                 }
@@ -1652,13 +1662,15 @@ async fn handle_admin_user_state_update(
             };
             if channel_moved {
                 broadcast_msg.channel_id = Some(client.channel_id);
-                broadcast_msg.suppress   = Some(client.suppress);
+                if suppress_changed {
+                    broadcast_msg.suppress = Some(client.suppress);
+                }
             }
             if let Some(v) = user_state.mute  { broadcast_msg.mute  = Some(v); }
             if let Some(v) = user_state.deaf  { broadcast_msg.deaf  = Some(v); }
             edge_state.client_manager.broadcast(MessageType::UserState, &broadcast_msg, None).await;
             if channel_moved {
-                hub_client.notify_user_moved(target_session, client.channel_id).await;
+                hub_client.notify_user_moved(target_session, client.channel_id, actor_session).await;
             } else {
                 hub_client.notify_user_state_changed(
                     target_session,
@@ -2351,10 +2363,11 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
                         debug!("Broadcast remote user state changed: session {}", session_id);
                     }
-                    EdgeEvent::RemoteUserMoved { session_id, channel_id } => {
+                    EdgeEvent::RemoteUserMoved { session_id, channel_id, actor_session } => {
                         let msg = mumbleproto::UserState {
                             session: Some(session_id),
                             channel_id: Some(channel_id),
+                            actor: Some(actor_session),
                             ..Default::default()
                         };
                         state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
