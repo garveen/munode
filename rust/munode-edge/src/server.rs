@@ -1294,6 +1294,7 @@ async fn handle_user_state_update(
                         return;
                     }
                     debug!("User {} moving to channel {}", session_id, target_channel_id);
+                    let saved_crypt = edge_state.client_manager.get_crypt_state(session_id).await;
                     let sender = edge_state.client_manager.get_sender(session_id).await;
                     edge_state.client_manager.remove_client(session_id).await;
                     client.channel_id = target_channel_id;
@@ -1307,6 +1308,11 @@ async fn handle_user_state_update(
                     client.suppress = new_suppress;
                     if let Some(sender) = sender {
                         edge_state.client_manager.add_client(client.clone(), sender).await;
+                    }
+                    // Preserve the UDP CryptState across the channel move so voice
+                    // continues to work after the user returns to any channel.
+                    if let Some(cs_arc) = saved_crypt {
+                        edge_state.client_manager.restore_crypt_state(session_id, cs_arc).await;
                     }
                     needs_broadcast = true;
                     channel_moved = true;
@@ -1631,6 +1637,7 @@ async fn handle_admin_user_state_update(
         let mut suppress_changed = false;
         if let Some(target_channel_id) = user_state.channel_id {
             if client.channel_id != target_channel_id {
+                let saved_crypt = edge_state.client_manager.get_crypt_state(target_session).await;
                 let sender = edge_state.client_manager.get_sender(target_session).await;
                 edge_state.client_manager.remove_client(target_session).await;
                 client.channel_id = target_channel_id;
@@ -1644,6 +1651,10 @@ async fn handle_admin_user_state_update(
                 client.suppress = new_suppress;
                 if let Some(sender) = sender {
                     edge_state.client_manager.add_client(client.clone(), sender).await;
+                }
+                // Preserve the UDP CryptState across the admin-initiated channel move.
+                if let Some(cs_arc) = saved_crypt {
+                    edge_state.client_manager.restore_crypt_state(target_session, cs_arc).await;
                 }
                 needs_broadcast = true;
                 channel_moved = true;

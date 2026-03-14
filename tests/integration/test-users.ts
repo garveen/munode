@@ -189,4 +189,9 @@ export const testUserPasswords: Record<string, { password: string; user_id: numb
       // Hub restart channel linking test users
       'restart_ch0_e1': { password: 'pass1', user_id: 766 },
       'restart_ch1_e1': { password: 'pass1', user_id: 767 },
+      // Voice-after-channel-move test users
+      'ch_move_sender': { password: 'pass1', user_id: 801 },
+      'ch_move_receiver': { password: 'pass2', user_id: 802 },
+      'ch_move_admin': { password: 'admin123', user_id: 803, groups: ['admin'] },
+      'ch_move_target': { password: 'pass3', user_id: 804 },
     };

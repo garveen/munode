@@ -335,6 +335,12 @@ impl ClientManager {
         self.crypt_states.read().await.get(&session).cloned()
     }
 
+    /// Restore a previously-saved CryptState Arc directly (used when re-adding a
+    /// client after a channel move so the existing crypto session is preserved).
+    pub async fn restore_crypt_state(&self, session: u32, state: Arc<Mutex<CryptState>>) {
+        self.crypt_states.write().await.insert(session, state);
+    }
+
     /// Update the decrypt IV for a session (called on CryptSetup resync).
     pub async fn update_decrypt_iv(&self, session: u32, client_nonce: &[u8; 16]) {
         if let Some(arc) = self.crypt_states.read().await.get(&session) {

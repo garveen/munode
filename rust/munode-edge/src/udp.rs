@@ -292,10 +292,14 @@ impl UdpServer {
 
     /// Handle a packet from an already-identified client.
     async fn handle_known_client(&self, data: &[u8], session_id: u32) {
+        debug!("handle_known_client: session={} len={}", session_id, data.len());
         let plaintext = {
             let cs_arc = match self.edge_state.client_manager.get_crypt_state(session_id).await {
                 Some(a) => a,
-                None => return,
+                None => {
+                    debug!("No CryptState for session {} — UDP packet dropped", session_id);
+                    return;
+                }
             };
             let mut cs = cs_arc.lock().unwrap();
             let mut plain = Vec::new();
@@ -371,9 +375,13 @@ impl UdpServer {
     async fn route_voice(&self, sender_session: u32, plaintext: &[u8]) {
         let sender_client = match self.edge_state.client_manager.get_client(sender_session).await {
             Some(c) => c,
-            None => return,
+            None => {
+                debug!("route_voice: sender session {} not found in clients", sender_session);
+                return;
+            }
         };
         let sender_channel = sender_client.channel_id;
+        debug!("route_voice: session={} channel={}", sender_session, sender_channel);
 
         // Block suppressed users from speaking
         let voice_target = if !plaintext.is_empty() { (plaintext[0] & 0x1F) as u32 } else { 0 };
@@ -402,6 +410,8 @@ impl UdpServer {
             .get_channel_voice_targets_with_listeners(&linked_channels, sender_session)
             .await;
 
+        debug!("route_voice: {} targets in channels {:?}", targets.len(), &linked_channels);
+
         let session_addrs = self.session_to_addr.read().await;
 
         for (target, is_deaf, cs_opt) in &targets {
@@ -419,6 +429,7 @@ impl UdpServer {
                 }
             } else {
                 // No UDP address: deliver via TCP UDPTunnel (includes session ID)
+                debug!("route_voice: fallback_to_tcp for session {}", target);
                 self.fallback_to_tcp(*target, &forwarded).await;
             }
         }
