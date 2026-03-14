@@ -2385,9 +2385,11 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         state.client_manager.broadcast(MessageType::ChannelRemove, &msg, None).await;
                         debug!("Broadcast channel removed: {}", channel_id);
                     }
-                    EdgeEvent::ChannelUpdated { channel_id } => {
+                    EdgeEvent::ChannelUpdated { channel_id, links_add, links_remove } => {
                         if let Some(ch) = state.channel_manager.get_channel(channel_id).await {
-                            let msg = handler::build_channel_state_msg(&ch);
+                            let mut msg = handler::build_channel_state_msg(&ch);
+                            msg.links_add = links_add;
+                            msg.links_remove = links_remove;
                             state.client_manager.broadcast(MessageType::ChannelState, &msg, None).await;
                         }
                         debug!("Broadcast channel updated: {}", channel_id);

@@ -119,8 +119,9 @@ pub enum EdgeEvent {
     ChannelCreated { channel_id: u32 },
     /// A channel was removed.
     ChannelRemoved { channel_id: u32 },
-    /// A channel was updated.
-    ChannelUpdated { channel_id: u32 },
+    /// A channel was updated. `links_add` / `links_remove` carry the link delta
+    /// so that connected clients can be notified via ChannelState messages.
+    ChannelUpdated { channel_id: u32, links_add: Vec<u32>, links_remove: Vec<u32> },
     /// A text message forwarded from another edge via Hub.
     TextMessageForward {
         actor: u32,

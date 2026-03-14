@@ -846,9 +846,20 @@ impl HubClient {
                 if let Some(params) = &notification.channel_updated {
                     let ch_proto = &params.channel;
                     let channel = ChannelData::from(ch_proto);
-                    debug!("Channel updated: {} (id {})", channel.name, channel.id);
+                    let channel_id = ch_proto.channel_id;
+                    // Compute link delta so the broadcast to local clients uses
+                    // links_add / links_remove (Mumble protocol incremental update).
+                    let old_links = if let Some(old_ch) = self.edge_state.channel_manager.get_channel(channel_id).await {
+                        old_ch.links
+                    } else {
+                        vec![]
+                    };
+                    let new_links = channel.links.clone();
+                    let links_add: Vec<u32> = new_links.iter().filter(|l| !old_links.contains(l)).copied().collect();
+                    let links_remove: Vec<u32> = old_links.iter().filter(|l| !new_links.contains(l)).copied().collect();
+                    debug!("Channel updated: {} (id {}), links_add={:?}, links_remove={:?}", channel.name, channel_id, links_add, links_remove);
                     self.edge_state.channel_manager.upsert_channel(channel).await;
-                    self.edge_state.emit(EdgeEvent::ChannelUpdated { channel_id: ch_proto.channel_id });
+                    self.edge_state.emit(EdgeEvent::ChannelUpdated { channel_id, links_add, links_remove });
                 }
             }
             "edge.forceDisconnect" => {
