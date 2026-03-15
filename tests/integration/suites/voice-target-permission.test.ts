@@ -70,25 +70,26 @@ describe('Voice Target Permission Validation Tests', () => {
   });
 
   describe('Basic Permission Checks', () => {
-    it('should allow VoiceTarget with Whisper permission', async () => {
+    // "allow with Whisper permission" and "allow targeting visible users" are structurally
+    // identical: both connect two users on edge 1, get the target session, call setVoiceTarget,
+    // and expect no error. Merged into one test to eliminate the duplicate.
+    it('should allow VoiceTarget to visible users with default permissions', async () => {
       const clients = await createClients(testEnv, [
-        { username: 'whisper_allowed', edge: 1, channelId: 0 },
-        { username: 'target_user', edge: 1, channelId: 0 },
+        { username: 'sender_allowed', edge: 1, channelId: 0 },
+        { username: 'target_user_allowed', edge: 1, channelId: 0 },
       ]);
 
       const [sender, target] = clients;
       const targetSession = target.getStateManager().getSession()?.session || 0;
 
-      // Set voice target to specific user
+      // With default permissions both Whisper is allowed and the peer is visible,
+      // so either validation path should succeed.
       try {
         await sender.setVoiceTarget(1, [{
           session: [targetSession],
         }]);
-        
-        // If no error is thrown, the permission check passed
         expect(true).toBe(true);
       } catch (error) {
-        // Should not fail for users with default permissions
         console.error('VoiceTarget setting failed:', error);
         throw error;
       }
@@ -224,31 +225,8 @@ describe('Voice Target Permission Validation Tests', () => {
   });
 
   describe('Target User Visibility Checks', () => {
-    it('should allow targeting visible users', async () => {
-      const clients = await createClients(testEnv, [
-        { username: 'sender_visible', edge: 1, channelId: 0 },
-        { username: 'target_visible', edge: 1, channelId: 0 },
-      ]);
-
-      const [sender, target] = clients;
-      const targetSession = target.getStateManager().getSession()?.session || 0;
-
-      // Target a visible user (should succeed)
-      try {
-        await sender.setVoiceTarget(4, [{
-          session: [targetSession],
-        }]);
-        
-        expect(true).toBe(true);
-      } catch (error) {
-        console.error('VoiceTarget to visible user failed:', error);
-        throw error;
-      }
-
-      await cleanupClients(clients);
-    });
-
-    it('should deny targeting non-existent users', async () => {
+    // Note: "should allow VoiceTarget to visible users with default permissions" has been merged
+    // into the Basic Permission Checks suite above, as the two tests were identical.
       const clients = await createClients(testEnv, [
         { username: 'sender_invalid', edge: 1, channelId: 0 },
       ]);

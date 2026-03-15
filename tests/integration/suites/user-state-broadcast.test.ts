@@ -25,144 +25,89 @@ describe('User State Broadcast Tests', () => {
   });
 
   describe('User Join Broadcast', () => {
-    it('should not send duplicate UserState when a user joins', async () => {
-      // Scenario:
-      // 1. User A connects to Edge-1
-      // 2. User B connects to Edge-1
-      // Expected: User A should only receive User B's UserState message once, no duplicates
+    // Both same-edge and cross-edge scenarios share the same verification pattern:
+    // connect two clients sequentially → verify mutual visibility. They are merged
+    // into one test that covers both scenarios to avoid duplicating setup/teardown.
+    it('should broadcast UserState so both clients see each other on same-edge and cross-edge joins', async () => {
+      // ── Scenario A: same Edge ────────────────────────────────────────────
+      const sameEdgeA = new MumbleClient();
+      const sameEdgeB = new MumbleClient();
 
-      const clientA = new MumbleClient();
-      const clientB = new MumbleClient();
-
-      // User A connects
-      console.log('[TEST] Step 1: Connecting User A to Edge-1');
-      await clientA.connect({
+      console.log('[TEST] Scenario A: both clients connect to Edge-1');
+      await sameEdgeA.connect({
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user1',
         password: 'password1',
         rejectUnauthorized: false,
       });
-
-      expect(clientA.isConnected()).toBe(true);
-      
-      const sessionA = clientA.getStateManager().getSession();
-      expect(sessionA).toBeDefined();
-      console.log(`[TEST] User A connected with session ${sessionA?.session}`);
-
-      // Wait for authentication to complete
+      expect(sameEdgeA.isConnected()).toBe(true);
+      const sessionA1 = sameEdgeA.getStateManager().getSession();
+      expect(sessionA1).toBeDefined();
       await sleep(500);
 
-      // Record initial user count seen by User A (should only see themselves)
-      const initialUsers = clientA.getUsers();
-      console.log(`[TEST] Initial users seen by A: ${initialUsers.length}`);
-
-      // User B connects
-      console.log('[TEST] Step 2: Connecting User B to Edge-1');
-      await clientB.connect({
+      await sameEdgeB.connect({
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user2',
         password: 'password2',
         rejectUnauthorized: false,
       });
-
-      expect(clientB.isConnected()).toBe(true);
-      
-      const sessionB = clientB.getStateManager().getSession();
-      expect(sessionB).toBeDefined();
-      console.log(`[TEST] User B connected with session ${sessionB?.session}`);
-
-      // Wait for user state sync
+      expect(sameEdgeB.isConnected()).toBe(true);
+      const sessionB1 = sameEdgeB.getStateManager().getSession();
+      expect(sessionB1).toBeDefined();
       await sleep(500);
 
-      // Verify: User A should see User B
-      const usersSeenByA = clientA.getUsers();
-      console.log(`[TEST] Users seen by A after B joined: ${usersSeenByA.map(u => `${u.name}(${u.session})`).join(', ')}`);
-      
-      const userBVisibleToA = usersSeenByA.some(u => u.name === 'user2' && u.session === sessionB?.session);
-      expect(userBVisibleToA).toBe(true);
-      
-      // Verify: User B should see User A
-      const usersSeenByB = clientB.getUsers();
-      console.log(`[TEST] Users seen by B: ${usersSeenByB.map(u => `${u.name}(${u.session})`).join(', ')}`);
-      
-      const userAVisibleToB = usersSeenByB.some(u => u.name === 'user1' && u.session === sessionA?.session);
-      expect(userAVisibleToB).toBe(true);
+      const usersSeenByA1 = sameEdgeA.getUsers();
+      console.log(`[TEST] A(same-edge) sees: ${usersSeenByA1.map(u => `${u.name}(${u.session})`).join(', ')}`);
+      expect(usersSeenByA1.some(u => u.name === 'user2' && u.session === sessionB1?.session)).toBe(true);
 
-      // Note: We cannot directly detect duplicate UserState messages since clients only keep final state
-      // But if duplicates exist, clients should still work correctly, so this test mainly verifies basic functionality
-      // Duplicate detection requires manual verification in Edge server logs
+      const usersSeenByB1 = sameEdgeB.getUsers();
+      console.log(`[TEST] B(same-edge) sees: ${usersSeenByB1.map(u => `${u.name}(${u.session})`).join(', ')}`);
+      expect(usersSeenByB1.some(u => u.name === 'user1' && u.session === sessionA1?.session)).toBe(true);
 
-      // Cleanup
-      await clientA.disconnect();
-      await clientB.disconnect();
-    });
+      await sameEdgeA.disconnect();
+      await sameEdgeB.disconnect();
 
-    it('should correctly broadcast UserState when user joins from different Edge', async () => {
-      // Scenario:
-      // 1. User A connects to Edge-1
-      // 2. User B connects to Edge-2
-      // Expected: Both users should see each other, without duplicate broadcasts
+      // ── Scenario B: cross Edge ───────────────────────────────────────────
+      const crossEdgeA = new MumbleClient();
+      const crossEdgeB = new MumbleClient();
 
-      const clientA = new MumbleClient();
-      const clientB = new MumbleClient();
-
-      // User A connects to Edge-1
-      console.log('[TEST] Step 1: Connecting User A to Edge-1');
-      await clientA.connect({
+      console.log('[TEST] Scenario B: client A on Edge-1, client B on Edge-2');
+      await crossEdgeA.connect({
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'admin',
         password: 'admin123',
         rejectUnauthorized: false,
       });
-
-      expect(clientA.isConnected()).toBe(true);
-      
-      const sessionA = clientA.getStateManager().getSession();
-      expect(sessionA).toBeDefined();
-      console.log(`[TEST] User A connected with session ${sessionA?.session}`);
-
-      // Wait for User A to be reported to Hub
+      expect(crossEdgeA.isConnected()).toBe(true);
+      const sessionA2 = crossEdgeA.getStateManager().getSession();
+      expect(sessionA2).toBeDefined();
       await sleep(500);
 
-      // User B connects to Edge-2
-      console.log('[TEST] Step 2: Connecting User B to Edge-2');
-      await clientB.connect({
+      await crossEdgeB.connect({
         host: 'localhost',
         port: testEnv.edgePort2,
         username: 'guest',
         password: 'guest123',
         rejectUnauthorized: false,
       });
-
-      expect(clientB.isConnected()).toBe(true);
-      
-      const sessionB = clientB.getStateManager().getSession();
-      expect(sessionB).toBeDefined();
-      console.log(`[TEST] User B connected with session ${sessionB?.session}`);
-
-      // Wait for user state sync
+      expect(crossEdgeB.isConnected()).toBe(true);
+      const sessionB2 = crossEdgeB.getStateManager().getSession();
+      expect(sessionB2).toBeDefined();
       await sleep(500);
 
-      // Verify: User A should see User B
-      const usersSeenByA = clientA.getUsers();
-      console.log(`[TEST] Users seen by A: ${usersSeenByA.map(u => `${u.name}(${u.session})`).join(', ')}`);
-      
-      const userBVisibleToA = usersSeenByA.some(u => u.name === 'guest' && u.session === sessionB?.session);
-      expect(userBVisibleToA).toBe(true);
+      const usersSeenByA2 = crossEdgeA.getUsers();
+      console.log(`[TEST] A(cross-edge) sees: ${usersSeenByA2.map(u => `${u.name}(${u.session})`).join(', ')}`);
+      expect(usersSeenByA2.some(u => u.name === 'guest' && u.session === sessionB2?.session)).toBe(true);
 
-      // Verify: User B should see User A
-      const usersSeenByB = clientB.getUsers();
-      console.log(`[TEST] Users seen by B: ${usersSeenByB.map(u => `${u.name}(${u.session})`).join(', ')}`);
-      
-      const userAVisibleToB = usersSeenByB.some(u => u.name === 'admin' && u.session === sessionA?.session);
-      expect(userAVisibleToB).toBe(true);
+      const usersSeenByB2 = crossEdgeB.getUsers();
+      console.log(`[TEST] B(cross-edge) sees: ${usersSeenByB2.map(u => `${u.name}(${u.session})`).join(', ')}`);
+      expect(usersSeenByB2.some(u => u.name === 'admin' && u.session === sessionA2?.session)).toBe(true);
 
-      // Cleanup
-      await clientA.disconnect();
-      await clientB.disconnect();
+      await crossEdgeA.disconnect();
+      await crossEdgeB.disconnect();
     });
   });
 

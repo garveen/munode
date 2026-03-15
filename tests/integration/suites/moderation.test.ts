@@ -229,7 +229,9 @@ describe('Moderation Integration Tests', () => {
   });
 
   describe('Message Moderation', () => {
-    it('should send and receive text messages across edges', async () => {
+    // Both "channel broadcast" and "private message" tests share the same 3-client setup
+    // (user1→E1, user2→E1, guest→E2). Merged into one test covering both message types.
+    it('should send channel broadcast and private messages across edges', async () => {
       const client1 = new MumbleClient(); // 发送者 - Edge 1
       const client2 = new MumbleClient(); // 本 Edge 接收者 - Edge 1
       const client3 = new MumbleClient(); // 跨 Edge 接收者 - Edge 2
@@ -252,122 +254,71 @@ describe('Moderation Integration Tests', () => {
 
       await client3.connect({
         host: 'localhost',
-        port: testEnv.edgePort2, // 连接到第二个 Edge
+        port: testEnv.edgePort2,
         username: 'guest',
         password: 'guest123',
         rejectUnauthorized: false,
       });
 
-      // Wait for all clients to be fully synchronized with Hub
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      const testMessage = 'Hello from integration test ' + Date.now();
+      const session2 = client2.getStateManager().getSession()?.session;
+      const session3 = client3.getStateManager().getSession()?.session;
 
-      // 本 Edge 用户监听
+      // ── 频道广播 ─────────────────────────────────────────────────────────
+      const channelMsg = 'Channel broadcast ' + Date.now();
+
       let messageReceivedLocal = false;
-      const messagePromiseLocal = new Promise<void>((resolve) => {
+      const channelPromiseLocal = new Promise<void>((resolve) => {
         client2.on('textMessage', (message: any) => {
-          if (message.message === testMessage) {
-            messageReceivedLocal = true;
-            resolve();
-          }
+          if (message.message === channelMsg) { messageReceivedLocal = true; resolve(); }
         });
       });
 
-      // 跨 Edge 用户监听
       let messageReceivedRemote = false;
-      const messagePromiseRemote = new Promise<void>((resolve) => {
+      const channelPromiseRemote = new Promise<void>((resolve) => {
         client3.on('textMessage', (message: any) => {
-          if (message.message === testMessage) {
-            messageReceivedRemote = true;
-            resolve();
-          }
+          if (message.message === channelMsg) { messageReceivedRemote = true; resolve(); }
         });
       });
 
-      // 用户1发送频道消息
-      await client1.sendMessage({ channelId: 0 }, testMessage);
+      await client1.sendMessage({ channelId: 0 }, channelMsg);
 
-      // 等待本 Edge 和跨 Edge 用户收到消息
       await Promise.all([
-        Promise.race([messagePromiseLocal, new Promise(resolve => setTimeout(resolve, 2000))]),
-        Promise.race([messagePromiseRemote, new Promise(resolve => setTimeout(resolve, 2000))])
+        Promise.race([channelPromiseLocal,  new Promise(resolve => setTimeout(resolve, 2000))]),
+        Promise.race([channelPromiseRemote, new Promise(resolve => setTimeout(resolve, 2000))]),
       ]);
 
-      // Note: Text message broadcasting across edges has known issues
-      // This is a limitation of the current implementation
-      // At least one client should receive the message
+      // Note: cross-edge text broadcasting has known limitations; at least one side must receive
       expect(messageReceivedLocal || messageReceivedRemote).toBe(true);
 
-      await client1.disconnect();
-      await client2.disconnect();
-      await client3.disconnect();
-    });
+      // ── 本 Edge 私聊 ─────────────────────────────────────────────────────
+      const privateMsg1 = 'Private local ' + Date.now();
 
-    it('should send private message to specific user across edges', async () => {
-      const client1 = new MumbleClient(); // 发送者 - Edge 1
-      const client2 = new MumbleClient(); // 本 Edge 接收者 - Edge 1
-      const client3 = new MumbleClient(); // 跨 Edge 接收者 - Edge 2
-
-      await client1.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'user1',
-        password: 'password1',
-        rejectUnauthorized: false,
-      });
-
-      await client2.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'user2',
-        password: 'password2',
-        rejectUnauthorized: false,
-      });
-
-      await client3.connect({
-        host: 'localhost',
-        port: testEnv.edgePort2, // 连接到第二个 Edge
-        username: 'guest',
-        password: 'guest123',
-        rejectUnauthorized: false,
-      });
-
-      // 测试 1: 本 Edge 私聊
-      const session2 = client2.getStateManager().getSession()?.session;
-      const testMessage1 = 'Private message local ' + Date.now();
-
-      let messageReceivedLocal = false;
-      const messagePromiseLocal = new Promise<void>((resolve) => {
+      let privateReceivedLocal = false;
+      const privatePromiseLocal = new Promise<void>((resolve) => {
         client2.on('textMessage', (message: any) => {
-          if (message.message === testMessage1) {
-            messageReceivedLocal = true;
-            resolve();
-          }
+          if (message.message === privateMsg1) { privateReceivedLocal = true; resolve(); }
         });
       });
 
-      await client1.sendMessage({ userId: session2 }, testMessage1);
-      await Promise.race([messagePromiseLocal, new Promise(resolve => setTimeout(resolve, 2000))]);
-      expect(messageReceivedLocal).toBe(true);
+      await client1.sendMessage({ userId: session2 }, privateMsg1);
+      await Promise.race([privatePromiseLocal, new Promise(resolve => setTimeout(resolve, 2000))]);
+      expect(privateReceivedLocal).toBe(true);
 
-      // 测试 2: 跨 Edge 私聊
-      const session3 = client3.getStateManager().getSession()?.session;
-      const testMessage2 = 'Private message remote ' + Date.now();
+      // ── 跨 Edge 私聊 ─────────────────────────────────────────────────────
+      const privateMsg2 = 'Private remote ' + Date.now();
 
-      let messageReceivedRemote = false;
-      const messagePromiseRemote = new Promise<void>((resolve) => {
+      let privateReceivedRemote = false;
+      const privatePromiseRemote = new Promise<void>((resolve) => {
         client3.on('textMessage', (message: any) => {
-          if (message.message === testMessage2) {
-            messageReceivedRemote = true;
-            resolve();
-          }
+          if (message.message === privateMsg2) { privateReceivedRemote = true; resolve(); }
         });
       });
 
-      await client1.sendMessage({ userId: session3 }, testMessage2);
-      await Promise.race([messagePromiseRemote, new Promise(resolve => setTimeout(resolve, 2000))]);
-      expect(messageReceivedRemote).toBe(true);
+      await client1.sendMessage({ userId: session3 }, privateMsg2);
+      await Promise.race([privatePromiseRemote, new Promise(resolve => setTimeout(resolve, 2000))]);
+      expect(privateReceivedRemote).toBe(true);
 
       await client1.disconnect();
       await client2.disconnect();

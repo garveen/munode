@@ -25,7 +25,9 @@ describe('ACL Operations Integration Tests', () => {
   });
 
   describe('ACL Query and Check', () => {
-    it('should query channel ACL', async () => {
+    // queryACL / checkPermission / getUserPermissions all connect as admin to channel 0
+    // and disconnect — merged into one test to avoid repeated connect/disconnect overhead.
+    it('should query ACL, check write permission, and get user permissions on root channel', async () => {
       const client = new MumbleClient();
 
       await client.connect({
@@ -35,62 +37,21 @@ describe('ACL Operations Integration Tests', () => {
         password: 'admin123',
         rejectUnauthorized: false,
       });
+
+      const session = client.getStateManager().getSession()?.session;
 
       // 查询根频道的 ACL
       const acl = await client.queryACL(0);
-
       expect(acl).toBeDefined();
-      // ACL 应该包含 acls 和 groups 等信息
 
-      await client.disconnect();
-    });
-
-    it('should check user permissions in channel', async () => {
-      const client = new MumbleClient();
-
-      await client.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'admin',
-        password: 'admin123',
-        rejectUnauthorized: false,
-      });
-
-      const session = client.getStateManager().getSession()?.session;
-
-      // 检查管理员在根频道的权限
-      // Note: Without explicit ACL configuration, users don't have write permission by default
-      // This test verifies the permission check works, not that admins have default permissions
-      const hasWrite = await client.checkPermission(
-        0,
-        PermissionFlag.Write,
-        session
-      );
-
-      // The permission system is working if we get a boolean response
+      // 检查权限（验证系统返回 boolean，而不是断言具体值）
+      const hasWrite = await client.checkPermission(0, PermissionFlag.Write, session);
       expect(typeof hasWrite).toBe('boolean');
 
-      await client.disconnect();
-    });
-
-    it('should get all user permissions in channel', async () => {
-      const client = new MumbleClient();
-
-      await client.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'admin',
-        password: 'admin123',
-        rejectUnauthorized: false,
-      });
-
-      const session = client.getStateManager().getSession()?.session;
-
-      // 获取用户在频道中的所有权限
+      // 获取用户在频道中的所有权限（位掩码）
       const permissions = await client.getUserPermissions(0, session);
-
       expect(permissions).toBeDefined();
-      expect(typeof permissions).toBe('number'); // 权限是位掩码
+      expect(typeof permissions).toBe('number');
 
       await client.disconnect();
     });
@@ -122,7 +83,9 @@ describe('ACL Operations Integration Tests', () => {
   });
 
   describe('ACL Entry Management', () => {
-    it('should add ACL entry to channel', async () => {
+    // add / remove / update all share the same pattern: connect admin → createChannel →
+    // addACLEntry → diverge. Merged into one lifecycle test on a single channel.
+    it('should add, update, and remove ACL entry lifecycle on a channel', async () => {
       const client = new MumbleClient();
 
       await client.connect({
@@ -133,11 +96,9 @@ describe('ACL Operations Integration Tests', () => {
         rejectUnauthorized: false,
       });
 
-      // 创建测试频道
-      const channelName = 'ACLTest_' + Date.now();
-      const channelId = await client.createChannel(channelName, 0);
+      const channelId = await client.createChannel('ACLLifecycle_' + Date.now(), 0);
 
-      // 添加 ACL 条目
+      // ── Add ───────────────────────────────────────────────────────────────
       await client.addACLEntry(channelId, {
         apply_here: true,
         apply_subs: false,
@@ -145,109 +106,39 @@ describe('ACL Operations Integration Tests', () => {
         allow: PermissionFlag.Speak | PermissionFlag.Enter,
         deny: 0,
       });
+      await new Promise(resolve => setTimeout(resolve, 300));
 
-      // 等待生效
-      await new Promise(resolve => setTimeout(resolve, 500));
+      const aclAfterAdd = await client.queryACL(channelId);
+      expect(aclAfterAdd).toBeDefined();
+      const entryCount = aclAfterAdd?.acls?.length || 0;
 
-      // 查询 ACL 验证
-      const acl = await client.queryACL(channelId);
-      expect(acl).toBeDefined();
-
-      // 清理
-      await client.deleteChannel(channelId);
-      await client.disconnect();
-    });
-
-    it('should remove ACL entry from channel', async () => {
-      const client = new MumbleClient();
-
-      await client.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'admin',
-        password: 'admin123',
-        rejectUnauthorized: false,
+      // ── Update ────────────────────────────────────────────────────────────
+      await client.updateACLEntry(channelId, 0, {
+        allow: PermissionFlag.Speak | PermissionFlag.TextMessage,
       });
-
-      // 创建测试频道
-      const channelName = 'ACLRemove_' + Date.now();
-      const channelId = await client.createChannel(channelName, 0);
-
-      // 添加 ACL 条目
-      await client.addACLEntry(channelId, {
-        apply_here: true,
-        apply_subs: false,
-        group: 'test_group',
-        allow: PermissionFlag.Speak,
-        deny: 0,
-      });
-
       await new Promise(resolve => setTimeout(resolve, 200));
 
-      // 查询 ACL
-      const aclBefore = await client.queryACL(channelId);
-      const entryCount = aclBefore?.acls?.length || 0;
+      const aclAfterUpdate = await client.queryACL(channelId);
+      expect(aclAfterUpdate).toBeDefined();
 
-      // 移除 ACL 条目（索引0）
+      // ── Remove ────────────────────────────────────────────────────────────
       if (entryCount > 0) {
         await client.removeACLEntry(channelId, 0);
         await new Promise(resolve => setTimeout(resolve, 200));
 
-        // 再次查询验证
-        const aclAfter = await client.queryACL(channelId);
-        expect(aclAfter?.acls?.length).toBeLessThanOrEqual(entryCount);
+        const aclAfterRemove = await client.queryACL(channelId);
+        expect(aclAfterRemove?.acls?.length).toBeLessThanOrEqual(entryCount);
       }
 
-      // 清理
-      await client.deleteChannel(channelId);
-      await client.disconnect();
-    });
-
-    it('should update ACL entry', async () => {
-      const client = new MumbleClient();
-
-      await client.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'admin',
-        password: 'admin123',
-        rejectUnauthorized: false,
-      });
-
-      // 创建测试频道
-      const channelName = 'ACLUpdate_' + Date.now();
-      const channelId = await client.createChannel(channelName, 0);
-
-      // 添加 ACL 条目
-      await client.addACLEntry(channelId, {
-        apply_here: true,
-        apply_subs: false,
-        group: 'user',
-        allow: PermissionFlag.Speak,
-        deny: 0,
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      // 更新 ACL 条目
-      await client.updateACLEntry(channelId, 0, {
-        allow: PermissionFlag.Speak | PermissionFlag.TextMessage,
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      // 验证更新
-      const acl = await client.queryACL(channelId);
-      expect(acl).toBeDefined();
-
-      // 清理
       await client.deleteChannel(channelId);
       await client.disconnect();
     });
   });
 
   describe('Channel Group Management', () => {
-    it('should create channel group', async () => {
+    // create / delete / add-user / remove-user all share: connect admin → createChannel →
+    // createChannelGroup → diverge. Merged into one group lifecycle test on a single channel.
+    it('should manage channel group lifecycle: create, add user, remove user, delete', async () => {
       const client = new MumbleClient();
 
       await client.connect({
@@ -258,146 +149,48 @@ describe('ACL Operations Integration Tests', () => {
         rejectUnauthorized: false,
       });
 
-      // 创建测试频道
-      const channelName = 'GroupTest_' + Date.now();
-      const channelId = await client.createChannel(channelName, 0);
+      const channelId = await client.createChannel('GroupLifecycle_' + Date.now(), 0);
 
-      // 创建频道组
-      await client.createChannelGroup(
-        channelId,
-        'moderators',
-        false, // not inherited
-        true   // inheritable
-      );
-
+      // ── Create group ──────────────────────────────────────────────────────
+      await client.createChannelGroup(channelId, 'team', false, true);
       await new Promise(resolve => setTimeout(resolve, 200));
 
-      // 查询验证
-      const acl = await client.queryACL(channelId);
+      let acl = await client.queryACL(channelId);
       expect(acl?.groups).toBeDefined();
 
-      // 清理
-      await client.deleteChannel(channelId);
-      await client.disconnect();
-    });
-
-    it('should delete channel group', async () => {
-      const client = new MumbleClient();
-
-      await client.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'admin',
-        password: 'admin123',
-        rejectUnauthorized: false,
-      });
-
-      // 创建测试频道
-      const channelName = 'GroupDelete_' + Date.now();
-      const channelId = await client.createChannel(channelName, 0);
-
-      // 创建频道组
-      await client.createChannelGroup(channelId, 'temp_group');
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      // 删除频道组
-      await client.deleteChannelGroup(channelId, 'temp_group');
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      // 验证
-      const acl = await client.queryACL(channelId);
-      const group = acl?.groups?.get('temp_group');
-      expect(group).toBeUndefined();
-
-      // 清理
-      await client.deleteChannel(channelId);
-      await client.disconnect();
-    });
-
-    it('should add user to channel group', async () => {
-      const client = new MumbleClient();
-
-      await client.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'admin',
-        password: 'admin123',
-        rejectUnauthorized: false,
-      });
-
-      // 创建测试频道
-      const channelName = 'GroupUser_' + Date.now();
-      const channelId = await client.createChannel(channelName, 0);
-
-      // 创建频道组
-      await client.createChannelGroup(channelId, 'vip');
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      // 获取当前用户 ID（需要从认证信息获取）
-      const users = client.getUsers();
-      const currentUser = users.find(u => u.name === 'admin');
-
-      if (currentUser) {
-        // 添加用户到组
-        await client.addUserToGroup(channelId, 'vip', currentUser.user_id || 1);
-        await new Promise(resolve => setTimeout(resolve, 200));
-
-        // 验证
-        const acl = await client.queryACL(channelId);
-        expect(acl).toBeDefined();
-      }
-
-      // 清理
-      await client.deleteChannel(channelId);
-      await client.disconnect();
-    });
-
-    it('should remove user from channel group', async () => {
-      const client = new MumbleClient();
-
-      await client.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'admin',
-        password: 'admin123',
-        rejectUnauthorized: false,
-      });
-
-      // 创建测试频道
-      const channelName = 'GroupRemove_' + Date.now();
-      const channelId = await client.createChannel(channelName, 0);
-
-      // 创建频道组
-      await client.createChannelGroup(channelId, 'members');
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      const users = client.getUsers();
-      const currentUser = users.find(u => u.name === 'admin');
-
+      // ── Add / remove user ─────────────────────────────────────────────────
+      const currentUser = client.getUsers().find(u => u.name === 'admin');
       if (currentUser) {
         const userId = currentUser.user_id || 1;
 
-        // 添加用户到组
-        await client.addUserToGroup(channelId, 'members', userId);
+        await client.addUserToGroup(channelId, 'team', userId);
         await new Promise(resolve => setTimeout(resolve, 200));
+        acl = await client.queryACL(channelId);
+        expect(acl).toBeDefined();
 
-        // 从组中移除用户
-        await client.removeUserFromGroup(channelId, 'members', userId);
+        await client.removeUserFromGroup(channelId, 'team', userId);
         await new Promise(resolve => setTimeout(resolve, 200));
-
-        // 验证
-        const acl = await client.queryACL(channelId);
+        acl = await client.queryACL(channelId);
         expect(acl).toBeDefined();
       }
 
-      // 清理
+      // ── Delete group ──────────────────────────────────────────────────────
+      await client.deleteChannelGroup(channelId, 'team');
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      acl = await client.queryACL(channelId);
+      expect(acl?.groups?.get('team')).toBeUndefined();
+
       await client.deleteChannel(channelId);
       await client.disconnect();
     });
   });
 
   describe('ACL Permission Verification', () => {
-    it('should enforce speak permission', async () => {
+    // Both "enforce speak" and "enforce enter" share the same setup (admin + guest connect,
+    // create a channel, addACLEntry, checkPermission). Merged into one test that sets
+    // both speak and enter restrictions on the same channel and checks both permissions.
+    it('should enforce speak and enter permissions via ACL on a channel', async () => {
       const adminClient = new MumbleClient();
       const userClient = new MumbleClient();
 
@@ -417,11 +210,10 @@ describe('ACL Operations Integration Tests', () => {
         rejectUnauthorized: false,
       });
 
-      // 创建限制说话的频道
-      const channelName = 'NoSpeak_' + Date.now();
-      const channelId = await adminClient.createChannel(channelName, 0);
+      const channelId = await adminClient.createChannel('PermCheck_' + Date.now(), 0);
+      const userSession = userClient.getStateManager().getSession()?.session;
 
-      // 设置 ACL：拒绝所有人说话
+      // ── Speak restriction ─────────────────────────────────────────────────
       await adminClient.addACLEntry(channelId, {
         apply_here: true,
         apply_subs: false,
@@ -429,52 +221,13 @@ describe('ACL Operations Integration Tests', () => {
         allow: PermissionFlag.Enter,
         deny: PermissionFlag.Speak,
       });
+      await new Promise(resolve => setTimeout(resolve, 300));
 
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Note: Client-side permission checking doesn't fully work without group tracking
-      // This test verifies that the ACL can be set, not that client-side checking works
-      const userSession = userClient.getStateManager().getSession()?.session;
-      const canSpeak = await userClient.checkPermission(
-        channelId,
-        PermissionFlag.Speak,
-        userSession
-      );
-
-      // ACL was set successfully - client permission check may not reflect server-side ACLs
+      // Note: client-side check may not reflect server ACLs — we verify the API responds
+      const canSpeak = await userClient.checkPermission(channelId, PermissionFlag.Speak, userSession);
       expect(typeof canSpeak).toBe('boolean');
 
-      // 清理
-      await adminClient.deleteChannel(channelId);
-      await adminClient.disconnect();
-      await userClient.disconnect();
-    });
-
-    it('should enforce channel enter permission', async () => {
-      const adminClient = new MumbleClient();
-      const userClient = new MumbleClient();
-
-      await adminClient.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'admin',
-        password: 'admin123',
-        rejectUnauthorized: false,
-      });
-
-      await userClient.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'guest',
-        password: 'guest123',
-        rejectUnauthorized: false,
-      });
-
-      // 创建私密频道
-      const channelName = 'Private_' + Date.now();
-      const channelId = await adminClient.createChannel(channelName, 0);
-
-      // 设置 ACL：只允许管理员进入
+      // ── Enter restriction ─────────────────────────────────────────────────
       await adminClient.addACLEntry(channelId, {
         apply_here: true,
         apply_subs: false,
@@ -482,7 +235,6 @@ describe('ACL Operations Integration Tests', () => {
         allow: PermissionFlag.Enter | PermissionFlag.Speak,
         deny: 0,
       });
-
       await adminClient.addACLEntry(channelId, {
         apply_here: true,
         apply_subs: false,
@@ -490,22 +242,11 @@ describe('ACL Operations Integration Tests', () => {
         allow: 0,
         deny: PermissionFlag.Enter,
       });
+      await new Promise(resolve => setTimeout(resolve, 300));
 
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Note: Client-side permission checking doesn't fully work without group tracking
-      // This test verifies that the ACL can be set, not that client-side checking works
-      const userSession = userClient.getStateManager().getSession()?.session;
-      const canEnter = await userClient.checkPermission(
-        channelId,
-        PermissionFlag.Enter,
-        userSession
-      );
-
-      // ACL was set successfully - client permission check may not reflect server-side ACLs
+      const canEnter = await userClient.checkPermission(channelId, PermissionFlag.Enter, userSession);
       expect(typeof canEnter).toBe('boolean');
 
-      // 清理
       await adminClient.deleteChannel(channelId);
       await adminClient.disconnect();
       await userClient.disconnect();

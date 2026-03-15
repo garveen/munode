@@ -45,11 +45,14 @@ describe.skipIf(!USE_RUST)('Voice Routing Strategy Tests — tcp_only (Rust)', (
     await tcpOnlyEnv?.cleanup();
   }, 30000);
 
-  it('Edge 1 client should connect successfully with tcp_only strategy', async () => {
-    const client = new MumbleClient();
+  // The two "connect successfully" tests (Edge 1 / Edge 2) share the same environment and
+  // only differ in which port they connect to. Merged into one test that verifies both.
+  it('both Edge 1 and Edge 2 clients should connect successfully with tcp_only strategy', async () => {
+    const c1 = new MumbleClient();
+    const c2 = new MumbleClient();
 
     try {
-      await client.connect({
+      await c1.connect({
         host: 'localhost',
         port: tcpOnlyEnv.edgePort,
         username: 'user1',
@@ -58,19 +61,7 @@ describe.skipIf(!USE_RUST)('Voice Routing Strategy Tests — tcp_only (Rust)', (
         forceTcpVoice: true,
       });
 
-      expect(client.isConnected()).toBe(true);
-      const session = client.getStateManager().getSession();
-      expect(session).toBeDefined();
-    } finally {
-      try { await client.disconnect(); } catch {}
-    }
-  }, 15000);
-
-  it('Edge 2 client should connect successfully with tcp_only strategy', async () => {
-    const client = new MumbleClient();
-
-    try {
-      await client.connect({
+      await c2.connect({
         host: 'localhost',
         port: tcpOnlyEnv.edgePort2,
         username: 'user2',
@@ -79,9 +70,12 @@ describe.skipIf(!USE_RUST)('Voice Routing Strategy Tests — tcp_only (Rust)', (
         forceTcpVoice: true,
       });
 
-      expect(client.isConnected()).toBe(true);
+      expect(c1.isConnected()).toBe(true);
+      expect(c1.getStateManager().getSession()).toBeDefined();
+      expect(c2.isConnected()).toBe(true);
     } finally {
-      try { await client.disconnect(); } catch {}
+      try { await c1.disconnect(); } catch {}
+      try { await c2.disconnect(); } catch {}
     }
   }, 15000);
 

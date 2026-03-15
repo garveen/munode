@@ -154,8 +154,10 @@ describe('Channel Link/Unlink Real-Time Notification Tests', () => {
     }
   }, 30000);
 
-  // ── Test 3: peer channel also updated (B receives A's session) ─────────────
-  it('peer channel (B) also receives links_add=[A] when A links to B', async () => {
+  // ── Test 3: peer channels receive symmetric link/unlink notifications ─────
+  // Both tests (peer links_add + peer links_remove) share the same setup,
+  // so they are merged: link → verify both sides → unlink → verify both sides.
+  it('both peer channels receive symmetric links_add then links_remove notifications', async () => {
     const ts = Date.now();
     const [admin, observer] = await createClients(testEnv, [
       { username: 'admin', edge: 1 },
@@ -168,8 +170,7 @@ describe('Channel Link/Unlink Real-Time Notification Tests', () => {
 
       await sleep(500);
 
-      // Hub broadcasts channelUpdated for BOTH A and B after linking,
-      // so the observer should see both ChannelState messages.
+      // ── Link: Hub broadcasts channelUpdated for BOTH A and B ──────────────
       const linkAPromise = waitForLinkUpdate(observer, chAId, 'links_add', chBId);
       const linkBPromise = waitForLinkUpdate(observer, chBId, 'links_add', chAId);
 
@@ -182,33 +183,8 @@ describe('Channel Link/Unlink Real-Time Notification Tests', () => {
       const chBState = observer.getStateManager().getChannel(chBId);
       expect(chAState!.links).toContain(chBId);
       expect(chBState!.links).toContain(chAId);
-    } finally {
-      await cleanupClients([admin, observer]);
-    }
-  }, 30000);
 
-  // ── Test 4: links_remove clears internal state ─────────────────────────────
-  it('links_remove fully clears the link list visible to clients', async () => {
-    const ts = Date.now();
-    const [admin, observer] = await createClients(testEnv, [
-      { username: 'admin', edge: 1 },
-      { username: 'user1', edge: 1 },
-    ]);
-
-    try {
-      const chAId = await admin.createChannel(`LinkClearA_${ts}`, 0);
-      const chBId = await admin.createChannel(`LinkClearB_${ts}`, 0);
-
-      await sleep(500);
-
-      // First, create the link.
-      const linkPromise = waitForLinkUpdate(observer, chAId, 'links_add', chBId);
-      await admin.sendChannelState({ channel_id: chAId, links_add: [chBId] });
-      await linkPromise;
-
-      expect(observer.getStateManager().getChannel(chAId)!.links).toContain(chBId);
-
-      // Then remove it.
+      // ── Unlink: both A and B should receive symmetric links_remove ────────
       const unlinkAPromise = waitForLinkUpdate(observer, chAId, 'links_remove', chBId);
       const unlinkBPromise = waitForLinkUpdate(observer, chBId, 'links_remove', chAId);
       await admin.sendChannelState({ channel_id: chAId, links_remove: [chBId] });
