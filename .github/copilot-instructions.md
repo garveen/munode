@@ -1,395 +1,208 @@
-# MuNode 项目 Copilot 指导
+# MuNode — Copilot Instructions
 
-## 项目概述
+MuNode is a distributed Mumble voice server. The server-side (Hub + Edge) is written in Rust. A TypeScript client library exists under `packages/client/` and remains actively maintained. All other TypeScript packages under `packages/` are **deprecated** — do not modify them.
 
-MuNode 是一个基于 Node.js/TypeScript 的 Mumble 服务器实现，采用 Hub-Edge 分布式架构。本项目使用 pnpm workspace 管理 monorepo。
+## Tech Stack
 
-## 项目架构
+- **Language:** Rust (edition 2024, workspace)
+- **Async runtime:** tokio (full features, work-stealing scheduler)
+- **Protobuf:** prost 0.13 for encoding/decoding, prost-build for code generation
+- **TLS:** tokio-rustls 0.26 + rustls 0.23 (no OpenSSL)
+- **WebSocket:** tokio-tungstenite 0.26 (Hub ↔ Edge control channel)
+- **HTTP framework:** axum 0.7 (Hub web API)
+- **Database:** rusqlite 0.33 with bundled SQLite (WAL mode)
+- **Crypto:** aes 0.8 (OCB2-AES128 voice encryption), ring 0.17 (HMAC, RNG), argon2 0.5 (password hashing)
+- **Serialization:** serde + toml (TOML config files), serde_json (RPC payloads)
+- **Logging:** tracing 0.1 + tracing-subscriber (text or JSON output)
+- **Error handling:** anyhow for application errors, thiserror for library error enums
+- **Scripting:** mlua 0.10 (Lua 5.4, vendored) for pluggable auth scripts
+- **Config format:** TOML files (`config/edge.toml`, `config/hub.toml`)
+- **Client library:** TypeScript (packages/client), uses pnpm, ESModule, Node.js 22
 
-### Packages 结构
-- `@munode/common`: 共享工具类、类型定义、配置管理、日志系统、心跳机制
-- `@munode/protocol`: Protocol Buffers 定义和类型安全的 RPC 通信
-- `@munode/hub-server`: Hub 服务器 - 中心管理节点，负责用户认证、权限管理、数据持久化
-- `@munode/edge-server`: Edge 服务器 - 边缘节点，处理实时语音/数据传输、客户端连接
-- `@munode/cli`: 命令行工具
+## Project Structure
 
-### 核心技术栈
-- **语言**: TypeScript (严格模式)
-- **风格**: ESModule，不是 CommonJS
-- **运行时**: Node.js 22 , 使用 npx tsx 运行 TypeScript 代码
-- **包管理**: pnpm workspace
-- **协议**: Protocol Buffers, Mumble Protocol **注意 Mumble.proto 文件不得修改，其作用是与外部系统互操作**
-- **通信**: gRPC, TCP, UDP, WebSocket
-- **加密**: OCB2-AES128, TLS
-- **数据库**: SQLite (Hub), JSON (配置/数据)
+```
+rust/                          # Rust workspace root (Cargo.toml)
+├── munode-protocol/           # Protobuf types, message framing, transport
+├── munode-common/             # Config loading, logging, error types, rate limiting
+├── munode-edge/               # Edge server binary — accepts Mumble clients
+│   ├── server.rs              # Main TCP listener + task spawning
+│   ├── hub_client.rs          # WebSocket connection to Hub (RPC + notifications)
+│   ├── handler.rs             # Per-client message handling (auth, state, text)
+│   ├── udp.rs                 # Voice packet routing (OCB2 decrypt → relay)
+│   ├── crypto.rs              # OCB2-AES128 implementation
+│   ├── client.rs              # ClientManager (Arc<RwLock<HashMap>>)
+│   ├── channel_manager.rs     # Local channel tree (synced from Hub)
+│   ├── state.rs               # Shared EdgeState + PeerRegistry
+│   ├── relay_server.rs        # WebSocket relay for inter-Edge Hub tunneling
+│   └── tls.rs                 # TLS acceptor setup
+└── munode-hub/                # Hub server binary — cluster orchestrator
+    ├── server.rs              # Main Hub loop (DB, auth, WebSocket listener)
+    ├── rpc_handler.rs         # RPC dispatch (40+ message types)
+    ├── database.rs            # SQLite wrapper (users, channels, ACLs, bans)
+    ├── session_manager.rs     # Active session tracking
+    ├── channel_store.rs       # Channel tree with parent-child hierarchy
+    ├── acl_manager.rs         # Permission system (bitmask, group, inheritance)
+    ├── auth_service.rs        # Auth dispatch (local DB / Lua / HTTP)
+    ├── lua_auth.rs            # Lua script engine for custom auth
+    ├── blob_store.rs          # File storage (avatars, comments) with hash sharding
+    ├── topology_manager.rs    # Edge registry + peer discovery
+    ├── edge_connection.rs     # Per-Edge WebSocket handler
+    ├── web_api.rs             # Axum REST API (/users, /channels, /bans, /stats)
+    └── geoip.rs               # MaxMind GeoIP lookups
 
-## 编码规范
-
-### TypeScript 风格
-
-**严格类型要求（必须遵守）：**
-
-1. **禁止使用 any**：系统内严禁使用 `any` 类型
-2. **禁止使用 unknown**：避免使用 `unknown`，必须定义精确类型
-3. **限制使用 Partial**：一般不使用 `Partial<T>`，显式定义可选属性
-4. **限制使用 Record**：一般不使用 `Record<string, any>` 等模糊类型，定义精确的接口；除非该record的确用于定义动态键值对集合
-5. **必须定义接口**：所有对象类型必须有明确的 interface 或 type 定义
-6. **精确类型定义**：项目内不应该有任何模糊的类型定义
-
-```typescript
-// ❌ 错误示例
-function handle(data: any) { }
-function process(config: Partial<Config>) { }
-function update(fields: Record<string, unknown>) { }
-
-// ✅ 正确示例
-interface UserState {
-  session: number;
-  name: string;
-  channelId: number;
-}
-
-interface UpdateFields {
-  name?: string;
-  position?: number;
-  maxUsers?: number;
-}
-
-function handle(data: UserState) { }
-function process(config: UpdateFields) { }
-
-// 优先使用 interface 而非 type
-interface ILogger {
-  info(message: string): void;
-  error(message: string, error?: Error): void;
-}
-
-// 使用枚举表示常量集合
-enum PermissionFlag {
-  None = 0,
-  Write = 1,
-  Traverse = 2,
-  Enter = 4,
-}
+packages/client/               # TypeScript Mumble client (ACTIVE — do not deprecate)
+packages/{common,protocol,hub-server,edge-server,cli,auth-service}/
+                               # ⚠️ DEPRECATED TypeScript server code — do not modify
 ```
 
-protobuf使用其标准属性，不要使用单字母内部属性(n f等)
-protobuf optional字段需要检查是否真的设置了值，不能仅凭默认值判断，使用has_xxx
+## Coding Conventions
 
-### 命名约定
-- **类名**: PascalCase (如 `EdgeServer`, `HubClient`)
-- **接口**: PascalCase, 可选 `I` 前缀 (如 `IConfig`, `ClientState`)
-- **方法/函数**: camelCase (如 `handleMessage`, `broadcastUserState`)
-- **常量**: UPPER_SNAKE_CASE (如 `MAX_CONNECTIONS`, `DEFAULT_PORT`)
-- **文件名**: kebab-case (如 `edge-server.ts`, `auth-manager.ts`)
+### Naming
+- Structs and enums: `PascalCase` (`EdgeServer`, `ClientInfo`, `MessageType`)
+- Functions and methods: `snake_case` (`connect_and_run`, `handle_client`)
+- Constants: `UPPER_SNAKE_CASE` (`MAX_MESSAGE_SIZE`, `RELAY_IDLE_TIMEOUT`)
+- Modules and files: `snake_case` (`hub_client.rs`, `channel_manager.rs`)
 
-### 异步处理
-```typescript
-// 优先使用 async/await
-async function authenticateUser(token: string): Promise<User> {
-  try {
-    const user = await validateToken(token);
-    return user;
-  } catch (error) {
-    logger.error('Authentication failed', error);
-    throw new Error('Invalid token');
-  }
+### Error Handling
+- Use `anyhow::Result<T>` for application-level functions. Add `.context()` for meaningful error messages.
+- Use `thiserror` derive macros for library error enums (e.g., `MunodeError`, `FrameError`).
+- In CLI `main.rs`, print user-friendly messages and call `std::process::exit(1)` on failure.
+
+```rust
+// Application code
+pub fn load_config(path: &str) -> anyhow::Result<EdgeConfig> {
+    let content = std::fs::read_to_string(path)
+        .context(format!("failed to read config at {}", path))?;
+    toml::from_str(&content).context("invalid TOML syntax")
 }
 
-// 对于并发操作使用 Promise.all
-await Promise.all([
-  saveUser(user),
-  updateChannel(channel),
-  notifyClients(message)
-]);
-```
-
-### 错误处理
-```typescript
-// 使用类型化的错误
-class AuthenticationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'AuthenticationError';
-  }
-}
-
-// 在关键路径记录错误
-try {
-  await criticalOperation();
-} catch (error) {
-  logger.error('Operation failed', error);
-  // 决定是否重新抛出或优雅降级
+// Library code
+#[derive(thiserror::Error, Debug)]
+pub enum FrameError {
+    #[error("message too large: {0} bytes")] TooLarge(usize),
+    #[error("incomplete frame")] Incomplete,
 }
 ```
 
-### 日志规范
-```typescript
-// 使用统一的日志接口
-logger.info('User connected', { session, username });
-logger.warn('Unusual activity detected', { userId, action });
-logger.error('Failed to process message', { error, context });
-logger.debug('State update', { state }); // 仅开发/调试模式
+### Async Patterns
+- Use `tokio::spawn` for concurrent tasks. Share state via `Arc<T>`.
+- Use `Arc<RwLock<HashMap<K, V>>>` for shared mutable collections (prefer `RwLock` over `Mutex` for mostly-read data).
+- Use `mpsc` channels for queued work, `oneshot` for request-response, `broadcast` for fan-out notifications.
+- Every long-running task (`run`, `connect_and_run`) returns `Result<()>` and logs errors internally.
+
+### Concurrency
+- Main task: TCP listener loop (`loop { listener.accept().await }`)
+- Per-client: spawned async handler
+- Background: Hub WebSocket client with exponential backoff reconnection
+- Background: UDP voice server
+- All shared state through `Arc` clones passed into spawned tasks
+
+### Logging
+- Use `tracing` macros: `info!`, `warn!`, `error!`, `debug!`, `trace!`
+- Include structured fields: `info!(session_id = %id, username = %name, "user connected")`
+- JSON format available for production log aggregation
+
+### Protobuf
+- Proto files live in `packages/protocol/proto/` — **do not modify `Mumble.proto`** (external interop)
+- `munode-protocol/build.rs` compiles `.proto` → `src/generated/*.rs`
+- Generated types are re-exported via `munode_protocol::{mumbleproto, hubedge, voiceudp, authservice}`
+- Wire format: `[type:u16][length:u32][protobuf payload]`
+
+### Configuration
+- All config uses TOML (serde deserialization with smart defaults)
+- Edge config: `load_edge_config(path) -> Result<EdgeConfig>`
+- Hub config: `load_hub_config(path) -> Result<HubConfig>`
+- See `rust/config/edge.example.toml` and `rust/config/hub.example.toml` for reference
+
+## Architecture
+
+### Hub-Edge Model
+- **Hub** is the central orchestrator: user auth, ACL, database, session tracking, channel tree.
+- **Edge** nodes accept Mumble client connections, handle voice routing, and delegate auth/permissions to Hub via WebSocket RPC.
+- Edges discover each other through Hub notifications (`peerJoined`/`peerLeft`).
+- Voice: OCB2-AES128 encrypted UDP between clients ↔ Edge, with optional Hub TCP relay or direct Edge-to-Edge UDP.
+- Control relay: every Edge runs a transparent WebSocket relay so Edge A can reach Hub through Edge B if direct connection fails.
+
+### RPC Flow
+```
+Client → Edge: Mumble TCP/TLS (protobuf frames)
+Edge → Hub:    WebSocket (JSON-encoded RPC request/response)
+Hub → Edge:    WebSocket notifications (broadcast to all connected Edges)
 ```
 
-## 架构模式
+### Key RPC Methods
+- `EdgeRegister` — Edge announces itself to Hub
+- `EdgeAuthenticateUser` — Verify user credentials
+- `EdgeJoin` — User joins cluster
+- `EdgeFullSync` — Sync all users/channels to Edge
+- `EdgeHandleTextMessage` — Relay text across Edges
+- `BlobGet` / `BlobPut` — Retrieve/store avatars and comments
 
-### Hub-Edge 通信
-```typescript
-// Edge -> Hub: 使用类型安全的 RPC
-await hubClient.rpc.authenticateUser({
-  username: 'user',
-  password: 'pass'
-});
+### ACL System
+- Permissions stored as bitmasks (write, traverse, enter, speak, mute_deafen, move, etc.)
+- Per-channel entries with optional group matching
+- Inheritance: if `inherit_acl` is true, recursively check parent channel
 
-// Hub -> Edge: 通过控制通道广播
-hubServer.broadcastToEdges({
-  type: 'USER_STATE_UPDATE',
-  payload: userState
-});
-```
+### Database
+- SQLite with WAL mode. Tables: `users`, `channels`, `acl_entries`, `bans`, `migrations`
+- Schema is compatible with the TS implementation — databases are interchangeable
 
-### 权限系统 (ACL)
-```typescript
-// 检查权限时考虑继承
-function hasPermission(
-  user: User,
-  channel: Channel,
-  permission: PermissionFlag
-): boolean {
-  // 检查直接权限
-  if (channel.acl.hasPermission(user, permission)) return true;
-  
-  // 检查继承的权限
-  if (channel.inheritACL) {
-    return hasPermission(user, channel.parent, permission);
-  }
-  
-  return false;
-}
-```
+## Testing
 
-### 集群同步
-```typescript
-// 状态变更需要同步到所有节点
-async function updateUserState(session: number, state: Partial<UserState>) {
-  // 本地更新
-  this.users.set(session, { ...currentState, ...state });
-  
-  // 集群广播
-  await this.clusterManager.broadcast({
-    type: 'USER_STATE_SYNC',
-    session,
-    state
-  });
-}
-```
-
-## 测试指导
-
-*** 绝大部分测试需要先编译项目 ***
-
-*** 只运行集成测试，本项目暂时不设置单元测试 ***
-
-*** 如果只需要运行少数几个测试，修改测试使用 it.only 节省时间 ***
-
-*** 测试时可以把输出写入到 ./tmp/ ，方便调试 ***
-
-### 集成测试
-
-#### 运行集成测试
-```bash
-
-# 运行所有集成测试
-pnpm test:integration
-
-# 以监视模式运行集成测试
-pnpm test:integration:watch
-
-# 运行集成测试并查看覆盖率
-pnpm test:integration -- --coverage
-
-# 运行特定的测试文件，注意完全不需要 -- 连接
-pnpm test:integration tests/integration/suites/auth.test.ts
-```
-
-#### 集成测试结构
-
-
-- **旧测试文件位于根目录**: `test-*.js`, `test-*.ts`（可能需要迁移）
-
-#### 集成测试配置
-- 配置文件: `vitest.config.integration.ts`
-
-#### 编写集成测试
-```typescript
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-
-describe('Feature Integration Tests', () => {
-  let hubServer;
-  let edgeServer;
-
-  beforeAll(async () => {
-    // 启动 Hub 和 Edge 服务器
-    hubServer = await startHubServer();
-    edgeServer = await startEdgeServer();
-  });
-
-  afterAll(async () => {
-    // 清理资源
-    await edgeServer.stop();
-    await hubServer.stop();
-  });
-
-  it('should handle feature correctly', async () => {
-    // 测试逻辑
-    const result = await testFeature();
-    expect(result).toBe(expected);
-  });
-});
-```
-
-#### 集成测试最佳实践
-1. **测试隔离**: 每个测试套件使用独立的服务器实例和端口
-2. **资源清理**: 在 `afterAll` 中清理所有资源（服务器、连接、文件等）
-3. **超时设置**: 集成测试通常需要较长超时，已配置为 30 秒
-4. **错误处理**: 捕获并记录详细的错误信息以便调试
-5. **测试数据**: 使用临时数据库和配置文件，测试后清理
-
-！注意！
-集成测试，对于hub和edge连接部分，需使用hub和edge实例测试；对于所有模拟客户端行为的部分，都使用系统内的客户端执行
-
-#### 常见集成测试场景
-- Hub-Edge 连接和断开
-- 用户认证流程（包含外部认证 API）
-- ACL 权限继承和检查
-- 频道创建、移动、删除
-- 用户状态同步（跨 Edge）
-- 语音包路由和转发
-- 文本消息广播
-- 用户组和权限管理
-
-## Protocol Buffers
-
-### 消息定义
-```protobuf
-// 所有 .proto 文件位于 packages/protocol/proto/
-message UserState {
-  uint32 session = 1;
-  string name = 2;
-  uint32 channel_id = 3;
-}
-```
-
-### 类型安全 RPC
-```typescript
-// 使用生成的类型化 RPC 客户端
-const client = new TypedRpcClient<HubRpcInterface>(connection);
-const response = await client.call('methodName', { param: value });
-```
-
-## 常见模式
-
-### 客户端连接管理
-```typescript
-class Client {
-  private session: number;
-  private state: ClientState;
-  private socket: TLSSocket;
-  
-  async handleMessage(message: MumbleMessage): Promise<void> {
-    // 解析消息类型并路由到相应处理器
-  }
-  
-  async sendMessage(message: MumbleMessage): Promise<void> {
-    // 序列化并发送，处理背压
-  }
-}
-```
-
-### 频道树管理
-```typescript
-class ChannelManager {
-  private channels: Map<number, Channel>;
-  
-  createChannel(parent: Channel, name: string): Channel {
-    // 创建频道，设置 ACL 继承
-  }
-  
-  moveUser(user: User, targetChannel: Channel): void {
-    // 检查权限，更新状态，广播变更
-  }
-}
-```
-
-### 配置加载
-```typescript
-// 使用 @munode/common 的配置工具
-import { loadConfig } from '@munode/common';
-
-const config = await loadConfig<EdgeConfig>('config/edge.json');
-```
-
-## 性能注意事项
-
-- **UDP 语音包**: 最小化处理延迟，避免阻塞操作
-- **连接数**: Edge 支持大量并发连接，使用事件驱动模式
-- **内存管理**: 定期清理断开的客户端状态
-- **数据库**: Hub 使用 SQLite，避免 N+1 查询，使用事务批量操作
-
-## 安全考虑
-
-- **认证**: Hub 集中管理用户认证，Edge 信任 Hub 的认证结果
-- **加密**: 客户端连接强制 TLS，语音使用 OCB2-AES128
-- **权限**: 所有操作检查 ACL 权限，支持频道级继承
-- **输入验证**: 验证所有外部输入，防止注入攻击
-
-## 调试提示
-
-```typescript
-// 启用调试日志
-process.env.DEBUG = 'munode:*';
-
-// 使用 VSCode 调试配置
-// .vscode/launch.json 中配置了各服务的调试入口
-
-// 查看 Protocol Buffers 消息
-console.log(JSON.stringify(message.toJSON(), null, 2));
-```
-
-## 依赖管理
+### Rust Tests
+- Framework: built-in `#[tokio::test]` for async tests, `#[test]` for sync
+- Tests live in each module's `#[cfg(test)] mod tests { ... }` block
+- ~80 tests across all crates (ACL, crypto, channels, sessions, database, blob store, handlers)
 
 ```bash
-# 在根目录安装依赖
-pnpm install
-
-# 添加依赖到特定 package
-pnpm --filter @munode/edge-server add library-name
-
-# 运行特定 package 的脚本
-pnpm --filter @munode/hub-server run build
+cd rust/
+cargo test                        # Run all tests
+cargo test -p munode-edge         # Run tests for one crate
+cargo test crypto::tests          # Run specific test module
 ```
 
-## 文档参考
+### Integration Tests (TypeScript client)
+- TypeScript integration tests in `tests/integration/` use vitest
+- These tests start real Hub + Edge servers and connect with the TS client
+- Run with: `pnpm test:integration`
+- Config: `vitest.config.integration.ts`
 
-- 架构文档: `docs/` 目录
-- 实现状态: 根目录 `*_IMPLEMENTATION*.md` 文件
-- API 文档: 各 package 的 README.md
-- RPC 使用: `packages/protocol/TYPED_RPC_USAGE.md`
+## Boundaries
 
-## 读取文件
-尽量直接读取文件而不是用sed
+- **Do not modify** any TypeScript packages except `packages/client/`
+- **Do not modify** `Mumble.proto` — it defines the external Mumble protocol
+- **Do not use** `unsafe` without explicit justification and documentation
+- **Do not block** the tokio runtime — use `tokio::task::spawn_blocking` for CPU-heavy or synchronous I/O work
+- **Do not add** new dependencies without checking for security advisories
+- Prefer `Arc<RwLock<T>>` over `Arc<Mutex<T>>` for shared state that is read-heavy
+- All public functions that can fail must return `Result<T>`
+- Voice packet handling (UDP) must minimize latency — avoid allocations in the hot path
 
-## 常见问题
+## Deprecated TypeScript Packages
 
-**Q: Edge 和 Hub 如何通信?**
-A: Edge 通过 gRPC (类型安全 RPC) 与 Hub 通信，用于认证、权限查询等；Hub 通过控制通道向 Edge 推送状态更新。
+The following packages under `packages/` are **deprecated** and should not receive new code:
 
-**Q: 用户状态如何同步?**
-A: 用户状态变更在 Edge 本地处理，然后通过 Hub 广播到所有相关 Edge 节点，确保最终一致性。
+| Package | Status | Notes |
+|---------|--------|-------|
+| `packages/common` | ⛔ Deprecated | Replaced by `rust/munode-common` |
+| `packages/protocol` | ⛔ Deprecated | Replaced by `rust/munode-protocol` |
+| `packages/hub-server` | ⛔ Deprecated | Replaced by `rust/munode-hub` |
+| `packages/edge-server` | ⛔ Deprecated | Replaced by `rust/munode-edge` |
+| `packages/cli` | ⛔ Deprecated | CLI now built into Rust binaries |
+| `packages/auth-service` | ⛔ Deprecated | Replaced by `rust/munode-hub/auth_service.rs` |
+| **`packages/client`** | ✅ **Active** | Only Mumble client — actively maintained (TypeScript) |
 
-**Q: 如何添加新的 RPC 方法?**
-A: 在 `packages/protocol/proto/` 定义消息，在 Hub 实现处理器，Edge 通过类型化客户端调用。
+## Quick Reference
 
-**Q: 测试时如何模拟 Hub-Edge 环境?**
-A: 使用集成测试启动本地 Hub 和 Edge 实例。
+| What | Where |
+|------|-------|
+| Build | `cd rust && cargo build --release` |
+| Test | `cd rust && cargo test` |
+| Edge binary | `rust/target/release/munode-edge` |
+| Hub binary | `rust/target/release/munode-hub` |
+| Edge config | `rust/config/edge.example.toml` |
+| Hub config | `rust/config/hub.example.toml` |
+| Proto files | `packages/protocol/proto/*.proto` |
+| Client library | `packages/client/` |
+| Architecture docs | `rust/docs/`, `docs/` |
