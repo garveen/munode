@@ -411,7 +411,7 @@ impl RpcHandler {
                             user_id: None, username: None, display_name: None,
                             groups: vec![],
                             reason: Some("Server error: unable to verify ban status".to_string()),
-                            reject_type: Some(5), // ServerFull (closest generic error)
+                            reject_type: Some(0), // None (reason is provided in the reason field)
                             channel_id: None,
                             mute: None, deaf: None, suppress: None,
                             self_mute: None, self_deaf: None,
