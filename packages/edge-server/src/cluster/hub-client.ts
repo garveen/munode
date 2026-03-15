@@ -64,7 +64,6 @@ export type HubNotificationMessage = HubToEdgeNotifications;
 export type ExtendedRegisterResponse = RPCResult<'edge.register'> & {
   reconnected?: boolean;
   session_expired?: boolean;
-  cold_restart?: boolean;
   need_cleanup?: boolean;
 };
 
@@ -211,10 +210,6 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
    * 实现 HMAC 挑战-响应认证
    */
   private async register(): Promise<void> {
-    // 检查是否为冷重启：Edge 进程刚启动，没有任何客户端连接
-    // 注意：第一次启动时也会标记为冷重启，这是正确的行为
-    const isColdRestart = true; // Edge 进程启动/重启时，所有旧连接都已断开
-    
     // 读取证书文件并计算hash
     // 优先使用 edge_cert（Edge 间连接专用证书），未配置时回退到 cert（服务器证书）
     let certHash = '';
@@ -245,7 +240,6 @@ export class EdgeControlClient extends TypedEventEmitter<EdgeControlClientEvents
       region: this.config.network.region || '',
       capacity: this.config.server.capacity,
       certificate: certHash, // 发送证书hash而不是完整PEM
-      cold_restart: isColdRestart, // 报告冷重启状态
       metadata: {
         version: '1.0.0',
         features: Object.keys(this.config.features)

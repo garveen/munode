@@ -97,9 +97,6 @@ export interface EdgeRegisterMethod {
     // HMAC 挑战-响应认证
     challenge?: string; // Hub 返回的挑战码
     challenge_response?: string; // Edge 计算的 HMAC 签名
-    
-    // 冷重启标志：Edge 进程重启，所有旧客户端已断开
-    cold_restart?: boolean;
   };
   result: EdgeRegisterResultPb;
 }

@@ -557,7 +557,8 @@ export class HubControlService {
 
   /**
    * 清理指定Edge上的所有会话（用于Edge重连时）
-   * 与 cleanupEdgeSessions 的区别：不广播给正在重连的Edge本身，避免竞态条件
+   * 广播给所有Edge（包含正在重连的Edge本身），确保其本地客户端也能收到 UserRemove 消息，
+   * 避免产生僵尸用户（见方案C修复）。
    */
   private cleanupEdgeSessionsForReconnect(edgeId: number): void {
     try {
@@ -566,13 +567,13 @@ export class HubControlService {
 
       this.logger.info(`Cleaning up ${sessions.length} sessions from reconnecting Edge ${edgeId}`);
 
-      // 1. 清理所有会话并广播用户离开消息（排除当前Edge）
+      // 清理所有会话并广播用户离开消息（包含正在重连的Edge本身）
       for (const session of sessions) {
         // 从会话管理器中移除会话
         sessionManager.removeSession(session.session_id);
 
-        // 广播用户离开消息给其他Edge（排除正在重连的Edge，它会自己处理）
-        this.broadcastExcept(edgeId, 'hub.userRemoveBroadcast', {
+        // 广播给所有Edge：确保正在重连的Edge也能收到，以便对其本地已连接客户端发送 UserRemove
+        this.broadcast('hub.userRemoveBroadcast', {
           session: session.session_id,
           reason: 'Edge reconnected - session cleanup',
         });

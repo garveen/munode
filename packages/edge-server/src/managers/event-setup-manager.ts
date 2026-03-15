@@ -361,6 +361,12 @@ export class EventSetupManager {
         try {
           this.logger.info('Requesting full sync from Hub...');
           const syncData = await this.hubClient.requestFullSync();
+          
+          // 方案A：快照同步前的远端用户集合，用于后续差量计算
+          const previousRemoteSessions = new Set(
+            this.handlerFactory.stateManager.getAllRemoteSessions()
+          );
+          
           // Process sync data
           // Note: Protobuf toObject() types mark all fields as optional, but the server guarantees
           // required fields are present. Cast to FullSnapshot which has stricter type requirements.
@@ -369,21 +375,22 @@ export class EventSetupManager {
           
           // Process sessions from fullSync - broadcast remote users to local clients
           // This is critical after edge reconnection to ensure all clients see users on other edges
+          const localEdgeId = this.handlerFactory.config.server_id;
+          // Get local clients once before the loops
+          const allClients = this.handlerFactory.clientManager.getAllClients();
+          const authenticatedClients = allClients.filter(c => c.user_id > 0 && c !== undefined);
+          
           if (syncData.sessions && Array.isArray(syncData.sessions)) {
-            const localEdgeId = this.handlerFactory.config.server_id;
             const remoteSessionCount = syncData.sessions.filter(s => s.edge_id !== localEdgeId).length;
             this.logger.info(`Processing ${remoteSessionCount} remote user sessions from fullSync`);
             
-            // Import protocol dependencies once before the loop
-            const MessageType = await import('@munode/protocol').then(m => m.MessageType);
-            
-            // Get local clients once before the loop
-            const allClients = this.handlerFactory.clientManager.getAllClients();
-            const authenticatedClients = allClients.filter(c => c.user_id > 0 && c !== undefined);
+            const newRemoteSessions = new Set<number>();
             
             for (const session of syncData.sessions) {
               // Only process sessions from other edges
               if (session.edge_id !== localEdgeId) {
+                newRemoteSessions.add(session.session_id);
+                
                 // Add to remote users map
                 this.handlerFactory.stateManager.addRemoteUser(
                   session.session_id,
@@ -433,6 +440,39 @@ export class EventSetupManager {
             
             if (remoteSessionCount > 0) {
               this.logger.info(`Broadcasted ${remoteSessionCount} remote users to ${authenticatedClients.length} local clients after reconnect`);
+            }
+            
+            // 方案A：对同步前存在、同步后消失的远端用户发送 UserRemove，清除客户端的僵尸用户
+            const disappearedSessions = [...previousRemoteSessions].filter(s => !newRemoteSessions.has(s));
+            if (disappearedSessions.length > 0) {
+              this.logger.info(`Sending UserRemove for ${disappearedSessions.length} disappeared remote users to clear zombie users`);
+              for (const sessionId of disappearedSessions) {
+                const userRemoveMessage = mumbleproto.UserRemove.encode({ session: sessionId }).finish();
+                const userRemoveBuffer = Buffer.from(userRemoveMessage);
+                for (const client of authenticatedClients) {
+                  this.handlerFactory.messageHandler.sendMessage(
+                    client.session,
+                    MessageType.UserRemove,
+                    userRemoveBuffer
+                  );
+                }
+              }
+            }
+          } else {
+            // syncData.sessions 为空/未定义：所有之前已知的远端用户都已消失
+            if (previousRemoteSessions.size > 0) {
+              this.logger.info(`Sending UserRemove for ${previousRemoteSessions.size} disappeared remote users (empty sync response)`);
+              for (const sessionId of previousRemoteSessions) {
+                const userRemoveMessage = mumbleproto.UserRemove.encode({ session: sessionId }).finish();
+                const userRemoveBuffer = Buffer.from(userRemoveMessage);
+                for (const client of authenticatedClients) {
+                  this.handlerFactory.messageHandler.sendMessage(
+                    client.session,
+                    MessageType.UserRemove,
+                    userRemoveBuffer
+                  );
+                }
+              }
             }
           }
         } catch (error) {

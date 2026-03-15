@@ -572,6 +572,13 @@ export class EdgeStateManager {
   }
 
   /**
+   * 获取所有远端用户的 session ID 列表（用于 fullSync 差量计算）
+   */
+  getAllRemoteSessions(): number[] {
+    return Array.from(this.remoteUsers.keys());
+  }
+
+  /**
    * 获取所有已知的Edge ID列表
    * 从remoteUsers中提取唯一的edge_id
    */
