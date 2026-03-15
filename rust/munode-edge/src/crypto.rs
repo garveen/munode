@@ -647,12 +647,51 @@ mod tests {
         let mut out1 = Vec::new();
         assert!(recv.decrypt(&encrypted, &mut out1));
 
-        // Try to replay the same packet — should be rejected
-        // We need to reset the IV to simulate re-receiving
-        // Actually replay detection is based on history, not re-setting IV
-        // The replay will be detected via decrypt_history
-        // For simplicity, test that decrypting same packet twice with fresh state fails
-        // the second time after advancing the IV sequence
-        // (In practice, replays within a window are detected via decrypt_history)
+        // Replay the exact same ciphertext — should be rejected because the IV[0]
+        // value is already in decrypt_history.
+        let mut out2 = Vec::new();
+        assert!(!recv.decrypt(&encrypted, &mut out2), "Replayed packet should be rejected");
+        assert!(out2.is_empty(), "Output should be empty on replay rejection");
+    }
+
+    /// Verify that the IV counter wraps from 0xFF back to 0x00 correctly and
+    /// that packets across the 0xFF→0x00 boundary can be decrypted.
+    #[test]
+    fn test_encrypt_decrypt_at_iv_wraparound() {
+        let mut sender = CryptState::new();
+        // Set encrypt_iv so that IV[0] will wrap after one more increment.
+        let mut key = [0u8; 16];
+        let mut enc_iv = [0u8; 16];
+        let dec_iv = [0u8; 16];
+        // Fill key with non-zero bytes for a meaningful cipher
+        for (i, b) in key.iter_mut().enumerate() { *b = (i as u8).wrapping_add(1); }
+        enc_iv[0] = 0xFF; // IV[0] is about to wrap
+        sender.set_key(&key, &enc_iv, &dec_iv);
+
+        // Encrypt at IV[0] = 0xFF
+        let plaintext = b"wraparound test payload";
+        let mut encrypted_ff = Vec::new();
+        assert!(sender.encrypt(plaintext, &mut encrypted_ff));
+        // After encrypt, IV[0] should be 0x00 (wrapped around)
+        assert_eq!(sender.encrypt_iv[0], 0x00, "IV[0] should wrap to 0x00 after 0xFF");
+
+        // Encrypt again at IV[0] = 0x00
+        let mut encrypted_00 = Vec::new();
+        assert!(sender.encrypt(plaintext, &mut encrypted_00));
+        assert_eq!(sender.encrypt_iv[0], 0x01, "IV[0] should advance to 0x01");
+
+        // Receiver starts with decrypt_iv = sender's initial enc_iv (IV[0]=0xFF)
+        let mut receiver = CryptState::new();
+        receiver.set_key(&key, &dec_iv, &enc_iv); // decrypt_iv = enc_iv (0xFF start)
+
+        // Decrypt first packet (sender sent at 0xFF)
+        let mut out1 = Vec::new();
+        assert!(receiver.decrypt(&encrypted_ff, &mut out1), "Should decrypt packet with IV[0]=0xFF");
+        assert_eq!(out1, plaintext);
+
+        // Decrypt second packet (sender sent at 0x00, i.e. post-wraparound)
+        let mut out2 = Vec::new();
+        assert!(receiver.decrypt(&encrypted_00, &mut out2), "Should decrypt packet with IV[0]=0x00 (post-wrap)");
+        assert_eq!(out2, plaintext);
     }
 }

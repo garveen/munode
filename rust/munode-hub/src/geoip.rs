@@ -126,8 +126,10 @@ fn is_private(ip: &IpAddr) -> bool {
         }
         IpAddr::V6(v6) => {
             v6.is_loopback() || v6.is_unspecified()
-                || v6.segments()[0] == 0xfc00 // fc00::/7 ULA
-                || v6.segments()[0] == 0xfe80 // fe80::/10 link-local
+                // `Ipv6Addr::segments()` always returns exactly 8 elements ([u16; 8]).
+                // Index 0 is safe without bounds checking.
+                || v6.segments()[0] & 0xfe00 == 0xfc00 // fc00::/7 ULA
+                || v6.segments()[0] & 0xffc0 == 0xfe80 // fe80::/10 link-local
         }
     }
 }

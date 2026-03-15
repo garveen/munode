@@ -18,12 +18,12 @@ fn main() -> Result<()> {
     let proto_dir = if let Ok(dir) = std::env::var("MUNODE_PROTO_DIR") {
         PathBuf::from(dir)
     } else {
-        manifest_dir
+        let workspace_root = manifest_dir
             .parent()
-            .unwrap()
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Failed to find munode-protocol parent directory"))?
             .parent()
-            .unwrap()
-            .join("packages/protocol/proto")
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Failed to find workspace root (expected 2 levels above munode-protocol)"))?;
+        workspace_root.join("packages/protocol/proto")
     };
 
     if !proto_dir.exists() {

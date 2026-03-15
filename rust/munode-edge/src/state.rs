@@ -264,9 +264,13 @@ impl EdgeState {
 
     /// Get the current edge ID (0 = not yet registered with Hub).
     /// Lock-free: uses atomic load for hot-path reads.
+    ///
+    /// Memory ordering: `Acquire` pairs with the `Release` store in `set_edge_id`,
+    /// guaranteeing that any state written before `set_edge_id` is visible to
+    /// code that reads a non-zero edge_id (e.g., voice routing after registration).
     #[inline(always)]
     pub fn get_edge_id(&self) -> u32 {
-        self.edge_id.load(Ordering::Relaxed)
+        self.edge_id.load(Ordering::Acquire)
     }
 
     /// Set the edge ID after Hub registration.

@@ -90,9 +90,15 @@ pub struct LuaAuthEngine {
     lua: Mutex<Lua>,
 }
 
-// mlua with the `send` feature makes `Lua: Send`, and `Mutex<Lua>` is therefore
-// `Send + Sync`.  The explicit impls below are a belt-and-braces declaration so
-// the compiler catches any regression in the feature flags.
+// mlua is compiled with the `send` feature (see workspace Cargo.toml), which
+// makes `Lua: Send`.  `Mutex<Lua>` is therefore `Send + Sync` automatically.
+// The explicit unsafe impls below act as a compile-time guard: if the `send`
+// feature is ever accidentally removed, the compiler will surface a clear error
+// here rather than silently emitting incorrect (non-Send) code.
+//
+// Safety: `Lua` is `Send` because mlua's `send` feature is enabled, and
+// `Mutex<T>: Sync` when `T: Send`.  We never move the Lua VM across threads
+// without holding the mutex.
 unsafe impl Send for LuaAuthEngine {}
 unsafe impl Sync for LuaAuthEngine {}
 

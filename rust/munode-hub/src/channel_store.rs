@@ -171,6 +171,13 @@ impl ChannelStore {
     }
 
     /// Allocate the next channel ID.
+    ///
+    /// IDs are monotonically increasing from `max(loaded_ids) + 1`.
+    /// If channels are deleted, their IDs are not reused — this ensures that
+    /// in-flight RPC messages referencing a recently deleted channel cannot
+    /// accidentally target a newly created channel with the same numeric ID.
+    /// The SQLite schema stores the channel `id` as the primary key rather than
+    /// using AUTOINCREMENT, so the in-memory counter is the authoritative source.
     pub fn next_channel_id(&self) -> u32 {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }

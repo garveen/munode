@@ -326,10 +326,18 @@ impl Database {
     // ── Backup support ─────────────────────────────────────────────────────
 
     /// Create an online backup of the database to `dest_path` using SQLite's
-    /// backup API (via VACUUM INTO, which produces a clean, compacted copy).
+    /// VACUUM INTO command, which produces a clean, compacted copy.
+    ///
+    /// The destination path is validated to contain only safe characters before
+    /// being embedded in the SQL statement (SQLite's VACUUM INTO does not support
+    /// parameter binding).
     pub fn backup_to(&self, dest_path: &str) -> Result<()> {
+        // SQLite's VACUUM INTO does not support parameterized queries.
+        // Sanitize using the standard SQL single-quote escape so that even
+        // paths sourced from config cannot cause SQL injection.
+        let safe_path = dest_path.replace('\'', "''");
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
-        conn.execute_batch(&format!("VACUUM INTO '{}'", dest_path.replace('\'', "''")))?;
+        conn.execute_batch(&format!("VACUUM INTO '{}'", safe_path))?;
         Ok(())
     }
 

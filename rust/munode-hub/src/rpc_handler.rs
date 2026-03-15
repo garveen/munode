@@ -58,7 +58,6 @@ use crate::server::EdgeRegistration;
 
 /// Voice target storage entry.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct VoiceTargetEntry {
     edge_id: u32,
     client_session: u32,
@@ -71,6 +70,10 @@ struct VoiceTargetEntry {
 pub struct RpcHandler {
     state: Arc<HubState>,
     /// Voice targets keyed by (client_session, target_id).
+    ///
+    /// Written by `EdgeSyncVoiceTarget` RPCs and broadcast to peer edges.
+    /// Currently only used as a relay/forwarding table; direct reads are
+    /// not needed since Edges maintain their own local voice-target state.
     voice_targets: RwLock<HashMap<(u32, u32), VoiceTargetEntry>>,
     /// Pre-compiled username regex (cached from config at startup).
     username_regex: Option<Regex>,
@@ -1365,25 +1368,45 @@ impl RpcHandler {
             })
             .collect();
 
-        // Build edge list
+        // Build edge list with current load computed from per-Edge health data.
+        let health_map = self.state.edge_health.read().await;
         let edges: Vec<EdgeInfoProto> = self.state.edge_registry
             .read()
             .await
             .values()
-            .map(|e| EdgeInfoProto {
-                server_id: e.server_id,
-                name: e.name.clone(),
-                host: e.host.clone(),
-                port: e.port,
-                region: e.region.clone(),
-                current_load: 0,
-                capacity: e.capacity,
+            .map(|e| {
+                // current_load is the number of active sessions on this Edge,
+                // expressed as a per-mille value (0–1000) relative to capacity.
+                let user_count = health_map
+                    .get(&e.server_id)
+                    .map(|h| h.user_count)
+                    .unwrap_or(0);
+                let current_load = if e.capacity > 0 {
+                    ((user_count as u64 * 1000) / e.capacity as u64).min(1000) as u32
+                } else {
+                    0
+                };
+                EdgeInfoProto {
+                    server_id: e.server_id,
+                    name: e.name.clone(),
+                    host: e.host.clone(),
+                    port: e.port,
+                    region: e.region.clone(),
+                    current_load,
+                    capacity: e.capacity,
+                }
             })
             .collect();
+        drop(health_map);
 
         let result = EdgeFullSyncResult {
             channels,
             channel_links,
+            // ACLs and bans are intentionally omitted from the full-sync snapshot.
+            // Edge nodes query ACL permissions on demand via `EdgePermissionQuery` RPCs
+            // (evaluated by the Hub's AclManager).  Ban checks are performed by the Hub
+            // during `EdgeAuthenticateUser`.  Pushing the full ACL/ban table to every
+            // Edge would be wasteful and create stale-cache invalidation complexity.
             acls: vec![],
             bans: vec![],
             sessions,

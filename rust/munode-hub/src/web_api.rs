@@ -402,6 +402,17 @@ async fn handle_unban(
 ///
 /// | Name | Type | Description |
 /// |------|------|-------------|
+/// Escape a string for use as a Prometheus label value.
+///
+/// Prometheus label values may not contain unescaped backslashes, double quotes,
+/// or newlines.  See the Prometheus data model exposition format specification.
+fn prometheus_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\n")
+}
+
 /// | `munode_hub_connected_edges` | gauge | Number of currently connected Edge nodes |
 /// | `munode_hub_total_sessions` | gauge | Total user sessions across all Edges |
 /// | `munode_hub_total_channels` | gauge | Total channels in the channel store |
@@ -491,7 +502,7 @@ async fn handle_metrics(State(state): State<AppState>) -> Response {
              # TYPE munode_hub_edge_user_count gauge\n",
         );
         for e in &edge_snapshots {
-            let safe_name = e.name.replace('\\', "\\\\").replace('"', "\\\"");
+            let safe_name = prometheus_escape(&e.name);
             buf.push_str(&format!(
                 "munode_hub_edge_user_count{{edge_id=\"{}\",edge_name=\"{}\"}} {}\n",
                 e.id, safe_name, e.user_count
@@ -504,7 +515,7 @@ async fn handle_metrics(State(state): State<AppState>) -> Response {
              # TYPE munode_hub_edge_channel_count gauge\n",
         );
         for e in &edge_snapshots {
-            let safe_name = e.name.replace('\\', "\\\\").replace('"', "\\\"");
+            let safe_name = prometheus_escape(&e.name);
             buf.push_str(&format!(
                 "munode_hub_edge_channel_count{{edge_id=\"{}\",edge_name=\"{}\"}} {}\n",
                 e.id, safe_name, e.channel_count
@@ -517,7 +528,7 @@ async fn handle_metrics(State(state): State<AppState>) -> Response {
              # TYPE munode_hub_edge_online gauge\n",
         );
         for e in &edge_snapshots {
-            let safe_name = e.name.replace('\\', "\\\\").replace('"', "\\\"");
+            let safe_name = prometheus_escape(&e.name);
             buf.push_str(&format!(
                 "munode_hub_edge_online{{edge_id=\"{}\",edge_name=\"{}\"}} {}\n",
                 e.id, safe_name, if e.is_online { 1 } else { 0 }
@@ -530,7 +541,7 @@ async fn handle_metrics(State(state): State<AppState>) -> Response {
              # TYPE munode_hub_edge_uptime_seconds gauge\n",
         );
         for e in &edge_snapshots {
-            let safe_name = e.name.replace('\\', "\\\\").replace('"', "\\\"");
+            let safe_name = prometheus_escape(&e.name);
             buf.push_str(&format!(
                 "munode_hub_edge_uptime_seconds{{edge_id=\"{}\",edge_name=\"{}\"}} {}\n",
                 e.id, safe_name, e.uptime_secs

@@ -26,6 +26,15 @@ use crate::tls::create_tls_acceptor;
 use crate::udp::UdpServer;
 
 /// The main Edge server.
+
+/// Permission bit flags matching the Mumble protocol ACL system.
+/// These must match the values defined in munode-hub's acl_manager::permission.
+mod perm {
+    pub const WRITE: u32 = 0x1;
+    pub const ENTER: u32 = 0x4;
+    pub const SPEAK: u32 = 0x8;
+    pub const LISTEN: u32 = 0x800;
+}
 pub struct EdgeServer {
     config: EdgeConfig,
 }
@@ -307,9 +316,14 @@ async fn handle_client_connection(
                     // Parse client version message and save info
                     if let Ok(version_msg) = mumbleproto::Version::decode(&frame.payload[..]) {
                         client_version = version_msg.version;
+                        // Truncate version strings to prevent log injection and excess memory use.
+                        const MAX_VERSION_STR: usize = 256;
                         client_release = version_msg.release.unwrap_or_default();
+                        client_release.truncate(MAX_VERSION_STR);
                         client_os = version_msg.os.unwrap_or_default();
+                        client_os.truncate(MAX_VERSION_STR);
                         client_os_version = version_msg.os_version.unwrap_or_default();
+                        client_os_version.truncate(MAX_VERSION_STR);
                         info!(
                             "Client {} version: v={:?} release={} os={} os_version={}",
                             peer_addr, client_version, client_release, client_os, client_os_version
@@ -459,7 +473,7 @@ async fn handle_client_connection(
                     // (done AFTER add_client so hub_client.handle_permission_query gets the right user_id)
                     if !auth_result.suppress.unwrap_or(false) {
                         let can_speak = match hub_client.handle_permission_query(sid, channel_id).await {
-                            Ok(r) => r.permissions.map(|p| p & 0x8 != 0).unwrap_or(true),
+                            Ok(r) => r.permissions.map(|p| p & perm::SPEAK != 0).unwrap_or(true),
                             Err(_) => true,
                         };
                         if !can_speak {
@@ -491,7 +505,7 @@ async fn handle_client_connection(
                             let mut visible_set = std::collections::HashSet::new();
                             for &ch_id in &ninja_channels {
                                 let can_enter = match hub_client.handle_permission_query(sid, ch_id).await {
-                                    Ok(r) => r.permissions.map(|p| p & 0x4 != 0).unwrap_or(false),
+                                    Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(false),
                                     Err(_) => false,
                                 };
                                 if can_enter {
@@ -668,13 +682,15 @@ async fn handle_client_connection(
                                     bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
                                     bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
                                     bytes::BufMut::put_slice(&mut buf, &forwarded);
-                                    let data = buf.to_vec();
+                                    // Wrap in Arc to share the frame buffer across target senders
+                                    // without per-target heap allocation.
+                                    let data = std::sync::Arc::new(buf.to_vec());
                                     // Send to local targets
                                     for target_session in &target_sessions {
                                         if let Some(target_client) = edge_state.client_manager.get_client(*target_session).await {
                                             if !target_client.deaf && !target_client.self_deaf {
                                                 if let Some(sender) = edge_state.client_manager.get_sender(*target_session).await {
-                                                    sender.send_raw(data.clone()).await;
+                                                    sender.send_raw((*data).clone()).await;
                                                 }
                                             }
                                         }
@@ -716,7 +732,9 @@ async fn handle_client_connection(
                                 bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
                                 bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
                                 bytes::BufMut::put_slice(&mut buf, &forwarded);
-                                let data = buf.to_vec();
+                                // Wrap in Arc to share the frame buffer across target senders
+                                // without per-target heap allocation.
+                                let data = std::sync::Arc::new(buf.to_vec());
 
                                 // Local clients in all linked channels
                                 for ch_id in &linked_channels {
@@ -731,7 +749,7 @@ async fn handle_client_connection(
                                             }
                                         }
                                         if let Some(sender) = edge_state.client_manager.get_sender(target_session).await {
-                                            sender.send_raw(data.clone()).await;
+                                            sender.send_raw((*data).clone()).await;
                                         }
                                     }
                                 }
@@ -1025,7 +1043,7 @@ async fn handle_client_connection(
                         // Check admin (Write) permission on root channel
                         let sid = session_id.unwrap_or(0);
                         let is_admin = match hub_client.handle_permission_query(sid, 0).await {
-                            Ok(r) => r.permissions.map(|p| p & 0x1 != 0).unwrap_or(false), // WRITE = 0x1
+                            Ok(r) => r.permissions.map(|p| p & perm::WRITE != 0).unwrap_or(false),
                             Err(_) => false,
                         };
                         if !is_admin {
@@ -1297,7 +1315,7 @@ async fn handle_user_state_update(
             if client.channel_id != target_channel_id {
                 // Check Enter permission on target channel via Hub
                 let can_enter = match hub_client.handle_permission_query(session_id, target_channel_id).await {
-                    Ok(r) => r.permissions.map(|p| p & 0x4 != 0).unwrap_or(true), // ENTER
+                    Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(true),
                     Err(_) => true, // Fail open if Hub unreachable
                 };
                 if can_enter {
@@ -1332,7 +1350,7 @@ async fn handle_user_state_update(
                     client.channel_id = target_channel_id;
                     // Check Speak permission; suppress the user if they can't speak in the new channel
                     let can_speak = match hub_client.handle_permission_query(session_id, target_channel_id).await {
-                        Ok(r) => r.permissions.map(|p| p & 0x8 != 0).unwrap_or(true), // SPEAK = 0x8
+                        Ok(r) => r.permissions.map(|p| p & perm::SPEAK != 0).unwrap_or(true),
                         Err(_) => true,
                     };
                     let new_suppress = !can_speak;
@@ -1452,7 +1470,7 @@ async fn handle_user_state_update(
 
                 // Check Listen permission (0x800) before adding
                 let can_listen = match hub_client.handle_permission_query(session_id, ch).await {
-                    Ok(r) => r.permissions.map(|p| p & 0x800 != 0).unwrap_or(true), // LISTEN
+                    Ok(r) => r.permissions.map(|p| p & perm::LISTEN != 0).unwrap_or(true),
                     Err(_) => true,
                 };
                 if !can_listen {
@@ -1675,7 +1693,7 @@ async fn handle_admin_user_state_update(
                 client.channel_id = target_channel_id;
                 // Re-check suppress for the new channel
                 let can_speak = match hub_client.handle_permission_query(target_session, target_channel_id).await {
-                    Ok(r) => r.permissions.map(|p| p & 0x8 != 0).unwrap_or(true),
+                    Ok(r) => r.permissions.map(|p| p & perm::SPEAK != 0).unwrap_or(true),
                     Err(_) => true,
                 };
                 let new_suppress = !can_speak;
@@ -1907,6 +1925,7 @@ mod tests {
                 pool_size: 1,
                 relay_port: 0,
                 static_peers: vec![],
+                tls: false,
             },
             server: ServerConfig::default(),
             voice_routing: munode_common::config::EdgeVoiceRoutingConfig::default(),

@@ -178,11 +178,36 @@ impl AclManager {
         Ok(())
     }
 
-    /// Invalidate cache for all users on a specific channel and its descendants.
-    pub async fn invalidate_channel(&self, _channel_id: u32) {
-        // For simplicity, clear entire cache.
-        // A more optimized approach would only clear entries for affected channels.
-        self.cache.write().await.clear();
+    /// Invalidate cache entries for a specific channel and its descendants.
+    ///
+    /// When ACLs are updated for a channel, all cached permission results for
+    /// that channel (and any child channels that inherit from it) are stale.
+    /// This removes only the affected entries rather than clearing the whole cache.
+    pub async fn invalidate_channel(&self, channel_id: u32) {
+        // Collect descendant channel IDs (including the channel itself).
+        let mut affected: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        affected.insert(channel_id);
+
+        // Walk all channels to find descendants.
+        let all_channels = self.channel_store.get_all_channels().await;
+        // Iteratively expand until no new descendants are added.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for ch in &all_channels {
+                if let Some(parent) = ch.parent_id {
+                    if affected.contains(&parent) && affected.insert(ch.id) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        // Remove only cache entries whose channel_id is in the affected set.
+        self.cache
+            .write()
+            .await
+            .retain(|(_uid, cid), _| !affected.contains(cid));
     }
 
     /// Build the channel chain from root (channel 0) to the target channel.
