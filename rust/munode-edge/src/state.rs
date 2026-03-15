@@ -95,8 +95,11 @@ pub struct RemoteUserStateDelta {
 /// Events broadcast within the Edge server.
 #[derive(Debug, Clone)]
 pub enum EdgeEvent {
-    /// Hub registration completed, channels/users loaded.
-    HubRegistered,
+    /// Hub registration and full sync completed.
+    /// `disappeared_session_ids`: remote session IDs that were in the local
+    /// cache *before* the sync but are absent from the fresh Hub snapshot —
+    /// the event loop should send UserRemove for these to all local clients.
+    HubRegistered { disappeared_session_ids: Vec<u32> },
     /// Hub connection lost.
     HubDisconnected,
     /// Hub is completely unreachable: both direct and relay connections failed.

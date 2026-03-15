@@ -2450,8 +2450,107 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         }
                         debug!("Broadcast channel updated: {}", channel_id);
                     }
-                    EdgeEvent::HubRegistered => {
-                        info!("Hub registered event received");
+                    EdgeEvent::HubRegistered { disappeared_session_ids } => {
+                        // After Hub reconnect / full-sync, resync the local clients' view of the
+                        // world:
+                        //  1. Send UserRemove for sessions that disappeared from Hub's snapshot
+                        //     (protects against zombie users left over from before the reconnect).
+                        //  2. Re-announce every remote user currently in the cache so clients that
+                        //     were already connected during the reconnect see new/updated users.
+                        //  3. Re-broadcast channel states so clients see any channel changes.
+                        let local_clients = state.client_manager.get_all_clients().await;
+                        let authenticated_clients: Vec<_> = local_clients
+                            .iter()
+                            .filter(|c| c.state == crate::client::ClientState::Ready)
+                            .collect();
+
+                        if authenticated_clients.is_empty() {
+                            info!("Hub registered — no authenticated clients to notify");
+                        } else {
+                            // 1. UserRemove for disappeared sessions
+                            for &sid in &disappeared_session_ids {
+                                let remove_msg = handler::build_user_remove_msg(sid, None);
+                                for client in &authenticated_clients {
+                                    state.client_manager.send_to(client.session, MessageType::UserRemove, &remove_msg).await;
+                                }
+                            }
+                            if !disappeared_session_ids.is_empty() {
+                                info!("Hub registered — sent UserRemove for {} disappeared session(s)", disappeared_session_ids.len());
+                            }
+
+                            // 2. Re-announce all current remote users (only true-booleans to avoid spurious notifications)
+                            let ninja_channels_snap: std::collections::HashSet<u32> = {
+                                state.ninja_channels.read().await.iter().copied().collect()
+                            };
+                            let ninja_visible = state.ninja_visible_to.read().await;
+                            let remote_users = state.channel_manager.get_all_remote_users().await;
+                            let local_session_set: std::collections::HashSet<u32> =
+                                authenticated_clients.iter().map(|c| c.session).collect();
+
+                            for user in &remote_users {
+                                // Skip our own edge's users (tracked via client_manager)
+                                if local_session_set.contains(&user.session_id) { continue; }
+                                // Ninja channel visibility check
+                                if ninja_channels_snap.contains(&user.channel_id) {
+                                    // Only send to clients who can see this channel
+                                    let msg = mumbleproto::UserState {
+                                        session: Some(user.session_id),
+                                        user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
+                                        name: Some(user.username.clone()),
+                                        channel_id: Some(user.channel_id),
+                                        mute:             if user.mute             { Some(true) } else { None },
+                                        deaf:             if user.deaf             { Some(true) } else { None },
+                                        suppress:         if user.suppress         { Some(true) } else { None },
+                                        self_mute:        if user.self_mute        { Some(true) } else { None },
+                                        self_deaf:        if user.self_deaf        { Some(true) } else { None },
+                                        priority_speaker: if user.priority_speaker { Some(true) } else { None },
+                                        recording:        if user.recording        { Some(true) } else { None },
+                                        hash: user.cert_hash.clone(),
+                                        ..Default::default()
+                                    };
+                                    for client in &authenticated_clients {
+                                        let can_see = ninja_visible
+                                            .get(&client.session)
+                                            .map(|set| set.contains(&user.channel_id))
+                                            .unwrap_or(false);
+                                        if can_see {
+                                            state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
+                                        }
+                                    }
+                                } else {
+                                    let msg = mumbleproto::UserState {
+                                        session: Some(user.session_id),
+                                        user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
+                                        name: Some(user.username.clone()),
+                                        channel_id: Some(user.channel_id),
+                                        mute:             if user.mute             { Some(true) } else { None },
+                                        deaf:             if user.deaf             { Some(true) } else { None },
+                                        suppress:         if user.suppress         { Some(true) } else { None },
+                                        self_mute:        if user.self_mute        { Some(true) } else { None },
+                                        self_deaf:        if user.self_deaf        { Some(true) } else { None },
+                                        priority_speaker: if user.priority_speaker { Some(true) } else { None },
+                                        recording:        if user.recording        { Some(true) } else { None },
+                                        hash: user.cert_hash.clone(),
+                                        ..Default::default()
+                                    };
+                                    for client in &authenticated_clients {
+                                        state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
+                                    }
+                                }
+                            }
+                            info!("Hub registered — re-announced {} remote user(s) to {} local client(s)",
+                                remote_users.len(), authenticated_clients.len());
+
+                            // 3. Re-broadcast channel states so clients see any channel changes
+                            let channels = state.channel_manager.get_channels_bfs().await;
+                            for ch in &channels {
+                                let ch_msg = handler::build_channel_state_msg(ch);
+                                for client in &authenticated_clients {
+                                    state.client_manager.send_to(client.session, MessageType::ChannelState, &ch_msg).await;
+                                }
+                            }
+                            debug!("Hub registered — re-broadcast {} channel(s) to local clients", channels.len());
+                        }
                     }
                     EdgeEvent::HubDisconnected => {
                         warn!("Hub disconnected - local clients will continue but some features unavailable");

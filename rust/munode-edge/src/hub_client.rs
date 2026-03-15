@@ -394,14 +394,16 @@ impl HubClient {
 
         if is_primary {
             self.do_register().await?;
-            self.do_full_sync().await?;
+            let disappeared = self.do_full_sync().await?;
+            // Clear stale voice-target cache from before the reconnect.
+            self.edge_state.voice_targets.write().await.clear();
             self.do_join_cluster().await?;
             // Report any already-connected local users (Hub may have restarted)
             if let Err(e) = self.do_report_local_users().await {
                 warn!("Failed to report existing users to Hub: {}", e);
             }
             *self.state.write().await = HubConnectionState::Registered;
-            self.edge_state.emit(EdgeEvent::HubRegistered);
+            self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
             info!("Edge registered with Hub successfully (via {}, slot {})", url, slot);
         }
 
@@ -533,8 +535,10 @@ impl HubClient {
         if is_primary {
             // Register with Hub (reader task is now running)
             self.do_register().await?;
-            // Request full sync
-            self.do_full_sync().await?;
+            // Request full sync; capture disappeared session IDs for the event.
+            let disappeared = self.do_full_sync().await?;
+            // Clear stale voice-target cache from before the reconnect.
+            self.edge_state.voice_targets.write().await.clear();
             // Join cluster topology
             self.do_join_cluster().await?;
             // Report any already-connected local users (Hub may have restarted)
@@ -543,7 +547,7 @@ impl HubClient {
             }
 
             *self.state.write().await = HubConnectionState::Registered;
-            self.edge_state.emit(EdgeEvent::HubRegistered);
+            self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
             info!("Edge registered with Hub successfully (pool primary)");
         }
 
@@ -1141,7 +1145,12 @@ impl HubClient {
     }
 
     /// Request full sync from Hub (channels, users, ACLs).
-    async fn do_full_sync(&self) -> Result<()> {
+    ///
+    /// Returns the list of remote-user session IDs that were present in the local
+    /// cache *before* the sync but are absent from the fresh Hub snapshot.
+    /// These "disappeared" sessions should be communicated to connected local clients
+    /// via `UserRemove` so they don't keep stale entries in their user lists.
+    async fn do_full_sync(&self) -> Result<Vec<u32>> {
         let request_id = self.next_request_id().await;
         let request = TypedRpcRequest {
             request_id,
@@ -1162,21 +1171,45 @@ impl HubClient {
         let result = response.edge_full_sync
             .ok_or_else(|| anyhow::anyhow!("No edge_full_sync in response"))?;
 
+        // Snapshot the old remote-user session IDs **before** clearing the cache so
+        // we can compute the "disappeared" diff once the fresh data is loaded.
+        let old_session_ids: std::collections::HashSet<u32> = self.edge_state
+            .channel_manager
+            .get_all_remote_users()
+            .await
+            .iter()
+            .map(|u| u.session_id)
+            .collect();
+
         // Load channels
         self.edge_state.channel_manager.load_channels(
             &result.channels,
             &result.channel_links,
         ).await;
 
-        // Load remote users
+        // Load remote users (clears and repopulates the cache).
         self.edge_state.channel_manager.load_remote_users(&result.sessions).await;
+
+        // Compute sessions that existed before but are no longer present.
+        let new_session_ids: std::collections::HashSet<u32> = result.sessions
+            .iter()
+            .map(|s| s.session_id)
+            .collect();
+        let disappeared: Vec<u32> = old_session_ids
+            .into_iter()
+            .filter(|id| !new_session_ids.contains(id))
+            .collect();
+
+        if !disappeared.is_empty() {
+            info!("Full sync: {} session(s) disappeared from Hub snapshot", disappeared.len());
+        }
 
         info!(
             "Full sync complete: {} channels, {} sessions",
             result.channels.len(),
             result.sessions.len()
         );
-        Ok(())
+        Ok(disappeared)
     }
 
     /// Join the cluster topology so Hub can broadcast our address to peer Edges.

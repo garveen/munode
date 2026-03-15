@@ -263,6 +263,33 @@ impl RpcHandler {
             }
         }
 
+        // Clean up any stale sessions left over from a previous instance of this edge
+        // (handles the case where the edge process restarted while Hub was still running).
+        // We do NOT clean up sessions when Hub itself restarted, because in that case
+        // Hub's session table is already empty.
+        let stale_sessions = self.state.session_manager
+            .get_sessions_by_edge(params.server_id).await;
+        if !stale_sessions.is_empty() {
+            warn!(
+                "Edge {} re-registered with {} stale session(s) — cleaning up",
+                params.server_id, stale_sessions.len()
+            );
+            for session in &stale_sessions {
+                self.state.session_manager.remove_session(session.session_id).await;
+                let session_id = session.session_id;
+                self.broadcast_notification("hub.userRemoveBroadcast", |n| {
+                    n.user_remove_broadcast = Some(HubUserRemoveBroadcastParams {
+                        session: session_id,
+                        actor: None,
+                        reason: Some("Edge reconnected - session cleanup".to_string()),
+                        ban: None,
+                        target_sessions: vec![],
+                    });
+                }).await;
+            }
+            info!("Cleaned up {} stale session(s) for re-registering edge {}", stale_sessions.len(), params.server_id);
+        }
+
         // Register the edge
         let registration = EdgeRegistration {
             server_id: params.server_id,

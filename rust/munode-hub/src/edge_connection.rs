@@ -19,6 +19,10 @@ pub struct EdgeConnection {
     rpc_handler: Arc<RpcHandler>,
     /// The server_id once registered.
     server_id: Option<u32>,
+    /// Clone of this connection's outbound sender, set after registration.
+    /// Used to detect if a newer connection has already taken over this server_id
+    /// slot before running disconnect cleanup.
+    own_sender: Option<mpsc::Sender<Vec<u8>>>,
 }
 
 impl EdgeConnection {
@@ -27,6 +31,7 @@ impl EdgeConnection {
             state,
             rpc_handler,
             server_id: None,
+            own_sender: None,
         }
     }
 
@@ -101,11 +106,32 @@ impl EdgeConnection {
         let _ = writer_stop_tx.send(()).await;
         let _ = writer_handle.await;
 
-        // Cleanup on disconnect
+        // Cleanup on disconnect.
+        // Guard against a race condition where the Edge rapidly restarts: if the
+        // new connection has already registered under the same server_id and put
+        // its own sender into `edge_connections`, we must NOT remove that entry
+        // or run cleanup (which would destroy the new connection's sessions).
         if let Some(server_id) = self.server_id {
-            self.state.edge_connections.write().await.remove(&server_id);
-            self.state.edge_health.write().await.remove(&server_id);
-            self.rpc_handler.cleanup_edge(server_id).await;
+            let should_cleanup = if let Some(our_sender) = &self.own_sender {
+                // Atomically check-and-remove: only remove if OUR sender is still stored.
+                let mut connections = self.state.edge_connections.write().await;
+                let is_ours = connections
+                    .get(&server_id)
+                    .map(|s| s.same_channel(our_sender))
+                    .unwrap_or(false);
+                if is_ours {
+                    connections.remove(&server_id);
+                }
+                is_ours
+            } else {
+                // Never completed registration — nothing to clean up.
+                false
+            };
+
+            if should_cleanup {
+                self.state.edge_health.write().await.remove(&server_id);
+                self.rpc_handler.cleanup_edge(server_id).await;
+            }
             info!("Edge {} (server_id={}) disconnected", addr, server_id);
         }
 
@@ -129,6 +155,9 @@ impl EdgeConnection {
                         if let Some(params) = &request.edge_register {
                             let sid = params.server_id;
                             self.server_id = Some(sid);
+                            // Keep our own sender reference so disconnect cleanup can
+                            // verify it is still the active connection for this server_id.
+                            self.own_sender = Some(send_tx.clone());
                             // Register sender channel so broadcast can reach this edge
                             self.state
                                 .edge_connections
