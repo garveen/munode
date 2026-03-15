@@ -7,6 +7,7 @@ edition.workspace = true
 prost = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
+num_enum = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

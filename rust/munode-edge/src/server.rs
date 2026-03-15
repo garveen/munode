@@ -25,8 +25,6 @@ use crate::state::{EdgeEvent, EdgeState};
 use crate::tls::create_tls_acceptor;
 use crate::udp::UdpServer;
 
-/// The main Edge server.
-
 /// Permission bit flags matching the Mumble protocol ACL system.
 /// These must match the values defined in munode-hub's acl_manager::permission.
 mod perm {
@@ -35,6 +33,8 @@ mod perm {
     pub const SPEAK: u32 = 0x8;
     pub const LISTEN: u32 = 0x800;
 }
+
+/// The main Edge server.
 pub struct EdgeServer {
     config: EdgeConfig,
 }

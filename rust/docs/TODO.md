@@ -270,15 +270,17 @@
 - **描述**: `payload.len() as u32` 在 >4GB 时静默截断（虽然实际不可能）。
 - **建议**: 使用 `try_into()` 验证。
 
-#### L-03: message_type.rs 手动 match 维护性差
+#### ~~L-03: message_type.rs 手动 match 维护性差~~ ✅ 已修复
 - **文件**: `munode-protocol/src/message_type.rs:39-70`
 - **描述**: `from_u16()` 手动匹配所有枚举变体，新增类型时容易遗漏。
 - **建议**: 使用 `num_enum` 或 `strum` derive 宏自动生成。
+- **已实现**: 添加 `num_enum 0.7` 依赖；`MessageType` 和 `UdpVoiceType` 均派生 `TryFromPrimitive` + `IntoPrimitive`；`from_u16()` 委托给 `TryFrom<u16>`；消除 32 行手动 match。
 
-#### L-04: error.rs 错误类型使用 String 而非枚举
+#### ~~L-04: error.rs 错误类型使用 String 而非枚举~~ ✅ 已修复
 - **文件**: `munode-common/src/error.rs`
 - **描述**: 错误变体（Config、Tls、Connection 等）使用 `String` 参数，丢失类型信息。
 - **建议**: 使用嵌套错误枚举保留上下文。
+- **已实现**: 新增 `ConfigError`、`TlsError`、`ConnectionError`、`AuthError`、`ProtocolError`、`HubError` 六个细粒度枚举；`MunodeError` 通过 `#[from]` 聚合，保持调用侧的 `?` 操作符体验；所有变体携带结构化字段而非 String。
 
 #### ~~L-05: session_manager.rs 未使用参数~~ ✅ 已修复（保留参数 + 补充注释说明预留用途）
 - **文件**: `munode-hub/src/session_manager.rs:40`
@@ -396,5 +398,6 @@
 ## 更新日志
 
 - 2026-03-15: **修复所有 Critical 和 High 问题** — 完成 C-01～C-05、H-01～H-13 共 18 项修复，包括 TLS 证书验证、mutex panic 消除、优雅关闭、连接限制等
+- 2026-03-15: **修复 L-03/L-04** — 引入 `num_enum 0.7` 消除 `from_u16()` 手动 match；重构 `MunodeError` 为 6 个细粒度子枚举；copilot-instructions 新增不需向后兼容的说明
 - 2026-03-15: **修复所有 Medium 和 Low 问题** — 完成 M-01～M-19、L-01/L-02/L-05/L-06/L-07/L-09 共 25 项修复，包括权限常量化、精确缓存失效、f64 精度、wss:// 支持、IV 边界测试等
 - 2026-03-15: **重写 TODO.md** — 移除已完成功能的详细任务清单（合并为总览表），基于全量代码审计新增 5 个 Critical、13 个 High、19 个 Medium、9 个 Low 级别代码质量问题，新增 4 个架构级改进建议
