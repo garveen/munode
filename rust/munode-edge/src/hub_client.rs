@@ -24,6 +24,7 @@ use munode_protocol::hubedge::{
     EdgeHandleUserLeftParams, EdgeHandleUserRemoveParams, EdgeHandleUserMovedParams,
     EdgeHandleUserStateChangedParams, EdgeHandleTextMessageParams,
     EdgeHandleChannelStateParams, EdgeHandleChannelRemoveParams,
+    EdgeReportSessionParams, GlobalSessionProto,
 };
 
 use crate::channel_manager::{ChannelData, RemoteUser};
@@ -405,6 +406,10 @@ impl HubClient {
             self.do_register().await?;
             self.do_full_sync().await?;
             self.do_join_cluster().await?;
+            // Report any already-connected local users (Hub may have restarted)
+            if let Err(e) = self.do_report_local_users().await {
+                warn!("Failed to report existing users to Hub: {}", e);
+            }
             *self.state.write().await = HubConnectionState::Registered;
             self.edge_state.emit(EdgeEvent::HubRegistered);
             info!("Edge registered with Hub successfully (via {}, slot {})", url, slot);
@@ -541,6 +546,10 @@ impl HubClient {
             self.do_full_sync().await?;
             // Join cluster topology
             self.do_join_cluster().await?;
+            // Report any already-connected local users (Hub may have restarted)
+            if let Err(e) = self.do_report_local_users().await {
+                warn!("Failed to report existing users to Hub: {}", e);
+            }
 
             *self.state.write().await = HubConnectionState::Registered;
             self.edge_state.emit(EdgeEvent::HubRegistered);
@@ -1242,6 +1251,61 @@ impl HubClient {
             ..Default::default()
         };
         let _ = self.rpc_call(complete_request).await;
+
+        Ok(())
+    }
+
+    /// After a Hub reconnect, report all currently-connected local users to the
+    /// Hub so it can rebuild its session registry.  Without this, Hub restart
+    /// leaves Hub unaware of existing users, breaking cross-edge visibility and
+    /// other Hub-side logic.
+    async fn do_report_local_users(&self) -> Result<()> {
+        use crate::client::ClientState;
+        let edge_id = self.edge_id();
+        let clients = self.edge_state.client_manager.get_all_clients().await;
+        let ready_clients: Vec<_> = clients.iter()
+            .filter(|c| c.state == ClientState::Ready)
+            .collect();
+
+        if ready_clients.is_empty() {
+            return Ok(());
+        }
+
+        info!("Reporting {} existing local users to Hub after reconnect", ready_clients.len());
+
+        for client in ready_clients {
+            let session_proto = GlobalSessionProto {
+                session_id: client.session,
+                edge_id,
+                user_id: client.user_id,
+                username: client.username.clone(),
+                channel_id: client.channel_id,
+                ip_address: Some(client.ip_address.clone()),
+                cert_hash: client.cert_hash.clone(),
+                connected_at: None,
+                groups: client.groups.clone(),
+                mute: Some(client.mute),
+                deaf: Some(client.deaf),
+                suppress: Some(client.suppress),
+                self_mute: Some(client.self_mute),
+                self_deaf: Some(client.self_deaf),
+                priority_speaker: Some(client.priority_speaker),
+                recording: Some(client.recording),
+            };
+            let request_id = self.next_request_id().await;
+            let request = TypedRpcRequest {
+                request_id,
+                method: "edge.reportSession".to_string(),
+                timeout_ms: Some(10000),
+                edge_report_session: Some(EdgeReportSessionParams { session: session_proto }),
+                ..Default::default()
+            };
+            if let Err(e) = self.rpc_call(request).await {
+                warn!("Failed to report existing session {} to Hub: {}", client.session, e);
+            } else {
+                debug!("Reported session {} ({}) to Hub", client.session, client.username);
+            }
+        }
 
         Ok(())
     }

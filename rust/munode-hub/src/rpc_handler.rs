@@ -124,6 +124,7 @@ impl RpcHandler {
             "edge.register" => self.handle_register(&request, &request_id).await,
             "edge.allocateSessionId" => self.handle_allocate_session_id(&request, &request_id).await,
             "edge.authenticateUser" => self.handle_authenticate_user(&request, &request_id, edge_server_id).await,
+            "edge.reportSession" => self.handle_report_session(&request, &request_id, edge_server_id).await,
             "edge.fullSync" => self.handle_full_sync(&request, &request_id).await,
             "edge.handlePermissionQuery" => self.handle_permission_query(&request, &request_id).await,
             "edge.syncVoiceTarget" => self.handle_sync_voice_target(&request, &request_id).await,
@@ -1123,7 +1124,70 @@ impl RpcHandler {
         }))
     }
 
-    /// Authenticate a user via an HTTP endpoint.
+    /// Re-register an already-authenticated session after Hub restart / Edge reconnect.
+    ///
+    /// Unlike `edge.authenticateUser`, this path skips credential validation entirely
+    /// and simply inserts the session into the session manager, then broadcasts
+    /// `hub.userJoined` so all other Edges learn about the user.
+    async fn handle_report_session(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+        edge_server_id: u32,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.edge_report_session.as_ref()
+            .context("Missing edge_report_session params")?;
+        let s = &params.session;
+
+        let session_info = SessionInfo {
+            session_id: s.session_id,
+            edge_id: edge_server_id,
+            user_id: s.user_id,
+            username: s.username.clone(),
+            channel_id: s.channel_id,
+            groups: s.groups.clone(),
+            cert_hash: s.cert_hash.clone().unwrap_or_default(),
+            mute: s.mute.unwrap_or(false),
+            deaf: s.deaf.unwrap_or(false),
+            suppress: s.suppress.unwrap_or(false),
+            self_mute: s.self_mute.unwrap_or(false),
+            self_deaf: s.self_deaf.unwrap_or(false),
+            priority_speaker: s.priority_speaker.unwrap_or(false),
+            recording: s.recording.unwrap_or(false),
+        };
+        self.state.session_manager.add_session(session_info).await;
+
+        info!(
+            "Reported existing session: {} (session={}, edge={}, channel={})",
+            s.username, s.session_id, edge_server_id, s.channel_id
+        );
+
+        // Broadcast hub.userJoined to all edges (including the reporting edge,
+        // which ignores it for its own edge_id).
+        self.broadcast_notification("hub.userJoined", |n| {
+            n.user_joined = Some(HubUserJoinedParams {
+                session_id: s.session_id,
+                edge_id: edge_server_id,
+                user_id: s.user_id,
+                username: s.username.clone(),
+                channel_id: s.channel_id,
+                groups: s.groups.clone(),
+                cert_hash: s.cert_hash.clone(),
+                mute: s.mute,
+                deaf: s.deaf,
+                suppress: s.suppress,
+                self_mute: s.self_mute,
+                self_deaf: s.self_deaf,
+                priority_speaker: s.priority_speaker,
+                recording: s.recording,
+            });
+        }).await;
+
+        let result = EdgeReportSessionResult { success: true, error: None };
+        Ok(self.make_response_packet(request_id, "edge.reportSession", |r| {
+            r.edge_report_session = Some(result);
+        }))
+    }
     ///
     /// Returns `Ok(Some(response))` on a successful HTTP call (response may indicate failure).
     /// Returns `Ok(None)` on timeout.

@@ -924,6 +924,14 @@ pub struct EdgeAuthenticateUserResult {
     #[prost(bool, optional, tag = "16")]
     pub cert_required: ::core::option::Option<bool>,
 }
+/// ---------------------------------------------------------------------------
+/// edge.reportSession - Edge 上报已存在的会话（Hub 重启后重连时使用）
+/// ---------------------------------------------------------------------------
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeReportSessionParams {
+    #[prost(message, required, tag = "1")]
+    pub session: GlobalSessionProto,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeReportSessionResult {
     #[prost(bool, required, tag = "1")]
@@ -2025,6 +2033,8 @@ pub struct TypedRpcRequest {
     pub edge_allocate_session_id: ::core::option::Option<EdgeAllocateSessionIdParams>,
     #[prost(message, optional, tag = "13")]
     pub edge_authenticate_user: ::core::option::Option<EdgeAuthenticateUserParams>,
+    #[prost(message, optional, tag = "14")]
+    pub edge_report_session: ::core::option::Option<EdgeReportSessionParams>,
     #[prost(message, optional, tag = "15")]
     pub edge_sync_voice_target: ::core::option::Option<EdgeSyncVoiceTargetParams>,
     #[prost(message, optional, tag = "16")]
