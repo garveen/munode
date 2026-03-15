@@ -410,7 +410,7 @@ fn prometheus_escape(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")
         .replace('\n', "\\n")
-        .replace('\r', "\\n")
+        .replace('\r', "\\r")
 }
 
 /// | `munode_hub_connected_edges` | gauge | Number of currently connected Edge nodes |

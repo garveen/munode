@@ -610,6 +610,8 @@ impl HubSuggestConfig {
         let patch = parts[2].parse::<u64>().ok()?;
         // Cap each component to its field width so bit-shifts never overflow.
         // v2 format: major(16) | minor(16) | patch(16) in the top 48 bits.
+        // Silently cap at the maximum representable value; values beyond 65535
+        // are not used in any known Mumble client version string.
         let major_capped = major.min(0xFFFF);
         let minor_capped = minor.min(0xFFFF);
         let patch_capped = patch.min(0xFFFF);

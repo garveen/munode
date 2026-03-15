@@ -71,9 +71,11 @@ pub struct RpcHandler {
     state: Arc<HubState>,
     /// Voice targets keyed by (client_session, target_id).
     ///
-    /// Written by `EdgeSyncVoiceTarget` RPCs and broadcast to peer edges.
-    /// Currently only used as a relay/forwarding table; direct reads are
-    /// not needed since Edges maintain their own local voice-target state.
+    /// Populated by `EdgeSyncVoiceTarget` RPCs: each Edge reports its clients'
+    /// active whisper targets to the Hub, which stores them here and broadcasts
+    /// the update to all other Edges via `hub.syncVoiceTarget`.  The Hub acts as
+    /// a relay — Edges maintain their own authoritative copy for local routing.
+    /// The Hub's copy is used for cluster-wide visibility (e.g., diagnostics).
     voice_targets: RwLock<HashMap<(u32, u32), VoiceTargetEntry>>,
     /// Pre-compiled username regex (cached from config at startup).
     username_regex: Option<Regex>,
