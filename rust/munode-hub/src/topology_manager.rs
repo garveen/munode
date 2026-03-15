@@ -205,15 +205,21 @@ impl TopologyManager {
         let edge_ids: Vec<u32> = self.edges.keys().cloned().collect();
         let mut parent: HashMap<u32, u32> = edge_ids.iter().map(|&e| (e, e)).collect();
 
+        // Iterative find with path compression — avoids stack overflow on large clusters.
         fn find(parent: &mut HashMap<u32, u32>, x: u32) -> u32 {
-            let p = *parent.get(&x).unwrap_or(&x);
-            if p != x {
-                let root = find(parent, p);
-                parent.insert(x, root);
-                root
-            } else {
-                x
+            // Walk up to the root
+            let mut root = x;
+            while parent.get(&root).copied().unwrap_or(root) != root {
+                root = parent.get(&root).copied().unwrap_or(root);
             }
+            // Path compression: point every node on the path directly to root
+            let mut cur = x;
+            while cur != root {
+                let next = parent.get(&cur).copied().unwrap_or(cur);
+                parent.insert(cur, root);
+                cur = next;
+            }
+            root
         }
 
         fn union(parent: &mut HashMap<u32, u32>, x: u32, y: u32) {

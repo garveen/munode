@@ -37,7 +37,8 @@ impl CryptState {
     /// Create a new CryptState with zero key/IVs.
     pub fn new() -> Self {
         let key = [0u8; 16];
-        let cipher = Aes128::new_from_slice(&key).expect("AES key init failed");
+        // SAFETY: key is always exactly 16 bytes; AES-128 requires 16 bytes.
+        let cipher = Aes128::new_from_slice(&key).expect("AES-128 key must be 16 bytes");
         Self {
             key,
             encrypt_iv: [0u8; 16],
@@ -52,13 +53,17 @@ impl CryptState {
     }
 
     /// Generate a random key and IVs using ring's CSPRNG.
-    pub fn generate_key(&mut self) {
+    ///
+    /// Returns an error if the system RNG is unavailable (e.g., entropy pool exhausted).
+    pub fn generate_key(&mut self) -> Result<(), ring::error::Unspecified> {
         use ring::rand::{SecureRandom, SystemRandom};
         let rng = SystemRandom::new();
-        rng.fill(&mut self.key).expect("RNG failed");
-        rng.fill(&mut self.encrypt_iv).expect("RNG failed");
-        rng.fill(&mut self.decrypt_iv).expect("RNG failed");
-        self.cipher = Aes128::new_from_slice(&self.key).expect("AES key init failed");
+        rng.fill(&mut self.key)?;
+        rng.fill(&mut self.encrypt_iv)?;
+        rng.fill(&mut self.decrypt_iv)?;
+        // SAFETY: self.key is always 16 bytes; AES-128 requires 16 bytes.
+        self.cipher = Aes128::new_from_slice(&self.key).expect("AES-128 key must be 16 bytes");
+        Ok(())
     }
 
     /// Set key and IVs explicitly.
@@ -70,7 +75,8 @@ impl CryptState {
         self.key = *key;
         self.encrypt_iv = *encrypt_iv;
         self.decrypt_iv = *decrypt_iv;
-        self.cipher = Aes128::new_from_slice(&self.key).expect("AES key init failed");
+        // SAFETY: self.key is always 16 bytes; AES-128 requires 16 bytes.
+        self.cipher = Aes128::new_from_slice(&self.key).expect("AES-128 key must be 16 bytes");
     }
 
     /// Get the raw AES key.
@@ -527,7 +533,7 @@ mod tests {
         // with decrypt_iv = sender's encrypt_iv (before increment), so that when
         // the receiver sees the first nonce byte it correctly advances its IV.
         let mut sender = CryptState::new();
-        sender.generate_key();
+        sender.generate_key().unwrap();
 
         let key = *sender.get_key();
         let enc_iv_before = sender.encrypt_iv; // Sender's encrypt_iv BEFORE first encrypt
@@ -553,7 +559,7 @@ mod tests {
     #[test]
     fn test_decrypt_rejects_tampered_packet() {
         let mut state = CryptState::new();
-        state.generate_key();
+        state.generate_key().unwrap();
 
         let plaintext = b"Test voice data";
         let mut encrypted = Vec::new();
@@ -579,7 +585,7 @@ mod tests {
     #[test]
     fn test_good_stat_incremented() {
         let mut state = CryptState::new();
-        state.generate_key();
+        state.generate_key().unwrap();
 
         // Clone key/IVs for a receiver
         let key = *state.get_key();
@@ -602,7 +608,7 @@ mod tests {
     #[test]
     fn test_partial_block_roundtrip() {
         let mut state = CryptState::new();
-        state.generate_key();
+        state.generate_key().unwrap();
 
         let key = *state.get_key();
         let enc_iv = state.encrypt_iv;
@@ -625,7 +631,7 @@ mod tests {
     #[test]
     fn test_replay_rejection() {
         let mut state = CryptState::new();
-        state.generate_key();
+        state.generate_key().unwrap();
 
         let key = *state.get_key();
         let enc_iv = state.encrypt_iv;

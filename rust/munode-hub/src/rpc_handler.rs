@@ -8,7 +8,7 @@ use prost::Message;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use munode_protocol::authservice::{AuthRequest as ExtAuthRequest};
 use munode_protocol::hubedge::*;
@@ -221,7 +221,7 @@ impl RpcHandler {
         if let Some(hmac_secret) = &self.state.config.registry.hmac_secret {
             if params.challenge_response.is_none() {
                 // Send challenge to the edge
-                let challenge = generate_challenge();
+                let challenge = generate_challenge()?;
                 let result = EdgeRegisterResult {
                     success: false,
                     hub_server_id: None,
@@ -403,8 +403,24 @@ impl RpcHandler {
                     }
                     Ok(None) => {} // Not banned, proceed
                     Err(e) => {
-                        warn!("Failed to check ban list for IP {}: {}", client_ip, e);
-                        // Don't reject on DB error — fail open for ban check only
+                        error!("Failed to check ban list for IP {}: {}", client_ip, e);
+                        // Fail closed: if we can't verify the ban list, reject the connection
+                        // to prevent banned users from connecting during a DB outage.
+                        let result = EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None, username: None, display_name: None,
+                            groups: vec![],
+                            reason: Some("Server error: unable to verify ban status".to_string()),
+                            reject_type: Some(5), // ServerFull (closest generic error)
+                            channel_id: None,
+                            mute: None, deaf: None, suppress: None,
+                            self_mute: None, self_deaf: None,
+                            priority_speaker: None, recording: None,
+                            cert_required: None,
+                        };
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(result);
+                        }));
                     }
                 }
             }
@@ -464,7 +480,9 @@ impl RpcHandler {
                     let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
                     // Ensure ext-auth user exists in DB so last_channel can be tracked
                     if user_id > 0 {
-                        let _ = self.state.database.upsert_ext_user(user_id, &auth_username);
+                        if let Err(e) = self.state.database.upsert_ext_user(user_id, &auth_username) {
+                            warn!("Failed to persist ext-auth user to database: {}", e);
+                        }
                     }
                     // Prefer ext auth's channel, fall back to DB last_channel, then default
                     let channel_id = if let Some(ch) = resp.channel_id {
@@ -645,7 +663,9 @@ impl RpcHandler {
                     let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
                     let groups = resp.groups.clone().unwrap_or_default();
                     if user_id > 0 {
-                        let _ = self.state.database.upsert_ext_user(user_id, &auth_username);
+                        if let Err(e) = self.state.database.upsert_ext_user(user_id, &auth_username) {
+                            warn!("Failed to persist ext-auth user to database: {}", e);
+                        }
                     }
                     let channel_id = if user_id > 0 {
                         match self.state.database.get_user_last_channel(user_id) {
@@ -794,7 +814,9 @@ impl RpcHandler {
                     let groups = resp.groups.clone().unwrap_or_default();
                     // Ensure ext-auth user exists in DB for last_channel tracking
                     if user_id > 0 {
-                        let _ = self.state.database.upsert_ext_user(user_id, &auth_username);
+                        if let Err(e) = self.state.database.upsert_ext_user(user_id, &auth_username) {
+                            warn!("Failed to persist ext-auth user to database: {}", e);
+                        }
                     }
                     // Check DB for last_channel saved from previous session
                     let channel_id = if user_id > 0 {
@@ -3018,12 +3040,12 @@ impl RpcHandler {
 }
 
 /// Generate a random challenge string for HMAC authentication.
-fn generate_challenge() -> String {
+fn generate_challenge() -> Result<String> {
     use ring::rand::{SecureRandom, SystemRandom};
     let rng = SystemRandom::new();
     let mut buf = [0u8; 32];
-    rng.fill(&mut buf).unwrap();
-    hex_encode(&buf)
+    rng.fill(&mut buf).map_err(|_| anyhow::anyhow!("RNG failed: system entropy unavailable"))?;
+    Ok(hex_encode(&buf))
 }
 
 /// Compute HMAC-SHA256 of `challenge:server_id` with the given secret.

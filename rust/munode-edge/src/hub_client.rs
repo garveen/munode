@@ -633,7 +633,12 @@ impl HubClient {
             rpc_request: Some(request),
             ..Default::default()
         };
-        self.send_packet(&packet).await?;
+        if let Err(e) = self.send_packet(&packet).await {
+            // Remove pending entry immediately on send failure to avoid a stale
+            // entry that would only be cleaned up on timeout.
+            self.pending.lock().await.remove(&request_id);
+            return Err(e);
+        }
 
         // Wait for response with timeout
         let timeout = Duration::from_secs(30);

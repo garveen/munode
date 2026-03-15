@@ -566,22 +566,19 @@ pub fn build_router(state: Arc<HubState>) -> Router {
 /// Start the Web API HTTP server.
 ///
 /// Listens on `host:port` and runs until the process is shut down.
-pub async fn run_web_api(host: &str, port: u16, state: Arc<HubState>) {
+/// Returns an error if binding fails so the caller can decide whether to abort.
+pub async fn run_web_api(host: &str, port: u16, state: Arc<HubState>) -> anyhow::Result<()> {
     let addr = format!("{}:{}", host, port);
     let router = build_router(state);
 
     info!("Hub Web API listening on http://{}", addr);
 
-    let listener = match tokio::net::TcpListener::bind(&addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            error!("Failed to bind Web API on {}: {}", addr, e);
-            return;
-        }
-    };
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to bind Web API on {}: {}", addr, e))?;
 
-    if let Err(e) = axum::serve(listener, router).await {
-        error!("Web API server error: {}", e);
-    }
+    axum::serve(listener, router)
+        .await
+        .map_err(|e| anyhow::anyhow!("Web API server error: {}", e))
 }
 

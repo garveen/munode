@@ -15,24 +15,46 @@ pub fn create_tls_acceptor(tls_config: &TlsConfig) -> Result<TlsAcceptor> {
     let key = load_private_key(&tls_config.key)
         .context("Failed to load TLS private key")?;
 
-    // Use a verifier that requests but doesn't require client certificates
-    // This allows optional client certificate authentication (Mumble behavior)
+    // Use a verifier that requests but doesn't require client certificates,
+    // and accepts self-signed certificates (Murmur/Mumble-compatible behavior).
+    // Clients are identified by their certificate hash; the TLS handshake signature
+    // is still verified to ensure the client owns the corresponding private key.
     use rustls::server::danger::{ClientCertVerifier, ClientCertVerified};
     
     #[derive(Debug)]
-    struct OptionalClientCertVerifier;
+    struct MumbleClientCertVerifier {
+        /// Delegate verifier used only for TLS handshake signature verification.
+        /// This ensures clients actually own the private key of their presented certificate,
+        /// while still allowing self-signed certificates (no CA chain validation).
+        sig_delegate: Arc<dyn ClientCertVerifier>,
+    }
+
+    impl MumbleClientCertVerifier {
+        fn new() -> Result<Self> {
+            // Build a delegate verifier with an empty root store and
+            // allow_unauthenticated() so that clients without certificates are
+            // also accepted.  We only use this delegate for the
+            // verify_tls12_signature / verify_tls13_signature calls.
+            let roots = Arc::new(rustls::RootCertStore::empty());
+            let sig_delegate = rustls::server::WebPkiClientVerifier::builder(roots)
+                .allow_unauthenticated()
+                .build()
+                .context("Failed to build signature-verification delegate")?;
+            Ok(Self { sig_delegate })
+        }
+    }
     
-    impl ClientCertVerifier for OptionalClientCertVerifier {
+    impl ClientCertVerifier for MumbleClientCertVerifier {
         fn offer_client_auth(&self) -> bool {
             true // Request client certificate
         }
         
         fn client_auth_mandatory(&self) -> bool {
-            false // But don't require it
+            false // But don't require it (Mumble allows connecting without a cert)
         }
         
         fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
-            // Return empty list - we accept any certificate
+            // Return empty list — we accept any certificate, including self-signed ones.
             &[]
         }
         
@@ -42,40 +64,43 @@ pub fn create_tls_acceptor(tls_config: &TlsConfig) -> Result<TlsAcceptor> {
             _intermediates: &[rustls::pki_types::CertificateDer<'_>],
             _now: rustls::pki_types::UnixTime,
         ) -> Result<ClientCertVerified, rustls::Error> {
-            // Accept any client certificate (we only use it for identification, not authentication)
+            // Accept any client certificate, including self-signed ones.
+            // This is intentional Mumble/Murmur-compatible behaviour: client
+            // certificates are used solely for persistent identity (cert hash),
+            // not for CA-chain authentication.  Application-level auth
+            // (username/password, tokens, Lua scripts) is used for actual access control.
             Ok(ClientCertVerified::assertion())
         }
         
         fn verify_tls12_signature(
             &self,
-            _message: &[u8],
-            _cert: &rustls::pki_types::CertificateDer<'_>,
-            _dss: &rustls::DigitallySignedStruct,
+            message: &[u8],
+            cert: &rustls::pki_types::CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
         ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+            // Verify the TLS CertificateVerify signature so that we confirm the
+            // client actually owns the private key of the presented certificate.
+            // This prevents certificate impersonation even when CA chain validation
+            // is skipped.
+            self.sig_delegate.verify_tls12_signature(message, cert, dss)
         }
         
         fn verify_tls13_signature(
             &self,
-            _message: &[u8],
-            _cert: &rustls::pki_types::CertificateDer<'_>,
-            _dss: &rustls::DigitallySignedStruct,
+            message: &[u8],
+            cert: &rustls::pki_types::CertificateDer<'_>,
+            dss: &rustls::DigitallySignedStruct,
         ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+            self.sig_delegate.verify_tls13_signature(message, cert, dss)
         }
         
         fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-            vec![
-                rustls::SignatureScheme::RSA_PKCS1_SHA256,
-                rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-                rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-                rustls::SignatureScheme::ED25519,
-            ]
+            self.sig_delegate.supported_verify_schemes()
         }
     }
     
     let config = rustls::ServerConfig::builder()
-        .with_client_cert_verifier(Arc::new(OptionalClientCertVerifier))
+        .with_client_cert_verifier(Arc::new(MumbleClientCertVerifier::new()?))
         .with_single_cert(certs, key)
         .context("Failed to build TLS server config")?;
 

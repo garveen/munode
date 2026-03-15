@@ -89,11 +89,13 @@ impl EdgeServer {
         });
 
         // Event listener: broadcast Hub notifications to local clients
+        let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
         let event_handle = tokio::spawn({
             let state = edge_state.clone();
             let mut event_rx = edge_state.subscribe_events();
+            let shutdown_tx = shutdown_tx.clone();
             async move {
-                hub_event_listener(state, &mut event_rx).await;
+                hub_event_listener(state, &mut event_rx, shutdown_tx).await;
             }
         });
 
@@ -118,7 +120,14 @@ impl EdgeServer {
         let listener = TcpListener::bind(listen_addr).await?;
         info!("TLS server listening on {}", listen_addr);
 
-        let (_shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+        // Semaphore to cap concurrent connections at the configured capacity.
+        // capacity = 0 means unlimited; use a large sentinel value in that case.
+        let max_conn = if self.config.server.capacity > 0 {
+            self.config.server.capacity as usize
+        } else {
+            10_000
+        };
+        let conn_semaphore = Arc::new(tokio::sync::Semaphore::new(max_conn));
 
         // Accept loop
         loop {
@@ -126,11 +135,22 @@ impl EdgeServer {
                 result = listener.accept() => {
                     match result {
                         Ok((stream, peer_addr)) => {
+                            // Reject the connection immediately if the server is at capacity.
+                            let permit = match conn_semaphore.clone().try_acquire_owned() {
+                                Ok(permit) => permit,
+                                Err(_) => {
+                                    warn!("Connection from {} rejected: server at capacity ({})", peer_addr, max_conn);
+                                    drop(stream);
+                                    continue;
+                                }
+                            };
                             let acceptor = tls_acceptor.clone();
                             let config = self.config.clone();
                             let hub = hub_client.clone();
                             let state = edge_state.clone();
                             tokio::spawn(async move {
+                                // Hold the permit for the duration of the connection.
+                                let _permit = permit;
                                 if let Err(e) = handle_client_connection(
                                     stream, peer_addr, acceptor, &config, hub, state,
                                 ).await {
@@ -154,6 +174,10 @@ impl EdgeServer {
             }
         }
 
+        // Allow background tasks a moment to notice shutdown before aborting.
+        // These tasks are stateless (no persistent data to flush), so abort is
+        // acceptable as a fallback after a brief grace period.
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         udp_handle.abort();
         hub_handle.abort();
         event_handle.abort();
@@ -161,6 +185,10 @@ impl EdgeServer {
         Ok(())
     }
 }
+
+/// Idle timeout for client TCP connections. Connections that send no data for
+/// this duration are considered zombie connections and are closed.
+const CLIENT_IDLE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(120);
 
 /// Handle a single Mumble client connection (TLS).
 async fn handle_client_connection(
@@ -247,11 +275,15 @@ async fn handle_client_connection(
     };
 
     'outer: loop {
-        // Read data from TLS stream
-        let n = match reader.read_buf(&mut buf).await {
-            Ok(n) => n,
-            Err(e) => {
+        // Read data from TLS stream with idle timeout to drop zombie connections.
+        let n = match tokio::time::timeout(CLIENT_IDLE_TIMEOUT, reader.read_buf(&mut buf)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => {
                 info!("Client {} connection error: {}", peer_addr, e);
+                break 'outer;
+            }
+            Err(_) => {
+                info!("Client {} idle timeout — closing connection", peer_addr);
                 break 'outer;
             }
         };
@@ -1878,7 +1910,6 @@ mod tests {
             },
             server: ServerConfig::default(),
             voice_routing: munode_common::config::EdgeVoiceRoutingConfig::default(),
-            suggest: None,
             log_level: "info".to_string(),
             log_format: "text".to_string(),
         }
@@ -2118,7 +2149,8 @@ mod tests {
         let es2 = es.clone();
         tokio::spawn(async move {
             let mut rx = es2.subscribe_events();
-            hub_event_listener(es2, &mut rx).await;
+            let (shutdown_tx, _shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+            hub_event_listener(es2, &mut rx, shutdown_tx).await;
         });
         // Give the background task a moment to subscribe before the first emit.
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -2291,6 +2323,7 @@ mod tests {
 /// Listen for events from the Hub and broadcast them to local clients.
 async fn hub_event_listener(    state: Arc<EdgeState>,
     event_rx: &mut tokio::sync::broadcast::Receiver<EdgeEvent>,
+    shutdown_tx: tokio::sync::mpsc::Sender<()>,
 ) {
     use tokio::sync::broadcast::error::RecvError;
 
@@ -2592,11 +2625,9 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         // Give clients a moment to receive the reject, then exit gracefully
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                         warn!("Exiting due to hub shutdown request (cluster partition)");
-                        // Use tokio::signal abort or break the event loop to allow cleanup.
-                        // Since the event loop runs as a background task, exit the process.
-                        // This is the standard practice for stateless edge servers in a cluster.
-                        drop(state);
-                        std::process::exit(0);
+                        // Signal the main accept loop to shut down gracefully.
+                        let _ = shutdown_tx.send(()).await;
+                        return;
                     }
                 }
             }

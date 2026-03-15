@@ -73,7 +73,7 @@ impl Database {
     /// The schema is kept identical to the TypeScript Hub server so databases are
     /// directly interchangeable without any migration.
     fn init_tables(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
 
         conn.execute_batch(
             // ── Users (TS-compatible) ─────────────────────────────────────
@@ -207,7 +207,7 @@ impl Database {
 
     /// Returns the highest applied schema version, or 0 if no migrations recorded.
     pub fn schema_version(&self) -> Result<u32> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let version: u32 = conn
             .query_row(
                 "SELECT COALESCE(MAX(version), 0) FROM schema_versions",
@@ -220,7 +220,7 @@ impl Database {
 
     /// Return all applied migrations as `(version, description, applied_at_unix_secs)`.
     pub fn list_migrations(&self) -> Result<Vec<(u32, String, i64)>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = conn.prepare(
             "SELECT version, description, applied_at FROM schema_versions ORDER BY version"
         )?;
@@ -260,7 +260,7 @@ impl Database {
             return Ok(vec![]);
         }
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut applied = Vec::new();
         for (version, description, sql) in &pending {
             conn.execute_batch(sql)
@@ -328,14 +328,14 @@ impl Database {
     /// Create an online backup of the database to `dest_path` using SQLite's
     /// backup API (via VACUUM INTO, which produces a clean, compacted copy).
     pub fn backup_to(&self, dest_path: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute_batch(&format!("VACUUM INTO '{}'", dest_path.replace('\'', "''")))?;
         Ok(())
     }
 
     /// Load all channels from the database.
     pub fn load_channels(&self) -> Result<Vec<DbChannelRecord>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         // TS schema: no 'temporary' column; parent_id NOT NULL, -1 means root (no parent)
         let mut stmt = conn.prepare(
             "SELECT id, parent_id, name, COALESCE(description_blob,''), position, max_users, inherit_acl FROM channels"
@@ -365,7 +365,7 @@ impl Database {
 
     /// Load all channel links from the database.
     pub fn load_channel_links(&self) -> Result<Vec<(u32, u32)>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = conn.prepare("SELECT channel_id, link_id FROM channel_links")?;
 
         let rows = stmt.query_map([], |row| {
@@ -381,7 +381,7 @@ impl Database {
 
     /// Save (insert or replace) a channel.
     pub fn save_channel(&self, ch: &DbChannelRecord) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         // TS schema: no 'temporary' column; represent root's absent parent as -1
         let parent_id: i64 = ch.parent_id.map(|p| p as i64).unwrap_or(-1);
         conn.execute(
@@ -402,7 +402,7 @@ impl Database {
 
     /// Add a bidirectional channel link to the database.
     pub fn add_channel_link(&self, ch1: u32, ch2: u32) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute(
             "INSERT OR IGNORE INTO channel_links (channel_id, link_id) VALUES (?1, ?2)",
             params![ch1, ch2],
@@ -416,7 +416,7 @@ impl Database {
 
     /// Remove a bidirectional channel link from the database.
     pub fn remove_channel_link(&self, ch1: u32, ch2: u32) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute(
             "DELETE FROM channel_links WHERE (channel_id = ?1 AND link_id = ?2) OR (channel_id = ?2 AND link_id = ?1)",
             params![ch1, ch2],
@@ -426,7 +426,7 @@ impl Database {
 
     /// Delete a channel by ID.
     pub fn delete_channel(&self, channel_id: u32) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute("DELETE FROM channels WHERE id = ?1", params![channel_id])?;
         conn.execute("DELETE FROM channel_links WHERE channel_id = ?1 OR link_id = ?1", params![channel_id])?;
         Ok(())
@@ -434,7 +434,7 @@ impl Database {
 
     /// Find a user by username.
     pub fn find_user(&self, username: &str) -> Result<Option<UserRecord>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         // TS schema: 'name' not 'username', 'password_hash' not 'pw_hash', no cert_hash column.
         // last_channel stored in user_last_channels (TS primary) with fallback to users.last_channel.
         let mut stmt = conn.prepare(
@@ -461,7 +461,7 @@ impl Database {
 
     /// Create a new registered user. Returns the new user ID.
     pub fn create_user(&self, username: &str, pw_hash: &str) -> Result<u32> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute(
             "INSERT INTO users (name, password_hash, last_channel) VALUES (?1, ?2, 0)",
             params![username, pw_hash],
@@ -471,7 +471,7 @@ impl Database {
 
     /// List all registered users.
     pub fn list_users(&self) -> Result<Vec<UserRecord>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = conn.prepare(
             "SELECT u.id, u.name, COALESCE(u.password_hash,''),
                     COALESCE(ulc.last_channel, COALESCE(u.last_channel, 0))
@@ -497,7 +497,7 @@ impl Database {
 
     /// Rename a registered user. Returns false if the user was not found.
     pub fn rename_user(&self, user_id: u32, new_name: &str) -> Result<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let n = conn.execute(
             "UPDATE users SET name = ?1 WHERE id = ?2",
             params![new_name, user_id],
@@ -507,7 +507,7 @@ impl Database {
 
     /// Delete a registered user (de-register).
     pub fn delete_user(&self, user_id: u32) -> Result<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let n = conn.execute("DELETE FROM users WHERE id = ?1", params![user_id])?;
         Ok(n > 0)
     }
@@ -515,7 +515,7 @@ impl Database {
     /// Update the last channel for a user.
     /// Uses user_last_channels as primary storage (same as TS), also keeps users.last_channel in sync.
     pub fn save_user_last_channel(&self, user_id: u32, channel_id: u32) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute(
             "INSERT OR REPLACE INTO user_last_channels (id, last_channel) VALUES (?1, ?2)",
             params![user_id, channel_id],
@@ -531,7 +531,7 @@ impl Database {
     /// Get the last channel for a user (by user_id). Returns 0 if not found.
     /// Checks user_last_channels first (TS primary), falls back to users.last_channel.
     pub fn get_user_last_channel(&self, user_id: u32) -> Result<u32> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = conn.prepare(
             "SELECT COALESCE(ulc.last_channel, COALESCE(u.last_channel, 0))
              FROM users u
@@ -558,7 +558,7 @@ impl Database {
     /// Ensure an externally-authenticated user exists in the DB (creates if missing).
     /// This allows last_channel to be tracked for ext-auth users.
     pub fn upsert_ext_user(&self, user_id: u32, username: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute(
             "INSERT OR IGNORE INTO users (id, name, password_hash, last_channel) VALUES (?1, ?2, '', 0)",
             params![user_id, username],
@@ -568,7 +568,7 @@ impl Database {
 
     /// Load ACL entries for a specific channel.
     pub fn load_acls(&self, channel_id: u32) -> Result<Vec<crate::acl_manager::AclEntry>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = conn.prepare(
             r#"SELECT channel_id, user_id, "group", apply_here, apply_subs, allow, deny
              FROM acls WHERE channel_id = ?1 AND deleted_at IS NULL"#
@@ -596,7 +596,7 @@ impl Database {
 
     /// Save ACL entries for a channel (replaces all existing entries for that channel).
     pub fn save_acls(&self, channel_id: u32, entries: &[crate::acl_manager::AclEntry]) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute("DELETE FROM acls WHERE channel_id = ?1", params![channel_id])?;
 
         let mut stmt = conn.prepare(
@@ -621,7 +621,7 @@ impl Database {
 
     /// Load all ACL entries from the database.
     pub fn load_all_acls(&self) -> Result<Vec<crate::acl_manager::AclEntry>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = conn.prepare(
             r#"SELECT channel_id, user_id, "group", apply_here, apply_subs, allow, deny FROM acls WHERE deleted_at IS NULL"#
         )?;
@@ -652,7 +652,7 @@ impl Database {
 
     /// Load all ban records.
     pub fn load_bans(&self) -> Result<Vec<BanRecord>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         // TS schema: 'hash' (nullable) for cert hash, 'start' not 'start_time', nullable name/reason
         let mut stmt = conn.prepare(
             "SELECT id, address, COALESCE(mask,128), COALESCE(name,''), COALESCE(hash,''),
@@ -694,7 +694,7 @@ impl Database {
 
         // Only load active (non-expired) bans from the database.
         // duration=0 means permanent; duration>0 bans must not have expired.
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = conn.prepare(
             "SELECT id, address, COALESCE(mask,128), COALESCE(name,''), COALESCE(hash,''),
                     COALESCE(reason,''), COALESCE(start,0), COALESCE(duration,0)
@@ -729,7 +729,7 @@ impl Database {
 
     /// Add a ban record.
     pub fn add_ban(&self, ban: &BanRecord) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute(
             "INSERT INTO bans (address, mask, name, hash, reason, start, duration)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -748,7 +748,7 @@ impl Database {
 
     /// Replace all bans (used for ban list updates from clients).
     pub fn replace_bans(&self, bans: &[BanRecord]) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute("DELETE FROM bans", [])?;
 
         let mut stmt = conn.prepare(
@@ -773,7 +773,7 @@ impl Database {
 
     /// Remove expired bans.
     pub fn cleanup_expired_bans(&self) -> Result<u32> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -788,7 +788,7 @@ impl Database {
 
     /// Delete a specific ban by its row ID.  Returns `true` if a row was deleted.
     pub fn delete_ban_by_id(&self, id: i64) -> Result<bool> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let count = conn.execute("DELETE FROM bans WHERE id = ?1", params![id])?;
         Ok(count > 0)
     }
@@ -806,7 +806,7 @@ impl Database {
             "comment" => "comment_blob",
             _ => return Ok(None),
         };
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let mut stmt = conn.prepare(
             &format!("SELECT {} FROM users WHERE id = ?1", col)
         )?;
@@ -826,7 +826,7 @@ impl Database {
             "comment" => "comment_blob",
             _ => return Ok(()),
         };
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute(
             &format!("UPDATE users SET {} = ?1 WHERE id = ?2", col),
             params![hash, user_id],
