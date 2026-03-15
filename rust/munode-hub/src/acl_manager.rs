@@ -6,32 +6,10 @@ use tracing::debug;
 use crate::channel_store::ChannelStore;
 use crate::database::Database;
 
-/// Permission bit flags matching the Mumble protocol.
-#[allow(dead_code)]
-pub mod permission {
-    pub const NONE: u32 = 0x0;
-    pub const WRITE: u32 = 0x1;
-    pub const TRAVERSE: u32 = 0x2;
-    pub const ENTER: u32 = 0x4;
-    pub const SPEAK: u32 = 0x8;
-    pub const MUTE_DEAFEN: u32 = 0x10;
-    pub const MOVE: u32 = 0x20;
-    pub const MAKE_CHANNEL: u32 = 0x40;
-    pub const LINK_CHANNEL: u32 = 0x80;
-    pub const WHISPER: u32 = 0x100;
-    pub const TEXT_MESSAGE: u32 = 0x200;
-    pub const TEMP_CHANNEL: u32 = 0x400;
-    pub const LISTEN: u32 = 0x800;
-    pub const KICK: u32 = 0x10000;
-    pub const BAN: u32 = 0x20000;
-    pub const REGISTER: u32 = 0x40000;
-    pub const SELF_REGISTER: u32 = 0x80000;
-
-    /// All permissions including root-only.
-    pub const ALL: u32 = 0xF0FFF;
-    /// Default permissions for unauthenticated users.
-    pub const DEFAULT: u32 = TRAVERSE | ENTER | SPEAK | WHISPER | TEXT_MESSAGE | LISTEN;
-}
+/// Permission bit flags — defined in `munode_common::permission` and
+/// re-exported here so that callers using `acl_manager::permission::*`
+/// continue to work without changes.
+pub use munode_common::permission;
 
 /// An ACL entry loaded from the database.
 #[derive(Debug, Clone)]

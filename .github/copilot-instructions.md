@@ -59,6 +59,9 @@ packages/{common,protocol,hub-server,edge-server,cli,auth-service}/
 
 ## Coding Conventions
 
+### Git
+- **Commit messages must be in English.** Use the conventional-commit format: `type(scope): short summary`. Examples: `fix(crypto): handle IV wraparound`, `feat(acl): centralize permission constants`.
+
 ### Naming
 - Structs and enums: `PascalCase` (`EdgeServer`, `ClientInfo`, `MessageType`)
 - Functions and methods: `snake_case` (`connect_and_run`, `handle_client`)

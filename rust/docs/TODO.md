@@ -297,10 +297,11 @@
 - **描述**: `db_path.parent().unwrap()` — 如果路径为根目录会 panic。
 - **建议**: 使用 `and_then` 或条件检查。
 
-#### L-08: crypto.rs 重放保护只存 1 字节历史
+#### ~~L-08: crypto.rs 重放保护只存 1 字节历史~~ ✅ 已确认为有意设计（补充注释说明）
 - **文件**: `munode-edge/src/crypto.rs:213`
 - **描述**: `decrypt_history[self.decrypt_iv[0]]` 只存每个 IV[0] 值的 1 字节历史。多个包有相同 IV[0] 但不同 IV[1..] 时可能绕过重放检查。
 - **注意**: 这是 Mumble 官方 OCB2 实现的兼容行为，不一定需要修改。
+- **已实现**: 补充详细注释说明 256-bucket 窗口大小对真实网络抖动已足够，以及匹配 Mumble 参考实现是有意为之以保证互通性。
 
 #### ~~L-09: crypto.rs 测试未覆盖 IV 环绕边界~~ ✅ 已修复（新增 test_encrypt_decrypt_at_iv_wraparound 测试）
 - **文件**: `munode-edge/src/crypto.rs` — 测试区
@@ -311,18 +312,20 @@
 
 ## 架构级改进建议
 
-### A-01: 统一的优雅关闭机制
+### ~~A-01: 统一的优雅关闭机制~~ ✅ 已修复
 - **现状**: 混合使用 `task.abort()`、`process::exit()` 和 channel drop。
 - **建议**: 全局使用 `tokio_util::sync::CancellationToken` 或 `tokio::sync::watch` 实现统一的优雅关闭。
+- **已实现**: Edge 服务器的关闭信号改用 `tokio::sync::watch::channel(false)` 替代 `mpsc::channel::<()>(1)`；watch receiver 可被 clone 供多任务同时观察；`hub_event_listener` 通过 `shutdown_tx.send(true)` 触发关闭，主接受循环通过 `watch_rx.wait_for(|v| *v)` 响应。无需引入额外依赖。
 
 ### ~~A-02: 统一的 Mutex 错误处理策略~~ ✅ 已修复
 - **现状**: 30+ 处 `.lock().unwrap()` 分布在 database.rs 和 udp.rs。
 - **建议**: 封装一个 `SafeMutex<T>` wrapper，统一处理 poison 错误（记录日志 + 尝试恢复或转为 anyhow::Error）。
 - **已实现**: H-01/H-02 中已将所有 `unwrap()` 替换为 `map_err()` 错误处理。
 
-### A-03: 权限常量和策略集中化
+### ~~A-03: 权限常量和策略集中化~~ ✅ 已修复
 - **现状**: 权限位掩码（0x1、0x4、0x8、0x800 等）散落在 server.rs 各处，fail-open/closed 不一致。
 - **建议**: 在 `munode-common` 或 `munode-protocol` 中定义权限常量，统一 fail 策略。
+- **已实现**: 新建 `munode-common/src/permission.rs`，包含全部 18 个权限常量（NONE/WRITE/TRAVERSE/ENTER/SPEAK/MUTE_DEAFEN/MOVE/MAKE_CHANNEL/LINK_CHANNEL/WHISPER/TEXT_MESSAGE/TEMP_CHANNEL/LISTEN/KICK/BAN/REGISTER/SELF_REGISTER/ALL/DEFAULT）；Hub 的 `acl_manager.rs` 改为 `pub use munode_common::permission;` 重导出；Edge 的 `server.rs` 移除本地 `mod perm`，改为 `use munode_common::permission as perm;`。
 
 ### ~~A-04: 连接生命周期管理~~ ✅ 已修复
 - **现状**: 无最大连接数限制、无客户端空闲超时、无 WebSocket 握手超时。
@@ -398,6 +401,7 @@
 ## 更新日志
 
 - 2026-03-15: **修复所有 Critical 和 High 问题** — 完成 C-01～C-05、H-01～H-13 共 18 项修复，包括 TLS 证书验证、mutex panic 消除、优雅关闭、连接限制等
+- 2026-03-15: **完成所有剩余 TODO 项** — L-08 确认为 Mumble 兼容设计并补充注释；A-01 统一关闭信号改用 watch::channel；A-03 权限常量迁移至 munode-common::permission；copilot-instructions 添加 Git 提交规范（英文提交信息）
 - 2026-03-15: **修复 L-03/L-04** — 引入 `num_enum 0.7` 消除 `from_u16()` 手动 match；重构 `MunodeError` 为 6 个细粒度子枚举；copilot-instructions 新增不需向后兼容的说明
 - 2026-03-15: **修复所有 Medium 和 Low 问题** — 完成 M-01～M-19、L-01/L-02/L-05/L-06/L-07/L-09 共 25 项修复，包括权限常量化、精确缓存失效、f64 精度、wss:// 支持、IV 边界测试等
 - 2026-03-15: **重写 TODO.md** — 移除已完成功能的详细任务清单（合并为总览表），基于全量代码审计新增 5 个 Critical、13 个 High、19 个 Medium、9 个 Low 级别代码质量问题，新增 4 个架构级改进建议

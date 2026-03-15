@@ -16,7 +16,10 @@ use aes::{
 ///
 /// - `encrypt_iv`: server→client nonce (incremented on each sent packet)
 /// - `decrypt_iv`: client→server nonce (tracked from received packets)
-/// - `decrypt_history`: replay protection (history of seen nonce[0] values)
+/// - `decrypt_history`: replay protection — maps IV\[0\] → last-seen IV\[1\] for
+///   each bucket.  This 256-entry table matches the official Mumble/Murmur OCB2
+///   reference implementation.  See the inline comment in `decrypt()` for the
+///   intentional design trade-off.
 pub struct CryptState {
     key: [u8; 16],
     pub encrypt_iv: [u8; 16],
@@ -215,7 +218,16 @@ impl CryptState {
                 return false;
             }
 
-            // Replay check: if we've already seen this exact IV[0..=1] combo, reject
+            // Replay check: compare IV[0..=1] against history.
+            //
+            // `decrypt_history` maps IV[0] → last-seen IV[1] for that bucket.  This
+            // matches the original Mumble/Murmur OCB2 reference implementation and
+            // is intentional: out-of-window packets that share the same IV[0] but
+            // differ in IV[1..] would theoretically bypass this check.  In practice,
+            // the 256-bucket window size means that two colliding packets would need
+            // to arrive more than 256 sequence numbers apart — well beyond any
+            // real-network jitter window.  Matching Mumble's behaviour here ensures
+            // interoperability with all standard Mumble clients.
             if self.decrypt_history[self.decrypt_iv[0] as usize] == self.decrypt_iv[1] {
                 self.decrypt_iv = save_iv;
                 return false;

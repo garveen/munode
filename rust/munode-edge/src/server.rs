@@ -7,11 +7,12 @@ use bytes::BytesMut;
 use prost::Message;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, trace, warn};
 
 use munode_common::config::EdgeConfig;
+use munode_common::permission as perm;
 use munode_protocol::hubedge;
 use munode_protocol::message_type::MessageType;
 use munode_protocol::mumbleproto;
@@ -24,15 +25,6 @@ use crate::hub_client::{HubClient, HubConnectionState};
 use crate::state::{EdgeEvent, EdgeState};
 use crate::tls::create_tls_acceptor;
 use crate::udp::UdpServer;
-
-/// Permission bit flags matching the Mumble protocol ACL system.
-/// These must match the values defined in munode-hub's acl_manager::permission.
-mod perm {
-    pub const WRITE: u32 = 0x1;
-    pub const ENTER: u32 = 0x4;
-    pub const SPEAK: u32 = 0x8;
-    pub const LISTEN: u32 = 0x800;
-}
 
 /// The main Edge server.
 pub struct EdgeServer {
@@ -97,8 +89,9 @@ impl EdgeServer {
             }
         });
 
-        // Event listener: broadcast Hub notifications to local clients
-        let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+        // Event listener: broadcast Hub notifications to local clients.
+        // Uses a watch channel so any future task can also observe the shutdown signal.
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let event_handle = tokio::spawn({
             let state = edge_state.clone();
             let mut event_rx = edge_state.subscribe_events();
@@ -172,7 +165,10 @@ impl EdgeServer {
                         }
                     }
                 }
-                _ = shutdown_rx.recv() => {
+                _ = {
+                    let mut rx = shutdown_rx.clone();
+                    async move { rx.wait_for(|v| *v).await.ok(); }
+                } => {
                     info!("Shutting down edge server");
                     break;
                 }
@@ -2168,7 +2164,7 @@ mod tests {
         let es2 = es.clone();
         tokio::spawn(async move {
             let mut rx = es2.subscribe_events();
-            let (shutdown_tx, _shutdown_rx) = tokio::sync::mpsc::channel::<()>(1);
+            let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
             hub_event_listener(es2, &mut rx, shutdown_tx).await;
         });
         // Give the background task a moment to subscribe before the first emit.
@@ -2342,7 +2338,7 @@ mod tests {
 /// Listen for events from the Hub and broadcast them to local clients.
 async fn hub_event_listener(    state: Arc<EdgeState>,
     event_rx: &mut tokio::sync::broadcast::Receiver<EdgeEvent>,
-    shutdown_tx: tokio::sync::mpsc::Sender<()>,
+    shutdown_tx: watch::Sender<bool>,
 ) {
     use tokio::sync::broadcast::error::RecvError;
 
@@ -2645,7 +2641,7 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                         warn!("Exiting due to hub shutdown request (cluster partition)");
                         // Signal the main accept loop to shut down gracefully.
-                        let _ = shutdown_tx.send(()).await;
+                        let _ = shutdown_tx.send(true);
                         return;
                     }
                 }
