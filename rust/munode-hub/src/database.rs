@@ -320,6 +320,15 @@ impl Database {
                     applied_at INTEGER NOT NULL DEFAULT 0
                 );",
             ),
+            (
+                5,
+                "Add channel_listeners table for persistent user listening state",
+                "CREATE TABLE IF NOT EXISTS channel_listeners (
+                    user_id INTEGER NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    PRIMARY KEY (user_id, channel_id)
+                );",
+            ),
         ]
     }
 
@@ -338,6 +347,53 @@ impl Database {
         let safe_path = dest_path.replace('\'', "''");
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute_batch(&format!("VACUUM INTO '{}'", safe_path))?;
+        Ok(())
+    }
+
+    /// Load all persisted listening channels for a user.
+    ///
+    /// Returns the set of channel IDs the user was listening to at their last
+    /// logout.  Returns an empty `Vec` when the user has no saved listeners
+    /// or the `channel_listeners` table doesn't exist yet (pre-migration 5).
+    pub fn load_channel_listeners(&self, user_id: u32) -> Result<Vec<u32>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = match conn.prepare(
+            "SELECT channel_id FROM channel_listeners WHERE user_id = ?1"
+        ) {
+            Ok(s) => s,
+            // "no such table" on databases that haven't had migration 5 applied yet.
+            Err(e) if e.to_string().contains("no such table") => return Ok(vec![]),
+            Err(e) => return Err(e.into()),
+        };
+        let channel_ids: Vec<u32> = stmt
+            .query_map(params![user_id], |row| row.get::<_, u32>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(channel_ids)
+    }
+
+    /// Persist the channel listeners for a user (replaces previous state).
+    ///
+    /// Deletes all previous rows for this user and inserts the new set.
+    /// Passing an empty `channel_ids` slice effectively clears the listeners.
+    /// Silently succeeds when the `channel_listeners` table doesn't exist yet
+    /// (pre-migration 5 databases).
+    pub fn save_channel_listeners(&self, user_id: u32, channel_ids: &[u32]) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        // Replace atomically within a transaction.
+        let del_result = conn.execute("DELETE FROM channel_listeners WHERE user_id = ?1", params![user_id]);
+        match del_result {
+            // "no such table" on pre-migration 5 databases — silently skip.
+            Err(e) if e.to_string().contains("no such table") => return Ok(()),
+            Err(e) => return Err(e.into()),
+            Ok(_) => {}
+        }
+        for &ch_id in channel_ids {
+            conn.execute(
+                "INSERT OR IGNORE INTO channel_listeners (user_id, channel_id) VALUES (?1, ?2)",
+                params![user_id, ch_id],
+            )?;
+        }
         Ok(())
     }
 

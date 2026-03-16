@@ -1289,6 +1289,45 @@ pub struct EdgeSaveChannelResult {
     pub error: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// ---------------------------------------------------------------------------
+/// edge.saveChannelListeners - Edge 保存用户频道监听状态
+/// ---------------------------------------------------------------------------
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeSaveChannelListenersParams {
+    /// The registered user_id whose listening channels should be saved.
+    /// 0 means "guest/anonymous" (no-op — guests have no persistent state).
+    #[prost(uint32, required, tag = "1")]
+    pub user_id: u32,
+    /// The channel IDs the user was listening to at disconnect.
+    #[prost(uint32, repeated, packed = "false", tag = "2")]
+    pub channel_ids: ::prost::alloc::vec::Vec<u32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeSaveChannelListenersResult {
+    #[prost(bool, required, tag = "1")]
+    pub success: bool,
+    #[prost(string, optional, tag = "2")]
+    pub error: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// ---------------------------------------------------------------------------
+/// edge.loadChannelListeners - Edge 加载用户频道监听状态
+/// ---------------------------------------------------------------------------
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeLoadChannelListenersParams {
+    /// The registered user_id whose listening channels should be loaded.
+    #[prost(uint32, required, tag = "1")]
+    pub user_id: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeLoadChannelListenersResult {
+    #[prost(bool, required, tag = "1")]
+    pub success: bool,
+    /// The channel IDs the user was listening to at their last disconnect.
+    #[prost(uint32, repeated, packed = "false", tag = "2")]
+    pub channel_ids: ::prost::alloc::vec::Vec<u32>,
+    #[prost(string, optional, tag = "3")]
+    pub error: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// ---------------------------------------------------------------------------
 /// edge.saveACL - Edge 保存 ACL
 /// ---------------------------------------------------------------------------
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2087,6 +2126,12 @@ pub struct TypedRpcRequest {
     pub blob_set_user_texture: ::core::option::Option<BlobSetUserTextureParams>,
     #[prost(message, optional, tag = "37")]
     pub blob_set_user_comment: ::core::option::Option<BlobSetUserCommentParams>,
+    /// edge.saveChannelListeners - persist user channel listeners on disconnect
+    #[prost(message, optional, tag = "38")]
+    pub edge_save_channel_listeners: ::core::option::Option<EdgeSaveChannelListenersParams>,
+    /// edge.loadChannelListeners - load user channel listeners on connect
+    #[prost(message, optional, tag = "39")]
+    pub edge_load_channel_listeners: ::core::option::Option<EdgeLoadChannelListenersParams>,
 }
 /// *
 /// TypedRPCResponse - 类型安全的 RPC 响应
@@ -2162,6 +2207,12 @@ pub struct TypedRpcResponse {
     pub blob_set_user_texture: ::core::option::Option<BlobSetUserTextureResult>,
     #[prost(message, optional, tag = "37")]
     pub blob_set_user_comment: ::core::option::Option<BlobSetUserCommentResult>,
+    /// edge.saveChannelListeners result
+    #[prost(message, optional, tag = "38")]
+    pub edge_save_channel_listeners: ::core::option::Option<EdgeSaveChannelListenersResult>,
+    /// edge.loadChannelListeners result
+    #[prost(message, optional, tag = "39")]
+    pub edge_load_channel_listeners: ::core::option::Option<EdgeLoadChannelListenersResult>,
 }
 /// ---------------------------------------------------------------------------
 /// hub.routeTableUpdate - Hub pushes quality-aware route table to Edge
@@ -2182,6 +2233,30 @@ pub struct HubRouteEntryProto {
 pub struct HubRouteTableUpdateParams {
     #[prost(message, repeated, tag = "1")]
     pub routes: ::prost::alloc::vec::Vec<HubRouteEntryProto>,
+}
+/// Hub → Edge: push a ContextActionModify to target sessions on this Edge.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HubContextActionModifyParams {
+    /// The ContextActionModify message to send to the client.
+    #[prost(message, required, tag = "1")]
+    pub action: super::mumbleproto::ContextActionModify,
+    /// Session IDs of the clients to deliver this modification to.
+    /// Empty means broadcast to all clients on this Edge.
+    #[prost(uint32, repeated, packed = "false", tag = "2")]
+    pub target_sessions: ::prost::alloc::vec::Vec<u32>,
+}
+/// Edge → Hub: a client triggered a context action.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeContextActionParams {
+    /// The Edge that received the action.
+    #[prost(uint32, required, tag = "1")]
+    pub edge_id: u32,
+    /// Session ID of the client who triggered the action.
+    #[prost(uint32, required, tag = "2")]
+    pub session_id: u32,
+    /// The ContextAction message from the client.
+    #[prost(message, required, tag = "3")]
+    pub action: super::mumbleproto::ContextAction,
 }
 /// *
 /// TypedRPCNotification - 类型安全的 RPC 通知
@@ -2247,8 +2322,14 @@ pub struct TypedRpcNotification {
     pub cluster_peer_joined: ::core::option::Option<HubClusterPeerJoinedParams>,
     #[prost(message, optional, tag = "34")]
     pub cluster_peer_left: ::core::option::Option<HubClusterPeerLeftParams>,
+    /// Hub → Edge: push ContextActionModify to target clients (tag 35).
+    #[prost(message, optional, tag = "35")]
+    pub context_action_modify: ::core::option::Option<HubContextActionModifyParams>,
     #[prost(message, optional, tag = "36")]
     pub route_table_update: ::core::option::Option<HubRouteTableUpdateParams>,
+    /// Edge → Hub: client triggered a context action (tag 37).
+    #[prost(message, optional, tag = "37")]
+    pub context_action: ::core::option::Option<EdgeContextActionParams>,
     /// For unknown notification types, store params as JSON string
     #[prost(string, optional, tag = "99")]
     pub unknown_params_json: ::core::option::Option<::prost::alloc::string::String>,

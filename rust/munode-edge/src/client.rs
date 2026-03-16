@@ -10,6 +10,7 @@ use tracing::warn;
 use munode_protocol::message_type::MessageType;
 use munode_protocol::transport::encode_message;
 
+use crate::bandwidth::BandwidthRecord;
 use crate::crypto::CryptState;
 
 /// Client connection state machine.
@@ -87,6 +88,8 @@ pub struct ClientManager {
     channel_users: RwLock<HashMap<u32, Vec<u32>>>,
     /// Per-session OCB2-AES128 cryptographic states.
     crypt_states: RwLock<HashMap<u32, Arc<Mutex<CryptState>>>>,
+    /// Per-session voice bandwidth records. Keyed by session_id.
+    bandwidth_records: RwLock<HashMap<u32, BandwidthRecord>>,
     /// Listening index: channel_id → Vec<session_id> of clients listening to
     /// that channel but whose primary channel is different.  This is maintained
     /// in sync with `clients.listening_channels` to provide O(1) lookup instead
@@ -101,6 +104,7 @@ impl ClientManager {
             senders: RwLock::new(HashMap::new()),
             channel_users: RwLock::new(HashMap::new()),
             crypt_states: RwLock::new(HashMap::new()),
+            bandwidth_records: RwLock::new(HashMap::new()),
             listening_index: RwLock::new(HashMap::new()),
         })
     }
@@ -166,6 +170,7 @@ impl ClientManager {
     pub async fn remove_client(&self, session: u32) -> Option<ClientInfo> {
         self.senders.write().await.remove(&session);
         self.crypt_states.write().await.remove(&session);
+        self.bandwidth_records.write().await.remove(&session);
         let client = self.clients.write().await.remove(&session);
         if let Some(ref c) = client {
             if let Some(users) = self.channel_users.write().await.get_mut(&c.channel_id) {
@@ -365,6 +370,34 @@ impl ClientManager {
     /// Get all sessions that have a CryptState registered (i.e., have completed login).
     pub async fn get_authenticated_sessions(&self) -> Vec<u32> {
         self.crypt_states.read().await.keys().copied().collect()
+    }
+
+    /// Record a voice frame for the given session, returning `false` if it should
+    /// be dropped because it exceeds `max_bytes_per_sec`.
+    ///
+    /// The bandwidth record is created with `window_secs` slots on first access.
+    pub async fn record_voice_bytes(
+        &self,
+        session: u32,
+        bytes: u32,
+        max_bytes_per_sec: u32,
+        window_secs: usize,
+    ) -> bool {
+        let mut records = self.bandwidth_records.write().await;
+        let record = records
+            .entry(session)
+            .or_insert_with(|| BandwidthRecord::new(window_secs));
+        record.add_frame(bytes, max_bytes_per_sec)
+    }
+
+    /// Return the bytes-per-second in the most recently completed second for a session.
+    /// Returns `0` if no bandwidth data has been recorded.
+    pub async fn get_bandwidth_stats(&self, session: u32) -> u32 {
+        let records = self.bandwidth_records.read().await;
+        match records.get(&session) {
+            Some(r) => r.bytes_last_second(),
+            None => 0,
+        }
     }
 
     /// Update client state.

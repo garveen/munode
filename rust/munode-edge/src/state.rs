@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use tokio::sync::{broadcast, RwLock};
 
@@ -195,6 +195,14 @@ pub struct EdgeState {
     /// Maximum number of listeners allowed in a single channel.
     /// 0 = unlimited.
     pub listeners_per_channel: u32,
+    /// Whether to respond to unauthenticated UDP ping probes from clients.
+    /// When false, the server won't echo back ping packets (prevents public listing).
+    /// Stored as AtomicBool for lock-free reads in the UDP hot path and hot-reload.
+    pub allow_ping: AtomicBool,
+    /// Rolling statistics window size in seconds for per-session voice quality metrics.
+    /// 0 means no rolling window (accumulate forever).
+    /// Stored as AtomicU32 for lock-free reads in the voice hot path and hot-reload.
+    pub rolling_stats_window: AtomicU32,
     /// Channel Ninja: list of channel IDs that are hidden from unprivileged users.
     /// Users without both Enter (0x4) AND Listen (0x800) permission on the channel
     /// will not see its occupants.  Populated from Hub on registration.
@@ -229,6 +237,8 @@ impl EdgeState {
             allow_direct_udp: true,
             listeners_per_user: 0,
             listeners_per_channel: 0,
+            allow_ping: AtomicBool::new(true),
+            rolling_stats_window: AtomicU32::new(120),
             ninja_channels: RwLock::new(vec![]),
             ninja_visible_to: RwLock::new(HashMap::new()),
             route_table: RwLock::new(std::collections::HashMap::new()),
@@ -258,11 +268,55 @@ impl EdgeState {
             allow_direct_udp,
             listeners_per_user,
             listeners_per_channel,
+            allow_ping: AtomicBool::new(true),
+            rolling_stats_window: AtomicU32::new(120),
             ninja_channels: RwLock::new(vec![]),
             ninja_visible_to: RwLock::new(HashMap::new()),
             route_table: RwLock::new(std::collections::HashMap::new()),
             hub_limits: RwLock::new(None),
         })
+    }
+
+    /// Create EdgeState with full configuration including ping and stats settings.
+    pub fn new_with_full_config(
+        channel_manager: Arc<ChannelManager>,
+        client_manager: Arc<ClientManager>,
+        allow_hub_relay: bool,
+        allow_direct_udp: bool,
+        listeners_per_user: u32,
+        listeners_per_channel: u32,
+        allow_ping: bool,
+        rolling_stats_window: u32,
+    ) -> Arc<Self> {
+        let (event_tx, _) = broadcast::channel(256);
+        Arc::new(Self {
+            edge_id: AtomicU32::new(0),
+            cert_required: RwLock::new(false),
+            channel_manager,
+            client_manager,
+            event_tx,
+            voice_targets: RwLock::new(HashMap::new()),
+            peer_registry: RwLock::new(PeerRegistry::default()),
+            allow_hub_relay,
+            allow_direct_udp,
+            listeners_per_user,
+            listeners_per_channel,
+            allow_ping: AtomicBool::new(allow_ping),
+            rolling_stats_window: AtomicU32::new(rolling_stats_window),
+            ninja_channels: RwLock::new(vec![]),
+            ninja_visible_to: RwLock::new(HashMap::new()),
+            route_table: RwLock::new(std::collections::HashMap::new()),
+            hub_limits: RwLock::new(None),
+        })
+    }
+
+    /// Apply hot-reloadable config fields from a freshly loaded EdgeConfig.
+    ///
+    /// Fields that require a full restart (ports, TLS, Hub address) are ignored.
+    /// Fields that can be applied immediately are updated atomically.
+    pub fn apply_hot_config(&self, config: &munode_common::config::EdgeConfig) {
+        self.allow_ping.store(config.server.allow_ping, Ordering::Relaxed);
+        self.rolling_stats_window.store(config.server.rolling_stats_window, Ordering::Relaxed);
     }
 
     /// Get the current edge ID (0 = not yet registered with Hub).

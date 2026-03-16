@@ -244,6 +244,18 @@ pub struct ServerConfig {
     /// Maximum number of listeners per channel. 0 = unlimited.
     #[serde(default)]
     pub listeners_per_channel: u32,
+    /// Whether to respond to unauthenticated UDP ping probes (default: true).
+    /// Set to false to prevent the server from being listed in public server browsers.
+    #[serde(default = "default_true")]
+    pub allow_ping: bool,
+    /// Rolling statistics window size in seconds for voice quality metrics (default: 120).
+    /// Controls how many seconds of OCB2 crypto stats are tracked per user.
+    #[serde(default = "default_rolling_stats_window")]
+    pub rolling_stats_window: u32,
+    /// Maximum voice bandwidth per user in bits-per-second (default: 0 = use max_bandwidth).
+    /// BandwidthRecord tracks per-user voice bandwidth usage in this sliding window.
+    #[serde(default)]
+    pub bandwidth_record_window: u32,
 }
 
 impl Default for ServerConfig {
@@ -261,6 +273,9 @@ impl Default for ServerConfig {
             plugin_message_length: default_plugin_message_length(),
             listeners_per_user: 0,
             listeners_per_channel: 0,
+            allow_ping: true,
+            rolling_stats_window: default_rolling_stats_window(),
+            bandwidth_record_window: 0,
         }
     }
 }
@@ -814,3 +829,7 @@ pub struct HubGeoIpConfig {
 }
 
 fn default_geoip_log() -> bool { true }
+
+fn default_rolling_stats_window() -> u32 {
+    120
+}

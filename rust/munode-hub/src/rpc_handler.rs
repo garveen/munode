@@ -121,6 +121,8 @@ impl RpcHandler {
             "edge.updateBanList" => self.handle_update_ban_list(&request, &request_id).await,
             "edge.getUserList" => self.handle_get_user_list(&request_id).await,
             "edge.updateUserList" => self.handle_update_user_list(&request, &request_id).await,
+            "edge.saveChannelListeners" => self.handle_save_channel_listeners(&request, &request_id).await,
+            "edge.loadChannelListeners" => self.handle_load_channel_listeners(&request, &request_id).await,
             "blob.put" => self.handle_blob_put(&request, &request_id).await,
             "blob.get" => self.handle_blob_get(&request, &request_id).await,
             "blob.getUserTexture" => self.handle_blob_get_user_texture(&request, &request_id).await,
@@ -1779,6 +1781,81 @@ impl RpcHandler {
         Ok(self.make_response_packet(request_id, "edge.saveACL", |r| {
             r.edge_save_acl = Some(result);
         }))
+    }
+
+    /// Handle edge.saveChannelListeners — persist a user's listening channels.
+    async fn handle_save_channel_listeners(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = match &request.edge_save_channel_listeners {
+            Some(p) => p,
+            None => return Ok(self.make_error_packet(request_id, -1, "Missing edge_save_channel_listeners params")),
+        };
+        // Only save for registered users (user_id > 0); guests (user_id == 0) are skipped.
+        if params.user_id > 0 {
+            if let Err(e) = self.state.database.save_channel_listeners(params.user_id, &params.channel_ids) {
+                warn!("Failed to save channel listeners for user {}: {}", params.user_id, e);
+                return Ok(self.make_response_packet(request_id, "edge.saveChannelListeners", |r| {
+                    r.edge_save_channel_listeners = Some(EdgeSaveChannelListenersResult {
+                        success: false,
+                        error: Some(e.to_string()),
+                    });
+                }));
+            }
+            debug!("Saved {} channel listeners for user {}", params.channel_ids.len(), params.user_id);
+        }
+        Ok(self.make_response_packet(request_id, "edge.saveChannelListeners", |r| {
+            r.edge_save_channel_listeners = Some(EdgeSaveChannelListenersResult {
+                success: true,
+                error: None,
+            });
+        }))
+    }
+
+    /// Handle edge.loadChannelListeners — retrieve a user's persisted listening channels.
+    async fn handle_load_channel_listeners(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = match &request.edge_load_channel_listeners {
+            Some(p) => p,
+            None => return Ok(self.make_error_packet(request_id, -1, "Missing edge_load_channel_listeners params")),
+        };
+        if params.user_id == 0 {
+            // Guests have no persistent listeners.
+            return Ok(self.make_response_packet(request_id, "edge.loadChannelListeners", |r| {
+                r.edge_load_channel_listeners = Some(EdgeLoadChannelListenersResult {
+                    success: true,
+                    channel_ids: vec![],
+                    error: None,
+                });
+            }));
+        }
+        match self.state.database.load_channel_listeners(params.user_id) {
+            Ok(channel_ids) => {
+                debug!("Loaded {} channel listeners for user {}", channel_ids.len(), params.user_id);
+                Ok(self.make_response_packet(request_id, "edge.loadChannelListeners", |r| {
+                    r.edge_load_channel_listeners = Some(EdgeLoadChannelListenersResult {
+                        success: true,
+                        channel_ids,
+                        error: None,
+                    });
+                }))
+            }
+            Err(e) => {
+                warn!("Failed to load channel listeners for user {}: {}", params.user_id, e);
+                Ok(self.make_response_packet(request_id, "edge.loadChannelListeners", |r| {
+                    r.edge_load_channel_listeners = Some(EdgeLoadChannelListenersResult {
+                        success: false,
+                        channel_ids: vec![],
+                        error: Some(e.to_string()),
+                    });
+                }))
+            }
+        }
     }
 
     async fn handle_get_ban_list(

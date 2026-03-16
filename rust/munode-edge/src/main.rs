@@ -174,7 +174,7 @@ async fn main() -> Result<()> {
         "Starting MuNode Edge Server (Rust)"
     );
 
-    let server = EdgeServer::new(config);
+    let server = EdgeServer::new_with_path(config, config_path);
     server.run().await?;
 
     Ok(())

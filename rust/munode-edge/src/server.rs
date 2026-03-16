@@ -29,11 +29,18 @@ use crate::udp::UdpServer;
 /// The main Edge server.
 pub struct EdgeServer {
     config: EdgeConfig,
+    /// Path to the config file, used for hot-reload on SIGHUP.
+    config_path: Option<String>,
 }
 
 impl EdgeServer {
     pub fn new(config: EdgeConfig) -> Self {
-        Self { config }
+        Self { config, config_path: None }
+    }
+
+    /// Create a new EdgeServer with the config file path for hot-reload support.
+    pub fn new_with_path(config: EdgeConfig, config_path: String) -> Self {
+        Self { config, config_path: Some(config_path) }
     }
 
     /// Run the edge server.
@@ -53,13 +60,15 @@ impl EdgeServer {
                 (!self.config.server.disable_hub_relay, true)
             }
         };
-        let edge_state = EdgeState::new_with_config(
+        let edge_state = EdgeState::new_with_full_config(
             channel_manager,
             client_manager,
             allow_hub_relay,
             allow_direct_udp,
             self.config.server.listeners_per_user,
             self.config.server.listeners_per_channel,
+            self.config.server.allow_ping,
+            self.config.server.rolling_stats_window,
         );
 
         // Set up TLS
@@ -100,6 +109,49 @@ impl EdgeServer {
                 hub_event_listener(state, &mut event_rx, shutdown_tx).await;
             }
         });
+
+        // SIGHUP hot-reload task: reload the config file and apply hot-reloadable fields.
+        #[cfg(unix)]
+        {
+            let config_path = self.config_path.clone();
+            let reload_state = edge_state.clone();
+            tokio::spawn(async move {
+                use tokio::signal::unix::{signal, SignalKind};
+                let mut sighup = match signal(SignalKind::hangup()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("Failed to register SIGHUP handler: {}", e);
+                        return;
+                    }
+                };
+                loop {
+                    sighup.recv().await;
+                    info!("SIGHUP received — attempting config hot-reload");
+                    if let Some(ref path) = config_path {
+                        match munode_common::config::load_edge_config(path) {
+                            Ok(new_cfg) => {
+                                reload_state.apply_hot_config(&new_cfg);
+                                // Re-initialise logging at the new level.
+                                munode_common::logging::init_logging_with_format(
+                                    &new_cfg.log_level,
+                                    &new_cfg.log_format,
+                                );
+                                info!(
+                                    allow_ping = new_cfg.server.allow_ping,
+                                    rolling_stats_window = new_cfg.server.rolling_stats_window,
+                                    "Config hot-reload applied"
+                                );
+                            }
+                            Err(e) => {
+                                warn!("SIGHUP hot-reload failed — could not parse config '{}': {}", path, e);
+                            }
+                        }
+                    } else {
+                        warn!("SIGHUP received but no config path known; skipping hot-reload");
+                    }
+                }
+            });
+        }
 
         // Always start the control-relay server (every Edge acts as a relay for peers)
         let relay_port = if self.config.hub_server.relay_port > 0 {
@@ -539,6 +591,23 @@ async fn handle_client_connection(
                         Some(sid),
                     ).await;
 
+                    // Restore persisted channel listeners for registered users.
+                    // This runs after the login sequence so permissions are cached.
+                    let user_id = client.user_id;
+                    if user_id > 0 {
+                        let saved_listeners = hub_client.load_channel_listeners(user_id).await;
+                        if !saved_listeners.is_empty() {
+                            // Apply the saved listeners through the normal permission-checked path.
+                            let restore_state = mumbleproto::UserState {
+                                session: Some(sid),
+                                listening_channel_add: saved_listeners,
+                                ..Default::default()
+                            };
+                            handle_user_state_update(&edge_state, &hub_client, sid, &restore_state).await;
+                            debug!("Restored saved channel listeners for user {} (session {})", user_id, sid);
+                        }
+                    }
+
                     info!("Client {} is now Ready (session={})", peer_addr, sid);
                 }
                 MessageType::Ping => {
@@ -865,6 +934,10 @@ async fn handle_client_connection(
                                 // Encode IP address as bytes (IPv4 4 bytes, IPv6 16 bytes)
                                 let addr_bytes = encode_ip_address(&target.ip_address);
 
+                                // Fetch bandwidth stats: bytes-per-second in the last slot.
+                                let bps_last =
+                                    edge_state.client_manager.get_bandwidth_stats(target_session).await;
+
                                 let is_stats_only = stats.stats_only.unwrap_or(false);
 
                                 let response = if is_stats_only {
@@ -886,6 +959,7 @@ async fn handle_client_connection(
                                         }),
                                         onlinesecs: Some(onlinesecs),
                                         idlesecs: Some(idlesecs),
+                                        bandwidth: Some(bps_last * 8), // bytes→bits per second
                                         ..Default::default()
                                     }
                                 } else {
@@ -907,6 +981,7 @@ async fn handle_client_connection(
                                         address: Some(addr_bytes),
                                         onlinesecs: Some(onlinesecs),
                                         idlesecs: Some(idlesecs),
+                                        bandwidth: Some(bps_last * 8), // bytes→bits per second
                                         opus: Some(target.opus_supported),
                                         strong_certificate: Some(target.cert_hash.is_some()),
                                         celt_versions: vec![-2147483637], // CELT 0.7.0 (Mumble standard)
@@ -1261,6 +1336,22 @@ async fn handle_client_connection(
                         broadcast_codec_version(&edge_state).await;
                     }
                 }
+                // ContextAction: client clicked a registered context menu item.
+                // Forward the action to Hub as a fire-and-forget notification so that
+                // any registered callback (ICE replacement, Lua hook, etc.) is invoked.
+                MessageType::ContextAction if client_state == ClientState::Ready => {
+                    let Ok(ca) = mumbleproto::ContextAction::decode(&frame.payload[..]) else { continue; };
+                    if let Some(sid) = session_id {
+                        debug!(
+                            session = sid,
+                            action = ca.action.as_str(),
+                            actor = ca.session.unwrap_or(0),
+                            channel = ca.channel_id.unwrap_or(0),
+                            "ContextAction received"
+                        );
+                        hub_client.notify_context_action(sid, ca).await;
+                    }
+                }
                 other => {
                     debug!("Unhandled message type {:?} from {} (state={:?})", other, peer_addr, client_state);
                 }            }
@@ -1269,6 +1360,15 @@ async fn handle_client_connection(
 
     // Cleanup
     if let Some(sid) = session_id {
+        // Save channel listeners before removing the client (so we still have access to the data)
+        if let Some(client) = edge_state.client_manager.get_client(sid).await {
+            if client.user_id > 0 && !client.listening_channels.is_empty() {
+                let user_id = client.user_id;
+                let channels = client.listening_channels.clone();
+                hub_client.save_channel_listeners(user_id, channels).await;
+            }
+        }
+
         edge_state.client_manager.remove_client(sid).await;
         // Clean up ninja channel permission cache for this session
         edge_state.ninja_visible_to.write().await.remove(&sid);

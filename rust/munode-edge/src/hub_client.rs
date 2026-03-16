@@ -25,6 +25,7 @@ use munode_protocol::hubedge::{
     EdgeHandleUserStateChangedParams, EdgeHandleTextMessageParams,
     EdgeHandleChannelStateParams, EdgeHandleChannelRemoveParams,
     EdgeReportSessionParams, GlobalSessionProto,
+    EdgeContextActionParams,
 };
 
 use crate::channel_manager::{ChannelData, RemoteUser};
@@ -1004,6 +1005,32 @@ impl HubClient {
                     debug!("Route table updated: {} entries", count);
                 }
             }
+            "hub.contextActionModify" => {
+                // Hub pushes a ContextActionModify to specific clients on this Edge.
+                // Forward the ContextActionModify message to each targeted client.
+                if let Some(params) = &notification.context_action_modify {
+                    let msg = &params.action;
+                    let target_sessions = &params.target_sessions;
+                    if target_sessions.is_empty() {
+                        // Broadcast to all local clients
+                        self.edge_state.client_manager
+                            .broadcast(MessageType::ContextActionModify, msg, None)
+                            .await;
+                        debug!("ContextActionModify broadcast to all clients: action={:?}", msg.action.as_str());
+                    } else {
+                        for &sid in target_sessions {
+                            if let Some(sender) = self.edge_state.client_manager.get_sender(sid).await {
+                                sender.send_message(MessageType::ContextActionModify, msg).await;
+                            }
+                        }
+                        debug!(
+                            "ContextActionModify sent to {} client(s): action={:?}",
+                            target_sessions.len(),
+                            msg.action.as_str()
+                        );
+                    }
+                }
+            }
             _ => {
                 // Check for hub.ninjaConfig (uses unknown_params_json)
                 if method == "hub.ninjaConfig" {
@@ -1667,6 +1694,66 @@ impl HubClient {
             .ok_or_else(|| anyhow::anyhow!("No edge_save_channel in response"))
     }
 
+    /// RPC: Save channel listeners for a user on disconnect.
+    ///
+    /// This is a best-effort fire-and-forget call; failures are logged but do
+    /// not propagate to the caller.
+    pub async fn save_channel_listeners(&self, user_id: u32, channel_ids: Vec<u32>) {
+        if user_id == 0 {
+            return; // Guests have no persistent listeners
+        }
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id().await,
+            method: "edge.saveChannelListeners".to_string(),
+            timeout_ms: Some(5000),
+            edge_save_channel_listeners: Some(hubedge::EdgeSaveChannelListenersParams {
+                user_id,
+                channel_ids,
+            }),
+            ..Default::default()
+        };
+        match self.rpc_call(request).await {
+            Ok(resp) => {
+                if let Some(result) = resp.edge_save_channel_listeners {
+                    if !result.success {
+                        warn!("Hub rejected channel listeners save for user {}: {:?}", user_id, result.error);
+                    }
+                }
+            }
+            Err(e) => warn!("Failed to save channel listeners for user {}: {}", user_id, e),
+        }
+    }
+
+    /// RPC: Load persisted channel listeners for a user on connect.
+    ///
+    /// Returns the list of channel IDs the user was listening to at their last
+    /// disconnect, or an empty `Vec` on failure.
+    pub async fn load_channel_listeners(&self, user_id: u32) -> Vec<u32> {
+        if user_id == 0 {
+            return vec![]; // Guests have no persistent listeners
+        }
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id().await,
+            method: "edge.loadChannelListeners".to_string(),
+            timeout_ms: Some(5000),
+            edge_load_channel_listeners: Some(hubedge::EdgeLoadChannelListenersParams {
+                user_id,
+            }),
+            ..Default::default()
+        };
+        match self.rpc_call(request).await {
+            Ok(resp) => {
+                resp.edge_load_channel_listeners
+                    .map(|r| if r.success { r.channel_ids } else { vec![] })
+                    .unwrap_or_default()
+            }
+            Err(e) => {
+                warn!("Failed to load channel listeners for user {}: {}", user_id, e);
+                vec![]
+            }
+        }
+    }
+
     /// Notify Hub about a channel state change (including links_add/links_remove).
     pub async fn notify_channel_state(
         &self,
@@ -1745,6 +1832,36 @@ impl HubClient {
         };
         if let Err(e) = self.send_packet(&packet).await {
             warn!("Failed to forward text message to Hub: {}", e);
+        }
+    }
+
+    /// Notify the Hub that a client triggered a context action.
+    ///
+    /// This allows Hub-side callbacks (plugins, Lua scripts) to respond to
+    /// context menu interactions registered via `hub.contextActionModify`.
+    pub async fn notify_context_action(
+        &self,
+        session_id: u32,
+        action: munode_protocol::mumbleproto::ContextAction,
+    ) {
+        let edge_id = self.edge_id();
+        let notification = TypedRpcNotification {
+            method: "hub.contextAction".to_string(),
+            timestamp: Some(current_millis() as i64),
+            context_action: Some(EdgeContextActionParams {
+                edge_id,
+                session_id,
+                action,
+            }),
+            ..Default::default()
+        };
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+        if let Err(e) = self.send_packet(&packet).await {
+            warn!("Failed to forward ContextAction to Hub: {}", e);
         }
     }
 
