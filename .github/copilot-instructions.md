@@ -14,7 +14,8 @@ MuNode is a distributed Mumble voice server. The server-side (Hub + Edge) is wri
 - **Crypto:** aes 0.8 (OCB2-AES128 voice encryption), ring 0.17 (HMAC, RNG), argon2 0.5 (password hashing)
 - **Serialization:** serde + toml (TOML config files), serde_json (RPC payloads)
 - **Logging:** tracing 0.1 + tracing-subscriber (text or JSON output)
-- **Error handling:** anyhow for application errors, thiserror for library error enums
+- **Error handling:** anyhow for application errors, thiserror for library error enums, num_enum 0.7 for integer↔enum conversions
+- **Enum primitives:** num_enum 0.7 (`TryFromPrimitive`, `IntoPrimitive`) for all protocol integer↔enum mappings
 - **Scripting:** mlua 0.10 (Lua 5.4, vendored) for pluggable auth scripts
 - **Config format:** TOML files (`config/edge.toml`, `config/hub.toml`)
 - **Client library:** TypeScript (packages/client), uses pnpm, ESModule, Node.js 22
@@ -57,6 +58,9 @@ packages/{common,protocol,hub-server,edge-server,cli,auth-service}/
 ```
 
 ## Coding Conventions
+
+### Git
+- **Commit messages must be in English.** Use the conventional-commit format: `type(scope): short summary`. Examples: `fix(crypto): handle IV wraparound`, `feat(acl): centralize permission constants`.
 
 ### Naming
 - Structs and enums: `PascalCase` (`EdgeServer`, `ClientInfo`, `MessageType`)
@@ -178,6 +182,7 @@ cargo test crypto::tests          # Run specific test module
 - Prefer `Arc<RwLock<T>>` over `Arc<Mutex<T>>` for shared state that is read-heavy
 - All public functions that can fail must return `Result<T>`
 - Voice packet handling (UDP) must minimize latency — avoid allocations in the hot path
+- **Backward compatibility is NOT required.** MuNode is pre-1.0 and internal — public API, config schema, database schema, and wire format (other than the external Mumble protocol) may be changed freely without a deprecation period. Prefer correct, idiomatic Rust over preserving old interfaces.
 
 ## Deprecated TypeScript Packages
 

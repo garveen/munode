@@ -197,6 +197,12 @@ pub struct HubServerConfig {
     /// `hub.peerJoined` notifications).
     #[serde(default)]
     pub static_peers: Vec<StaticPeerConfig>,
+    /// Whether to connect to the Hub over TLS (`wss://` instead of `ws://`).
+    /// Defaults to `false` (plain WebSocket) for backward compatibility.
+    /// Enable this when the Hub is behind a TLS terminator or when Hub and Edge
+    /// are on separate networks.
+    #[serde(default)]
+    pub tls: bool,
 }
 
 /// Server capacity and behavior configuration.
@@ -602,12 +608,19 @@ impl HubSuggestConfig {
         let major = parts[0].parse::<u64>().ok()?;
         let minor = parts[1].parse::<u64>().ok()?;
         let patch = parts[2].parse::<u64>().ok()?;
-        // v2: full precision
-        let v2: u64 = (major << 48) | (minor << 32) | (patch << 16);
+        // Cap each component to its field width so bit-shifts never overflow.
+        // v2 format: major(16) | minor(16) | patch(16) in the top 48 bits.
+        // Silently cap at the maximum representable value; values beyond 65535
+        // are not used in any known Mumble client version string.
+        let major_capped = major.min(0xFFFF);
+        let minor_capped = minor.min(0xFFFF);
+        let patch_capped = patch.min(0xFFFF);
+        // v2: full precision (16 bits each, top 48 bits of a u64)
+        let v2: u64 = (major_capped << 48) | (minor_capped << 32) | (patch_capped << 16);
         // v1 legacy: major capped at u16::MAX, minor/patch capped at u8::MAX
-        let v1: u32 = ((major.min(0xFFFF) as u32) << 16)
-            | ((minor.min(0xFF) as u32) << 8)
-            | (patch.min(0xFF) as u32);
+        let v1: u32 = ((major_capped.min(0xFFFF) as u32) << 16)
+            | ((minor_capped.min(0xFF) as u32) << 8)
+            | (patch_capped.min(0xFF) as u32);
         Some((v1, v2))
     }
 }

@@ -68,7 +68,8 @@ impl BlobStore {
         }
 
         // Ensure shard directory exists
-        let shard_dir = path.parent().expect("blob path has a parent");
+        let shard_dir = path.parent()
+            .ok_or_else(|| anyhow::anyhow!("Blob path '{}' has no parent directory", path.display()))?;
         fs::create_dir_all(shard_dir)
             .with_context(|| format!("Failed to create shard dir {}", shard_dir.display()))?;
 

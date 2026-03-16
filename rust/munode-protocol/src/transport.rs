@@ -33,14 +33,19 @@ pub struct RawFrame {
 /// Encode a Mumble protocol message into wire format.
 ///
 /// Wire format: [type:u16 big-endian][length:u32 big-endian][protobuf payload]
+///
+/// Panics if the encoded payload exceeds `u32::MAX` bytes (~4 GiB), which is
+/// impossible in practice given the protocol's 8 MiB message size limit.
 pub fn encode_message<M: Message>(
     msg_type: MessageType,
     message: &M,
     buf: &mut BytesMut,
 ) {
     let payload = message.encode_to_vec();
+    let len: u32 = payload.len().try_into()
+        .expect("encoded message exceeds u32::MAX bytes — impossible given the 8 MiB protocol limit");
     buf.put_u16(msg_type as u16);
-    buf.put_u32(payload.len() as u32);
+    buf.put_u32(len);
     buf.put_slice(&payload);
 }
 

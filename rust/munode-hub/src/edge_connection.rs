@@ -40,16 +40,29 @@ impl EdgeConnection {
 
         // Channel for sending outgoing messages to this edge
         let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(256);
+        // Graceful-shutdown signal for the writer task.
+        let (writer_stop_tx, mut writer_stop_rx) = mpsc::channel::<()>(1);
 
         // Writer task: forwards messages from send_rx to WebSocket
         let writer_handle = tokio::spawn(async move {
-            while let Some(data) = send_rx.recv().await {
-                if let Err(e) = ws_write
-                    .send(tungstenite::Message::Binary(Bytes::from(data)))
-                    .await
-                {
-                    error!("WebSocket write error for edge: {}", e);
-                    break;
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = writer_stop_rx.recv() => break,
+                    msg = send_rx.recv() => {
+                        match msg {
+                            Some(data) => {
+                                if let Err(e) = ws_write
+                                    .send(tungstenite::Message::Binary(Bytes::from(data)))
+                                    .await
+                                {
+                                    error!("WebSocket write error for edge: {}", e);
+                                    break;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
                 }
             }
         });
@@ -84,7 +97,9 @@ impl EdgeConnection {
             }
         }
 
-        writer_handle.abort();
+        // Signal the writer task to stop and wait for it to drain its queue.
+        let _ = writer_stop_tx.send(()).await;
+        let _ = writer_handle.await;
 
         // Cleanup on disconnect
         if let Some(server_id) = self.server_id {

@@ -84,12 +84,17 @@ async fn handle_proxy_connection(
     hub_port: u16,
 ) -> Result<()> {
     // Upgrade incoming TCP connection to WebSocket (server role)
-    let client_ws = tokio_tungstenite::accept_async(stream).await?;
+    const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
+    let client_ws = timeout(HANDSHAKE_TIMEOUT, tokio_tungstenite::accept_async(stream))
+        .await
+        .map_err(|_| anyhow::anyhow!("WebSocket handshake timed out from {}", peer_addr))??;
     debug!("Control relay: WebSocket handshake complete with {}", peer_addr);
 
     // Connect to Hub as a WebSocket client
     let hub_url = format!("ws://{}:{}", hub_host, hub_port);
-    let (hub_ws, _) = tokio_tungstenite::connect_async(&hub_url).await?;
+    let (hub_ws, _) = timeout(HANDSHAKE_TIMEOUT, tokio_tungstenite::connect_async(&hub_url))
+        .await
+        .map_err(|_| anyhow::anyhow!("WebSocket connect to Hub timed out ({})", hub_url))??;
     debug!("Control relay: connected to Hub at {} for peer {}", hub_url, peer_addr);
 
     let (mut client_write, client_read) = client_ws.split();

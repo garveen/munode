@@ -205,15 +205,32 @@ impl TopologyManager {
         let edge_ids: Vec<u32> = self.edges.keys().cloned().collect();
         let mut parent: HashMap<u32, u32> = edge_ids.iter().map(|&e| (e, e)).collect();
 
+        // Iterative find with path compression — avoids stack overflow on large clusters.
         fn find(parent: &mut HashMap<u32, u32>, x: u32) -> u32 {
-            let p = *parent.get(&x).unwrap_or(&x);
-            if p != x {
-                let root = find(parent, p);
-                parent.insert(x, root);
-                root
-            } else {
-                x
+            // Walk up to the root.
+            // The parent map can only be set by `union()` which always points a
+            // root to another root, so the chain is strictly decreasing in depth
+            // and cannot cycle.  The bound `parent.len() + 1` is a safety guard
+            // against any future bug that could introduce a cycle.
+            let mut root = x;
+            let max_depth = parent.len() + 1;
+            let mut depth = 0;
+            while parent.get(&root).copied().unwrap_or(root) != root {
+                root = parent.get(&root).copied().unwrap_or(root);
+                depth += 1;
+                if depth > max_depth {
+                    break; // Safety: should never happen in a correct Union-Find
+                }
             }
+            // Path compression: point every node on the path directly to root
+            let mut cur = x;
+            while cur != root {
+                let next = parent.get(&cur).copied().unwrap_or(root);
+                parent.insert(cur, root);
+                if next == cur { break; } // Defensive: avoid infinite loop
+                cur = next;
+            }
+            root
         }
 
         fn union(parent: &mut HashMap<u32, u32>, x: u32, y: u32) {

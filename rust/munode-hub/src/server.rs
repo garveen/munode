@@ -240,7 +240,9 @@ impl HubServer {
             let web_host = self.config.web_api.host.clone();
             let web_port = self.config.web_api.port;
             tokio::spawn(async move {
-                crate::web_api::run_web_api(&web_host, web_port, web_state).await;
+                if let Err(e) = crate::web_api::run_web_api(&web_host, web_port, web_state).await {
+                    error!("Web API failed: {}", e);
+                }
             });
         }
 

@@ -8,7 +8,7 @@ use prost::Message;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use munode_protocol::authservice::{AuthRequest as ExtAuthRequest};
 use munode_protocol::hubedge::*;
@@ -58,7 +58,6 @@ use crate::server::EdgeRegistration;
 
 /// Voice target storage entry.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct VoiceTargetEntry {
     edge_id: u32,
     client_session: u32,
@@ -71,6 +70,12 @@ struct VoiceTargetEntry {
 pub struct RpcHandler {
     state: Arc<HubState>,
     /// Voice targets keyed by (client_session, target_id).
+    ///
+    /// Populated by `EdgeSyncVoiceTarget` RPCs: each Edge reports its clients'
+    /// active whisper targets to the Hub, which stores them here and broadcasts
+    /// the update to all other Edges via `hub.syncVoiceTarget`.  The Hub acts as
+    /// a relay — Edges maintain their own authoritative copy for local routing.
+    /// The Hub's copy is used for cluster-wide visibility (e.g., diagnostics).
     voice_targets: RwLock<HashMap<(u32, u32), VoiceTargetEntry>>,
     /// Pre-compiled username regex (cached from config at startup).
     username_regex: Option<Regex>,
@@ -221,7 +226,7 @@ impl RpcHandler {
         if let Some(hmac_secret) = &self.state.config.registry.hmac_secret {
             if params.challenge_response.is_none() {
                 // Send challenge to the edge
-                let challenge = generate_challenge();
+                let challenge = generate_challenge()?;
                 let result = EdgeRegisterResult {
                     success: false,
                     hub_server_id: None,
@@ -403,8 +408,24 @@ impl RpcHandler {
                     }
                     Ok(None) => {} // Not banned, proceed
                     Err(e) => {
-                        warn!("Failed to check ban list for IP {}: {}", client_ip, e);
-                        // Don't reject on DB error — fail open for ban check only
+                        error!("Failed to check ban list for IP {}: {}", client_ip, e);
+                        // Fail closed: if we can't verify the ban list, reject the connection
+                        // to prevent banned users from connecting during a DB outage.
+                        let result = EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None, username: None, display_name: None,
+                            groups: vec![],
+                            reason: Some("Server error: unable to verify ban status".to_string()),
+                            reject_type: Some(0), // None (reason is provided in the reason field)
+                            channel_id: None,
+                            mute: None, deaf: None, suppress: None,
+                            self_mute: None, self_deaf: None,
+                            priority_speaker: None, recording: None,
+                            cert_required: None,
+                        };
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(result);
+                        }));
                     }
                 }
             }
@@ -464,7 +485,9 @@ impl RpcHandler {
                     let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
                     // Ensure ext-auth user exists in DB so last_channel can be tracked
                     if user_id > 0 {
-                        let _ = self.state.database.upsert_ext_user(user_id, &auth_username);
+                        if let Err(e) = self.state.database.upsert_ext_user(user_id, &auth_username) {
+                            warn!("Failed to persist ext-auth user to database: {}", e);
+                        }
                     }
                     // Prefer ext auth's channel, fall back to DB last_channel, then default
                     let channel_id = if let Some(ch) = resp.channel_id {
@@ -645,7 +668,9 @@ impl RpcHandler {
                     let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
                     let groups = resp.groups.clone().unwrap_or_default();
                     if user_id > 0 {
-                        let _ = self.state.database.upsert_ext_user(user_id, &auth_username);
+                        if let Err(e) = self.state.database.upsert_ext_user(user_id, &auth_username) {
+                            warn!("Failed to persist ext-auth user to database: {}", e);
+                        }
                     }
                     let channel_id = if user_id > 0 {
                         match self.state.database.get_user_last_channel(user_id) {
@@ -794,7 +819,9 @@ impl RpcHandler {
                     let groups = resp.groups.clone().unwrap_or_default();
                     // Ensure ext-auth user exists in DB for last_channel tracking
                     if user_id > 0 {
-                        let _ = self.state.database.upsert_ext_user(user_id, &auth_username);
+                        if let Err(e) = self.state.database.upsert_ext_user(user_id, &auth_username) {
+                            warn!("Failed to persist ext-auth user to database: {}", e);
+                        }
                     }
                     // Check DB for last_channel saved from previous session
                     let channel_id = if user_id > 0 {
@@ -1343,25 +1370,45 @@ impl RpcHandler {
             })
             .collect();
 
-        // Build edge list
+        // Build edge list with current load computed from per-Edge health data.
+        let health_map = self.state.edge_health.read().await;
         let edges: Vec<EdgeInfoProto> = self.state.edge_registry
             .read()
             .await
             .values()
-            .map(|e| EdgeInfoProto {
-                server_id: e.server_id,
-                name: e.name.clone(),
-                host: e.host.clone(),
-                port: e.port,
-                region: e.region.clone(),
-                current_load: 0,
-                capacity: e.capacity,
+            .map(|e| {
+                // current_load is the number of active sessions on this Edge,
+                // expressed as a per-mille value (0–1000) relative to capacity.
+                let user_count = health_map
+                    .get(&e.server_id)
+                    .map(|h| h.user_count)
+                    .unwrap_or(0);
+                let current_load = if e.capacity > 0 {
+                    ((user_count as u64 * 1000) / e.capacity as u64).min(1000) as u32
+                } else {
+                    0
+                };
+                EdgeInfoProto {
+                    server_id: e.server_id,
+                    name: e.name.clone(),
+                    host: e.host.clone(),
+                    port: e.port,
+                    region: e.region.clone(),
+                    current_load,
+                    capacity: e.capacity,
+                }
             })
             .collect();
+        drop(health_map);
 
         let result = EdgeFullSyncResult {
             channels,
             channel_links,
+            // ACLs and bans are intentionally omitted from the full-sync snapshot.
+            // Edge nodes query ACL permissions on demand via `EdgePermissionQuery` RPCs
+            // (evaluated by the Hub's AclManager).  Ban checks are performed by the Hub
+            // during `EdgeAuthenticateUser`.  Pushing the full ACL/ban table to every
+            // Edge would be wasteful and create stale-cache invalidation complexity.
             acls: vec![],
             bans: vec![],
             sessions,
@@ -3018,12 +3065,12 @@ impl RpcHandler {
 }
 
 /// Generate a random challenge string for HMAC authentication.
-fn generate_challenge() -> String {
+fn generate_challenge() -> Result<String> {
     use ring::rand::{SecureRandom, SystemRandom};
     let rng = SystemRandom::new();
     let mut buf = [0u8; 32];
-    rng.fill(&mut buf).unwrap();
-    hex_encode(&buf)
+    rng.fill(&mut buf).map_err(|_| anyhow::anyhow!("RNG failed: system entropy unavailable"))?;
+    Ok(hex_encode(&buf))
 }
 
 /// Compute HMAC-SHA256 of `challenge:server_id` with the given secret.

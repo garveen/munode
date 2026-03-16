@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
             }
         } else {
             println!("❌ Database directory: does not exist ({})",
-                db_path.parent().unwrap().display());
+                db_path.parent().unwrap_or(std::path::Path::new("/")).display());
         }
 
         // Check blob store path

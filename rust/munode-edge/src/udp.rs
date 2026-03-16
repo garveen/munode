@@ -301,7 +301,13 @@ impl UdpServer {
                     return;
                 }
             };
-            let mut cs = cs_arc.lock().unwrap();
+            let mut cs = match cs_arc.lock() {
+                Ok(cs) => cs,
+                Err(e) => {
+                    warn!("CryptState mutex poisoned for session {} — packet dropped: {}", session_id, e);
+                    return;
+                }
+            };
             let mut plain = Vec::new();
             if !cs.decrypt(data, &mut plain) {
                 debug!("OCB2 decrypt failed for session {} ({} bytes)", session_id, data.len());
@@ -345,7 +351,13 @@ impl UdpServer {
 
             let mut plain = Vec::new();
             let identified = {
-                let mut cs = cs_arc.lock().unwrap();
+                let mut cs = match cs_arc.lock() {
+                    Ok(cs) => cs,
+                    Err(e) => {
+                        warn!("CryptState mutex poisoned for session {} — packet dropped: {}", session_id, e);
+                        continue;
+                    }
+                };
                 cs.decrypt(data, &mut plain)
             };
 
@@ -422,7 +434,13 @@ impl UdpServer {
                 // Has UDP address: OCB2-encrypt and send
                 if let Some(cs_arc) = cs_opt {
                     let mut encrypted = Vec::with_capacity(forwarded.len() + 16);
-                    cs_arc.lock().unwrap().encrypt(&forwarded, &mut encrypted);
+                    match cs_arc.lock() {
+                        Ok(mut cs) => { cs.encrypt(&forwarded, &mut encrypted); }
+                        Err(e) => {
+                            warn!("CryptState mutex poisoned for session {} — packet dropped: {}", target, e);
+                            continue;
+                        }
+                    }
                     if let Err(e) = self.socket.send_to(&encrypted, addr).await {
                         warn!("UDP send to session {} failed: {}", target, e);
                     }
@@ -547,7 +565,13 @@ impl UdpServer {
         if let Some(addr) = self.session_to_addr.read().await.get(&session_id).copied() {
             if let Some(cs_arc) = self.edge_state.client_manager.get_crypt_state(session_id).await {
                 let mut encrypted = Vec::new();
-                cs_arc.lock().unwrap().encrypt(plaintext, &mut encrypted);
+                match cs_arc.lock() {
+                    Ok(mut cs) => { cs.encrypt(plaintext, &mut encrypted); }
+                    Err(e) => {
+                        warn!("CryptState mutex poisoned for session {} — packet dropped: {}", session_id, e);
+                        return;
+                    }
+                }
                 let _ = self.socket.send_to(&encrypted, addr).await;
             }
         }
@@ -630,7 +654,13 @@ impl UdpServer {
             if let Some(&addr) = session_addrs.get(&target) {
                 if let Some(cs_arc) = self.edge_state.client_manager.get_crypt_state(target).await {
                     let mut encrypted = Vec::new();
-                    cs_arc.lock().unwrap().encrypt(&forwarded, &mut encrypted);
+                    match cs_arc.lock() {
+                        Ok(mut cs) => { cs.encrypt(&forwarded, &mut encrypted); }
+                        Err(e) => {
+                            warn!("CryptState mutex poisoned for session {} — packet dropped: {}", target, e);
+                            continue;
+                        }
+                    }
                     if let Err(e) = self.socket.send_to(&encrypted, addr).await {
                         warn!("UDP relay to session {} failed: {}", target, e);
                     }

@@ -6,32 +6,10 @@ use tracing::debug;
 use crate::channel_store::ChannelStore;
 use crate::database::Database;
 
-/// Permission bit flags matching the Mumble protocol.
-#[allow(dead_code)]
-pub mod permission {
-    pub const NONE: u32 = 0x0;
-    pub const WRITE: u32 = 0x1;
-    pub const TRAVERSE: u32 = 0x2;
-    pub const ENTER: u32 = 0x4;
-    pub const SPEAK: u32 = 0x8;
-    pub const MUTE_DEAFEN: u32 = 0x10;
-    pub const MOVE: u32 = 0x20;
-    pub const MAKE_CHANNEL: u32 = 0x40;
-    pub const LINK_CHANNEL: u32 = 0x80;
-    pub const WHISPER: u32 = 0x100;
-    pub const TEXT_MESSAGE: u32 = 0x200;
-    pub const TEMP_CHANNEL: u32 = 0x400;
-    pub const LISTEN: u32 = 0x800;
-    pub const KICK: u32 = 0x10000;
-    pub const BAN: u32 = 0x20000;
-    pub const REGISTER: u32 = 0x40000;
-    pub const SELF_REGISTER: u32 = 0x80000;
-
-    /// All permissions including root-only.
-    pub const ALL: u32 = 0xF0FFF;
-    /// Default permissions for unauthenticated users.
-    pub const DEFAULT: u32 = TRAVERSE | ENTER | SPEAK | WHISPER | TEXT_MESSAGE | LISTEN;
-}
+/// Permission bit flags — defined in `munode_common::permission` and
+/// re-exported here so that callers using `acl_manager::permission::*`
+/// continue to work without changes.
+pub use munode_common::permission;
 
 /// An ACL entry loaded from the database.
 #[derive(Debug, Clone)]
@@ -178,11 +156,36 @@ impl AclManager {
         Ok(())
     }
 
-    /// Invalidate cache for all users on a specific channel and its descendants.
-    pub async fn invalidate_channel(&self, _channel_id: u32) {
-        // For simplicity, clear entire cache.
-        // A more optimized approach would only clear entries for affected channels.
-        self.cache.write().await.clear();
+    /// Invalidate cache entries for a specific channel and its descendants.
+    ///
+    /// When ACLs are updated for a channel, all cached permission results for
+    /// that channel (and any child channels that inherit from it) are stale.
+    /// This removes only the affected entries rather than clearing the whole cache.
+    pub async fn invalidate_channel(&self, channel_id: u32) {
+        // Collect descendant channel IDs (including the channel itself).
+        let mut affected: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        affected.insert(channel_id);
+
+        // Walk all channels to find descendants.
+        let all_channels = self.channel_store.get_all_channels().await;
+        // Iteratively expand until no new descendants are added.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for ch in &all_channels {
+                if let Some(parent) = ch.parent_id {
+                    if affected.contains(&parent) && affected.insert(ch.id) {
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        // Remove only cache entries whose channel_id is in the affected set.
+        self.cache
+            .write()
+            .await
+            .retain(|(_uid, cid), _| !affected.contains(cid));
     }
 
     /// Build the channel chain from root (channel 0) to the target channel.

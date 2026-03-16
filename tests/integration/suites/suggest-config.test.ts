@@ -22,9 +22,9 @@ describe.skipIf(!USE_RUST)('SuggestConfig Integration Tests (Rust)', () => {
       startAuth: true,
       silent: true,
       isolated: true,
-      rustEdgeExtraConfig: {
+      rustHubExtraConfig: {
         suggest: {
-          version: 1340029,
+          version: "20.114.125",
           positional: true,
           push_to_talk: false,
         },

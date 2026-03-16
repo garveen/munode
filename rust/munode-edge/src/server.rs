@@ -7,11 +7,12 @@ use bytes::BytesMut;
 use prost::Message;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, trace, warn};
 
 use munode_common::config::EdgeConfig;
+use munode_common::permission as perm;
 use munode_protocol::hubedge;
 use munode_protocol::message_type::MessageType;
 use munode_protocol::mumbleproto;
@@ -88,12 +89,15 @@ impl EdgeServer {
             }
         });
 
-        // Event listener: broadcast Hub notifications to local clients
+        // Event listener: broadcast Hub notifications to local clients.
+        // Uses a watch channel so any future task can also observe the shutdown signal.
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         let event_handle = tokio::spawn({
             let state = edge_state.clone();
             let mut event_rx = edge_state.subscribe_events();
+            let shutdown_tx = shutdown_tx.clone();
             async move {
-                hub_event_listener(state, &mut event_rx).await;
+                hub_event_listener(state, &mut event_rx, shutdown_tx).await;
             }
         });
 
@@ -118,7 +122,14 @@ impl EdgeServer {
         let listener = TcpListener::bind(listen_addr).await?;
         info!("TLS server listening on {}", listen_addr);
 
-        let (_shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
+        // Semaphore to cap concurrent connections at the configured capacity.
+        // capacity = 0 means unlimited; use a large sentinel value in that case.
+        let max_conn = if self.config.server.capacity > 0 {
+            self.config.server.capacity as usize
+        } else {
+            10_000
+        };
+        let conn_semaphore = Arc::new(tokio::sync::Semaphore::new(max_conn));
 
         // Accept loop
         loop {
@@ -126,11 +137,22 @@ impl EdgeServer {
                 result = listener.accept() => {
                     match result {
                         Ok((stream, peer_addr)) => {
+                            // Reject the connection immediately if the server is at capacity.
+                            let permit = match conn_semaphore.clone().try_acquire_owned() {
+                                Ok(permit) => permit,
+                                Err(_) => {
+                                    warn!("Connection from {} rejected: server at capacity ({})", peer_addr, max_conn);
+                                    drop(stream);
+                                    continue;
+                                }
+                            };
                             let acceptor = tls_acceptor.clone();
                             let config = self.config.clone();
                             let hub = hub_client.clone();
                             let state = edge_state.clone();
                             tokio::spawn(async move {
+                                // Hold the permit for the duration of the connection.
+                                let _permit = permit;
                                 if let Err(e) = handle_client_connection(
                                     stream, peer_addr, acceptor, &config, hub, state,
                                 ).await {
@@ -143,7 +165,7 @@ impl EdgeServer {
                         }
                     }
                 }
-                _ = shutdown_rx.recv() => {
+                _ = shutdown_rx.wait_for(|v| *v) => {
                     info!("Shutting down edge server");
                     break;
                 }
@@ -154,6 +176,10 @@ impl EdgeServer {
             }
         }
 
+        // Allow background tasks a moment to notice shutdown before aborting.
+        // These tasks are stateless (no persistent data to flush), so abort is
+        // acceptable as a fallback after a brief grace period.
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         udp_handle.abort();
         hub_handle.abort();
         event_handle.abort();
@@ -161,6 +187,10 @@ impl EdgeServer {
         Ok(())
     }
 }
+
+/// Idle timeout for client TCP connections. Connections that send no data for
+/// this duration are considered zombie connections and are closed.
+const CLIENT_IDLE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(120);
 
 /// Handle a single Mumble client connection (TLS).
 async fn handle_client_connection(
@@ -247,11 +277,15 @@ async fn handle_client_connection(
     };
 
     'outer: loop {
-        // Read data from TLS stream
-        let n = match reader.read_buf(&mut buf).await {
-            Ok(n) => n,
-            Err(e) => {
+        // Read data from TLS stream with idle timeout to drop zombie connections.
+        let n = match tokio::time::timeout(CLIENT_IDLE_TIMEOUT, reader.read_buf(&mut buf)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => {
                 info!("Client {} connection error: {}", peer_addr, e);
+                break 'outer;
+            }
+            Err(_) => {
+                info!("Client {} idle timeout — closing connection", peer_addr);
                 break 'outer;
             }
         };
@@ -275,9 +309,14 @@ async fn handle_client_connection(
                     // Parse client version message and save info
                     if let Ok(version_msg) = mumbleproto::Version::decode(&frame.payload[..]) {
                         client_version = version_msg.version;
+                        // Truncate version strings to prevent log injection and excess memory use.
+                        const MAX_VERSION_STR: usize = 256;
                         client_release = version_msg.release.unwrap_or_default();
+                        client_release.truncate(MAX_VERSION_STR);
                         client_os = version_msg.os.unwrap_or_default();
+                        client_os.truncate(MAX_VERSION_STR);
                         client_os_version = version_msg.os_version.unwrap_or_default();
+                        client_os_version.truncate(MAX_VERSION_STR);
                         info!(
                             "Client {} version: v={:?} release={} os={} os_version={}",
                             peer_addr, client_version, client_release, client_os, client_os_version
@@ -427,7 +466,7 @@ async fn handle_client_connection(
                     // (done AFTER add_client so hub_client.handle_permission_query gets the right user_id)
                     if !auth_result.suppress.unwrap_or(false) {
                         let can_speak = match hub_client.handle_permission_query(sid, channel_id).await {
-                            Ok(r) => r.permissions.map(|p| p & 0x8 != 0).unwrap_or(true),
+                            Ok(r) => r.permissions.map(|p| p & perm::SPEAK != 0).unwrap_or(true),
                             Err(_) => true,
                         };
                         if !can_speak {
@@ -459,7 +498,7 @@ async fn handle_client_connection(
                             let mut visible_set = std::collections::HashSet::new();
                             for &ch_id in &ninja_channels {
                                 let can_enter = match hub_client.handle_permission_query(sid, ch_id).await {
-                                    Ok(r) => r.permissions.map(|p| p & 0x4 != 0).unwrap_or(false),
+                                    Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(false),
                                     Err(_) => false,
                                 };
                                 if can_enter {
@@ -636,13 +675,15 @@ async fn handle_client_connection(
                                     bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
                                     bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
                                     bytes::BufMut::put_slice(&mut buf, &forwarded);
-                                    let data = buf.to_vec();
+                                    // Wrap in Arc to share the frame buffer across target senders
+                                    // without per-target heap allocation.
+                                    let data = std::sync::Arc::new(buf.to_vec());
                                     // Send to local targets
                                     for target_session in &target_sessions {
                                         if let Some(target_client) = edge_state.client_manager.get_client(*target_session).await {
                                             if !target_client.deaf && !target_client.self_deaf {
                                                 if let Some(sender) = edge_state.client_manager.get_sender(*target_session).await {
-                                                    sender.send_raw(data.clone()).await;
+                                                    sender.send_raw((*data).clone()).await;
                                                 }
                                             }
                                         }
@@ -684,7 +725,9 @@ async fn handle_client_connection(
                                 bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
                                 bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
                                 bytes::BufMut::put_slice(&mut buf, &forwarded);
-                                let data = buf.to_vec();
+                                // Wrap in Arc to share the frame buffer across target senders
+                                // without per-target heap allocation.
+                                let data = std::sync::Arc::new(buf.to_vec());
 
                                 // Local clients in all linked channels
                                 for ch_id in &linked_channels {
@@ -699,7 +742,7 @@ async fn handle_client_connection(
                                             }
                                         }
                                         if let Some(sender) = edge_state.client_manager.get_sender(target_session).await {
-                                            sender.send_raw(data.clone()).await;
+                                            sender.send_raw((*data).clone()).await;
                                         }
                                     }
                                 }
@@ -993,7 +1036,7 @@ async fn handle_client_connection(
                         // Check admin (Write) permission on root channel
                         let sid = session_id.unwrap_or(0);
                         let is_admin = match hub_client.handle_permission_query(sid, 0).await {
-                            Ok(r) => r.permissions.map(|p| p & 0x1 != 0).unwrap_or(false), // WRITE = 0x1
+                            Ok(r) => r.permissions.map(|p| p & perm::WRITE != 0).unwrap_or(false),
                             Err(_) => false,
                         };
                         if !is_admin {
@@ -1265,7 +1308,7 @@ async fn handle_user_state_update(
             if client.channel_id != target_channel_id {
                 // Check Enter permission on target channel via Hub
                 let can_enter = match hub_client.handle_permission_query(session_id, target_channel_id).await {
-                    Ok(r) => r.permissions.map(|p| p & 0x4 != 0).unwrap_or(true), // ENTER
+                    Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(true),
                     Err(_) => true, // Fail open if Hub unreachable
                 };
                 if can_enter {
@@ -1300,7 +1343,7 @@ async fn handle_user_state_update(
                     client.channel_id = target_channel_id;
                     // Check Speak permission; suppress the user if they can't speak in the new channel
                     let can_speak = match hub_client.handle_permission_query(session_id, target_channel_id).await {
-                        Ok(r) => r.permissions.map(|p| p & 0x8 != 0).unwrap_or(true), // SPEAK = 0x8
+                        Ok(r) => r.permissions.map(|p| p & perm::SPEAK != 0).unwrap_or(true),
                         Err(_) => true,
                     };
                     let new_suppress = !can_speak;
@@ -1420,7 +1463,7 @@ async fn handle_user_state_update(
 
                 // Check Listen permission (0x800) before adding
                 let can_listen = match hub_client.handle_permission_query(session_id, ch).await {
-                    Ok(r) => r.permissions.map(|p| p & 0x800 != 0).unwrap_or(true), // LISTEN
+                    Ok(r) => r.permissions.map(|p| p & perm::LISTEN != 0).unwrap_or(true),
                     Err(_) => true,
                 };
                 if !can_listen {
@@ -1643,7 +1686,7 @@ async fn handle_admin_user_state_update(
                 client.channel_id = target_channel_id;
                 // Re-check suppress for the new channel
                 let can_speak = match hub_client.handle_permission_query(target_session, target_channel_id).await {
-                    Ok(r) => r.permissions.map(|p| p & 0x8 != 0).unwrap_or(true),
+                    Ok(r) => r.permissions.map(|p| p & perm::SPEAK != 0).unwrap_or(true),
                     Err(_) => true,
                 };
                 let new_suppress = !can_speak;
@@ -1875,10 +1918,10 @@ mod tests {
                 pool_size: 1,
                 relay_port: 0,
                 static_peers: vec![],
+                tls: false,
             },
             server: ServerConfig::default(),
             voice_routing: munode_common::config::EdgeVoiceRoutingConfig::default(),
-            suggest: None,
             log_level: "info".to_string(),
             log_format: "text".to_string(),
         }
@@ -2118,7 +2161,8 @@ mod tests {
         let es2 = es.clone();
         tokio::spawn(async move {
             let mut rx = es2.subscribe_events();
-            hub_event_listener(es2, &mut rx).await;
+            let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+            hub_event_listener(es2, &mut rx, shutdown_tx).await;
         });
         // Give the background task a moment to subscribe before the first emit.
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -2291,6 +2335,7 @@ mod tests {
 /// Listen for events from the Hub and broadcast them to local clients.
 async fn hub_event_listener(    state: Arc<EdgeState>,
     event_rx: &mut tokio::sync::broadcast::Receiver<EdgeEvent>,
+    shutdown_tx: watch::Sender<bool>,
 ) {
     use tokio::sync::broadcast::error::RecvError;
 
@@ -2592,11 +2637,9 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         // Give clients a moment to receive the reject, then exit gracefully
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                         warn!("Exiting due to hub shutdown request (cluster partition)");
-                        // Use tokio::signal abort or break the event loop to allow cleanup.
-                        // Since the event loop runs as a background task, exit the process.
-                        // This is the standard practice for stateless edge servers in a cluster.
-                        drop(state);
-                        std::process::exit(0);
+                        // Signal the main accept loop to shut down gracefully.
+                        let _ = shutdown_tx.send(true);
+                        return;
                     }
                 }
             }

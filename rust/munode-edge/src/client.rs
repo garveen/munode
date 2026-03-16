@@ -177,6 +177,11 @@ impl ClientManager {
                 for ch in &c.listening_channels {
                     if let Some(sessions) = idx.get_mut(ch) {
                         sessions.retain(|&s| s != session);
+                        // Remove the entry entirely when the Vec is empty to prevent
+                        // unbounded growth of the listening_index map.
+                        if sessions.is_empty() {
+                            idx.remove(ch);
+                        }
                     }
                 }
             }

@@ -16,19 +16,19 @@ pub fn init_logging_with_format(level: &str, format: &str) {
         .unwrap_or_else(|_| EnvFilter::new(level));
 
     if format == "json" {
-        fmt()
+        let _ = fmt()
             .json()
             .with_env_filter(filter)
             .with_target(true)
             .with_thread_ids(false)
             .with_line_number(true)
-            .init();
+            .try_init();
     } else {
-        fmt()
+        let _ = fmt()
             .with_env_filter(filter)
             .with_target(true)
             .with_thread_ids(false)
             .with_line_number(true)
-            .init();
+            .try_init();
     }
 }

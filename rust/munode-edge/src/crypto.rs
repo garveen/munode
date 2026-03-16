@@ -16,7 +16,10 @@ use aes::{
 ///
 /// - `encrypt_iv`: server→client nonce (incremented on each sent packet)
 /// - `decrypt_iv`: client→server nonce (tracked from received packets)
-/// - `decrypt_history`: replay protection (history of seen nonce[0] values)
+/// - `decrypt_history`: replay protection — maps IV\[0\] → last-seen IV\[1\] for
+///   each bucket.  This 256-entry table matches the official Mumble/Murmur OCB2
+///   reference implementation.  See the inline comment in `decrypt()` for the
+///   intentional design trade-off.
 pub struct CryptState {
     key: [u8; 16],
     pub encrypt_iv: [u8; 16],
@@ -37,7 +40,8 @@ impl CryptState {
     /// Create a new CryptState with zero key/IVs.
     pub fn new() -> Self {
         let key = [0u8; 16];
-        let cipher = Aes128::new_from_slice(&key).expect("AES key init failed");
+        // SAFETY: key is always exactly 16 bytes; AES-128 requires 16 bytes.
+        let cipher = Aes128::new_from_slice(&key).expect("AES-128 key must be 16 bytes");
         Self {
             key,
             encrypt_iv: [0u8; 16],
@@ -52,13 +56,17 @@ impl CryptState {
     }
 
     /// Generate a random key and IVs using ring's CSPRNG.
-    pub fn generate_key(&mut self) {
+    ///
+    /// Returns an error if the system RNG is unavailable (e.g., entropy pool exhausted).
+    pub fn generate_key(&mut self) -> Result<(), ring::error::Unspecified> {
         use ring::rand::{SecureRandom, SystemRandom};
         let rng = SystemRandom::new();
-        rng.fill(&mut self.key).expect("RNG failed");
-        rng.fill(&mut self.encrypt_iv).expect("RNG failed");
-        rng.fill(&mut self.decrypt_iv).expect("RNG failed");
-        self.cipher = Aes128::new_from_slice(&self.key).expect("AES key init failed");
+        rng.fill(&mut self.key)?;
+        rng.fill(&mut self.encrypt_iv)?;
+        rng.fill(&mut self.decrypt_iv)?;
+        // SAFETY: self.key is always 16 bytes; AES-128 requires 16 bytes.
+        self.cipher = Aes128::new_from_slice(&self.key).expect("AES-128 key must be 16 bytes");
+        Ok(())
     }
 
     /// Set key and IVs explicitly.
@@ -70,7 +78,8 @@ impl CryptState {
         self.key = *key;
         self.encrypt_iv = *encrypt_iv;
         self.decrypt_iv = *decrypt_iv;
-        self.cipher = Aes128::new_from_slice(&self.key).expect("AES key init failed");
+        // SAFETY: self.key is always 16 bytes; AES-128 requires 16 bytes.
+        self.cipher = Aes128::new_from_slice(&self.key).expect("AES-128 key must be 16 bytes");
     }
 
     /// Get the raw AES key.
@@ -209,7 +218,16 @@ impl CryptState {
                 return false;
             }
 
-            // Replay check: if we've already seen this exact IV[0..=1] combo, reject
+            // Replay check: compare IV[0..=1] against history.
+            //
+            // `decrypt_history` maps IV[0] → last-seen IV[1] for that bucket.  This
+            // matches the original Mumble/Murmur OCB2 reference implementation and
+            // is intentional: out-of-window packets that share the same IV[0] but
+            // differ in IV[1..] would theoretically bypass this check.  In practice,
+            // the 256-bucket window size means that two colliding packets would need
+            // to arrive more than 256 sequence numbers apart — well beyond any
+            // real-network jitter window.  Matching Mumble's behaviour here ensures
+            // interoperability with all standard Mumble clients.
             if self.decrypt_history[self.decrypt_iv[0] as usize] == self.decrypt_iv[1] {
                 self.decrypt_iv = save_iv;
                 return false;
@@ -527,7 +545,7 @@ mod tests {
         // with decrypt_iv = sender's encrypt_iv (before increment), so that when
         // the receiver sees the first nonce byte it correctly advances its IV.
         let mut sender = CryptState::new();
-        sender.generate_key();
+        sender.generate_key().unwrap();
 
         let key = *sender.get_key();
         let enc_iv_before = sender.encrypt_iv; // Sender's encrypt_iv BEFORE first encrypt
@@ -553,7 +571,7 @@ mod tests {
     #[test]
     fn test_decrypt_rejects_tampered_packet() {
         let mut state = CryptState::new();
-        state.generate_key();
+        state.generate_key().unwrap();
 
         let plaintext = b"Test voice data";
         let mut encrypted = Vec::new();
@@ -579,7 +597,7 @@ mod tests {
     #[test]
     fn test_good_stat_incremented() {
         let mut state = CryptState::new();
-        state.generate_key();
+        state.generate_key().unwrap();
 
         // Clone key/IVs for a receiver
         let key = *state.get_key();
@@ -602,7 +620,7 @@ mod tests {
     #[test]
     fn test_partial_block_roundtrip() {
         let mut state = CryptState::new();
-        state.generate_key();
+        state.generate_key().unwrap();
 
         let key = *state.get_key();
         let enc_iv = state.encrypt_iv;
@@ -625,7 +643,7 @@ mod tests {
     #[test]
     fn test_replay_rejection() {
         let mut state = CryptState::new();
-        state.generate_key();
+        state.generate_key().unwrap();
 
         let key = *state.get_key();
         let enc_iv = state.encrypt_iv;
@@ -641,12 +659,51 @@ mod tests {
         let mut out1 = Vec::new();
         assert!(recv.decrypt(&encrypted, &mut out1));
 
-        // Try to replay the same packet — should be rejected
-        // We need to reset the IV to simulate re-receiving
-        // Actually replay detection is based on history, not re-setting IV
-        // The replay will be detected via decrypt_history
-        // For simplicity, test that decrypting same packet twice with fresh state fails
-        // the second time after advancing the IV sequence
-        // (In practice, replays within a window are detected via decrypt_history)
+        // Replay the exact same ciphertext — should be rejected because the IV[0]
+        // value is already in decrypt_history.
+        let mut out2 = Vec::new();
+        assert!(!recv.decrypt(&encrypted, &mut out2), "Replayed packet should be rejected");
+        assert!(out2.is_empty(), "Output should be empty on replay rejection");
+    }
+
+    /// Verify that the IV counter wraps from 0xFF back to 0x00 correctly and
+    /// that packets across the 0xFF→0x00 boundary can be decrypted.
+    #[test]
+    fn test_encrypt_decrypt_at_iv_wraparound() {
+        let mut sender = CryptState::new();
+        // Set encrypt_iv so that IV[0] will wrap after one more increment.
+        let mut key = [0u8; 16];
+        let mut enc_iv = [0u8; 16];
+        let dec_iv = [0u8; 16];
+        // Fill key with non-zero bytes for a meaningful cipher
+        for (i, b) in key.iter_mut().enumerate() { *b = (i as u8).wrapping_add(1); }
+        enc_iv[0] = 0xFF; // IV[0] is about to wrap
+        sender.set_key(&key, &enc_iv, &dec_iv);
+
+        // Encrypt at IV[0] = 0xFF
+        let plaintext = b"wraparound test payload";
+        let mut encrypted_ff = Vec::new();
+        assert!(sender.encrypt(plaintext, &mut encrypted_ff));
+        // After encrypt, IV[0] should be 0x00 (wrapped around)
+        assert_eq!(sender.encrypt_iv[0], 0x00, "IV[0] should wrap to 0x00 after 0xFF");
+
+        // Encrypt again at IV[0] = 0x00
+        let mut encrypted_00 = Vec::new();
+        assert!(sender.encrypt(plaintext, &mut encrypted_00));
+        assert_eq!(sender.encrypt_iv[0], 0x01, "IV[0] should advance to 0x01");
+
+        // Receiver starts with decrypt_iv = sender's initial enc_iv (IV[0]=0xFF)
+        let mut receiver = CryptState::new();
+        receiver.set_key(&key, &dec_iv, &enc_iv); // decrypt_iv = enc_iv (0xFF start)
+
+        // Decrypt first packet (sender sent at 0xFF)
+        let mut out1 = Vec::new();
+        assert!(receiver.decrypt(&encrypted_ff, &mut out1), "Should decrypt packet with IV[0]=0xFF");
+        assert_eq!(out1, plaintext);
+
+        // Decrypt second packet (sender sent at 0x00, i.e. post-wraparound)
+        let mut out2 = Vec::new();
+        assert!(receiver.decrypt(&encrypted_00, &mut out2), "Should decrypt packet with IV[0]=0x00 (post-wrap)");
+        assert_eq!(out2, plaintext);
     }
 }

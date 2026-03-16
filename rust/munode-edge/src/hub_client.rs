@@ -107,9 +107,6 @@ pub struct HubClient {
     region: Option<String>,
     /// Maximum number of users for this Edge.
     capacity: u32,
-    /// Control-relay port advertised to Hub (always active; auto-derived if 0).
-    #[allow(dead_code)]
-    relay_port: u16,
     /// Statically configured peers for bootstrap relay (from config).
     /// These are tried first before dynamically-discovered peers.
     static_relay_peers: Vec<(String, u16)>,
@@ -138,12 +135,6 @@ impl HubClient {
         let edge_port = config.network.edge_port.unwrap_or(config.network.port + 1);
         let pool_size = config.hub_server.pool_size.max(1) as usize;
         let pool_senders = (0..pool_size).map(|_| Mutex::new(None)).collect();
-        // The relay port is always active.  Use configured value if set, else edge_port + 2.
-        let relay_port = if config.hub_server.relay_port > 0 {
-            config.hub_server.relay_port
-        } else {
-            edge_port + 2
-        };
         // Static peers from config (for bootstrap before Hub connection).
         let static_relay_peers: Vec<(String, u16)> = config
             .hub_server
@@ -160,7 +151,6 @@ impl HubClient {
             edge_port,
             region: config.network.region.clone(),
             capacity: config.server.capacity,
-            relay_port,
             static_relay_peers,
             state: RwLock::new(HubConnectionState::Disconnected),
             edge_state,
@@ -475,7 +465,8 @@ impl HubClient {
     async fn try_connect_slot(self: &Arc<Self>, slot: usize, is_primary: bool) -> Result<()> {
         *self.state.write().await = HubConnectionState::Connecting;
 
-        let url = format!("ws://{}:{}", self.config.host, self.config.control_port);
+        let scheme = if self.config.tls { "wss" } else { "ws" };
+        let url = format!("{}://{}:{}", scheme, self.config.host, self.config.control_port);
         info!("Connecting to Hub at {} (slot {})", url, slot);
 
         let (ws_stream, _) = tokio_tungstenite::connect_async(&url)
@@ -633,7 +624,12 @@ impl HubClient {
             rpc_request: Some(request),
             ..Default::default()
         };
-        self.send_packet(&packet).await?;
+        if let Err(e) = self.send_packet(&packet).await {
+            // Remove pending entry immediately on send failure to avoid a stale
+            // entry that would only be cleaned up on timeout.
+            self.pending.lock().await.remove(&request_id);
+            return Err(e);
+        }
 
         // Wait for response with timeout
         let timeout = Duration::from_secs(30);
@@ -1342,8 +1338,11 @@ impl HubClient {
             };
 
             if let Err(e) = self.send_packet(&packet).await {
-                warn!("Failed to send heartbeat: {}", e);
-                break;
+                warn!("Failed to send heartbeat (seq={}): {}", sequence, e);
+                // A single send failure may be a transient network blip. Continue
+                // sending heartbeats; the connection manager will detect a dead link
+                // through its own reconnect logic after consecutive failures.
+                continue;
             }
             debug!("Heartbeat sent (seq={})", sequence);
         }

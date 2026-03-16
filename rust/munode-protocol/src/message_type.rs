@@ -1,8 +1,14 @@
+use num_enum::{IntoPrimitive, TryFromPrimitive};
+
 /// Mumble protocol message type IDs.
 ///
 /// These correspond to the message type numbers used in the Mumble protocol
-/// wire format: [type:u16][length:u32][protobuf payload].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// wire format: `[type:u16][length:u32][protobuf payload]`.
+///
+/// `TryFromPrimitive` (from `num_enum`) generates `TryFrom<u16>` automatically,
+/// keeping the variant list and the integer conversion in sync — no manual match
+/// needed.  The `from_u16` convenience wrapper is kept for call-site readability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TryFromPrimitive, IntoPrimitive)]
 #[repr(u16)]
 pub enum MessageType {
     Version = 0,
@@ -35,43 +41,19 @@ pub enum MessageType {
 }
 
 impl MessageType {
-    /// Try to create a MessageType from a u16 wire value.
+    /// Try to create a `MessageType` from a u16 wire value.
+    ///
+    /// Returns `None` for unknown type IDs.  The conversion is backed by the
+    /// `num_enum::TryFromPrimitive` derive, so adding a new variant to the enum
+    /// is all that is needed — no manual match arm required.
+    #[inline]
     pub fn from_u16(value: u16) -> Option<Self> {
-        match value {
-            0 => Some(Self::Version),
-            1 => Some(Self::UdpTunnel),
-            2 => Some(Self::Authenticate),
-            3 => Some(Self::Ping),
-            4 => Some(Self::Reject),
-            5 => Some(Self::ServerSync),
-            6 => Some(Self::ChannelRemove),
-            7 => Some(Self::ChannelState),
-            8 => Some(Self::UserRemove),
-            9 => Some(Self::UserState),
-            10 => Some(Self::BanList),
-            11 => Some(Self::TextMessage),
-            12 => Some(Self::PermissionDenied),
-            13 => Some(Self::Acl),
-            14 => Some(Self::QueryUsers),
-            15 => Some(Self::CryptSetup),
-            16 => Some(Self::ContextActionModify),
-            17 => Some(Self::ContextAction),
-            18 => Some(Self::UserList),
-            19 => Some(Self::VoiceTarget),
-            20 => Some(Self::PermissionQuery),
-            21 => Some(Self::CodecVersion),
-            22 => Some(Self::UserStats),
-            23 => Some(Self::RequestBlob),
-            24 => Some(Self::ServerConfig),
-            25 => Some(Self::SuggestConfig),
-            26 => Some(Self::PluginDataTransmission),
-            _ => None,
-        }
+        Self::try_from(value).ok()
     }
 }
 
 /// UDP voice codec type IDs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum UdpVoiceType {
     CeltAlpha = 0,

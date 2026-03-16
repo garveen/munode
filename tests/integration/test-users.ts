@@ -159,6 +159,8 @@ export const testUserPasswords: Record<string, { password: string; user_id: numb
       'udp_multi_sender': { password: 'password123', user_id: 552 },
       'udp_multi_receiver': { password: 'password123', user_id: 553 },
       // Voice target permission test users
+      'sender_allowed': { password: 'sender_allowed_pass', user_id: 719 },
+      'target_user_allowed': { password: 'target_allowed_pass', user_id: 720 },
       'whisper_allowed': { password: 'whisper_pass', user_id: 701 },
       'target_user': { password: 'target_pass', user_id: 702 },
       'no_whisper_user': { password: 'no_whisper_pass', user_id: 703 },

@@ -37,6 +37,10 @@ impl SessionManager {
     }
 
     /// Allocate the next unique session ID.
+    ///
+    /// The `edge_id` parameter is reserved for future use (e.g., generating
+    /// edge-scoped IDs or for routing hints).  It is currently not used in
+    /// ID generation, which is a single global monotonic counter.
     pub fn allocate_session_id(&self, _edge_id: u32) -> u32 {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
