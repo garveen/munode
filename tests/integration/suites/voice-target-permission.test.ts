@@ -227,6 +227,7 @@ describe('Voice Target Permission Validation Tests', () => {
   describe('Target User Visibility Checks', () => {
     // Note: "should allow VoiceTarget to visible users with default permissions" has been merged
     // into the Basic Permission Checks suite above, as the two tests were identical.
+    it('should deny VoiceTarget with invalid session', async () => {
       const clients = await createClients(testEnv, [
         { username: 'sender_invalid', edge: 1, channelId: 0 },
       ]);
