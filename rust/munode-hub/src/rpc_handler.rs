@@ -7,7 +7,7 @@ use argon2::password_hash::SaltString;
 use prost::Message;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 
 use munode_protocol::authservice::{AuthRequest as ExtAuthRequest};
@@ -54,29 +54,11 @@ struct HttpAuthResponse {
 /// Sender type for pushing serialized packets to a specific edge.
 pub type EdgeSender = mpsc::Sender<Vec<u8>>;
 
-use crate::server::EdgeRegistration;
-
-/// Voice target storage entry.
-#[derive(Debug, Clone)]
-struct VoiceTargetEntry {
-    edge_id: u32,
-    client_session: u32,
-    target_id: u32,
-    config: Option<VoiceTargetConfigProto>,
-    timestamp: i64,
-}
+use crate::server::{EdgeRegistration, VoiceTargetEntry};
 
 /// Handles all incoming RPC requests from edges.
 pub struct RpcHandler {
     state: Arc<HubState>,
-    /// Voice targets keyed by (client_session, target_id).
-    ///
-    /// Populated by `EdgeSyncVoiceTarget` RPCs: each Edge reports its clients'
-    /// active whisper targets to the Hub, which stores them here and broadcasts
-    /// the update to all other Edges via `hub.syncVoiceTarget`.  The Hub acts as
-    /// a relay — Edges maintain their own authoritative copy for local routing.
-    /// The Hub's copy is used for cluster-wide visibility (e.g., diagnostics).
-    voice_targets: RwLock<HashMap<(u32, u32), VoiceTargetEntry>>,
     /// Pre-compiled username regex (cached from config at startup).
     username_regex: Option<Regex>,
     /// Pre-compiled channel name regex (cached from config at startup).
@@ -103,7 +85,6 @@ impl RpcHandler {
             });
         Self {
             state,
-            voice_targets: RwLock::new(HashMap::new()),
             username_regex,
             channel_name_regex,
         }
@@ -1501,7 +1482,7 @@ impl RpcHandler {
             timestamp: current_millis() as i64,
         };
 
-        self.voice_targets
+        self.state.voice_targets
             .write()
             .await
             .insert((params.client_session, params.target_id), entry);

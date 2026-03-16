@@ -1,15 +1,17 @@
 //! Hub Web API — HTTP REST endpoints for monitoring and management.
 //!
 //! Endpoints:
-//!   GET /api/status      — Hub server status (uptime, version, …)
-//!   GET /api/edges       — Connected Edge list with health summary
-//!   GET /api/edges/:id   — Specific Edge details
-//!   GET /api/stats       — Hub statistics (sessions, channels, …)
-//!   GET /api/topology    — Network topology (edges and links)
-//!   GET /api/health      — Liveness probe (always 200 OK)
-//!   GET /api/bans        — List active ban records
-//!   DELETE /api/bans/:id — Remove a ban record (manual unban)
-//!   GET /metrics         — Prometheus metrics endpoint
+//!   GET /api/status                         — Hub server status (uptime, version, …)
+//!   GET /api/edges                          — Connected Edge list with health summary
+//!   GET /api/edges/:id                      — Specific Edge details
+//!   GET /api/stats                          — Hub statistics (sessions, channels, …)
+//!   GET /api/topology                       — Network topology (edges and links)
+//!   GET /api/health                         — Liveness probe (always 200 OK)
+//!   GET /api/bans                           — List active ban records
+//!   DELETE /api/bans/:id                    — Remove a ban record (manual unban)
+//!   GET /api/voice_targets                  — All voice (whisper) targets in the cluster
+//!   GET /api/voice_targets/session/:id      — Voice targets for a specific client session
+//!   GET /metrics                            — Prometheus metrics endpoint
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -29,7 +31,45 @@ use crate::server::HubState;
 /// Shared state passed to axum handlers.
 type AppState = Arc<HubState>;
 
-/// Hub status response.
+/// A whisper-target channel entry in the API response.
+#[derive(Serialize)]
+pub struct VoiceTargetChannelInfo {
+    pub channel_id: u32,
+    pub children: bool,
+    pub links: bool,
+    pub group: Option<String>,
+}
+
+/// Serialised voice target configuration.
+#[derive(Serialize)]
+pub struct VoiceTargetConfigInfo {
+    /// Session IDs that are direct whisper targets.
+    pub sessions: Vec<u32>,
+    /// Channel entries that are whisper targets.
+    pub channels: Vec<VoiceTargetChannelInfo>,
+}
+
+/// A single voice target entry as returned by the web API.
+#[derive(Serialize)]
+pub struct VoiceTargetInfo {
+    /// Edge that owns this client session.
+    pub edge_id: u32,
+    /// Session ID of the speaking client.
+    pub client_session: u32,
+    /// Whisper target slot ID (1–30 for Mumble).
+    pub target_id: u32,
+    /// Configured targets for this slot (absent when the slot is cleared).
+    pub config: Option<VoiceTargetConfigInfo>,
+    /// Unix timestamp in milliseconds when this slot was last updated.
+    pub timestamp_ms: i64,
+}
+
+/// Response for the voice targets list endpoint.
+#[derive(Serialize)]
+pub struct VoiceTargetListResponse {
+    pub voice_targets: Vec<VoiceTargetInfo>,
+    pub timestamp: u64,
+}
 #[derive(Serialize)]
 pub struct StatusResponse {
     pub status: &'static str,
@@ -294,7 +334,61 @@ async fn handle_health() -> Json<HealthResponse> {
     Json(HealthResponse { ok: true })
 }
 
-// ── Ban Management ────────────────────────────────────────────────────────────
+// ── Voice Targets ─────────────────────────────────────────────────────────────
+
+/// Convert a stored `VoiceTargetEntry` into the API response type.
+fn entry_to_info(e: &crate::server::VoiceTargetEntry) -> VoiceTargetInfo {
+    let config = e.config.as_ref().map(|c| VoiceTargetConfigInfo {
+        sessions: c.sessions.iter().map(|s| s.session).collect(),
+        channels: c.channels.iter().map(|ch| VoiceTargetChannelInfo {
+            channel_id: ch.channel_id,
+            children: ch.children.unwrap_or(false),
+            links: ch.links.unwrap_or(false),
+            group: ch.group.clone(),
+        }).collect(),
+    });
+    VoiceTargetInfo {
+        edge_id: e.edge_id,
+        client_session: e.client_session,
+        target_id: e.target_id,
+        config,
+        timestamp_ms: e.timestamp,
+    }
+}
+
+/// `GET /api/voice_targets` — return all whisper-target entries in the cluster.
+async fn handle_voice_targets(State(state): State<AppState>) -> Json<VoiceTargetListResponse> {
+    let map = state.voice_targets.read().await;
+    let mut voice_targets: Vec<VoiceTargetInfo> = map.values().map(entry_to_info).collect();
+    // Stable order: sort by (client_session, target_id).
+    voice_targets.sort_by_key(|v| (v.client_session, v.target_id));
+    Json(VoiceTargetListResponse {
+        voice_targets,
+        timestamp: now_secs(),
+    })
+}
+
+/// `GET /api/voice_targets/session/:session_id` — return whisper targets for one session.
+async fn handle_voice_targets_by_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<u32>,
+) -> impl IntoResponse {
+    let map = state.voice_targets.read().await;
+    let mut voice_targets: Vec<VoiceTargetInfo> = map
+        .iter()
+        .filter(|((client_session, _), _)| *client_session == session_id)
+        .map(|(_, e)| entry_to_info(e))
+        .collect();
+    voice_targets.sort_by_key(|v| v.target_id);
+    (
+        StatusCode::OK,
+        Json(VoiceTargetListResponse {
+            voice_targets,
+            timestamp: now_secs(),
+        }),
+    )
+        .into_response()
+}
 
 /// Helper: convert raw IPv4-mapped-IPv6 bytes to a human-readable string.
 fn bytes_to_ip_string(bytes: &[u8; 16]) -> String {
@@ -570,6 +664,8 @@ pub fn build_router(state: Arc<HubState>) -> Router {
         .route("/api/health", get(handle_health))
         .route("/api/bans", get(handle_bans))
         .route("/api/bans/:id", delete(handle_unban))
+        .route("/api/voice_targets", get(handle_voice_targets))
+        .route("/api/voice_targets/session/:id", get(handle_voice_targets_by_session))
         .route("/metrics", get(handle_metrics))
         .with_state(state)
 }

@@ -22,6 +22,20 @@ use crate::topology_manager::TopologyManager;
 use crate::auth_service::{AuthServiceHandle, run_auth_service_listener};
 use crate::lua_auth::LuaAuthEngine;
 
+/// A single whisper-target slot as reported by an Edge via `EdgeSyncVoiceTarget`.
+///
+/// Stored in `HubState::voice_targets` for cluster-wide visibility (diagnostics,
+/// web API).  The authoritative copy for local routing lives on each Edge.
+#[derive(Debug, Clone)]
+pub struct VoiceTargetEntry {
+    pub edge_id: u32,
+    pub client_session: u32,
+    pub target_id: u32,
+    pub config: Option<munode_protocol::hubedge::VoiceTargetConfigProto>,
+    /// Unix timestamp (milliseconds) when this entry was last updated.
+    pub timestamp: i64,
+}
+
 /// Information about a registered edge server (keyed by server_id in HubState).
 #[derive(Debug, Clone)]
 pub struct EdgeRegistration {
@@ -124,6 +138,11 @@ pub struct HubState {
     pub geoip: Arc<crate::geoip::GeoIpService>,
     /// Server start time for uptime calculation.
     pub started_at: std::time::Instant,
+    /// Cluster-wide voice (whisper) target snapshot, keyed by (client_session, target_id).
+    ///
+    /// Written by `RpcHandler::handle_sync_voice_target` on every `EdgeSyncVoiceTarget` RPC.
+    /// Read by the web API to expose diagnostics.
+    pub voice_targets: RwLock<HashMap<(u32, u32), VoiceTargetEntry>>,
 }
 
 /// The main Hub server.
@@ -188,6 +207,7 @@ impl HubServer {
             failed_auth_tracker: RwLock::new(FailedAuthTracker::default()),
             geoip,
             started_at: std::time::Instant::now(),
+            voice_targets: RwLock::new(HashMap::new()),
         });
 
         // Load channels from database
