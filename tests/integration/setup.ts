@@ -797,6 +797,9 @@ async function createIsolatedTestEnvironment(
   const edgeUdpPort2 = edgePort2;
 
   let authServer: TestAuthServer | undefined;
+  let hubServer: HubServer | undefined;
+  let edgeServer: EdgeServer | undefined;
+  let edgeServer2: EdgeServer | undefined;
   let hubProcess: RustServerProcess | undefined;
   let edgeProcess: RustServerProcess | undefined;
   let edgeProcess2: RustServerProcess | undefined;
@@ -851,6 +854,87 @@ async function createIsolatedTestEnvironment(
       },
       10000, 100, `Isolated Hub control port ${controlPort}`
     );
+  } else if (startHub && !USE_RUST) {
+    const hubConfigPath = join(PROJECT_ROOT, 'tests/config/hub-test.js');
+    if (fs.existsSync(hubConfigPath)) {
+      const hubConfigModule = await import(`file://${hubConfigPath}?v=${++importCounter}`);
+      const originalConfig = hubConfigModule.default || hubConfigModule;
+      const hubConfig: HubConfig = {
+        ...originalConfig,
+        tls: { ...originalConfig.tls },
+        connection: originalConfig.connection ? { ...originalConfig.connection } : undefined,
+        database: { ...originalConfig.database },
+        blob_store: originalConfig.blob_store ? { ...originalConfig.blob_store } : undefined,
+        registry: { ...originalConfig.registry },
+        web_api: originalConfig.web_api ? { ...originalConfig.web_api } : undefined,
+        auth: originalConfig.auth ? { ...originalConfig.auth } : undefined,
+        voice_routing: originalConfig.voice_routing ? { ...originalConfig.voice_routing } : undefined,
+      } as HubConfig;
+
+      hubConfig.port = hubPort;
+      hubConfig.control_port = controlPort;
+      hubConfig.web_api = hubConfig.web_api || { enabled: true, port: webApiPort, host: '127.0.0.1', cors: true };
+      hubConfig.web_api.port = webApiPort;
+      hubConfig.blob_store = hubConfig.blob_store || { enabled: true, path: join(PROJECT_ROOT, 'data/blobs-test') };
+
+      if (!hubConfig.auth || !('callback' in hubConfig.auth)) {
+        const existingAuth = hubConfig.auth || {};
+        hubConfig.auth = {
+          ...existingAuth,
+          api_url: authPort > 0 ? `http://127.0.0.1:${authPort}/auth` : undefined,
+          api_key: '',
+          timeout: 5000,
+          content_type: 'application/json',
+          method: 'POST' as const,
+          cache_ttl: 300000,
+          pull_interval: 300000,
+          track_sessions: false,
+          allow_cache_fallback: true,
+        };
+      }
+
+      hubConfig.log_level = silent ? 'error' : 'debug';
+
+      const dbPath = join(PROJECT_ROOT, `data/hub-isolated-${basePort}.db`);
+      hubConfig.database.path = dbPath;
+      for (const ext of ['', '-wal', '-shm']) {
+        try { if (fs.existsSync(dbPath + ext)) fs.unlinkSync(dbPath + ext); } catch {}
+      }
+
+      const initScript = join(PROJECT_ROOT, 'scripts/init-test-db.ts');
+      if (fs.existsSync(initScript)) {
+        await new Promise<void>((resolve, reject) => {
+          const initProcess = spawn('tsx', [initScript, dbPath], {
+            stdio: silent ? 'ignore' : 'inherit',
+            cwd: PROJECT_ROOT,
+            env: { ...process.env, DB_PATH: dbPath },
+          });
+          initProcess.on('exit', (code: number) => {
+            if (code === 0) resolve();
+            else reject(new Error(`Database initialization failed with code ${code}`));
+          });
+          initProcess.on('error', reject);
+        });
+      }
+
+      hubServer = new HubServer(hubConfig);
+      await hubServer.start();
+
+      await waitForCondition(
+        async () => {
+          try {
+            return await new Promise<boolean>((resolve) => {
+              const socket = new net.Socket();
+              socket.setTimeout(100);
+              socket.connect(controlPort, '127.0.0.1', () => { socket.destroy(); resolve(true); });
+              socket.on('error', () => { socket.destroy(); resolve(false); });
+              socket.on('timeout', () => { socket.destroy(); resolve(false); });
+            });
+          } catch { return false; }
+        },
+        5000, 100, `Isolated Hub control port ${controlPort}`
+      );
+    }
   }
 
   if (startEdge && USE_RUST) {
@@ -868,6 +952,8 @@ async function createIsolatedTestEnvironment(
       },
       10000, 100, `Isolated Edge 1 port ${edgePort}`
     );
+  } else if (startEdge && !USE_RUST) {
+    edgeServer = await startEdgeServer(1, 'Edge1-Isolated', edgePort, edgeEdgePort, hubPort, controlPort, silent);
   }
 
   if (startEdge2 && USE_RUST) {
@@ -885,12 +971,17 @@ async function createIsolatedTestEnvironment(
       },
       10000, 100, `Isolated Edge 2 port ${edgePort2}`
     );
+  } else if (startEdge2 && !USE_RUST) {
+    edgeServer2 = await startEdgeServer(2, 'Edge2-Isolated', edgePort2, edgeEdgePort2, hubPort, controlPort, silent);
   }
 
   // Wait for edges to register with hub
   await sleep(1000);
 
   const env: TestEnvironment = {
+    hubServer,
+    edgeServer,
+    edgeServer2,
     hubProcess,
     edgeProcess,
     edgeProcess2,
@@ -914,7 +1005,10 @@ async function createIsolatedTestEnvironment(
     cleanup: async () => {
       if (edgeProcess2) await edgeProcess2.stop().catch(() => {});
       if (edgeProcess) await edgeProcess.stop().catch(() => {});
+      if (edgeServer2) await edgeServer2.stop().catch(() => {});
+      if (edgeServer) await edgeServer.stop().catch(() => {});
       if (hubProcess) await hubProcess.stop().catch(() => {});
+      if (hubServer) await hubServer.stop().catch(() => {});
       if (authServer) await authServer.stop().catch(() => {});
       // Clean up DB files
       const dbPath = join(PROJECT_ROOT, `data/hub-isolated-${basePort}.db`);
