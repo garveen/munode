@@ -256,6 +256,19 @@ pub struct ServerConfig {
     /// BandwidthRecord tracks per-user voice bandwidth usage in this sliding window.
     #[serde(default)]
     pub bandwidth_record_window: u32,
+    /// Whether to allow users to record audio (default: true).
+    /// When false, ServerConfig.recording_allowed is sent as false to clients,
+    /// and any user who sets recording=true is kicked.
+    #[serde(default = "default_true")]
+    pub recording_allowed: bool,
+    /// Whether to allow HTML in text messages (default: true).
+    /// When false, HTML tags are stripped from messages before forwarding.
+    #[serde(default = "default_true")]
+    pub allow_html: bool,
+    /// Seconds a client has to complete authentication before being disconnected (default: 30).
+    /// 0 = no pre-auth timeout (falls back to idle timeout).
+    #[serde(default = "default_auth_timeout_secs")]
+    pub auth_timeout_secs: u64,
 }
 
 impl Default for ServerConfig {
@@ -276,6 +289,9 @@ impl Default for ServerConfig {
             allow_ping: true,
             rolling_stats_window: default_rolling_stats_window(),
             bandwidth_record_window: 0,
+            recording_allowed: true,
+            allow_html: true,
+            auth_timeout_secs: default_auth_timeout_secs(),
         }
     }
 }
@@ -832,4 +848,8 @@ fn default_geoip_log() -> bool { true }
 
 fn default_rolling_stats_window() -> u32 {
     120
+}
+
+fn default_auth_timeout_secs() -> u64 {
+    30
 }
