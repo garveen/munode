@@ -91,7 +91,7 @@ impl EdgeServer {
 
         // Event listener: broadcast Hub notifications to local clients.
         // Uses a watch channel so any future task can also observe the shutdown signal.
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         let event_handle = tokio::spawn({
             let state = edge_state.clone();
             let mut event_rx = edge_state.subscribe_events();
@@ -165,10 +165,7 @@ impl EdgeServer {
                         }
                     }
                 }
-                _ = {
-                    let mut rx = shutdown_rx.clone();
-                    async move { rx.wait_for(|v| *v).await.ok(); }
-                } => {
+                _ = shutdown_rx.wait_for(|v| *v) => {
                     info!("Shutting down edge server");
                     break;
                 }
