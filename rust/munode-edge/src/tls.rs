@@ -18,29 +18,31 @@ pub fn create_tls_acceptor(tls_config: &TlsConfig) -> Result<TlsAcceptor> {
     // Use a verifier that requests but doesn't require client certificates,
     // and accepts self-signed certificates (Murmur/Mumble-compatible behavior).
     // Clients are identified by their certificate hash; the TLS handshake signature
-    // is still verified to ensure the client owns the corresponding private key.
+    // is verified using the installed crypto provider to ensure the client owns
+    // the corresponding private key.
     use rustls::server::danger::{ClientCertVerifier, ClientCertVerified};
     
     #[derive(Debug)]
     struct MumbleClientCertVerifier {
-        /// Delegate verifier used only for TLS handshake signature verification.
-        /// This ensures clients actually own the private key of their presented certificate,
-        /// while still allowing self-signed certificates (no CA chain validation).
-        sig_delegate: Arc<dyn ClientCertVerifier>,
+        /// Signature verification algorithms from the installed crypto provider,
+        /// used to verify TLS CertificateVerify messages (proves the client
+        /// owns the private key of their presented certificate).
+        algs: rustls::crypto::WebPkiSupportedAlgorithms,
     }
 
     impl MumbleClientCertVerifier {
         fn new() -> Result<Self> {
-            // Build a delegate verifier with an empty root store and
-            // allow_unauthenticated() so that clients without certificates are
-            // also accepted.  We only use this delegate for the
-            // verify_tls12_signature / verify_tls13_signature calls.
-            let roots = Arc::new(rustls::RootCertStore::empty());
-            let sig_delegate = rustls::server::WebPkiClientVerifier::builder(roots)
-                .allow_unauthenticated()
-                .build()
-                .context("Failed to build signature-verification delegate")?;
-            Ok(Self { sig_delegate })
+            // Obtain the signature verification algorithms from the already-installed
+            // crypto provider.  main() installs aws_lc_rs before calling EdgeServer::run(),
+            // so get_default() should always succeed here.
+            let algs = rustls::crypto::CryptoProvider::get_default()
+                .ok_or_else(|| anyhow::anyhow!(
+                    "No default crypto provider installed. \
+                     Call rustls::crypto::aws_lc_rs::default_provider().install_default() \
+                     before starting the Edge server."
+                ))?
+                .signature_verification_algorithms;
+            Ok(Self { algs })
         }
     }
     
@@ -78,11 +80,10 @@ pub fn create_tls_acceptor(tls_config: &TlsConfig) -> Result<TlsAcceptor> {
             cert: &rustls::pki_types::CertificateDer<'_>,
             dss: &rustls::DigitallySignedStruct,
         ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-            // Verify the TLS CertificateVerify signature so that we confirm the
-            // client actually owns the private key of the presented certificate.
-            // This prevents certificate impersonation even when CA chain validation
-            // is skipped.
-            self.sig_delegate.verify_tls12_signature(message, cert, dss)
+            // Verify the TLS 1.2 CertificateVerify signature using the crypto
+            // provider's algorithms.  This confirms the client owns the private
+            // key of their presented certificate without requiring a CA chain.
+            rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algs)
         }
         
         fn verify_tls13_signature(
@@ -91,11 +92,11 @@ pub fn create_tls_acceptor(tls_config: &TlsConfig) -> Result<TlsAcceptor> {
             cert: &rustls::pki_types::CertificateDer<'_>,
             dss: &rustls::DigitallySignedStruct,
         ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-            self.sig_delegate.verify_tls13_signature(message, cert, dss)
+            rustls::crypto::verify_tls13_signature(message, cert, dss, &self.algs)
         }
         
         fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-            self.sig_delegate.supported_verify_schemes()
+            self.algs.supported_schemes()
         }
     }
     
