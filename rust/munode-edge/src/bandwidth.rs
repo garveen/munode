@@ -109,7 +109,7 @@ impl BandwidthRecord {
         // to a past ring-buffer cycle and would be stale.
         match self.last_slot_abs {
             None => 0,
-            Some(last_abs) if now_abs.saturating_sub(last_abs) > 1 => 0,
+            Some(last_abs) if now_abs.saturating_sub(last_abs) >= 2 => 0,
             _ => {
                 let prev_idx = (now_abs - 1) % self.window_secs;
                 self.slots[prev_idx]

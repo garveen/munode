@@ -11,7 +11,7 @@ use tracing_subscriber::prelude::*;
 /// subscriber has been installed.
 #[derive(Clone)]
 pub struct LogReloadHandle {
-    inner: Arc<dyn Fn(&str) + Send + Sync>,
+    handle: Arc<reload::Handle<EnvFilter, Registry>>,
 }
 
 impl LogReloadHandle {
@@ -22,7 +22,13 @@ impl LogReloadHandle {
     /// takes precedence over the supplied value, matching the behaviour of the
     /// initial [`init_logging_with_reload`] call.
     pub fn reload_level(&self, level: &str) {
-        (self.inner)(level);
+        let new_filter = EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(level));
+        if let Err(e) = self.handle.reload(new_filter) {
+            // Only fails if the subscriber was dropped, which cannot happen for
+            // a global subscriber installed via `try_init`.
+            tracing::warn!("Failed to reload log filter: {}", e);
+        }
     }
 }
 
@@ -79,6 +85,10 @@ pub fn init_logging_with_reload(level: &str, format: &str) -> LogReloadHandle {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(level));
 
+    // The explicit `Registry` type parameter is required so that the reload
+    // handle has a concrete type before the layer is composed with the
+    // subscriber.  At runtime the phantom `S` parameter does not affect the
+    // handle's behaviour — only `EnvFilter` (the layer type `L`) matters.
     let (reload_layer, reload_handle): (reload::Layer<EnvFilter, Registry>, _) =
         reload::Layer::new(filter);
 
@@ -105,15 +115,5 @@ pub fn init_logging_with_reload(level: &str, format: &str) -> LogReloadHandle {
             .try_init();
     }
 
-    let inner: Arc<dyn Fn(&str) + Send + Sync> = Arc::new(move |new_level: &str| {
-        let new_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(new_level));
-        if let Err(e) = reload_handle.reload(new_filter) {
-            // Only fails if the subscriber was dropped, which cannot happen for
-            // a global subscriber installed via `try_init`.
-            tracing::warn!("Failed to reload log filter: {}", e);
-        }
-    });
-
-    LogReloadHandle { inner }
+    LogReloadHandle { handle: Arc::new(reload_handle) }
 }
