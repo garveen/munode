@@ -1621,7 +1621,43 @@ impl HubClient {
             .ok_or_else(|| anyhow::anyhow!("No edge_handle_permission_query in response"))
     }
 
-    /// Sync a VoiceTarget to the Hub.
+    /// Batch permission query: returns effective permissions for a slice of channel IDs
+    /// in a single Hub RPC round trip. Used during the login sequence to populate
+    /// `can_enter`/`is_enter_restricted` in ChannelState messages without N serial RPCs.
+    pub async fn batch_permission_query(
+        &self,
+        session_id: u32,
+        channel_ids: &[u32],
+    ) -> Result<hubedge::EdgeBatchPermissionQueryResult> {
+        let request_id = self.next_request_id().await;
+        let edge_id = self.edge_id();
+
+        let (user_id, username) = if let Some(client) = self.edge_state.client_manager.get_client(session_id).await {
+            (client.user_id, client.username.clone())
+        } else {
+            (0, String::new())
+        };
+
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.batchPermissionQuery".to_string(),
+            timeout_ms: Some(30000),
+            edge_batch_permission_query: Some(hubedge::EdgeBatchPermissionQueryParams {
+                edge_id,
+                actor_session: session_id,
+                actor_user_id: user_id,
+                actor_username: username,
+                channel_ids: channel_ids.to_vec(),
+            }),
+            ..Default::default()
+        };
+        let response = self.rpc_call(request).await
+            .context("edge.batchPermissionQuery RPC failed")?;
+        response.edge_batch_permission_query
+            .ok_or_else(|| anyhow::anyhow!("No edge_batch_permission_query in response"))
+    }
+
+
     pub async fn sync_voice_target(
         &self,
         client_session: u32,

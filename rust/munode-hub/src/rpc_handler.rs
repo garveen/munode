@@ -113,6 +113,7 @@ impl RpcHandler {
             "edge.reportSession" => self.handle_report_session(&request, &request_id, edge_server_id).await,
             "edge.fullSync" => self.handle_full_sync(&request, &request_id).await,
             "edge.handlePermissionQuery" => self.handle_permission_query(&request, &request_id).await,
+            "edge.batchPermissionQuery" => self.handle_batch_permission_query(&request, &request_id).await,
             "edge.syncVoiceTarget" => self.handle_sync_voice_target(&request, &request_id).await,
             "edge.saveChannel" => self.handle_save_channel(&request, &request_id).await,
             "edge.handleACL" => self.handle_acl(&request, &request_id).await,
@@ -1624,6 +1625,98 @@ impl RpcHandler {
 
         Ok(self.make_response_packet(request_id, "edge.handlePermissionQuery", |r| {
             r.edge_handle_permission_query = Some(result);
+        }))
+    }
+
+    async fn handle_batch_permission_query(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.edge_batch_permission_query.as_ref()
+            .context("Missing edge_batch_permission_query params")?;
+
+        // Look up user groups from the session (done once for all channels)
+        let base_groups: Vec<String> = match self.state.session_manager
+            .get_session(params.actor_session).await {
+            Some(s) => s.groups.clone(),
+            None => Vec::new(),
+        };
+
+        let user_id_u32 = params.actor_user_id;
+
+        // Compute permissions for every requested channel.
+        // Group augmentation (DB channel-group memberships) is done per-channel,
+        // matching the single-query logic exactly.
+        let mut entries: Vec<ChannelPermissionEntry> = Vec::with_capacity(params.channel_ids.len());
+        for &channel_id in &params.channel_ids {
+            let mut effective_groups = base_groups.clone();
+
+            // Build ancestor chain (root → channel_id) to check inherited group memberships
+            {
+                let mut chain: Vec<u32> = Vec::new();
+                let mut current = channel_id;
+                loop {
+                    chain.push(current);
+                    if current == 0 { break; }
+                    match self.state.channel_store.get_channel(current).await {
+                        Some(ch) => {
+                            if let Some(parent) = ch.parent_id {
+                                current = parent;
+                            } else { break; }
+                        }
+                        None => break,
+                    }
+                }
+                chain.reverse(); // root first
+
+                for ancestor_id in chain {
+                    if let Ok(db_groups) = self.state.database.get_channel_groups(ancestor_id) {
+                        for db_group in &db_groups {
+                            if !db_group.inherit && ancestor_id != channel_id {
+                                continue;
+                            }
+                            match self.state.database.get_channel_group_members(db_group.id) {
+                                Ok(members) => {
+                                    let is_added = members.iter()
+                                        .any(|(uid, is_add)| *uid == user_id_u32 && *is_add);
+                                    let is_removed = members.iter()
+                                        .any(|(uid, is_add)| *uid == user_id_u32 && !*is_add);
+                                    if is_added && !is_removed && !effective_groups.contains(&db_group.name) {
+                                        effective_groups.push(db_group.name.clone());
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to load group members for group '{}' (id {}): {}", db_group.name, db_group.id, e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Calculate effective permissions for this channel.
+            // The ACL manager writes results into its cache on first compute, so
+            // subsequent PermissionQuery calls for the same (user, channel) pair
+            // (e.g. from a live client's UI) will be served from cache.
+            let permissions = self.state.acl_manager
+                .calculate_permissions(
+                    params.actor_user_id as i32,
+                    channel_id,
+                    &effective_groups,
+                )
+                .await;
+            entries.push(ChannelPermissionEntry { channel_id, permissions });
+        }
+
+        let result = EdgeBatchPermissionQueryResult {
+            success: true,
+            entries,
+            error: None,
+        };
+
+        Ok(self.make_response_packet(request_id, "edge.batchPermissionQuery", |r| {
+            r.edge_batch_permission_query = Some(result);
         }))
     }
 

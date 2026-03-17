@@ -515,6 +515,31 @@ message EdgeHandlePermissionQueryResult {
 }
 
 // ---------------------------------------------------------------------------
+// edge.batchPermissionQuery - Edge 批量查询多个频道的权限（用于登录序列）
+// ---------------------------------------------------------------------------
+message EdgeBatchPermissionQueryParams {
+  required uint32 edge_id = 1;
+  required uint32 actor_session = 2;
+  required uint32 actor_user_id = 3;
+  required string actor_username = 4;
+  // Channel IDs to query permissions for
+  repeated uint32 channel_ids = 5;
+}
+
+// Per-channel result entry
+message ChannelPermissionEntry {
+  required uint32 channel_id = 1;
+  required uint32 permissions = 2;
+}
+
+message EdgeBatchPermissionQueryResult {
+  required bool success = 1;
+  // One entry per requested channel_id, in the same order
+  repeated ChannelPermissionEntry entries = 2;
+  optional string error = 3;
+}
+
+// ---------------------------------------------------------------------------
 // edge.reportPeerDisconnect - Edge 报告 Peer 断开连接
 // ---------------------------------------------------------------------------
 message EdgeReportPeerDisconnectParams {
@@ -947,6 +972,7 @@ message TypedRPCRequest {
   optional BlobGetUserCommentParams blob_get_user_comment = 35;
   optional BlobSetUserTextureParams blob_set_user_texture = 36;
   optional BlobSetUserCommentParams blob_set_user_comment = 37;
+  optional EdgeBatchPermissionQueryParams edge_batch_permission_query = 40;
 }
 
 /**
@@ -987,11 +1013,8 @@ message TypedRPCResponse {
   optional BlobGetUserCommentResult blob_get_user_comment = 35;
   optional BlobSetUserTextureResult blob_set_user_texture = 36;
   optional BlobSetUserCommentResult blob_set_user_comment = 37;
+  optional EdgeBatchPermissionQueryResult edge_batch_permission_query = 40;
 }
-
-// ---------------------------------------------------------------------------
-// hub.routeTableUpdate - Hub pushes quality-aware route table to Edge
-// ---------------------------------------------------------------------------
 message HubRouteEntryProto {
   required uint32 target_edge_id = 1;
   required uint32 route_type = 2;    // 0=direct, 1=relay via next_hop, 2=hub_tcp
