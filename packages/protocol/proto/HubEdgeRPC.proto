@@ -530,6 +530,11 @@ message EdgeBatchPermissionQueryParams {
 message ChannelPermissionEntry {
   required uint32 channel_id = 1;
   required uint32 permissions = 2;
+  // Whether the channel itself has any ACL entry denying Enter (channel property,
+  // independent of the querying user's own permissions). Matches Murmur's
+  // isChannelEnterRestricted() behaviour. Used to populate the Mumble
+  // ChannelState.is_enter_restricted field shown as a lock icon in the client.
+  optional bool is_enter_restricted = 3;
 }
 
 message EdgeBatchPermissionQueryResult {

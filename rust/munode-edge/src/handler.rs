@@ -63,9 +63,12 @@ impl<'a> LoginHandler<'a> {
         let channels = self.edge_state.channel_manager.get_channels_bfs().await;
         let channel_ids: Vec<u32> = channels.iter().map(|c| c.id).collect();
         // Collect unique IDs (channel 0 will be in the list; no need to add separately)
-        let perm_map: std::collections::HashMap<u32, u32> = {
+        // perm_map: channel_id → (effective_permissions, is_enter_restricted)
+        let perm_map: std::collections::HashMap<u32, (u32, bool)> = {
             match self.hub_client.batch_permission_query(session_id, &channel_ids).await {
-                Ok(result) => result.entries.iter().map(|e| (e.channel_id, e.permissions)).collect(),
+                Ok(result) => result.entries.iter().map(|e| {
+                    (e.channel_id, (e.permissions, e.is_enter_restricted.unwrap_or(false)))
+                }).collect(),
                 Err(e) => {
                     // Fail open: proceed without channel permissions rather than aborting login
                     warn!("Batch permission query failed during login for session {}: {}", session_id, e);
@@ -86,7 +89,7 @@ impl<'a> LoginHandler<'a> {
         // 6. Send ServerSync (include actual root-channel permissions so the
         //    Mumble client caches them and doesn't spam PermissionQuery for
         //    channel 0 on every UI event during startup).
-        let root_permissions = perm_map.get(&0).copied().unwrap_or(0);
+        let root_permissions = perm_map.get(&0).map(|(p, _)| *p).unwrap_or(0);
         self.send_server_sync(session_id, root_permissions).await?;
 
         // 7. Send ServerConfig
@@ -148,13 +151,15 @@ impl<'a> LoginHandler<'a> {
 
     /// Send the full channel tree in BFS order.
     ///
-    /// `perm_map` maps channel_id → effective permissions bitmask for the logging-in
-    /// user (pre-fetched in a single batch RPC call to avoid N round trips).
-    /// The `is_enter_restricted` and `can_enter` fields are derived from the ENTER bit.
+    /// `perm_map` maps channel_id → (effective_permissions, is_enter_restricted) for the
+    /// logging-in user (pre-fetched in a single batch RPC call to avoid N round trips).
+    /// `can_enter` is derived from the ENTER bit; `is_enter_restricted` is a channel-level
+    /// property indicating whether any ACL denies Enter for any user (mirrors Murmur's
+    /// isChannelEnterRestricted()). Both fields are always set when perm_map is non-empty.
     async fn send_channel_tree_with_perms(
         &self,
         channels: &[crate::channel_manager::ChannelData],
-        perm_map: &std::collections::HashMap<u32, u32>,
+        perm_map: &std::collections::HashMap<u32, (u32, bool)>,
     ) -> Result<()> {
         use munode_common::permission as perm;
 
@@ -173,14 +178,16 @@ impl<'a> LoginHandler<'a> {
                 (None, None)
             };
 
-            // Derive can_enter from the pre-fetched permission bits.
+            // Derive can_enter and is_enter_restricted from the pre-fetched data.
             // When the perm_map is empty (batch query failed) we fail open (can_enter=true).
+            // Both fields are always sent (Some) when the map is populated, matching
+            // Murmur which unconditionally calls set_is_enter_restricted() and set_can_enter().
             let (can_enter, is_enter_restricted) = if perm_map.is_empty() {
                 (None, None)
             } else {
-                let perms = perm_map.get(&ch.id).copied().unwrap_or(0);
+                let (perms, ch_restricted) = perm_map.get(&ch.id).copied().unwrap_or((0, false));
                 let enter = perms & perm::ENTER != 0;
-                (Some(enter), if !enter { Some(true) } else { None })
+                (Some(enter), Some(ch_restricted))
             };
 
             let msg = mumbleproto::ChannelState {

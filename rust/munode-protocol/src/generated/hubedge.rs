@@ -1515,6 +1515,11 @@ pub struct ChannelPermissionEntry {
     pub channel_id: u32,
     #[prost(uint32, required, tag = "2")]
     pub permissions: u32,
+    /// Whether the channel itself has any ACL entry denying Enter (channel property,
+    /// independent of the querying user's own permissions). Matches Murmur's
+    /// isChannelEnterRestricted() behaviour.
+    #[prost(bool, optional, tag = "3")]
+    pub is_enter_restricted: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeBatchPermissionQueryResult {

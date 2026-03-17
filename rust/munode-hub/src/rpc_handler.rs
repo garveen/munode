@@ -1706,7 +1706,24 @@ impl RpcHandler {
                     &effective_groups,
                 )
                 .await;
-            entries.push(ChannelPermissionEntry { channel_id, permissions });
+
+            // Compute is_enter_restricted: does the channel have any ACL entry
+            // that explicitly denies Enter?  This is a channel-level property
+            // independent of the querying user — it mirrors Murmur's
+            // isChannelEnterRestricted() which iterates the channel's own ACL
+            // list and returns true when any entry has pDeny & ChanACL::Enter.
+            // Only the channel's own (non-inherited) ACL entries are checked.
+            let is_enter_restricted = {
+                use munode_common::permission;
+                let acls = self.state.database.load_acls(channel_id).unwrap_or_default();
+                acls.iter().any(|a| a.deny & permission::ENTER != 0)
+            };
+
+            entries.push(ChannelPermissionEntry {
+                channel_id,
+                permissions,
+                is_enter_restricted: Some(is_enter_restricted),
+            });
         }
 
         let result = EdgeBatchPermissionQueryResult {

@@ -21,6 +21,7 @@
     "test:unit": "vitest run --config vitest.config.unit.ts",
     "test:unit:watch": "vitest watch --config vitest.config.unit.ts",
     "test:integration": "vitest run --config vitest.config.integration.ts",
+    "test:integration:ts": "MUNODE_USE_TS=1 vitest run --config vitest.config.integration.ts",
     "test:integration:watch": "vitest watch --config vitest.config.integration.ts",
     "test:integration:ui": "vitest --ui --config vitest.config.integration.ts",
     "test:integration:manual": "tsx tests/integration/test-integration.ts",

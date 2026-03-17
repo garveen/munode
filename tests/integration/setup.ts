@@ -67,12 +67,14 @@ export interface RustEdgeExtraConfig {
 const TEST_DEBUG = process.env.TEST_DEBUG === '1' || process.env.TEST_VERBOSE === '1';
 
 /**
- * 是否使用 Rust 实现（通过环境变量 MUNODE_USE_RUST=1 启用）
+ * 是否使用 Rust 实现（默认启用；通过环境变量 MUNODE_USE_TS=1 切换回 TypeScript 实现）
  */
-export const USE_RUST = process.env.MUNODE_USE_RUST === '1';
+export const USE_RUST = process.env.MUNODE_USE_TS !== '1';
 
-if (USE_RUST) {
-  console.log('[RUST MODE] Using Rust binaries for Hub and Edge servers');
+if (!USE_RUST) {
+  console.log('[TS MODE] Using TypeScript in-process servers (set MUNODE_USE_TS=1)');
+} else {
+  console.log('[RUST MODE] Using Rust binaries for Hub and Edge servers (default)');
 }
 
 /**
