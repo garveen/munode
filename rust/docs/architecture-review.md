@@ -566,7 +566,7 @@ match route_table.get(target_edge_id) {
 
 ### 7.1 Edge → Hub RPC 通道
 
-**协议**：WebSocket，JSON 编码的 Protobuf（`EdgeHubPacket`）
+**协议**：WebSocket，Protobuf 二进制编码（`EdgeHubPacket`）
 
 **请求匹配**：使用 `request_id` 字符串 + `oneshot` channel，支持乱序响应
 
