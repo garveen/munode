@@ -1,3 +1,4 @@
+pub mod bandwidth;
 pub mod channel_manager;
 pub mod client;
 pub mod crypto;

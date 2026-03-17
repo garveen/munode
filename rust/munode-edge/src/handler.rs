@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use bytes::BytesMut;
 use prost::Message;
+use sha1::{Sha1, Digest as Sha1Digest};
 use tracing::{debug, info};
 
 use munode_common::config::EdgeConfig;
@@ -57,7 +58,7 @@ impl<'a> LoginHandler<'a> {
         self.send_codec_version(opus_supported).await?;
 
         // 3. Send channel tree (BFS order)
-        self.send_channel_tree().await?;
+        self.send_channel_tree(session_id).await?;
 
         // 4. Send UserState for all remote users
         self.send_remote_users(session_id).await?;
@@ -133,19 +134,49 @@ impl<'a> LoginHandler<'a> {
     }
 
     /// Send the full channel tree in BFS order.
-    async fn send_channel_tree(&self) -> Result<()> {
+    async fn send_channel_tree(&self, session_id: u32) -> Result<()> {
+        use munode_common::permission as perm;
         let channels = self.edge_state.channel_manager.get_channels_bfs().await;
 
         // Pass 1: Send all channels with their basic info
         for ch in &channels {
+            // Compute description_hash (SHA1) when description is non-empty,
+            // so the client can request the full description via BlobGet if needed.
+            let (description, description_hash) = if let Some(ref desc) = ch.description {
+                if !desc.is_empty() {
+                    let hash = Sha1::digest(desc.as_bytes());
+                    (None, Some(hash.to_vec()))
+                } else {
+                    (Some(desc.clone()), None)
+                }
+            } else {
+                (None, None)
+            };
+
+            // Check ENTER permission for the current user on this channel.
+            let can_enter = match self.hub_client.handle_permission_query(session_id, ch.id).await {
+                Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(true),
+                Err(_) => true, // fail open
+            };
+            // is_enter_restricted signals that the channel has entry restrictions (shows padlock).
+            // Strictly, this should be true whenever the channel has any ENTER-deny ACL entry,
+            // regardless of whether the current user can enter. That would require a separate
+            // Hub query. We use the approximation: restricted iff the current user cannot enter.
+            // This is wrong only in the edge case where the user has special access to a
+            // restricted channel (padlock won't show for them), which is acceptable UX.
+            let is_enter_restricted = !can_enter;
+
             let msg = mumbleproto::ChannelState {
                 channel_id: Some(ch.id),
                 parent: ch.parent_id,
                 name: Some(ch.name.clone()),
-                description: ch.description.clone(),
+                description,
+                description_hash,
                 position: Some(ch.position),
                 temporary: Some(ch.temporary),
                 max_users: Some(ch.max_users),
+                is_enter_restricted: if is_enter_restricted { Some(true) } else { None },
+                can_enter: Some(can_enter),
                 ..Default::default()
             };
             self.send(MessageType::ChannelState, &msg).await?;
@@ -369,11 +400,11 @@ impl<'a> LoginHandler<'a> {
         let msg = mumbleproto::ServerConfig {
             max_bandwidth: Some(max_bandwidth),
             welcome_text: None,
-            allow_html: Some(true),
+            allow_html: Some(self.config.server.allow_html),
             message_length: Some(text_message_length),
             image_message_length: Some(image_message_length),
             max_users: Some(max_users),
-            recording_allowed: Some(true),
+            recording_allowed: Some(self.config.server.recording_allowed),
         };
         self.send(MessageType::ServerConfig, &msg).await?;
         debug!("Sent ServerConfig");
@@ -580,6 +611,11 @@ mod tests {
             listening_volume_adjustments: HashMap::new(),
             texture_hash: None,
             comment_hash: None,
+            client_version: None,
+            client_release: String::new(),
+            client_os: String::new(),
+            client_os_version: String::new(),
+            plugin_context: vec![],
         };
 
         let msg = build_user_state_msg(&client);

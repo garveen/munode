@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use tracing::info;
 
 /// A user record from the database.
@@ -25,6 +25,16 @@ pub struct DbChannelRecord {
     pub max_users: u32,
     pub temporary: bool,
     pub inherit_acl: bool,
+}
+
+/// A channel group record from the DB.
+#[derive(Debug, Clone)]
+pub struct ChannelGroupRecord {
+    pub id: i64,
+    pub channel_id: u32,
+    pub name: String,
+    pub inherit: bool,
+    pub inheritable: bool,
 }
 
 /// A ban record from the database.
@@ -320,6 +330,15 @@ impl Database {
                     applied_at INTEGER NOT NULL DEFAULT 0
                 );",
             ),
+            (
+                5,
+                "Add channel_listeners table for persistent user listening state",
+                "CREATE TABLE IF NOT EXISTS channel_listeners (
+                    user_id INTEGER NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    PRIMARY KEY (user_id, channel_id)
+                );",
+            ),
         ]
     }
 
@@ -338,6 +357,53 @@ impl Database {
         let safe_path = dest_path.replace('\'', "''");
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         conn.execute_batch(&format!("VACUUM INTO '{}'", safe_path))?;
+        Ok(())
+    }
+
+    /// Load all persisted listening channels for a user.
+    ///
+    /// Returns the set of channel IDs the user was listening to at their last
+    /// logout.  Returns an empty `Vec` when the user has no saved listeners
+    /// or the `channel_listeners` table doesn't exist yet (pre-migration 5).
+    pub fn load_channel_listeners(&self, user_id: u32) -> Result<Vec<u32>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = match conn.prepare(
+            "SELECT channel_id FROM channel_listeners WHERE user_id = ?1"
+        ) {
+            Ok(s) => s,
+            // "no such table" on databases that haven't had migration 5 applied yet.
+            Err(e) if e.to_string().contains("no such table") => return Ok(vec![]),
+            Err(e) => return Err(e.into()),
+        };
+        let channel_ids: Vec<u32> = stmt
+            .query_map(params![user_id], |row| row.get::<_, u32>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(channel_ids)
+    }
+
+    /// Persist the channel listeners for a user (replaces previous state).
+    ///
+    /// Deletes all previous rows for this user and inserts the new set.
+    /// Passing an empty `channel_ids` slice effectively clears the listeners.
+    /// Silently succeeds when the `channel_listeners` table doesn't exist yet
+    /// (pre-migration 5 databases).
+    pub fn save_channel_listeners(&self, user_id: u32, channel_ids: &[u32]) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        // Replace atomically within a transaction.
+        let del_result = conn.execute("DELETE FROM channel_listeners WHERE user_id = ?1", params![user_id]);
+        match del_result {
+            // "no such table" on pre-migration 5 databases — silently skip.
+            Err(e) if e.to_string().contains("no such table") => return Ok(()),
+            Err(e) => return Err(e.into()),
+            Ok(_) => {}
+        }
+        for &ch_id in channel_ids {
+            conn.execute(
+                "INSERT OR IGNORE INTO channel_listeners (user_id, channel_id) VALUES (?1, ?2)",
+                params![user_id, ch_id],
+            )?;
+        }
         Ok(())
     }
 
@@ -656,6 +722,78 @@ impl Database {
 
     // ==================== Ban Management ====================
 
+    // ==================== Channel Group Management ====================
+
+    /// Load channel groups for a channel.
+    pub fn get_channel_groups(&self, channel_id: u32) -> Result<Vec<ChannelGroupRecord>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, inherit, inheritable FROM channel_groups WHERE channel_id = ?1"
+        )?;
+        let rows = stmt.query_map(params![channel_id], |row| {
+            Ok(ChannelGroupRecord {
+                id: row.get(0)?,
+                channel_id,
+                name: row.get(1)?,
+                inherit: row.get::<_, i32>(2)? != 0,
+                inheritable: row.get::<_, i32>(3)? != 0,
+            })
+        })?;
+        let mut groups = Vec::new();
+        for row in rows { groups.push(row?); }
+        Ok(groups)
+    }
+
+    /// Load members of a channel group.
+    pub fn get_channel_group_members(&self, group_id: i64) -> Result<Vec<(u32, bool)>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = conn.prepare(
+            "SELECT user_id, is_add FROM channel_group_members WHERE channel_group_id = ?1"
+        )?;
+        let rows = stmt.query_map(params![group_id], |row| {
+            Ok((row.get::<_, u32>(0)?, row.get::<_, i32>(1)? != 0))
+        })?;
+        let mut members = Vec::new();
+        for row in rows { members.push(row?); }
+        Ok(members)
+    }
+
+    /// Save channel groups for a channel (replaces existing).
+    pub fn save_channel_groups(&self, channel_id: u32, groups: &[ChannelGroupRecord]) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        conn.execute("DELETE FROM channel_groups WHERE channel_id = ?1", params![channel_id])?;
+        for g in groups {
+            conn.execute(
+                "INSERT INTO channel_groups (channel_id, name, inherit, inheritable) VALUES (?1, ?2, ?3, ?4)",
+                params![channel_id, g.name, g.inherit as i32, g.inheritable as i32],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Save members for a channel group (replaces existing members).
+    pub fn save_channel_group_members(&self, group_id: i64, members: &[(u32, bool)]) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        conn.execute("DELETE FROM channel_group_members WHERE channel_group_id = ?1", params![group_id])?;
+        for (user_id, is_add) in members {
+            conn.execute(
+                "INSERT INTO channel_group_members (channel_group_id, user_id, is_add) VALUES (?1, ?2, ?3)",
+                params![group_id, user_id, *is_add as i32],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Get the auto-incremented ID of a channel group by channel_id + name.
+    pub fn get_channel_group_id(&self, channel_id: u32, name: &str) -> Result<Option<i64>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let id: Option<i64> = conn.query_row(
+            "SELECT id FROM channel_groups WHERE channel_id = ?1 AND name = ?2",
+            params![channel_id, name],
+            |row| row.get(0),
+        ).optional()?;
+        Ok(id)
+    }
 
 
     /// Load all ban records.

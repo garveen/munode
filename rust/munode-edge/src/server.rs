@@ -29,11 +29,18 @@ use crate::udp::UdpServer;
 /// The main Edge server.
 pub struct EdgeServer {
     config: EdgeConfig,
+    /// Path to the config file, used for hot-reload on SIGHUP.
+    config_path: Option<String>,
 }
 
 impl EdgeServer {
     pub fn new(config: EdgeConfig) -> Self {
-        Self { config }
+        Self { config, config_path: None }
+    }
+
+    /// Create a new EdgeServer with the config file path for hot-reload support.
+    pub fn new_with_path(config: EdgeConfig, config_path: String) -> Self {
+        Self { config, config_path: Some(config_path) }
     }
 
     /// Run the edge server.
@@ -53,13 +60,15 @@ impl EdgeServer {
                 (!self.config.server.disable_hub_relay, true)
             }
         };
-        let edge_state = EdgeState::new_with_config(
+        let edge_state = EdgeState::new_with_full_config(
             channel_manager,
             client_manager,
             allow_hub_relay,
             allow_direct_udp,
             self.config.server.listeners_per_user,
             self.config.server.listeners_per_channel,
+            self.config.server.allow_ping,
+            self.config.server.rolling_stats_window,
         );
 
         // Set up TLS
@@ -94,12 +103,56 @@ impl EdgeServer {
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         let event_handle = tokio::spawn({
             let state = edge_state.clone();
+            let hub_client_for_events = hub_client.clone();
             let mut event_rx = edge_state.subscribe_events();
             let shutdown_tx = shutdown_tx.clone();
             async move {
-                hub_event_listener(state, &mut event_rx, shutdown_tx).await;
+                hub_event_listener(state, &mut event_rx, shutdown_tx, hub_client_for_events).await;
             }
         });
+
+        // SIGHUP hot-reload task: reload the config file and apply hot-reloadable fields.
+        #[cfg(unix)]
+        {
+            let config_path = self.config_path.clone();
+            let reload_state = edge_state.clone();
+            tokio::spawn(async move {
+                use tokio::signal::unix::{signal, SignalKind};
+                let mut sighup = match signal(SignalKind::hangup()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("Failed to register SIGHUP handler: {}", e);
+                        return;
+                    }
+                };
+                loop {
+                    sighup.recv().await;
+                    info!("SIGHUP received — attempting config hot-reload");
+                    if let Some(ref path) = config_path {
+                        match munode_common::config::load_edge_config(path) {
+                            Ok(new_cfg) => {
+                                reload_state.apply_hot_config(&new_cfg);
+                                // Re-initialise logging at the new level.
+                                munode_common::logging::init_logging_with_format(
+                                    &new_cfg.log_level,
+                                    &new_cfg.log_format,
+                                );
+                                info!(
+                                    allow_ping = new_cfg.server.allow_ping,
+                                    rolling_stats_window = new_cfg.server.rolling_stats_window,
+                                    "Config hot-reload applied"
+                                );
+                            }
+                            Err(e) => {
+                                warn!("SIGHUP hot-reload failed — could not parse config '{}': {}", path, e);
+                            }
+                        }
+                    } else {
+                        warn!("SIGHUP received but no config path known; skipping hot-reload");
+                    }
+                }
+            });
+        }
 
         // Always start the control-relay server (every Edge acts as a relay for peers)
         let relay_port = if self.config.hub_server.relay_port > 0 {
@@ -276,15 +329,46 @@ async fn handle_client_connection(
         None
     };
 
+    let auth_deadline = if config.server.auth_timeout_secs > 0 {
+        Some(tokio::time::Instant::now() + tokio::time::Duration::from_secs(config.server.auth_timeout_secs))
+    } else {
+        None
+    };
+
     'outer: loop {
         // Read data from TLS stream with idle timeout to drop zombie connections.
-        let n = match tokio::time::timeout(CLIENT_IDLE_TIMEOUT, reader.read_buf(&mut buf)).await {
+        // Before authentication, also enforce the pre-auth connection timeout.
+        let read_timeout = if client_state != ClientState::Ready {
+            if let Some(deadline) = auth_deadline {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                remaining.min(CLIENT_IDLE_TIMEOUT)
+            } else {
+                CLIENT_IDLE_TIMEOUT
+            }
+        } else {
+            CLIENT_IDLE_TIMEOUT
+        };
+        let n = match tokio::time::timeout(read_timeout, reader.read_buf(&mut buf)).await {
             Ok(Ok(n)) => n,
             Ok(Err(e)) => {
                 info!("Client {} connection error: {}", peer_addr, e);
                 break 'outer;
             }
             Err(_) => {
+                if client_state != ClientState::Ready {
+                    if let Some(deadline) = auth_deadline {
+                        if tokio::time::Instant::now() >= deadline {
+                            info!("Client {} auth timeout — closing unauthenticated connection", peer_addr);
+                            let reject = mumbleproto::Reject {
+                                r#type: Some(mumbleproto::reject::RejectType::None as i32),
+                                reason: Some("Authentication timed out".to_string()),
+                                ..Default::default()
+                            };
+                            client_sender.send_message(MessageType::Reject, &reject).await;
+                            break 'outer;
+                        }
+                    }
+                }
                 info!("Client {} idle timeout — closing connection", peer_addr);
                 break 'outer;
             }
@@ -407,8 +491,21 @@ async fn handle_client_connection(
                     if !auth_result.success {
                         let reason = auth_result.reason.clone().unwrap_or_else(|| "Authentication denied".to_string());
                         info!("Authentication failed for {}: {}", username, reason);
+                        // If the server requires a certificate, send PermissionDenied(MissingCertificate)
+                        // first so modern clients show the appropriate dialog, then fall through to Reject.
+                        if auth_result.cert_required.unwrap_or(false) {
+                            let pd = mumbleproto::PermissionDenied {
+                                r#type: Some(mumbleproto::permission_denied::DenyType::MissingCertificate as i32),
+                                session: Some(sid),
+                                ..Default::default()
+                            };
+                            client_sender.send_message(MessageType::PermissionDenied, &pd).await;
+                        }
                         client_sender.send_raw(handler::encode_reject(
-                            auth_result.reject_type.map(|t| t as i32),
+                            auth_result.reject_type.map(|t| t as i32)
+                                .or_else(|| if auth_result.cert_required.unwrap_or(false) {
+                                    Some(mumbleproto::reject::RejectType::NoCertificate as i32)
+                                } else { None }),
                             &reason,
                         )).await;
                         // Drop sender so the writer task drains and flushes the Reject before exiting
@@ -458,6 +555,11 @@ async fn handle_client_connection(
             listening_volume_adjustments: HashMap::new(),
             texture_hash: None,
             comment_hash: None,
+            client_version,
+            client_release: client_release.clone(),
+            client_os: client_os.clone(),
+            client_os_version: client_os_version.clone(),
+            plugin_context: vec![],
                     };
                     // Add client to manager first so permission queries can resolve user_id
                     edge_state.client_manager.add_client(client.clone(), client_sender.clone()).await;
@@ -539,6 +641,23 @@ async fn handle_client_connection(
                         Some(sid),
                     ).await;
 
+                    // Restore persisted channel listeners for registered users.
+                    // This runs after the login sequence so permissions are cached.
+                    let user_id = client.user_id;
+                    if user_id > 0 {
+                        let saved_listeners = hub_client.load_channel_listeners(user_id).await;
+                        if !saved_listeners.is_empty() {
+                            // Apply the saved listeners through the normal permission-checked path.
+                            let restore_state = mumbleproto::UserState {
+                                session: Some(sid),
+                                listening_channel_add: saved_listeners,
+                                ..Default::default()
+                            };
+                            handle_user_state_update(&edge_state, &hub_client, sid, &restore_state).await;
+                            debug!("Restored saved channel listeners for user {} (session {})", user_id, sid);
+                        }
+                    }
+
                     info!("Client {} is now Ready (session={})", peer_addr, sid);
                 }
                 MessageType::Ping => {
@@ -554,6 +673,16 @@ async fn handle_client_connection(
                             // Admin operation: apply to target session
                             handle_admin_user_state_update(&edge_state, &hub_client, sid, target_sid, &user_state).await;
                         } else {
+                            // Reject recording if server policy disallows it
+                            if user_state.recording == Some(true) && !config.server.recording_allowed {
+                                let pq = mumbleproto::PermissionDenied {
+                                    r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                    reason: Some("Recording is not allowed on this server".to_string()),
+                                    ..Default::default()
+                                };
+                                client_sender.send_message(MessageType::PermissionDenied, &pq).await;
+                                continue;
+                            }
                             handle_user_state_update(&edge_state, &hub_client, sid, &user_state).await;
                         }
                     }
@@ -588,6 +717,44 @@ async fn handle_client_connection(
                             }
                         }
                         debug!("TextMessage from session {}: {:?}", sid, text_msg.message);
+                        // Strip HTML if not allowed
+                        let mut text_msg = if !config.server.allow_html && text_msg.message.contains('<') {
+                            let mut stripped = text_msg.clone();
+                            stripped.message = strip_html_tags(&stripped.message);
+                            stripped
+                        } else {
+                            text_msg
+                        };
+                        // Check TEXT_MESSAGE permission on each target channel and filter
+                        // to only the channels where the sender has permission.
+                        // PermissionDenied is sent only when ALL channels are denied.
+                        if !text_msg.channel_id.is_empty() {
+                            let mut permitted_channels: Vec<u32> = Vec::new();
+                            let mut first_denied: Option<u32> = None;
+                            for &ch_id in &text_msg.channel_id {
+                                let has_perm = match hub_client.handle_permission_query(sid, ch_id).await {
+                                    Ok(r) => r.permissions.map(|p| p & perm::TEXT_MESSAGE != 0).unwrap_or(true),
+                                    Err(_) => true, // fail open on Hub error
+                                };
+                                if has_perm {
+                                    permitted_channels.push(ch_id);
+                                } else if first_denied.is_none() {
+                                    first_denied = Some(ch_id);
+                                }
+                            }
+                            if permitted_channels.is_empty() {
+                                // No permitted channels at all — deny
+                                let pq = mumbleproto::PermissionDenied {
+                                    r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                    channel_id: first_denied,
+                                    ..Default::default()
+                                };
+                                client_sender.send_message(MessageType::PermissionDenied, &pq).await;
+                                continue;
+                            }
+                            // Replace channel list with only permitted channels
+                            text_msg.channel_id = permitted_channels;
+                        }
                         // Local broadcast to clients on this edge
                         broadcast_text_message(&edge_state, sid, &text_msg).await;
                         // Forward to Hub for cross-edge delivery
@@ -664,6 +831,14 @@ async fn handle_client_connection(
                                             let local_sessions = edge_state.client_manager.get_channel_sessions(ch_id).await;
                                             for s in local_sessions {
                                                 if s != sid {
+                                                    // If a group filter is set, only include users in that group
+                                                    if let Some(ref group_filter) = ch_cfg.group {
+                                                        if let Some(target_client) = edge_state.client_manager.get_client(s).await {
+                                                            if !target_client.groups.iter().any(|g| g == group_filter) {
+                                                                continue;
+                                                            }
+                                                        }
+                                                    }
                                                     target_sessions.insert(s);
                                                 }
                                             }
@@ -865,6 +1040,10 @@ async fn handle_client_connection(
                                 // Encode IP address as bytes (IPv4 4 bytes, IPv6 16 bytes)
                                 let addr_bytes = encode_ip_address(&target.ip_address);
 
+                                // Fetch bandwidth stats: bytes-per-second in the last slot.
+                                let bps_last =
+                                    edge_state.client_manager.get_bandwidth_stats(target_session).await;
+
                                 let is_stats_only = stats.stats_only.unwrap_or(false);
 
                                 let response = if is_stats_only {
@@ -886,6 +1065,7 @@ async fn handle_client_connection(
                                         }),
                                         onlinesecs: Some(onlinesecs),
                                         idlesecs: Some(idlesecs),
+                                        bandwidth: Some(bps_last * 8), // bytes→bits per second
                                         ..Default::default()
                                     }
                                 } else {
@@ -907,9 +1087,16 @@ async fn handle_client_connection(
                                         address: Some(addr_bytes),
                                         onlinesecs: Some(onlinesecs),
                                         idlesecs: Some(idlesecs),
+                                        bandwidth: Some(bps_last * 8), // bytes→bits per second
                                         opus: Some(target.opus_supported),
                                         strong_certificate: Some(target.cert_hash.is_some()),
                                         celt_versions: vec![-2147483637], // CELT 0.7.0 (Mumble standard)
+                                        version: Some(mumbleproto::Version {
+                                            version: target.client_version,
+                                            release: if target.client_release.is_empty() { None } else { Some(target.client_release.clone()) },
+                                            os: if target.client_os.is_empty() { None } else { Some(target.client_os.clone()) },
+                                            os_version: if target.client_os_version.is_empty() { None } else { Some(target.client_os_version.clone()) },
+                                        }),
                                         ..Default::default()
                                     }
                                 };
@@ -1261,6 +1448,27 @@ async fn handle_client_connection(
                         broadcast_codec_version(&edge_state).await;
                     }
                 }
+                // ContextAction: client clicked a registered context menu item.
+                // Forward the action to Hub as a fire-and-forget notification so that
+                // any registered callback (ICE replacement, Lua hook, etc.) is invoked.
+                MessageType::ContextAction if client_state == ClientState::Ready => {
+                    let Ok(ca) = mumbleproto::ContextAction::decode(&frame.payload[..]) else { continue; };
+                    if let Some(sid) = session_id {
+                        debug!(
+                            session = sid,
+                            action = ca.action.as_str(),
+                            actor = ca.session.unwrap_or(0),
+                            channel = ca.channel_id.unwrap_or(0),
+                            "ContextAction received"
+                        );
+                        hub_client.notify_context_action(sid, ca).await;
+                    }
+                }
+                MessageType::Authenticate if client_state == ClientState::Ready => {
+                    // Token update while already authenticated: updating tokens requires new
+                    // Hub RPCs (re-evaluate ACLs, broadcast ChannelState). Not yet supported.
+                    debug!("Client {} sent Authenticate in Ready state (token update not yet supported)", peer_addr);
+                }
                 other => {
                     debug!("Unhandled message type {:?} from {} (state={:?})", other, peer_addr, client_state);
                 }            }
@@ -1269,6 +1477,15 @@ async fn handle_client_connection(
 
     // Cleanup
     if let Some(sid) = session_id {
+        // Save channel listeners before removing the client (so we still have access to the data)
+        if let Some(client) = edge_state.client_manager.get_client(sid).await {
+            if client.user_id > 0 && !client.listening_channels.is_empty() {
+                let user_id = client.user_id;
+                let channels = client.listening_channels.clone();
+                hub_client.save_channel_listeners(user_id, channels).await;
+            }
+        }
+
         edge_state.client_manager.remove_client(sid).await;
         // Clean up ninja channel permission cache for this session
         edge_state.ninja_visible_to.write().await.remove(&sid);
@@ -1312,11 +1529,23 @@ async fn handle_user_state_update(
                     Err(_) => true, // Fail open if Hub unreachable
                 };
                 if can_enter {
-                    // Check channel user limit (max_users from channel config)
+                    // Check channel user limit (max_users from channel config, or global per-channel limit)
                     let channel_full = if let Some(ch) = edge_state.channel_manager.get_channel(target_channel_id).await {
-                        if ch.max_users > 0 {
+                        let effective_limit = if ch.max_users > 0 {
+                            ch.max_users
+                        } else {
+                            let hub_limits = edge_state.hub_limits.read().await;
+                            hub_limits.as_ref().and_then(|l| {
+                                if l.max_users_per_channel.unwrap_or(0) > 0 {
+                                    l.max_users_per_channel
+                                } else {
+                                    None
+                                }
+                            }).unwrap_or(0)
+                        };
+                        if effective_limit > 0 {
                             let user_count = edge_state.client_manager.count_in_channel(target_channel_id).await;
-                            user_count >= ch.max_users
+                            user_count >= effective_limit
                         } else {
                             false
                         }
@@ -1503,6 +1732,11 @@ async fn handle_user_state_update(
                 }
             }
             needs_broadcast = true;
+        }
+
+        // Positional audio plugin context update
+        if let Some(ref ctx) = user_state.plugin_context {
+            edge_state.client_manager.update_plugin_context(session_id, ctx.clone()).await;
         }
 
         // Texture / comment blob updates (upload to Hub and broadcast hash to peers)
@@ -1769,10 +2003,20 @@ async fn broadcast_text_message(
             edge_state.client_manager.send_to(target_session, MessageType::TextMessage, &msg).await;
         }
     } else if !text_msg.tree_id.is_empty() {
-        // Send to channel trees (for now, treat as broadcast)
-        for &channel_id in &text_msg.tree_id {
+        // Collect all channels in the tree (including sub-channels recursively)
+        let mut all_channel_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut to_visit: std::collections::VecDeque<u32> = text_msg.tree_id.iter().copied().collect();
+        while let Some(ch_id) = to_visit.pop_front() {
+            if all_channel_ids.insert(ch_id) {
+                let children = edge_state.channel_manager.get_children(ch_id).await;
+                for child in children {
+                    to_visit.push_back(child);
+                }
+            }
+        }
+        for ch_id in all_channel_ids {
             edge_state.client_manager.broadcast_to_channel(
-                channel_id,
+                ch_id,
                 MessageType::TextMessage,
                 &msg,
                 Some(sender_session),
@@ -1793,6 +2037,21 @@ async fn broadcast_codec_version(edge_state: &Arc<EdgeState>) {
         opus: Some(all_opus),
     };
     edge_state.client_manager.broadcast(MessageType::CodecVersion, &msg, None).await;
+}
+
+/// Strip HTML tags from a string (simple tag removal for Mumble text messages).
+fn strip_html_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for ch in s.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Decode a hex string into bytes.  Returns `None` if the string is not valid hex.
@@ -1952,6 +2211,11 @@ mod tests {
             listening_volume_adjustments: HashMap::new(),
             texture_hash: None,
             comment_hash: None,
+            client_version: None,
+            client_release: String::new(),
+            client_os: String::new(),
+            client_os_version: String::new(),
+            plugin_context: vec![],
         }
     }
 
@@ -2162,7 +2426,8 @@ mod tests {
         tokio::spawn(async move {
             let mut rx = es2.subscribe_events();
             let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
-            hub_event_listener(es2, &mut rx, shutdown_tx).await;
+            let hub_client = HubClient::new(&test_config(), es2.clone());
+            hub_event_listener(es2, &mut rx, shutdown_tx, hub_client).await;
         });
         // Give the background task a moment to subscribe before the first emit.
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -2336,6 +2601,7 @@ mod tests {
 async fn hub_event_listener(    state: Arc<EdgeState>,
     event_rx: &mut tokio::sync::broadcast::Receiver<EdgeEvent>,
     shutdown_tx: watch::Sender<bool>,
+    hub_client: Arc<HubClient>,
 ) {
     use tokio::sync::broadcast::error::RecvError;
 
@@ -2579,7 +2845,18 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                                 state.client_manager.broadcast_to_channel(ch_id, MessageType::TextMessage, &msg, None).await;
                             }
                         } else if !msg.tree_id.is_empty() {
-                            for &ch_id in &msg.tree_id {
+                            // Collect all channels in the tree recursively
+                            let mut all_channel_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+                            let mut to_visit: std::collections::VecDeque<u32> = msg.tree_id.iter().copied().collect();
+                            while let Some(ch_id) = to_visit.pop_front() {
+                                if all_channel_ids.insert(ch_id) {
+                                    let children = state.channel_manager.get_children(ch_id).await;
+                                    for child in children {
+                                        to_visit.push_back(child);
+                                    }
+                                }
+                            }
+                            for ch_id in all_channel_ids {
                                 state.client_manager.broadcast_to_channel(ch_id, MessageType::TextMessage, &msg, None).await;
                             }
                         }
@@ -2739,6 +3016,26 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         // Signal the main accept loop to shut down gracefully.
                         let _ = shutdown_tx.send(true);
                         return;
+                    }
+                    EdgeEvent::AclUpdated { channel_id } => {
+                        // An ACL was updated on the Hub; re-evaluate can_enter for every local
+                        // client on the affected channel and push a ChannelState update so the
+                        // client's lock icon reflects the new permissions immediately.
+                        debug!("ACL updated for channel {}, refreshing can_enter for all local sessions", channel_id);
+                        let all_clients = state.client_manager.get_all_clients().await;
+                        for client in all_clients {
+                            let can_enter = match hub_client.handle_permission_query(client.session, channel_id).await {
+                                Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(true),
+                                Err(_) => true,
+                            };
+                            let ch_state = mumbleproto::ChannelState {
+                                channel_id: Some(channel_id),
+                                is_enter_restricted: Some(!can_enter),
+                                can_enter: Some(can_enter),
+                                ..Default::default()
+                            };
+                            state.client_manager.send_to(client.session, MessageType::ChannelState, &ch_state).await;
+                        }
                     }
                 }
             }

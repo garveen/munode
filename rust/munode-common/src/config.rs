@@ -244,6 +244,31 @@ pub struct ServerConfig {
     /// Maximum number of listeners per channel. 0 = unlimited.
     #[serde(default)]
     pub listeners_per_channel: u32,
+    /// Whether to respond to unauthenticated UDP ping probes (default: true).
+    /// Set to false to prevent the server from being listed in public server browsers.
+    #[serde(default = "default_true")]
+    pub allow_ping: bool,
+    /// Rolling statistics window size in seconds for voice quality metrics (default: 120).
+    /// Controls how many seconds of OCB2 crypto stats are tracked per user.
+    #[serde(default = "default_rolling_stats_window")]
+    pub rolling_stats_window: u32,
+    /// Maximum voice bandwidth per user in bits-per-second (default: 0 = use max_bandwidth).
+    /// BandwidthRecord tracks per-user voice bandwidth usage in this sliding window.
+    #[serde(default)]
+    pub bandwidth_record_window: u32,
+    /// Whether to allow users to record audio (default: true).
+    /// When false, ServerConfig.recording_allowed is sent as false to clients,
+    /// and any user who sets recording=true is kicked.
+    #[serde(default = "default_true")]
+    pub recording_allowed: bool,
+    /// Whether to allow HTML in text messages (default: true).
+    /// When false, HTML tags are stripped from messages before forwarding.
+    #[serde(default = "default_true")]
+    pub allow_html: bool,
+    /// Seconds a client has to complete authentication before being disconnected (default: 30).
+    /// 0 = no pre-auth timeout (falls back to idle timeout).
+    #[serde(default = "default_auth_timeout_secs")]
+    pub auth_timeout_secs: u64,
 }
 
 impl Default for ServerConfig {
@@ -261,6 +286,12 @@ impl Default for ServerConfig {
             plugin_message_length: default_plugin_message_length(),
             listeners_per_user: 0,
             listeners_per_channel: 0,
+            allow_ping: true,
+            rolling_stats_window: default_rolling_stats_window(),
+            bandwidth_record_window: 0,
+            recording_allowed: true,
+            allow_html: true,
+            auth_timeout_secs: default_auth_timeout_secs(),
         }
     }
 }
@@ -449,6 +480,9 @@ pub struct HubAuthConfig {
     pub default_channel: u32,
     /// Welcome text.
     pub welcome_text: Option<String>,
+    /// Path to a file containing the welcome text (MOTD).
+    /// If both `welcome_text` and `welcome_text_file` are set, the file takes precedence.
+    pub welcome_text_file: Option<String>,
     /// Server password (empty = no password).
     pub server_password: Option<String>,
     /// When true and an external auth service is connected, always delegate
@@ -493,6 +527,7 @@ impl Default for HubAuthConfig {
             allow_guest: true,
             default_channel: 0,
             welcome_text: None,
+            welcome_text_file: None,
             server_password: None,
             require_auth_service: false,
             http_url: None,
@@ -535,6 +570,17 @@ pub struct HubLimitsConfig {
     /// Maximum number of channels a single user may listen to at once. 0 = unlimited.
     #[serde(default)]
     pub listeners_per_user: u32,
+    /// Maximum channel nesting depth. 0 = unlimited.
+    #[serde(default)]
+    pub channel_nesting_limit: u32,
+    /// Maximum total number of channels. 0 = unlimited.
+    #[serde(default)]
+    pub channel_count_limit: u32,
+    /// Maximum number of simultaneous sessions allowed for the same non-anonymous user.
+    /// When the limit is reached the oldest session is kicked to make room for the new one.
+    /// 0 = unlimited. Default: 1.
+    #[serde(default = "default_max_sessions_per_user")]
+    pub max_sessions_per_user: u32,
 }
 
 impl Default for HubLimitsConfig {
@@ -550,6 +596,9 @@ impl Default for HubLimitsConfig {
             plugin_message_length: default_plugin_message_length(),
             listeners_per_channel: 0,
             listeners_per_user: 0,
+            channel_nesting_limit: 0,
+            channel_count_limit: 0,
+            max_sessions_per_user: default_max_sessions_per_user(),
         }
     }
 }
@@ -764,6 +813,9 @@ fn default_message_rate() -> f32 {
 fn default_message_burst() -> u32 {
     5
 }
+fn default_max_sessions_per_user() -> u32 {
+    1
+}
 fn default_auto_ban_attempts() -> u32 {
     10
 }
@@ -814,3 +866,11 @@ pub struct HubGeoIpConfig {
 }
 
 fn default_geoip_log() -> bool { true }
+
+fn default_rolling_stats_window() -> u32 {
+    120
+}
+
+fn default_auth_timeout_secs() -> u64 {
+    30
+}

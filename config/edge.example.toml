@@ -110,6 +110,23 @@ max_bandwidth  = 558000                 # Default: 558000 (bps, ~558 kbps)
 # Used primarily for integration tests that verify Edge-to-Edge direct connections
 # disable_hub_relay = false             # Default: false
 
+# Maximum number of channels a single user may listen to simultaneously.
+# 0 = unlimited.
+# listeners_per_user    = 0            # Default: 0 (unlimited)
+
+# Maximum number of listeners allowed in a single channel.
+# 0 = unlimited.
+# listeners_per_channel = 0            # Default: 0 (unlimited)
+
+# Whether to respond to unauthenticated UDP ping probes from Mumble clients.
+# Set to false to prevent the server from appearing in public server browsers.
+# allow_ping = true                    # Default: true
+
+# Rolling statistics window in seconds for per-user voice quality metrics.
+# Controls how many seconds of OCB2 crypto stats are tracked per user.
+# 0 = accumulate forever (not recommended for long-running servers).
+# rolling_stats_window = 120           # Default: 120
+
 # ---------------------------------------------------------------------------
 # Voice Routing
 # ---------------------------------------------------------------------------

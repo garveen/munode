@@ -10,6 +10,7 @@ use tracing::warn;
 use munode_protocol::message_type::MessageType;
 use munode_protocol::transport::encode_message;
 
+use crate::bandwidth::BandwidthRecord;
 use crate::crypto::CryptState;
 
 /// Client connection state machine.
@@ -78,6 +79,17 @@ pub struct ClientInfo {
     /// SHA-256 hash of this user's comment blob (if comment is > 128 bytes).
     /// Broadcast to peers so they can request the full comment via RequestBlob.
     pub comment_hash: Option<Vec<u8>>,
+    /// Client version number (from Version message).
+    pub client_version: Option<u32>,
+    /// Client release string (from Version message).
+    pub client_release: String,
+    /// Client OS string (from Version message).
+    pub client_os: String,
+    /// Client OS version string (from Version message).
+    pub client_os_version: String,
+    /// Positional audio context (game plugin context).
+    /// When set, voice is only routed to users with the same context.
+    pub plugin_context: Vec<u8>,
 }
 
 /// Manages all connected clients and their message senders.
@@ -87,6 +99,8 @@ pub struct ClientManager {
     channel_users: RwLock<HashMap<u32, Vec<u32>>>,
     /// Per-session OCB2-AES128 cryptographic states.
     crypt_states: RwLock<HashMap<u32, Arc<Mutex<CryptState>>>>,
+    /// Per-session voice bandwidth records. Keyed by session_id.
+    bandwidth_records: RwLock<HashMap<u32, BandwidthRecord>>,
     /// Listening index: channel_id → Vec<session_id> of clients listening to
     /// that channel but whose primary channel is different.  This is maintained
     /// in sync with `clients.listening_channels` to provide O(1) lookup instead
@@ -101,6 +115,7 @@ impl ClientManager {
             senders: RwLock::new(HashMap::new()),
             channel_users: RwLock::new(HashMap::new()),
             crypt_states: RwLock::new(HashMap::new()),
+            bandwidth_records: RwLock::new(HashMap::new()),
             listening_index: RwLock::new(HashMap::new()),
         })
     }
@@ -166,6 +181,7 @@ impl ClientManager {
     pub async fn remove_client(&self, session: u32) -> Option<ClientInfo> {
         self.senders.write().await.remove(&session);
         self.crypt_states.write().await.remove(&session);
+        self.bandwidth_records.write().await.remove(&session);
         let client = self.clients.write().await.remove(&session);
         if let Some(ref c) = client {
             if let Some(users) = self.channel_users.write().await.get_mut(&c.channel_id) {
@@ -367,6 +383,34 @@ impl ClientManager {
         self.crypt_states.read().await.keys().copied().collect()
     }
 
+    /// Record a voice frame for the given session, returning `false` if it should
+    /// be dropped because it exceeds `max_bytes_per_sec`.
+    ///
+    /// The bandwidth record is created with `window_secs` slots on first access.
+    pub async fn record_voice_bytes(
+        &self,
+        session: u32,
+        bytes: u32,
+        max_bytes_per_sec: u32,
+        window_secs: usize,
+    ) -> bool {
+        let mut records = self.bandwidth_records.write().await;
+        let record = records
+            .entry(session)
+            .or_insert_with(|| BandwidthRecord::new(window_secs));
+        record.add_frame(bytes, max_bytes_per_sec)
+    }
+
+    /// Return the bytes-per-second in the most recently completed second for a session.
+    /// Returns `0` if no bandwidth data has been recorded.
+    pub async fn get_bandwidth_stats(&self, session: u32) -> u32 {
+        let records = self.bandwidth_records.read().await;
+        match records.get(&session) {
+            Some(r) => r.bytes_last_second(),
+            None => 0,
+        }
+    }
+
     /// Update client state.
     pub async fn set_client_state(&self, session: u32, state: ClientState) {
         if let Some(client) = self.clients.write().await.get_mut(&session) {
@@ -469,6 +513,14 @@ impl ClientManager {
             .count() as u32
     }
 
+    /// Update the plugin_context for a session.
+    pub async fn update_plugin_context(&self, session_id: u32, ctx: Vec<u8>) {
+        let mut clients = self.clients.write().await;
+        if let Some(client) = clients.get_mut(&session_id) {
+            client.plugin_context = ctx;
+        }
+    }
+
     /// Send a Reject message to all connected clients and close their connections.
     ///
     /// Used when Hub becomes completely unreachable (direct + relay both failed).
@@ -526,6 +578,11 @@ mod tests {
             listening_volume_adjustments: HashMap::new(),
             texture_hash: None,
             comment_hash: None,
+            client_version: None,
+            client_release: String::new(),
+            client_os: String::new(),
+            client_os_version: String::new(),
+            plugin_context: vec![],
         }
     }
 

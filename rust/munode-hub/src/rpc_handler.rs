@@ -121,6 +121,8 @@ impl RpcHandler {
             "edge.updateBanList" => self.handle_update_ban_list(&request, &request_id).await,
             "edge.getUserList" => self.handle_get_user_list(&request_id).await,
             "edge.updateUserList" => self.handle_update_user_list(&request, &request_id).await,
+            "edge.saveChannelListeners" => self.handle_save_channel_listeners(&request, &request_id).await,
+            "edge.loadChannelListeners" => self.handle_load_channel_listeners(&request, &request_id).await,
             "blob.put" => self.handle_blob_put(&request, &request_id).await,
             "blob.get" => self.handle_blob_get(&request, &request_id).await,
             "blob.getUserTexture" => self.handle_blob_get_user_texture(&request, &request_id).await,
@@ -310,6 +312,8 @@ impl RpcHandler {
             })
             .collect();
 
+        let mut server_limits = self.build_server_limits();
+        server_limits.welcome_text = self.load_welcome_text().await;
         let result = EdgeRegisterResult {
             success: true,
             hub_server_id: Some(params.server_id),
@@ -317,7 +321,7 @@ impl RpcHandler {
             challenge: None,
             challenge_timeout: None,
             error: None,
-            server_limits: Some(self.build_server_limits()),
+            server_limits: Some(server_limits),
         };
 
         let response = self.make_response_packet(request_id, "edge.register", |r| {
@@ -344,6 +348,42 @@ impl RpcHandler {
         Ok(self.make_response_packet(request_id, "edge.allocateSessionId", |r| {
             r.edge_allocate_session_id = Some(result);
         }))
+    }
+
+    /// Enforce the per-user concurrent session limit for a non-anonymous user.
+    ///
+    /// If `user_id == 0` (anonymous) or `max_sessions == 0` (unlimited), this is a no-op.
+    /// Otherwise, all existing sessions for `user_id` are collected, sorted by session_id
+    /// ascending (oldest first), and excess sessions are removed and broadcast-kicked until
+    /// the remaining count is strictly below `max_sessions`.
+    async fn kick_excess_sessions_for_user(&self, user_id: u32, max_sessions: u32) {
+        if user_id == 0 || max_sessions == 0 {
+            return;
+        }
+        let mut existing = self.state.session_manager.get_sessions_by_user(user_id).await;
+        if existing.len() < max_sessions as usize {
+            return;
+        }
+        // Sort by session_id ascending so the oldest (lowest ID) is kicked first.
+        existing.sort_by_key(|s| s.session_id);
+        let to_kick = existing.len() - max_sessions as usize + 1;
+        for session in existing.into_iter().take(to_kick) {
+            let ghost_session = session.session_id;
+            self.state.session_manager.remove_session(ghost_session).await;
+            self.broadcast_notification("hub.userRemoveBroadcast", |n| {
+                n.user_remove_broadcast = Some(HubUserRemoveBroadcastParams {
+                    session: ghost_session,
+                    actor: None,
+                    reason: Some("Replaced by new connection (session limit reached)".to_string()),
+                    ban: None,
+                    target_sessions: vec![],
+                });
+            }).await;
+            info!(
+                "Kicked oldest session {} for user_id={} due to max_sessions_per_user={}",
+                ghost_session, user_id, max_sessions
+            );
+        }
     }
 
     async fn handle_authenticate_user(
@@ -440,6 +480,62 @@ impl RpcHandler {
         }
 
         // ------------------------------------------------------------------
+        // Step 0.5: Username uniqueness check — ghost detection
+        // ------------------------------------------------------------------
+        // Only reject or replace when the connecting client presents a certificate.
+        // Certificate-less (guest) connections are allowed to share usernames because
+        // there is no reliable identity signal to distinguish a ghost from a different
+        // physical user who happens to pick the same name. UsernameInUse is only
+        // meaningful when a cert-bearing client tries to connect and a session with a
+        // *different* cert already holds the name.
+        {
+            let new_cert = params.client_info.as_ref()
+                .and_then(|ci| ci.certificate_hash.clone())
+                .unwrap_or_default();
+
+            if !new_cert.is_empty() {
+                // New client has a certificate — enforce uniqueness.
+                let all_sessions = self.state.session_manager.get_all_sessions().await;
+                if let Some(existing) = all_sessions.iter().find(|s| s.username.eq_ignore_ascii_case(username)) {
+                    let ghost_session = existing.session_id;
+                    if existing.cert_hash.is_empty() || existing.cert_hash.as_str() == new_cert.as_str() {
+                        // No cert on old session, or same cert: ghost replacement.
+                        self.state.session_manager.remove_session(ghost_session).await;
+                        self.broadcast_notification("hub.userRemoveBroadcast", |n| {
+                            n.user_remove_broadcast = Some(HubUserRemoveBroadcastParams {
+                                session: ghost_session,
+                                actor: None,
+                                reason: Some("Ghost connection replaced".to_string()),
+                                ban: None,
+                                target_sessions: vec![],
+                            });
+                        }).await;
+                        info!("Ghost session {} for user '{}' replaced by new cert connection", ghost_session, username);
+                    } else {
+                        // Different cert already holds this username — reject.
+                        warn!("Rejecting cert user '{}': username already in use by session {} with different cert", username, ghost_session);
+                        let result = EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None, username: None, display_name: None,
+                            groups: vec![],
+                            reason: Some(format!("Username '{}' is already in use", username)),
+                            reject_type: Some(4), // UsernameInUse = 4 in Mumble reject enum
+                            channel_id: None,
+                            mute: None, deaf: None, suppress: None,
+                            self_mute: None, self_deaf: None,
+                            priority_speaker: None, recording: None,
+                            cert_required: None,
+                        };
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(result);
+                        }));
+                    }
+                }
+            }
+            // If the new client has no certificate, allow them through regardless of name conflicts.
+        }
+
+        // ------------------------------------------------------------------
         // Step 1: Try external auth service (if connected)
         // ------------------------------------------------------------------
         if self.state.auth_service.is_connected().await {
@@ -529,6 +625,7 @@ impl RpcHandler {
                         priority_speaker: params.priority_speaker.unwrap_or(false),
                         recording: params.recording.unwrap_or(false),
                     };
+                    self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
                     self.state.session_manager.add_session(session_info).await;
 
                     info!(
@@ -708,6 +805,7 @@ impl RpcHandler {
                         priority_speaker: params.priority_speaker.unwrap_or(false),
                         recording: params.recording.unwrap_or(false),
                     };
+                    self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
                     self.state.session_manager.add_session(session_info).await;
 
                     info!(
@@ -860,6 +958,7 @@ impl RpcHandler {
                         priority_speaker: params.priority_speaker.unwrap_or(false),
                         recording: params.recording.unwrap_or(false),
                     };
+                    self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
                     self.state.session_manager.add_session(session_info).await;
 
                     info!(
@@ -1073,6 +1172,7 @@ impl RpcHandler {
             recording: params.recording.unwrap_or(false),
         };
 
+        self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
         self.state.session_manager.add_session(session_info.clone()).await;
 
         // GeoIP lookup for this user's IP address
@@ -1445,12 +1545,62 @@ impl RpcHandler {
             None => Vec::new(),
         };
 
+        // Augment with DB channel group memberships for the entire ancestor chain.
+        // This lets ACL rules that reference named groups work correctly when
+        // users are assigned to those groups via the ACL editor.
+        let user_id_u32 = params.actor_user_id;
+        let mut effective_groups = groups;
+        {
+            // Build ancestor chain (root → target) to check inherited group memberships
+            let mut chain: Vec<u32> = Vec::new();
+            let mut current = params.channel_id;
+            loop {
+                chain.push(current);
+                if current == 0 { break; }
+                match self.state.channel_store.get_channel(current).await {
+                    Some(ch) => {
+                        if let Some(parent) = ch.parent_id {
+                            current = parent;
+                        } else { break; }
+                    }
+                    None => break,
+                }
+            }
+            chain.reverse(); // root first
+
+            for ancestor_id in chain {
+                if let Ok(db_groups) = self.state.database.get_channel_groups(ancestor_id) {
+                    for db_group in &db_groups {
+                        if !db_group.inherit && ancestor_id != params.channel_id {
+                            continue; // non-inheritable groups only apply to their own channel
+                        }
+                        match self.state.database.get_channel_group_members(db_group.id) {
+                            Ok(members) => {
+                                let is_explicitly_added = members.iter()
+                                    .any(|(uid, is_add)| *uid == user_id_u32 && *is_add);
+                                let is_explicitly_removed = members.iter()
+                                    .any(|(uid, is_add)| *uid == user_id_u32 && !*is_add);
+                                if is_explicitly_added && !is_explicitly_removed && !effective_groups.contains(&db_group.name) {
+                                    effective_groups.push(db_group.name.clone());
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to load group members for group '{}' (id {}): {}", db_group.name, db_group.id, e);
+                            }
+                        }
+                    }
+                } else {
+                    debug!("Failed to load channel groups for ancestor channel {}", ancestor_id);
+                }
+            }
+        }
+
         // Calculate effective permissions using the ACL manager
         let permissions = self.state.acl_manager
             .calculate_permissions(
                 params.actor_user_id as i32,
                 params.channel_id,
-                &groups,
+                &effective_groups,
             )
             .await;
 
@@ -1539,6 +1689,67 @@ impl RpcHandler {
 
         let is_new = params.id.is_none();
         let channel_id = if is_new {
+            // Reject creating a permanent channel inside a temporary channel
+            if let Some(parent_id) = params.parent_id {
+                if let Some(parent_ch) = self.state.channel_store.get_channel(parent_id).await {
+                    if parent_ch.temporary {
+                        return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                            r.edge_save_channel = Some(EdgeSaveChannelResult {
+                                success: false,
+                                channel_id: None,
+                                error: Some("Cannot create a permanent channel inside a temporary channel".to_string()),
+                            });
+                        }));
+                    }
+                }
+            }
+
+            // Check channel count limit
+            let count_limit = self.state.config.limits.channel_count_limit;
+            if count_limit > 0 {
+                let current_count = self.state.channel_store.count().await as u32;
+                if current_count >= count_limit {
+                    return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                        r.edge_save_channel = Some(EdgeSaveChannelResult {
+                            success: false,
+                            channel_id: None,
+                            error: Some(format!("Channel count limit ({}) reached", count_limit)),
+                        });
+                    }));
+                }
+            }
+
+            // Check nesting depth limit
+            let nesting_limit = self.state.config.limits.channel_nesting_limit;
+            if nesting_limit > 0 {
+                if let Some(parent_id) = params.parent_id {
+                    let depth = {
+                        let mut d = 1u32;
+                        let mut cur = parent_id;
+                        let channels = self.state.channel_store.get_all_channels().await;
+                        let parent_map: std::collections::HashMap<u32, Option<u32>> =
+                            channels.iter().map(|c| (c.id, c.parent_id)).collect();
+                        while let Some(&Some(pid)) = parent_map.get(&cur) {
+                            d += 1;
+                            cur = pid;
+                            if d > nesting_limit {
+                                break;
+                            }
+                        }
+                        d
+                    };
+                    if depth > nesting_limit {
+                        return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                            r.edge_save_channel = Some(EdgeSaveChannelResult {
+                                success: false,
+                                channel_id: None,
+                                error: Some(format!("Channel nesting limit ({}) exceeded", nesting_limit)),
+                            });
+                        }));
+                    }
+                }
+            }
+
             // Create new channel
             let ch = ChannelRecord {
                 id: 0, // Will be assigned by create_channel
@@ -1669,11 +1880,40 @@ impl RpcHandler {
                 .map(|c| c.inherit_acl)
                 .unwrap_or(true);
 
+            // Load channel groups for this channel
+            let groups_db = match self.state.database.get_channel_groups(params.channel_id) {
+                Ok(groups) => groups,
+                Err(e) => {
+                    warn!("Failed to load channel groups for channel {}: {}", params.channel_id, e);
+                    vec![]
+                }
+            };
+            let groups_proto: Vec<munode_protocol::mumbleproto::acl::ChanGroup> = groups_db.iter().map(|g| {
+                let members_db = match self.state.database.get_channel_group_members(g.id) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        warn!("Failed to load members for group '{}' (id {}): {}", g.name, g.id, e);
+                        vec![]
+                    }
+                };
+                let add: Vec<u32> = members_db.iter().filter(|(_, is_add)| *is_add).map(|(uid, _)| *uid).collect();
+                let remove: Vec<u32> = members_db.iter().filter(|(_, is_add)| !*is_add).map(|(uid, _)| *uid).collect();
+                munode_protocol::mumbleproto::acl::ChanGroup {
+                    name: g.name.clone(),
+                    inherited: Some(false),
+                    inherit: Some(g.inherit),
+                    inheritable: Some(g.inheritable),
+                    add,
+                    remove,
+                    inherited_members: vec![],
+                }
+            }).collect();
+
             // Encode ACL data as raw bytes (Mumble ACL message format)
             let acl_msg = munode_protocol::mumbleproto::Acl {
                 channel_id: params.channel_id,
                 inherit_acls: Some(inherit_acl),
-                groups: vec![],
+                groups: groups_proto,
                 acls: acls.iter().map(|a| {
                     munode_protocol::mumbleproto::acl::ChanAcl {
                         apply_here: Some(a.apply_here),
@@ -1719,6 +1959,31 @@ impl RpcHandler {
             }).collect();
 
             self.state.acl_manager.save_acls(params.channel_id, &entries).await?;
+
+            // Save channel groups from the decoded ACL message
+            let groups_to_save: Vec<crate::database::ChannelGroupRecord> = acl_msg.groups.iter().map(|g| {
+                crate::database::ChannelGroupRecord {
+                    id: 0, // auto-assigned by DB
+                    channel_id: params.channel_id,
+                    name: g.name.clone(),
+                    inherit: g.inherit.unwrap_or(true),
+                    inheritable: g.inheritable.unwrap_or(true),
+                }
+            }).collect();
+            if let Err(e) = self.state.database.save_channel_groups(params.channel_id, &groups_to_save) {
+                warn!("Failed to save channel groups: {}", e);
+            }
+            // Save members for each group
+            for g in &acl_msg.groups {
+                if let Ok(Some(gid)) = self.state.database.get_channel_group_id(params.channel_id, &g.name) {
+                    let members: Vec<(u32, bool)> = g.add.iter().map(|&uid| (uid, true))
+                        .chain(g.remove.iter().map(|&uid| (uid, false)))
+                        .collect();
+                    if let Err(e) = self.state.database.save_channel_group_members(gid, &members) {
+                        warn!("Failed to save channel group members for group '{}': {}", g.name, e);
+                    }
+                }
+            }
 
             // Update inherit_acl flag on channel if provided
             if let Some(inherit) = acl_msg.inherit_acls {
@@ -1779,6 +2044,81 @@ impl RpcHandler {
         Ok(self.make_response_packet(request_id, "edge.saveACL", |r| {
             r.edge_save_acl = Some(result);
         }))
+    }
+
+    /// Handle edge.saveChannelListeners — persist a user's listening channels.
+    async fn handle_save_channel_listeners(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = match &request.edge_save_channel_listeners {
+            Some(p) => p,
+            None => return Ok(self.make_error_packet(request_id, -1, "Missing edge_save_channel_listeners params")),
+        };
+        // Only save for registered users (user_id > 0); guests (user_id == 0) are skipped.
+        if params.user_id > 0 {
+            if let Err(e) = self.state.database.save_channel_listeners(params.user_id, &params.channel_ids) {
+                warn!("Failed to save channel listeners for user {}: {}", params.user_id, e);
+                return Ok(self.make_response_packet(request_id, "edge.saveChannelListeners", |r| {
+                    r.edge_save_channel_listeners = Some(EdgeSaveChannelListenersResult {
+                        success: false,
+                        error: Some(e.to_string()),
+                    });
+                }));
+            }
+            debug!("Saved {} channel listeners for user {}", params.channel_ids.len(), params.user_id);
+        }
+        Ok(self.make_response_packet(request_id, "edge.saveChannelListeners", |r| {
+            r.edge_save_channel_listeners = Some(EdgeSaveChannelListenersResult {
+                success: true,
+                error: None,
+            });
+        }))
+    }
+
+    /// Handle edge.loadChannelListeners — retrieve a user's persisted listening channels.
+    async fn handle_load_channel_listeners(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = match &request.edge_load_channel_listeners {
+            Some(p) => p,
+            None => return Ok(self.make_error_packet(request_id, -1, "Missing edge_load_channel_listeners params")),
+        };
+        if params.user_id == 0 {
+            // Guests have no persistent listeners.
+            return Ok(self.make_response_packet(request_id, "edge.loadChannelListeners", |r| {
+                r.edge_load_channel_listeners = Some(EdgeLoadChannelListenersResult {
+                    success: true,
+                    channel_ids: vec![],
+                    error: None,
+                });
+            }));
+        }
+        match self.state.database.load_channel_listeners(params.user_id) {
+            Ok(channel_ids) => {
+                debug!("Loaded {} channel listeners for user {}", channel_ids.len(), params.user_id);
+                Ok(self.make_response_packet(request_id, "edge.loadChannelListeners", |r| {
+                    r.edge_load_channel_listeners = Some(EdgeLoadChannelListenersResult {
+                        success: true,
+                        channel_ids,
+                        error: None,
+                    });
+                }))
+            }
+            Err(e) => {
+                warn!("Failed to load channel listeners for user {}: {}", params.user_id, e);
+                Ok(self.make_response_packet(request_id, "edge.loadChannelListeners", |r| {
+                    r.edge_load_channel_listeners = Some(EdgeLoadChannelListenersResult {
+                        success: false,
+                        channel_ids: vec![],
+                        error: Some(e.to_string()),
+                    });
+                }))
+            }
+        }
     }
 
     async fn handle_get_ban_list(
@@ -1964,6 +2304,9 @@ impl RpcHandler {
                 n.user_remove_broadcast = Some(remove_params);
             })
             .await;
+
+            // Clean up the old channel if it was temporary and is now empty
+            self.maybe_cleanup_temp_channel(removed.channel_id).await;
         }
     }
 
@@ -2003,6 +2346,7 @@ impl RpcHandler {
             return;
         }
 
+        let old_channel_id = self.state.session_manager.get_session(p.session_id).await.map(|s| s.channel_id);
         self.state.session_manager.move_user_to_channel(p.session_id, p.channel_id).await;
 
         let moved_params = HubUserMovedParams {
@@ -2015,6 +2359,11 @@ impl RpcHandler {
             n.user_moved = Some(moved_params);
         })
         .await;
+
+        // Clean up the old channel if it was temporary and is now empty
+        if let Some(old_ch) = old_channel_id {
+            self.maybe_cleanup_temp_channel(old_ch).await;
+        }
     }
 
     async fn on_user_state_changed(&self, notification: &TypedRpcNotification) {
@@ -2461,12 +2810,16 @@ impl RpcHandler {
 
     /// Build a ServerLimitsConfig from the current Hub configuration.
     /// This is sent to Edge on registration and via heartbeat ack when limits change.
+    /// Pass `override_welcome` to supply a pre-read welcome text (e.g. from async file I/O).
     pub(crate) fn build_server_limits(&self) -> ServerLimitsConfig {
         let limits = &self.state.config.limits;
         let suggest = &self.state.config.suggest;
         let (suggest_version, suggest_version_v2) = suggest.parse_version()
             .map(|(v1, v2)| (Some(v1), Some(v2)))
             .unwrap_or((None, None));
+        // Welcome text: inline config value only. The file variant is loaded
+        // asynchronously by callers via `load_welcome_text()` to avoid blocking
+        // the tokio executor with synchronous file I/O.
         let welcome = self.state.config.auth.welcome_text.clone();
         ServerLimitsConfig {
             max_bandwidth: Some(limits.max_bandwidth),
@@ -2483,6 +2836,82 @@ impl RpcHandler {
             suggest_push_to_talk: suggest.push_to_talk,
             welcome_text: welcome,
             suggest_version_v2,
+            max_users_per_channel: if limits.max_users_per_channel > 0 {
+                Some(limits.max_users_per_channel)
+            } else {
+                None
+            },
+        }
+    }
+
+    /// Load the welcome text asynchronously.
+    ///
+    /// If `welcome_text_file` is set, the file is read with `tokio::fs` (non-blocking).
+    /// Falls back to the inline `welcome_text` config value on error or if not set.
+    async fn load_welcome_text(&self) -> Option<String> {
+        if let Some(ref file_path) = self.state.config.auth.welcome_text_file {
+            match tokio::fs::read_to_string(file_path).await {
+                Ok(text) => Some(text.trim_end().to_string()),
+                Err(e) => {
+                    warn!("Failed to read welcome_text_file '{}': {}", file_path, e);
+                    self.state.config.auth.welcome_text.clone()
+                }
+            }
+        } else {
+            self.state.config.auth.welcome_text.clone()
+        }
+    }
+
+    /// Check if a channel is temporary and empty, and if so delete it and broadcast.
+    ///
+    /// After deleting the channel, this method also checks the parent channel — if
+    /// the parent is also temporary and is now empty (because all children were deleted),
+    /// it is cleaned up too, walking up the tree until a non-empty or non-temporary
+    /// ancestor is reached.
+    async fn maybe_cleanup_temp_channel(&self, channel_id: u32) {
+        // Walk up the ancestor chain, cleaning up empty temporary channels.
+        let mut current_id = channel_id;
+        loop {
+            if current_id == 0 {
+                return; // Never delete root channel
+            }
+            let ch = match self.state.channel_store.get_channel(current_id).await {
+                Some(c) => c,
+                None => return,
+            };
+            if !ch.temporary {
+                return; // Reached a permanent channel — stop
+            }
+            // Keep channel if any session is in it
+            let sessions = self.state.session_manager.get_all_sessions().await;
+            if sessions.iter().any(|s| s.channel_id == current_id) {
+                return;
+            }
+            // Keep channel if it still has sub-channels
+            let has_children = self.state.channel_store
+                .get_all_channels().await
+                .iter()
+                .any(|c| c.parent_id == Some(current_id));
+            if has_children {
+                return;
+            }
+            let parent_id = ch.parent_id;
+            // Delete this empty temporary channel
+            self.state.channel_store.remove_channel(current_id).await;
+            if let Err(e) = self.state.database.delete_channel(current_id) {
+                warn!("Failed to delete temporary channel {} from DB: {}", current_id, e);
+            }
+            info!("Deleted empty temporary channel {} ('{}')", current_id, ch.name);
+            self.broadcast_notification("hub.channelRemoved", |n| {
+                n.channel_removed = Some(HubChannelRemovedParams {
+                    channel_id: current_id,
+                });
+            }).await;
+            // Continue to check the parent channel
+            match parent_id {
+                Some(pid) => current_id = pid,
+                None => return,
+            }
         }
     }
 
