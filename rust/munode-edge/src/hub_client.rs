@@ -1032,8 +1032,20 @@ impl HubClient {
                 }
             }
             _ => {
+                // Check for hub.aclUpdated (uses unknown_params_json)
+                if method == "hub.aclUpdated" {
+                    if let Some(json_str) = &notification.unknown_params_json {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                            if let Some(channel_id) = val.get("channel_id").and_then(|v| v.as_u64()) {
+                                debug!("ACL updated for channel {}", channel_id);
+                                self.edge_state.emit(crate::state::EdgeEvent::AclUpdated {
+                                    channel_id: channel_id as u32,
+                                });
+                            }
+                        }
+                    }
                 // Check for hub.ninjaConfig (uses unknown_params_json)
-                if method == "hub.ninjaConfig" {
+                } else if method == "hub.ninjaConfig" {
                     if let Some(json_str) = &notification.unknown_params_json {
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
                             if val.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false) {

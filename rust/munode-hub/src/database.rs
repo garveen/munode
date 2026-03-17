@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use tracing::info;
 
 /// A user record from the database.
@@ -25,6 +25,16 @@ pub struct DbChannelRecord {
     pub max_users: u32,
     pub temporary: bool,
     pub inherit_acl: bool,
+}
+
+/// A channel group record from the DB.
+#[derive(Debug, Clone)]
+pub struct ChannelGroupRecord {
+    pub id: i64,
+    pub channel_id: u32,
+    pub name: String,
+    pub inherit: bool,
+    pub inheritable: bool,
 }
 
 /// A ban record from the database.
@@ -712,6 +722,78 @@ impl Database {
 
     // ==================== Ban Management ====================
 
+    // ==================== Channel Group Management ====================
+
+    /// Load channel groups for a channel.
+    pub fn get_channel_groups(&self, channel_id: u32) -> Result<Vec<ChannelGroupRecord>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, inherit, inheritable FROM channel_groups WHERE channel_id = ?1"
+        )?;
+        let rows = stmt.query_map(params![channel_id], |row| {
+            Ok(ChannelGroupRecord {
+                id: row.get(0)?,
+                channel_id,
+                name: row.get(1)?,
+                inherit: row.get::<_, i32>(2)? != 0,
+                inheritable: row.get::<_, i32>(3)? != 0,
+            })
+        })?;
+        let mut groups = Vec::new();
+        for row in rows { groups.push(row?); }
+        Ok(groups)
+    }
+
+    /// Load members of a channel group.
+    pub fn get_channel_group_members(&self, group_id: i64) -> Result<Vec<(u32, bool)>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = conn.prepare(
+            "SELECT user_id, is_add FROM channel_group_members WHERE channel_group_id = ?1"
+        )?;
+        let rows = stmt.query_map(params![group_id], |row| {
+            Ok((row.get::<_, u32>(0)?, row.get::<_, i32>(1)? != 0))
+        })?;
+        let mut members = Vec::new();
+        for row in rows { members.push(row?); }
+        Ok(members)
+    }
+
+    /// Save channel groups for a channel (replaces existing).
+    pub fn save_channel_groups(&self, channel_id: u32, groups: &[ChannelGroupRecord]) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        conn.execute("DELETE FROM channel_groups WHERE channel_id = ?1", params![channel_id])?;
+        for g in groups {
+            conn.execute(
+                "INSERT INTO channel_groups (channel_id, name, inherit, inheritable) VALUES (?1, ?2, ?3, ?4)",
+                params![channel_id, g.name, g.inherit as i32, g.inheritable as i32],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Save members for a channel group (replaces existing members).
+    pub fn save_channel_group_members(&self, group_id: i64, members: &[(u32, bool)]) -> Result<()> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        conn.execute("DELETE FROM channel_group_members WHERE channel_group_id = ?1", params![group_id])?;
+        for (user_id, is_add) in members {
+            conn.execute(
+                "INSERT INTO channel_group_members (channel_group_id, user_id, is_add) VALUES (?1, ?2, ?3)",
+                params![group_id, user_id, *is_add as i32],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Get the auto-incremented ID of a channel group by channel_id + name.
+    pub fn get_channel_group_id(&self, channel_id: u32, name: &str) -> Result<Option<i64>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let id: Option<i64> = conn.query_row(
+            "SELECT id FROM channel_groups WHERE channel_id = ?1 AND name = ?2",
+            params![channel_id, name],
+            |row| row.get(0),
+        ).optional()?;
+        Ok(id)
+    }
 
 
     /// Load all ban records.

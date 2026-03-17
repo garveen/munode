@@ -79,6 +79,17 @@ pub struct ClientInfo {
     /// SHA-256 hash of this user's comment blob (if comment is > 128 bytes).
     /// Broadcast to peers so they can request the full comment via RequestBlob.
     pub comment_hash: Option<Vec<u8>>,
+    /// Client version number (from Version message).
+    pub client_version: Option<u32>,
+    /// Client release string (from Version message).
+    pub client_release: String,
+    /// Client OS string (from Version message).
+    pub client_os: String,
+    /// Client OS version string (from Version message).
+    pub client_os_version: String,
+    /// Positional audio context (game plugin context).
+    /// When set, voice is only routed to users with the same context.
+    pub plugin_context: Vec<u8>,
 }
 
 /// Manages all connected clients and their message senders.
@@ -500,6 +511,14 @@ impl ClientManager {
             .values()
             .filter(|c| c.channel_id == channel_id)
             .count() as u32
+    }
+
+    /// Update the plugin_context for a session.
+    pub async fn update_plugin_context(&self, session_id: u32, ctx: Vec<u8>) {
+        let mut clients = self.clients.write().await;
+        if let Some(client) = clients.get_mut(&session_id) {
+            client.plugin_context = ctx;
+        }
     }
 
     /// Send a Reject message to all connected clients and close their connections.

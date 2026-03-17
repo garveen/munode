@@ -148,6 +148,8 @@ pub enum EdgeEvent {
     ShutdownRequested {
         reason: String,
     },
+    /// Hub ACL was updated for a channel; Edges should re-evaluate can_enter for all clients.
+    AclUpdated { channel_id: u32 },
 }
 
 /// Route decision for reaching a target Edge, derived from Hub's route table.

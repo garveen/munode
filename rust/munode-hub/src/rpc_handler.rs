@@ -1492,12 +1492,69 @@ impl RpcHandler {
             None => Vec::new(),
         };
 
+        // Augment with DB channel group memberships for the entire ancestor chain.
+        // This lets ACL rules that reference named groups work correctly when
+        // users are assigned to those groups via the ACL editor.
+        let user_id_u32 = params.actor_user_id;
+        let mut effective_groups = groups;
+        {
+            // Build ancestor chain (root → target) to check inherited group memberships
+            let mut chain: Vec<u32> = Vec::new();
+            let mut current = params.channel_id;
+            loop {
+                chain.push(current);
+                if current == 0 { break; }
+                match self.state.channel_store.get_channel(current).await {
+                    Some(ch) => {
+                        if let Some(parent) = ch.parent_id {
+                            current = parent;
+                        } else { break; }
+                    }
+                    None => break,
+                }
+            }
+            chain.reverse(); // root first
+
+            for ancestor_id in chain {
+                if let Ok(db_groups) = self.state.database.get_channel_groups(ancestor_id) {
+                    for db_group in &db_groups {
+                        if !db_group.inherit && ancestor_id != params.channel_id {
+                            continue; // non-inheritable groups only apply to their own channel
+                        }
+                        match self.state.database.get_channel_group_members(db_group.id) {
+                            Ok(members) => {
+                                // Single pass: track both add and remove status
+                                let (is_added, is_removed) = members.iter().fold(
+                                    (false, false),
+                                    |(added, removed), (uid, is_add)| {
+                                        if *uid == user_id_u32 {
+                                            (added || *is_add, removed || !*is_add)
+                                        } else {
+                                            (added, removed)
+                                        }
+                                    },
+                                );
+                                if is_added && !is_removed && !effective_groups.contains(&db_group.name) {
+                                    effective_groups.push(db_group.name.clone());
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to load group members for group '{}' (id {}): {}", db_group.name, db_group.id, e);
+                            }
+                        }
+                    }
+                } else {
+                    debug!("Failed to load channel groups for ancestor channel {}", ancestor_id);
+                }
+            }
+        }
+
         // Calculate effective permissions using the ACL manager
         let permissions = self.state.acl_manager
             .calculate_permissions(
                 params.actor_user_id as i32,
                 params.channel_id,
-                &groups,
+                &effective_groups,
             )
             .await;
 
@@ -1777,11 +1834,40 @@ impl RpcHandler {
                 .map(|c| c.inherit_acl)
                 .unwrap_or(true);
 
+            // Load channel groups for this channel
+            let groups_db = match self.state.database.get_channel_groups(params.channel_id) {
+                Ok(groups) => groups,
+                Err(e) => {
+                    warn!("Failed to load channel groups for channel {}: {}", params.channel_id, e);
+                    vec![]
+                }
+            };
+            let groups_proto: Vec<munode_protocol::mumbleproto::acl::ChanGroup> = groups_db.iter().map(|g| {
+                let members_db = match self.state.database.get_channel_group_members(g.id) {
+                    Ok(m) => m,
+                    Err(e) => {
+                        warn!("Failed to load members for group '{}' (id {}): {}", g.name, g.id, e);
+                        vec![]
+                    }
+                };
+                let add: Vec<u32> = members_db.iter().filter(|(_, is_add)| *is_add).map(|(uid, _)| *uid).collect();
+                let remove: Vec<u32> = members_db.iter().filter(|(_, is_add)| !*is_add).map(|(uid, _)| *uid).collect();
+                munode_protocol::mumbleproto::acl::ChanGroup {
+                    name: g.name.clone(),
+                    inherited: Some(false),
+                    inherit: Some(g.inherit),
+                    inheritable: Some(g.inheritable),
+                    add,
+                    remove,
+                    inherited_members: vec![],
+                }
+            }).collect();
+
             // Encode ACL data as raw bytes (Mumble ACL message format)
             let acl_msg = munode_protocol::mumbleproto::Acl {
                 channel_id: params.channel_id,
                 inherit_acls: Some(inherit_acl),
-                groups: vec![],
+                groups: groups_proto,
                 acls: acls.iter().map(|a| {
                     munode_protocol::mumbleproto::acl::ChanAcl {
                         apply_here: Some(a.apply_here),
@@ -1827,6 +1913,31 @@ impl RpcHandler {
             }).collect();
 
             self.state.acl_manager.save_acls(params.channel_id, &entries).await?;
+
+            // Save channel groups from the decoded ACL message
+            let groups_to_save: Vec<crate::database::ChannelGroupRecord> = acl_msg.groups.iter().map(|g| {
+                crate::database::ChannelGroupRecord {
+                    id: 0, // auto-assigned by DB
+                    channel_id: params.channel_id,
+                    name: g.name.clone(),
+                    inherit: g.inherit.unwrap_or(true),
+                    inheritable: g.inheritable.unwrap_or(true),
+                }
+            }).collect();
+            if let Err(e) = self.state.database.save_channel_groups(params.channel_id, &groups_to_save) {
+                warn!("Failed to save channel groups: {}", e);
+            }
+            // Save members for each group
+            for g in &acl_msg.groups {
+                if let Ok(Some(gid)) = self.state.database.get_channel_group_id(params.channel_id, &g.name) {
+                    let members: Vec<(u32, bool)> = g.add.iter().map(|&uid| (uid, true))
+                        .chain(g.remove.iter().map(|&uid| (uid, false)))
+                        .collect();
+                    if let Err(e) = self.state.database.save_channel_group_members(gid, &members) {
+                        warn!("Failed to save channel group members for group '{}': {}", g.name, e);
+                    }
+                }
+            }
 
             // Update inherit_acl flag on channel if provided
             if let Some(inherit) = acl_msg.inherit_acls {
@@ -2685,6 +2796,11 @@ impl RpcHandler {
             suggest_push_to_talk: suggest.push_to_talk,
             welcome_text: welcome,
             suggest_version_v2,
+            max_users_per_channel: if limits.max_users_per_channel > 0 {
+                Some(limits.max_users_per_channel)
+            } else {
+                None
+            },
         }
     }
 

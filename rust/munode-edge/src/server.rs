@@ -490,8 +490,21 @@ async fn handle_client_connection(
                     if !auth_result.success {
                         let reason = auth_result.reason.clone().unwrap_or_else(|| "Authentication denied".to_string());
                         info!("Authentication failed for {}: {}", username, reason);
+                        // If the server requires a certificate, send PermissionDenied(MissingCertificate)
+                        // first so modern clients show the appropriate dialog, then fall through to Reject.
+                        if auth_result.cert_required.unwrap_or(false) {
+                            let pd = mumbleproto::PermissionDenied {
+                                r#type: Some(mumbleproto::permission_denied::DenyType::MissingCertificate as i32),
+                                session: Some(sid),
+                                ..Default::default()
+                            };
+                            client_sender.send_message(MessageType::PermissionDenied, &pd).await;
+                        }
                         client_sender.send_raw(handler::encode_reject(
-                            auth_result.reject_type.map(|t| t as i32),
+                            auth_result.reject_type.map(|t| t as i32)
+                                .or(if auth_result.cert_required.unwrap_or(false) {
+                                    Some(mumbleproto::reject::RejectType::NoCertificate as i32)
+                                } else { None }),
                             &reason,
                         )).await;
                         // Drop sender so the writer task drains and flushes the Reject before exiting
@@ -541,6 +554,11 @@ async fn handle_client_connection(
             listening_volume_adjustments: HashMap::new(),
             texture_hash: None,
             comment_hash: None,
+            client_version,
+            client_release: client_release.clone(),
+            client_os: client_os.clone(),
+            client_os_version: client_os_version.clone(),
+            plugin_context: vec![],
                     };
                     // Add client to manager first so permission queries can resolve user_id
                     edge_state.client_manager.add_client(client.clone(), client_sender.clone()).await;
@@ -1058,6 +1076,12 @@ async fn handle_client_connection(
                                         opus: Some(target.opus_supported),
                                         strong_certificate: Some(target.cert_hash.is_some()),
                                         celt_versions: vec![-2147483637], // CELT 0.7.0 (Mumble standard)
+                                        version: Some(mumbleproto::Version {
+                                            version: target.client_version,
+                                            release: if target.client_release.is_empty() { None } else { Some(target.client_release.clone()) },
+                                            os: if target.client_os.is_empty() { None } else { Some(target.client_os.clone()) },
+                                            os_version: if target.client_os_version.is_empty() { None } else { Some(target.client_os_version.clone()) },
+                                        }),
                                         ..Default::default()
                                     }
                                 };
@@ -1490,11 +1514,23 @@ async fn handle_user_state_update(
                     Err(_) => true, // Fail open if Hub unreachable
                 };
                 if can_enter {
-                    // Check channel user limit (max_users from channel config)
+                    // Check channel user limit (max_users from channel config, or global per-channel limit)
                     let channel_full = if let Some(ch) = edge_state.channel_manager.get_channel(target_channel_id).await {
-                        if ch.max_users > 0 {
+                        let effective_limit = if ch.max_users > 0 {
+                            ch.max_users
+                        } else {
+                            let hub_limits = edge_state.hub_limits.read().await;
+                            hub_limits.as_ref().and_then(|l| {
+                                if l.max_users_per_channel.unwrap_or(0) > 0 {
+                                    l.max_users_per_channel
+                                } else {
+                                    None
+                                }
+                            }).unwrap_or(0)
+                        };
+                        if effective_limit > 0 {
                             let user_count = edge_state.client_manager.count_in_channel(target_channel_id).await;
-                            user_count >= ch.max_users
+                            user_count >= effective_limit
                         } else {
                             false
                         }
@@ -1681,6 +1717,11 @@ async fn handle_user_state_update(
                 }
             }
             needs_broadcast = true;
+        }
+
+        // Positional audio plugin context update
+        if let Some(ref ctx) = user_state.plugin_context {
+            edge_state.client_manager.update_plugin_context(session_id, ctx.clone()).await;
         }
 
         // Texture / comment blob updates (upload to Hub and broadcast hash to peers)
@@ -2155,6 +2196,11 @@ mod tests {
             listening_volume_adjustments: HashMap::new(),
             texture_hash: None,
             comment_hash: None,
+            client_version: None,
+            client_release: String::new(),
+            client_os: String::new(),
+            client_os_version: String::new(),
+            plugin_context: vec![],
         }
     }
 
@@ -2953,6 +2999,26 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         // Signal the main accept loop to shut down gracefully.
                         let _ = shutdown_tx.send(true);
                         return;
+                    }
+                    EdgeEvent::AclUpdated { channel_id } => {
+                        // An ACL was updated on the Hub; re-evaluate can_enter for every local
+                        // client on the affected channel and push a ChannelState update so the
+                        // client's lock icon reflects the new permissions immediately.
+                        debug!("ACL updated for channel {}, refreshing can_enter for all local sessions", channel_id);
+                        let all_clients = state.client_manager.get_all_clients().await;
+                        for client in all_clients {
+                            let can_enter = match hub_client.handle_permission_query(client.session, channel_id).await {
+                                Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(true),
+                                Err(_) => true,
+                            };
+                            let ch_state = mumbleproto::ChannelState {
+                                channel_id: Some(channel_id),
+                                is_enter_restricted: Some(!can_enter),
+                                can_enter: Some(can_enter),
+                                ..Default::default()
+                            };
+                            state.client_manager.send_to(client.session, MessageType::ChannelState, &ch_state).await;
+                        }
                     }
                 }
             }

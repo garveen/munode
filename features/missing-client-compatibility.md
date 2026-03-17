@@ -8,6 +8,8 @@
 
 ## 1. 频道进入状态同步（`is_enter_restricted` / `can_enter`）
 
+✅ **已实现**：`send_channel_tree()` 现在接受 `session_id` 参数，对每个频道调用 Hub `handle_permission_query`，计算 `can_enter` 和 `is_enter_restricted` 并随 `ChannelState` 消息发送给客户端。
+
 **描述**：Murmur 在登录时发送频道树时，为每个频道附带 `is_enter_restricted`（是否有 Enter 拒绝规则）和 `can_enter`（当前用户是否可进入）字段。客户端依赖这些字段显示频道锁定图标和控制 UI 反馈。
 
 **现状**：MuNode 的 `send_channel_tree()` 只发送基础频道属性（名称、父频道、位置等），不包含这两个字段。
@@ -22,6 +24,8 @@
 ---
 
 ## 2. ACL 变更后 `can_enter` 刷新广播
+
+✅ **已实现**：新增 `EdgeEvent::AclUpdated { channel_id }` 事件；Hub 的 `hub.aclUpdated` 通知现在由 `hub_client.rs` 解析并触发该事件；Edge 事件循环收到后对所有本地客户端重新查询权限并发送 `ChannelState` 更新。
 
 **描述**：Murmur 在 ACL 更新后，向所有在线用户广播受影响频道的更新 `can_enter` 状态（ChannelState 消息）。
 
@@ -109,6 +113,8 @@
 
 ## 8. ACL 查询响应中不包含群组（Groups 始终为空）
 
+✅ **已实现**：`handle_acl` 的查询分支现在从 DB 加载 `channel_groups` 和 `channel_group_members`，并在 ACL 查询响应中包含完整的 `ChanGroup` 列表；更新分支也会保存客户端提交的群组及成员数据。
+
 **描述**：Murmur 的 ACL 查询响应（`MumbleProto::ACL`）包含完整的频道群组定义（`ChanGroup`：名称、成员列表、继承设置等）。客户端的 ACL 编辑界面依赖这些数据来管理访问控制组。
 
 **现状**：MuNode 的 `handle_acl` 在 ACL 查询响应中始终返回 `groups: vec![]`。DB 中虽然有 `channel_groups` 和 `channel_group_members` 表，但 ORM 层未与 ACL 管理器集成。
@@ -121,6 +127,8 @@
 ---
 
 ## 9. ACL 群组成员关系不参与权限计算
+
+✅ **已实现**：`handle_permission_query` 现在在调用 `calculate_permissions` 前，遍历目标频道的祖先链，将 DB 中的群组成员资格追加到 `effective_groups`，使 ACL 中的 `@groupname` 规则正确生效。
 
 **描述**：Murmur 的 ACL 权限计算中，`@groupname` 规则会检查用户是否在该频道（及继承链）的对应群组中。群组成员来自 DB 中的显式成员列表。
 
@@ -199,6 +207,8 @@
 
 ## 15. UserStats 响应缺少证书、带宽、版本信息
 
+✅ **已实现**（部分）：`ClientInfo` 新增 `client_version`、`client_release`、`client_os`、`client_os_version` 字段，在认证时从 Version 消息填充；UserStats 非 stats_only 响应中现在包含 `version` 字段（含 release/os/os_version）。证书链（`certificates`）尚未实现，因为 TLS 证书需要从握手中捕获原始 DER 数据。
+
 **描述**：Murmur 的 UserStats 响应（非 stats_only 模式）包含：
 - `certificates`：目标用户的完整 PEM 证书链
 - `bandwidth`：历史带宽使用（BandwidthRecord 环形缓冲数据）
@@ -215,6 +225,8 @@
 ---
 
 ## 16. 频道描述发送方式（始终内联，无 hash 懒加载）
+
+✅ **已实现**：`send_channel_tree()` 现在对非空描述计算 SHA1 哈希并发送 `description_hash`，客户端可按需通过 `RequestBlob` 获取全文。
 
 **描述**：Murmur 对 >= 1.2.2 版本的客户端发送 `description_hash`（内容摘要），客户端按需通过 `RequestBlob` 获取全文；对旧版客户端直接发送描述全文。
 
@@ -238,6 +250,8 @@
 ---
 
 ## 18. 位置音频路由（plugin_context / plugin_identity）
+
+✅ **已实现**（部分）：`ClientInfo` 新增 `plugin_context: Vec<u8>` 字段；`ClientManager` 新增 `update_plugin_context()` 方法；`handle_user_state_update` 现在在 UserState 消息中有 `plugin_context` 时更新存储的上下文。实际语音路由过滤（仅向相同 context 的用户路由）尚未实现，需要修改 UDP 热路径。
 
 **描述**：Murmur 在处理语音包时，通过 `plugin_context` 字段过滤语音接收者——只有 `plugin_context` 相同的用户才互相收听位置音频。`plugin_context` 通过 UserState 更新，但不对外广播。
 
@@ -263,6 +277,8 @@
 
 ## 20. 全局每频道用户上限（`iMaxUsersPerChannel`）未执行
 
+✅ **已实现**：`ServerLimitsConfig` 新增 `max_users_per_channel` 字段，Hub 在 `build_server_limits()` 中填充该值并通过注册/心跳推送给 Edge；频道移动逻辑现在当频道无单独 `max_users` 时回退到全局 `max_users_per_channel`。
+
 **描述**：Murmur 有全局 `iMaxUsersPerChannel` 配置，作用于所有未单独设置上限的频道，优先级低于频道自身的 `uiMaxUsers`。
 
 **现状**：MuNode 只执行每频道的 `max_users`，无全局每频道默认上限。
@@ -270,6 +286,8 @@
 ---
 
 ## 21. 证书必须的拒绝消息缺少用户 session（NoCertificate 类型）
+
+✅ **已实现**：当 Hub 返回 `cert_required=true` 的认证失败时，Edge 先发送 `PermissionDenied { type: MissingCertificate, session }` 消息，再发送兼容性 `Reject { type: NoCertificate }` 消息。
 
 **描述**：Murmur 在 `cert_required=true` 且用户没有提供证书时，发送 `PermissionDenied::NoCertificate`，同时在消息中附带触发该限制的用户 session。
 

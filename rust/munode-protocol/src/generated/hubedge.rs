@@ -721,6 +721,9 @@ pub struct ServerLimitsConfig {
     /// 建议客户端版本（v2 格式：major<<48 | minor<<32 | patch<<16，供新版客户端使用）。
     #[prost(uint64, optional, tag = "14")]
     pub suggest_version_v2: ::core::option::Option<u64>,
+    /// 每频道最大用户数（全局限制）。0 = 无限制。
+    #[prost(uint32, optional, tag = "15")]
+    pub max_users_per_channel: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeInfo {

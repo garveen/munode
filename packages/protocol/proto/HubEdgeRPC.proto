@@ -39,6 +39,8 @@ message ServerLimitsConfig {
   optional string welcome_text = 13;
   // 建议客户端版本（v2 格式：major<<48 | minor<<32 | patch<<16，供新版客户端使用）。
   optional uint64 suggest_version_v2 = 14;
+  // 每频道最大用户数（全局限制）。0 = 无限制。
+  optional uint32 max_users_per_channel = 15;
 }
 
 message EdgeInfo {
