@@ -369,11 +369,11 @@ impl<'a> LoginHandler<'a> {
         let msg = mumbleproto::ServerConfig {
             max_bandwidth: Some(max_bandwidth),
             welcome_text: None,
-            allow_html: Some(true),
+            allow_html: Some(self.config.server.allow_html),
             message_length: Some(text_message_length),
             image_message_length: Some(image_message_length),
             max_users: Some(max_users),
-            recording_allowed: Some(true),
+            recording_allowed: Some(self.config.server.recording_allowed),
         };
         self.send(MessageType::ServerConfig, &msg).await?;
         debug!("Sent ServerConfig");

@@ -35,6 +35,8 @@
 
 ## 3. 已认证用户通过 Authenticate 消息更新 Access Token
 
+✅ **已实现**（部分）：已在 `Ready` 状态添加 `Authenticate` 消息处理，防止未处理警告。完整的 token 刷新（重新评估 can_enter 并广播）尚未实现，需要新的 Hub RPC。
+
 **描述**：Murmur 支持已认证用户发送新的 `Authenticate` 消息（仅含 `tokens` 字段）来更新其访问令牌，随后服务端刷新并广播所有频道的 `can_enter` 更新。
 
 **现状**：MuNode 仅在 `Connected` 状态下处理 `Authenticate` 消息，认证完成后收到的 `Authenticate` 消息被忽略。
@@ -49,6 +51,8 @@
 
 ## 4. `tree_id` 文字消息不递归子频道
 
+✅ **已实现**：`broadcast_text_message` 和 `EdgeEvent::TextMessageForward` 中的 `tree_id` 处理现已递归遍历所有子频道。
+
 **描述**：Murmur 对 `TextMessage.tree_id` 的处理是递归遍历整个频道子树，并在每一级检查 `TextMessage` 权限后广播。
 
 **现状**：MuNode 对 `tree_id` 的处理仅广播到列举的频道本身，不递归到子频道。
@@ -61,6 +65,8 @@
 
 ## 5. 文字消息缺少 `TextMessage` 权限检查
 
+✅ **已实现**：TextMessage 处理中已添加 `perm::TEXT_MESSAGE` 权限检查，无权限时返回 `PermissionDenied`。
+
 **描述**：Murmur 在转发文字消息到频道前，检查发送者是否拥有目标频道的 `ChanACL::TextMessage` 权限。
 
 **现状**：MuNode 仅做文字消息长度限制和速率限制，没有权限检查。
@@ -72,6 +78,8 @@
 ---
 
 ## 6. `recording_allowed` 配置不可用，无法阻止用户录音
+
+✅ **已实现**：`send_server_config()` 现在读取 `config.server.recording_allowed`；当 `recording_allowed=false` 时，客户端尝试开启录音会收到 `PermissionDenied`。
 
 **描述**：Murmur 有 `allowRecording` 配置（默认 true），当设置为 false 时：
 1. `ServerConfig.recording_allowed` 发送 false，客户端隐藏录音按钮
@@ -86,6 +94,8 @@
 ---
 
 ## 7. `allow_html` 硬编码为 true，无服务端 HTML 过滤
+
+✅ **已实现**：`send_server_config()` 现在读取 `config.server.allow_html`；当 `allow_html=false` 时，文字消息中的 HTML 标签在转发前被剥离。
 
 **描述**：Murmur 通过 `bAllowHTML` 配置控制是否允许富文本消息，当 false 时服务端对消息内容进行 HTML 过滤（`isTextAllowed()`）。
 
@@ -124,6 +134,8 @@
 
 ## 10. 临时频道不会在最后一名用户离开时自动删除
 
+✅ **已实现**：`on_user_left` 和 `on_user_moved` 中已添加 `maybe_cleanup_temp_channel()` 调用，空临时频道将自动删除并广播 `channelRemoved`。
+
 **描述**：Murmur 的临时频道（`temporary=true`）在最后一名用户离开后自动删除，并向所有客户端广播 `ChannelRemove`。
 
 **现状**：MuNode 支持创建临时频道（标记 `temporary=true`），但没有实现用户离开触发的空频道清理逻辑。
@@ -137,6 +149,8 @@
 
 ## 11. 永久频道不能在临时频道内创建（TemporaryChannel 拒绝）
 
+✅ **已实现**：`handle_save_channel` 中已添加父频道临时性检查，在临时父频道内创建永久频道时返回错误。
+
 **描述**：Murmur 在尝试于临时频道内创建永久频道时，返回 `PermissionDenied::TemporaryChannel`。
 
 **现状**：MuNode 不检查父频道是否为临时频道，允许在临时频道中创建永久子频道。
@@ -149,6 +163,8 @@
 
 ## 12. 频道嵌套深度限制未执行（PermissionDenied: NestingLimit）
 
+✅ **已实现**：`HubLimitsConfig` 新增 `channel_nesting_limit` 字段；`handle_save_channel` 中已添加深度检查。
+
 **描述**：Murmur 配置 `iChannelNestingLimit`，超出时发送 `PermissionDenied::NestingLimit`。
 
 **现状**：MuNode 没有嵌套深度限制检查（`PermissionDenied::NestingLimit` 枚举值存在于协议层但未使用）。
@@ -157,6 +173,8 @@
 
 ## 13. 频道总数限制未执行（PermissionDenied: ChannelCountLimit）
 
+✅ **已实现**：`HubLimitsConfig` 新增 `channel_count_limit` 字段；`handle_save_channel` 中已添加数量检查。
+
 **描述**：Murmur 配置 `iChannelCountLimit`，超出时发送 `PermissionDenied::ChannelCountLimit`。
 
 **现状**：MuNode 没有频道总数限制检查（枚举值存在但未使用）。
@@ -164,6 +182,8 @@
 ---
 
 ## 14. 用户名占用检测缺失（UsernameInUse 拒绝类型）
+
+✅ **已实现**：`handle_authenticate_user` 中已添加用户名唯一性检查：相同证书 hash 踢出旧幽灵会话，不同证书返回 `UsernameInUse`(reject_type=4)。
 
 **描述**：Murmur 在两个用户尝试使用同一名称连接时：
 - 若相同证书 hash 或相同 IP：踢出旧连接并允许新连接（幽灵用户替换）
@@ -263,6 +283,8 @@
 
 ## 22. 欢迎消息文件（`qsWelcomeTextFile`）不支持
 
+✅ **已实现**：`HubAuthConfig` 新增 `welcome_text_file` 字段；`build_server_limits()` 优先从文件读取 MOTD，回退到内联 `welcome_text`。
+
 **描述**：Murmur 支持从文件加载欢迎消息（`welcometextfile` 配置项），可包含 HTML 格式的长文。
 
 **现状**：MuNode 仅支持配置文件中的内联 `welcome_text` 字符串，不支持从文件读取。
@@ -270,6 +292,8 @@
 ---
 
 ## 23. 自认证超时检查（连接超时）
+
+✅ **已实现**：认证前使用 `auth_timeout_secs` 作为最大等待时间；超时后发送 `Reject` 并断开连接。
 
 **描述**：Murmur 配置 `iTimeout`，未在超时内完成认证的连接被强制断开（分阶段超时）。
 

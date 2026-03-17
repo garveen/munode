@@ -442,6 +442,51 @@ impl RpcHandler {
         }
 
         // ------------------------------------------------------------------
+        // Step 0.5: Username uniqueness check — ghost detection
+        // ------------------------------------------------------------------
+        {
+            let all_sessions = self.state.session_manager.get_all_sessions().await;
+            if let Some(existing) = all_sessions.iter().find(|s| s.username.eq_ignore_ascii_case(username)) {
+                let new_cert = params.client_info.as_ref()
+                    .and_then(|ci| ci.certificate_hash.clone())
+                    .unwrap_or_default();
+                if !existing.cert_hash.is_empty() && existing.cert_hash == new_cert {
+                    // Same cert: ghost replacement — kick the old session
+                    let ghost_session = existing.session_id;
+                    self.state.session_manager.remove_session(ghost_session).await;
+                    self.broadcast_notification("hub.userRemoveBroadcast", |n| {
+                        n.user_remove_broadcast = Some(HubUserRemoveBroadcastParams {
+                            session: ghost_session,
+                            actor: None,
+                            reason: Some("Ghost connection replaced".to_string()),
+                            ban: None,
+                            target_sessions: vec![],
+                        });
+                    }).await;
+                    info!("Ghost session {} for user '{}' replaced by new connection", ghost_session, username);
+                } else {
+                    // Different cert: reject with UsernameInUse
+                    warn!("Rejecting duplicate username '{}': already in use by session {}", username, existing.session_id);
+                    let result = EdgeAuthenticateUserResult {
+                        success: false,
+                        user_id: None, username: None, display_name: None,
+                        groups: vec![],
+                        reason: Some(format!("Username '{}' is already in use", username)),
+                        reject_type: Some(4), // UsernameInUse = 4 in Mumble reject enum
+                        channel_id: None,
+                        mute: None, deaf: None, suppress: None,
+                        self_mute: None, self_deaf: None,
+                        priority_speaker: None, recording: None,
+                        cert_required: None,
+                    };
+                    return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                        r.edge_authenticate_user = Some(result);
+                    }));
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
         // Step 1: Try external auth service (if connected)
         // ------------------------------------------------------------------
         if self.state.auth_service.is_connected().await {
@@ -1541,6 +1586,67 @@ impl RpcHandler {
 
         let is_new = params.id.is_none();
         let channel_id = if is_new {
+            // Reject creating a permanent channel inside a temporary channel
+            if let Some(parent_id) = params.parent_id {
+                if let Some(parent_ch) = self.state.channel_store.get_channel(parent_id).await {
+                    if parent_ch.temporary {
+                        return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                            r.edge_save_channel = Some(EdgeSaveChannelResult {
+                                success: false,
+                                channel_id: None,
+                                error: Some("Cannot create a permanent channel inside a temporary channel".to_string()),
+                            });
+                        }));
+                    }
+                }
+            }
+
+            // Check channel count limit
+            let count_limit = self.state.config.limits.channel_count_limit;
+            if count_limit > 0 {
+                let current_count = self.state.channel_store.count().await as u32;
+                if current_count >= count_limit {
+                    return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                        r.edge_save_channel = Some(EdgeSaveChannelResult {
+                            success: false,
+                            channel_id: None,
+                            error: Some(format!("Channel count limit ({}) reached", count_limit)),
+                        });
+                    }));
+                }
+            }
+
+            // Check nesting depth limit
+            let nesting_limit = self.state.config.limits.channel_nesting_limit;
+            if nesting_limit > 0 {
+                if let Some(parent_id) = params.parent_id {
+                    let depth = {
+                        let mut d = 1u32;
+                        let mut cur = parent_id;
+                        let channels = self.state.channel_store.get_all_channels().await;
+                        let parent_map: std::collections::HashMap<u32, Option<u32>> =
+                            channels.iter().map(|c| (c.id, c.parent_id)).collect();
+                        while let Some(&Some(pid)) = parent_map.get(&cur) {
+                            d += 1;
+                            cur = pid;
+                            if d > nesting_limit {
+                                break;
+                            }
+                        }
+                        d
+                    };
+                    if depth > nesting_limit {
+                        return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                            r.edge_save_channel = Some(EdgeSaveChannelResult {
+                                success: false,
+                                channel_id: None,
+                                error: Some(format!("Channel nesting limit ({}) exceeded", nesting_limit)),
+                            });
+                        }));
+                    }
+                }
+            }
+
             // Create new channel
             let ch = ChannelRecord {
                 id: 0, // Will be assigned by create_channel
@@ -2041,6 +2147,9 @@ impl RpcHandler {
                 n.user_remove_broadcast = Some(remove_params);
             })
             .await;
+
+            // Clean up the old channel if it was temporary and is now empty
+            self.maybe_cleanup_temp_channel(removed.channel_id).await;
         }
     }
 
@@ -2080,6 +2189,7 @@ impl RpcHandler {
             return;
         }
 
+        let old_channel_id = self.state.session_manager.get_session(p.session_id).await.map(|s| s.channel_id);
         self.state.session_manager.move_user_to_channel(p.session_id, p.channel_id).await;
 
         let moved_params = HubUserMovedParams {
@@ -2092,6 +2202,11 @@ impl RpcHandler {
             n.user_moved = Some(moved_params);
         })
         .await;
+
+        // Clean up the old channel if it was temporary and is now empty
+        if let Some(old_ch) = old_channel_id {
+            self.maybe_cleanup_temp_channel(old_ch).await;
+        }
     }
 
     async fn on_user_state_changed(&self, notification: &TypedRpcNotification) {
@@ -2544,7 +2659,17 @@ impl RpcHandler {
         let (suggest_version, suggest_version_v2) = suggest.parse_version()
             .map(|(v1, v2)| (Some(v1), Some(v2)))
             .unwrap_or((None, None));
-        let welcome = self.state.config.auth.welcome_text.clone();
+        let welcome = if let Some(ref file_path) = self.state.config.auth.welcome_text_file {
+            match std::fs::read_to_string(file_path) {
+                Ok(text) => Some(text.trim_end().to_string()),
+                Err(e) => {
+                    warn!("Failed to read welcome_text_file '{}': {}", file_path, e);
+                    self.state.config.auth.welcome_text.clone()
+                }
+            }
+        } else {
+            self.state.config.auth.welcome_text.clone()
+        };
         ServerLimitsConfig {
             max_bandwidth: Some(limits.max_bandwidth),
             text_message_length: Some(limits.text_message_length),
@@ -2561,6 +2686,37 @@ impl RpcHandler {
             welcome_text: welcome,
             suggest_version_v2,
         }
+    }
+
+    /// Check if a channel is temporary and empty, and if so delete it and broadcast.
+    async fn maybe_cleanup_temp_channel(&self, channel_id: u32) {
+        if channel_id == 0 {
+            return; // Never delete root channel
+        }
+        let ch = match self.state.channel_store.get_channel(channel_id).await {
+            Some(c) => c,
+            None => return,
+        };
+        if !ch.temporary {
+            return;
+        }
+        // Check if any sessions are in this channel
+        let sessions = self.state.session_manager.get_all_sessions().await;
+        let occupied = sessions.iter().any(|s| s.channel_id == channel_id);
+        if occupied {
+            return;
+        }
+        // Remove the channel
+        self.state.channel_store.remove_channel(channel_id).await;
+        if let Err(e) = self.state.database.delete_channel(channel_id) {
+            warn!("Failed to delete temporary channel {} from DB: {}", channel_id, e);
+        }
+        info!("Deleted empty temporary channel {} ('{}')", channel_id, ch.name);
+        self.broadcast_notification("hub.channelRemoved", |n| {
+            n.channel_removed = Some(HubChannelRemovedParams {
+                channel_id,
+            });
+        }).await;
     }
 
     fn make_response_packet<F>(

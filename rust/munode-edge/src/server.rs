@@ -328,15 +328,46 @@ async fn handle_client_connection(
         None
     };
 
+    let auth_deadline = if config.server.auth_timeout_secs > 0 {
+        Some(tokio::time::Instant::now() + tokio::time::Duration::from_secs(config.server.auth_timeout_secs))
+    } else {
+        None
+    };
+
     'outer: loop {
         // Read data from TLS stream with idle timeout to drop zombie connections.
-        let n = match tokio::time::timeout(CLIENT_IDLE_TIMEOUT, reader.read_buf(&mut buf)).await {
+        // Before authentication, also enforce the pre-auth connection timeout.
+        let read_timeout = if client_state != ClientState::Ready {
+            if let Some(deadline) = auth_deadline {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                remaining.min(CLIENT_IDLE_TIMEOUT)
+            } else {
+                CLIENT_IDLE_TIMEOUT
+            }
+        } else {
+            CLIENT_IDLE_TIMEOUT
+        };
+        let n = match tokio::time::timeout(read_timeout, reader.read_buf(&mut buf)).await {
             Ok(Ok(n)) => n,
             Ok(Err(e)) => {
                 info!("Client {} connection error: {}", peer_addr, e);
                 break 'outer;
             }
             Err(_) => {
+                if client_state != ClientState::Ready {
+                    if let Some(deadline) = auth_deadline {
+                        if tokio::time::Instant::now() >= deadline {
+                            info!("Client {} auth timeout — closing unauthenticated connection", peer_addr);
+                            let reject = mumbleproto::Reject {
+                                r#type: Some(mumbleproto::reject::RejectType::None as i32),
+                                reason: Some("Authentication timed out".to_string()),
+                                ..Default::default()
+                            };
+                            client_sender.send_message(MessageType::Reject, &reject).await;
+                            break 'outer;
+                        }
+                    }
+                }
                 info!("Client {} idle timeout — closing connection", peer_addr);
                 break 'outer;
             }
@@ -623,6 +654,16 @@ async fn handle_client_connection(
                             // Admin operation: apply to target session
                             handle_admin_user_state_update(&edge_state, &hub_client, sid, target_sid, &user_state).await;
                         } else {
+                            // Reject recording if server policy disallows it
+                            if user_state.recording == Some(true) && !config.server.recording_allowed {
+                                let pq = mumbleproto::PermissionDenied {
+                                    r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                    reason: Some("Recording is not allowed on this server".to_string()),
+                                    ..Default::default()
+                                };
+                                client_sender.send_message(MessageType::PermissionDenied, &pq).await;
+                                continue;
+                            }
                             handle_user_state_update(&edge_state, &hub_client, sid, &user_state).await;
                         }
                     }
@@ -657,6 +698,38 @@ async fn handle_client_connection(
                             }
                         }
                         debug!("TextMessage from session {}: {:?}", sid, text_msg.message);
+                        // Strip HTML if not allowed
+                        let text_msg = if !config.server.allow_html && text_msg.message.contains('<') {
+                            let mut stripped = text_msg.clone();
+                            stripped.message = strip_html_tags(&stripped.message);
+                            stripped
+                        } else {
+                            text_msg
+                        };
+                        // Check TEXT_MESSAGE permission on target channels
+                        if !text_msg.channel_id.is_empty() {
+                            let mut any_allowed = false;
+                            for &ch_id in &text_msg.channel_id {
+                                if let Ok(r) = hub_client.handle_permission_query(sid, ch_id).await {
+                                    if r.permissions.map(|p| p & perm::TEXT_MESSAGE != 0).unwrap_or(true) {
+                                        any_allowed = true;
+                                        break;
+                                    }
+                                } else {
+                                    any_allowed = true; // fail open on Hub error
+                                    break;
+                                }
+                            }
+                            if !any_allowed {
+                                let pq = mumbleproto::PermissionDenied {
+                                    r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                    channel_id: text_msg.channel_id.first().copied(),
+                                    ..Default::default()
+                                };
+                                client_sender.send_message(MessageType::PermissionDenied, &pq).await;
+                                continue;
+                            }
+                        }
                         // Local broadcast to clients on this edge
                         broadcast_text_message(&edge_state, sid, &text_msg).await;
                         // Forward to Hub for cross-edge delivery
@@ -1352,6 +1425,11 @@ async fn handle_client_connection(
                         hub_client.notify_context_action(sid, ca).await;
                     }
                 }
+                MessageType::Authenticate if client_state == ClientState::Ready => {
+                    // Token update while already authenticated: updating tokens requires new
+                    // Hub RPCs (re-evaluate ACLs, broadcast ChannelState). Not yet supported.
+                    debug!("Client {} sent Authenticate in Ready state (token update not yet supported)", peer_addr);
+                }
                 other => {
                     debug!("Unhandled message type {:?} from {} (state={:?})", other, peer_addr, client_state);
                 }            }
@@ -1869,10 +1947,20 @@ async fn broadcast_text_message(
             edge_state.client_manager.send_to(target_session, MessageType::TextMessage, &msg).await;
         }
     } else if !text_msg.tree_id.is_empty() {
-        // Send to channel trees (for now, treat as broadcast)
-        for &channel_id in &text_msg.tree_id {
+        // Collect all channels in the tree (including sub-channels recursively)
+        let mut all_channel_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut to_visit: std::collections::VecDeque<u32> = text_msg.tree_id.iter().copied().collect();
+        while let Some(ch_id) = to_visit.pop_front() {
+            if all_channel_ids.insert(ch_id) {
+                let children = edge_state.channel_manager.get_children(ch_id).await;
+                for child in children {
+                    to_visit.push_back(child);
+                }
+            }
+        }
+        for ch_id in all_channel_ids {
             edge_state.client_manager.broadcast_to_channel(
-                channel_id,
+                ch_id,
                 MessageType::TextMessage,
                 &msg,
                 Some(sender_session),
@@ -1893,6 +1981,21 @@ async fn broadcast_codec_version(edge_state: &Arc<EdgeState>) {
         opus: Some(all_opus),
     };
     edge_state.client_manager.broadcast(MessageType::CodecVersion, &msg, None).await;
+}
+
+/// Strip HTML tags from a string (simple tag removal for Mumble text messages).
+fn strip_html_tags(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for ch in s.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Decode a hex string into bytes.  Returns `None` if the string is not valid hex.
@@ -2679,7 +2782,18 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                                 state.client_manager.broadcast_to_channel(ch_id, MessageType::TextMessage, &msg, None).await;
                             }
                         } else if !msg.tree_id.is_empty() {
-                            for &ch_id in &msg.tree_id {
+                            // Collect all channels in the tree recursively
+                            let mut all_channel_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+                            let mut to_visit: std::collections::VecDeque<u32> = msg.tree_id.iter().copied().collect();
+                            while let Some(ch_id) = to_visit.pop_front() {
+                                if all_channel_ids.insert(ch_id) {
+                                    let children = state.channel_manager.get_children(ch_id).await;
+                                    for child in children {
+                                        to_visit.push_back(child);
+                                    }
+                                }
+                            }
+                            for ch_id in all_channel_ids {
                                 state.client_manager.broadcast_to_channel(ch_id, MessageType::TextMessage, &msg, None).await;
                             }
                         }

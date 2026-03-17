@@ -480,6 +480,9 @@ pub struct HubAuthConfig {
     pub default_channel: u32,
     /// Welcome text.
     pub welcome_text: Option<String>,
+    /// Path to a file containing the welcome text (MOTD).
+    /// If both `welcome_text` and `welcome_text_file` are set, the file takes precedence.
+    pub welcome_text_file: Option<String>,
     /// Server password (empty = no password).
     pub server_password: Option<String>,
     /// When true and an external auth service is connected, always delegate
@@ -524,6 +527,7 @@ impl Default for HubAuthConfig {
             allow_guest: true,
             default_channel: 0,
             welcome_text: None,
+            welcome_text_file: None,
             server_password: None,
             require_auth_service: false,
             http_url: None,
@@ -566,6 +570,12 @@ pub struct HubLimitsConfig {
     /// Maximum number of channels a single user may listen to at once. 0 = unlimited.
     #[serde(default)]
     pub listeners_per_user: u32,
+    /// Maximum channel nesting depth. 0 = unlimited.
+    #[serde(default)]
+    pub channel_nesting_limit: u32,
+    /// Maximum total number of channels. 0 = unlimited.
+    #[serde(default)]
+    pub channel_count_limit: u32,
 }
 
 impl Default for HubLimitsConfig {
@@ -581,6 +591,8 @@ impl Default for HubLimitsConfig {
             plugin_message_length: default_plugin_message_length(),
             listeners_per_channel: 0,
             listeners_per_user: 0,
+            channel_nesting_limit: 0,
+            channel_count_limit: 0,
         }
     }
 }
