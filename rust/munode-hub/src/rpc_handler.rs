@@ -1988,15 +1988,23 @@ impl RpcHandler {
                 .map(|c| c.inherit_acl)
                 .unwrap_or(true);
 
-            // Build the chain [root, ..., parent] (all ancestors, NOT including target channel).
+            // Build the chain [root, ..., parent] stopping at inheritance breaks.
+            // inherit_acl on a channel means "this channel inherits ACLs from its parent".
+            // When a channel has inherit_acl=false the chain stops there: ancestors above
+            // that point do not contribute to this channel's (or its descendants') effective
+            // ACLs, so they should not appear as "inherited" in the ACL dialog.
             let mut ancestor_chain: Vec<u32> = Vec::new();
             {
                 let mut cur = channel_id;
                 loop {
-                    let parent = self.state.channel_store
-                        .get_channel(cur).await
-                        .and_then(|c| c.parent_id);
-                    match parent {
+                    let ch = match self.state.channel_store.get_channel(cur).await {
+                        Some(c) => c,
+                        None => break,
+                    };
+                    if !ch.inherit_acl {
+                        break; // cur does not inherit from its parent; stop here
+                    }
+                    match ch.parent_id {
                         Some(pid) => {
                             ancestor_chain.push(pid);
                             cur = pid;
