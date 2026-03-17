@@ -312,6 +312,8 @@ impl RpcHandler {
             })
             .collect();
 
+        let mut server_limits = self.build_server_limits();
+        server_limits.welcome_text = self.load_welcome_text().await;
         let result = EdgeRegisterResult {
             success: true,
             hub_server_id: Some(params.server_id),
@@ -319,7 +321,7 @@ impl RpcHandler {
             challenge: None,
             challenge_timeout: None,
             error: None,
-            server_limits: Some(self.build_server_limits()),
+            server_limits: Some(server_limits),
         };
 
         let response = self.make_response_packet(request_id, "edge.register", |r| {
@@ -2757,23 +2759,17 @@ impl RpcHandler {
 
     /// Build a ServerLimitsConfig from the current Hub configuration.
     /// This is sent to Edge on registration and via heartbeat ack when limits change.
+    /// Pass `override_welcome` to supply a pre-read welcome text (e.g. from async file I/O).
     pub(crate) fn build_server_limits(&self) -> ServerLimitsConfig {
         let limits = &self.state.config.limits;
         let suggest = &self.state.config.suggest;
         let (suggest_version, suggest_version_v2) = suggest.parse_version()
             .map(|(v1, v2)| (Some(v1), Some(v2)))
             .unwrap_or((None, None));
-        let welcome = if let Some(ref file_path) = self.state.config.auth.welcome_text_file {
-            match std::fs::read_to_string(file_path) {
-                Ok(text) => Some(text.trim_end().to_string()),
-                Err(e) => {
-                    warn!("Failed to read welcome_text_file '{}': {}", file_path, e);
-                    self.state.config.auth.welcome_text.clone()
-                }
-            }
-        } else {
-            self.state.config.auth.welcome_text.clone()
-        };
+        // Welcome text: inline config value only. The file variant is loaded
+        // asynchronously by callers via `load_welcome_text()` to avoid blocking
+        // the tokio executor with synchronous file I/O.
+        let welcome = self.state.config.auth.welcome_text.clone();
         ServerLimitsConfig {
             max_bandwidth: Some(limits.max_bandwidth),
             text_message_length: Some(limits.text_message_length),
@@ -2797,35 +2793,75 @@ impl RpcHandler {
         }
     }
 
+    /// Load the welcome text asynchronously.
+    ///
+    /// If `welcome_text_file` is set, the file is read with `tokio::fs` (non-blocking).
+    /// Falls back to the inline `welcome_text` config value on error or if not set.
+    async fn load_welcome_text(&self) -> Option<String> {
+        if let Some(ref file_path) = self.state.config.auth.welcome_text_file {
+            match tokio::fs::read_to_string(file_path).await {
+                Ok(text) => Some(text.trim_end().to_string()),
+                Err(e) => {
+                    warn!("Failed to read welcome_text_file '{}': {}", file_path, e);
+                    self.state.config.auth.welcome_text.clone()
+                }
+            }
+        } else {
+            self.state.config.auth.welcome_text.clone()
+        }
+    }
+
     /// Check if a channel is temporary and empty, and if so delete it and broadcast.
+    ///
+    /// After deleting the channel, this method also checks the parent channel — if
+    /// the parent is also temporary and is now empty (because all children were deleted),
+    /// it is cleaned up too, walking up the tree until a non-empty or non-temporary
+    /// ancestor is reached.
     async fn maybe_cleanup_temp_channel(&self, channel_id: u32) {
-        if channel_id == 0 {
-            return; // Never delete root channel
+        // Walk up the ancestor chain, cleaning up empty temporary channels.
+        let mut current_id = channel_id;
+        loop {
+            if current_id == 0 {
+                return; // Never delete root channel
+            }
+            let ch = match self.state.channel_store.get_channel(current_id).await {
+                Some(c) => c,
+                None => return,
+            };
+            if !ch.temporary {
+                return; // Reached a permanent channel — stop
+            }
+            // Keep channel if any session is in it
+            let sessions = self.state.session_manager.get_all_sessions().await;
+            if sessions.iter().any(|s| s.channel_id == current_id) {
+                return;
+            }
+            // Keep channel if it still has sub-channels
+            let has_children = self.state.channel_store
+                .get_all_channels().await
+                .iter()
+                .any(|c| c.parent_id == Some(current_id));
+            if has_children {
+                return;
+            }
+            let parent_id = ch.parent_id;
+            // Delete this empty temporary channel
+            self.state.channel_store.remove_channel(current_id).await;
+            if let Err(e) = self.state.database.delete_channel(current_id) {
+                warn!("Failed to delete temporary channel {} from DB: {}", current_id, e);
+            }
+            info!("Deleted empty temporary channel {} ('{}')", current_id, ch.name);
+            self.broadcast_notification("hub.channelRemoved", |n| {
+                n.channel_removed = Some(HubChannelRemovedParams {
+                    channel_id: current_id,
+                });
+            }).await;
+            // Continue to check the parent channel
+            match parent_id {
+                Some(pid) => current_id = pid,
+                None => return,
+            }
         }
-        let ch = match self.state.channel_store.get_channel(channel_id).await {
-            Some(c) => c,
-            None => return,
-        };
-        if !ch.temporary {
-            return;
-        }
-        // Check if any sessions are in this channel
-        let sessions = self.state.session_manager.get_all_sessions().await;
-        let occupied = sessions.iter().any(|s| s.channel_id == channel_id);
-        if occupied {
-            return;
-        }
-        // Remove the channel
-        self.state.channel_store.remove_channel(channel_id).await;
-        if let Err(e) = self.state.database.delete_channel(channel_id) {
-            warn!("Failed to delete temporary channel {} from DB: {}", channel_id, e);
-        }
-        info!("Deleted empty temporary channel {} ('{}')", channel_id, ch.name);
-        self.broadcast_notification("hub.channelRemoved", |n| {
-            n.channel_removed = Some(HubChannelRemovedParams {
-                channel_id,
-            });
-        }).await;
     }
 
     fn make_response_packet<F>(

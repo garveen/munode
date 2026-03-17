@@ -718,36 +718,42 @@ async fn handle_client_connection(
                         }
                         debug!("TextMessage from session {}: {:?}", sid, text_msg.message);
                         // Strip HTML if not allowed
-                        let text_msg = if !config.server.allow_html && text_msg.message.contains('<') {
+                        let mut text_msg = if !config.server.allow_html && text_msg.message.contains('<') {
                             let mut stripped = text_msg.clone();
                             stripped.message = strip_html_tags(&stripped.message);
                             stripped
                         } else {
                             text_msg
                         };
-                        // Check TEXT_MESSAGE permission on target channels
+                        // Check TEXT_MESSAGE permission on each target channel and filter
+                        // to only the channels where the sender has permission.
+                        // PermissionDenied is sent only when ALL channels are denied.
                         if !text_msg.channel_id.is_empty() {
-                            let mut any_allowed = false;
+                            let mut permitted_channels: Vec<u32> = Vec::new();
+                            let mut first_denied: Option<u32> = None;
                             for &ch_id in &text_msg.channel_id {
-                                if let Ok(r) = hub_client.handle_permission_query(sid, ch_id).await {
-                                    if r.permissions.map(|p| p & perm::TEXT_MESSAGE != 0).unwrap_or(true) {
-                                        any_allowed = true;
-                                        break;
-                                    }
-                                } else {
-                                    any_allowed = true; // fail open on Hub error
-                                    break;
+                                let has_perm = match hub_client.handle_permission_query(sid, ch_id).await {
+                                    Ok(r) => r.permissions.map(|p| p & perm::TEXT_MESSAGE != 0).unwrap_or(true),
+                                    Err(_) => true, // fail open on Hub error
+                                };
+                                if has_perm {
+                                    permitted_channels.push(ch_id);
+                                } else if first_denied.is_none() {
+                                    first_denied = Some(ch_id);
                                 }
                             }
-                            if !any_allowed {
+                            if permitted_channels.is_empty() {
+                                // No permitted channels at all — deny
                                 let pq = mumbleproto::PermissionDenied {
                                     r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
-                                    channel_id: text_msg.channel_id.first().copied(),
+                                    channel_id: first_denied,
                                     ..Default::default()
                                 };
                                 client_sender.send_message(MessageType::PermissionDenied, &pq).await;
                                 continue;
                             }
+                            // Replace channel list with only permitted channels
+                            text_msg.channel_id = permitted_channels;
                         }
                         // Local broadcast to clients on this edge
                         broadcast_text_message(&edge_state, sid, &text_msg).await;

@@ -158,8 +158,12 @@ impl<'a> LoginHandler<'a> {
                 Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(true),
                 Err(_) => true, // fail open
             };
-            // is_enter_restricted: signals that the channel has entry restrictions.
-            // We approximate: if the current user cannot enter, it is restricted.
+            // is_enter_restricted signals that the channel has entry restrictions (shows padlock).
+            // Strictly, this should be true whenever the channel has any ENTER-deny ACL entry,
+            // regardless of whether the current user can enter. That would require a separate
+            // Hub query. We use the approximation: restricted iff the current user cannot enter.
+            // This is wrong only in the edge case where the user has special access to a
+            // restricted channel (padlock won't show for them), which is acceptable UX.
             let is_enter_restricted = !can_enter;
 
             let msg = mumbleproto::ChannelState {
