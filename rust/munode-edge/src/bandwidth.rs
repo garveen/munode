@@ -217,18 +217,25 @@ mod tests {
 
     #[test]
     fn test_bytes_last_second_stale_after_idle() {
-        // Use a 2-slot window so we only need to wait ~2 s for the staleness
-        // guard to trigger instead of the full 360-s default window.
-        let mut bw = BandwidthRecord::new(2);
-        assert!(bw.add_frame(1000, 0));
+        // Build a record whose epoch is 2 seconds in the past so that
+        // elapsed_slots() returns 2 immediately — no real sleep needed.
+        let mut bw = BandwidthRecord::new(4); // 4-slot window
+        bw.epoch = std::time::Instant::now() - std::time::Duration::from_secs(2);
 
-        // After ≥2 s without any new frames, bytes_last_second must return 0
-        // rather than the stale ring-buffer slot from the previous recording.
-        std::thread::sleep(std::time::Duration::from_millis(2100));
+        // With epoch 2 s in the past: now_abs = 2, prev_idx = (2-1) % 4 = 1.
+        // Pre-populate that exact slot with a non-zero value so that without the
+        // staleness guard bytes_last_second() would return 5000 instead of 0.
+        bw.slots[1] = 5000;
+
+        // Simulate the last write having happened at second 0 (2 s ago).
+        // now_abs - last_slot_abs == 2 is the threshold that triggers the guard.
+        bw.last_slot_abs = Some(0);
+
+        // The staleness guard must kick in and return 0 rather than the stale 5000.
         assert_eq!(
             bw.bytes_last_second(),
             0,
-            "bytes_last_second should return 0 after ≥2 s of inactivity"
+            "bytes_last_second should return 0 when last write was ≥2 s ago (staleness guard)"
         );
     }
 }

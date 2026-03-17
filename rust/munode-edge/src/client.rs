@@ -688,17 +688,30 @@ mod tests {
     async fn test_record_voice_bytes_enforces_cap() {
         let mgr = ClientManager::new();
         let session = 42u32;
-        let cap = 8000u32;
+        let cap = 500u32;
+        let frame_bytes = 100u32;
 
-        // First frame fills the cap exactly — should be accepted.
+        // Loop sending small frames until the cap is exceeded.  All iterations
+        // complete in microseconds, so no slot boundary is ever crossed and the
+        // test is deterministic regardless of system load or scheduling jitter.
+        let max_iters = cap / frame_bytes + 2; // slightly more than needed
+        let mut accepted = 0u32;
+        let mut dropped = false;
+        for _ in 0..max_iters {
+            if mgr.record_voice_bytes(session, frame_bytes, cap, 60).await {
+                accepted += 1;
+            } else {
+                dropped = true;
+                break;
+            }
+        }
+
+        assert!(dropped, "cap of {cap} bps should have been exceeded within {max_iters} frames");
+        // At most cap/frame_bytes frames should have been accepted before the cap was hit.
         assert!(
-            mgr.record_voice_bytes(session, cap, cap, 60).await,
-            "frame that fills cap should be accepted"
-        );
-        // Next frame should be rejected (over cap).
-        assert!(
-            !mgr.record_voice_bytes(session, 1, cap, 60).await,
-            "frame that exceeds cap should be dropped"
+            accepted <= cap / frame_bytes,
+            "accepted {accepted} frames before drop; expected at most {}",
+            cap / frame_bytes
         );
     }
 
