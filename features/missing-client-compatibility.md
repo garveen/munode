@@ -240,6 +240,8 @@
 
 ## 17. 频道监听状态不持久化（登录后不恢复）
 
+✅ **已实现**：DB 方法 `load_channel_listeners` / `save_channel_listeners` 已存在；Edge 在登录完成后调用 `hub_client.load_channel_listeners(user_id)` 恢复持久化的监听状态，在断开连接时调用 `save_channel_listeners` 保存。
+
 **描述**：Murmur 在用户登录时，从 DB 加载其上次的频道监听状态（`loadChannelListenersOf`），恢复订阅关系。
 
 **现状**：MuNode 不持久化频道监听关系，断线重连后用户的监听状态全部丢失。
@@ -264,6 +266,8 @@
 ---
 
 ## 19. VoiceTarget 群组过滤（`group` 字段）不生效
+
+✅ **已实现**：语音路由（VoiceTarget channel targets）现在检查 `ch_cfg.group` 过滤器；当设置了群组名时，只向该频道中 `ClientInfo.groups` 包含该群组名的用户发送语音。
 
 **描述**：Murmur 的低语目标配置中，频道目标可附加 `targetGroup` 字段，表示只将语音发送给该频道中属于该群组的用户。
 

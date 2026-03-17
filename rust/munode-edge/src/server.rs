@@ -103,10 +103,11 @@ impl EdgeServer {
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         let event_handle = tokio::spawn({
             let state = edge_state.clone();
+            let hub_client_for_events = hub_client.clone();
             let mut event_rx = edge_state.subscribe_events();
             let shutdown_tx = shutdown_tx.clone();
             async move {
-                hub_event_listener(state, &mut event_rx, shutdown_tx).await;
+                hub_event_listener(state, &mut event_rx, shutdown_tx, hub_client_for_events).await;
             }
         });
 
@@ -502,7 +503,7 @@ async fn handle_client_connection(
                         }
                         client_sender.send_raw(handler::encode_reject(
                             auth_result.reject_type.map(|t| t as i32)
-                                .or(if auth_result.cert_required.unwrap_or(false) {
+                                .or_else(|| if auth_result.cert_required.unwrap_or(false) {
                                     Some(mumbleproto::reject::RejectType::NoCertificate as i32)
                                 } else { None }),
                             &reason,
@@ -824,6 +825,14 @@ async fn handle_client_connection(
                                             let local_sessions = edge_state.client_manager.get_channel_sessions(ch_id).await;
                                             for s in local_sessions {
                                                 if s != sid {
+                                                    // If a group filter is set, only include users in that group
+                                                    if let Some(ref group_filter) = ch_cfg.group {
+                                                        if let Some(target_client) = edge_state.client_manager.get_client(s).await {
+                                                            if !target_client.groups.iter().any(|g| g == group_filter) {
+                                                                continue;
+                                                            }
+                                                        }
+                                                    }
                                                     target_sessions.insert(s);
                                                 }
                                             }
@@ -2411,7 +2420,8 @@ mod tests {
         tokio::spawn(async move {
             let mut rx = es2.subscribe_events();
             let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
-            hub_event_listener(es2, &mut rx, shutdown_tx).await;
+            let hub_client = HubClient::new(&test_config(), es2.clone());
+            hub_event_listener(es2, &mut rx, shutdown_tx, hub_client).await;
         });
         // Give the background task a moment to subscribe before the first emit.
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -2585,6 +2595,7 @@ mod tests {
 async fn hub_event_listener(    state: Arc<EdgeState>,
     event_rx: &mut tokio::sync::broadcast::Receiver<EdgeEvent>,
     shutdown_tx: watch::Sender<bool>,
+    hub_client: Arc<HubClient>,
 ) {
     use tokio::sync::broadcast::error::RecvError;
 

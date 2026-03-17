@@ -1523,18 +1523,11 @@ impl RpcHandler {
                         }
                         match self.state.database.get_channel_group_members(db_group.id) {
                             Ok(members) => {
-                                // Single pass: track both add and remove status
-                                let (is_added, is_removed) = members.iter().fold(
-                                    (false, false),
-                                    |(added, removed), (uid, is_add)| {
-                                        if *uid == user_id_u32 {
-                                            (added || *is_add, removed || !*is_add)
-                                        } else {
-                                            (added, removed)
-                                        }
-                                    },
-                                );
-                                if is_added && !is_removed && !effective_groups.contains(&db_group.name) {
+                                let is_explicitly_added = members.iter()
+                                    .any(|(uid, is_add)| *uid == user_id_u32 && *is_add);
+                                let is_explicitly_removed = members.iter()
+                                    .any(|(uid, is_add)| *uid == user_id_u32 && !*is_add);
+                                if is_explicitly_added && !is_explicitly_removed && !effective_groups.contains(&db_group.name) {
                                     effective_groups.push(db_group.name.clone());
                                 }
                             }

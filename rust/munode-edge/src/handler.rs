@@ -607,6 +607,11 @@ mod tests {
             listening_volume_adjustments: HashMap::new(),
             texture_hash: None,
             comment_hash: None,
+            client_version: None,
+            client_release: String::new(),
+            client_os: String::new(),
+            client_os_version: String::new(),
+            plugin_context: vec![],
         };
 
         let msg = build_user_state_msg(&client);
