@@ -58,7 +58,7 @@ impl<'a> LoginHandler<'a> {
         self.send_codec_version(opus_supported).await?;
 
         // 3. Send channel tree (BFS order)
-        self.send_channel_tree(session_id).await?;
+        self.send_channel_tree().await?;
 
         // 4. Send UserState for all remote users
         self.send_remote_users(session_id).await?;
@@ -134,8 +134,15 @@ impl<'a> LoginHandler<'a> {
     }
 
     /// Send the full channel tree in BFS order.
-    async fn send_channel_tree(&self, session_id: u32) -> Result<()> {
-        use munode_common::permission as perm;
+    ///
+    /// Per-channel permission queries (for `is_enter_restricted` / `can_enter`) are
+    /// deliberately skipped here.  Making one Hub RPC call per channel during the login
+    /// sequence would cause 20+ second delays on servers with many channels, causing
+    /// Mumble clients (especially the official C++ client) to time out.  The Mumble
+    /// protocol treats both fields as optional; omitting them is safe — the client
+    /// falls back to its own permission model and requests individual PermissionQuery
+    /// replies for channels it cares about.
+    async fn send_channel_tree(&self) -> Result<()> {
         let channels = self.edge_state.channel_manager.get_channels_bfs().await;
 
         // Pass 1: Send all channels with their basic info
@@ -153,19 +160,6 @@ impl<'a> LoginHandler<'a> {
                 (None, None)
             };
 
-            // Check ENTER permission for the current user on this channel.
-            let can_enter = match self.hub_client.handle_permission_query(session_id, ch.id).await {
-                Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(true),
-                Err(_) => true, // fail open
-            };
-            // is_enter_restricted signals that the channel has entry restrictions (shows padlock).
-            // Strictly, this should be true whenever the channel has any ENTER-deny ACL entry,
-            // regardless of whether the current user can enter. That would require a separate
-            // Hub query. We use the approximation: restricted iff the current user cannot enter.
-            // This is wrong only in the edge case where the user has special access to a
-            // restricted channel (padlock won't show for them), which is acceptable UX.
-            let is_enter_restricted = !can_enter;
-
             let msg = mumbleproto::ChannelState {
                 channel_id: Some(ch.id),
                 parent: ch.parent_id,
@@ -175,8 +169,6 @@ impl<'a> LoginHandler<'a> {
                 position: Some(ch.position),
                 temporary: Some(ch.temporary),
                 max_users: Some(ch.max_users),
-                is_enter_restricted: if is_enter_restricted { Some(true) } else { None },
-                can_enter: Some(can_enter),
                 ..Default::default()
             };
             self.send(MessageType::ChannelState, &msg).await?;

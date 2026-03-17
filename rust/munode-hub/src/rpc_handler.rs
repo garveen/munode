@@ -1885,18 +1885,75 @@ impl RpcHandler {
             .context("Missing edge_handle_acl params")?;
 
         if params.query {
-            // ACL query: return ACL entries for the channel (including inherited)
-            let acls = self.state.acl_manager.get_channel_acls(params.channel_id);
+            // ACL query: return ACL entries for the channel (including inherited from parents).
+            // This mirrors Murmur's sendACL behaviour: walk the chain from root to the target
+            // channel, collect parent-channel ACLs that have apply_subs=true (marked inherited),
+            // then append the target channel's own ACLs (marked not-inherited).
+            let channel_id = params.channel_id;
             let inherit_acl = self.state.channel_store
-                .get_channel(params.channel_id).await
+                .get_channel(channel_id).await
                 .map(|c| c.inherit_acl)
                 .unwrap_or(true);
 
+            // Build the chain [root, ..., parent] (all ancestors, NOT including target channel).
+            let mut ancestor_chain: Vec<u32> = Vec::new();
+            {
+                let mut cur = channel_id;
+                loop {
+                    let parent = self.state.channel_store
+                        .get_channel(cur).await
+                        .and_then(|c| c.parent_id);
+                    match parent {
+                        Some(pid) => {
+                            ancestor_chain.push(pid);
+                            cur = pid;
+                        }
+                        None => break,
+                    }
+                }
+                ancestor_chain.reverse(); // root first
+            }
+
+            // Collect ACL entries: inherited ones from ancestors first, then own.
+            let mut acls_proto: Vec<munode_protocol::mumbleproto::acl::ChanAcl> = Vec::new();
+
+            for &ancestor_id in &ancestor_chain {
+                let ancestor_acls = self.state.acl_manager.get_channel_acls(ancestor_id);
+                for a in &ancestor_acls {
+                    if !a.apply_subs {
+                        continue; // only include ACLs that propagate to sub-channels
+                    }
+                    acls_proto.push(munode_protocol::mumbleproto::acl::ChanAcl {
+                        apply_here: Some(a.apply_here),
+                        apply_subs: Some(a.apply_subs),
+                        user_id: a.user_id.map(|id| id as u32),
+                        group: a.group_name.clone(),
+                        grant: Some(a.allow),
+                        deny: Some(a.deny),
+                        inherited: Some(true),
+                    });
+                }
+            }
+
+            // Own ACLs for the target channel (not inherited).
+            let own_acls = self.state.acl_manager.get_channel_acls(channel_id);
+            for a in &own_acls {
+                acls_proto.push(munode_protocol::mumbleproto::acl::ChanAcl {
+                    apply_here: Some(a.apply_here),
+                    apply_subs: Some(a.apply_subs),
+                    user_id: a.user_id.map(|id| id as u32),
+                    group: a.group_name.clone(),
+                    grant: Some(a.allow),
+                    deny: Some(a.deny),
+                    inherited: Some(false),
+                });
+            }
+
             // Load channel groups for this channel
-            let groups_db = match self.state.database.get_channel_groups(params.channel_id) {
+            let groups_db = match self.state.database.get_channel_groups(channel_id) {
                 Ok(groups) => groups,
                 Err(e) => {
-                    warn!("Failed to load channel groups for channel {}: {}", params.channel_id, e);
+                    warn!("Failed to load channel groups for channel {}: {}", channel_id, e);
                     vec![]
                 }
             };
@@ -1923,20 +1980,10 @@ impl RpcHandler {
 
             // Encode ACL data as raw bytes (Mumble ACL message format)
             let acl_msg = munode_protocol::mumbleproto::Acl {
-                channel_id: params.channel_id,
+                channel_id,
                 inherit_acls: Some(inherit_acl),
                 groups: groups_proto,
-                acls: acls.iter().map(|a| {
-                    munode_protocol::mumbleproto::acl::ChanAcl {
-                        apply_here: Some(a.apply_here),
-                        apply_subs: Some(a.apply_subs),
-                        user_id: a.user_id.map(|id| id as u32),
-                        group: a.group_name.clone(),
-                        grant: Some(a.allow),
-                        deny: Some(a.deny),
-                        inherited: Some(false),
-                    }
-                }).collect(),
+                acls: acls_proto,
                 query: Some(true),
             };
 
