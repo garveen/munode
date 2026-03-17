@@ -398,11 +398,6 @@ impl ClientManager {
         let record = records
             .entry(session)
             .or_insert_with(|| BandwidthRecord::new(window_secs));
-        // If `rolling_stats_window` was hot-reloaded to a different size,
-        // recreate the record so it uses the updated window length.
-        if record.window_secs() != crate::bandwidth::effective_window(window_secs) {
-            *record = BandwidthRecord::new(window_secs);
-        }
         record.add_frame(bytes, max_bytes_per_sec)
     }
 

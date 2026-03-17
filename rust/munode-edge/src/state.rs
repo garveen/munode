@@ -202,7 +202,7 @@ pub struct EdgeState {
     /// Stored as AtomicBool for lock-free reads in the UDP hot path and hot-reload.
     pub allow_ping: AtomicBool,
     /// Rolling statistics window size in seconds for per-session voice quality metrics.
-    /// 0 uses the default window (360 seconds), matching the BandwidthRecord default.
+    /// 0 means no rolling window (accumulate forever).
     /// Stored as AtomicU32 for lock-free reads in the voice hot path and hot-reload.
     pub rolling_stats_window: AtomicU32,
     /// Channel Ninja: list of channel IDs that are hidden from unprivileged users.

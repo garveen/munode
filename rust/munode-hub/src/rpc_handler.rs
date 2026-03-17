@@ -189,18 +189,6 @@ impl RpcHandler {
             "hub.handlePluginDataTransmission" => {
                 self.on_plugin_data(&notification, edge_server_id).await;
             }
-            "hub.contextAction" => {
-                if let Some(ca) = &notification.context_action {
-                    debug!(
-                        edge_id = edge_server_id,
-                        session_id = ca.session_id,
-                        action = ca.action.action.as_str(),
-                        actor = ca.action.session.unwrap_or(0),
-                        channel = ca.action.channel_id.unwrap_or(0),
-                        "ContextAction received from edge (no Hub-side processing yet)"
-                    );
-                }
-            }
             _ => {
                 debug!("Unhandled notification: {}", method);
             }
@@ -2822,6 +2810,7 @@ impl RpcHandler {
 
     /// Build a ServerLimitsConfig from the current Hub configuration.
     /// This is sent to Edge on registration and via heartbeat ack when limits change.
+    /// Pass `override_welcome` to supply a pre-read welcome text (e.g. from async file I/O).
     pub(crate) fn build_server_limits(&self) -> ServerLimitsConfig {
         let limits = &self.state.config.limits;
         let suggest = &self.state.config.suggest;

@@ -18,20 +18,6 @@ pub const DEFAULT_WINDOW_SLOTS: usize = 360;
 /// A 1-hour window is more than sufficient for any practical use case.
 pub const MAX_WINDOW_SLOTS: usize = 3600;
 
-/// Normalize a requested window size to the effective number of slots that
-/// `BandwidthRecord::new` would allocate.
-///
-/// * `0`  → `DEFAULT_WINDOW_SLOTS` (360)
-/// * `> MAX_WINDOW_SLOTS` → `MAX_WINDOW_SLOTS` (3600)
-/// * otherwise → `window_secs` unchanged
-pub fn effective_window(window_secs: usize) -> usize {
-    if window_secs == 0 {
-        DEFAULT_WINDOW_SLOTS
-    } else {
-        window_secs.min(MAX_WINDOW_SLOTS)
-    }
-}
-
 /// Per-user voice bandwidth ring-buffer recorder.
 ///
 /// Call `add_frame(size, max_bytes_per_sec)` on each received voice packet.
@@ -55,7 +41,11 @@ impl BandwidthRecord {
     /// * `window_secs = 0` uses the `DEFAULT_WINDOW_SLOTS` (360 seconds).
     /// * Values above `MAX_WINDOW_SLOTS` (3600) are clamped to the maximum.
     pub fn new(window_secs: usize) -> Self {
-        let slots = effective_window(window_secs);
+        let slots = if window_secs == 0 {
+            DEFAULT_WINDOW_SLOTS
+        } else {
+            window_secs.min(MAX_WINDOW_SLOTS)
+        };
         Self {
             slots: vec![0u32; slots],
             epoch: Instant::now(),
@@ -83,11 +73,6 @@ impl BandwidthRecord {
         true
     }
 
-    /// Return the window size (number of slots) this record was created with.
-    pub fn window_secs(&self) -> usize {
-        self.window_secs
-    }
-
     /// Return the total bytes recorded across the entire window.
     pub fn total_bytes(&self) -> u64 {
         self.slots.iter().map(|&b| b as u64).sum()
@@ -95,26 +80,13 @@ impl BandwidthRecord {
 
     /// Return the bytes recorded in the most-recent completed slot (i.e., the
     /// previous second), which gives an instantaneous bandwidth snapshot.
-    ///
-    /// Returns `0` if no frames have been recorded yet, or if no frames have
-    /// arrived within the last two seconds (stale / idle session).
     pub fn bytes_last_second(&self) -> u32 {
         let now_abs = self.elapsed_slots();
         if now_abs == 0 {
             return 0;
         }
-        // The previous-second slot is only valid when a frame was recorded
-        // recently enough that it has not yet been overwritten by stale-slot
-        // clearing.  If `last_slot_abs < now_abs - 1` the slot value belongs
-        // to a past ring-buffer cycle and would be stale.
-        match self.last_slot_abs {
-            None => 0,
-            Some(last_abs) if now_abs.saturating_sub(last_abs) >= 2 => 0,
-            _ => {
-                let prev_idx = (now_abs - 1) % self.window_secs;
-                self.slots[prev_idx]
-            }
-        }
+        let prev_idx = (now_abs - 1) % self.window_secs;
+        self.slots[prev_idx]
     }
 
     /// Return the average bytes-per-second across all filled slots.

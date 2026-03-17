@@ -384,16 +384,14 @@ impl Database {
 
     /// Persist the channel listeners for a user (replaces previous state).
     ///
-    /// Deletes all previous rows for this user and inserts the new set atomically
-    /// within a transaction.  Passing an empty `channel_ids` slice clears the
-    /// listeners.  Silently succeeds when the `channel_listeners` table doesn't
-    /// exist yet (pre-migration 5 databases).
+    /// Deletes all previous rows for this user and inserts the new set.
+    /// Passing an empty `channel_ids` slice effectively clears the listeners.
+    /// Silently succeeds when the `channel_listeners` table doesn't exist yet
+    /// (pre-migration 5 databases).
     pub fn save_channel_listeners(&self, user_id: u32, channel_ids: &[u32]) -> Result<()> {
-        let mut conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
-        // Wrap delete + insert in a single transaction so the state is always
-        // consistent even if the process crashes mid-operation.
-        let tx = conn.transaction()?;
-        let del_result = tx.execute("DELETE FROM channel_listeners WHERE user_id = ?1", params![user_id]);
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        // Replace atomically within a transaction.
+        let del_result = conn.execute("DELETE FROM channel_listeners WHERE user_id = ?1", params![user_id]);
         match del_result {
             // "no such table" on pre-migration 5 databases — silently skip.
             Err(e) if e.to_string().contains("no such table") => return Ok(()),
@@ -401,12 +399,11 @@ impl Database {
             Ok(_) => {}
         }
         for &ch_id in channel_ids {
-            tx.execute(
+            conn.execute(
                 "INSERT OR IGNORE INTO channel_listeners (user_id, channel_id) VALUES (?1, ?2)",
                 params![user_id, ch_id],
             )?;
         }
-        tx.commit()?;
         Ok(())
     }
 

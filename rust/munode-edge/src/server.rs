@@ -12,7 +12,6 @@ use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, trace, warn};
 
 use munode_common::config::EdgeConfig;
-use munode_common::logging::LogReloadHandle;
 use munode_common::permission as perm;
 use munode_protocol::hubedge;
 use munode_protocol::message_type::MessageType;
@@ -32,18 +31,16 @@ pub struct EdgeServer {
     config: EdgeConfig,
     /// Path to the config file, used for hot-reload on SIGHUP.
     config_path: Option<String>,
-    /// Handle for updating the active log-level filter at runtime.
-    log_reload: Option<LogReloadHandle>,
 }
 
 impl EdgeServer {
     pub fn new(config: EdgeConfig) -> Self {
-        Self { config, config_path: None, log_reload: None }
+        Self { config, config_path: None }
     }
 
     /// Create a new EdgeServer with the config file path for hot-reload support.
-    pub fn new_with_path(config: EdgeConfig, config_path: String, log_reload: LogReloadHandle) -> Self {
-        Self { config, config_path: Some(config_path), log_reload: Some(log_reload) }
+    pub fn new_with_path(config: EdgeConfig, config_path: String) -> Self {
+        Self { config, config_path: Some(config_path) }
     }
 
     /// Run the edge server.
@@ -119,7 +116,6 @@ impl EdgeServer {
         {
             let config_path = self.config_path.clone();
             let reload_state = edge_state.clone();
-            let log_reload = self.log_reload.clone();
             tokio::spawn(async move {
                 use tokio::signal::unix::{signal, SignalKind};
                 let mut sighup = match signal(SignalKind::hangup()) {
@@ -136,16 +132,14 @@ impl EdgeServer {
                         match munode_common::config::load_edge_config(path) {
                             Ok(new_cfg) => {
                                 reload_state.apply_hot_config(&new_cfg);
-                                // Update the active log-level filter via the reload handle so
-                                // the change takes effect immediately without re-initialising
-                                // the global subscriber (which would be a no-op).
-                                if let Some(ref lr) = log_reload {
-                                    lr.reload_level(&new_cfg.log_level);
-                                }
+                                // Re-initialise logging at the new level.
+                                munode_common::logging::init_logging_with_format(
+                                    &new_cfg.log_level,
+                                    &new_cfg.log_format,
+                                );
                                 info!(
                                     allow_ping = new_cfg.server.allow_ping,
                                     rolling_stats_window = new_cfg.server.rolling_stats_window,
-                                    log_level = %new_cfg.log_level,
                                     "Config hot-reload applied"
                                 );
                             }
@@ -1483,11 +1477,9 @@ async fn handle_client_connection(
 
     // Cleanup
     if let Some(sid) = session_id {
-        // Save channel listeners before removing the client (so we still have access to the data).
-        // Always persist even when the list is empty, so that a user who explicitly cleared all
-        // listeners has that "no listeners" state saved (overwriting any previously stored state).
+        // Save channel listeners before removing the client (so we still have access to the data)
         if let Some(client) = edge_state.client_manager.get_client(sid).await {
-            if client.user_id > 0 {
+            if client.user_id > 0 && !client.listening_channels.is_empty() {
                 let user_id = client.user_id;
                 let channels = client.listening_channels.clone();
                 hub_client.save_channel_listeners(user_id, channels).await;
