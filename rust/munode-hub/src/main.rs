@@ -2,7 +2,7 @@ use anyhow::Result;
 use tracing::info;
 
 use munode_common::config::load_hub_config;
-use munode_common::logging::init_logging_with_format;
+use munode_common::logging::init_logging_with_reload;
 use munode_hub::database::Database;
 use munode_hub::server::HubServer;
 
@@ -329,7 +329,7 @@ async fn main() -> Result<()> {
         .to_string();
 
     let config = load_hub_config(&config_path)?;
-    init_logging_with_format(&config.log_level, &config.log_format);
+    let log_reload = init_logging_with_reload(&config.log_level, &config.log_format);
 
     info!(
         control_port = config.network.control_port,
@@ -355,7 +355,10 @@ async fn main() -> Result<()> {
                 tracing::info!("SIGHUP received — attempting config hot-reload");
                 match load_hub_config(&reload_path) {
                     Ok(new_cfg) => {
-                        init_logging_with_format(&new_cfg.log_level, &new_cfg.log_format);
+                        // Update the active log-level filter via the reload handle so the
+                        // change takes effect immediately without re-initialising the global
+                        // subscriber (which would be a no-op after the first init).
+                        log_reload.reload_level(&new_cfg.log_level);
                         tracing::info!(
                             log_level = %new_cfg.log_level,
                             "Hub config hot-reload applied (log level updated)"
