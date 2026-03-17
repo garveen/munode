@@ -350,6 +350,42 @@ impl RpcHandler {
         }))
     }
 
+    /// Enforce the per-user concurrent session limit for a non-anonymous user.
+    ///
+    /// If `user_id == 0` (anonymous) or `max_sessions == 0` (unlimited), this is a no-op.
+    /// Otherwise, all existing sessions for `user_id` are collected, sorted by session_id
+    /// ascending (oldest first), and excess sessions are removed and broadcast-kicked until
+    /// the remaining count is strictly below `max_sessions`.
+    async fn kick_excess_sessions_for_user(&self, user_id: u32, max_sessions: u32) {
+        if user_id == 0 || max_sessions == 0 {
+            return;
+        }
+        let mut existing = self.state.session_manager.get_sessions_by_user(user_id).await;
+        if existing.len() < max_sessions as usize {
+            return;
+        }
+        // Sort by session_id ascending so the oldest (lowest ID) is kicked first.
+        existing.sort_by_key(|s| s.session_id);
+        let to_kick = existing.len() - max_sessions as usize + 1;
+        for session in existing.into_iter().take(to_kick) {
+            let ghost_session = session.session_id;
+            self.state.session_manager.remove_session(ghost_session).await;
+            self.broadcast_notification("hub.userRemoveBroadcast", |n| {
+                n.user_remove_broadcast = Some(HubUserRemoveBroadcastParams {
+                    session: ghost_session,
+                    actor: None,
+                    reason: Some("Replaced by new connection (session limit reached)".to_string()),
+                    ban: None,
+                    target_sessions: vec![],
+                });
+            }).await;
+            info!(
+                "Kicked oldest session {} for user_id={} due to max_sessions_per_user={}",
+                ghost_session, user_id, max_sessions
+            );
+        }
+    }
+
     async fn handle_authenticate_user(
         &self,
         request: &TypedRpcRequest,
@@ -589,6 +625,7 @@ impl RpcHandler {
                         priority_speaker: params.priority_speaker.unwrap_or(false),
                         recording: params.recording.unwrap_or(false),
                     };
+                    self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
                     self.state.session_manager.add_session(session_info).await;
 
                     info!(
@@ -768,6 +805,7 @@ impl RpcHandler {
                         priority_speaker: params.priority_speaker.unwrap_or(false),
                         recording: params.recording.unwrap_or(false),
                     };
+                    self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
                     self.state.session_manager.add_session(session_info).await;
 
                     info!(
@@ -920,6 +958,7 @@ impl RpcHandler {
                         priority_speaker: params.priority_speaker.unwrap_or(false),
                         recording: params.recording.unwrap_or(false),
                     };
+                    self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
                     self.state.session_manager.add_session(session_info).await;
 
                     info!(
@@ -1133,6 +1172,7 @@ impl RpcHandler {
             recording: params.recording.unwrap_or(false),
         };
 
+        self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
         self.state.session_manager.add_session(session_info.clone()).await;
 
         // GeoIP lookup for this user's IP address

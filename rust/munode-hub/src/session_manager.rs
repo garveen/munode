@@ -65,6 +65,17 @@ impl SessionManager {
         self.sessions.read().await.values().cloned().collect()
     }
 
+    /// Get all sessions belonging to a specific user.
+    pub async fn get_sessions_by_user(&self, user_id: u32) -> Vec<SessionInfo> {
+        self.sessions
+            .read()
+            .await
+            .values()
+            .filter(|s| s.user_id == user_id)
+            .cloned()
+            .collect()
+    }
+
     /// Get all sessions belonging to a specific edge.
     pub async fn get_sessions_by_edge(&self, edge_id: u32) -> Vec<SessionInfo> {
         self.sessions
@@ -165,5 +176,30 @@ mod tests {
         assert_eq!(session.channel_id, 5);
 
         assert!(!mgr.move_user_to_channel(99, 5).await);
+    }
+
+    #[tokio::test]
+    async fn test_get_sessions_by_user() {
+        let mgr = SessionManager::new();
+        // Two sessions with the same user_id (100)
+        let mut s1 = make_session(1, 1, "alice", 0);
+        s1.user_id = 100;
+        let mut s2 = make_session(2, 2, "alice", 0);
+        s2.user_id = 100;
+        // One session with a different user_id
+        let mut s3 = make_session(3, 1, "bob", 0);
+        s3.user_id = 200;
+        mgr.add_session(s1).await;
+        mgr.add_session(s2).await;
+        mgr.add_session(s3).await;
+
+        let user100 = mgr.get_sessions_by_user(100).await;
+        assert_eq!(user100.len(), 2);
+
+        let user200 = mgr.get_sessions_by_user(200).await;
+        assert_eq!(user200.len(), 1);
+
+        let user999 = mgr.get_sessions_by_user(999).await;
+        assert_eq!(user999.len(), 0);
     }
 }

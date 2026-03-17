@@ -211,6 +211,12 @@ listeners_per_user    = 0              # Default: 0 (unlimited)
 # Maximum listeners per channel (0 = unlimited)
 listeners_per_channel = 0             # Default: 0 (unlimited)
 
+# Maximum simultaneous sessions per non-anonymous user (0 = unlimited).
+# When the limit is reached, the oldest session for that user is kicked to make
+# room for the new connection. Anonymous users (no registered account) are not
+# affected by this setting.
+max_sessions_per_user = 1             # Default: 1
+
 # ---------------------------------------------------------------------------
 # Auto-Ban (brute-force protection)
 # ---------------------------------------------------------------------------

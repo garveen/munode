@@ -576,6 +576,11 @@ pub struct HubLimitsConfig {
     /// Maximum total number of channels. 0 = unlimited.
     #[serde(default)]
     pub channel_count_limit: u32,
+    /// Maximum number of simultaneous sessions allowed for the same non-anonymous user.
+    /// When the limit is reached the oldest session is kicked to make room for the new one.
+    /// 0 = unlimited. Default: 1.
+    #[serde(default = "default_max_sessions_per_user")]
+    pub max_sessions_per_user: u32,
 }
 
 impl Default for HubLimitsConfig {
@@ -593,6 +598,7 @@ impl Default for HubLimitsConfig {
             listeners_per_user: 0,
             channel_nesting_limit: 0,
             channel_count_limit: 0,
+            max_sessions_per_user: default_max_sessions_per_user(),
         }
     }
 }
@@ -806,6 +812,9 @@ fn default_message_rate() -> f32 {
 }
 fn default_message_burst() -> u32 {
     5
+}
+fn default_max_sessions_per_user() -> u32 {
+    1
 }
 fn default_auto_ban_attempts() -> u32 {
     10
