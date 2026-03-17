@@ -207,4 +207,28 @@ mod tests {
         }
         assert_eq!(bw.total_bytes(), 500);
     }
+
+    #[test]
+    fn test_bytes_last_second_no_frames_recorded() {
+        // When no frames have been recorded, bytes_last_second must return 0.
+        let bw = BandwidthRecord::new(60);
+        assert_eq!(bw.bytes_last_second(), 0);
+    }
+
+    #[test]
+    fn test_bytes_last_second_stale_after_idle() {
+        // Use a 2-slot window so we only need to wait ~2 s for the staleness
+        // guard to trigger instead of the full 360-s default window.
+        let mut bw = BandwidthRecord::new(2);
+        assert!(bw.add_frame(1000, 0));
+
+        // After ≥2 s without any new frames, bytes_last_second must return 0
+        // rather than the stale ring-buffer slot from the previous recording.
+        std::thread::sleep(std::time::Duration::from_millis(2100));
+        assert_eq!(
+            bw.bytes_last_second(),
+            0,
+            "bytes_last_second should return 0 after ≥2 s of inactivity"
+        );
+    }
 }
