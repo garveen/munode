@@ -1492,6 +1492,41 @@ pub struct EdgeHandlePermissionQueryResult {
     pub error: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// ---------------------------------------------------------------------------
+/// edge.batchPermissionQuery - Edge 批量查询多个频道权限（用于登录序列）
+/// ---------------------------------------------------------------------------
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeBatchPermissionQueryParams {
+    #[prost(uint32, required, tag = "1")]
+    pub edge_id: u32,
+    #[prost(uint32, required, tag = "2")]
+    pub actor_session: u32,
+    #[prost(uint32, required, tag = "3")]
+    pub actor_user_id: u32,
+    #[prost(string, required, tag = "4")]
+    pub actor_username: ::prost::alloc::string::String,
+    /// Channel IDs to query permissions for
+    #[prost(uint32, repeated, packed = "false", tag = "5")]
+    pub channel_ids: ::prost::alloc::vec::Vec<u32>,
+}
+/// Per-channel result entry
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct ChannelPermissionEntry {
+    #[prost(uint32, required, tag = "1")]
+    pub channel_id: u32,
+    #[prost(uint32, required, tag = "2")]
+    pub permissions: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EdgeBatchPermissionQueryResult {
+    #[prost(bool, required, tag = "1")]
+    pub success: bool,
+    /// One entry per requested channel_id
+    #[prost(message, repeated, tag = "2")]
+    pub entries: ::prost::alloc::vec::Vec<ChannelPermissionEntry>,
+    #[prost(string, optional, tag = "3")]
+    pub error: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// ---------------------------------------------------------------------------
 /// edge.reportPeerDisconnect - Edge 报告 Peer 断开连接
 /// ---------------------------------------------------------------------------
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -2135,6 +2170,9 @@ pub struct TypedRpcRequest {
     /// edge.loadChannelListeners - load user channel listeners on connect
     #[prost(message, optional, tag = "39")]
     pub edge_load_channel_listeners: ::core::option::Option<EdgeLoadChannelListenersParams>,
+    /// edge.batchPermissionQuery - batch channel permission query for login sequence
+    #[prost(message, optional, tag = "40")]
+    pub edge_batch_permission_query: ::core::option::Option<EdgeBatchPermissionQueryParams>,
 }
 /// *
 /// TypedRPCResponse - 类型安全的 RPC 响应
@@ -2216,6 +2254,9 @@ pub struct TypedRpcResponse {
     /// edge.loadChannelListeners result
     #[prost(message, optional, tag = "39")]
     pub edge_load_channel_listeners: ::core::option::Option<EdgeLoadChannelListenersResult>,
+    /// edge.batchPermissionQuery result
+    #[prost(message, optional, tag = "40")]
+    pub edge_batch_permission_query: ::core::option::Option<EdgeBatchPermissionQueryResult>,
 }
 /// ---------------------------------------------------------------------------
 /// hub.routeTableUpdate - Hub pushes quality-aware route table to Edge

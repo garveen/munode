@@ -113,6 +113,7 @@ impl RpcHandler {
             "edge.reportSession" => self.handle_report_session(&request, &request_id, edge_server_id).await,
             "edge.fullSync" => self.handle_full_sync(&request, &request_id).await,
             "edge.handlePermissionQuery" => self.handle_permission_query(&request, &request_id).await,
+            "edge.batchPermissionQuery" => self.handle_batch_permission_query(&request, &request_id).await,
             "edge.syncVoiceTarget" => self.handle_sync_voice_target(&request, &request_id).await,
             "edge.saveChannel" => self.handle_save_channel(&request, &request_id).await,
             "edge.handleACL" => self.handle_acl(&request, &request_id).await,
@@ -1627,6 +1628,98 @@ impl RpcHandler {
         }))
     }
 
+    async fn handle_batch_permission_query(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let params = request.edge_batch_permission_query.as_ref()
+            .context("Missing edge_batch_permission_query params")?;
+
+        // Look up user groups from the session (done once for all channels)
+        let base_groups: Vec<String> = match self.state.session_manager
+            .get_session(params.actor_session).await {
+            Some(s) => s.groups.clone(),
+            None => Vec::new(),
+        };
+
+        let user_id_u32 = params.actor_user_id;
+
+        // Compute permissions for every requested channel.
+        // Group augmentation (DB channel-group memberships) is done per-channel,
+        // matching the single-query logic exactly.
+        let mut entries: Vec<ChannelPermissionEntry> = Vec::with_capacity(params.channel_ids.len());
+        for &channel_id in &params.channel_ids {
+            let mut effective_groups = base_groups.clone();
+
+            // Build ancestor chain (root → channel_id) to check inherited group memberships
+            {
+                let mut chain: Vec<u32> = Vec::new();
+                let mut current = channel_id;
+                loop {
+                    chain.push(current);
+                    if current == 0 { break; }
+                    match self.state.channel_store.get_channel(current).await {
+                        Some(ch) => {
+                            if let Some(parent) = ch.parent_id {
+                                current = parent;
+                            } else { break; }
+                        }
+                        None => break,
+                    }
+                }
+                chain.reverse(); // root first
+
+                for ancestor_id in chain {
+                    if let Ok(db_groups) = self.state.database.get_channel_groups(ancestor_id) {
+                        for db_group in &db_groups {
+                            if !db_group.inherit && ancestor_id != channel_id {
+                                continue;
+                            }
+                            match self.state.database.get_channel_group_members(db_group.id) {
+                                Ok(members) => {
+                                    let is_added = members.iter()
+                                        .any(|(uid, is_add)| *uid == user_id_u32 && *is_add);
+                                    let is_removed = members.iter()
+                                        .any(|(uid, is_add)| *uid == user_id_u32 && !*is_add);
+                                    if is_added && !is_removed && !effective_groups.contains(&db_group.name) {
+                                        effective_groups.push(db_group.name.clone());
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to load group members for group '{}' (id {}): {}", db_group.name, db_group.id, e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Calculate effective permissions for this channel.
+            // The ACL manager writes results into its cache on first compute, so
+            // subsequent PermissionQuery calls for the same (user, channel) pair
+            // (e.g. from a live client's UI) will be served from cache.
+            let permissions = self.state.acl_manager
+                .calculate_permissions(
+                    params.actor_user_id as i32,
+                    channel_id,
+                    &effective_groups,
+                )
+                .await;
+            entries.push(ChannelPermissionEntry { channel_id, permissions });
+        }
+
+        let result = EdgeBatchPermissionQueryResult {
+            success: true,
+            entries,
+            error: None,
+        };
+
+        Ok(self.make_response_packet(request_id, "edge.batchPermissionQuery", |r| {
+            r.edge_batch_permission_query = Some(result);
+        }))
+    }
+
     async fn handle_sync_voice_target(
         &self,
         request: &TypedRpcRequest,
@@ -1885,18 +1978,83 @@ impl RpcHandler {
             .context("Missing edge_handle_acl params")?;
 
         if params.query {
-            // ACL query: return ACL entries for the channel (including inherited)
-            let acls = self.state.acl_manager.get_channel_acls(params.channel_id);
+            // ACL query: return ACL entries for the channel (including inherited from parents).
+            // This mirrors Murmur's sendACL behaviour: walk the chain from root to the target
+            // channel, collect parent-channel ACLs that have apply_subs=true (marked inherited),
+            // then append the target channel's own ACLs (marked not-inherited).
+            let channel_id = params.channel_id;
             let inherit_acl = self.state.channel_store
-                .get_channel(params.channel_id).await
+                .get_channel(channel_id).await
                 .map(|c| c.inherit_acl)
                 .unwrap_or(true);
 
+            // Build the chain [root, ..., parent] stopping at inheritance breaks.
+            // inherit_acl on a channel means "this channel inherits ACLs from its parent".
+            // When a channel has inherit_acl=false the chain stops there: ancestors above
+            // that point do not contribute to this channel's (or its descendants') effective
+            // ACLs, so they should not appear as "inherited" in the ACL dialog.
+            let mut ancestor_chain: Vec<u32> = Vec::new();
+            {
+                let mut cur = channel_id;
+                loop {
+                    let ch = match self.state.channel_store.get_channel(cur).await {
+                        Some(c) => c,
+                        None => break,
+                    };
+                    if !ch.inherit_acl {
+                        break; // cur does not inherit from its parent; stop here
+                    }
+                    match ch.parent_id {
+                        Some(pid) => {
+                            ancestor_chain.push(pid);
+                            cur = pid;
+                        }
+                        None => break,
+                    }
+                }
+                ancestor_chain.reverse(); // root first
+            }
+
+            // Collect ACL entries: inherited ones from ancestors first, then own.
+            let mut acls_proto: Vec<munode_protocol::mumbleproto::acl::ChanAcl> = Vec::new();
+
+            for &ancestor_id in &ancestor_chain {
+                let ancestor_acls = self.state.acl_manager.get_channel_acls(ancestor_id);
+                for a in &ancestor_acls {
+                    if !a.apply_subs {
+                        continue; // only include ACLs that propagate to sub-channels
+                    }
+                    acls_proto.push(munode_protocol::mumbleproto::acl::ChanAcl {
+                        apply_here: Some(a.apply_here),
+                        apply_subs: Some(a.apply_subs),
+                        user_id: a.user_id.map(|id| id as u32),
+                        group: a.group_name.clone(),
+                        grant: Some(a.allow),
+                        deny: Some(a.deny),
+                        inherited: Some(true),
+                    });
+                }
+            }
+
+            // Own ACLs for the target channel (not inherited).
+            let own_acls = self.state.acl_manager.get_channel_acls(channel_id);
+            for a in &own_acls {
+                acls_proto.push(munode_protocol::mumbleproto::acl::ChanAcl {
+                    apply_here: Some(a.apply_here),
+                    apply_subs: Some(a.apply_subs),
+                    user_id: a.user_id.map(|id| id as u32),
+                    group: a.group_name.clone(),
+                    grant: Some(a.allow),
+                    deny: Some(a.deny),
+                    inherited: Some(false),
+                });
+            }
+
             // Load channel groups for this channel
-            let groups_db = match self.state.database.get_channel_groups(params.channel_id) {
+            let groups_db = match self.state.database.get_channel_groups(channel_id) {
                 Ok(groups) => groups,
                 Err(e) => {
-                    warn!("Failed to load channel groups for channel {}: {}", params.channel_id, e);
+                    warn!("Failed to load channel groups for channel {}: {}", channel_id, e);
                     vec![]
                 }
             };
@@ -1923,20 +2081,10 @@ impl RpcHandler {
 
             // Encode ACL data as raw bytes (Mumble ACL message format)
             let acl_msg = munode_protocol::mumbleproto::Acl {
-                channel_id: params.channel_id,
+                channel_id,
                 inherit_acls: Some(inherit_acl),
                 groups: groups_proto,
-                acls: acls.iter().map(|a| {
-                    munode_protocol::mumbleproto::acl::ChanAcl {
-                        apply_here: Some(a.apply_here),
-                        apply_subs: Some(a.apply_subs),
-                        user_id: a.user_id.map(|id| id as u32),
-                        group: a.group_name.clone(),
-                        grant: Some(a.allow),
-                        deny: Some(a.deny),
-                        inherited: Some(false),
-                    }
-                }).collect(),
+                acls: acls_proto,
                 query: Some(true),
             };
 
