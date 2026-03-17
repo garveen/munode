@@ -446,46 +446,57 @@ impl RpcHandler {
         // ------------------------------------------------------------------
         // Step 0.5: Username uniqueness check — ghost detection
         // ------------------------------------------------------------------
+        // Only reject or replace when the connecting client presents a certificate.
+        // Certificate-less (guest) connections are allowed to share usernames because
+        // there is no reliable identity signal to distinguish a ghost from a different
+        // physical user who happens to pick the same name. UsernameInUse is only
+        // meaningful when a cert-bearing client tries to connect and a session with a
+        // *different* cert already holds the name.
         {
-            let all_sessions = self.state.session_manager.get_all_sessions().await;
-            if let Some(existing) = all_sessions.iter().find(|s| s.username.eq_ignore_ascii_case(username)) {
-                let new_cert = params.client_info.as_ref()
-                    .and_then(|ci| ci.certificate_hash.clone())
-                    .unwrap_or_default();
-                if !existing.cert_hash.is_empty() && existing.cert_hash == new_cert {
-                    // Same cert: ghost replacement — kick the old session
+            let new_cert = params.client_info.as_ref()
+                .and_then(|ci| ci.certificate_hash.clone())
+                .unwrap_or_default();
+
+            if !new_cert.is_empty() {
+                // New client has a certificate — enforce uniqueness.
+                let all_sessions = self.state.session_manager.get_all_sessions().await;
+                if let Some(existing) = all_sessions.iter().find(|s| s.username.eq_ignore_ascii_case(username)) {
                     let ghost_session = existing.session_id;
-                    self.state.session_manager.remove_session(ghost_session).await;
-                    self.broadcast_notification("hub.userRemoveBroadcast", |n| {
-                        n.user_remove_broadcast = Some(HubUserRemoveBroadcastParams {
-                            session: ghost_session,
-                            actor: None,
-                            reason: Some("Ghost connection replaced".to_string()),
-                            ban: None,
-                            target_sessions: vec![],
-                        });
-                    }).await;
-                    info!("Ghost session {} for user '{}' replaced by new connection", ghost_session, username);
-                } else {
-                    // Different cert: reject with UsernameInUse
-                    warn!("Rejecting duplicate username '{}': already in use by session {}", username, existing.session_id);
-                    let result = EdgeAuthenticateUserResult {
-                        success: false,
-                        user_id: None, username: None, display_name: None,
-                        groups: vec![],
-                        reason: Some(format!("Username '{}' is already in use", username)),
-                        reject_type: Some(4), // UsernameInUse = 4 in Mumble reject enum
-                        channel_id: None,
-                        mute: None, deaf: None, suppress: None,
-                        self_mute: None, self_deaf: None,
-                        priority_speaker: None, recording: None,
-                        cert_required: None,
-                    };
-                    return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
-                        r.edge_authenticate_user = Some(result);
-                    }));
+                    if existing.cert_hash.is_empty() || existing.cert_hash.as_str() == new_cert.as_str() {
+                        // No cert on old session, or same cert: ghost replacement.
+                        self.state.session_manager.remove_session(ghost_session).await;
+                        self.broadcast_notification("hub.userRemoveBroadcast", |n| {
+                            n.user_remove_broadcast = Some(HubUserRemoveBroadcastParams {
+                                session: ghost_session,
+                                actor: None,
+                                reason: Some("Ghost connection replaced".to_string()),
+                                ban: None,
+                                target_sessions: vec![],
+                            });
+                        }).await;
+                        info!("Ghost session {} for user '{}' replaced by new cert connection", ghost_session, username);
+                    } else {
+                        // Different cert already holds this username — reject.
+                        warn!("Rejecting cert user '{}': username already in use by session {} with different cert", username, ghost_session);
+                        let result = EdgeAuthenticateUserResult {
+                            success: false,
+                            user_id: None, username: None, display_name: None,
+                            groups: vec![],
+                            reason: Some(format!("Username '{}' is already in use", username)),
+                            reject_type: Some(4), // UsernameInUse = 4 in Mumble reject enum
+                            channel_id: None,
+                            mute: None, deaf: None, suppress: None,
+                            self_mute: None, self_deaf: None,
+                            priority_speaker: None, recording: None,
+                            cert_required: None,
+                        };
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(result);
+                        }));
+                    }
                 }
             }
+            // If the new client has no certificate, allow them through regardless of name conflicts.
         }
 
         // ------------------------------------------------------------------
