@@ -207,4 +207,35 @@ mod tests {
         }
         assert_eq!(bw.total_bytes(), 500);
     }
+
+    #[test]
+    fn test_bytes_last_second_no_frames_recorded() {
+        // When no frames have been recorded, bytes_last_second must return 0.
+        let bw = BandwidthRecord::new(60);
+        assert_eq!(bw.bytes_last_second(), 0);
+    }
+
+    #[test]
+    fn test_bytes_last_second_stale_after_idle() {
+        // Build a record whose epoch is 2 seconds in the past so that
+        // elapsed_slots() returns 2 immediately — no real sleep needed.
+        let mut bw = BandwidthRecord::new(4); // 4-slot window
+        bw.epoch = std::time::Instant::now() - std::time::Duration::from_secs(2);
+
+        // With epoch 2 s in the past: now_abs = 2, prev_idx = (2-1) % 4 = 1.
+        // Pre-populate that exact slot with a non-zero value so that without the
+        // staleness guard bytes_last_second() would return 5000 instead of 0.
+        bw.slots[1] = 5000;
+
+        // Simulate the last write having happened at second 0 (2 s ago).
+        // now_abs - last_slot_abs == 2 is the threshold that triggers the guard.
+        bw.last_slot_abs = Some(0);
+
+        // The staleness guard must kick in and return 0 rather than the stale 5000.
+        assert_eq!(
+            bw.bytes_last_second(),
+            0,
+            "bytes_last_second should return 0 when last write was ≥2 s ago (staleness guard)"
+        );
+    }
 }

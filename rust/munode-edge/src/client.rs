@@ -683,4 +683,83 @@ mod tests {
         let updated = mgr.get_client(1).await.unwrap();
         assert!(updated.self_mute);
     }
+
+    #[tokio::test]
+    async fn test_record_voice_bytes_enforces_cap() {
+        let mgr = ClientManager::new();
+        let session = 42u32;
+        let cap = 500u32;
+        let frame_bytes = 100u32;
+
+        // Loop sending small frames until the cap is exceeded.  All iterations
+        // complete in microseconds, so no slot boundary is ever crossed and the
+        // test is deterministic regardless of system load or scheduling jitter.
+        let max_iters = cap / frame_bytes + 2; // slightly more than needed
+        let mut accepted = 0u32;
+        let mut dropped = false;
+        for _ in 0..max_iters {
+            if mgr.record_voice_bytes(session, frame_bytes, cap, 60).await {
+                accepted += 1;
+            } else {
+                dropped = true;
+                break;
+            }
+        }
+
+        assert!(dropped, "cap of {cap} bps should have been exceeded within {max_iters} frames");
+        // At most cap/frame_bytes frames should have been accepted before the cap was hit.
+        assert!(
+            accepted <= cap / frame_bytes,
+            "accepted {accepted} frames before drop; expected at most {}",
+            cap / frame_bytes
+        );
+    }
+
+    #[tokio::test]
+    async fn test_record_voice_bytes_no_cap() {
+        let mgr = ClientManager::new();
+        let session = 99u32;
+
+        // cap = 0 means unlimited — all frames should be accepted.
+        for _ in 0..10 {
+            assert!(
+                mgr.record_voice_bytes(session, 10_000, 0, 60).await,
+                "unlimited cap should always accept"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_record_voice_bytes_window_resize() {
+        use crate::bandwidth::effective_window;
+
+        let mgr = ClientManager::new();
+        let session = 7u32;
+
+        // Seed an initial record with a 60-s window.
+        mgr.record_voice_bytes(session, 100, 0, 60).await;
+
+        // Verify the record has the expected window before resizing.
+        {
+            let records = mgr.bandwidth_records.read().await;
+            assert_eq!(
+                records.get(&session).expect("bandwidth record should exist after recording frames").window_secs(),
+                effective_window(60),
+                "initial window should be 60 slots"
+            );
+        }
+
+        // Calling record_voice_bytes with a different window_secs should
+        // recreate the BandwidthRecord with the new window size.
+        mgr.record_voice_bytes(session, 100, 0, 120).await;
+
+        {
+            let records = mgr.bandwidth_records.read().await;
+            assert_eq!(
+                records.get(&session).expect("bandwidth record should exist after window resize").window_secs(),
+                effective_window(120),
+                "window should be updated to 120 slots after hot-reload"
+            );
+        }
+    }
 }

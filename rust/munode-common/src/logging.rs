@@ -9,9 +9,13 @@ use tracing_subscriber::prelude::*;
 /// (backed by an `Arc`).  Log-format changes (text ↔ JSON) still require a
 /// process restart because the format layer cannot be swapped after the global
 /// subscriber has been installed.
+///
+/// When [`init_logging_with_reload`] cannot install the global subscriber (e.g.
+/// because one is already registered in tests), the handle is a **no-op** —
+/// `reload_level` returns immediately without emitting any warning.
 #[derive(Clone)]
 pub struct LogReloadHandle {
-    handle: Arc<reload::Handle<EnvFilter, Registry>>,
+    handle: Option<Arc<reload::Handle<EnvFilter, Registry>>>,
 }
 
 impl LogReloadHandle {
@@ -21,12 +25,14 @@ impl LogReloadHandle {
     /// `"mymodule=trace"`).  If the `RUST_LOG` environment variable is set it
     /// takes precedence over the supplied value, matching the behaviour of the
     /// initial [`init_logging_with_reload`] call.
+    ///
+    /// Does nothing if the handle is a no-op (subscriber was never installed by
+    /// this call, e.g. a global subscriber was already registered at init time).
     pub fn reload_level(&self, level: &str) {
+        let Some(handle) = &self.handle else { return };
         let new_filter = EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| EnvFilter::new(level));
-        if let Err(e) = self.handle.reload(new_filter) {
-            // Only fails if the subscriber was dropped, which cannot happen for
-            // a global subscriber installed via `try_init`.
+        if let Err(e) = handle.reload(new_filter) {
             tracing::warn!("Failed to reload log filter: {}", e);
         }
     }
@@ -93,7 +99,7 @@ pub fn init_logging_with_reload(level: &str, format: &str) -> LogReloadHandle {
         reload::Layer::new(filter);
 
     if format == "json" {
-        let _ = tracing_subscriber::registry()
+        let ok = tracing_subscriber::registry()
             .with(reload_layer)
             .with(
                 fmt::Layer::new()
@@ -102,9 +108,11 @@ pub fn init_logging_with_reload(level: &str, format: &str) -> LogReloadHandle {
                     .with_thread_ids(false)
                     .with_line_number(true),
             )
-            .try_init();
+            .try_init()
+            .is_ok();
+        LogReloadHandle { handle: if ok { Some(Arc::new(reload_handle)) } else { None } }
     } else {
-        let _ = tracing_subscriber::registry()
+        let ok = tracing_subscriber::registry()
             .with(reload_layer)
             .with(
                 fmt::Layer::new()
@@ -112,8 +120,8 @@ pub fn init_logging_with_reload(level: &str, format: &str) -> LogReloadHandle {
                     .with_thread_ids(false)
                     .with_line_number(true),
             )
-            .try_init();
+            .try_init()
+            .is_ok();
+        LogReloadHandle { handle: if ok { Some(Arc::new(reload_handle)) } else { None } }
     }
-
-    LogReloadHandle { handle: Arc::new(reload_handle) }
 }
