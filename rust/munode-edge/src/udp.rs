@@ -402,20 +402,24 @@ impl UdpServer {
         // Record voice bandwidth for this sender session.
         // Use rolling_stats_window from EdgeState for the window size.
         // Clamp to MAX_WINDOW_SLOTS (3600) to prevent excessive memory allocation.
+        // 0 is passed through as-is; BandwidthRecord::new(0) uses DEFAULT_WINDOW_SLOTS (360).
         let window_secs = (self.edge_state.rolling_stats_window.load(std::sync::atomic::Ordering::Relaxed) as usize)
-            .max(1)
             .min(crate::bandwidth::MAX_WINDOW_SLOTS);
-        // max_bandwidth is in kbps → convert to bytes-per-second.
+        // max_bandwidth is in bps → convert to bytes-per-second.
         // 0 means unlimited; the record still tracks bytes even when uncapped.
         {
-            let max_kbps = self.edge_state.hub_limits.read().await
+            let max_bps = self.edge_state.hub_limits.read().await
                 .as_ref()
                 .and_then(|l| l.max_bandwidth)
                 .unwrap_or(0);
-            let max_bytes = if max_kbps > 0 { max_kbps * 1000 / 8 } else { 0 };
-            self.edge_state.client_manager
-                .record_voice_bytes(sender_session, plaintext.len() as u32, max_bytes, window_secs.max(1))
+            let max_bytes = if max_bps > 0 { max_bps / 8 } else { 0 };
+            let within_budget = self.edge_state.client_manager
+                .record_voice_bytes(sender_session, plaintext.len() as u32, max_bytes, window_secs)
                 .await;
+            if !within_budget {
+                // Drop the packet — sender exceeded their per-second bandwidth cap.
+                return;
+            }
         }
 
         // Block suppressed users from speaking

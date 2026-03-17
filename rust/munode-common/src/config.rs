@@ -258,7 +258,8 @@ pub struct ServerConfig {
     pub bandwidth_record_window: u32,
     /// Whether to allow users to record audio (default: true).
     /// When false, ServerConfig.recording_allowed is sent as false to clients,
-    /// and any user who sets recording=true is kicked.
+    /// and any user who tries to set recording=true receives a PermissionDenied
+    /// response (the request is rejected but the user is not disconnected).
     #[serde(default = "default_true")]
     pub recording_allowed: bool,
     /// Whether to allow HTML in text messages (default: true).

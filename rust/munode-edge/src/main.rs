@@ -2,7 +2,7 @@ use anyhow::Result;
 use tracing::info;
 
 use munode_common::config::load_edge_config;
-use munode_common::logging::init_logging_with_format;
+use munode_common::logging::init_logging_with_reload;
 use munode_edge::server::EdgeServer;
 
 #[tokio::main]
@@ -165,7 +165,7 @@ async fn main() -> Result<()> {
         .to_string();
 
     let config = load_edge_config(&config_path)?;
-    init_logging_with_format(&config.log_level, &config.log_format);
+    let log_reload = init_logging_with_reload(&config.log_level, &config.log_format);
 
     info!(
         server_id = config.server_id,
@@ -174,7 +174,7 @@ async fn main() -> Result<()> {
         "Starting MuNode Edge Server (Rust)"
     );
 
-    let server = EdgeServer::new_with_path(config, config_path);
+    let server = EdgeServer::new_with_path(config, config_path, log_reload);
     server.run().await?;
 
     Ok(())
