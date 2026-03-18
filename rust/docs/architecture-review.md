@@ -89,7 +89,7 @@ let bans = self.state.database.load_bans()?;                   // 第 2288 行
 
 **建议**：
 1. 将所有 Database 方法调用包裹在 `tokio::task::spawn_blocking` 中
-2. 或改用异步 SQLite 封装（如 `tokio-rusqlite`）
+2. **【实现】** 或改用异步 SQLite 封装（如 `tokio-rusqlite`）
 3. 考虑使用连接池支持并行读取（WAL 模式允许并发读）
 4. 对高频查询（`find_user`、`check_ip_banned`）添加数据库索引
 
@@ -122,7 +122,7 @@ for (edge_id, sender) in edges.iter() {
 **场景**：2000 用户登录高峰期，50 个用户快速加入 → 50 条 `hub.userJoined` 广播。如果某 Edge 网络抖动导致发送缓慢，缓冲区可能溢出。
 
 **建议**：
-1. 对关键状态消息使用 `send().await`（带超时）而非 `try_send()`
+1. **【实现】** 对关键状态消息使用 `send().await`（带超时）而非 `try_send()`
 2. 或实现消息优先级：状态同步消息（用户加入/离开）> 语音中继 > 其他
 3. 添加消息丢弃计数器，当丢弃数超过阈值时触发强制 fullSync
 4. 考虑增大缓冲区（256 → 1024 或更多），或基于 Edge 当前用户数动态调整
@@ -156,7 +156,7 @@ let sessions: Vec<GlobalSessionProto> = self.state.session_manager
 2. 在 WebSocket 层启用 `permessage-deflate` 压缩
 3. 增加 fullSync 超时（30s → 60s）
 4. 考虑仅发送与该 Edge 相关的数据（按 region 或按频道子树过滤）
-5. 减少序列化期间的锁持有时间：先 clone 数据再序列化
+5. **【实现】** 减少序列化期间的锁持有时间：先 clone 数据再序列化
 
 ---
 
@@ -180,7 +180,7 @@ Edge 间 UDP 包格式：
 - 没有认证——任何人都可以向 Edge 的 `edge_port` 发送伪造的语音包
 
 **建议**：
-1. 对 Edge 间 UDP 实现 DTLS 或使用预共享密钥加密（如 ChaCha20-Poly1305）
+1. **【实现】** 对 Edge 间 UDP 实现 DTLS 或使用预共享密钥加密（如 ChaCha20-Poly1305）
 2. 至少添加 HMAC 认证防止伪造包注入
 3. 如果 Edge 都在同一可信内网内，在文档中明确说明安全边界假设
 
@@ -205,7 +205,7 @@ Edge 间 UDP 包格式：
 - 帧缓冲无上限：如果 Hub 响应慢，中继缓冲可能导致 OOM
 
 **建议**：
-1. 添加基于 HMAC 的握手认证（复用 Edge 注册的 `hmac_secret`）
+1. **【实现】** 添加基于 HMAC 的握手认证（复用 Edge 注册的 `hmac_secret`）
 2. 限制最大并发中继连接数
 3. 添加帧缓冲上限，达到上限时断开连接
 4. 至少添加 per-IP 速率限制
@@ -235,7 +235,7 @@ pub struct AclManager {
 
 **建议**：
 1. 添加 TTL 过期机制（如 1 小时后过期）
-2. 实现 LRU 淘汰策略，限制缓存最大条目数（如 10 万条）
+2. **【实现】** 实现 LRU 淘汰策略，限制缓存最大条目数（如 10 万条）
 3. 不缓存匿名用户的权限（或使用更短的 TTL）
 
 ---
@@ -269,7 +269,7 @@ Hub 触发的关机更短——仅 100ms 等待。
 
 **建议**：
 1. 增加优雅关机窗口至 3-5 秒
-2. 实现分阶段关机：停止接受新连接 → 通知所有客户端 → 等待飞行中的消息完成 → 关闭
+2. **【实现】** 实现分阶段关机：停止接受新连接 → 通知所有客户端 → 等待飞行中的消息完成 → 关闭
 3. 向每个连接的客户端发送 `ServerBan/Reject` 消息告知服务器关闭
 4. 在 abort 前使用 `tokio::time::timeout` 等待任务自然结束
 
@@ -290,7 +290,7 @@ Hub 触发的关机更短——仅 100ms 等待。
 - 对于实时语音通信来说，3 分钟的检测延迟极不理想
 
 **建议**：
-1. 缩短心跳间隔至 10 秒，超时阈值至 30-45 秒
+1. **【实现】** 缩短心跳间隔至 10 秒，超时阈值至 30-45 秒
 2. 实现双向心跳：Hub 也向 Edge 发送心跳 ack
 3. Edge 端如果连续 N 次心跳无应答，主动标记 Hub 不可达
 4. 对关键通知（用户移动、语音目标更新）添加 ack 确认机制
@@ -342,7 +342,7 @@ sender.send(data).await;                          // 发送
 
 **建议**：
 1. 尽量使用 Edge-to-Edge 直连 UDP（当前已有优先选择直连的逻辑）
-2. Hub 中继路径考虑使用 `Bytes` 类型实现零拷贝转发
+2. **【实现】** Hub 中继路径考虑使用 `Bytes` 类型实现零拷贝转发
 3. 添加 Hub 中继带宽监控告警
 
 ---
@@ -360,8 +360,8 @@ sender.send(data).await;                          // 发送
 - 池模式下 `send_raw()` 如果所有 slot 都不可用，返回 `Ok(())`（静默成功），调用方无法感知失败
 
 **建议**：
-1. 在文档和示例配置中推荐 `pool_size = 2-3`
-2. 修复静默失败：所有 slot 不可用时应返回错误
+1. **【实现】**：在文档和示例配置中推荐 `pool_size = 3`
+2. **【实现】** 修复静默失败：所有 slot 不可用时应返回错误
 3. 添加连接池健康状态监控（当前已有 slot 数量但缺少 exposed metrics）
 
 ---
@@ -382,7 +382,7 @@ reg.upsert(peer_edge_id, PeerEdgeInfo { ... });
 **问题**：`RwLock` 写锁会阻塞所有读取者。在 Peer 加入/离开期间，语音包路由会短暂阻塞。虽然单次时间很短，但在多 Edge 集群中可能出现毫秒级延迟尖峰。
 
 **建议**：
-1. 考虑使用 `dashmap` 等无写锁的并发 HashMap
+1. **【实现】** 考虑使用 `dashmap` 等无写锁的并发 HashMap
 2. 或使用 copy-on-write 模式：路由快照 + 原子交换
 
 ---
@@ -401,7 +401,7 @@ reg.upsert(peer_edge_id, PeerEdgeInfo { ... });
 **问题**：如果 Web API 端口暴露在公网或内网中，任何人都可以移除封禁记录。
 
 **建议**：
-1. 添加 API Key 或 Bearer Token 认证中间件
+1. **【实现】** 添加 API Key 或 Bearer Token 认证中间件
 2. 或将 Web API 绑定到 localhost（仅本机访问）
 3. 所有写操作（DELETE, POST, PUT）都应需要认证
 
@@ -420,11 +420,11 @@ reg.upsert(peer_edge_id, PeerEdgeInfo { ... });
 - 500 人频道中如果有频繁的用户移动，会产生大量 RPC 请求
 
 **建议**（Hub 仍为唯一事实来源，Edge 做边缘缓存）：
-1. **权限缓存**：Edge 本地缓存 ACL 计算结果，Hub 在 ACL 变更时推送失效通知
-2. **频道树缓存**：Edge 已有 `channel_manager`，应增量更新而非全量替换
+1. **【实现】** **权限缓存**：Edge 本地缓存 ACL 计算结果，Hub 在 ACL 变更时推送失效通知
+2. **【实现】** **频道树缓存**：Edge 已有 `channel_manager`，应增量更新而非全量替换
 3. **同频道语音快速路径**：同一 Edge 上同一频道内的语音应完全在 Edge 本地路由，不经过 Hub（当前已实现）
 4. **文本消息本地分发**：同一 Edge 上同一频道的文本消息可先本地分发，再异步通知 Hub
-5. **频道用户列表缓存**：Edge 维护的 `channel_users` 映射应在收到 Hub 通知时增量更新
+5. **【实现】** **频道用户列表缓存**：Edge 维护的 `channel_users` 映射应在收到 Hub 通知时增量更新
 
 ---
 
@@ -442,7 +442,7 @@ reg.upsert(peer_edge_id, PeerEdgeInfo { ... });
 
 ---
 
-### L-2: 临时频道清理可能产生级联 Session Manager 查询
+### L-2: 【不实现】临时频道清理可能产生级联 Session Manager 查询
 
 **位置**：`munode-hub/src/rpc_handler.rs`（`maybe_cleanup_temp_channel`）
 
@@ -452,7 +452,7 @@ reg.upsert(peer_edge_id, PeerEdgeInfo { ... });
 
 ---
 
-### L-3: 拓扑管理器中的 Union-Find 使用递归
+### L-3: 【不实现】拓扑管理器中的 Union-Find 使用递归
 
 **位置**：`munode-hub/src/topology_manager.rs`（`detect_partitions`）
 
@@ -464,7 +464,7 @@ reg.upsert(peer_edge_id, PeerEdgeInfo { ... });
 
 ---
 
-### L-4: 带宽限制超标时静默丢弃语音包
+### L-4: 【不实现】带宽限制超标时静默丢弃语音包
 
 **位置**：`munode-edge/src/bandwidth.rs`
 
@@ -482,7 +482,7 @@ reg.upsert(peer_edge_id, PeerEdgeInfo { ... });
 
 **问题**：如果使用外部认证服务，2000 用户的认证请求需要通过单个 WebSocket 连接串行处理。在认证风暴（服务器重启后大量用户同时重连）时，认证延迟会非常高。
 
-**建议**：支持多个认证服务实例（负载均衡）或至少支持并发请求流水线。
+用户备注：如果lua可以完全替换外部认证服务功能，则删掉这部分，完全使用lua。
 
 ---
 
@@ -684,6 +684,8 @@ message_burst        = 5          # 保持不变
 heartbeat_timeout = 30000         # 从 90000 降低到 30000（30 秒）
 
 [voice_routing]
+# 仅控制 Hub 是否接受来自 Edge 的 `edge.relayVoiceViaTcp` RPC 请求（Hub 侧 TCP 中继）。
+# 不影响 Edge 间 UDP 直连或 UDP 多跳转发；后者由 Edge 侧 connection_strategy 控制。
 enable_relay         = true
 max_total_relay_streams = 200     # 设置上限防止 Hub 过载
 
@@ -702,11 +704,28 @@ pool_size          = 2            # 启用连接池
 heartbeat_interval = 10000        # 从 30000 降低到 10000（10 秒）
 
 [voice_routing]
+# 控制 Edge 侧跨 Edge 语音路由策略（UDP 直连 / Hub TCP 中继 / 两者兼用）。
+# 与 Hub 侧 voice_routing.enable_relay 相互独立：
+#   - auto_fallback：优先 UDP 直连，失败后回退到 Hub TCP 中继（依赖 Hub 端 enable_relay=true）
+#   - direct_only：仅 UDP 直连，完全不走 Hub TCP 中继
+#   - tcp_only：始终走 Hub TCP 中继，不尝试 UDP 直连
 connection_strategy = "auto_fallback"
 
 [voice_routing.relay]
 max_relay_bandwidth = 50000       # 50 Mbps（提升中继带宽上限）
 ```
+
+> **语音中继配置分工说明**
+>
+> MuNode 有两个相互独立的中继控制层，语义容易混淆，需明确区分：
+>
+> | 配置项 | 所属端 | 控制范围 |
+> |--------|--------|----------|
+> | `[voice_routing] enable_relay` | **Hub** `hub.toml` | Hub 是否接受 Edge 发来的 `edge.relayVoiceViaTcp` RPC 请求（Hub 作为 TCP 中间人转发语音包）。仅影响 Hub TCP 中继这一段，不涉及 UDP。 |
+> | `[voice_routing] connection_strategy` | **Edge** `edge.toml` | Edge 本身使用何种策略进行跨 Edge 语音路由：UDP 直连、Hub TCP 中继或自动回退。决定 Edge 是否会发起 `edge.relayVoiceViaTcp` RPC。 |
+> | `[voice_routing.relay] max_relay_bandwidth` | **Edge** `edge.toml` | 当本 Edge 作为 UDP 多跳中继节点（`EDGE_PKT_RELAY`）时的出口带宽上限。与 Hub TCP 中继无关。 |
+>
+> 典型场景：若只想禁止 Hub 参与语音转发（强制所有 Edge 直连），应将 Hub 端 `enable_relay = false`，同时将所有 Edge 端 `connection_strategy = "direct_only"`。单独设置任一项只会影响一半路径。
 
 ### 部署建议
 
