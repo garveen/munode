@@ -306,6 +306,7 @@ impl EdgeState {
             ninja_channels: RwLock::new(vec![]),
             ninja_visible_to: RwLock::new(HashMap::new()),
             route_table: RwLock::new(std::collections::HashMap::new()),
+            voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
         })
     }
@@ -341,6 +342,7 @@ impl EdgeState {
             ninja_channels: RwLock::new(vec![]),
             ninja_visible_to: RwLock::new(HashMap::new()),
             route_table: RwLock::new(std::collections::HashMap::new()),
+            voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
         })
     }

@@ -316,7 +316,8 @@ impl TopologyManager {
         let mut result = Vec::new();
         let all_edge_ids: Vec<u32> = self.edges.keys().cloned().collect();
 
-        for target_id in all_edge_ids {
+        for target_id in &all_edge_ids {
+            let target_id = *target_id;
             if target_id == for_edge_id {
                 continue;
             }
@@ -351,6 +352,16 @@ impl TopologyManager {
                     }
                 }
             }
+
+            // DirectTcp candidate: always add so the Edge can choose TCP when UDP is degraded.
+            let tcp_cost = self.link_quality.get(&(for_edge_id, target_id))
+                .map(|q| (q.rtt_ms * 1.5 + config.edge_tcp_penalty_ms) as f32)
+                .unwrap_or(200.0);
+            result.push((target_id, 3, vec![], tcp_cost));
+
+            // HubTcp fallback: always present as last resort.
+            const HUB_TCP_COST: f32 = 150.0;
+            result.push((target_id, 2, vec![], HUB_TCP_COST));
         }
         result
     }

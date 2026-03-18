@@ -974,6 +974,20 @@ impl HubClient {
                             });
                             info!("Registered direct UDP route to peer edge {} at {}", peer_edge_id, udp_addr);
                         }
+                        // Connect TCP voice channel to the new peer
+                        let peer_host = host.clone();
+                        let self_id = self.edge_state.get_edge_id();
+                        let state_clone = self.edge_state.clone();
+                        tokio::spawn(async move {
+                            crate::relay_server::connect_peer_voice_tcp(
+                                peer_edge_id,
+                                peer_host,
+                                voice_port,
+                                self_id,
+                                state_clone,
+                            )
+                            .await;
+                        });
                     }
                 }
             }
@@ -1309,6 +1323,22 @@ impl HubClient {
                     });
                     info!("Registered direct UDP route to existing peer edge {} at {}", peer.id, udp_addr);
                 }
+                // Connect TCP voice channel to the existing peer
+                let peer_id = peer.id;
+                let peer_host = peer.host.clone();
+                let voice_port = peer.voice_port as u16;
+                let self_id = self.edge_state.get_edge_id();
+                let state_clone = self.edge_state.clone();
+                tokio::spawn(async move {
+                    crate::relay_server::connect_peer_voice_tcp(
+                        peer_id,
+                        peer_host,
+                        voice_port,
+                        self_id,
+                        state_clone,
+                    )
+                    .await;
+                });
             }
         }
 

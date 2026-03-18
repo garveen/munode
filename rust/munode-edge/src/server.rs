@@ -150,18 +150,20 @@ impl EdgeServer {
             });
         }
 
-        // Always start the control-relay server (every Edge acts as a relay for peers)
-        let relay_port = if self.config.hub_server.relay_port > 0 {
-            self.config.hub_server.relay_port
-        } else {
-            edge_port as u16 + 2
-        };
+        // Always start the edge WebSocket server (relay + voice) on edge_port
         {
             let hub_host = self.config.hub_server.host.clone();
             let hub_port = self.config.hub_server.control_port;
-            info!("Starting control relay server on port {}", relay_port);
+            let edge_state_clone = edge_state.clone();
+            info!("Starting edge WS server (relay+voice) on port {}", edge_port);
             tokio::spawn(async move {
-                crate::relay_server::run_relay_server(relay_port, hub_host, hub_port).await;
+                crate::relay_server::run_edge_ws_server(
+                    edge_port as u16,
+                    hub_host,
+                    hub_port,
+                    edge_state_clone,
+                )
+                .await;
             });
         }
 

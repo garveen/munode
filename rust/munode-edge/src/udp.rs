@@ -644,9 +644,24 @@ impl UdpServer {
                     }
                 }
                 Some(RouteDecision::DirectTcp) => {
-                    // DirectTcp not yet implemented — fall back to Hub TCP
-                    if self.edge_state.enable_hub_tcp_fallback {
-                        self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
+                    // Send via TCP voice channel if available, else fall back to Hub TCP.
+                    let sent = {
+                        let conns = self.edge_state.voice_tcp_conns.read().await;
+                        if let Some(tx) = conns.get(&target_edge_id) {
+                            // Frame: [0x01][session_BE(4)][plaintext...]
+                            let mut frame = Vec::with_capacity(1 + 4 + plaintext.len());
+                            frame.push(EDGE_PKT_VOICE);
+                            frame.extend_from_slice(&sender_session.to_be_bytes());
+                            frame.extend_from_slice(plaintext);
+                            tx.try_send(frame).is_ok()
+                        } else {
+                            false
+                        }
+                    };
+                    if !sent && self.edge_state.enable_hub_tcp_fallback {
+                        self.hub_client
+                            .relay_voice_via_hub(target_edge_id, relay_payload.clone())
+                            .await;
                     }
                 }
             }
@@ -897,7 +912,7 @@ fn probe_current_millis() -> u64 {
 }
 
 /// Encode a u32 value as a Mumble variable-length integer.
-fn encode_mumble_varint(value: u32) -> Vec<u8> {
+pub(crate) fn encode_mumble_varint(value: u32) -> Vec<u8> {
     if value < 0x80 {
         vec![value as u8]
     } else if value < 0x4000 {

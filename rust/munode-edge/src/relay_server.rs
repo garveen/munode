@@ -1,32 +1,34 @@
-//! Peer Edge Control Relay — transparent WebSocket relay server.
+//! Edge WebSocket server — combined control-relay and voice channel on `edge_port`.
 //!
-//! Every Edge starts a lightweight TCP/WebSocket relay listener (always-on, no opt-in flag).
-//! Peer Edges that cannot reach Hub directly connect to this relay port and have their
-//! traffic forwarded transparently.
+//! Every Edge starts a lightweight TCP/WebSocket listener on the same port number as
+//! its UDP `edge_port` (UDP and TCP share the port number but are distinct protocols).
+//! Two WebSocket paths are served:
 //!
-//! For each incoming client WebSocket, the relay opens **one new WebSocket
-//! connection to the Hub** and relays all binary frames bidirectionally.
-//! The relay does not parse or interpret any messages — it is purely transparent.
+//! - `/relay` — transparent Hub proxy relay (unchanged behaviour from the old relay server)
+//! - `/voice` — direct Edge-to-Edge voice channel for `DirectTcp` routing
 //!
 //! ```text
 //!   Edge A (cannot reach Hub)
-//!        │ ws://edge-b-host:relay_port/
+//!        │ ws://edge-b-host:edge_port/relay
 //!        ▼
 //!   Edge B (relay server)  ───ws://hub-host:hub-port/──►  Hub
-//!        ▲                                                    │
-//!        └────────────────── relay ──────────────────────────┘
-//! ```
 //!
-//! Limitations:
-//! - Single-hop only: Edge B does **not** accept further relay chains.
-//! - Plain WebSocket (no TLS): The relay listener does not use TLS.
-//!   This is acceptable for in-cluster connections on a trusted network.
+//!   Edge A (DirectTcp voice)
+//!        │ ws://edge-b-host:edge_port/voice
+//!        ▼
+//!   Edge B — delivers voice frames directly to local clients
+//! ```
+
+use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info, warn};
+
+use crate::state::{EdgeEvent, EdgeState};
 
 type WsMessage = tokio_tungstenite::tungstenite::Message;
 type WsError = tokio_tungstenite::tungstenite::Error;
@@ -35,22 +37,31 @@ type WsError = tokio_tungstenite::tungstenite::Error;
 /// for this duration. This prevents resource leaks from stale/zombie relays.
 const RELAY_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Start the control-relay WebSocket server.
+/// Voice TCP connection channel buffer size.
+const VOICE_TCP_CHAN_BUF: usize = 256;
+
+/// Start the combined edge WebSocket server (relay + voice) on `edge_port`.
 ///
-/// Binds to `0.0.0.0:relay_port` and for every incoming WebSocket connection
-/// opens a new WebSocket to the Hub (`ws://hub_host:hub_port/`) and relays
-/// frames bidirectionally until either side closes.
+/// Binds to `0.0.0.0:edge_port` (TCP) and dispatches incoming WebSocket connections
+/// by path:
+/// - `/relay` → Hub proxy relay (for Edges that can't reach Hub directly)
+/// - `/voice` → Edge-to-Edge voice delivery channel
 ///
 /// This function never returns under normal operation.
-pub async fn run_relay_server(relay_port: u16, hub_host: String, hub_port: u16) {
-    let bind_addr = format!("0.0.0.0:{}", relay_port);
+pub async fn run_edge_ws_server(
+    edge_port: u16,
+    hub_host: String,
+    hub_port: u16,
+    edge_state: Arc<EdgeState>,
+) {
+    let bind_addr = format!("0.0.0.0:{}", edge_port);
     let listener = match TcpListener::bind(&bind_addr).await {
         Ok(l) => {
-            info!("Control relay server listening on {}", bind_addr);
+            info!("Edge WS server (relay+voice) listening on {}", bind_addr);
             l
         }
         Err(e) => {
-            error!("Failed to bind control relay server on {}: {}", bind_addr, e);
+            error!("Failed to bind edge WS server on {}: {}", bind_addr, e);
             return;
         }
     };
@@ -60,37 +71,304 @@ pub async fn run_relay_server(relay_port: u16, hub_host: String, hub_port: u16) 
             Ok((stream, peer_addr)) => {
                 let hub_host = hub_host.clone();
                 let hub_port = hub_port;
-                info!("Control relay: incoming connection from {}", peer_addr);
+                let edge_state = edge_state.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_proxy_connection(stream, peer_addr, hub_host, hub_port).await {
-                        debug!("Control relay connection from {} ended: {}", peer_addr, e);
+                    // Capture the HTTP upgrade path via a header callback
+                    let captured_path: Arc<StdMutex<String>> =
+                        Arc::new(StdMutex::new(String::new()));
+                    let cp = captured_path.clone();
+
+                    let ws_result = timeout(
+                        Duration::from_secs(30),
+                        tokio_tungstenite::accept_hdr_async(
+                            stream,
+                            move |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                                  response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                                *cp.lock().unwrap() = req.uri().path().to_string();
+                                Ok(response)
+                            },
+                        ),
+                    )
+                    .await;
+
+                    let ws = match ws_result {
+                        Ok(Ok(ws)) => ws,
+                        Ok(Err(e)) => {
+                            debug!("Edge WS handshake error from {}: {}", peer_addr, e);
+                            return;
+                        }
+                        Err(_) => {
+                            debug!("Edge WS handshake timeout from {}", peer_addr);
+                            return;
+                        }
+                    };
+
+                    let path = captured_path.lock().unwrap().clone();
+                    match path.as_str() {
+                        "/voice" => {
+                            debug!("Edge WS /voice connection from {}", peer_addr);
+                            handle_voice_connection(ws, peer_addr, edge_state).await;
+                        }
+                        _ => {
+                            // Default: /relay or any unknown path → Hub proxy
+                            debug!("Edge WS /relay connection from {}", peer_addr);
+                            if let Err(e) =
+                                run_relay_for_ws(ws, peer_addr, hub_host, hub_port).await
+                            {
+                                debug!(
+                                    "Control relay connection from {} ended: {}",
+                                    peer_addr, e
+                                );
+                            }
+                        }
                     }
                 });
             }
             Err(e) => {
-                warn!("Control relay accept error: {}", e);
+                warn!("Edge WS server accept error: {}", e);
             }
         }
     }
 }
 
+/// Handle an incoming `/voice` WebSocket connection from a peer Edge.
+///
+/// Protocol:
+/// 1. First binary message = peer's `edge_id` (4 bytes BE).
+/// 2. Subsequent binary messages:
+///    - `[0x01][session_BE(4)][plaintext...]` → deliver locally via `RelayedVoice`.
+///    - `[0x02][ttl(1)][target_BE(4)][session_BE(4)][plaintext...]` → relay (dropped for now).
+async fn handle_voice_connection(
+    ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    peer_addr: std::net::SocketAddr,
+    edge_state: Arc<EdgeState>,
+) {
+    let (mut _write, mut read) = ws.split();
+
+    // Read peer edge_id from the first binary frame
+    let peer_edge_id = loop {
+        match timeout(Duration::from_secs(10), read.next()).await {
+            Ok(Some(Ok(WsMessage::Binary(data)))) if data.len() == 4 => {
+                let id = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+                break id;
+            }
+            Ok(Some(Ok(WsMessage::Binary(data)))) => {
+                warn!(
+                    "Voice conn from {}: unexpected first frame length {}",
+                    peer_addr,
+                    data.len()
+                );
+                return;
+            }
+            Ok(Some(Ok(_))) => continue, // skip non-binary frames
+            Ok(Some(Err(e))) => {
+                debug!("Voice conn from {}: read error: {}", peer_addr, e);
+                return;
+            }
+            Ok(None) => {
+                debug!("Voice conn from {}: closed before edge_id", peer_addr);
+                return;
+            }
+            Err(_) => {
+                warn!("Voice conn from {}: timeout waiting for edge_id", peer_addr);
+                return;
+            }
+        }
+    };
+
+    info!(
+        "Voice TCP connection from peer edge {} ({})",
+        peer_edge_id, peer_addr
+    );
+
+    // Process incoming voice frames
+    while let Ok(Some(msg)) = timeout(RELAY_IDLE_TIMEOUT, read.next()).await {
+        let data = match msg {
+            Ok(WsMessage::Binary(d)) => d,
+            Ok(WsMessage::Close(_)) => break,
+            Ok(_) => continue,
+            Err(e) => {
+                debug!(
+                    "Voice conn from peer edge {}: read error: {}",
+                    peer_edge_id, e
+                );
+                break;
+            }
+        };
+
+        if data.is_empty() {
+            continue;
+        }
+
+        match data[0] {
+            0x01 if data.len() >= 6 => {
+                // Direct delivery: [0x01][session_BE(4)][plaintext...]
+                let sender_session =
+                    u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
+                let plaintext = &data[5..];
+                // Build RelayedVoice packet: inject session varint into plaintext
+                let voice_packet = make_relayed_voice_packet(plaintext, sender_session);
+                if !voice_packet.is_empty() {
+                    edge_state.emit(EdgeEvent::RelayedVoice { voice_packet });
+                }
+            }
+            0x02 => {
+                // Relay frame — not handled on the /voice channel (log and drop)
+                debug!(
+                    "Voice conn from peer edge {}: relay frame dropped (len={})",
+                    peer_edge_id,
+                    data.len()
+                );
+            }
+            _ => {
+                debug!(
+                    "Voice conn from peer edge {}: unknown frame type 0x{:02X}",
+                    peer_edge_id, data[0]
+                );
+            }
+        }
+    }
+
+    info!(
+        "Voice TCP connection from peer edge {} ({}) closed",
+        peer_edge_id, peer_addr
+    );
+}
+
+/// Connect to a peer Edge's `/voice` WebSocket endpoint and store the sender in
+/// `edge_state.voice_tcp_conns[peer_edge_id]`.  Reconnects once if the
+/// connection drops.
+pub async fn connect_peer_voice_tcp(
+    peer_edge_id: u32,
+    peer_host: String,
+    peer_edge_port: u16,
+    self_edge_id: u32,
+    edge_state: Arc<EdgeState>,
+) {
+    let url = format!("ws://{}:{}/voice", peer_host, peer_edge_port);
+
+    let ws = match timeout(
+        Duration::from_secs(15),
+        tokio_tungstenite::connect_async(&url),
+    )
+    .await
+    {
+        Ok(Ok((ws, _))) => ws,
+        Ok(Err(e)) => {
+            warn!(
+                "Failed to connect TCP voice channel to peer edge {} ({}): {}",
+                peer_edge_id, url, e
+            );
+            return;
+        }
+        Err(_) => {
+            warn!(
+                "Timeout connecting TCP voice channel to peer edge {} ({})",
+                peer_edge_id, url
+            );
+            return;
+        }
+    };
+
+    let (mut write, _read) = ws.split();
+
+    // Send our own edge_id as the first 4-byte frame
+    let id_frame = WsMessage::Binary(self_edge_id.to_be_bytes().to_vec().into());
+    if let Err(e) = write.send(id_frame).await {
+        warn!(
+            "TCP voice to peer edge {}: failed to send edge_id: {}",
+            peer_edge_id, e
+        );
+        return;
+    }
+
+    // Create the channel and store the sender so udp.rs can enqueue frames
+    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(VOICE_TCP_CHAN_BUF);
+    {
+        let mut conns = edge_state.voice_tcp_conns.write().await;
+        conns.insert(peer_edge_id, tx);
+    }
+    info!(
+        "TCP voice channel to peer edge {} ({}) established",
+        peer_edge_id, url
+    );
+
+    // Drain the rx channel and forward frames over the WebSocket
+    while let Some(frame) = rx.recv().await {
+        if let Err(e) = write.send(WsMessage::Binary(frame.into())).await {
+            debug!(
+                "TCP voice to peer edge {}: send error: {}",
+                peer_edge_id, e
+            );
+            break;
+        }
+    }
+
+    // Connection dropped — clean up
+    {
+        let mut conns = edge_state.voice_tcp_conns.write().await;
+        conns.remove(&peer_edge_id);
+    }
+    info!(
+        "TCP voice channel to peer edge {} ({}) disconnected",
+        peer_edge_id, url
+    );
+}
+
+/// Build a `RelayedVoice`-compatible packet from a raw plaintext voice payload
+/// (client-to-server format) and a sender session ID.
+///
+/// Input `plaintext`: `[header(1B)][sequence_varint][audio_data]`
+/// Output: `[header(1B)][session_varint][sequence_varint][audio_data]`
+fn make_relayed_voice_packet(plaintext: &[u8], sender_session: u32) -> Vec<u8> {
+    if plaintext.is_empty() {
+        return Vec::new();
+    }
+    let header = plaintext[0];
+    let session_bytes = encode_varint(sender_session);
+    let mut pkt = Vec::with_capacity(1 + session_bytes.len() + plaintext.len() - 1);
+    pkt.push(header);
+    pkt.extend_from_slice(&session_bytes);
+    pkt.extend_from_slice(&plaintext[1..]);
+    pkt
+}
+
+/// Encode a u32 as a Mumble varint.
+fn encode_varint(value: u32) -> Vec<u8> {
+    if value < 0x80 {
+        vec![value as u8]
+    } else if value < 0x4000 {
+        vec![((value >> 8) | 0x80) as u8, (value & 0xFF) as u8]
+    } else if value < 0x200000 {
+        vec![
+            ((value >> 16) | 0xC0) as u8,
+            ((value >> 8) & 0xFF) as u8,
+            (value & 0xFF) as u8,
+        ]
+    } else {
+        vec![
+            0xF0,
+            ((value >> 24) & 0xFF) as u8,
+            ((value >> 16) & 0xFF) as u8,
+            ((value >> 8) & 0xFF) as u8,
+            (value & 0xFF) as u8,
+        ]
+    }
+}
+
 /// Handle a single proxy connection: upgrade to WebSocket, connect to Hub,
-/// then relay frames bidirectionally until either side closes or the
-/// connection is idle for more than [`RELAY_IDLE_TIMEOUT`].
-async fn handle_proxy_connection(
-    stream: tokio::net::TcpStream,
+/// Relay an already-upgraded client WebSocket connection to the Hub.
+///
+/// Opens a new WebSocket connection to the Hub and relays frames bidirectionally
+/// until either side closes or the connection is idle for [`RELAY_IDLE_TIMEOUT`].
+async fn run_relay_for_ws(
+    client_ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     peer_addr: std::net::SocketAddr,
     hub_host: String,
     hub_port: u16,
 ) -> Result<()> {
-    // Upgrade incoming TCP connection to WebSocket (server role)
-    const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
-    let client_ws = timeout(HANDSHAKE_TIMEOUT, tokio_tungstenite::accept_async(stream))
-        .await
-        .map_err(|_| anyhow::anyhow!("WebSocket handshake timed out from {}", peer_addr))??;
-    debug!("Control relay: WebSocket handshake complete with {}", peer_addr);
-
     // Connect to Hub as a WebSocket client
+    const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
     let hub_url = format!("ws://{}:{}", hub_host, hub_port);
     let (hub_ws, _) = timeout(HANDSHAKE_TIMEOUT, tokio_tungstenite::connect_async(&hub_url))
         .await

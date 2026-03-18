@@ -388,6 +388,9 @@ pub struct HubVoiceRoutingConfig {
     /// Maximum relay hops; chains longer than this fall back to HubTcp.
     #[serde(default = "default_max_relay_hops")]
     pub max_relay_hops: usize,
+    /// Penalty (ms) for using Edge-to-Edge TCP vs UDP (accounts for connection overhead).
+    #[serde(default = "default_edge_tcp_penalty_ms")]
+    pub edge_tcp_penalty_ms: f64,
 }
 
 impl Default for HubVoiceRoutingConfig {
@@ -407,6 +410,7 @@ impl Default for HubVoiceRoutingConfig {
             min_improvement_ms: default_min_improvement_ms(),
             relay_hop_penalty_ms: default_relay_hop_penalty_ms(),
             max_relay_hops: default_max_relay_hops(),
+            edge_tcp_penalty_ms: default_edge_tcp_penalty_ms(),
         }
     }
 }
@@ -871,6 +875,9 @@ fn default_relay_hop_penalty_ms() -> f64 {
 }
 fn default_max_relay_hops() -> usize {
     2
+}
+fn default_edge_tcp_penalty_ms() -> f64 {
+    20.0
 }
 
 /// GeoIP configuration.
