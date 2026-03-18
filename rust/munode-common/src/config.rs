@@ -61,7 +61,11 @@ pub struct EdgeVoiceRoutingConfig {
     /// Whether to use Hub TCP relay as last resort when all other paths fail.
     #[serde(default = "default_true")]
     pub enable_hub_tcp_fallback: bool,
-    /// Consecutive UDP send failures before skipping a next-hop (0 = disabled).
+    /// Number of consecutive UDP send failures to a next-hop before skipping it and
+    /// trying the next route candidate.  This provides fast local failover without
+    /// waiting for the Hub to update the route table.  The counter is reset when a
+    /// send succeeds or when a quality probe pong is received from that peer.
+    /// Set to 0 to disable local failover (rely solely on Hub route table updates).
     #[serde(default = "default_consecutive_failure_threshold")]
     pub consecutive_failure_threshold: u32,
     /// Relay node configuration.

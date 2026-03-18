@@ -340,9 +340,11 @@ impl TopologyManager {
                     let relay_chain: Vec<u32> = path[1..path.len()-1].to_vec();
                     let hop_count = relay_chain.len();
                     if hop_count > config.max_relay_hops {
-                        // Too many hops — fall back to Hub TCP
-                        let cost = self.path_cost(&path, config) as f32;
-                        result.push((target_id, 2, vec![], cost));
+                        // Too many hops — fall back to Hub TCP.
+                        // Use a fixed representative cost (Hub round-trip ≈ 150ms) rather than
+                        // the relay path cost, which would be misleadingly high for long chains.
+                        const HUB_TCP_REPRESENTATIVE_COST: f32 = 150.0;
+                        result.push((target_id, 2, vec![], HUB_TCP_REPRESENTATIVE_COST));
                     } else {
                         let cost = self.path_cost(&path, config) as f32;
                         result.push((target_id, 1, relay_chain, cost));

@@ -605,9 +605,9 @@ impl HubClient {
                 }
             }
         }
-        // No live slot — all connections to Hub are down
-        warn!("HubClient::send_raw: all {} pool slot(s) unavailable — message dropped", self.pool_size);
-        Err(anyhow::anyhow!("all connection pool slots unavailable"))
+        // No live slot — all connections to Hub are down or busy
+        warn!("HubClient::send_raw: all {} pool slot(s) unavailable (disconnected or busy) — message dropped", self.pool_size);
+        Err(anyhow::anyhow!("all {} connection pool slots unavailable (disconnected or busy)", self.pool_size))
     }
 
     /// Send an EdgeHubPacket to the Hub.

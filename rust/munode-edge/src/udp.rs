@@ -702,15 +702,8 @@ impl UdpServer {
 
         let my_edge_id = self.edge_state.get_edge_id();
         if target_edge_id == my_edge_id {
-            // Deliver locally — treat as a direct edge voice packet
-            let mut local_data = Vec::with_capacity(4 + voice_data.len());
-            local_data.extend_from_slice(&sender_session.to_be_bytes());
-            local_data.extend_from_slice(voice_data);
-            // Reuse handle_edge_packet by constructing its expected format
-            // (we need a peer_addr but it's not used for routing here; use a dummy)
-            let dummy_addr = std::net::SocketAddr::new(
-                std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0);
-            self.handle_edge_packet(&local_data, dummy_addr).await;
+            // Deliver locally — this Edge is the final destination.
+            self.deliver_voice_locally(sender_session, voice_data).await;
             return;
         }
 
@@ -780,6 +773,43 @@ impl UdpServer {
         let forwarded = inject_session_into_voice(voice_data, sender_session);
 
         // Deliver to local clients in the same channel
+        let local_targets = self.edge_state.client_manager.get_channel_sessions(channel_id).await;
+        let session_addrs = self.session_to_addr.read().await;
+
+        for target in local_targets {
+            if let Some(&addr) = session_addrs.get(&target) {
+                if let Some(cs_arc) = self.edge_state.client_manager.get_crypt_state(target).await {
+                    let mut encrypted = Vec::new();
+                    match cs_arc.lock() {
+                        Ok(mut cs) => { cs.encrypt(&forwarded, &mut encrypted); }
+                        Err(e) => {
+                            warn!("CryptState mutex poisoned for session {} — packet dropped: {}", target, e);
+                            continue;
+                        }
+                    }
+                    if let Err(e) = self.socket.send_to(&encrypted, addr).await {
+                        warn!("UDP relay to session {} failed: {}", target, e);
+                    }
+                }
+            } else {
+                self.fallback_to_tcp(target, &forwarded).await;
+            }
+        }
+    }
+
+    /// Deliver a relayed voice packet to local clients on this Edge.
+    /// Extracted from handle_edge_packet to avoid needing a dummy peer address.
+    async fn deliver_voice_locally(&self, sender_session: u32, voice_data: &[u8]) {
+        debug!("deliver_voice_locally: session={}, {} bytes", sender_session, voice_data.len());
+
+        let channel_id = if let Some(ru) = self.edge_state.channel_manager.get_remote_user(sender_session).await {
+            ru.channel_id
+        } else {
+            debug!("Unknown remote session {} in relay delivery", sender_session);
+            return;
+        };
+
+        let forwarded = inject_session_into_voice(voice_data, sender_session);
         let local_targets = self.edge_state.client_manager.get_channel_sessions(channel_id).await;
         let session_addrs = self.session_to_addr.read().await;
 

@@ -152,6 +152,9 @@ pub enum EdgeEvent {
     AclUpdated { channel_id: u32 },
 }
 
+/// Default TTL cap for relay packets when no Hub-provided cap is available.
+pub const DEFAULT_MAX_TTL: u32 = 4;
+
 /// Transport layer for a hop in a relay chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HopTransport { Udp, Tcp }
@@ -258,7 +261,7 @@ impl EdgeState {
             enable_hub_tcp_fallback,
             consecutive_failure_threshold: 2,
             next_hop_failures: RwLock::new(HashMap::new()),
-            max_ttl: std::sync::atomic::AtomicU32::new(4),
+            max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
             listeners_per_user: 0,
             listeners_per_channel: 0,
             allow_ping: AtomicBool::new(true),
@@ -290,7 +293,7 @@ impl EdgeState {
             enable_hub_tcp_fallback,
             consecutive_failure_threshold: 2,
             next_hop_failures: RwLock::new(HashMap::new()),
-            max_ttl: std::sync::atomic::AtomicU32::new(4),
+            max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
             listeners_per_user,
             listeners_per_channel,
             allow_ping: AtomicBool::new(true),
@@ -325,7 +328,7 @@ impl EdgeState {
             enable_hub_tcp_fallback,
             consecutive_failure_threshold,
             next_hop_failures: RwLock::new(HashMap::new()),
-            max_ttl: std::sync::atomic::AtomicU32::new(4),
+            max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
             listeners_per_user,
             listeners_per_channel,
             allow_ping: AtomicBool::new(allow_ping),
