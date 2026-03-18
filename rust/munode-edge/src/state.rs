@@ -245,9 +245,6 @@ pub struct EdgeState {
     /// Client-facing limits pushed from Hub on registration (and updated via heartbeat).
     /// When set, overrides Edge-local config for ServerSync/ServerConfig/rate limiting.
     pub hub_limits: RwLock<Option<ServerLimitsConfig>>,
-    /// Test-only: percentage (0–100) of outbound Edge-to-Edge UDP packets to drop.
-    /// When > 0, the UDP server will drop that fraction of packets before sending,
-    /// simulating link degradation so that failure-fallback paths can be exercised.
     /// Percentage (0–100) of outbound Edge-to-Edge UDP packets to drop.
     /// Zero in production; set by `test-utils` feature tests to simulate link degradation.
     pub test_udp_drop_rate: AtomicU32,

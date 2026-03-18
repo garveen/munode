@@ -992,3 +992,32 @@ pub async fn test_route_to_edge(
         }
     }
 }
+
+/// Test-only: send a single relay voice packet via UDP in the `EDGE_PKT_RELAY` wire format.
+///
+/// Wire format: `[0x02][ttl(1)][target_edge_id_BE(4)][sender_session_BE(4)][payload...]`
+///
+/// This mirrors exactly what `route_voice()` sends for `RouteDecision::RelayChain`.
+/// The receiver parses it as an incoming relay hop (EDGE_PKT_RELAY branch in `run()`).
+///
+/// Returns `true` if the socket send succeeded.
+///
+/// Used by integration tests in `tests/voice_routing.rs` to verify the relay
+/// packet wire format without requiring a full `UdpServer` stack.
+#[cfg(feature = "test-utils")]
+pub async fn test_send_relay_packet(
+    edge_socket: Arc<tokio::net::UdpSocket>,
+    target_edge_id: u32,
+    target_addr: std::net::SocketAddr,
+    sender_session: u32,
+    ttl: u8,
+    payload: &[u8],
+) -> bool {
+    let mut pkt = Vec::with_capacity(1 + 1 + 4 + 4 + payload.len());
+    pkt.push(EDGE_PKT_RELAY); // 0x02
+    pkt.push(ttl);
+    pkt.extend_from_slice(&target_edge_id.to_be_bytes());
+    pkt.extend_from_slice(&sender_session.to_be_bytes());
+    pkt.extend_from_slice(payload);
+    edge_socket.send_to(&pkt, target_addr).await.is_ok()
+}
