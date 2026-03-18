@@ -33,6 +33,21 @@ use crate::server::HubState;
 /// Shared state passed to axum handlers.
 type AppState = Arc<HubState>;
 
+/// Constant-time string comparison to prevent timing side-channel attacks on API keys.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    // XOR each byte pair; OR into accumulator so no early exit leaks timing info.
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// Middleware that enforces API key authentication for write operations (non-GET requests).
 ///
 /// Reads the key from `Authorization: Bearer <key>` header and compares it to
@@ -60,7 +75,7 @@ async fn api_key_middleware(
                 .get("Authorization")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.strip_prefix("Bearer "));
-            if provided_key == Some(configured_key.as_str()) {
+            if provided_key.is_some_and(|k| constant_time_eq(k, configured_key)) {
                 next.run(request).await
             } else {
                 (StatusCode::UNAUTHORIZED, "Invalid or missing API key").into_response()

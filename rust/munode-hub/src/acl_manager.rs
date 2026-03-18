@@ -134,7 +134,7 @@ impl AclManager {
 
         // Cache result (with size guard to prevent unbounded growth)
         let mut cache = self.cache.write().await;
-        if cache.len() > ACL_CACHE_MAX_SIZE {
+        if cache.len() >= ACL_CACHE_MAX_SIZE {
             cache.clear();
             tracing::debug!("ACL cache cleared (exceeded {} entries)", ACL_CACHE_MAX_SIZE);
         }
