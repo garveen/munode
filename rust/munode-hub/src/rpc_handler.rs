@@ -1455,7 +1455,9 @@ impl RpcHandler {
             })
             .collect();
 
-        // Gather all channel links (deduplicated)
+        // Gather all channel links (deduplicated).
+        // get_all_channels() returns an owned Vec<ChannelRecord>, so the internal
+        // read-lock is released before we iterate — no lock is held during serialization.
         let mut link_set = std::collections::HashSet::new();
         let all_channels = self.state.channel_store.get_all_channels().await;
         let mut channel_links = Vec::new();
@@ -1475,7 +1477,9 @@ impl RpcHandler {
             }
         }
 
-        // Gather all sessions
+        // Gather all sessions.
+        // get_all_sessions() returns an owned Vec<SessionInfo>, so the internal
+        // read-lock is released before we map/serialize — no lock is held during serialization.
         let sessions: Vec<GlobalSessionProto> = self
             .state
             .session_manager
@@ -3661,7 +3665,9 @@ impl RpcHandler {
         }
 
         let target_edge_id = params.target_edge_id;
-        let voice_packet = params.voice_packet.clone();
+        // params is a shared borrow (&EdgeRelayVoiceViaTcpParams), so a clone of
+        // the voice payload is unavoidable here.  We place it directly into the
+        // outgoing notification struct to keep the number of copies at one.
         let from_edge_id = params.from_edge_id;
         let timestamp = params.timestamp;
 
@@ -3671,7 +3677,7 @@ impl RpcHandler {
             timestamp: Some(current_millis() as i64),
             relay_voice_packet: Some(HubRelayVoicePacketParams {
                 from_edge_id,
-                voice_packet,
+                voice_packet: params.voice_packet.clone(),
                 timestamp,
             }),
             ..Default::default()

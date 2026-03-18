@@ -225,10 +225,17 @@ impl EdgeServer {
             }
         }
 
-        // Allow background tasks a moment to notice shutdown before aborting.
-        // These tasks are stateless (no persistent data to flush), so abort is
-        // acceptable as a fallback after a brief grace period.
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        // On SIGINT/ctrl-c the ShutdownRequested event path has not fired, so
+        // clients have not yet been notified.  Broadcast a Reject to all
+        // connected clients so they know to reconnect, then give tasks time
+        // to drain their write buffers before we abort them.
+        edge_state.client_manager.close_all_connections("Server shutting down").await;
+
+        // Allow background tasks adequate time to notice the shutdown signal
+        // and flush any in-flight messages before we force-abort them.
+        // 3 seconds is sufficient for disconnect notifications to Hub and any
+        // queued writes to be flushed to clients.
+        tokio::time::sleep(tokio::time::Duration::from_millis(3000)).await;
         udp_handle.abort();
         hub_handle.abort();
         event_handle.abort();
