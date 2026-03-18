@@ -3149,11 +3149,12 @@ impl RpcHandler {
         // fine since this is a shared read lock — only topology writers are briefly
         // paused.  For typical cluster sizes (2–20 edges) the total computation time
         // is well under a millisecond.
-        let edge_data: Vec<(u32, Vec<(u32, u32, Option<u32>, f32)>)> = {
+        let edge_data: Vec<(u32, Vec<(u32, u32, Vec<u32>, f32)>)> = {
             let topo = self.state.topology.read().await;
+            let config = &self.state.config.voice_routing;
             topo.get_all_edges()
                 .iter()
-                .map(|e| (e.edge_id, topo.compute_route_table(e.edge_id)))
+                .map(|e| (e.edge_id, topo.compute_route_table(e.edge_id, config)))
                 .collect()
         }; // lock released here
 
@@ -3163,14 +3164,17 @@ impl RpcHandler {
             }
             self.send_notification_to_edge(edge_id, "hub.routeTableUpdate", |n| {
                 n.route_table_update = Some(HubRouteTableUpdateParams {
-                    routes: routes.into_iter().map(|(target, rtype, nhop, cost)| {
+                    routes: routes.into_iter().map(|(target, rtype, relay_chain, cost)| {
+                        let relay_transports = vec![0u32; relay_chain.len()]; // all UDP for now
                         HubRouteEntryProto {
                             target_edge_id: target,
                             route_type: rtype,
-                            next_hop: nhop,
+                            relay_chain,
+                            relay_transports,
                             cost,
                         }
                     }).collect(),
+                    max_ttl: Some(4),
                 });
             }).await;
         }
@@ -3623,7 +3627,7 @@ impl RpcHandler {
             .context("Missing edge_relay_voice_via_tcp params")?;
 
         // Respect Hub voice routing policy: if relay is disabled, reject immediately.
-        if !self.state.config.voice_routing.enable_relay {
+        if !self.state.config.voice_routing.enable_hub_tcp_relay {
             return Ok(self.make_response_packet(request_id, "edge.relayVoiceViaTcp", |r| {
                 r.edge_relay_voice_via_tcp = Some(EdgeRelayVoiceViaTcpResult {
                     success: false,

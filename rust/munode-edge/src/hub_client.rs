@@ -987,22 +987,31 @@ impl HubClient {
             }
             "hub.routeTableUpdate" => {
                 if let Some(params) = &notification.route_table_update {
-                    use crate::state::RouteDecision;
+                    use crate::state::{RouteCandidate, RouteDecision, HopTransport};
+                    use std::sync::atomic::Ordering;
+                    let new_max_ttl = params.max_ttl.unwrap_or(4);
+                    self.edge_state.max_ttl.store(new_max_ttl, Ordering::Relaxed);
                     let mut table = self.edge_state.route_table.write().await;
                     table.clear();
                     for entry in &params.routes {
                         let decision = match entry.route_type {
-                            1 => RouteDecision::RelayVia {
-                                relay_edge_id: entry.next_hop.unwrap_or(0),
-                            },
+                            1 => {
+                                let hops = entry.relay_chain.clone();
+                                let transports = entry.relay_transports.iter().map(|&t| {
+                                    if t == 1 { HopTransport::Tcp } else { HopTransport::Udp }
+                                }).collect();
+                                RouteDecision::RelayChain { hops, transports }
+                            }
                             2 => RouteDecision::HubTcp,
-                            _ => RouteDecision::Direct,
+                            3 => RouteDecision::DirectTcp,
+                            _ => RouteDecision::DirectUdp,
                         };
-                        table.insert(entry.target_edge_id, decision);
+                        let candidate = RouteCandidate { decision, cost: entry.cost };
+                        table.entry(entry.target_edge_id).or_insert_with(Vec::new).push(candidate);
                     }
                     let count = table.len();
                     drop(table);
-                    debug!("Route table updated: {} entries", count);
+                    debug!("Route table updated: {} entries, max_ttl={}", count, new_max_ttl);
                 }
             }
             "hub.contextActionModify" => {

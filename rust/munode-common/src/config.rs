@@ -32,44 +32,6 @@ fn default_log_format() -> String {
     "text".to_string()
 }
 
-/// Connection strategy for Edge-to-Edge voice routing.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum VoiceConnectionStrategy {
-    /// Try direct Edge-to-Edge UDP first; fall back to Hub TCP relay on failure.
-    #[default]
-    AutoFallback,
-    /// Always use Hub TCP relay; never attempt direct Edge-to-Edge UDP.
-    TcpOnly,
-    /// Always use direct Edge-to-Edge UDP; never use Hub TCP relay.
-    /// Primarily useful for testing direct connectivity.
-    DirectOnly,
-}
-
-/// Fallback thresholds for voice quality degradation detection.
-#[derive(Debug, Clone, Deserialize)]
-pub struct EdgeVoiceFallbackConfig {
-    /// Whether to enable TCP fallback when UDP quality degrades.
-    #[serde(default)]
-    pub enable_tcp_fallback: bool,
-    /// Delay in ms before switching to TCP after UDP degradation is detected.
-    #[serde(default = "default_tcp_fallback_delay")]
-    pub tcp_fallback_delay: u64,
-    /// Interval in ms to check whether UDP has recovered after a TCP fallback.
-    #[serde(default = "default_udp_recovery_check_interval")]
-    pub udp_recovery_check_interval: u64,
-}
-
-impl Default for EdgeVoiceFallbackConfig {
-    fn default() -> Self {
-        Self {
-            enable_tcp_fallback: false,
-            tcp_fallback_delay: default_tcp_fallback_delay(),
-            udp_recovery_check_interval: default_udp_recovery_check_interval(),
-        }
-    }
-}
-
 /// Relay configuration for the Edge acting as a relay node.
 #[derive(Debug, Clone, Deserialize)]
 pub struct EdgeVoiceRelayConfig {
@@ -96,15 +58,12 @@ pub struct EdgeVoiceRoutingConfig {
     /// Enable voice routing (default: true).
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Connection strategy for cross-Edge voice packets.
-    /// - `auto_fallback` (default): UDP direct, fall back to Hub TCP relay.
-    /// - `tcp_only`: always use Hub TCP relay.
-    /// - `direct_only`: UDP direct only (no Hub relay).
-    #[serde(default)]
-    pub connection_strategy: VoiceConnectionStrategy,
-    /// Fallback / quality degradation configuration.
-    #[serde(default)]
-    pub fallback: EdgeVoiceFallbackConfig,
+    /// Whether to use Hub TCP relay as last resort when all other paths fail.
+    #[serde(default = "default_true")]
+    pub enable_hub_tcp_fallback: bool,
+    /// Consecutive UDP send failures before skipping a next-hop (0 = disabled).
+    #[serde(default = "default_consecutive_failure_threshold")]
+    pub consecutive_failure_threshold: u32,
     /// Relay node configuration.
     #[serde(default)]
     pub relay: EdgeVoiceRelayConfig,
@@ -114,8 +73,8 @@ impl Default for EdgeVoiceRoutingConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            connection_strategy: VoiceConnectionStrategy::AutoFallback,
-            fallback: EdgeVoiceFallbackConfig::default(),
+            enable_hub_tcp_fallback: true,
+            consecutive_failure_threshold: default_consecutive_failure_threshold(),
             relay: EdgeVoiceRelayConfig::default(),
         }
     }
@@ -383,7 +342,7 @@ pub struct HubVoiceRoutingConfig {
     /// Enable Hub-mediated voice relay (default: true).
     /// When false, `edge.relayVoiceViaTcp` RPC calls are rejected.
     #[serde(default = "default_true")]
-    pub enable_relay: bool,
+    pub enable_hub_tcp_relay: bool,
     /// Maximum number of simultaneous relay streams per Edge pair.
     /// 0 = unlimited.
     #[serde(default)]
@@ -401,17 +360,49 @@ pub struct HubVoiceRoutingConfig {
     /// Packet loss threshold (0.0–1.0) below which direct routes are preferred.
     #[serde(default = "default_direct_loss_threshold")]
     pub direct_loss_threshold: f32,
+    /// Packet loss rate above which a link is considered degraded.
+    #[serde(default = "default_degraded_packet_loss")]
+    pub degraded_packet_loss: f64,
+    /// Packet loss rate above which a link is removed from path calculation.
+    #[serde(default = "default_failed_packet_loss")]
+    pub failed_packet_loss: f64,
+    /// RTT (ms) above which a link is considered degraded.
+    #[serde(default = "default_degraded_rtt_ms")]
+    pub degraded_rtt_ms: f64,
+    /// RTT (ms) above which a link is removed from path calculation.
+    #[serde(default = "default_failed_rtt_ms")]
+    pub failed_rtt_ms: f64,
+    /// Number of consecutive report cycles a recovered link must pass before being used.
+    #[serde(default = "default_recovery_report_count")]
+    pub recovery_report_count: u32,
+    /// Minimum cost improvement (ms) before updating route table.
+    #[serde(default = "default_min_improvement_ms")]
+    pub min_improvement_ms: f32,
+    /// Penalty per relay hop (ms).
+    #[serde(default = "default_relay_hop_penalty_ms")]
+    pub relay_hop_penalty_ms: f64,
+    /// Maximum relay hops; chains longer than this fall back to HubTcp.
+    #[serde(default = "default_max_relay_hops")]
+    pub max_relay_hops: usize,
 }
 
 impl Default for HubVoiceRoutingConfig {
     fn default() -> Self {
         Self {
-            enable_relay: true,
+            enable_hub_tcp_relay: true,
             max_relay_streams_per_pair: 0,
             max_total_relay_streams: 0,
             relay_cost_factor: default_relay_cost_factor(),
             direct_rtt_threshold: default_direct_rtt_threshold(),
             direct_loss_threshold: default_direct_loss_threshold(),
+            degraded_packet_loss: default_degraded_packet_loss(),
+            failed_packet_loss: default_failed_packet_loss(),
+            degraded_rtt_ms: default_degraded_rtt_ms(),
+            failed_rtt_ms: default_failed_rtt_ms(),
+            recovery_report_count: default_recovery_report_count(),
+            min_improvement_ms: default_min_improvement_ms(),
+            relay_hop_penalty_ms: default_relay_hop_penalty_ms(),
+            max_relay_hops: default_max_relay_hops(),
         }
     }
 }
@@ -832,12 +823,6 @@ fn default_web_api_port() -> u16 {
 fn default_blob_store_path() -> String {
     "data/blobs".to_string()
 }
-fn default_tcp_fallback_delay() -> u64 {
-    2000
-}
-fn default_udp_recovery_check_interval() -> u64 {
-    5000
-}
 fn default_relay_bandwidth() -> u32 {
     10000
 }
@@ -849,6 +834,33 @@ fn default_direct_rtt_threshold() -> u32 {
 }
 fn default_direct_loss_threshold() -> f32 {
     0.05
+}
+fn default_consecutive_failure_threshold() -> u32 {
+    2
+}
+fn default_degraded_packet_loss() -> f64 {
+    0.10
+}
+fn default_failed_packet_loss() -> f64 {
+    0.40
+}
+fn default_degraded_rtt_ms() -> f64 {
+    150.0
+}
+fn default_failed_rtt_ms() -> f64 {
+    500.0
+}
+fn default_recovery_report_count() -> u32 {
+    3
+}
+fn default_min_improvement_ms() -> f32 {
+    25.0
+}
+fn default_relay_hop_penalty_ms() -> f64 {
+    5.0
+}
+fn default_max_relay_hops() -> usize {
+    2
 }
 
 /// GeoIP configuration.

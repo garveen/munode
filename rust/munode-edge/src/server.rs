@@ -52,22 +52,12 @@ impl EdgeServer {
         let client_manager = ClientManager::new();
         let channel_manager = ChannelManager::new();
 
-        // Derive voice routing flags from the new voice_routing config, falling back
-        // to the legacy `server.disable_hub_relay` for backwards compatibility.
-        use munode_common::config::VoiceConnectionStrategy;
-        let (allow_hub_relay, allow_direct_udp) = match &self.config.voice_routing.connection_strategy {
-            VoiceConnectionStrategy::TcpOnly => (true, false),
-            VoiceConnectionStrategy::DirectOnly => (false, true),
-            VoiceConnectionStrategy::AutoFallback => {
-                // Legacy override: disable_hub_relay forces DirectOnly behaviour.
-                (!self.config.server.disable_hub_relay, true)
-            }
-        };
+        // Derive voice routing flags from the voice_routing config.
         let edge_state = EdgeState::new_with_full_config(
             channel_manager,
             client_manager,
-            allow_hub_relay,
-            allow_direct_udp,
+            self.config.voice_routing.enable_hub_tcp_fallback,
+            self.config.voice_routing.consecutive_failure_threshold,
             self.config.server.listeners_per_user,
             self.config.server.listeners_per_channel,
             self.config.server.allow_ping,
@@ -889,7 +879,7 @@ async fn handle_client_connection(
                                         // [header][session_varint][seq][voice_data]
                                         // (matches TS hub relay format)
                                         let relay_payload = inject_session_into_voice(&frame.payload, sid);
-                                        if edge_state.allow_hub_relay {
+                                        if edge_state.enable_hub_tcp_fallback {
                                             hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                                         }
                                     }
@@ -945,7 +935,7 @@ async fn handle_client_connection(
                                     // Relay format: standard Mumble server-to-client packet
                                     // [header][session_varint][seq][voice_data]
                                     let relay_payload = inject_session_into_voice(&frame.payload, sid);
-                                    if edge_state.allow_hub_relay {
+                                    if edge_state.enable_hub_tcp_fallback {
                                         hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                                     }
                                 }

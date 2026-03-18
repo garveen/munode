@@ -152,15 +152,32 @@ pub enum EdgeEvent {
     AclUpdated { channel_id: u32 },
 }
 
-/// Route decision for reaching a target Edge, derived from Hub's route table.
+/// Transport layer for a hop in a relay chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HopTransport { Udp, Tcp }
+
+/// Route decision for reaching a target Edge.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RouteDecision {
-    /// Send direct UDP to the target Edge.
-    Direct,
-    /// Send via intermediate relay Edge.
-    RelayVia { relay_edge_id: u32 },
-    /// Use Hub TCP relay (no quality UDP path).
+    /// Direct UDP to target Edge.
+    DirectUdp,
+    /// Direct TCP (WebSocket /voice) to target Edge.
+    DirectTcp,
+    /// Multi-hop relay chain: hops = intermediate Edge IDs (not including source/dest),
+    /// transports[i] = transport used to reach hops[i].
+    RelayChain {
+        hops: Vec<u32>,
+        transports: Vec<HopTransport>,
+    },
+    /// Hub TCP relay (last resort).
     HubTcp,
+}
+
+/// Single route candidate with cost.
+#[derive(Debug, Clone)]
+pub struct RouteCandidate {
+    pub decision: RouteDecision,
+    pub cost: f32,
 }
 
 /// Shared state accessible by all components of the Edge server.
@@ -185,12 +202,15 @@ pub struct EdgeState {
     /// Uses RwLock because reads happen on every cross-edge voice packet and
     /// writes only occur on peerJoined / peerLeft notifications (rare).
     pub peer_registry: RwLock<PeerRegistry>,
-    /// Whether Hub-mediated TCP relay is allowed for cross-Edge voice.
-    /// Derived from `voice_routing.connection_strategy`.
-    pub allow_hub_relay: bool,
-    /// Whether direct Edge-to-Edge UDP routing is attempted.
-    /// Derived from `voice_routing.connection_strategy`.
-    pub allow_direct_udp: bool,
+    /// Whether Hub-mediated TCP relay is allowed for cross-Edge voice (last resort).
+    pub enable_hub_tcp_fallback: bool,
+    /// Number of consecutive send failures before skipping a next-hop.
+    /// 0 means never skip (rely solely on Hub route table updates).
+    pub consecutive_failure_threshold: u32,
+    /// Per next-hop consecutive failure counter.
+    pub next_hop_failures: RwLock<HashMap<u32, u32>>,
+    /// Hub-pushed cluster-level TTL cap for relay packets.
+    pub max_ttl: std::sync::atomic::AtomicU32,
     /// Maximum number of channels a single user may listen to simultaneously.
     /// 0 = unlimited.
     pub listeners_per_user: u32,
@@ -213,8 +233,8 @@ pub struct EdgeState {
     /// session_id -> set of channel IDs the user has Enter permission on.
     /// Used for fast ninja visibility checks without Hub round-trips.
     pub ninja_visible_to: RwLock<HashMap<u32, std::collections::HashSet<u32>>>,
-    /// Route table from Hub. Maps target_edge_id → RouteDecision.
-    pub route_table: RwLock<std::collections::HashMap<u32, RouteDecision>>,
+    /// Route table from Hub. Maps target_edge_id → ordered list of route candidates (best first).
+    pub route_table: RwLock<std::collections::HashMap<u32, Vec<RouteCandidate>>>,
     /// Client-facing limits pushed from Hub on registration (and updated via heartbeat).
     /// When set, overrides Edge-local config for ServerSync/ServerConfig/rate limiting.
     pub hub_limits: RwLock<Option<ServerLimitsConfig>>,
@@ -224,7 +244,7 @@ impl EdgeState {
     pub fn new(
         channel_manager: Arc<ChannelManager>,
         client_manager: Arc<ClientManager>,
-        disable_hub_relay: bool,
+        enable_hub_tcp_fallback: bool,
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(256);
         Arc::new(Self {
@@ -235,8 +255,10 @@ impl EdgeState {
             event_tx,
             voice_targets: RwLock::new(HashMap::new()),
             peer_registry: RwLock::new(PeerRegistry::default()),
-            allow_hub_relay: !disable_hub_relay,
-            allow_direct_udp: true,
+            enable_hub_tcp_fallback,
+            consecutive_failure_threshold: 2,
+            next_hop_failures: RwLock::new(HashMap::new()),
+            max_ttl: std::sync::atomic::AtomicU32::new(4),
             listeners_per_user: 0,
             listeners_per_channel: 0,
             allow_ping: AtomicBool::new(true),
@@ -252,8 +274,7 @@ impl EdgeState {
     pub fn new_with_config(
         channel_manager: Arc<ChannelManager>,
         client_manager: Arc<ClientManager>,
-        allow_hub_relay: bool,
-        allow_direct_udp: bool,
+        enable_hub_tcp_fallback: bool,
         listeners_per_user: u32,
         listeners_per_channel: u32,
     ) -> Arc<Self> {
@@ -266,8 +287,10 @@ impl EdgeState {
             event_tx,
             voice_targets: RwLock::new(HashMap::new()),
             peer_registry: RwLock::new(PeerRegistry::default()),
-            allow_hub_relay,
-            allow_direct_udp,
+            enable_hub_tcp_fallback,
+            consecutive_failure_threshold: 2,
+            next_hop_failures: RwLock::new(HashMap::new()),
+            max_ttl: std::sync::atomic::AtomicU32::new(4),
             listeners_per_user,
             listeners_per_channel,
             allow_ping: AtomicBool::new(true),
@@ -283,8 +306,8 @@ impl EdgeState {
     pub fn new_with_full_config(
         channel_manager: Arc<ChannelManager>,
         client_manager: Arc<ClientManager>,
-        allow_hub_relay: bool,
-        allow_direct_udp: bool,
+        enable_hub_tcp_fallback: bool,
+        consecutive_failure_threshold: u32,
         listeners_per_user: u32,
         listeners_per_channel: u32,
         allow_ping: bool,
@@ -299,8 +322,10 @@ impl EdgeState {
             event_tx,
             voice_targets: RwLock::new(HashMap::new()),
             peer_registry: RwLock::new(PeerRegistry::default()),
-            allow_hub_relay,
-            allow_direct_udp,
+            enable_hub_tcp_fallback,
+            consecutive_failure_threshold,
+            next_hop_failures: RwLock::new(HashMap::new()),
+            max_ttl: std::sync::atomic::AtomicU32::new(4),
             listeners_per_user,
             listeners_per_channel,
             allow_ping: AtomicBool::new(allow_ping),

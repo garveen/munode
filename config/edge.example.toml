@@ -132,21 +132,13 @@ max_bandwidth  = 558000                 # Default: 558000 (bps, ~558 kbps)
 # ---------------------------------------------------------------------------
 [voice_routing]
 # Enable cross-edge voice routing (relay and direct UDP)
-enabled = true                         # Default: true
+enabled = true                                # Default: true
 
-# Connection strategy for cross-edge voice routing:
-#   auto_fallback – try direct UDP, fall back to Hub relay if needed (default)
-#   tcp_only      – always use Hub TCP relay (lowest latency variance, higher Hub load)
-#   direct_only   – direct Edge-to-Edge UDP only; no Hub relay (lowest Hub load)
-connection_strategy = "auto_fallback"  # Default: auto_fallback
+# Use Hub TCP relay as last resort when all other paths fail
+enable_hub_tcp_fallback = true                # Default: true
 
-[voice_routing.fallback]
-# Enable TCP relay fallback when direct UDP fails
-enable_tcp_fallback          = true   # Default: false
-# Delay (ms) before switching to TCP fallback after UDP failure
-tcp_fallback_delay           = 2000    # Default: 2000 ms
-# Interval (ms) to check if direct UDP has recovered
-udp_recovery_check_interval  = 5000   # Default: 5000 ms
+# Consecutive UDP send failures before skipping a next-hop (0 = disabled)
+consecutive_failure_threshold = 2             # Default: 2
 
 [voice_routing.relay]
 # Enable Hub-mediated voice relay

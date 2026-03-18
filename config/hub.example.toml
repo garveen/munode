@@ -284,7 +284,7 @@ path = "./data/blobs"                  # Default: data/blobs
 # ---------------------------------------------------------------------------
 [voice_routing]
 # Enable Hub-mediated TCP voice relay for cross-edge routing
-enable_relay                 = true    # Default: true
+enable_hub_tcp_relay         = true    # Default: true
 
 # Maximum simultaneous relay streams between any pair of edges
 max_relay_streams_per_pair   = 0       # Default: 0 (unlimited)

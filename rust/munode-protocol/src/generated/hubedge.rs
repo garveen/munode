@@ -2266,22 +2266,29 @@ pub struct TypedRpcResponse {
 /// ---------------------------------------------------------------------------
 /// hub.routeTableUpdate - Hub pushes quality-aware route table to Edge
 /// ---------------------------------------------------------------------------
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HubRouteEntryProto {
     #[prost(uint32, required, tag = "1")]
     pub target_edge_id: u32,
-    /// 0=direct, 1=relay via next_hop, 2=hub_tcp
+    /// 0=DirectUdp, 1=RelayChain, 2=HubTcp, 3=DirectTcp
     #[prost(uint32, required, tag = "2")]
     pub route_type: u32,
-    #[prost(uint32, optional, tag = "3")]
-    pub next_hop: ::core::option::Option<u32>,
-    #[prost(float, required, tag = "4")]
+    /// full relay chain (intermediate edges, excl. src+dst)
+    #[prost(uint32, repeated, tag = "3")]
+    pub relay_chain: ::prost::alloc::vec::Vec<u32>,
+    /// transport per hop: 0=UDP, 1=TCP
+    #[prost(uint32, repeated, tag = "4")]
+    pub relay_transports: ::prost::alloc::vec::Vec<u32>,
+    #[prost(float, required, tag = "5")]
     pub cost: f32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HubRouteTableUpdateParams {
     #[prost(message, repeated, tag = "1")]
     pub routes: ::prost::alloc::vec::Vec<HubRouteEntryProto>,
+    /// cluster-wide TTL cap for relay packets
+    #[prost(uint32, optional, tag = "2")]
+    pub max_ttl: ::core::option::Option<u32>,
 }
 /// Hub → Edge: push a ContextActionModify to target sessions on this Edge.
 #[derive(Clone, PartialEq, ::prost::Message)]
