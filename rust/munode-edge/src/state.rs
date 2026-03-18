@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, mpsc, RwLock};
 
 use munode_protocol::hubedge::ServerLimitsConfig;
 
@@ -238,6 +238,10 @@ pub struct EdgeState {
     pub ninja_visible_to: RwLock<HashMap<u32, std::collections::HashSet<u32>>>,
     /// Route table from Hub. Maps target_edge_id → ordered list of route candidates (best first).
     pub route_table: RwLock<std::collections::HashMap<u32, Vec<RouteCandidate>>>,
+    /// Outbound TCP voice connections to peer Edges.
+    /// Maps peer_edge_id → channel sender for binary frames to deliver over the /voice WebSocket.
+    /// Populated when we successfully connect to a peer's /voice endpoint on peerJoined.
+    pub voice_tcp_conns: RwLock<HashMap<u32, mpsc::Sender<Vec<u8>>>>,
     /// Client-facing limits pushed from Hub on registration (and updated via heartbeat).
     /// When set, overrides Edge-local config for ServerSync/ServerConfig/rate limiting.
     pub hub_limits: RwLock<Option<ServerLimitsConfig>>,
@@ -269,6 +273,7 @@ impl EdgeState {
             ninja_channels: RwLock::new(vec![]),
             ninja_visible_to: RwLock::new(HashMap::new()),
             route_table: RwLock::new(std::collections::HashMap::new()),
+            voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
         })
     }
