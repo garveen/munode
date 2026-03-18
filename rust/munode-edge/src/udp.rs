@@ -575,23 +575,6 @@ impl UdpServer {
                         pkt.push(EDGE_PKT_VOICE);
                         pkt.extend_from_slice(&sender_session.to_be_bytes());
                         pkt.extend_from_slice(plaintext);
-                        // Test-only: simulate packet loss by dropping packets according to drop rate.
-                        #[cfg(test)]
-                        {
-                            use std::sync::atomic::Ordering;
-                            let drop_rate = self.edge_state.test_udp_drop_rate.load(Ordering::Relaxed);
-                            if drop_rate > 0 {
-                                static COUNTER: std::sync::atomic::AtomicU32 =
-                                    std::sync::atomic::AtomicU32::new(0);
-                                let c = COUNTER.fetch_add(1, Ordering::Relaxed);
-                                if c % 100 < drop_rate {
-                                    // Simulate send failure for failure-tracking purposes.
-                                    let mut failures = self.edge_state.next_hop_failures.write().await;
-                                    *failures.entry(target_edge_id).or_insert(0) += 1;
-                                    continue;
-                                }
-                            }
-                        }
                         if let Err(e) = self.edge_socket.send_to(&pkt, peer_addr).await {
                             warn!("Direct UDP to edge {} failed: {}; trying Hub TCP", target_edge_id, e);
                             {
@@ -955,4 +938,57 @@ fn inject_session_into_voice(payload: &[u8], sender_session: u32) -> Vec<u8> {
     result.extend_from_slice(&session_varint);
     result.extend_from_slice(&payload[1..]);
     result
+}
+
+/// Test-only: attempt to route a single voice packet directly via UDP to the given target Edge,
+/// applying the `test_udp_drop_rate` network-degradation hook.
+///
+/// Returns `true` if the packet reached the socket send call and succeeded,
+/// `false` if it was dropped by the degradation hook or by a real send error.
+/// In both failure cases `next_hop_failures[target_edge_id]` is incremented, exactly as the
+/// production `route_voice()` path does.
+///
+/// Used by integration tests in `tests/voice_routing.rs`.
+#[cfg(feature = "test-utils")]
+pub async fn test_route_to_edge(
+    edge_state: Arc<EdgeState>,
+    edge_socket: Arc<tokio::net::UdpSocket>,
+    target_edge_id: u32,
+    target_addr: std::net::SocketAddr,
+    session: u32,
+    payload: &[u8],
+) -> bool {
+    use std::sync::atomic::Ordering;
+
+    // Degradation hook: simulate packet loss.
+    let drop_rate = edge_state.test_udp_drop_rate.load(Ordering::Relaxed);
+    if drop_rate > 0 {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let c = COUNTER.fetch_add(1, Ordering::Relaxed);
+        if c % 100 < drop_rate {
+            let mut failures = edge_state.next_hop_failures.write().await;
+            *failures.entry(target_edge_id).or_insert(0) += 1;
+            return false;
+        }
+    }
+
+    let mut pkt = Vec::with_capacity(1 + 4 + payload.len());
+    pkt.push(EDGE_PKT_VOICE);
+    pkt.extend_from_slice(&session.to_be_bytes());
+    pkt.extend_from_slice(payload);
+
+    match edge_socket.send_to(&pkt, target_addr).await {
+        Ok(_) => {
+            if edge_state.consecutive_failure_threshold > 0 {
+                let mut failures = edge_state.next_hop_failures.write().await;
+                failures.insert(target_edge_id, 0);
+            }
+            true
+        }
+        Err(_) => {
+            let mut failures = edge_state.next_hop_failures.write().await;
+            *failures.entry(target_edge_id).or_insert(0) += 1;
+            false
+        }
+    }
 }

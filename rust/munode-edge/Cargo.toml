@@ -7,6 +7,12 @@ edition.workspace = true
 name = "munode-edge"
 path = "src/main.rs"
 
+[features]
+## Enables test-only helpers (e.g. `test_route_to_edge`, `test_udp_drop_rate`).
+## Required to compile the `voice_routing` integration test:
+##   cargo test -p munode-edge --features test-utils --test voice_routing
+test-utils = []
+
 [dependencies]
 munode-protocol = { workspace = true }
 munode-common = { workspace = true }
