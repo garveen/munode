@@ -43,7 +43,7 @@ path = "./data/hub.sqlite"           # SQLite database file path (default: data/
 hmac_secret       = "change-me-to-a-random-secret"  # Default: not set
 
 # Heartbeat timeout: if no heartbeat received from edge within this time, mark as dead
-heartbeat_timeout = 90000            # Milliseconds (default: 90000)
+heartbeat_timeout = 30000            # Milliseconds (default: 30000)
 
 # ---------------------------------------------------------------------------
 # Authentication
@@ -264,6 +264,11 @@ host    = "0.0.0.0"                    # Default: 0.0.0.0
 
 # Port for the Web API server
 port    = 8080                         # Default: 8080
+
+# Optional API key for write operations (POST, PUT, DELETE).
+# If not set, write endpoints (e.g. DELETE /api/bans/:id) are rejected with 403.
+# Set a strong random secret here to secure the management API.
+# api_key = "change-me-to-a-random-secret"  # Default: not set
 #
 # Available endpoints:
 #   GET  /api/health        – liveness probe

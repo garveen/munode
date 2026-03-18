@@ -448,7 +448,12 @@ impl RpcHandler {
 
             // Check if this IP is currently in the ban list
             if let Some(ip_bytes) = parse_ip_to_bytes(&client_ip) {
-                match self.state.database.check_ip_banned(&ip_bytes) {
+                // spawn_blocking: DB call on hot path
+                let db = self.state.database.clone();
+                match tokio::task::spawn_blocking(move || db.check_ip_banned(&ip_bytes))
+                    .await
+                    .context("spawn_blocking join error")?
+                {
                     Ok(Some(ban)) => {
                         warn!("Rejecting connection from banned IP {}: {}", client_ip, ban.reason);
                         let result = EdgeAuthenticateUserResult {
@@ -1098,7 +1103,12 @@ impl RpcHandler {
         // Check guest mode
         if !config.auth.allow_guest {
             // Look up user in database
-            let db_user = self.state.database.find_user(username)?;
+            // spawn_blocking: DB call on hot path
+            let db = self.state.database.clone();
+            let username_owned = username.to_string();
+            let db_user = tokio::task::spawn_blocking(move || db.find_user(&username_owned))
+                .await
+                .context("spawn_blocking join error")??;
             if db_user.is_none() {
                 // Track failed attempt (unknown username with no guest access counts toward auto-ban)
                 self.record_auth_failure(&client_ip).await;
@@ -1127,7 +1137,12 @@ impl RpcHandler {
         }
 
         // Look up user; verify password if they have one set
-        let db_user = self.state.database.find_user(username)?;
+        // spawn_blocking: DB call on hot path
+        let db = self.state.database.clone();
+        let username_owned = username.to_string();
+        let db_user = tokio::task::spawn_blocking(move || db.find_user(&username_owned))
+            .await
+            .context("spawn_blocking join error")??;
         let (user_id, channel_id) = match db_user {
             Some(ref u) => {
                 // If user has a stored password hash, verify the supplied password
@@ -1897,7 +1912,12 @@ impl RpcHandler {
                 temporary: false,
                 inherit_acl: params.inherit_acl.unwrap_or(true),
             };
-            self.state.database.save_channel(&db_ch)?;
+            // spawn_blocking: DB call on hot path
+            let db = self.state.database.clone();
+            let db_ch_owned = db_ch.clone();
+            tokio::task::spawn_blocking(move || db.save_channel(&db_ch_owned))
+                .await
+                .context("spawn_blocking join error")??;
 
             // Broadcast channel created
             let proto = ChannelDataProto {
@@ -1953,7 +1973,12 @@ impl RpcHandler {
                     temporary: ch.temporary,
                     inherit_acl: ch.inherit_acl,
                 };
-                self.state.database.save_channel(&db_ch)?;
+                // spawn_blocking: DB call on hot path
+                let db = self.state.database.clone();
+                let db_ch_owned = db_ch.clone();
+                tokio::task::spawn_blocking(move || db.save_channel(&db_ch_owned))
+                    .await
+                    .context("spawn_blocking join error")??;
 
                 // Broadcast channel updated
                 let proto = ChannelDataProto {
@@ -2302,7 +2327,11 @@ impl RpcHandler {
         &self,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        let bans = self.state.database.load_bans()?;
+        // spawn_blocking: DB call on hot path
+        let db = self.state.database.clone();
+        let bans = tokio::task::spawn_blocking(move || db.load_bans())
+            .await
+            .context("spawn_blocking join error")??;
 
         let ban_entries: Vec<munode_protocol::mumbleproto::ban_list::BanEntry> = bans.iter().map(|b| {
             munode_protocol::mumbleproto::ban_list::BanEntry {
@@ -2977,12 +3006,7 @@ impl RpcHandler {
         };
 
         let data = packet.encode_to_vec();
-        let edges = self.state.edge_connections.read().await;
-        for (edge_id, sender) in edges.iter() {
-            if let Err(e) = sender.try_send(data.clone()) {
-                warn!("Failed to send notification to edge {}: {}", edge_id, e);
-            }
-        }
+        crate::server::broadcast_critical(&self.state, data).await;
     }
 
     /// Build a ServerLimitsConfig from the current Hub configuration.

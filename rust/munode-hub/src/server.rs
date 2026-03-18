@@ -350,6 +350,30 @@ pub async fn broadcast(state: &HubState, data: Vec<u8>) {
     }
 }
 
+/// Broadcast a critical state-sync message to all edges with backpressure.
+///
+/// Uses `send().await` with a 2-second timeout per edge instead of `try_send()`
+/// to avoid silently dropping important state updates (user join/leave, channel
+/// changes, ACL updates).
+pub async fn broadcast_critical(state: &HubState, data: Vec<u8>) {
+    use tokio::time::{timeout, Duration};
+    let edges = state.edge_connections.read().await;
+    for (edge_id, sender) in edges.iter() {
+        match timeout(Duration::from_secs(2), sender.send(data.clone())).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!("broadcast_critical: edge {} channel closed: {}", edge_id, e);
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "broadcast_critical: edge {} send timeout — message dropped",
+                    edge_id
+                );
+            }
+        }
+    }
+}
+
 /// Send a packet to a specific edge.
 pub async fn notify(state: &HubState, edge_id: u32, data: Vec<u8>) {
     let edges = state.edge_connections.read().await;

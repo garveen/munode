@@ -23,6 +23,13 @@ pub struct AclEntry {
     pub deny: u32,
 }
 
+/// Maximum number of entries in the ACL permission cache.
+///
+/// With 2000 users × 500 channels = 1 million potential entries, an unbounded
+/// cache is a memory leak.  When this limit is exceeded we clear the whole cache
+/// (simple eviction — adequate protection without a full LRU implementation).
+const ACL_CACHE_MAX_SIZE: usize = 100_000;
+
 /// ACL Manager responsible for computing effective permissions.
 pub struct AclManager {
     db: Arc<Database>,
@@ -125,8 +132,13 @@ impl AclManager {
             user_id, channel_id, granted
         );
 
-        // Cache result
-        self.cache.write().await.insert((user_id, channel_id), granted);
+        // Cache result (with size guard to prevent unbounded growth)
+        let mut cache = self.cache.write().await;
+        if cache.len() > ACL_CACHE_MAX_SIZE {
+            cache.clear();
+            tracing::debug!("ACL cache cleared (exceeded {} entries)", ACL_CACHE_MAX_SIZE);
+        }
+        cache.insert((user_id, channel_id), granted);
 
         granted
     }

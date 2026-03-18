@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -122,7 +122,7 @@ pub struct HubClient {
     /// Round-robin index for distributing sends across pool slots.
     pool_rr: AtomicUsize,
     /// Counter for generating unique request IDs.
-    request_counter: Mutex<u64>,
+    request_counter: AtomicU64,
     /// Time when this HubClient was created (for uptime reporting).
     start_time: Instant,
 }
@@ -159,7 +159,7 @@ impl HubClient {
             pool_size,
             pool_senders,
             pool_rr: AtomicUsize::new(0),
-            request_counter: Mutex::new(0),
+            request_counter: AtomicU64::new(0),
             start_time: Instant::now(),
         })
     }
@@ -175,10 +175,9 @@ impl HubClient {
     }
 
     /// Generate a unique request ID.
-    async fn next_request_id(&self) -> String {
-        let mut counter = self.request_counter.lock().await;
-        *counter += 1;
-        format!("{}-{}", current_millis(), *counter)
+    fn next_request_id(&self) -> String {
+        let counter = self.request_counter.fetch_add(1, Ordering::Relaxed);
+        format!("{}-{}", current_millis(), counter)
     }
 
     /// Connect to the Hub and run the main communication loop with reconnection.
@@ -606,8 +605,9 @@ impl HubClient {
                 }
             }
         }
-        // No live slot – fall back silently (Hub is down, caller handles errors)
-        Ok(())
+        // No live slot — all connections to Hub are down
+        warn!("HubClient::send_raw: all {} pool slot(s) unavailable — message dropped", self.pool_size);
+        Err(anyhow::anyhow!("all connection pool slots unavailable"))
     }
 
     /// Send an EdgeHubPacket to the Hub.
@@ -1082,7 +1082,7 @@ impl HubClient {
 
     /// Register this Edge with the Hub (with optional HMAC challenge-response).
     async fn do_register(&self) -> Result<()> {
-        let request_id = self.next_request_id().await;
+        let request_id = self.next_request_id();
         let params = EdgeRegisterParams {
             server_id: self.server_id,
             name: self.server_name.clone(),
@@ -1147,7 +1147,7 @@ impl HubClient {
         let signature = hmac::sign(&key, data.as_bytes());
         let challenge_response = hex::encode(signature.as_ref());
 
-        let request_id = self.next_request_id().await;
+        let request_id = self.next_request_id();
         let params = EdgeRegisterParams {
             server_id: self.server_id,
             name: self.server_name.clone(),
@@ -1199,7 +1199,7 @@ impl HubClient {
     /// These "disappeared" sessions should be communicated to connected local clients
     /// via `UserRemove` so they don't keep stale entries in their user lists.
     async fn do_full_sync(&self) -> Result<Vec<u32>> {
-        let request_id = self.next_request_id().await;
+        let request_id = self.next_request_id();
         let request = TypedRpcRequest {
             request_id,
             method: "edge.fullSync".to_string(),
@@ -1264,7 +1264,7 @@ impl HubClient {
     /// Called after successful registration and full sync; sends `edge.join` RPC
     /// then confirms with `edge.joinComplete`.
     async fn do_join_cluster(&self) -> Result<()> {
-        let request_id = self.next_request_id().await;
+        let request_id = self.next_request_id();
         let params = EdgeJoinParams {
             server_id: self.server_id,
             name: self.server_name.clone(),
@@ -1313,7 +1313,7 @@ impl HubClient {
         }
 
         // Notify Hub that we have processed the peer list
-        let complete_id = self.next_request_id().await;
+        let complete_id = self.next_request_id();
         let token = result.token.unwrap_or_default();
         let connected_peers: Vec<u32> = result.peers.iter().map(|p| p.id).collect();
         let complete_request = TypedRpcRequest {
@@ -1369,7 +1369,7 @@ impl HubClient {
                 priority_speaker: Some(client.priority_speaker),
                 recording: Some(client.recording),
             };
-            let request_id = self.next_request_id().await;
+            let request_id = self.next_request_id();
             let request = TypedRpcRequest {
                 request_id,
                 method: "edge.reportSession".to_string(),
@@ -1440,7 +1440,7 @@ impl HubClient {
         preconnect_self_mute: Option<bool>,
         preconnect_self_deaf: Option<bool>,
     ) -> Result<hubedge::EdgeAuthenticateUserResult> {
-        let request_id = self.next_request_id().await;
+        let request_id = self.next_request_id();
         let request = TypedRpcRequest {
             request_id,
             method: "edge.authenticateUser".to_string(),
@@ -1601,7 +1601,7 @@ impl HubClient {
         session_id: u32,
         channel_id: u32,
     ) -> Result<hubedge::EdgeHandlePermissionQueryResult> {
-        let request_id = self.next_request_id().await;
+        let request_id = self.next_request_id();
         let edge_id = self.edge_id();
 
         // Get actor info from client
@@ -1638,7 +1638,7 @@ impl HubClient {
         session_id: u32,
         channel_ids: &[u32],
     ) -> Result<hubedge::EdgeBatchPermissionQueryResult> {
-        let request_id = self.next_request_id().await;
+        let request_id = self.next_request_id();
         let edge_id = self.edge_id();
 
         let (user_id, username) = if let Some(client) = self.edge_state.client_manager.get_client(session_id).await {
@@ -1673,7 +1673,7 @@ impl HubClient {
         target_id: u32,
         config: Option<hubedge::VoiceTargetConfigProto>,
     ) -> Result<hubedge::EdgeSyncVoiceTargetResult> {
-        let request_id = self.next_request_id().await;
+        let request_id = self.next_request_id();
         let edge_id = self.edge_id();
         let request = TypedRpcRequest {
             request_id,
@@ -1695,7 +1695,7 @@ impl HubClient {
 
     /// Allocate a session ID from the Hub.
     pub async fn allocate_session_id(&self) -> Result<u32> {
-        let request_id = self.next_request_id().await;
+        let request_id = self.next_request_id();
         let edge_id = self.edge_id();
         let request = TypedRpcRequest {
             request_id,
@@ -1726,7 +1726,7 @@ impl HubClient {
         position: Option<i32>,
         max_users: Option<u32>,
     ) -> Result<hubedge::EdgeSaveChannelResult> {
-        let request_id = self.next_request_id().await;
+        let request_id = self.next_request_id();
         let request = TypedRpcRequest {
             request_id,
             method: "edge.saveChannel".to_string(),
@@ -1760,7 +1760,7 @@ impl HubClient {
             return; // Guests have no persistent listeners
         }
         let request = TypedRpcRequest {
-            request_id: self.next_request_id().await,
+            request_id: self.next_request_id(),
             method: "edge.saveChannelListeners".to_string(),
             timeout_ms: Some(5000),
             edge_save_channel_listeners: Some(hubedge::EdgeSaveChannelListenersParams {
@@ -1790,7 +1790,7 @@ impl HubClient {
             return vec![]; // Guests have no persistent listeners
         }
         let request = TypedRpcRequest {
-            request_id: self.next_request_id().await,
+            request_id: self.next_request_id(),
             method: "edge.loadChannelListeners".to_string(),
             timeout_ms: Some(5000),
             edge_load_channel_listeners: Some(hubedge::EdgeLoadChannelListenersParams {
@@ -1925,7 +1925,7 @@ impl HubClient {
     /// RPC: Get ban list from Hub. Returns raw BanList protobuf bytes.
     pub async fn rpc_get_ban_list(&self) -> Option<Vec<u8>> {
         let request = TypedRpcRequest {
-            request_id: self.next_request_id().await,
+            request_id: self.next_request_id(),
             method: "edge.getBanList".to_string(),
             ..Default::default()
         };
@@ -1941,7 +1941,7 @@ impl HubClient {
     /// RPC: Update ban list on Hub using raw BanList protobuf bytes.
     pub async fn rpc_update_ban_list(&self, raw_ban_list: &[u8]) {
         let request = TypedRpcRequest {
-            request_id: self.next_request_id().await,
+            request_id: self.next_request_id(),
             method: "edge.updateBanList".to_string(),
             edge_handle_acl: Some(EdgeHandleAclParams {
                 edge_id: self.edge_id(),
@@ -1971,7 +1971,7 @@ impl HubClient {
         raw_data: &[u8],
     ) -> Option<Vec<u8>> {
         let request = TypedRpcRequest {
-            request_id: self.next_request_id().await,
+            request_id: self.next_request_id(),
             method: "edge.handleACL".to_string(),
             edge_handle_acl: Some(EdgeHandleAclParams {
                 edge_id: self.edge_id(),
@@ -1996,7 +1996,7 @@ impl HubClient {
     /// RPC: Get the registered user list from Hub (returns raw protobuf UserList bytes).
     pub async fn rpc_get_user_list(&self) -> Option<Vec<u8>> {
         let request = TypedRpcRequest {
-            request_id: self.next_request_id().await,
+            request_id: self.next_request_id(),
             method: "edge.getUserList".to_string(),
             ..Default::default()
         };
@@ -2012,7 +2012,7 @@ impl HubClient {
     /// RPC: Update (rename / de-register) users in Hub database.
     pub async fn rpc_update_user_list(&self, raw_user_list: &[u8]) -> bool {
         let request = TypedRpcRequest {
-            request_id: self.next_request_id().await,
+            request_id: self.next_request_id(),
             method: "edge.updateUserList".to_string(),
             edge_handle_acl: Some(EdgeHandleAclParams {
                 edge_id: self.edge_id(),
@@ -2073,7 +2073,7 @@ impl HubClient {
     /// RPC: Upload blob data to Hub. Returns SHA-256 hash on success.
     pub async fn blob_put(&self, data: Vec<u8>) -> Option<String> {
         let request = TypedRpcRequest {
-            request_id: self.next_request_id().await,
+            request_id: self.next_request_id(),
             method: "blob.put".to_string(),
             blob_put: Some(BlobPutParams { data }),
             ..Default::default()
@@ -2087,7 +2087,7 @@ impl HubClient {
     /// RPC: Download blob data by SHA-256 hash.
     pub async fn blob_get(&self, hash: &str) -> Option<Vec<u8>> {
         let request = TypedRpcRequest {
-            request_id: self.next_request_id().await,
+            request_id: self.next_request_id(),
             method: "blob.get".to_string(),
             blob_get: Some(BlobGetParams { hash: hash.to_string() }),
             ..Default::default()
@@ -2101,7 +2101,7 @@ impl HubClient {
     /// RPC: Get user texture blob. Returns (hash, data) on success.
     pub async fn blob_get_user_texture(&self, user_id: u32) -> Option<(String, Vec<u8>)> {
         let request = TypedRpcRequest {
-            request_id: self.next_request_id().await,
+            request_id: self.next_request_id(),
             method: "blob.getUserTexture".to_string(),
             blob_get_user_texture: Some(BlobGetUserTextureParams { user_id }),
             ..Default::default()
@@ -2117,7 +2117,7 @@ impl HubClient {
     /// RPC: Get user comment blob. Returns (hash, data) on success.
     pub async fn blob_get_user_comment(&self, user_id: u32) -> Option<(String, Vec<u8>)> {
         let request = TypedRpcRequest {
-            request_id: self.next_request_id().await,
+            request_id: self.next_request_id(),
             method: "blob.getUserComment".to_string(),
             blob_get_user_comment: Some(BlobGetUserCommentParams { user_id }),
             ..Default::default()
@@ -2133,7 +2133,7 @@ impl HubClient {
     /// RPC: Set user texture blob. Returns hash on success.
     pub async fn blob_set_user_texture(&self, user_id: u32, data: Vec<u8>) -> Option<String> {
         let request = TypedRpcRequest {
-            request_id: self.next_request_id().await,
+            request_id: self.next_request_id(),
             method: "blob.setUserTexture".to_string(),
             blob_set_user_texture: Some(BlobSetUserTextureParams { user_id, data }),
             ..Default::default()
@@ -2147,7 +2147,7 @@ impl HubClient {
     /// RPC: Set user comment blob. Returns hash on success.
     pub async fn blob_set_user_comment(&self, user_id: u32, data: Vec<u8>) -> Option<String> {
         let request = TypedRpcRequest {
-            request_id: self.next_request_id().await,
+            request_id: self.next_request_id(),
             method: "blob.setUserComment".to_string(),
             blob_set_user_comment: Some(BlobSetUserCommentParams { user_id, data }),
             ..Default::default()
@@ -2162,7 +2162,7 @@ impl HubClient {
     /// Called when a local sender needs to reach a remote user on another edge.
     pub async fn relay_voice_via_hub(&self, target_edge_id: u32, voice_packet: Vec<u8>) {
         let from_edge_id = self.edge_id();
-        let request_id = self.next_request_id().await;
+        let request_id = self.next_request_id();
 
         let request = TypedRpcRequest {
             request_id,
@@ -2185,7 +2185,7 @@ impl HubClient {
     /// Report link quality to a peer Edge to Hub for route table computation.
     pub async fn report_quality(&self, target_edge_id: u32, rtt_ms: f32, packet_loss: f32, jitter_ms: f32, samples: u32) {
         let from_edge_id = self.edge_id();
-        let request_id = self.next_request_id().await;
+        let request_id = self.next_request_id();
         let request = TypedRpcRequest {
             request_id,
             method: "edge.reportQuality".to_string(),

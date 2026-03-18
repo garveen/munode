@@ -690,7 +690,7 @@ impl Default for HubRegistryConfig {
     fn default() -> Self {
         Self {
             hmac_secret: None,
-            heartbeat_timeout: 90000,
+            heartbeat_timeout: 30000,
         }
     }
 }
@@ -707,6 +707,11 @@ pub struct HubWebApiConfig {
     /// HTTP listening host for the Web API.
     #[serde(default = "default_host")]
     pub host: String,
+    /// Optional API key for write operations (POST, PUT, DELETE).
+    /// If `None`, write endpoints require no authentication (suitable only for
+    /// deployments where the Web API is not exposed externally).
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 impl Default for HubWebApiConfig {
@@ -715,6 +720,7 @@ impl Default for HubWebApiConfig {
             enabled: false,
             port: default_web_api_port(),
             host: default_host(),
+            api_key: None,
         }
     }
 }
@@ -761,13 +767,13 @@ fn default_reconnect_interval() -> u64 {
     5000
 }
 fn default_heartbeat_interval() -> u64 {
-    30000
+    10000
 }
 fn default_pool_size() -> u32 {
     1
 }
 fn default_heartbeat_timeout() -> u64 {
-    90000
+    30000
 }
 fn default_capacity() -> u32 {
     1000

@@ -86,7 +86,11 @@ control_port       = 8443               # Hub's WebSocket control port (default:
 
 # Reconnection and heartbeat settings
 reconnect_interval = 5000               # Milliseconds between reconnection attempts (default: 5000)
-heartbeat_interval = 30000              # Milliseconds between heartbeat packets (default: 30000)
+heartbeat_interval = 10000              # Milliseconds between heartbeat packets (default: 10000)
+
+# Number of concurrent WebSocket connections to Hub.
+# Using 3 provides resilience against individual connection failures.
+# pool_size = 3                         # Default: 1
 
 # HMAC challenge-response authentication (must match Hub's registry.hmac_secret)
 # If not set, edge authentication is disabled (Hub must allow unauthenticated edges)
