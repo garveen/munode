@@ -245,6 +245,11 @@ pub struct EdgeState {
     /// Client-facing limits pushed from Hub on registration (and updated via heartbeat).
     /// When set, overrides Edge-local config for ServerSync/ServerConfig/rate limiting.
     pub hub_limits: RwLock<Option<ServerLimitsConfig>>,
+    /// Test-only: percentage (0–100) of outbound Edge-to-Edge UDP packets to drop.
+    /// When > 0, the UDP server will drop that fraction of packets before sending,
+    /// simulating link degradation so that failure-fallback paths can be exercised.
+    #[cfg(test)]
+    pub test_udp_drop_rate: AtomicU32,
 }
 
 impl EdgeState {
@@ -275,6 +280,8 @@ impl EdgeState {
             route_table: RwLock::new(std::collections::HashMap::new()),
             voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
+            #[cfg(test)]
+            test_udp_drop_rate: AtomicU32::new(0),
         })
     }
 
@@ -308,6 +315,8 @@ impl EdgeState {
             route_table: RwLock::new(std::collections::HashMap::new()),
             voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
+            #[cfg(test)]
+            test_udp_drop_rate: AtomicU32::new(0),
         })
     }
 
@@ -344,6 +353,8 @@ impl EdgeState {
             route_table: RwLock::new(std::collections::HashMap::new()),
             voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
+            #[cfg(test)]
+            test_udp_drop_rate: AtomicU32::new(0),
         })
     }
 
@@ -380,5 +391,146 @@ impl EdgeState {
     /// Broadcast an event.
     pub fn emit(&self, event: EdgeEvent) {
         let _ = self.event_tx.send(event);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_candidate(decision: RouteDecision, cost: f32) -> RouteCandidate {
+        RouteCandidate { decision, cost }
+    }
+
+    /// Returns the chosen RouteDecision from a candidate list given a failure map,
+    /// mirroring the selection logic in udp.rs route_voice.
+    fn select_candidate(
+        candidates: &[RouteCandidate],
+        failures: &HashMap<u32, u32>,
+        threshold: u32,
+    ) -> Option<RouteDecision> {
+        let mut chosen = None;
+        for candidate in candidates {
+            // Determine which "next hop" edge ID this candidate uses
+            let next_hop_id: Option<u32> = match &candidate.decision {
+                RouteDecision::DirectUdp => None, // uses target directly; skip threshold
+                RouteDecision::DirectTcp => None,
+                RouteDecision::HubTcp => None,
+                RouteDecision::RelayChain { hops, .. } => hops.first().copied(),
+            };
+
+            let fail_count = next_hop_id
+                .and_then(|id| failures.get(&id).copied())
+                .unwrap_or(0);
+
+            if threshold == 0 || fail_count < threshold {
+                chosen = Some(candidate.decision.clone());
+                break;
+            }
+        }
+        chosen.or_else(|| candidates.first().map(|c| c.decision.clone()))
+    }
+
+    #[test]
+    fn test_first_candidate_chosen_normally() {
+        let candidates = vec![
+            make_candidate(RouteDecision::DirectUdp, 30.0),
+            make_candidate(RouteDecision::HubTcp, 150.0),
+        ];
+        let failures = HashMap::new();
+        let chosen = select_candidate(&candidates, &failures, 2);
+        assert_eq!(chosen, Some(RouteDecision::DirectUdp));
+    }
+
+    #[test]
+    fn test_fallback_when_first_hop_over_threshold() {
+        // RelayChain via hop 99 has 2 failures → skip it; fall through to HubTcp
+        let candidates = vec![
+            make_candidate(RouteDecision::RelayChain { hops: vec![99], transports: vec![HopTransport::Udp] }, 45.0),
+            make_candidate(RouteDecision::HubTcp, 150.0),
+        ];
+        let mut failures = HashMap::new();
+        failures.insert(99, 2u32); // at threshold (threshold=2 means >= 2 → skip)
+
+        let chosen = select_candidate(&candidates, &failures, 2);
+        assert_eq!(chosen, Some(RouteDecision::HubTcp));
+    }
+
+    #[test]
+    fn test_still_uses_first_candidate_when_threshold_zero() {
+        // threshold=0 means disabled — always pick first regardless of failure count
+        let candidates = vec![
+            make_candidate(RouteDecision::RelayChain { hops: vec![99], transports: vec![HopTransport::Udp] }, 45.0),
+            make_candidate(RouteDecision::HubTcp, 150.0),
+        ];
+        let mut failures = HashMap::new();
+        failures.insert(99, 999u32);
+
+        let chosen = select_candidate(&candidates, &failures, 0);
+        assert_eq!(chosen, Some(RouteDecision::RelayChain {
+            hops: vec![99],
+            transports: vec![HopTransport::Udp],
+        }));
+    }
+
+    #[test]
+    fn test_fallback_all_over_threshold_uses_first() {
+        // Even if every candidate's hop is over threshold, pick the first (better than silence)
+        let candidates = vec![
+            make_candidate(RouteDecision::RelayChain { hops: vec![10], transports: vec![HopTransport::Udp] }, 30.0),
+            make_candidate(RouteDecision::RelayChain { hops: vec![20], transports: vec![HopTransport::Udp] }, 50.0),
+        ];
+        let mut failures = HashMap::new();
+        failures.insert(10, 5u32);
+        failures.insert(20, 5u32);
+
+        let chosen = select_candidate(&candidates, &failures, 2);
+        // Falls back to first (better than silence)
+        assert_eq!(chosen, Some(RouteDecision::RelayChain {
+            hops: vec![10],
+            transports: vec![HopTransport::Udp],
+        }));
+    }
+
+    #[test]
+    fn test_empty_candidates_returns_none() {
+        let chosen = select_candidate(&[], &HashMap::new(), 2);
+        assert_eq!(chosen, None);
+    }
+
+    #[test]
+    fn test_direct_tcp_candidate_not_penalised_by_hop_failures() {
+        // DirectTcp has no next_hop_id → never penalised by failure counter
+        let candidates = vec![
+            make_candidate(RouteDecision::DirectTcp, 52.0),
+            make_candidate(RouteDecision::HubTcp, 150.0),
+        ];
+        let mut failures = HashMap::new();
+        // Simulate all peers being "failed" — shouldn't affect DirectTcp
+        for id in 0..10u32 { failures.insert(id, 99); }
+
+        let chosen = select_candidate(&candidates, &failures, 2);
+        assert_eq!(chosen, Some(RouteDecision::DirectTcp));
+    }
+
+    // ── test_udp_drop_rate field initialises to zero ─────────────────────────
+
+    #[test]
+    fn test_edge_state_drop_rate_starts_zero() {
+        use std::sync::atomic::Ordering;
+        let cm = crate::channel_manager::ChannelManager::new();
+        let clm = crate::client::ClientManager::new();
+        let state = EdgeState::new(cm, clm, true);
+        assert_eq!(state.test_udp_drop_rate.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn test_edge_state_drop_rate_settable() {
+        use std::sync::atomic::Ordering;
+        let cm = crate::channel_manager::ChannelManager::new();
+        let clm = crate::client::ClientManager::new();
+        let state = EdgeState::new(cm, clm, true);
+        state.test_udp_drop_rate.store(50, Ordering::Relaxed);
+        assert_eq!(state.test_udp_drop_rate.load(Ordering::Relaxed), 50);
     }
 }

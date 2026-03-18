@@ -443,3 +443,241 @@ impl TopologyManager {
         total
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use munode_common::config::HubVoiceRoutingConfig;
+
+    fn make_edge(id: u32) -> TopologyEdge {
+        TopologyEdge {
+            edge_id: id,
+            name: format!("edge-{}", id),
+            host: format!("10.0.0.{}", id),
+            port: 64000 + id,
+            voice_port: 64001 + id,
+            capacity: 100,
+            joined_at: Instant::now(),
+            connected_peers: HashSet::new(),
+        }
+    }
+
+    fn make_quality(rtt_ms: f64, packet_loss: f64) -> LinkQuality {
+        LinkQuality { rtt_ms, packet_loss, jitter_ms: 0.0, samples: 10, last_update: Instant::now() }
+    }
+
+    fn default_config() -> HubVoiceRoutingConfig {
+        HubVoiceRoutingConfig::default()
+    }
+
+    // ── Dijkstra path selection ──────────────────────────────────────────────
+
+    #[test]
+    fn test_direct_path_when_only_two_edges() {
+        let mut topo = TopologyManager::new();
+        topo.add_edge(make_edge(1));
+        topo.add_edge(make_edge(2));
+        topo.report_quality(1, 2, make_quality(30.0, 0.0));
+        topo.report_quality(2, 1, make_quality(30.0, 0.0));
+
+        let path = topo.find_best_path(1, 2);
+        assert_eq!(path, vec![1, 2]);
+    }
+
+    #[test]
+    fn test_relay_path_cheaper_than_direct() {
+        // A→B direct: RTT=100ms loss=10% → cost = 100 + 0.10*500 = 150
+        // A→C→B:  A→C RTT=10ms loss=1% → 10+5=15
+        //         C→B RTT=15ms loss=2% → 15+10=25
+        //         total = 15+25 = 40  (+relay_hop_penalty=5 each) = 40+5+5=50
+        // So relay wins.
+        let mut topo = TopologyManager::new();
+        topo.add_edge(make_edge(1)); // A
+        topo.add_edge(make_edge(2)); // B
+        topo.add_edge(make_edge(3)); // C
+        topo.report_quality(1, 2, make_quality(100.0, 0.10));
+        topo.report_quality(2, 1, make_quality(100.0, 0.10));
+        topo.report_quality(1, 3, make_quality(10.0, 0.01));
+        topo.report_quality(3, 1, make_quality(10.0, 0.01));
+        topo.report_quality(3, 2, make_quality(15.0, 0.02));
+        topo.report_quality(2, 3, make_quality(15.0, 0.02));
+
+        let cfg = default_config();
+        let path = topo.find_best_path_with_config(1, 2, &cfg);
+        assert_eq!(path, vec![1, 3, 2], "expected relay via edge 3");
+    }
+
+    #[test]
+    fn test_failed_link_excluded_from_udp_path() {
+        // A→B link has 60% packet loss → marked as failed (default threshold 0.5)
+        // A→C→B is the only valid path.
+        let mut topo = TopologyManager::new();
+        topo.add_edge(make_edge(1));
+        topo.add_edge(make_edge(2));
+        topo.add_edge(make_edge(3));
+        let mut cfg = default_config();
+        cfg.failed_packet_loss = 0.5; // 50% threshold
+
+        topo.report_quality(1, 2, make_quality(20.0, 0.60)); // FAILED
+        topo.report_quality(1, 3, make_quality(10.0, 0.01));
+        topo.report_quality(3, 2, make_quality(10.0, 0.01));
+
+        let path = topo.find_best_path_with_config(1, 2, &cfg);
+        // Direct link is failed → relay via 3
+        assert_eq!(path, vec![1, 3, 2]);
+    }
+
+    // ── compute_route_table candidates ──────────────────────────────────────
+
+    #[test]
+    fn test_route_table_always_has_hub_tcp_candidate() {
+        let mut topo = TopologyManager::new();
+        topo.add_edge(make_edge(1));
+        topo.add_edge(make_edge(2));
+        topo.report_quality(1, 2, make_quality(30.0, 0.0));
+
+        let cfg = default_config();
+        let routes = topo.compute_route_table(1, &cfg);
+
+        // route_type 2 = HubTcp
+        let hub_tcp: Vec<_> = routes.iter().filter(|(t, rtype, _, _)| *t == 2 && *rtype == 2).collect();
+        assert!(!hub_tcp.is_empty(), "HubTcp candidate must always be present");
+    }
+
+    #[test]
+    fn test_route_table_always_has_direct_tcp_candidate() {
+        let mut topo = TopologyManager::new();
+        topo.add_edge(make_edge(1));
+        topo.add_edge(make_edge(2));
+        topo.report_quality(1, 2, make_quality(30.0, 0.0));
+
+        let cfg = default_config();
+        let routes = topo.compute_route_table(1, &cfg);
+
+        // route_type 3 = DirectTcp
+        let tcp: Vec<_> = routes.iter().filter(|(t, rtype, _, _)| *t == 2 && *rtype == 3).collect();
+        assert!(!tcp.is_empty(), "DirectTcp candidate must always be present");
+    }
+
+    #[test]
+    fn test_route_table_direct_udp_when_good_link() {
+        let mut topo = TopologyManager::new();
+        topo.add_edge(make_edge(1));
+        topo.add_edge(make_edge(2));
+        topo.report_quality(1, 2, make_quality(20.0, 0.01));
+
+        let cfg = default_config();
+        let routes = topo.compute_route_table(1, &cfg);
+
+        // route_type 0 = DirectUdp
+        let direct: Vec<_> = routes.iter().filter(|(t, rtype, _, _)| *t == 2 && *rtype == 0).collect();
+        assert!(!direct.is_empty(), "DirectUdp candidate must be present for a good link");
+    }
+
+    #[test]
+    fn test_route_table_relay_chain_three_edges() {
+        // B→C link only via relay A.  For edge C to reach B it must go through A.
+        // (We ask for edge 3's route table here as the middle relay.)
+        let mut topo = TopologyManager::new();
+        topo.add_edge(make_edge(1)); // A
+        topo.add_edge(make_edge(2)); // B
+        topo.add_edge(make_edge(3)); // C (relay)
+        // A and C can reach B
+        topo.report_quality(1, 3, make_quality(10.0, 0.0));
+        topo.report_quality(3, 1, make_quality(10.0, 0.0));
+        topo.report_quality(1, 2, make_quality(100.0, 0.60)); // direct A→B fails
+        topo.report_quality(3, 2, make_quality(15.0, 0.0));
+        topo.report_quality(2, 3, make_quality(15.0, 0.0));
+
+        let mut cfg = default_config();
+        cfg.failed_packet_loss = 0.5;
+        let routes = topo.compute_route_table(1, &cfg);
+
+        // For target B (id=2) there should be a relay chain entry going through C (id=3)
+        let relay: Vec<_> = routes.iter()
+            .filter(|(t, rtype, chain, _)| *t == 2 && *rtype == 1 && chain.contains(&3))
+            .collect();
+        assert!(!relay.is_empty(), "relay chain via edge 3 should be present");
+    }
+
+    #[test]
+    fn test_route_table_too_many_hops_falls_back_to_hub_tcp() {
+        // Build a linear chain 1→2→3→4→5: to reach 5 from 1 requires 3 hops.
+        // Set max_relay_hops=2 → chain should fall back to HubTcp.
+        let mut topo = TopologyManager::new();
+        for i in 1u32..=5 {
+            topo.add_edge(make_edge(i));
+        }
+        topo.report_quality(1, 2, make_quality(1000.0, 0.90)); // direct 1→5 fails
+        topo.report_quality(1, 2, make_quality(10.0, 0.0));
+        topo.report_quality(2, 3, make_quality(10.0, 0.0));
+        topo.report_quality(3, 4, make_quality(10.0, 0.0));
+        topo.report_quality(4, 5, make_quality(10.0, 0.0));
+        // symmetric
+        for (a, b) in &[(2u32,1u32),(3,2),(4,3),(5,4)] {
+            topo.report_quality(*a, *b, make_quality(10.0, 0.0));
+        }
+
+        let mut cfg = default_config();
+        cfg.failed_packet_loss = 0.5;
+        cfg.max_relay_hops = 2; // chains longer than 2 hops → HubTcp
+
+        let routes = topo.compute_route_table(1, &cfg);
+        // For target 5 (3 relay hops: 2,3,4), should emit HubTcp (type=2) not relay_chain
+        let for_5: Vec<_> = routes.iter().filter(|(t, _, _, _)| *t == 5).collect();
+        // There must be at least one HubTcp entry (route_type=2) for target 5
+        let has_hub = for_5.iter().any(|(_, rtype, chain, _)| *rtype == 2 && chain.is_empty());
+        assert!(has_hub, "long chains should produce a HubTcp entry for target 5; got: {:?}", for_5);
+    }
+
+    // ── Partition detection ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_single_connected_component() {
+        let mut topo = TopologyManager::new();
+        topo.add_edge(make_edge(1));
+        topo.add_edge(make_edge(2));
+        topo.add_edge(make_edge(3));
+        topo.report_quality(1, 2, make_quality(10.0, 0.0));
+        topo.report_quality(2, 3, make_quality(10.0, 0.0));
+
+        let parts = topo.detect_partitions();
+        assert_eq!(parts.len(), 1, "should be one connected component");
+    }
+
+    #[test]
+    fn test_partitioned_network() {
+        let mut topo = TopologyManager::new();
+        topo.add_edge(make_edge(1));
+        topo.add_edge(make_edge(2));
+        topo.add_edge(make_edge(3));
+        topo.add_edge(make_edge(4));
+        // {1,2} and {3,4} are isolated islands
+        topo.report_quality(1, 2, make_quality(10.0, 0.0));
+        topo.report_quality(3, 4, make_quality(10.0, 0.0));
+
+        let parts = topo.detect_partitions();
+        assert_eq!(parts.len(), 2, "should detect two network partitions");
+    }
+
+    // ── Disconnect arbitration ───────────────────────────────────────────────
+
+    #[test]
+    fn test_arbitration_awaits_single_report() {
+        let mut topo = TopologyManager::new();
+        match topo.arbitrate_disconnect(1, 2) {
+            ArbitrationResult::AwaitConfirmation => {}
+            other => panic!("unexpected: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_arbitration_confirms_on_both_reports() {
+        let mut topo = TopologyManager::new();
+        topo.arbitrate_disconnect(1, 2);
+        match topo.arbitrate_disconnect(2, 1) {
+            ArbitrationResult::BothReported { edge_id: 1 } => {}
+            other => panic!("unexpected: {:?}", other),
+        }
+    }
+}

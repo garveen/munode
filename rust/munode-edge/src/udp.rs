@@ -575,6 +575,23 @@ impl UdpServer {
                         pkt.push(EDGE_PKT_VOICE);
                         pkt.extend_from_slice(&sender_session.to_be_bytes());
                         pkt.extend_from_slice(plaintext);
+                        // Test-only: simulate packet loss by dropping packets according to drop rate.
+                        #[cfg(test)]
+                        {
+                            use std::sync::atomic::Ordering;
+                            let drop_rate = self.edge_state.test_udp_drop_rate.load(Ordering::Relaxed);
+                            if drop_rate > 0 {
+                                static COUNTER: std::sync::atomic::AtomicU32 =
+                                    std::sync::atomic::AtomicU32::new(0);
+                                let c = COUNTER.fetch_add(1, Ordering::Relaxed);
+                                if c % 100 < drop_rate {
+                                    // Simulate send failure for failure-tracking purposes.
+                                    let mut failures = self.edge_state.next_hop_failures.write().await;
+                                    *failures.entry(target_edge_id).or_insert(0) += 1;
+                                    continue;
+                                }
+                            }
+                        }
                         if let Err(e) = self.edge_socket.send_to(&pkt, peer_addr).await {
                             warn!("Direct UDP to edge {} failed: {}; trying Hub TCP", target_edge_id, e);
                             {
