@@ -61,6 +61,17 @@ const RELAY_TOKEN_MAX_AGE_MS: u64 = 30_000;
 /// Compute the HMAC-SHA256 relay token for a given timestamp.
 ///
 /// `token = hex(HMAC-SHA256(secret, "relay:<ts_ms>"))`
+///
+/// The key is `secret` (raw bytes of the UTF-8 string); the message is the
+/// ASCII string `"relay:<ts_ms>"` where `<ts_ms>` is the decimal timestamp.
+///
+/// Example (illustrative — not a real key):
+/// ```text
+/// secret  = "my-hmac-secret"
+/// ts_ms   = 1742371200000
+/// message = "relay:1742371200000"
+/// token   = hex(HMAC-SHA256("my-hmac-secret", "relay:1742371200000"))
+/// ```
 fn compute_relay_token(secret: &str, ts_ms: u64) -> String {
     use ring::hmac;
     let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
@@ -106,6 +117,10 @@ fn verify_relay_auth(hmac_secret: &str, query: Option<&str>) -> bool {
     }
 
     // Constant-time token comparison to prevent timing attacks.
+    // We use a manual XOR-fold instead of ring::constant_time::verify_slices_are_equal
+    // because that function is marked deprecated in ring 0.17 and the workspace uses
+    // aws_lc_rs as the primary provider.  The fold achieves the same O(n) constant-time
+    // property: all byte differences are OR-ed together before the final comparison.
     let expected = compute_relay_token(hmac_secret, ts_ms);
     if expected.len() != token.len() {
         return false;

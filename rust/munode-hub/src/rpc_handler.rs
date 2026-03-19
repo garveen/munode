@@ -1652,7 +1652,7 @@ impl RpcHandler {
             let db = self.state.database.clone();
             let target_channel_id = params.channel_id;
             let db_groups_result = tokio::task::spawn_blocking(move || {
-                let mut added: Vec<String> = Vec::new();
+                let mut accumulated_groups: Vec<String> = Vec::new();
                 for ancestor_id in chain {
                     let db_groups = match db.get_channel_groups(ancestor_id) {
                         Ok(g) => g,
@@ -1669,9 +1669,9 @@ impl RpcHandler {
                                 let is_explicitly_removed = members.iter()
                                     .any(|(uid, is_add)| *uid == user_id_u32 && !*is_add);
                                 if is_explicitly_added && !is_explicitly_removed
-                                    && !added.contains(&db_group.name)
+                                    && !accumulated_groups.contains(&db_group.name)
                                 {
-                                    added.push(db_group.name.clone());
+                                    accumulated_groups.push(db_group.name.clone());
                                 }
                             }
                             Err(e) => {
@@ -1683,7 +1683,7 @@ impl RpcHandler {
                         }
                     }
                 }
-                added
+                accumulated_groups
             })
             .await
             .unwrap_or_default();
@@ -1760,7 +1760,7 @@ impl RpcHandler {
                 // spawn_blocking: all DB group-membership lookups for the chain in one shot.
                 let db = self.state.database.clone();
                 let db_groups_result = tokio::task::spawn_blocking(move || {
-                    let mut added: Vec<String> = Vec::new();
+                    let mut accumulated_groups: Vec<String> = Vec::new();
                     for ancestor_id in chain {
                         let db_groups = match db.get_channel_groups(ancestor_id) {
                             Ok(g) => g,
@@ -1776,8 +1776,8 @@ impl RpcHandler {
                                         .any(|(uid, is_add)| *uid == user_id_u32 && *is_add);
                                     let is_removed = members.iter()
                                         .any(|(uid, is_add)| *uid == user_id_u32 && !*is_add);
-                                    if is_added && !is_removed && !added.contains(&db_group.name) {
-                                        added.push(db_group.name.clone());
+                                    if is_added && !is_removed && !accumulated_groups.contains(&db_group.name) {
+                                        accumulated_groups.push(db_group.name.clone());
                                     }
                                 }
                                 Err(e) => {
@@ -1789,7 +1789,7 @@ impl RpcHandler {
                             }
                         }
                     }
-                    added
+                    accumulated_groups
                 })
                 .await
                 .unwrap_or_default();

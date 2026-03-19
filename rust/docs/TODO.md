@@ -400,6 +400,7 @@
 
 ## 更新日志
 
+- 2026-03-19: **全面进度盘点 + H-3 改进** — 确认 H-3/H-4/H-5/M-1/M-4/C-3-5 已实现；改进 ACL 缓存驱逐策略（从 clear-all 改为优先驱逐匿名用户的部分驱逐，保留 75% 注册用户条目）；ACL calculate_permissions 中的 load_acls 调用改为单次 spawn_blocking；新增 1 个 ACL 驱逐测试；更新 architecture-review.md 各条目状态；当前进度：19 个问题中 14 个完全或基本解决，剩余 H-1（UDP 加密）、C-3（分页）、M-2（零拷贝暂缓）、M-6（Edge 缓存）共 4 个待实现
 - 2026-03-19: **继续实现 architecture-review 待办项** — 完成 C-1（关键热路径 spawn_blocking：upsert_ext_user、get_user_last_channel、ACL 权限组查询合并为单次 spawn_blocking）、C-2（broadcast_critical_excluding 消除 on_user_state / on_text_message 的 try_send）、H-2（Relay Server HMAC token 认证：URL 查询参数 ts+token，30 秒有效期防重放，6 个单元测试）、M-3（edge.example.toml 默认启用 pool_size = 3）
 - 2026-03-15: **修复所有 Critical 和 High 问题** — 完成 C-01～C-05、H-01～H-13 共 18 项修复，包括 TLS 证书验证、mutex panic 消除、优雅关闭、连接限制等
 - 2026-03-15: **完成所有剩余 TODO 项** — L-08 确认为 Mumble 兼容设计并补充注释；A-01 统一关闭信号改用 watch::channel；A-03 权限常量迁移至 munode-common::permission；copilot-instructions 添加 Git 提交规范（英文提交信息）
