@@ -18,7 +18,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::{Method, Request, StatusCode},
+    http::header,
+    middleware::{self, Next},
     response::{IntoResponse, Json, Response},
     routing::{delete, get},
     Router,
@@ -31,7 +33,57 @@ use crate::server::HubState;
 /// Shared state passed to axum handlers.
 type AppState = Arc<HubState>;
 
-/// A whisper-target channel entry in the API response.
+/// Constant-time string comparison to prevent timing side-channel attacks on API keys.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    // XOR each byte pair; OR into accumulator so no early exit leaks timing info.
+    let mut diff: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Middleware that enforces API key authentication for write operations (non-GET requests).
+///
+/// Reads the key from `Authorization: Bearer <key>` header and compares it to
+/// `config.web_api.api_key`.  If no key is configured, all write requests are
+/// rejected with 403 Forbidden to prevent accidental open access.
+async fn api_key_middleware(
+    State(state): State<AppState>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    // Allow all read-only requests through without authentication.
+    if request.method() == Method::GET || request.method() == Method::HEAD {
+        return next.run(request).await;
+    }
+
+    match &state.config.web_api.api_key {
+        None => {
+            // No key configured — reject all write operations.
+            (StatusCode::FORBIDDEN, "API key not configured; write operations are disabled")
+                .into_response()
+        }
+        Some(configured_key) => {
+            let provided_key = request
+                .headers()
+                .get("Authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.strip_prefix("Bearer "));
+            if provided_key.is_some_and(|k| constant_time_eq(k, configured_key)) {
+                next.run(request).await
+            } else {
+                (StatusCode::UNAUTHORIZED, "Invalid or missing API key").into_response()
+            }
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct VoiceTargetChannelInfo {
     pub channel_id: u32,
@@ -667,6 +719,7 @@ pub fn build_router(state: Arc<HubState>) -> Router {
         .route("/api/voice_targets", get(handle_voice_targets))
         .route("/api/voice_targets/session/:id", get(handle_voice_targets_by_session))
         .route("/metrics", get(handle_metrics))
+        .layer(middleware::from_fn_with_state(state.clone(), api_key_middleware))
         .with_state(state)
 }
 

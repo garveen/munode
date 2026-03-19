@@ -30,10 +30,10 @@ use crate::state::EdgeState;
 //     Overhead: 5 bytes total header (1 type + 4 session)
 //
 //   Relay-forward (this Edge is the intermediary; forward to target Edge):
-//     [0x02][target_edge_id BE(4B)][sender_session BE(4B)][raw plaintext voice...]
-//     Overhead: 9 bytes total header (1 type + 4 target + 4 session)
-//     The relay node strips the type byte, reads target+session, then builds a fresh
-//     Voice packet ([0x01][session][voice]) and sends it to the target's edge socket.
+//     [0x02][ttl(1B)][target_edge_id BE(4B)][sender_session BE(4B)][raw plaintext voice...]
+//     Overhead: 10 bytes total header (1 type + 1 ttl + 4 target + 4 session)
+//     The relay node reads ttl, drops if 0, delivers locally if target==self, or
+//     queries own route table and forwards with ttl-1 to next hop.
 //
 //   Quality probe (ping / pong):
 //     [0x03][subtype(1B): 0=ping 1=pong][seq BE(4B)][sent_ms BE(8B)]
@@ -92,7 +92,7 @@ struct PeerQualityState {
 /// Edge-to-Edge voice uses a separate `edge_socket` bound on `edge_port`.
 /// All datagrams on that socket are Edge-to-Edge; a single type byte distinguishes:
 ///   [0x01][session_BE(4B)][voice]   — direct voice for this Edge (5-byte header)
-///   [0x02][target_BE(4B)][session_BE(4B)][voice] — relay-forward (9-byte header)
+///   [0x02][ttl(1B)][target_BE(4B)][session_BE(4B)][voice] — relay-forward (10-byte header)
 ///   [0x03][subtype(1B)][seq_BE(4B)][ts_BE(8B)]   — quality probe (14 bytes)
 ///
 /// Fallback (no dedicated edge_port): packets arrive on the client socket and are
@@ -503,7 +503,7 @@ impl UdpServer {
 
         // Snapshot route_table and peer_registry once — avoids N async lock
         // acquisitions (one per remote edge) in the loop below.
-        let route_snapshot: std::collections::HashMap<u32, crate::state::RouteDecision> = {
+        let route_snapshot: std::collections::HashMap<u32, Vec<crate::state::RouteCandidate>> = {
             let table = self.edge_state.route_table.read().await;
             by_edge
                 .keys()
@@ -519,68 +519,149 @@ impl UdpServer {
                     map.insert(*eid, info.udp_addr);
                 }
             }
-            // Also collect relay intermediary addresses
-            for decision in route_snapshot.values() {
-                if let crate::state::RouteDecision::RelayVia { relay_edge_id } = decision {
-                    if let Some(info) = reg.get(*relay_edge_id) {
-                        map.insert(*relay_edge_id, info.udp_addr);
+            // Also collect relay intermediary addresses from relay chains
+            for candidates in route_snapshot.values() {
+                for candidate in candidates {
+                    if let crate::state::RouteDecision::RelayChain { hops, .. } = &candidate.decision {
+                        for &hop_id in hops {
+                            if let Some(info) = reg.get(hop_id) {
+                                map.insert(hop_id, info.udp_addr);
+                            }
+                        }
                     }
                 }
             }
             map
         };
 
+        let threshold = self.edge_state.consecutive_failure_threshold;
+        let max_ttl = self.edge_state.max_ttl.load(std::sync::atomic::Ordering::Relaxed);
+
         for target_edge_id in by_edge.into_keys() {
             debug!("edge={} UDP voice: routing from session {} to edge {}",
                 my_edge_id, sender_session, target_edge_id);
 
             use crate::state::RouteDecision;
-            match route_snapshot.get(&target_edge_id) {
-                Some(RouteDecision::Direct) | None => {
+
+            // Select best candidate not over failure threshold.
+            let decision = if let Some(candidates) = route_snapshot.get(&target_edge_id) {
+                let failures = self.edge_state.next_hop_failures.read().await;
+                let mut chosen = None;
+                for candidate in candidates {
+                    let next_hop_id = match &candidate.decision {
+                        RouteDecision::DirectUdp => Some(target_edge_id),
+                        RouteDecision::RelayChain { hops, .. } => hops.first().copied(),
+                        _ => None,
+                    };
+                    let fail_count = next_hop_id
+                        .and_then(|id| failures.get(&id).copied())
+                        .unwrap_or(0);
+                    if threshold == 0 || fail_count < threshold {
+                        chosen = Some(candidate.decision.clone());
+                        break;
+                    }
+                }
+                // Fall back to first candidate even if over threshold (better than silence)
+                chosen.or_else(|| candidates.first().map(|c| c.decision.clone()))
+            } else {
+                None
+            };
+
+            match decision.as_ref() {
+                Some(RouteDecision::DirectUdp) | None => {
                     if let Some(&peer_addr) = peer_snapshot.get(&target_edge_id) {
-                        if self.edge_state.allow_direct_udp {
-                            // [0x01][session_BE(4)][voice...]
-                            let mut pkt = Vec::with_capacity(1 + 4 + plaintext.len());
-                            pkt.push(EDGE_PKT_VOICE);
-                            pkt.extend_from_slice(&sender_session.to_be_bytes());
-                            pkt.extend_from_slice(plaintext);
-                            if let Err(e) = self.edge_socket.send_to(&pkt, peer_addr).await {
-                                warn!("Direct UDP to edge {} failed: {}; trying Hub TCP", target_edge_id, e);
-                                if self.edge_state.allow_hub_relay {
-                                    self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
-                                }
+                        // [0x01][session_BE(4)][voice...]
+                        let mut pkt = Vec::with_capacity(1 + 4 + plaintext.len());
+                        pkt.push(EDGE_PKT_VOICE);
+                        pkt.extend_from_slice(&sender_session.to_be_bytes());
+                        pkt.extend_from_slice(plaintext);
+                        if let Err(e) = self.edge_socket.send_to(&pkt, peer_addr).await {
+                            warn!("Direct UDP to edge {} failed: {}; trying Hub TCP", target_edge_id, e);
+                            {
+                                let mut failures = self.edge_state.next_hop_failures.write().await;
+                                *failures.entry(target_edge_id).or_insert(0) += 1;
                             }
-                        } else if self.edge_state.allow_hub_relay {
-                            self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
+                            if self.edge_state.enable_hub_tcp_fallback {
+                                self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
+                            }
+                        } else {
+                            if threshold > 0 {
+                                let mut failures = self.edge_state.next_hop_failures.write().await;
+                                failures.insert(target_edge_id, 0);
+                            }
                         }
-                    } else if self.edge_state.allow_hub_relay {
+                    } else if self.edge_state.enable_hub_tcp_fallback {
                         self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
                     }
                 }
-                Some(RouteDecision::RelayVia { relay_edge_id }) => {
-                    if let Some(&relay_addr) = peer_snapshot.get(relay_edge_id) {
-                        // [0x02][target_edge_id_BE(4)][session_BE(4)][voice...]
-                        let mut pkt = Vec::with_capacity(1 + 4 + 4 + plaintext.len());
+                Some(RouteDecision::RelayChain { hops, .. }) if !hops.is_empty() => {
+                    let first_hop = hops[0];
+                    if let Some(&relay_addr) = peer_snapshot.get(&first_hop) {
+                        let ttl = (hops.len() as u32 + 1).min(max_ttl).min(255) as u8;
+                        // [0x02][ttl(1)][target_edge_id_BE(4)][session_BE(4)][voice...]
+                        let mut pkt = Vec::with_capacity(1 + 1 + 4 + 4 + plaintext.len());
                         pkt.push(EDGE_PKT_RELAY);
+                        pkt.push(ttl);
                         pkt.extend_from_slice(&target_edge_id.to_be_bytes());
                         pkt.extend_from_slice(&sender_session.to_be_bytes());
                         pkt.extend_from_slice(plaintext);
                         if let Err(e) = self.edge_socket.send_to(&pkt, relay_addr).await {
                             warn!("Relay via edge {} to {} failed: {}; Hub TCP fallback",
-                                relay_edge_id, target_edge_id, e);
-                            if self.edge_state.allow_hub_relay {
+                                first_hop, target_edge_id, e);
+                            {
+                                let mut failures = self.edge_state.next_hop_failures.write().await;
+                                *failures.entry(first_hop).or_insert(0) += 1;
+                            }
+                            if self.edge_state.enable_hub_tcp_fallback {
                                 self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
                             }
                         } else {
-                            debug!("Voice relayed via edge {} → {}", relay_edge_id, target_edge_id);
+                            if threshold > 0 {
+                                let mut failures = self.edge_state.next_hop_failures.write().await;
+                                failures.insert(first_hop, 0);
+                            }
+                            debug!("Voice relayed via edge {} → {}", first_hop, target_edge_id);
                         }
-                    } else if self.edge_state.allow_hub_relay {
+                    } else if self.edge_state.enable_hub_tcp_fallback {
+                        self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
+                    }
+                }
+                Some(RouteDecision::RelayChain { .. }) => {
+                    // Empty hops — treat as direct
+                    if let Some(&peer_addr) = peer_snapshot.get(&target_edge_id) {
+                        let mut pkt = Vec::with_capacity(1 + 4 + plaintext.len());
+                        pkt.push(EDGE_PKT_VOICE);
+                        pkt.extend_from_slice(&sender_session.to_be_bytes());
+                        pkt.extend_from_slice(plaintext);
+                        let _ = self.edge_socket.send_to(&pkt, peer_addr).await;
+                    } else if self.edge_state.enable_hub_tcp_fallback {
                         self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
                     }
                 }
                 Some(RouteDecision::HubTcp) => {
-                    if self.edge_state.allow_hub_relay {
+                    if self.edge_state.enable_hub_tcp_fallback {
                         self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
+                    }
+                }
+                Some(RouteDecision::DirectTcp) => {
+                    // Send via TCP voice channel if available, else fall back to Hub TCP.
+                    let sent = {
+                        let conns = self.edge_state.voice_tcp_conns.read().await;
+                        if let Some(tx) = conns.get(&target_edge_id) {
+                            // Frame: [0x01][session_BE(4)][plaintext...]
+                            let mut frame = Vec::with_capacity(1 + 4 + plaintext.len());
+                            frame.push(EDGE_PKT_VOICE);
+                            frame.extend_from_slice(&sender_session.to_be_bytes());
+                            frame.extend_from_slice(plaintext);
+                            tx.try_send(frame).is_ok()
+                        } else {
+                            false
+                        }
+                    };
+                    if !sent && self.edge_state.enable_hub_tcp_fallback {
+                        self.hub_client
+                            .relay_voice_via_hub(target_edge_id, relay_payload.clone())
+                            .await;
                     }
                 }
             }
@@ -614,35 +695,68 @@ impl UdpServer {
 
     /// Handle a relay-forward packet received on the edge socket.
     ///
-    /// Format after stripping the type byte: [target_edge_id BE(4B)][sender_session BE(4B)][voice...]
+    /// Format after stripping the type byte:
+    ///   [ttl(1B)][target_edge_id BE(4B)][sender_session BE(4B)][voice...]
     ///
-    /// Builds a fresh Voice packet ([0x01][session][voice]) and forwards it to the target
-    /// Edge's edge socket.
+    /// If TTL == 0: drop. If target == my_edge_id: deliver locally.
+    /// Otherwise: query own route table, decrement TTL, forward to next hop.
     async fn handle_relay_packet(&self, data: &[u8]) {
-        // Minimum: 4 (target_edge_id) + 4 (sender_session) + 1 (voice) = 9
-        if data.len() < 9 {
+        // Minimum: 1 (ttl) + 4 (target_edge_id) + 4 (sender_session) + 1 (voice) = 10
+        if data.len() < 10 {
             debug!("Relay packet too short ({} bytes)", data.len());
             return;
         }
-        let target_edge_id = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
-        let sender_session = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
-        let voice_data = &data[8..];
+        let ttl = data[0];
+        if ttl == 0 {
+            debug!("Relay packet TTL expired — dropping");
+            return;
+        }
+        let target_edge_id = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
+        let sender_session = u32::from_be_bytes([data[5], data[6], data[7], data[8]]);
+        let voice_data = &data[9..];
 
-        let peer_addr = {
-            let reg = self.edge_state.peer_registry.read().await;
-            reg.get(target_edge_id).map(|p| p.udp_addr)
+        let my_edge_id = self.edge_state.get_edge_id();
+        if target_edge_id == my_edge_id {
+            // Deliver locally — this Edge is the final destination.
+            self.deliver_voice_locally(sender_session, voice_data).await;
+            return;
+        }
+
+        // Forward to next hop with TTL decremented
+        let next_hop_addr = {
+            use crate::state::RouteDecision;
+            let table = self.edge_state.route_table.read().await;
+            let candidates = table.get(&target_edge_id);
+            let decision = candidates.and_then(|cs| cs.first()).map(|c| c.decision.clone());
+            drop(table);
+
+            match decision {
+                Some(RouteDecision::DirectUdp) => {
+                    let reg = self.edge_state.peer_registry.read().await;
+                    reg.get(target_edge_id).map(|p| p.udp_addr)
+                }
+                Some(RouteDecision::RelayChain { hops, .. }) if !hops.is_empty() => {
+                    let reg = self.edge_state.peer_registry.read().await;
+                    reg.get(hops[0]).map(|p| p.udp_addr)
+                }
+                _ => {
+                    let reg = self.edge_state.peer_registry.read().await;
+                    reg.get(target_edge_id).map(|p| p.udp_addr)
+                }
+            }
         };
 
-        if let Some(addr) = peer_addr {
-            // Build a Voice packet for the target Edge.
-            let mut forward = Vec::with_capacity(1 + 4 + voice_data.len());
-            forward.push(EDGE_PKT_VOICE);
+        if let Some(addr) = next_hop_addr {
+            let mut forward = Vec::with_capacity(1 + 1 + 4 + 4 + voice_data.len());
+            forward.push(EDGE_PKT_RELAY);
+            forward.push(ttl - 1);
+            forward.extend_from_slice(&target_edge_id.to_be_bytes());
             forward.extend_from_slice(&sender_session.to_be_bytes());
             forward.extend_from_slice(voice_data);
             if let Err(e) = self.edge_socket.send_to(&forward, addr).await {
                 warn!("Forward relay packet to edge {} at {} failed: {}", target_edge_id, addr, e);
             } else {
-                debug!("Forwarded relay packet to edge {} at {}", target_edge_id, addr);
+                debug!("Forwarded relay packet to edge {} at {} (ttl={})", target_edge_id, addr, ttl - 1);
             }
         } else {
             debug!("Relay target edge {} not in peer registry — dropping relay packet", target_edge_id);
@@ -674,6 +788,43 @@ impl UdpServer {
         let forwarded = inject_session_into_voice(voice_data, sender_session);
 
         // Deliver to local clients in the same channel
+        let local_targets = self.edge_state.client_manager.get_channel_sessions(channel_id).await;
+        let session_addrs = self.session_to_addr.read().await;
+
+        for target in local_targets {
+            if let Some(&addr) = session_addrs.get(&target) {
+                if let Some(cs_arc) = self.edge_state.client_manager.get_crypt_state(target).await {
+                    let mut encrypted = Vec::new();
+                    match cs_arc.lock() {
+                        Ok(mut cs) => { cs.encrypt(&forwarded, &mut encrypted); }
+                        Err(e) => {
+                            warn!("CryptState mutex poisoned for session {} — packet dropped: {}", target, e);
+                            continue;
+                        }
+                    }
+                    if let Err(e) = self.socket.send_to(&encrypted, addr).await {
+                        warn!("UDP relay to session {} failed: {}", target, e);
+                    }
+                }
+            } else {
+                self.fallback_to_tcp(target, &forwarded).await;
+            }
+        }
+    }
+
+    /// Deliver a relayed voice packet to local clients on this Edge.
+    /// Extracted from handle_edge_packet to avoid needing a dummy peer address.
+    async fn deliver_voice_locally(&self, sender_session: u32, voice_data: &[u8]) {
+        debug!("deliver_voice_locally: session={}, {} bytes", sender_session, voice_data.len());
+
+        let channel_id = if let Some(ru) = self.edge_state.channel_manager.get_remote_user(sender_session).await {
+            ru.channel_id
+        } else {
+            debug!("Unknown remote session {} in relay delivery", sender_session);
+            return;
+        };
+
+        let forwarded = inject_session_into_voice(voice_data, sender_session);
         let local_targets = self.edge_state.client_manager.get_channel_sessions(channel_id).await;
         let session_addrs = self.session_to_addr.read().await;
 
@@ -732,6 +883,12 @@ impl UdpServer {
                     }
                     entry.pongs_received += 1;
                 }
+                drop(pq);
+                // Successful pong resets consecutive failure counter for this peer
+                if self.edge_state.consecutive_failure_threshold > 0 {
+                    let mut failures = self.edge_state.next_hop_failures.write().await;
+                    failures.insert(edge_id, 0);
+                }
             }
         }
     }
@@ -755,7 +912,7 @@ fn probe_current_millis() -> u64 {
 }
 
 /// Encode a u32 value as a Mumble variable-length integer.
-fn encode_mumble_varint(value: u32) -> Vec<u8> {
+pub(crate) fn encode_mumble_varint(value: u32) -> Vec<u8> {
     if value < 0x80 {
         vec![value as u8]
     } else if value < 0x4000 {
@@ -781,4 +938,86 @@ fn inject_session_into_voice(payload: &[u8], sender_session: u32) -> Vec<u8> {
     result.extend_from_slice(&session_varint);
     result.extend_from_slice(&payload[1..]);
     result
+}
+
+/// Test-only: attempt to route a single voice packet directly via UDP to the given target Edge,
+/// applying the `test_udp_drop_rate` network-degradation hook.
+///
+/// Returns `true` if the packet reached the socket send call and succeeded,
+/// `false` if it was dropped by the degradation hook or by a real send error.
+/// In both failure cases `next_hop_failures[target_edge_id]` is incremented, exactly as the
+/// production `route_voice()` path does.
+///
+/// Used by integration tests in `tests/voice_routing.rs`.
+#[cfg(feature = "test-utils")]
+pub async fn test_route_to_edge(
+    edge_state: Arc<EdgeState>,
+    edge_socket: Arc<tokio::net::UdpSocket>,
+    target_edge_id: u32,
+    target_addr: std::net::SocketAddr,
+    session: u32,
+    payload: &[u8],
+) -> bool {
+    use std::sync::atomic::Ordering;
+
+    // Degradation hook: simulate packet loss.
+    let drop_rate = edge_state.test_udp_drop_rate.load(Ordering::Relaxed);
+    if drop_rate > 0 {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let c = COUNTER.fetch_add(1, Ordering::Relaxed);
+        if c % 100 < drop_rate {
+            let mut failures = edge_state.next_hop_failures.write().await;
+            *failures.entry(target_edge_id).or_insert(0) += 1;
+            return false;
+        }
+    }
+
+    let mut pkt = Vec::with_capacity(1 + 4 + payload.len());
+    pkt.push(EDGE_PKT_VOICE);
+    pkt.extend_from_slice(&session.to_be_bytes());
+    pkt.extend_from_slice(payload);
+
+    match edge_socket.send_to(&pkt, target_addr).await {
+        Ok(_) => {
+            if edge_state.consecutive_failure_threshold > 0 {
+                let mut failures = edge_state.next_hop_failures.write().await;
+                failures.insert(target_edge_id, 0);
+            }
+            true
+        }
+        Err(_) => {
+            let mut failures = edge_state.next_hop_failures.write().await;
+            *failures.entry(target_edge_id).or_insert(0) += 1;
+            false
+        }
+    }
+}
+
+/// Test-only: send a single relay voice packet via UDP in the `EDGE_PKT_RELAY` wire format.
+///
+/// Wire format: `[0x02][ttl(1)][target_edge_id_BE(4)][sender_session_BE(4)][payload...]`
+///
+/// This mirrors exactly what `route_voice()` sends for `RouteDecision::RelayChain`.
+/// The receiver parses it as an incoming relay hop (EDGE_PKT_RELAY branch in `run()`).
+///
+/// Returns `true` if the socket send succeeded.
+///
+/// Used by integration tests in `tests/voice_routing.rs` to verify the relay
+/// packet wire format without requiring a full `UdpServer` stack.
+#[cfg(feature = "test-utils")]
+pub async fn test_send_relay_packet(
+    edge_socket: Arc<tokio::net::UdpSocket>,
+    target_edge_id: u32,
+    target_addr: std::net::SocketAddr,
+    sender_session: u32,
+    ttl: u8,
+    payload: &[u8],
+) -> bool {
+    let mut pkt = Vec::with_capacity(1 + 1 + 4 + 4 + payload.len());
+    pkt.push(EDGE_PKT_RELAY); // 0x02
+    pkt.push(ttl);
+    pkt.extend_from_slice(&target_edge_id.to_be_bytes());
+    pkt.extend_from_slice(&sender_session.to_be_bytes());
+    pkt.extend_from_slice(payload);
+    edge_socket.send_to(&pkt, target_addr).await.is_ok()
 }

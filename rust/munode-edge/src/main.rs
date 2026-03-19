@@ -107,12 +107,8 @@ async fn main() -> Result<()> {
         println!("   {:<22} {}:{}", "hub:", cfg.hub_server.host, cfg.hub_server.control_port);
         println!("   {:<22} {}", "pool_size:", cfg.hub_server.pool_size);
         println!("   {:<22} {}", "capacity:", cfg.server.capacity);
-        let strategy = match cfg.voice_routing.connection_strategy {
-            munode_common::config::VoiceConnectionStrategy::AutoFallback => "auto_fallback",
-            munode_common::config::VoiceConnectionStrategy::TcpOnly => "tcp_only",
-            munode_common::config::VoiceConnectionStrategy::DirectOnly => "direct_only",
-        };
-        println!("   {:<22} {}", "connection_strategy:", strategy);
+        println!("   {:<22} {}", "hub_tcp_fallback:", cfg.voice_routing.enable_hub_tcp_fallback);
+        println!("   {:<22} {}", "failure_threshold:", cfg.voice_routing.consecutive_failure_threshold);
         // Control relay is always active — show effective port
         let edge_port = cfg.network.edge_port.unwrap_or(cfg.network.port + 1);
         let relay_port = if cfg.hub_server.relay_port > 0 {
@@ -225,13 +221,9 @@ listeners_per_user    = 0
 listeners_per_channel = 0
 
 [voice_routing]
-enabled             = true
-connection_strategy = "auto_fallback"  # auto_fallback | tcp_only | direct_only
-
-[voice_routing.fallback]
-enable_tcp_fallback         = false
-tcp_fallback_delay          = 2000
-udp_recovery_check_interval = 5000
+enabled                       = true
+enable_hub_tcp_fallback       = true
+consecutive_failure_threshold = 2
 
 [voice_routing.relay]
 enabled             = true

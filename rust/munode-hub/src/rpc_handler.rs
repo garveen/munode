@@ -448,7 +448,12 @@ impl RpcHandler {
 
             // Check if this IP is currently in the ban list
             if let Some(ip_bytes) = parse_ip_to_bytes(&client_ip) {
-                match self.state.database.check_ip_banned(&ip_bytes) {
+                // spawn_blocking: DB call on hot path
+                let db = self.state.database.clone();
+                match tokio::task::spawn_blocking(move || db.check_ip_banned(&ip_bytes))
+                    .await
+                    .context("spawn_blocking join error")?
+                {
                     Ok(Some(ban)) => {
                         warn!("Rejecting connection from banned IP {}: {}", client_ip, ban.reason);
                         let result = EdgeAuthenticateUserResult {
@@ -1098,7 +1103,12 @@ impl RpcHandler {
         // Check guest mode
         if !config.auth.allow_guest {
             // Look up user in database
-            let db_user = self.state.database.find_user(username)?;
+            // spawn_blocking: DB call on hot path
+            let db = self.state.database.clone();
+            let username_owned = username.to_string();
+            let db_user = tokio::task::spawn_blocking(move || db.find_user(&username_owned))
+                .await
+                .context("spawn_blocking join error")??;
             if db_user.is_none() {
                 // Track failed attempt (unknown username with no guest access counts toward auto-ban)
                 self.record_auth_failure(&client_ip).await;
@@ -1127,7 +1137,12 @@ impl RpcHandler {
         }
 
         // Look up user; verify password if they have one set
-        let db_user = self.state.database.find_user(username)?;
+        // spawn_blocking: DB call on hot path
+        let db = self.state.database.clone();
+        let username_owned = username.to_string();
+        let db_user = tokio::task::spawn_blocking(move || db.find_user(&username_owned))
+            .await
+            .context("spawn_blocking join error")??;
         let (user_id, channel_id) = match db_user {
             Some(ref u) => {
                 // If user has a stored password hash, verify the supplied password
@@ -1440,7 +1455,9 @@ impl RpcHandler {
             })
             .collect();
 
-        // Gather all channel links (deduplicated)
+        // Gather all channel links (deduplicated).
+        // get_all_channels() returns an owned Vec<ChannelRecord>, so the internal
+        // read-lock is released before we iterate — no lock is held during serialization.
         let mut link_set = std::collections::HashSet::new();
         let all_channels = self.state.channel_store.get_all_channels().await;
         let mut channel_links = Vec::new();
@@ -1460,7 +1477,9 @@ impl RpcHandler {
             }
         }
 
-        // Gather all sessions
+        // Gather all sessions.
+        // get_all_sessions() returns an owned Vec<SessionInfo>, so the internal
+        // read-lock is released before we map/serialize — no lock is held during serialization.
         let sessions: Vec<GlobalSessionProto> = self
             .state
             .session_manager
@@ -1897,7 +1916,12 @@ impl RpcHandler {
                 temporary: false,
                 inherit_acl: params.inherit_acl.unwrap_or(true),
             };
-            self.state.database.save_channel(&db_ch)?;
+            // spawn_blocking: DB call on hot path
+            let db = self.state.database.clone();
+            let db_ch_owned = db_ch.clone();
+            tokio::task::spawn_blocking(move || db.save_channel(&db_ch_owned))
+                .await
+                .context("spawn_blocking join error")??;
 
             // Broadcast channel created
             let proto = ChannelDataProto {
@@ -1953,7 +1977,12 @@ impl RpcHandler {
                     temporary: ch.temporary,
                     inherit_acl: ch.inherit_acl,
                 };
-                self.state.database.save_channel(&db_ch)?;
+                // spawn_blocking: DB call on hot path
+                let db = self.state.database.clone();
+                let db_ch_owned = db_ch.clone();
+                tokio::task::spawn_blocking(move || db.save_channel(&db_ch_owned))
+                    .await
+                    .context("spawn_blocking join error")??;
 
                 // Broadcast channel updated
                 let proto = ChannelDataProto {
@@ -2302,7 +2331,11 @@ impl RpcHandler {
         &self,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        let bans = self.state.database.load_bans()?;
+        // spawn_blocking: DB call on hot path
+        let db = self.state.database.clone();
+        let bans = tokio::task::spawn_blocking(move || db.load_bans())
+            .await
+            .context("spawn_blocking join error")??;
 
         let ban_entries: Vec<munode_protocol::mumbleproto::ban_list::BanEntry> = bans.iter().map(|b| {
             munode_protocol::mumbleproto::ban_list::BanEntry {
@@ -2977,12 +3010,7 @@ impl RpcHandler {
         };
 
         let data = packet.encode_to_vec();
-        let edges = self.state.edge_connections.read().await;
-        for (edge_id, sender) in edges.iter() {
-            if let Err(e) = sender.try_send(data.clone()) {
-                warn!("Failed to send notification to edge {}: {}", edge_id, e);
-            }
-        }
+        crate::server::broadcast_critical(&self.state, data).await;
     }
 
     /// Build a ServerLimitsConfig from the current Hub configuration.
@@ -3149,11 +3177,12 @@ impl RpcHandler {
         // fine since this is a shared read lock — only topology writers are briefly
         // paused.  For typical cluster sizes (2–20 edges) the total computation time
         // is well under a millisecond.
-        let edge_data: Vec<(u32, Vec<(u32, u32, Option<u32>, f32)>)> = {
+        let edge_data: Vec<(u32, Vec<(u32, u32, Vec<u32>, f32)>)> = {
             let topo = self.state.topology.read().await;
+            let config = &self.state.config.voice_routing;
             topo.get_all_edges()
                 .iter()
-                .map(|e| (e.edge_id, topo.compute_route_table(e.edge_id)))
+                .map(|e| (e.edge_id, topo.compute_route_table(e.edge_id, config)))
                 .collect()
         }; // lock released here
 
@@ -3161,16 +3190,20 @@ impl RpcHandler {
             if routes.is_empty() {
                 continue;
             }
+            let max_ttl_val = self.state.config.voice_routing.max_ttl;
             self.send_notification_to_edge(edge_id, "hub.routeTableUpdate", |n| {
                 n.route_table_update = Some(HubRouteTableUpdateParams {
-                    routes: routes.into_iter().map(|(target, rtype, nhop, cost)| {
+                    routes: routes.into_iter().map(|(target, rtype, relay_chain, cost)| {
+                        let relay_transports = vec![0u32; relay_chain.len()]; // all UDP for now
                         HubRouteEntryProto {
                             target_edge_id: target,
                             route_type: rtype,
-                            next_hop: nhop,
+                            relay_chain,
+                            relay_transports,
                             cost,
                         }
                     }).collect(),
+                    max_ttl: Some(max_ttl_val),
                 });
             }).await;
         }
@@ -3623,7 +3656,7 @@ impl RpcHandler {
             .context("Missing edge_relay_voice_via_tcp params")?;
 
         // Respect Hub voice routing policy: if relay is disabled, reject immediately.
-        if !self.state.config.voice_routing.enable_relay {
+        if !self.state.config.voice_routing.enable_hub_tcp_relay {
             return Ok(self.make_response_packet(request_id, "edge.relayVoiceViaTcp", |r| {
                 r.edge_relay_voice_via_tcp = Some(EdgeRelayVoiceViaTcpResult {
                     success: false,
@@ -3633,7 +3666,9 @@ impl RpcHandler {
         }
 
         let target_edge_id = params.target_edge_id;
-        let voice_packet = params.voice_packet.clone();
+        // params is a shared borrow (&EdgeRelayVoiceViaTcpParams), so a clone of
+        // the voice payload is unavoidable here.  We place it directly into the
+        // outgoing notification struct to keep the number of copies at one.
         let from_edge_id = params.from_edge_id;
         let timestamp = params.timestamp;
 
@@ -3643,7 +3678,7 @@ impl RpcHandler {
             timestamp: Some(current_millis() as i64),
             relay_voice_packet: Some(HubRelayVoicePacketParams {
                 from_edge_id,
-                voice_packet,
+                voice_packet: params.voice_packet.clone(),
                 timestamp,
             }),
             ..Default::default()

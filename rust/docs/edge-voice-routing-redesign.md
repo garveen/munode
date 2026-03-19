@@ -1,6 +1,6 @@
 # Edge 间语音路由重设计：自适应多路径路由
 
-**状态**：设计草案  
+**状态**：已实施（Steps 1–14）  
 **适用版本**：munode-edge / munode-hub（待实现）  
 **替代文档**：原 `connection_strategy` 配置项  
 
@@ -735,7 +735,7 @@ struct RouteSnapshot {
 
 实现 `degraded_packet_loss`/`failed_packet_loss`/`degraded_rtt_ms`/`failed_rtt_ms` 阈值：超过 failed 阈值的链路从图中移除。实现 `recovery_report_count` 和 `min_improvement_ms` 防抖逻辑。
 
-### Step 11：实现 Edge TCP 语音通道（直连 + 中继）
+### Step 11：✅ 实现 Edge TCP 语音通道（直连 + 中继）
 
 扩展 `relay_server.rs`，增加 `/voice` 路径的 WebSocket 处理。Edge 启动后主动向所有已知 peer 建立 `/voice` 连接（见 §6.3）。
 
@@ -745,7 +745,7 @@ struct RouteSnapshot {
 
 在 `route_voice` 中增加对 `DirectTcp` 和 `RelayChain(transports[0]=Tcp)` 的处理分支：通过 `voice_tcp_conns[peer_id]` 的 sender 发送二进制帧。
 
-### Step 12：Hub Dijkstra 双轨建图 + 路由条目携带传输层
+### Step 12：✅ Hub Dijkstra 双轨建图 + 路由条目携带传输层
 
 为每对 Edge 同时添加 UDP 边和 TCP 边：
 
@@ -758,7 +758,7 @@ struct RouteSnapshot {
 
 重命名 `HubVoiceRoutingConfig` 中的字段和代码中所有引用。
 
-### Step 14：将 relay/voice WebSocket 合并至主端口
+### Step 14：✅ 将 relay/voice WebSocket 合并至主端口
 
 当前 relay server（`relay_server.rs`）独立运行在 `edge_port + 2`，导致 `PeerEdgeInfo.relay_port` 动态发现失效（§1.6）。修复方案：
 

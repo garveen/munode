@@ -52,22 +52,12 @@ impl EdgeServer {
         let client_manager = ClientManager::new();
         let channel_manager = ChannelManager::new();
 
-        // Derive voice routing flags from the new voice_routing config, falling back
-        // to the legacy `server.disable_hub_relay` for backwards compatibility.
-        use munode_common::config::VoiceConnectionStrategy;
-        let (allow_hub_relay, allow_direct_udp) = match &self.config.voice_routing.connection_strategy {
-            VoiceConnectionStrategy::TcpOnly => (true, false),
-            VoiceConnectionStrategy::DirectOnly => (false, true),
-            VoiceConnectionStrategy::AutoFallback => {
-                // Legacy override: disable_hub_relay forces DirectOnly behaviour.
-                (!self.config.server.disable_hub_relay, true)
-            }
-        };
+        // Derive voice routing flags from the voice_routing config.
         let edge_state = EdgeState::new_with_full_config(
             channel_manager,
             client_manager,
-            allow_hub_relay,
-            allow_direct_udp,
+            self.config.voice_routing.enable_hub_tcp_fallback,
+            self.config.voice_routing.consecutive_failure_threshold,
             self.config.server.listeners_per_user,
             self.config.server.listeners_per_channel,
             self.config.server.allow_ping,
@@ -160,18 +150,20 @@ impl EdgeServer {
             });
         }
 
-        // Always start the control-relay server (every Edge acts as a relay for peers)
-        let relay_port = if self.config.hub_server.relay_port > 0 {
-            self.config.hub_server.relay_port
-        } else {
-            edge_port as u16 + 2
-        };
+        // Always start the edge WebSocket server (relay + voice) on edge_port
         {
             let hub_host = self.config.hub_server.host.clone();
             let hub_port = self.config.hub_server.control_port;
-            info!("Starting control relay server on port {}", relay_port);
+            let edge_state_clone = edge_state.clone();
+            info!("Starting edge WS server (relay+voice) on port {}", edge_port);
             tokio::spawn(async move {
-                crate::relay_server::run_relay_server(relay_port, hub_host, hub_port).await;
+                crate::relay_server::run_edge_ws_server(
+                    edge_port as u16,
+                    hub_host,
+                    hub_port,
+                    edge_state_clone,
+                )
+                .await;
             });
         }
 
@@ -235,10 +227,17 @@ impl EdgeServer {
             }
         }
 
-        // Allow background tasks a moment to notice shutdown before aborting.
-        // These tasks are stateless (no persistent data to flush), so abort is
-        // acceptable as a fallback after a brief grace period.
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        // On SIGINT/ctrl-c the ShutdownRequested event path has not fired, so
+        // clients have not yet been notified.  Broadcast a Reject to all
+        // connected clients so they know to reconnect, then give tasks time
+        // to drain their write buffers before we abort them.
+        edge_state.client_manager.close_all_connections("Server shutting down").await;
+
+        // Allow background tasks adequate time to notice the shutdown signal
+        // and flush any in-flight messages before we force-abort them.
+        // 3 seconds is sufficient for disconnect notifications to Hub and any
+        // queued writes to be flushed to clients.
+        tokio::time::sleep(tokio::time::Duration::from_millis(3000)).await;
         udp_handle.abort();
         hub_handle.abort();
         event_handle.abort();
@@ -889,7 +888,7 @@ async fn handle_client_connection(
                                         // [header][session_varint][seq][voice_data]
                                         // (matches TS hub relay format)
                                         let relay_payload = inject_session_into_voice(&frame.payload, sid);
-                                        if edge_state.allow_hub_relay {
+                                        if edge_state.enable_hub_tcp_fallback {
                                             hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                                         }
                                     }
@@ -945,7 +944,7 @@ async fn handle_client_connection(
                                     // Relay format: standard Mumble server-to-client packet
                                     // [header][session_varint][seq][voice_data]
                                     let relay_payload = inject_session_into_voice(&frame.payload, sid);
-                                    if edge_state.allow_hub_relay {
+                                    if edge_state.enable_hub_tcp_fallback {
                                         hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                                     }
                                 }

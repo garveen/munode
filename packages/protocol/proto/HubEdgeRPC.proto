@@ -1022,13 +1022,15 @@ message TypedRPCResponse {
 }
 message HubRouteEntryProto {
   required uint32 target_edge_id = 1;
-  required uint32 route_type = 2;    // 0=direct, 1=relay via next_hop, 2=hub_tcp
-  optional uint32 next_hop = 3;
-  required float cost = 4;
+  required uint32 route_type = 2;    // 0=DirectUdp, 1=RelayChain, 2=HubTcp, 3=DirectTcp
+  repeated uint32 relay_chain = 3;   // full relay chain (intermediate edges, excl. src+dst)
+  repeated uint32 relay_transports = 4; // transport per hop: 0=UDP, 1=TCP
+  required float cost = 5;
 }
 
 message HubRouteTableUpdateParams {
   repeated HubRouteEntryProto routes = 1;
+  optional uint32 max_ttl = 2;  // cluster-wide TTL cap for relay packets
 }
 
 /**
