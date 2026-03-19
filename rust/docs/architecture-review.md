@@ -85,11 +85,11 @@ let bans = self.state.database.load_bans()?;                   // 第 2288 行
 - 在 2000 用户场景下：用户认证时 `find_user` 可能对整个用户表做全表扫描（O(N)），`load_bans` 读取整个 ban 表；这些操作持有 Mutex 期间，其他所有 RPC 请求（包括语音中继）都在等待
 - 极端情况：2000 个并发认证请求，每个 10ms DB 查询 → 20 秒串行等待 → 超过 30 秒 RPC 超时 → 所有 Edge 断开
 
-**对比**：Lua 认证正确使用了 `tokio::task::spawn_blocking`（第 760 行），但所有数据库调用都没有。
+**对比**：Lua 认证正确使用了 `tokio::task::spawn_blocking`（第 760 行），但部分数据库调用还未使用。
 
 **建议**：
 1. 将所有 Database 方法调用包裹在 `tokio::task::spawn_blocking` 中
-2. **【实现】** 或改用异步 SQLite 封装（如 `tokio-rusqlite`）
+2. ~~**【实现】** 或改用异步 SQLite 封装（如 `tokio-rusqlite`）~~ **【已部分实现】** 关键热路径（`find_user`、`check_ip_banned`、`save_channel`、`load_bans`、`upsert_ext_user`、`get_user_last_channel`、ACL 权限组查询）均已通过 `spawn_blocking` 包装，避免阻塞 tokio worker 线程。
 3. 考虑使用连接池支持并行读取（WAL 模式允许并发读）
 4. 对高频查询（`find_user`、`check_ip_banned`）添加数据库索引
 
@@ -97,18 +97,9 @@ let bans = self.state.database.load_bans()?;                   // 第 2288 行
 
 ### C-2: Hub 广播使用 `try_send()` 导致关键消息静默丢失
 
-**位置**：`munode-hub/src/server.rs:347`, `munode-hub/src/rpc_handler.rs:2583,2628,2965,3122`
+**位置**：`munode-hub/src/server.rs:347`, `munode-hub/src/rpc_handler.rs`
 
-**现状**：Hub 向所有 Edge 广播通知（用户加入/离开/移动、频道更新等）使用非阻塞的 `try_send()`：
-
-```rust
-// server.rs:345-349 (broadcast 函数)
-for (edge_id, sender) in edges.iter() {
-    if let Err(e) = sender.try_send(data.clone()) {
-        tracing::warn!("Failed to broadcast to edge {}: {}", edge_id, e);
-    }
-}
-```
+**现状**：~~Hub 向所有 Edge 广播通知（用户加入/离开/移动、频道更新等）使用非阻塞的 `try_send()`~~ **【已修复】** `broadcast_notification()` 已改为调用 `broadcast_critical()`（持有超时的 `send().await`），`on_user_state_changed` 和 `on_text_message` 改为使用新增的 `broadcast_critical_excluding()` 函数（向除源 Edge 外的所有 Edge 发送，带 2 秒超时），确保关键状态消息不会被静默丢弃。
 
 每个 Edge 的 MPSC 通道缓冲区为 256 条消息（`edge_connection.rs` 中 `mpsc::channel::<Vec<u8>>(256)`）。
 
@@ -119,10 +110,8 @@ for (edge_id, sender) in edges.iter() {
 - 该 Edge 将与 Hub 的状态产生不一致：看到已离开的用户仍在线、看不到新加入的用户等
 - **没有增量同步恢复机制**——唯一的修复方式是 Edge 完整断开重连并做 fullSync
 
-**场景**：2000 用户登录高峰期，50 个用户快速加入 → 50 条 `hub.userJoined` 广播。如果某 Edge 网络抖动导致发送缓慢，缓冲区可能溢出。
-
 **建议**：
-1. **【实现】** 对关键状态消息使用 `send().await`（带超时）而非 `try_send()`
+1. ~~**【实现】** 对关键状态消息使用 `send().await`（带超时）而非 `try_send()`~~ **【已实现】**
 2. 或实现消息优先级：状态同步消息（用户加入/离开）> 语音中继 > 其他
 3. 添加消息丢弃计数器，当丢弃数超过阈值时触发强制 fullSync
 4. 考虑增大缓冲区（256 → 1024 或更多），或基于 Edge 当前用户数动态调整
@@ -193,19 +182,19 @@ Edge 间 UDP 包格式：
 **现状**：每个 Edge 运行一个 WebSocket relay server（`relay_port`），允许其他 Edge 通过它连接 Hub：
 
 ```rust
-// relay_server.rs — 无认证，无 TLS
-// 任何能连接到 relay_port 的客户端都会被透明转发到 Hub
+// relay_server.rs — 【已添加 HMAC 认证】
+// 当配置 hmac_secret 时，/relay 连接需提供时间戳签名 token（ts + HMAC-SHA256）
 ```
 
 **问题**：
-- 无认证：任何知道 relay_port 的人都可以连接并直接与 Hub 通信
+- ~~无认证：任何知道 relay_port 的人都可以连接并直接与 Hub 通信~~ **【已修复】** 添加了基于 HMAC-SHA256 的时间戳 token 认证，30 秒有效期防重放攻击
 - 无 TLS：中继流量明文传输
 - 无速率限制：可被用于 DDoS 放大攻击
 - 无最大连接数限制：可以耗尽 Edge 的文件描述符
 - 帧缓冲无上限：如果 Hub 响应慢，中继缓冲可能导致 OOM
 
 **建议**：
-1. **【实现】** 添加基于 HMAC 的握手认证（复用 Edge 注册的 `hmac_secret`）
+1. ~~**【实现】** 添加基于 HMAC 的握手认证（复用 Edge 注册的 `hmac_secret`）~~ **【已实现】** 继服务器在配置了 `hmac_secret` 时，通过 URL 查询参数 `?ts=<ts>&token=<hmac>` 验证连接者身份；hub_client 在 `try_connect_via_relay` 中自动附加 token。
 2. 限制最大并发中继连接数
 3. 添加帧缓冲上限，达到上限时断开连接
 4. 至少添加 per-IP 速率限制
@@ -351,17 +340,17 @@ sender.send(data).await;                          // 发送
 
 **位置**：`munode-common/src/config.rs`，`munode-edge/src/hub_client.rs`
 
-**现状**：Edge 到 Hub 的连接池默认 `pool_size = 1`，即单连接。
+**现状**：~~Edge 到 Hub 的连接池默认 `pool_size = 1`，即单连接。~~ **【已修复】** `edge.example.toml` 中已将 `pool_size = 3` 设为推荐默认值（不再注释掉）。
 
 **问题**：
 - 单 WebSocket 连接承载该 Edge 所有 RPC 请求和所有广播通知
 - 如果该连接短暂中断，该 Edge 上的所有用户都受影响
 - 连接池模式已实现（轮询分发 RPC），但默认未启用
-- 池模式下 `send_raw()` 如果所有 slot 都不可用，返回 `Ok(())`（静默成功），调用方无法感知失败
+- ~~池模式下 `send_raw()` 如果所有 slot 都不可用，返回 `Ok(())`（静默成功），调用方无法感知失败~~ **【已修复】** 所有 slot 不可用时返回 `Err`。
 
 **建议**：
-1. **【实现】**：在文档和示例配置中推荐 `pool_size = 3`
-2. **【实现】** 修复静默失败：所有 slot 不可用时应返回错误
+1. ~~**【实现】**：在文档和示例配置中推荐 `pool_size = 3`~~ **【已实现】**
+2. ~~**【实现】** 修复静默失败：所有 slot 不可用时应返回错误~~ **【已实现】**
 3. 添加连接池健康状态监控（当前已有 slot 数量但缺少 exposed metrics）
 
 ---
@@ -761,19 +750,19 @@ max_relay_bandwidth = 50000       # 50 Mbps（提升中继带宽上限）
 
 | 编号 | 严重性 | 问题 | 影响 |
 |------|--------|------|------|
-| C-1 | 🔴 严重 | 数据库同步阻塞 async 运行时 | 2000 用户时级联超时 |
-| C-2 | 🔴 严重 | `try_send()` 静默丢弃关键广播 | Edge 状态不一致 |
+| C-1 | 🔴 严重 | ~~数据库同步阻塞 async 运行时~~ ✅ 关键热路径已用 spawn_blocking 包装 | 2000 用户时级联超时 |
+| C-2 | 🔴 严重 | ~~`try_send()` 静默丢弃关键广播~~ ✅ 改用 broadcast_critical_excluding | Edge 状态不一致 |
 | C-3 | 🔴 严重 | Full Sync 无分页无压缩 | 重连风暴时超时 |
 | H-1 | 🟠 高 | Edge 间语音明文传输 | 安全风险 |
-| H-2 | 🟠 高 | Relay Server 无认证无限制 | 安全 + DoS 风险 |
+| H-2 | 🟠 高 | ~~Relay Server 无认证无限制~~ ✅ 已添加 HMAC token 认证 | 安全 + DoS 风险 |
 | H-3 | 🟠 高 | ACL 缓存无 TTL 无大小限制 | 内存泄漏 |
 | H-4 | 🟠 高 | 优雅关机不足（200ms） | 用户体验差 |
 | H-5 | 🟠 高 | 心跳超时 180 秒 | 幽灵用户 3 分钟 |
 | M-1 | 🟡 中 | RPC 计数器用 Mutex | 性能瓶颈 |
 | M-2 | 🟡 中 | Hub 中继多次内存拷贝 | Hub CPU 压力 |
-| M-3 | 🟡 中 | 连接池默认未启用 | 单点故障 |
+| M-3 | 🟡 中 | ~~连接池默认未启用~~ ✅ pool_size = 3 已启用为推荐默认值 | 单点故障 |
 | M-4 | 🟡 中 | Peer Registry 写锁阻塞语音 | 延迟尖峰 |
-| M-5 | 🟡 中 | Web API 无认证 | 安全风险 |
+| M-5 | 🟡 中 | ~~Web API 无认证~~ ✅ 已实现 Bearer Token 认证 | 安全风险 |
 | M-6 | 🟡 中 | Edge 边缘计算不足 | Hub 负载过高 |
 | L-1 | 🟢 低 | UDP 源地址识别 O(N) | 启动期延迟 |
 | L-2 | 🟢 低 | 临时频道清理级联查询 | 偶发延迟 |

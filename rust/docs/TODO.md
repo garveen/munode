@@ -400,6 +400,7 @@
 
 ## 更新日志
 
+- 2026-03-19: **继续实现 architecture-review 待办项** — 完成 C-1（关键热路径 spawn_blocking：upsert_ext_user、get_user_last_channel、ACL 权限组查询合并为单次 spawn_blocking）、C-2（broadcast_critical_excluding 消除 on_user_state / on_text_message 的 try_send）、H-2（Relay Server HMAC token 认证：URL 查询参数 ts+token，30 秒有效期防重放，6 个单元测试）、M-3（edge.example.toml 默认启用 pool_size = 3）
 - 2026-03-15: **修复所有 Critical 和 High 问题** — 完成 C-01～C-05、H-01～H-13 共 18 项修复，包括 TLS 证书验证、mutex panic 消除、优雅关闭、连接限制等
 - 2026-03-15: **完成所有剩余 TODO 项** — L-08 确认为 Mumble 兼容设计并补充注释；A-01 统一关闭信号改用 watch::channel；A-03 权限常量迁移至 munode-common::permission；copilot-instructions 添加 Git 提交规范（英文提交信息）
 - 2026-03-15: **修复 L-03/L-04** — 引入 `num_enum 0.7` 消除 `from_u16()` 手动 match；重构 `MunodeError` 为 6 个细粒度子枚举；copilot-instructions 新增不需向后兼容的说明

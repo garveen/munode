@@ -295,7 +295,7 @@ impl HubClient {
     async fn try_connect_via_relay(self: &Arc<Self>, slot: usize, is_primary: bool) -> Result<()> {
         // 1. Static peers from config (for bootstrap before Hub connection)
         for (host, relay_port) in &self.static_relay_peers {
-            let relay_url = format!("ws://{}:{}", host, relay_port);
+            let relay_url = build_relay_url(host, *relay_port, self.config.hmac_secret.as_deref());
             info!("Attempting Hub relay via static peer at {}", relay_url);
             match self.try_connect_via_url(&relay_url, slot, is_primary).await {
                 Ok(()) => {
@@ -314,7 +314,7 @@ impl HubClient {
             return Err(anyhow::anyhow!("No relay peers available"));
         }
         for (peer_id, host, relay_port) in &dynamic_peers {
-            let relay_url = format!("ws://{}:{}", host, relay_port);
+            let relay_url = build_relay_url(host, *relay_port, self.config.hmac_secret.as_deref());
             info!("Attempting Hub relay via peer {} at {}", peer_id, relay_url);
             match self.try_connect_via_url(&relay_url, slot, is_primary).await {
                 Ok(()) => {
@@ -2258,6 +2258,32 @@ impl HubClient {
         if let Err(e) = self.rpc_call(request).await {
             debug!("report_quality to edge {} failed: {}", target_edge_id, e);
         }
+    }
+}
+
+/// Build a relay WebSocket URL.
+///
+/// When `hmac_secret` is provided, appends a timestamp-based HMAC token to
+/// authenticate with relay servers that require it:
+///
+/// ```text
+/// ws://host:port/relay?ts=<unix_ms>&token=<hex_hmac>
+/// ```
+///
+/// Without a secret, returns a plain `ws://host:port` URL for backward
+/// compatibility with relay servers that have no authentication configured.
+fn build_relay_url(host: &str, port: u16, hmac_secret: Option<&str>) -> String {
+    match hmac_secret {
+        Some(secret) => {
+            use ring::hmac;
+            let ts_ms = current_millis();
+            let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
+            let msg = format!("relay:{}", ts_ms);
+            let sig = hmac::sign(&key, msg.as_bytes());
+            let token = hex::encode(sig.as_ref());
+            format!("ws://{}:{}/relay?ts={}&token={}", host, port, ts_ms, token)
+        }
+        None => format!("ws://{}:{}/relay", host, port),
     }
 }
 
