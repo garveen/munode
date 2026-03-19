@@ -352,26 +352,38 @@ pub async fn broadcast(state: &HubState, data: Vec<u8>) {
 
 /// Broadcast a critical state-sync message to all edges with backpressure.
 ///
-/// Uses `send().await` with a 2-second timeout per edge instead of `try_send()`
-/// to avoid silently dropping important state updates (user join/leave, channel
-/// changes, ACL updates).
+/// Snapshots the sender list before sending so the `edge_connections` read-lock
+/// is held only for the brief map-clone, not during the per-edge `send().await`
+/// calls.  Each edge gets up to a 2-second window; all edges are sent
+/// concurrently via `join_all` so a slow edge does not delay the others.
 pub async fn broadcast_critical(state: &HubState, data: Vec<u8>) {
+    use futures_util::future::join_all;
     use tokio::time::{timeout, Duration};
-    let edges = state.edge_connections.read().await;
-    for (edge_id, sender) in edges.iter() {
-        match timeout(Duration::from_secs(2), sender.send(data.clone())).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                tracing::warn!("broadcast_critical: edge {} channel closed: {}", edge_id, e);
-            }
-            Err(_) => {
-                tracing::warn!(
-                    "broadcast_critical: edge {} send timeout — message dropped",
-                    edge_id
-                );
+
+    // Snapshot senders under the read-lock (clone is cheap — just Arc bumps).
+    let senders: Vec<(u32, tokio::sync::mpsc::Sender<Vec<u8>>)> = {
+        let edges = state.edge_connections.read().await;
+        edges.iter().map(|(&id, tx)| (id, tx.clone())).collect()
+    }; // read-lock released here
+
+    let futures = senders.into_iter().map(|(edge_id, sender)| {
+        let data = data.clone();
+        async move {
+            match timeout(Duration::from_secs(2), sender.send(data)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::warn!("broadcast_critical: edge {} channel closed: {}", edge_id, e);
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "broadcast_critical: edge {} send timeout — message dropped",
+                        edge_id
+                    );
+                }
             }
         }
-    }
+    });
+    join_all(futures).await;
 }
 
 /// Send a packet to a specific edge.

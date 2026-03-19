@@ -310,8 +310,11 @@ impl TopologyManager {
 
     /// Compute route table for an Edge.
     /// Returns: Vec<(target_edge_id, route_type, relay_chain, cost)>
-    ///   route_type: 0=direct, 1=relay_chain, 2=hub_tcp
+    ///   route_type: 0=DirectUdp, 1=RelayChain, 2=HubTcp, 3=DirectTcp
     ///   relay_chain: full intermediate node list (path[1..len-1])
+    ///
+    /// Every target always gets at least a DirectTcp (type 3) and a HubTcp (type 2)
+    /// candidate so Edges always have fallback options.
     pub fn compute_route_table(&self, for_edge_id: u32, config: &HubVoiceRoutingConfig) -> Vec<(u32, u32, Vec<u32>, f32)> {
         let mut result = Vec::new();
         let all_edge_ids: Vec<u32> = self.edges.keys().cloned().collect();
@@ -323,6 +326,11 @@ impl TopologyManager {
             }
 
             let path = self.find_best_path_with_config(for_edge_id, target_id, config);
+
+            // Whether a HubTcp entry has already been emitted for this target
+            // (can happen when a relay chain is too long and falls back to HubTcp
+            // inside the match arm below).
+            let mut hub_tcp_emitted = false;
 
             match path.len() {
                 0 | 1 => {
@@ -346,6 +354,7 @@ impl TopologyManager {
                         // the relay path cost, which would be misleadingly high for long chains.
                         const HUB_TCP_REPRESENTATIVE_COST: f32 = 150.0;
                         result.push((target_id, 2, vec![], HUB_TCP_REPRESENTATIVE_COST));
+                        hub_tcp_emitted = true;
                     } else {
                         let cost = self.path_cost(&path, config) as f32;
                         result.push((target_id, 1, relay_chain, cost));
@@ -359,9 +368,12 @@ impl TopologyManager {
                 .unwrap_or(200.0);
             result.push((target_id, 3, vec![], tcp_cost));
 
-            // HubTcp fallback: always present as last resort.
-            const HUB_TCP_COST: f32 = 150.0;
-            result.push((target_id, 2, vec![], HUB_TCP_COST));
+            // HubTcp fallback: always present as last resort — but only if not already emitted
+            // above (which happens when a relay chain exceeds max_relay_hops).
+            if !hub_tcp_emitted {
+                const HUB_TCP_COST: f32 = 150.0;
+                result.push((target_id, 2, vec![], HUB_TCP_COST));
+            }
         }
         result
     }

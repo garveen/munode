@@ -974,20 +974,30 @@ impl HubClient {
                             });
                             info!("Registered direct UDP route to peer edge {} at {}", peer_edge_id, udp_addr);
                         }
-                        // Connect TCP voice channel to the new peer
-                        let peer_host = host.clone();
-                        let self_id = self.edge_state.get_edge_id();
-                        let state_clone = self.edge_state.clone();
-                        tokio::spawn(async move {
-                            crate::relay_server::connect_peer_voice_tcp(
-                                peer_edge_id,
-                                peer_host,
-                                voice_port,
-                                self_id,
-                                state_clone,
-                            )
-                            .await;
-                        });
+                        // Connect TCP voice channel to the new peer, but only if one is
+                        // not already active.  Without this guard a rapid peerJoined +
+                        // full-sync sequence (or duplicate notifications) could spawn two
+                        // concurrent tasks for the same peer — the older task's cleanup
+                        // `remove()` would then silently kill the newer connection.
+                        let already_connected = {
+                            let conns = self.edge_state.voice_tcp_conns.read().await;
+                            conns.contains_key(&peer_edge_id)
+                        };
+                        if !already_connected {
+                            let peer_host = host.clone();
+                            let self_id = self.edge_state.get_edge_id();
+                            let state_clone = self.edge_state.clone();
+                            tokio::spawn(async move {
+                                crate::relay_server::connect_peer_voice_tcp(
+                                    peer_edge_id,
+                                    peer_host,
+                                    voice_port,
+                                    self_id,
+                                    state_clone,
+                                )
+                                .await;
+                            });
+                        }
                     }
                 }
             }
@@ -1022,6 +1032,12 @@ impl HubClient {
                         };
                         let candidate = RouteCandidate { decision, cost: entry.cost };
                         table.entry(entry.target_edge_id).or_insert_with(Vec::new).push(candidate);
+                    }
+                    // Sort each per-target candidate list by ascending cost so
+                    // udp.rs always considers cheaper options first regardless of
+                    // the order in which Hub sent the entries.
+                    for candidates in table.values_mut() {
+                        candidates.sort_unstable_by(|a, b| a.cost.partial_cmp(&b.cost).unwrap_or(std::cmp::Ordering::Equal));
                     }
                     let count = table.len();
                     drop(table);
@@ -1323,22 +1339,29 @@ impl HubClient {
                     });
                     info!("Registered direct UDP route to existing peer edge {} at {}", peer.id, udp_addr);
                 }
-                // Connect TCP voice channel to the existing peer
+                // Connect TCP voice channel to the existing peer, dedup by checking
+                // whether a live connection already exists.
                 let peer_id = peer.id;
                 let peer_host = peer.host.clone();
                 let voice_port = peer.voice_port as u16;
-                let self_id = self.edge_state.get_edge_id();
-                let state_clone = self.edge_state.clone();
-                tokio::spawn(async move {
-                    crate::relay_server::connect_peer_voice_tcp(
-                        peer_id,
-                        peer_host,
-                        voice_port,
-                        self_id,
-                        state_clone,
-                    )
-                    .await;
-                });
+                let already_connected = {
+                    let conns = self.edge_state.voice_tcp_conns.read().await;
+                    conns.contains_key(&peer_id)
+                };
+                if !already_connected {
+                    let self_id = self.edge_state.get_edge_id();
+                    let state_clone = self.edge_state.clone();
+                    tokio::spawn(async move {
+                        crate::relay_server::connect_peer_voice_tcp(
+                            peer_id,
+                            peer_host,
+                            voice_port,
+                            self_id,
+                            state_clone,
+                        )
+                        .await;
+                    });
+                }
             }
         }
 

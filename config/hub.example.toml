@@ -307,6 +307,10 @@ direct_rtt_threshold         = 200     # Default: 200 ms
 # Packet-loss threshold: prefer relay when direct loss rate exceeds this value
 direct_loss_threshold        = 0.05    # Default: 0.05 (5%)
 
+# Cluster-wide TTL cap for relay packets pushed to every Edge in routeTableUpdate.
+# Edges will not forward relay packets whose TTL reaches zero.
+max_ttl                      = 4       # Default: 4 hops
+
 # ---------------------------------------------------------------------------
 # Channel Ninja (invisible channels)
 # ---------------------------------------------------------------------------

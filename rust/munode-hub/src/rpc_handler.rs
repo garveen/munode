@@ -3190,6 +3190,7 @@ impl RpcHandler {
             if routes.is_empty() {
                 continue;
             }
+            let max_ttl_val = self.state.config.voice_routing.max_ttl;
             self.send_notification_to_edge(edge_id, "hub.routeTableUpdate", |n| {
                 n.route_table_update = Some(HubRouteTableUpdateParams {
                     routes: routes.into_iter().map(|(target, rtype, relay_chain, cost)| {
@@ -3202,7 +3203,7 @@ impl RpcHandler {
                             cost,
                         }
                     }).collect(),
-                    max_ttl: Some(4),
+                    max_ttl: Some(max_ttl_val),
                 });
             }).await;
         }

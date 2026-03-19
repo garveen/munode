@@ -246,8 +246,12 @@ async fn handle_voice_connection(
 }
 
 /// Connect to a peer Edge's `/voice` WebSocket endpoint and store the sender in
-/// `edge_state.voice_tcp_conns[peer_edge_id]`.  Reconnects once if the
-/// connection drops.
+/// `edge_state.voice_tcp_conns[peer_edge_id]`.
+///
+/// Makes a single connection attempt.  On disconnect or error, the entry is
+/// removed from `voice_tcp_conns` and the function returns.  The caller (spawned
+/// via `hub.peerJoined`) is expected to re-spawn this function if a persistent
+/// channel is needed.
 pub async fn connect_peer_voice_tcp(
     peer_edge_id: u32,
     peer_host: String,
@@ -335,35 +339,14 @@ fn make_relayed_voice_packet(plaintext: &[u8], sender_session: u32) -> Vec<u8> {
         return Vec::new();
     }
     let header = plaintext[0];
-    let session_bytes = encode_varint(sender_session);
+    // Reuse the shared varint encoder from udp.rs to avoid duplicating the
+    // implementation and risking divergence.
+    let session_bytes = crate::udp::encode_mumble_varint(sender_session);
     let mut pkt = Vec::with_capacity(1 + session_bytes.len() + plaintext.len() - 1);
     pkt.push(header);
     pkt.extend_from_slice(&session_bytes);
     pkt.extend_from_slice(&plaintext[1..]);
     pkt
-}
-
-/// Encode a u32 as a Mumble varint.
-fn encode_varint(value: u32) -> Vec<u8> {
-    if value < 0x80 {
-        vec![value as u8]
-    } else if value < 0x4000 {
-        vec![((value >> 8) | 0x80) as u8, (value & 0xFF) as u8]
-    } else if value < 0x200000 {
-        vec![
-            ((value >> 16) | 0xC0) as u8,
-            ((value >> 8) & 0xFF) as u8,
-            (value & 0xFF) as u8,
-        ]
-    } else {
-        vec![
-            0xF0,
-            ((value >> 24) & 0xFF) as u8,
-            ((value >> 16) & 0xFF) as u8,
-            ((value >> 8) & 0xFF) as u8,
-            (value & 0xFF) as u8,
-        ]
-    }
 }
 
 /// Handle a single proxy connection: upgrade to WebSocket, connect to Hub,

@@ -391,6 +391,10 @@ pub struct HubVoiceRoutingConfig {
     /// Penalty (ms) for using Edge-to-Edge TCP vs UDP (accounts for connection overhead).
     #[serde(default = "default_edge_tcp_penalty_ms")]
     pub edge_tcp_penalty_ms: f64,
+    /// Cluster-wide TTL cap for relay packets pushed to every Edge in `routeTableUpdate`.
+    /// Edges clamp relay-packet TTL to this value.  Default 4.
+    #[serde(default = "default_max_ttl")]
+    pub max_ttl: u32,
 }
 
 impl Default for HubVoiceRoutingConfig {
@@ -411,6 +415,7 @@ impl Default for HubVoiceRoutingConfig {
             relay_hop_penalty_ms: default_relay_hop_penalty_ms(),
             max_relay_hops: default_max_relay_hops(),
             edge_tcp_penalty_ms: default_edge_tcp_penalty_ms(),
+            max_ttl: default_max_ttl(),
         }
     }
 }
@@ -716,8 +721,9 @@ pub struct HubWebApiConfig {
     #[serde(default = "default_host")]
     pub host: String,
     /// Optional API key for write operations (POST, PUT, DELETE).
-    /// If `None`, write endpoints require no authentication (suitable only for
-    /// deployments where the Web API is not exposed externally).
+    /// If `None`, all write endpoints return 403 Forbidden — suitable for
+    /// read-only deployments. Set a non-empty string to allow writes with
+    /// `Authorization: Bearer <key>` authentication.
     #[serde(default)]
     pub api_key: Option<String>,
 }
@@ -878,6 +884,9 @@ fn default_max_relay_hops() -> usize {
 }
 fn default_edge_tcp_penalty_ms() -> f64 {
     20.0
+}
+fn default_max_ttl() -> u32 {
+    4
 }
 
 /// GeoIP configuration.
