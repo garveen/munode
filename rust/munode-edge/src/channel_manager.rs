@@ -84,6 +84,12 @@ pub struct ChannelManager {
     channels: RwLock<HashMap<u32, ChannelData>>,
     channel_children: RwLock<HashMap<u32, Vec<u32>>>,
     remote_users: RwLock<HashMap<u32, RemoteUser>>,
+    /// Reverse index: channel_id → set of remote session IDs in that channel.
+    ///
+    /// Maintained in sync with `remote_users` so that `get_remote_users_in_channels`
+    /// can run in O(|target_channels| × |sessions_per_channel|) instead of O(N) over
+    /// all remote users.  This matters in large clusters where N can be thousands.
+    channel_to_sessions: RwLock<HashMap<u32, std::collections::HashSet<u32>>>,
 }
 
 impl ChannelManager {
@@ -92,6 +98,7 @@ impl ChannelManager {
             channels: RwLock::new(HashMap::new()),
             channel_children: RwLock::new(HashMap::new()),
             remote_users: RwLock::new(HashMap::new()),
+            channel_to_sessions: RwLock::new(HashMap::new()),
         })
     }
 
@@ -126,9 +133,12 @@ impl ChannelManager {
     /// Load remote users from a fullSync response.
     pub async fn load_remote_users(&self, sessions: &[GlobalSessionProto]) {
         let mut users = self.remote_users.write().await;
+        let mut index = self.channel_to_sessions.write().await;
         users.clear();
+        index.clear();
         for proto in sessions {
             let user = RemoteUser::from(proto);
+            index.entry(user.channel_id).or_default().insert(user.session_id);
             users.insert(user.session_id, user);
         }
         info!("Loaded {} remote users from Hub", users.len());
@@ -210,12 +220,33 @@ impl ChannelManager {
     /// Add or update a remote user.
     pub async fn upsert_remote_user(&self, user: RemoteUser) {
         let sid = user.session_id;
-        self.remote_users.write().await.insert(sid, user);
+        let new_channel = user.channel_id;
+        let mut users = self.remote_users.write().await;
+        let mut index = self.channel_to_sessions.write().await;
+        // Remove from the old channel bucket if the user already existed and moved.
+        if let Some(old) = users.get(&sid) {
+            if old.channel_id != new_channel {
+                if let Some(set) = index.get_mut(&old.channel_id) {
+                    set.remove(&sid);
+                }
+            }
+        }
+        index.entry(new_channel).or_default().insert(sid);
+        users.insert(sid, user);
     }
 
     /// Remove a remote user.
     pub async fn remove_remote_user(&self, session_id: u32) -> Option<RemoteUser> {
-        self.remote_users.write().await.remove(&session_id)
+        let mut users = self.remote_users.write().await;
+        let mut index = self.channel_to_sessions.write().await;
+        if let Some(user) = users.remove(&session_id) {
+            if let Some(set) = index.get_mut(&user.channel_id) {
+                set.remove(&session_id);
+            }
+            Some(user)
+        } else {
+            None
+        }
     }
 
     /// Get a remote user.
@@ -258,12 +289,23 @@ impl ChannelManager {
     }
 
     /// Get remote users in any of the given channels.
+    ///
+    /// Uses the `channel_to_sessions` reverse index for O(|channels| × |sessions_per_channel|)
+    /// performance instead of scanning all remote users.
     pub async fn get_remote_users_in_channels(&self, channel_ids: &std::collections::HashSet<u32>) -> Vec<RemoteUser> {
-        self.remote_users.read().await
-            .values()
-            .filter(|u| channel_ids.contains(&u.channel_id))
-            .cloned()
-            .collect()
+        let index = self.channel_to_sessions.read().await;
+        let users = self.remote_users.read().await;
+        let mut result = Vec::new();
+        for &ch_id in channel_ids {
+            if let Some(sessions) = index.get(&ch_id) {
+                for &sid in sessions {
+                    if let Some(user) = users.get(&sid) {
+                        result.push(user.clone());
+                    }
+                }
+            }
+        }
+        result
     }
 
     /// Get a snapshot of the children map.

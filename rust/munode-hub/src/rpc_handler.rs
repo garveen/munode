@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::SaltString;
+use flate2::Compression;
+use flate2::write::ZlibEncoder;
 use prost::Message;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -145,7 +148,7 @@ impl RpcHandler {
         match response {
             Ok(packet) => {
                 let data: Vec<u8> = packet.encode_to_vec();
-                Ok(data)
+                Ok(maybe_compress(data))
             }
             Err(e) => {
                 warn!("RPC handler error for {}: {}", method, e);
@@ -3853,5 +3856,27 @@ fn parse_ip_to_bytes(ip: &str) -> Option<[u8; 16]> {
         Ok(IpAddr::V4(v4)) => Some(v4.to_ipv6_mapped().octets()),
         Ok(IpAddr::V6(v6)) => Some(v6.octets()),
         Err(_) => None,
+    }
+}
+
+/// Compress `data` with zlib (fast level) if it exceeds 4 KiB.
+///
+/// Compressed frames are prefixed with `0x01`.  Raw frames always start with a
+/// protobuf field tag (≥ `0x08`), so `0x01` is unambiguous as a compression flag.
+/// The Edge decompresses by checking the first byte before decoding.
+pub(crate) fn maybe_compress(data: Vec<u8>) -> Vec<u8> {
+    const COMPRESS_THRESHOLD: usize = 4096;
+    if data.len() <= COMPRESS_THRESHOLD {
+        return data;
+    }
+    let mut out = Vec::with_capacity(data.len() / 2 + 1);
+    out.push(0x01u8); // compression flag
+    let mut enc = ZlibEncoder::new(&mut out, Compression::fast());
+    if enc.write_all(&data).is_err() {
+        return data; // fall back to raw on unexpected error
+    }
+    match enc.finish() {
+        Ok(_) => out,
+        Err(_) => data,
     }
 }

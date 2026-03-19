@@ -62,6 +62,7 @@ impl EdgeServer {
             self.config.server.listeners_per_channel,
             self.config.server.allow_ping,
             self.config.server.rolling_stats_window,
+            self.config.hub_server.hmac_secret.as_deref(),
         );
 
         // Set up TLS

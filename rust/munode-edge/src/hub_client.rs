@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
+use flate2::read::ZlibDecoder;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
@@ -654,6 +656,21 @@ impl HubClient {
     /// `is_primary = false` → process RPC responses only (suppress notifications to
     ///                        avoid duplicate state updates in pool mode).
     async fn handle_incoming_slot(&self, data: &[u8], is_primary: bool) -> Result<()> {
+        // Decompress if the Hub compressed the payload (prefix byte 0x01).
+        // Raw protobuf frames always begin with a field tag (≥ 0x08), so 0x01 is unambiguous.
+        let decompressed: Vec<u8>;
+        let data: &[u8] = if data.first() == Some(&0x01) {
+            let mut dec = ZlibDecoder::new(&data[1..]);
+            let mut buf = Vec::new();
+            if let Err(e) = dec.read_to_end(&mut buf) {
+                warn!("Failed to decompress Hub message: {}", e);
+                return Ok(());
+            }
+            decompressed = buf;
+            &decompressed
+        } else {
+            data
+        };
         let packet = EdgeHubPacket::decode(data)
             .context("Failed to decode EdgeHubPacket")?;
 
@@ -1233,7 +1250,7 @@ impl HubClient {
         let request = TypedRpcRequest {
             request_id,
             method: "edge.fullSync".to_string(),
-            timeout_ms: Some(30000),
+            timeout_ms: Some(60000),
             edge_full_sync: Some(EdgeFullSyncParams {
                 for_user_id: None,
                 for_user_groups: vec![],
