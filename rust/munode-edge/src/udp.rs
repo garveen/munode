@@ -49,8 +49,9 @@ use crate::state::EdgeState;
 //     [0x12][sender_edge_id BE(4B)][counter BE(8B)][ttl(1B)][target_edge_id BE(4B)]
 //            [ChaCha20enc(session_id BE(4B) + voice) + Poly1305tag(16B)]
 //     Overhead: 18 bytes plain header + 20 bytes AEAD overhead.
-//     AAD = [sender_edge_id BE(4)][target_edge_id BE(4)] — binds routing metadata to
-//     ciphertext so an on-path attacker cannot redirect the packet.  Per-target encrypt.
+//     Empty AAD (same as 0x11). Edges are cluster-internal trusted nodes so routing
+//     metadata authentication is unnecessary.  Same ciphertext can be reused across
+//     relay packets to different targets — only the plain header fields differ.
 //
 // Legacy / fallback (shared socket — no dedicated edge_port):
 //   When `edge_socket` is the same fd as `socket` (the Mumble client port), the old
@@ -528,24 +529,17 @@ impl UdpServer {
             return;
         }
 
-        // Pre-encrypt once if crypto is configured — same ciphertext goes to all DirectUdp peers
-        // because all Edges share the same key.  The nonce encodes sender_edge_id + counter,
+        // Pre-encrypt once if crypto is configured — same ciphertext goes to ALL peers
+        // (both direct and relay) because all Edges share the same key and are mutually
+        // trusted cluster-internal nodes.  The nonce encodes sender_edge_id + counter,
         // so it is unique even when multiple Edges encrypt simultaneously.
-        // Plaintext for encryption: [session_id_BE(4)][voice_payload]  (matches edge packet body)
-        // For relay packets (0x12) we encrypt per-target with routing AAD inside the loop.
-        let enc_inner_plain: Option<Vec<u8>> = if self.edge_state.edge_crypto.is_some() {
+        // Plaintext: [session_id_BE(4)][voice_payload] — matches edge packet body.
+        let enc_direct: Option<(u64, Vec<u8>)> = if let Some(crypto) = &self.edge_state.edge_crypto {
             let mut plain = Vec::with_capacity(4 + plaintext.len());
             plain.extend_from_slice(&sender_session.to_be_bytes());
             plain.extend_from_slice(plaintext);
-            Some(plain)
-        } else {
-            None
-        };
-        let enc_direct: Option<(u64, Vec<u8>)> = if let (Some(crypto), Some(plain)) =
-            (&self.edge_state.edge_crypto, &enc_inner_plain)
-        {
             // Empty AAD: ciphertext is peer-independent (encrypt-once broadcast).
-            Some(crypto.encrypt(plain, my_edge_id, &[]))
+            Some(crypto.encrypt(&plain, my_edge_id, &[]))
         } else {
             None
         };
@@ -659,15 +653,8 @@ impl UdpServer {
                     let first_hop = hops[0];
                     if let Some(&relay_addr) = peer_snapshot.get(&first_hop) {
                         let ttl = (hops.len() as u32 + 1).min(max_ttl).min(255) as u8;
-                        // For relay packets, encrypt per-target with AAD = [sender_edge_id(4)][target_edge_id(4)]
-                        // so that an on-path attacker cannot redirect the packet to a different target.
-                        let pkt: Vec<u8> = if let (Some(crypto), Some(inner_plain)) =
-                            (&self.edge_state.edge_crypto, &enc_inner_plain)
-                        {
-                            let mut aad = [0u8; 8];
-                            aad[0..4].copy_from_slice(&my_edge_id.to_be_bytes());
-                            aad[4..8].copy_from_slice(&target_edge_id.to_be_bytes());
-                            let (counter, ciphertext) = crypto.encrypt(inner_plain, my_edge_id, &aad);
+                        // Reuse the pre-encrypted ciphertext (empty AAD, same as 0x11).
+                        let pkt: Vec<u8> = if let Some((counter, ciphertext)) = enc_direct.as_ref() {
                             // [0x12][my_edge_id_BE(4)][counter_BE(8)][ttl(1)][target_BE(4)][ciphertext+tag]
                             let mut p = Vec::with_capacity(1 + 4 + 8 + 1 + 4 + ciphertext.len());
                             p.push(EDGE_PKT_ENC_RELAY);
@@ -675,7 +662,7 @@ impl UdpServer {
                             p.extend_from_slice(&counter.to_be_bytes());
                             p.push(ttl);
                             p.extend_from_slice(&target_edge_id.to_be_bytes());
-                            p.extend_from_slice(&ciphertext);
+                            p.extend_from_slice(ciphertext);
                             p
                         } else {
                             // [0x02][ttl(1)][target_edge_id_BE(4)][session_BE(4)][voice...]
@@ -823,11 +810,8 @@ impl UdpServer {
     ///   `[sender_edge_id_BE(4)][nonce_counter_BE(8)][ttl(1)][target_edge_id_BE(4)]`
     ///   `[ChaCha20_enc(session_id_BE(4) + voice) + Poly1305_tag(16)]`
     ///
-    /// AAD = `[sender_edge_id_BE(4)][target_edge_id_BE(4)]` — binds the ciphertext to the
-    /// routing metadata so tampering with `target_edge_id` is detected by AEAD verification.
-    ///
-    /// The `ttl` field is NOT in the AAD because relay intermediaries decrement it before
-    /// forwarding; only the final recipient decrypts and verifies.
+    /// Empty AAD — Edges are cluster-internal trusted nodes; routing header integrity
+    /// is not verified by AEAD (same trust model as direct voice 0x11).
     async fn handle_enc_relay_packet(&self, data: &[u8]) {
         // Minimum: sender_edge_id(4) + counter(8) + ttl(1) + target(4) + session(4) + tag(16) = 37
         if data.len() < 4 + 8 + 1 + 4 + 4 + AEAD_TAG_LEN {
@@ -856,11 +840,7 @@ impl UdpServer {
                     return;
                 }
             };
-            // AAD binds sender + target to this ciphertext.
-            let mut aad = [0u8; 8];
-            aad[0..4].copy_from_slice(&sender_edge_id.to_be_bytes());
-            aad[4..8].copy_from_slice(&target_edge_id.to_be_bytes());
-            match crypto.decrypt(sender_edge_id, counter, ciphertext, &aad) {
+            match crypto.decrypt(sender_edge_id, counter, ciphertext, &[]) {
                 Some(plain) if plain.len() >= 4 => {
                     // plain = [session_id_BE(4)][voice_payload]
                     let dummy_addr = std::net::SocketAddr::from(([0, 0, 0, 0], 0));

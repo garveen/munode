@@ -162,7 +162,8 @@ Edge 间 UDP 包格式（加密模式，配置 hmac_secret 后自动启用）：
 [0x11][sender_edge_id BE(4)][nonce_counter BE(8)][ChaCha20-Poly1305 enc(session_id BE(4) + voice) + tag(16)]
     — 直接加密语音（13 字节明文头 + 加密载荷）。空 AAD。同一密文广播给所有直连 peer。
 [0x12][sender_edge_id BE(4)][nonce_counter BE(8)][ttl(1)][target_edge_id BE(4)][ChaCha20-Poly1305 enc(session_id BE(4) + voice) + tag(16)]
-    — 加密中继语音（18 字节明文路由头 + 加密载荷）。AAD = sender_edge_id(4) ‖ target_edge_id(4)，防止中间人篡改路由目标。按目标单独加密。
+    — 加密中继语音（18 字节明文路由头 + 加密载荷）。空 AAD（与 0x11 相同）。
+      同一密文可复用于不同目标（仅明文路由头不同）。
 
 明文兼容模式（未配置 hmac_secret）：
 [0x01][sender_session BE(4)][voice_payload]        — 直接语音（5 字节头，不变）
@@ -172,10 +173,9 @@ Edge 间 UDP 包格式（加密模式，配置 hmac_secret 后自动启用）：
 **算法选型理由**：
 - ChaCha20-Poly1305：软件实现快，无需 AES-NI 硬件指令，适合语音等低延迟场景
 - 共享密钥（从 `hmac_secret` 通过 HMAC-SHA256 派生 32 字节密钥），无 TLS 握手开销
-- **直连（0x11）一次加密广播**：空 AAD，密文与目标无关，同一加密结果可广播给所有直连 Edge
-- **中继（0x12）按目标单独加密**：AAD = `sender_edge_id ‖ target_edge_id`，中间节点无需解密即可转发，但最终目标可验证路由头未被篡改
+- **一次加密广播**：0x11 和 0x12 均使用空 AAD，密文与目标无关，同一加密结果可复用于所有目标 Edge（仅外层包头不同）
 - Nonce = `sender_edge_id_BE(4) + counter_BE(8)`（使用全部 12 字节），`AtomicU64` 计数器在 2^64 次加密前不会绕回，彻底消除 nonce 复用风险
-- 中继路由头中的 `ttl` 不纳入 AAD，因为中继节点需要递减 ttl 后转发
+- Edge 均为集群内部受信任节点，无需通过 AEAD AAD 防止路由头篡改
 
 **建议（已全部实现）**：
 1. ~~**【实现】** 对 Edge 间 UDP 实现 DTLS 或使用预共享密钥加密（如 ChaCha20-Poly1305）~~ **【已实现】**
@@ -750,7 +750,7 @@ max_relay_bandwidth = 50000       # 50 Mbps（提升中继带宽上限）
 | C-1 | 🔴 严重 | ~~数据库同步阻塞 async 运行时~~ ✅ 关键热路径已用 spawn_blocking 包装（含 ACL load_acls） | 2000 用户时级联超时 |
 | C-2 | 🔴 严重 | ~~`try_send()` 静默丢弃关键广播~~ ✅ 改用 broadcast_critical_excluding | Edge 状态不一致 |
 | C-3 | 🔴 严重 | ~~Full Sync 无分页无压缩~~ ✅ zlib压缩（>4KiB自动压缩，0x01前缀标志）+ 超时60s；Hub重连时session列表为空大幅减少数据量 | 重连风暴时超时 |
-| H-1 | 🟠 高 | ~~Edge 间语音明文传输~~ ✅ ChaCha20-Poly1305 加密（直连0x11空AAD广播，中继0x12按目标加密含路由AAD，计数器u64） | 安全风险 |
+| H-1 | 🟠 高 | ~~Edge 间语音明文传输~~ ✅ ChaCha20-Poly1305 加密（0x11/0x12均使用空AAD一次加密广播，计数器u64） | 安全风险 |
 | H-2 | 🟠 高 | ~~Relay Server 无认证无限制~~ ✅ 已添加 HMAC token 认证 | 安全 + DoS 风险 |
 | H-3 | 🟠 高 | ~~ACL 缓存无大小限制~~ ✅ 100k 上限 + 优先驱逐匿名用户的部分驱逐策略 | 内存泄漏 |
 | H-4 | 🟠 高 | ~~优雅关机不足（200ms）~~ ✅ 分阶段关机：close_all + 3s 排空 + abort | 用户体验差 |
