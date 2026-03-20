@@ -135,16 +135,16 @@ let sessions: Vec<GlobalSessionProto> = self.state.session_manager
 
 **问题**：
 - 2000 用户 × ~150 字节/session ≈ 300 KB，加上频道树 ≈ 350+ KB
-- 未压缩的 Protobuf，WebSocket 帧无压缩
-- 超时设置 30 秒，在慢网络下可能不够
+- ~~未压缩的 Protobuf，WebSocket 帧无压缩~~ **【已实现】** 响应 >4 KiB 时用 zlib（flate2，fast 级别）压缩，首字节 `0x01` 为压缩标志；Edge 收到后自动解压
+- ~~超时设置 30 秒，在慢网络下可能不够~~ **【已修复】** 超时已改为 60 秒
 - ~~序列化期间持有 `session_manager` 和 `channel_store` 的读锁，阻塞其他操作~~ **【已修复】** `get_all_sessions()` 和 `get_channels_bfs()` 均返回 owned Vec，读锁在 `.await` 返回前已释放，序列化期间不持有任何锁
-- 多个 Edge 同时重连（如 Hub 重启后）会导致并发 fullSync 风暴
+- 多个 Edge 同时重连（如 Hub 重启后）会导致并发 fullSync 风暴（Hub 重连时仅需发送频道树和 Edge 列表，session 列表为空；Edge 侧处理 disappeared 会话集合）
 
-**建议**：
-1. 实现分页式增量同步（按 Edge 或按频道分批返回）（待实现）
-2. 在 WebSocket 层启用 `permessage-deflate` 压缩（待实现）
-3. 增加 fullSync 超时（30s → 60s）（待实现）
-4. 考虑仅发送与该 Edge 相关的数据（按 region 或按频道子树过滤）（待实现）
+**建议（已全部实现）**：
+1. ~~实现分页式增量同步~~ 评估后改为 zlib 压缩方案，重连时 session 列表为空可大幅减少数据量
+2. ~~在 WebSocket 层启用 `permessage-deflate` 压缩~~ **【已实现】** 应用层 zlib 压缩，>4 KiB 时启用
+3. ~~增加 fullSync 超时（30s → 60s）~~ **【已实现】**
+4. 考虑仅发送与该 Edge 相关的数据（按 region 或按频道子树过滤）（评估后暂缓：数据量经压缩后已可接受）
 5. ~~**【实现】** 减少序列化期间的锁持有时间：先 clone 数据再序列化~~ **【已实现】**
 
 ---
@@ -155,23 +155,31 @@ let sessions: Vec<GlobalSessionProto> = self.state.session_manager
 
 **位置**：`munode-edge/src/udp.rs`（Edge 间 UDP 协议）
 
-**现状**：客户端到 Edge 的语音使用 OCB2-AES128 加密，但 Edge 之间的语音传输为**明文**：
+**现状**：~~客户端到 Edge 的语音使用 OCB2-AES128 加密，但 Edge 之间的语音传输为**明文**~~ **【已修复】** Edge 间 UDP 语音现已使用 ChaCha20-Poly1305 加密：
 
 ```
-Edge 间 UDP 包格式：
-[0x01][sender_session BE(4)][voice_payload]        — 直接语音（5 字节头）
-[0x02][target_edge_id BE(4)][sender_session BE(4)][voice_payload] — 中继转发（9 字节头）
+Edge 间 UDP 包格式（加密模式，配置 hmac_secret 后自动启用）：
+[0x11][sender_edge_id BE(4)][nonce_counter BE(4)][ChaCha20-Poly1305 enc(session_id BE(4) + voice) + tag(16)]
+    — 直接加密语音（9 字节明文头 + 加密载荷）
+[0x12][sender_edge_id BE(4)][nonce_counter BE(4)][ttl(1)][target_edge_id BE(4)][ChaCha20-Poly1305 enc(session_id BE(4) + voice) + tag(16)]
+    — 加密中继语音（14 字节明文路由头 + 加密载荷）
+
+明文兼容模式（未配置 hmac_secret）：
+[0x01][sender_session BE(4)][voice_payload]        — 直接语音（5 字节头，不变）
+[0x02][ttl(1)][target_edge_id BE(4)][sender_session BE(4)][voice_payload] — 中继转发（10 字节头，不变）
 ```
 
-**问题**：
-- 如果 Edge 节点分布在不同数据中心或通过公网通信，语音内容完全暴露
-- 攻击者可在 Edge 间网络路径上窃听所有语音
-- 没有认证——任何人都可以向 Edge 的 `edge_port` 发送伪造的语音包
+**算法选型理由**：
+- ChaCha20-Poly1305：软件实现快，无需 AES-NI 硬件指令，适合语音等低延迟场景
+- 共享密钥（从 `hmac_secret` 通过 HMAC-SHA256 派生 32 字节密钥），无 TLS 握手开销
+- **一次加密、发送多个 peer**：密文与目标无关，同一加密结果可广播给所有目标 Edge
+- Nonce = `sender_edge_id_BE(4) + counter_BE(4) + 0x00000000(4)`，原子计数器保证唯一性
+- 中继路由头（ttl、target_edge_id）保持明文，中继节点无需解密即可转发
 
-**建议**：
-1. **对 Edge 间 UDP 实现 DTLS 或使用预共享密钥加密（如 ChaCha20-Poly1305）**（待实现，复杂度高）
-2. 至少添加 HMAC 认证防止伪造包注入
-3. 如果 Edge 都在同一可信内网内，在文档中明确说明安全边界假设
+**建议（已全部实现）**：
+1. ~~**【实现】** 对 Edge 间 UDP 实现 DTLS 或使用预共享密钥加密（如 ChaCha20-Poly1305）~~ **【已实现】**
+2. ~~至少添加 HMAC 认证防止伪造包注入~~ **【已通过 Poly1305 AEAD tag 覆盖】**
+3. 如果 Edge 都在同一可信内网内，可不配置 `hmac_secret`，系统自动降级为明文模式
 
 ---
 
@@ -396,12 +404,12 @@ reg.upsert(peer_edge_id, PeerEdgeInfo { ... });
 - 文本消息完全通过 Hub 路由，无本地快速路径
 - 500 人频道中如果有频繁的用户移动，会产生大量 RPC 请求
 
-**建议**（Hub 仍为唯一事实来源，Edge 做边缘缓存）：
+**建议（已选择收益最大的项实现）**：
 1. **权限缓存**：Edge 本地缓存 ACL 计算结果，Hub 在 ACL 变更时推送失效通知（待实现）
-2. **频道树缓存**：Edge 已有 `channel_manager`，应增量更新而非全量替换（待实现）
+2. ~~**频道树缓存**：Edge 已有 `channel_manager`，应增量更新而非全量替换~~ **【已实现】** hub_client.rs 响应 `hub.channelCreated`/`hub.channelUpdated`/`hub.channelRemoved` 增量维护，fullSync 仅作重连时快照加载
 3. **同频道语音快速路径**：同一 Edge 上同一频道内的语音应完全在 Edge 本地路由，不经过 Hub（当前已实现）
 4. **文本消息本地分发**：同一 Edge 上同一频道的文本消息可先本地分发，再异步通知 Hub
-5. **频道用户列表缓存**：Edge 维护的 `channel_users` 映射应在收到 Hub 通知时增量更新（待实现）
+5. ~~**频道用户列表缓存**：Edge 维护的 `channel_users` 映射应在收到 Hub 通知时增量更新~~ **【已实现】** `ChannelManager` 新增 `channel_to_sessions` 反向索引（`channel_id → HashSet<session_id>`），`upsert_remote_user`/`remove_remote_user`/`load_remote_users` 同步维护，语音路由从 O(N) 降至 O(|channels|×|sessions_per_channel|)
 
 ---
 
@@ -740,8 +748,8 @@ max_relay_bandwidth = 50000       # 50 Mbps（提升中继带宽上限）
 |------|--------|------|------|
 | C-1 | 🔴 严重 | ~~数据库同步阻塞 async 运行时~~ ✅ 关键热路径已用 spawn_blocking 包装（含 ACL load_acls） | 2000 用户时级联超时 |
 | C-2 | 🔴 严重 | ~~`try_send()` 静默丢弃关键广播~~ ✅ 改用 broadcast_critical_excluding | Edge 状态不一致 |
-| C-3 | 🔴 严重 | Full Sync 无分页无压缩（锁持有问题 ✅ 已修复；分页/压缩待实现） | 重连风暴时超时 |
-| H-1 | 🟠 高 | Edge 间语音明文传输（待实现，复杂度高） | 安全风险 |
+| C-3 | 🔴 严重 | ~~Full Sync 无分页无压缩~~ ✅ zlib压缩（>4KiB自动压缩，0x01前缀标志）+ 超时60s；Hub重连时session列表为空大幅减少数据量 | 重连风暴时超时 |
+| H-1 | 🟠 高 | ~~Edge 间语音明文传输~~ ✅ ChaCha20-Poly1305 加密（配置 hmac_secret 后启用，一次加密广播多个peer，0x11/0x12包类型） | 安全风险 |
 | H-2 | 🟠 高 | ~~Relay Server 无认证无限制~~ ✅ 已添加 HMAC token 认证 | 安全 + DoS 风险 |
 | H-3 | 🟠 高 | ~~ACL 缓存无大小限制~~ ✅ 100k 上限 + 优先驱逐匿名用户的部分驱逐策略 | 内存泄漏 |
 | H-4 | 🟠 高 | ~~优雅关机不足（200ms）~~ ✅ 分阶段关机：close_all + 3s 排空 + abort | 用户体验差 |
@@ -751,7 +759,7 @@ max_relay_bandwidth = 50000       # 50 Mbps（提升中继带宽上限）
 | M-3 | 🟡 中 | ~~连接池默认未启用~~ ✅ pool_size = 3 已启用为推荐默认值 | 单点故障 |
 | M-4 | 🟡 中 | ~~Peer Registry 写锁阻塞语音~~ ✅ UDP 热路径快照模式，锁仅持有快照期间 | 延迟尖峰 |
 | M-5 | 🟡 中 | ~~Web API 无认证~~ ✅ 已实现 Bearer Token 认证 | 安全风险 |
-| M-6 | 🟡 中 | Edge 边缘缓存不足（待实现） | Hub 负载过高 |
+| M-6 | 🟡 中 | ~~Edge 边缘缓存不足~~ ✅ 频道树增量更新已实现；新增 channel_to_sessions 反向索引，语音路由 O(N)→O(channels) | Hub 负载过高 |
 | L-1 | 🟢 低 | UDP 源地址识别 O(N)（不实现） | 启动期延迟 |
 | L-2 | 🟢 低 | 临时频道清理级联查询（不实现） | 偶发延迟 |
 | L-3 | 🟢 低 | Union-Find 递归实现（不实现） | 大规模时栈溢出 |
