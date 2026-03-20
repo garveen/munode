@@ -205,9 +205,9 @@ pub async fn run_edge_ws_server_with_listener(
                                         let query = req.uri().query();
                                         if !verify_relay_auth(secret, query) {
                                             warn!(
-                                                "Relay auth failed for connection to {} (query: {:?})",
+                                                "Relay auth failed for connection from {} to {}",
+                                                peer_addr,
                                                 path,
-                                                query
                                             );
                                             // Return an HTTP 401 response to reject the upgrade.
                                             return Err(tokio_tungstenite::tungstenite::http::Response::builder()

@@ -292,17 +292,30 @@ impl ChannelManager {
     ///
     /// Uses the `channel_to_sessions` reverse index for O(|channels| × |sessions_per_channel|)
     /// performance instead of scanning all remote users.
+    ///
+    /// Lock ordering: snapshot session IDs under `channel_to_sessions` first, then release that
+    /// lock before acquiring `remote_users`.  This prevents a deadlock with `upsert_remote_user`
+    /// and `remove_remote_user`, which lock `remote_users` first then `channel_to_sessions`.
     pub async fn get_remote_users_in_channels(&self, channel_ids: &std::collections::HashSet<u32>) -> Vec<RemoteUser> {
-        let index = self.channel_to_sessions.read().await;
-        let users = self.remote_users.read().await;
-        let mut result = Vec::new();
-        for &ch_id in channel_ids {
-            if let Some(sessions) = index.get(&ch_id) {
-                for &sid in sessions {
-                    if let Some(user) = users.get(&sid) {
-                        result.push(user.clone());
+        // Step 1: collect session IDs under the index lock, then release it.
+        let mut session_ids = std::collections::HashSet::new();
+        {
+            let index = self.channel_to_sessions.read().await;
+            for &ch_id in channel_ids {
+                if let Some(sessions) = index.get(&ch_id) {
+                    for &sid in sessions {
+                        session_ids.insert(sid);
                     }
                 }
+            }
+        } // index lock released here
+
+        // Step 2: resolve session IDs to full user objects under the remote_users lock.
+        let users = self.remote_users.read().await;
+        let mut result = Vec::new();
+        for sid in session_ids {
+            if let Some(user) = users.get(&sid) {
+                result.push(user.clone());
             }
         }
         result

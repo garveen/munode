@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use tokio::sync::{broadcast, mpsc, RwLock};
 
@@ -18,7 +18,7 @@ use crate::client::ClientManager;
 /// ensuring per-sender uniqueness across the cluster lifetime.
 pub struct EdgeCrypto {
     key: ring::aead::LessSafeKey,
-    counter: AtomicU32,
+    counter: AtomicU64,
 }
 
 impl EdgeCrypto {
@@ -36,15 +36,16 @@ impl EdgeCrypto {
         let unbound = ring::aead::UnboundKey::new(&ring::aead::CHACHA20_POLY1305, key_bytes).ok()?;
         Some(Self {
             key: ring::aead::LessSafeKey::new(unbound),
-            counter: AtomicU32::new(0),
+            counter: AtomicU64::new(0),
         })
     }
 
-    fn build_nonce(sender_edge_id: u32, counter: u32) -> ring::aead::Nonce {
-        // 12-byte nonce: [sender_edge_id_BE(4)][counter_BE(4)][0x00_00_00_00(4)]
+    fn build_nonce(sender_edge_id: u32, counter: u64) -> ring::aead::Nonce {
+        // 12-byte nonce: [sender_edge_id_BE(4)][counter_BE(8)]
+        // Using all 12 bytes prevents nonce reuse even with a very high-frequency sender.
         let mut b = [0u8; 12];
         b[0..4].copy_from_slice(&sender_edge_id.to_be_bytes());
-        b[4..8].copy_from_slice(&counter.to_be_bytes());
+        b[4..12].copy_from_slice(&counter.to_be_bytes());
         ring::aead::Nonce::assume_unique_for_key(b)
     }
 
@@ -52,22 +53,33 @@ impl EdgeCrypto {
     ///
     /// Returns `(counter, ciphertext_with_poly1305_tag)`.  The caller embeds
     /// `counter` and `sender_edge_id` in the packet header so receivers can
-    /// reconstruct the nonce.  Because all Edges share the same key, the
-    /// same ciphertext can be sent to multiple peers without re-encryption.
-    pub fn encrypt(&self, plaintext: &[u8], sender_edge_id: u32) -> (u32, Vec<u8>) {
+    /// reconstruct the nonce.  Because all Edges share the same key, a
+    /// ciphertext produced with empty `aad` can be sent to multiple peers
+    /// without re-encryption (encrypt-once broadcast).
+    ///
+    /// Pass non-empty `aad` to bind the ciphertext to specific routing metadata
+    /// (e.g. for relay packets, use `sender_edge_id ++ target_edge_id` as AAD to
+    /// prevent an on-path attacker from redirecting the packet to a wrong destination).
+    pub fn encrypt(&self, plaintext: &[u8], sender_edge_id: u32, aad: &[u8]) -> (u64, Vec<u8>) {
         let counter = self.counter.fetch_add(1, Ordering::Relaxed);
         let nonce = Self::build_nonce(sender_edge_id, counter);
         let mut buf = plaintext.to_vec();
-        // Appends the 16-byte Poly1305 tag in-place.
-        let _ = self.key.seal_in_place_append_tag(nonce, ring::aead::Aad::empty(), &mut buf);
+        // Appends the 16-byte Poly1305 tag in-place.  Sealing can only fail on an
+        // out-of-memory condition or a programming error — treat as unrecoverable.
+        self.key
+            .seal_in_place_append_tag(nonce, ring::aead::Aad::from(aad), &mut buf)
+            .expect("EdgeCrypto::encrypt: AEAD sealing failed");
         (counter, buf)
     }
 
     /// Verify the Poly1305 tag and decrypt `ciphertext_with_tag`.
     ///
+    /// `aad` must match what was passed to `encrypt` exactly (empty slice for
+    /// direct-voice packets; `sender_edge_id ++ target_edge_id` for relay packets).
+    ///
     /// Returns plaintext on success, or `None` if authentication fails
-    /// (wrong key, tampered packet, or invalid nonce).
-    pub fn decrypt(&self, sender_edge_id: u32, counter: u32, ciphertext: &[u8]) -> Option<Vec<u8>> {
+    /// (wrong key, tampered packet, or invalid nonce / AAD mismatch).
+    pub fn decrypt(&self, sender_edge_id: u32, counter: u64, ciphertext: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
         const TAG_LEN: usize = 16;
         if ciphertext.len() <= TAG_LEN {
             return None;
@@ -75,7 +87,7 @@ impl EdgeCrypto {
         let nonce = Self::build_nonce(sender_edge_id, counter);
         let mut buf = ciphertext.to_vec();
         let plaintext = self.key
-            .open_in_place(nonce, ring::aead::Aad::empty(), &mut buf)
+            .open_in_place(nonce, ring::aead::Aad::from(aad), &mut buf)
             .ok()?;
         Some(plaintext.to_vec())
     }

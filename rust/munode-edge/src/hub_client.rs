@@ -298,14 +298,15 @@ impl HubClient {
         // 1. Static peers from config (for bootstrap before Hub connection)
         for (host, relay_port) in &self.static_relay_peers {
             let relay_url = build_relay_url(host, *relay_port, self.config.hmac_secret.as_deref());
-            info!("Attempting Hub relay via static peer at {}", relay_url);
+            let safe_url = safe_relay_url(host, *relay_port);
+            info!("Attempting Hub relay via static peer at {}", safe_url);
             match self.try_connect_via_url(&relay_url, slot, is_primary).await {
                 Ok(()) => {
-                    info!("Static peer relay connection ({}) closed normally", relay_url);
+                    info!("Static peer relay connection ({}) closed normally", safe_url);
                     return Ok(());
                 }
                 Err(e) => {
-                    warn!("Static peer relay via {} failed: {}", relay_url, e);
+                    warn!("Static peer relay via {} failed: {}", safe_url, e);
                 }
             }
         }
@@ -317,14 +318,15 @@ impl HubClient {
         }
         for (peer_id, host, relay_port) in &dynamic_peers {
             let relay_url = build_relay_url(host, *relay_port, self.config.hmac_secret.as_deref());
-            info!("Attempting Hub relay via peer {} at {}", peer_id, relay_url);
+            let safe_url = safe_relay_url(host, *relay_port);
+            info!("Attempting Hub relay via peer {} at {}", peer_id, safe_url);
             match self.try_connect_via_url(&relay_url, slot, is_primary).await {
                 Ok(()) => {
                     info!("Dynamic peer relay (peer {}) closed normally", peer_id);
                     return Ok(());
                 }
                 Err(e) => {
-                    warn!("Dynamic peer relay via {} failed: {}", relay_url, e);
+                    warn!("Dynamic peer relay via {} failed: {}", safe_url, e);
                 }
             }
         }
@@ -2287,8 +2289,8 @@ impl HubClient {
 /// ws://host:port/relay?ts=<unix_ms>&token=<hex_hmac>
 /// ```
 ///
-/// Without a secret, returns a plain `ws://host:port` URL for backward
-/// compatibility with relay servers that have no authentication configured.
+/// Without a secret, returns `ws://host:port/relay` — the relay server accepts
+/// connections without authentication when no `hmac_secret` is configured.
 fn build_relay_url(host: &str, port: u16, hmac_secret: Option<&str>) -> String {
     match hmac_secret {
         Some(secret) => {
@@ -2302,6 +2304,14 @@ fn build_relay_url(host: &str, port: u16, hmac_secret: Option<&str>) -> String {
         }
         None => format!("ws://{}:{}/relay", host, port),
     }
+}
+
+/// Build a log-safe relay URL (no authentication query parameters).
+///
+/// Use this in log messages instead of the full URL returned by `build_relay_url`
+/// to avoid leaking HMAC tokens that are valid within the replay-prevention window.
+fn safe_relay_url(host: &str, port: u16) -> String {
+    format!("ws://{}:{}/relay", host, port)
 }
 
 /// Simple timestamp in millis (no external dependency needed).
