@@ -26,9 +26,17 @@ pub struct AclEntry {
 /// Maximum number of entries in the ACL permission cache.
 ///
 /// With 2000 users × 500 channels = 1 million potential entries, an unbounded
-/// cache is a memory leak.  When this limit is exceeded we clear the whole cache
-/// (simple eviction — adequate protection without a full LRU implementation).
+/// cache is a memory leak.  When this limit is exceeded we perform a partial
+/// eviction: guest/anonymous entries are removed first (they are likely stale
+/// because each anonymous session gets a different negative user_id), then
+/// remaining entries are trimmed to [`ACL_CACHE_EVICT_TARGET`].
 const ACL_CACHE_MAX_SIZE: usize = 100_000;
+
+/// Target entry count after partial eviction (75 % of max).
+///
+/// Retaining most of the registered-user entries avoids a sudden cold-cache
+/// performance spike after every eviction cycle.
+const ACL_CACHE_EVICT_TARGET: usize = ACL_CACHE_MAX_SIZE * 3 / 4;
 
 /// ACL Manager responsible for computing effective permissions.
 pub struct AclManager {
@@ -69,35 +77,56 @@ impl AclManager {
         // SuperUser check: admin/superuser group gets all permissions
         if groups.iter().any(|g| g == "admin" || g == "superuser") {
             let result = permission::ALL;
-            self.cache.write().await.insert((user_id, channel_id), result);
+            self.cache_insert(user_id, channel_id, result).await;
             return result;
         }
 
         // Build the channel chain from root to the target channel
         let chain = self.build_channel_chain(channel_id).await;
 
+        // Snapshot the inherit_acl flag for each channel in the chain (async,
+        // avoids holding any lock during the subsequent blocking DB call).
+        let inherit_flags: Vec<bool> = {
+            let mut flags = Vec::with_capacity(chain.len());
+            for &cid in &chain {
+                let inherit = self.channel_store
+                    .get_channel(cid)
+                    .await
+                    .map(|c| c.inherit_acl)
+                    .unwrap_or(true);
+                flags.push(inherit);
+            }
+            flags
+        };
+
+        // Load ACLs for every channel in the chain with a single spawn_blocking
+        // call so the tokio thread is never blocked by SQLite I/O.
+        let db = Arc::clone(&self.db);
+        let chain_ids = chain.clone();
+        let chain_acls: Vec<Vec<AclEntry>> =
+            tokio::task::spawn_blocking(move || {
+                chain_ids
+                    .iter()
+                    .map(|&cid| db.load_acls(cid).unwrap_or_default())
+                    .collect()
+            })
+            .await
+            .unwrap_or_else(|_| vec![vec![]; chain.len()]);
+
         // Walk the chain, accumulating permissions
         let mut granted = permission::DEFAULT;
 
-        for &chain_channel_id in &chain {
-            // Check if this channel inherits ACLs from parent
-            let inherit_acl = self.channel_store.get_channel(chain_channel_id).await
-                .map(|c| c.inherit_acl)
-                .unwrap_or(true);
+        for (idx, &chain_channel_id) in chain.iter().enumerate() {
+            let inherit_acl = inherit_flags[idx];
+            let acls = &chain_acls[idx];
 
+            // Check scope: apply_here for current channel, apply_subs for ancestors
             if !inherit_acl && chain_channel_id != 0 {
                 // Reset to defaults when inheritance is broken
                 granted = permission::DEFAULT;
             }
 
-            // Load ACLs for this channel
-            let acls = match self.db.load_acls(chain_channel_id) {
-                Ok(acls) => acls,
-                Err(_) => continue,
-            };
-
-            for acl in &acls {
-                // Check scope: apply_here for current channel, apply_subs for ancestors
+            for acl in acls {
                 let is_target = chain_channel_id == channel_id;
                 if is_target && !acl.apply_here {
                     continue;
@@ -132,15 +161,40 @@ impl AclManager {
             user_id, channel_id, granted
         );
 
-        // Cache result (with size guard to prevent unbounded growth)
-        let mut cache = self.cache.write().await;
-        if cache.len() >= ACL_CACHE_MAX_SIZE {
-            cache.clear();
-            tracing::debug!("ACL cache cleared (exceeded {} entries)", ACL_CACHE_MAX_SIZE);
-        }
-        cache.insert((user_id, channel_id), granted);
+        self.cache_insert(user_id, channel_id, granted).await;
 
         granted
+    }
+
+    /// Insert a permission result into the cache, performing partial eviction
+    /// when the cache exceeds [`ACL_CACHE_MAX_SIZE`].
+    ///
+    /// Eviction strategy (avoids the cold-cache spike of a full clear):
+    /// 1. Remove all guest/anonymous entries (user_id ≤ 0) — they are stale
+    ///    because each anonymous session uses a unique negative user_id.
+    /// 2. If still above [`ACL_CACHE_EVICT_TARGET`], remove arbitrary entries
+    ///    until the target is reached.  Registered-user entries are kept warm.
+    async fn cache_insert(&self, user_id: i32, channel_id: u32, value: u32) {
+        let mut cache = self.cache.write().await;
+        if cache.len() >= ACL_CACHE_MAX_SIZE {
+            let before = cache.len();
+            // Step 1: remove anonymous/guest entries first (likely stale).
+            cache.retain(|(uid, _), _| *uid > 0);
+            // Step 2: if still over target, trim arbitrarily.
+            if cache.len() > ACL_CACHE_EVICT_TARGET {
+                let to_remove = cache.len() - ACL_CACHE_EVICT_TARGET;
+                let evict_keys: Vec<_> = cache.keys().take(to_remove).cloned().collect();
+                for k in evict_keys {
+                    cache.remove(&k);
+                }
+            }
+            tracing::debug!(
+                before,
+                after = cache.len(),
+                "ACL cache partially evicted (was full)"
+            );
+        }
+        cache.insert((user_id, channel_id), value);
     }
 
     /// Check if a user has a specific permission on a channel.
@@ -547,5 +601,61 @@ mod tests {
         mgr.invalidate_channel(0).await;
         let p2 = mgr.calculate_permissions(-1, 0, &[]).await;
         assert_eq!(p2 & permission::SPEAK, 0); // Now sees the deny
+    }
+
+    /// Verify that partial eviction keeps registered-user entries and removes
+    /// guest entries when the cache overflows.  We directly manipulate
+    /// `cache_insert` by pre-filling the cache to at least ACL_CACHE_MAX_SIZE
+    /// using the internal write lock, then triggering one more insertion.
+    #[tokio::test]
+    async fn test_cache_partial_eviction_retains_registered_users() {
+        let (db, cs) = setup().await;
+        let mgr = AclManager::new(db, cs);
+
+        // Pre-fill the cache to exactly ACL_CACHE_MAX_SIZE by directly writing
+        // to the cache lock.  Half entries are registered users (uid > 0),
+        // half are anonymous/guest (uid ≤ 0).
+        {
+            let mut cache = mgr.cache.write().await;
+            for i in 0..(ACL_CACHE_MAX_SIZE as i32 / 2) {
+                // registered user entries
+                cache.insert((i + 1, 0), permission::DEFAULT);
+                // anonymous/guest entries
+                cache.insert((-i - 1, 0), permission::DEFAULT);
+            }
+            assert_eq!(cache.len(), ACL_CACHE_MAX_SIZE);
+        }
+
+        // Now insert one more entry via cache_insert — this triggers eviction.
+        // user_id = 999_999 (registered), channel_id = 1 (unused so far).
+        mgr.cache_insert(999_999, 1, permission::DEFAULT).await;
+
+        let cache = mgr.cache.read().await;
+        let len_after = cache.len();
+
+        // After partial eviction + the new insertion, the cache should be
+        // around the eviction target (75% of max), NOT zero.
+        assert!(
+            len_after > 0,
+            "cache should not be empty after partial eviction"
+        );
+        assert!(
+            len_after <= ACL_CACHE_EVICT_TARGET + 1,
+            "cache should be at most EVICT_TARGET + 1 after eviction, got {}",
+            len_after
+        );
+
+        // All remaining entries with user_id ≤ 0 (guest) should have been removed first.
+        let has_guest = cache.keys().any(|(uid, _)| *uid <= 0);
+        assert!(
+            !has_guest,
+            "no guest (uid ≤ 0) entries should survive eviction when registered-user entries exist"
+        );
+
+        // The newly inserted registered-user entry must be present.
+        assert!(
+            cache.contains_key(&(999_999, 1)),
+            "the triggering insertion must be present after eviction"
+        );
     }
 }

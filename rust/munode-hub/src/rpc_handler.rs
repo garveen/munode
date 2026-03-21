@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::SaltString;
+use flate2::Compression;
+use flate2::write::ZlibEncoder;
 use prost::Message;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -145,7 +148,7 @@ impl RpcHandler {
         match response {
             Ok(packet) => {
                 let data: Vec<u8> = packet.encode_to_vec();
-                Ok(data)
+                Ok(maybe_compress(data))
             }
             Err(e) => {
                 warn!("RPC handler error for {}: {}", method, e);
@@ -607,7 +610,13 @@ impl RpcHandler {
                     let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
                     // Ensure ext-auth user exists in DB so last_channel can be tracked
                     if user_id > 0 {
-                        if let Err(e) = self.state.database.upsert_ext_user(user_id, &auth_username) {
+                        let db = self.state.database.clone();
+                        let auth_username_owned = auth_username.clone();
+                        // spawn_blocking: DB call on hot path
+                        if let Err(e) = tokio::task::spawn_blocking(move || db.upsert_ext_user(user_id, &auth_username_owned))
+                            .await
+                            .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking join error: {}", e)))
+                        {
                             warn!("Failed to persist ext-auth user to database: {}", e);
                         }
                     }
@@ -616,9 +625,19 @@ impl RpcHandler {
                         ch
                     } else if user_id > 0 {
                         // Check DB for last_channel saved from previous session
-                        match self.state.database.get_user_last_channel(user_id) {
-                            Ok(last_ch) if last_ch > 0 => last_ch,
-                            _ => config.auth.default_channel,
+                        let db = self.state.database.clone();
+                        // spawn_blocking: DB call on hot path
+                        match tokio::task::spawn_blocking(move || db.get_user_last_channel(user_id)).await {
+                            Ok(Ok(last_ch)) if last_ch > 0 => last_ch,
+                            Ok(Ok(_)) => config.auth.default_channel,
+                            Ok(Err(e)) => {
+                                warn!("Failed to load last_channel for user {}: {}", user_id, e);
+                                config.auth.default_channel
+                            }
+                            Err(e) => {
+                                warn!("spawn_blocking join error for get_user_last_channel: {}", e);
+                                config.auth.default_channel
+                            }
                         }
                     } else {
                         config.auth.default_channel
@@ -791,14 +810,30 @@ impl RpcHandler {
                     let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
                     let groups = resp.groups.clone().unwrap_or_default();
                     if user_id > 0 {
-                        if let Err(e) = self.state.database.upsert_ext_user(user_id, &auth_username) {
+                        let db = self.state.database.clone();
+                        let auth_username_owned = auth_username.clone();
+                        // spawn_blocking: DB call on hot path
+                        if let Err(e) = tokio::task::spawn_blocking(move || db.upsert_ext_user(user_id, &auth_username_owned))
+                            .await
+                            .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking join error: {}", e)))
+                        {
                             warn!("Failed to persist ext-auth user to database: {}", e);
                         }
                     }
                     let channel_id = if user_id > 0 {
-                        match self.state.database.get_user_last_channel(user_id) {
-                            Ok(last_ch) if last_ch > 0 => last_ch,
-                            _ => config.auth.default_channel,
+                        let db = self.state.database.clone();
+                        // spawn_blocking: DB call on hot path
+                        match tokio::task::spawn_blocking(move || db.get_user_last_channel(user_id)).await {
+                            Ok(Ok(last_ch)) if last_ch > 0 => last_ch,
+                            Ok(Ok(_)) => config.auth.default_channel,
+                            Ok(Err(e)) => {
+                                warn!("Failed to load last_channel for user {}: {}", user_id, e);
+                                config.auth.default_channel
+                            }
+                            Err(e) => {
+                                warn!("spawn_blocking join error for get_user_last_channel: {}", e);
+                                config.auth.default_channel
+                            }
                         }
                     } else {
                         config.auth.default_channel
@@ -943,15 +978,31 @@ impl RpcHandler {
                     let groups = resp.groups.clone().unwrap_or_default();
                     // Ensure ext-auth user exists in DB for last_channel tracking
                     if user_id > 0 {
-                        if let Err(e) = self.state.database.upsert_ext_user(user_id, &auth_username) {
+                        let db = self.state.database.clone();
+                        let auth_username_owned = auth_username.clone();
+                        // spawn_blocking: DB call on hot path
+                        if let Err(e) = tokio::task::spawn_blocking(move || db.upsert_ext_user(user_id, &auth_username_owned))
+                            .await
+                            .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking join error: {}", e)))
+                        {
                             warn!("Failed to persist ext-auth user to database: {}", e);
                         }
                     }
                     // Check DB for last_channel saved from previous session
                     let channel_id = if user_id > 0 {
-                        match self.state.database.get_user_last_channel(user_id) {
-                            Ok(last_ch) if last_ch > 0 => last_ch,
-                            _ => config.auth.default_channel,
+                        let db = self.state.database.clone();
+                        // spawn_blocking: DB call on hot path
+                        match tokio::task::spawn_blocking(move || db.get_user_last_channel(user_id)).await {
+                            Ok(Ok(last_ch)) if last_ch > 0 => last_ch,
+                            Ok(Ok(_)) => config.auth.default_channel,
+                            Ok(Err(e)) => {
+                                warn!("Failed to load last_channel for user {}: {}", user_id, e);
+                                config.auth.default_channel
+                            }
+                            Err(e) => {
+                                warn!("spawn_blocking join error for get_user_last_channel: {}", e);
+                                config.auth.default_channel
+                            }
                         }
                     } else {
                         config.auth.default_channel
@@ -1600,29 +1651,49 @@ impl RpcHandler {
             }
             chain.reverse(); // root first
 
-            for ancestor_id in chain {
-                if let Ok(db_groups) = self.state.database.get_channel_groups(ancestor_id) {
+            // spawn_blocking: all DB group-membership lookups for the chain in one shot.
+            let db = self.state.database.clone();
+            let target_channel_id = params.channel_id;
+            let db_groups_result = tokio::task::spawn_blocking(move || {
+                let mut accumulated_groups: Vec<String> = Vec::new();
+                for ancestor_id in chain {
+                    let db_groups = match db.get_channel_groups(ancestor_id) {
+                        Ok(g) => g,
+                        Err(_) => continue,
+                    };
                     for db_group in &db_groups {
-                        if !db_group.inherit && ancestor_id != params.channel_id {
-                            continue; // non-inheritable groups only apply to their own channel
+                        if !db_group.inherit && ancestor_id != target_channel_id {
+                            continue;
                         }
-                        match self.state.database.get_channel_group_members(db_group.id) {
+                        match db.get_channel_group_members(db_group.id) {
                             Ok(members) => {
                                 let is_explicitly_added = members.iter()
                                     .any(|(uid, is_add)| *uid == user_id_u32 && *is_add);
                                 let is_explicitly_removed = members.iter()
                                     .any(|(uid, is_add)| *uid == user_id_u32 && !*is_add);
-                                if is_explicitly_added && !is_explicitly_removed && !effective_groups.contains(&db_group.name) {
-                                    effective_groups.push(db_group.name.clone());
+                                if is_explicitly_added && !is_explicitly_removed
+                                    && !accumulated_groups.contains(&db_group.name)
+                                {
+                                    accumulated_groups.push(db_group.name.clone());
                                 }
                             }
                             Err(e) => {
-                                warn!("Failed to load group members for group '{}' (id {}): {}", db_group.name, db_group.id, e);
+                                tracing::warn!(
+                                    "Failed to load group members for group '{}' (id {}): {}",
+                                    db_group.name, db_group.id, e
+                                );
                             }
                         }
                     }
-                } else {
-                    debug!("Failed to load channel groups for ancestor channel {}", ancestor_id);
+                }
+                accumulated_groups
+            })
+            .await
+            .unwrap_or_default();
+
+            for g in db_groups_result {
+                if !effective_groups.contains(&g) {
+                    effective_groups.push(g);
                 }
             }
         }
@@ -1689,27 +1760,46 @@ impl RpcHandler {
                 }
                 chain.reverse(); // root first
 
-                for ancestor_id in chain {
-                    if let Ok(db_groups) = self.state.database.get_channel_groups(ancestor_id) {
+                // spawn_blocking: all DB group-membership lookups for the chain in one shot.
+                let db = self.state.database.clone();
+                let db_groups_result = tokio::task::spawn_blocking(move || {
+                    let mut accumulated_groups: Vec<String> = Vec::new();
+                    for ancestor_id in chain {
+                        let db_groups = match db.get_channel_groups(ancestor_id) {
+                            Ok(g) => g,
+                            Err(_) => continue,
+                        };
                         for db_group in &db_groups {
                             if !db_group.inherit && ancestor_id != channel_id {
                                 continue;
                             }
-                            match self.state.database.get_channel_group_members(db_group.id) {
+                            match db.get_channel_group_members(db_group.id) {
                                 Ok(members) => {
                                     let is_added = members.iter()
                                         .any(|(uid, is_add)| *uid == user_id_u32 && *is_add);
                                     let is_removed = members.iter()
                                         .any(|(uid, is_add)| *uid == user_id_u32 && !*is_add);
-                                    if is_added && !is_removed && !effective_groups.contains(&db_group.name) {
-                                        effective_groups.push(db_group.name.clone());
+                                    if is_added && !is_removed && !accumulated_groups.contains(&db_group.name) {
+                                        accumulated_groups.push(db_group.name.clone());
                                     }
                                 }
                                 Err(e) => {
-                                    warn!("Failed to load group members for group '{}' (id {}): {}", db_group.name, db_group.id, e);
+                                    tracing::warn!(
+                                        "Failed to load group members for group '{}' (id {}): {}",
+                                        db_group.name, db_group.id, e
+                                    );
                                 }
                             }
                         }
+                    }
+                    accumulated_groups
+                })
+                .await
+                .unwrap_or_default();
+
+                for g in db_groups_result {
+                    if !effective_groups.contains(&g) {
+                        effective_groups.push(g);
                     }
                 }
             }
@@ -1734,7 +1824,12 @@ impl RpcHandler {
             // Only the channel's own (non-inherited) ACL entries are checked.
             let is_enter_restricted = {
                 use munode_common::permission;
-                let acls = self.state.database.load_acls(channel_id).unwrap_or_default();
+                let db = self.state.database.clone();
+                // spawn_blocking: DB call on hot path
+                let acls = tokio::task::spawn_blocking(move || db.load_acls(channel_id))
+                    .await
+                    .unwrap_or_else(|_| Ok(vec![]))
+                    .unwrap_or_default();
                 acls.iter().any(|a| a.deny & permission::ENTER != 0)
             };
 
@@ -2625,15 +2720,7 @@ impl RpcHandler {
             ..Default::default()
         };
         let data = packet.encode_to_vec();
-        let edges = self.state.edge_connections.read().await;
-        for (edge_id, sender) in edges.iter() {
-            if *edge_id == source_edge_id {
-                continue;
-            }
-            if let Err(e) = sender.try_send(data.clone()) {
-                warn!("Failed to broadcast user state to edge {}: {}", edge_id, e);
-            }
-        }
+        crate::server::broadcast_critical_excluding(&self.state, data, source_edge_id).await;
     }
 
     /// Handle text message forwarding: relay to all other edges (not the sender).
@@ -2670,15 +2757,7 @@ impl RpcHandler {
         };
         let data = packet.encode_to_vec();
 
-        let edges = self.state.edge_connections.read().await;
-        for (edge_id, sender) in edges.iter() {
-            if *edge_id == source_edge_id {
-                continue;
-            }
-            if let Err(e) = sender.try_send(data.clone()) {
-                warn!("Failed to forward text message to edge {}: {}", edge_id, e);
-            }
-        }
+        crate::server::broadcast_critical_excluding(&self.state, data, source_edge_id).await;
     }
 
     /// Handle channel state notification from an edge (channel create/edit request).
@@ -3777,5 +3856,27 @@ fn parse_ip_to_bytes(ip: &str) -> Option<[u8; 16]> {
         Ok(IpAddr::V4(v4)) => Some(v4.to_ipv6_mapped().octets()),
         Ok(IpAddr::V6(v6)) => Some(v6.octets()),
         Err(_) => None,
+    }
+}
+
+/// Compress `data` with zlib (fast level) if it exceeds 4 KiB.
+///
+/// Compressed frames are prefixed with `0x01`.  Raw frames always start with a
+/// protobuf field tag (≥ `0x08`), so `0x01` is unambiguous as a compression flag.
+/// The Edge decompresses by checking the first byte before decoding.
+pub(crate) fn maybe_compress(data: Vec<u8>) -> Vec<u8> {
+    const COMPRESS_THRESHOLD: usize = 4096;
+    if data.len() <= COMPRESS_THRESHOLD {
+        return data;
+    }
+    let mut out = Vec::with_capacity(data.len() / 2 + 1);
+    out.push(0x01u8); // compression flag
+    let mut enc = ZlibEncoder::new(&mut out, Compression::fast());
+    if enc.write_all(&data).is_err() {
+        return data; // fall back to raw on unexpected error
+    }
+    match enc.finish() {
+        Ok(_) => out,
+        Err(_) => data,
     }
 }

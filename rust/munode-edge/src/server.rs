@@ -62,6 +62,7 @@ impl EdgeServer {
             self.config.server.listeners_per_channel,
             self.config.server.allow_ping,
             self.config.server.rolling_stats_window,
+            self.config.hub_server.hmac_secret.as_deref(),
         );
 
         // Set up TLS
@@ -154,6 +155,7 @@ impl EdgeServer {
         {
             let hub_host = self.config.hub_server.host.clone();
             let hub_port = self.config.hub_server.control_port;
+            let relay_hmac_secret = self.config.hub_server.hmac_secret.clone();
             let edge_state_clone = edge_state.clone();
             info!("Starting edge WS server (relay+voice) on port {}", edge_port);
             tokio::spawn(async move {
@@ -161,6 +163,7 @@ impl EdgeServer {
                     edge_port as u16,
                     hub_host,
                     hub_port,
+                    relay_hmac_secret,
                     edge_state_clone,
                 )
                 .await;

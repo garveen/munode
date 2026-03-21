@@ -396,6 +396,49 @@ pub async fn notify(state: &HubState, edge_id: u32, data: Vec<u8>) {
     }
 }
 
+/// Broadcast a critical state-sync message to all edges **except** one, with backpressure.
+///
+/// Same semantics as [`broadcast_critical`] but skips the edge identified by
+/// `exclude_edge_id`.  Used when forwarding a notification that originated on
+/// one edge to all other edges (e.g. `hub.userStateBroadcast`).
+pub async fn broadcast_critical_excluding(state: &HubState, data: Vec<u8>, exclude_edge_id: u32) {
+    use futures_util::future::join_all;
+    use tokio::time::{timeout, Duration};
+
+    // Snapshot senders under the read-lock, excluding the source edge.
+    let senders: Vec<(u32, tokio::sync::mpsc::Sender<Vec<u8>>)> = {
+        let edges = state.edge_connections.read().await;
+        edges
+            .iter()
+            .filter(|&(&id, _)| id != exclude_edge_id)
+            .map(|(&id, tx)| (id, tx.clone()))
+            .collect()
+    }; // read-lock released here
+
+    let futures = senders.into_iter().map(|(edge_id, sender)| {
+        let data = data.clone();
+        async move {
+            match timeout(Duration::from_secs(2), sender.send(data)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::warn!(
+                        "broadcast_critical_excluding: edge {} channel closed: {}",
+                        edge_id,
+                        e
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "broadcast_critical_excluding: edge {} send timeout — message dropped",
+                        edge_id
+                    );
+                }
+            }
+        }
+    });
+    join_all(futures).await;
+}
+
 fn current_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

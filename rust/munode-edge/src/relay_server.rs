@@ -7,9 +7,24 @@
 //! - `/relay` — transparent Hub proxy relay (unchanged behaviour from the old relay server)
 //! - `/voice` — direct Edge-to-Edge voice channel for `DirectTcp` routing
 //!
+//! ## Relay Authentication
+//!
+//! When the Edge is configured with an `hmac_secret`, incoming `/relay` connections
+//! must prove they know the same secret by including a timestamp-based HMAC token in
+//! the WebSocket URL query string:
+//!
+//! ```text
+//!   ws://relay-host:edge_port/relay?ts=<unix_ms>&token=<hex_hmac>
+//! ```
+//!
+//! The token is `hex(HMAC-SHA256(hmac_secret, "relay:<ts>"))`.  The relay server
+//! checks that `ts` is within 30 seconds of the current time and that the token
+//! matches, rejecting the connection with HTTP 401 otherwise.  Connections without
+//! a query string are allowed only when no `hmac_secret` is configured.
+//!
 //! ```text
 //!   Edge A (cannot reach Hub)
-//!        │ ws://edge-b-host:edge_port/relay
+//!        │ ws://edge-b-host:edge_port/relay?ts=...&token=...
 //!        ▼
 //!   Edge B (relay server)  ───ws://hub-host:hub-port/──►  Hub
 //!
@@ -40,6 +55,83 @@ const RELAY_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Voice TCP connection channel buffer size.
 const VOICE_TCP_CHAN_BUF: usize = 256;
 
+/// Maximum age (ms) of a relay auth token before it is considered expired.
+const RELAY_TOKEN_MAX_AGE_MS: u64 = 30_000;
+
+/// Compute the HMAC-SHA256 relay token for a given timestamp.
+///
+/// `token = hex(HMAC-SHA256(secret, "relay:<ts_ms>"))`
+///
+/// The key is `secret` (raw bytes of the UTF-8 string); the message is the
+/// ASCII string `"relay:<ts_ms>"` where `<ts_ms>` is the decimal timestamp.
+///
+/// Example (illustrative — not a real key):
+/// ```text
+/// secret  = "my-hmac-secret"
+/// ts_ms   = 1742371200000
+/// message = "relay:1742371200000"
+/// token   = hex(HMAC-SHA256("my-hmac-secret", "relay:1742371200000"))
+/// ```
+fn compute_relay_token(secret: &str, ts_ms: u64) -> String {
+    use ring::hmac;
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
+    let msg = format!("relay:{}", ts_ms);
+    let sig = hmac::sign(&key, msg.as_bytes());
+    hex::encode(sig.as_ref())
+}
+
+/// Verify the relay auth query parameters.
+///
+/// Returns `true` if no `hmac_secret` is configured (unauthenticated relays
+/// are allowed when the secret is absent), or if both the timestamp is fresh
+/// and the token matches.
+fn verify_relay_auth(hmac_secret: &str, query: Option<&str>) -> bool {
+    let query = match query {
+        Some(q) if !q.is_empty() => q,
+        _ => return false, // secret configured but no query params → reject
+    };
+
+    // Parse ts and token from query string
+    let mut ts_ms_opt: Option<u64> = None;
+    let mut token_opt: Option<String> = None;
+    for part in query.split('&') {
+        if let Some(val) = part.strip_prefix("ts=") {
+            ts_ms_opt = val.parse::<u64>().ok();
+        } else if let Some(val) = part.strip_prefix("token=") {
+            token_opt = Some(val.to_string());
+        }
+    }
+
+    let (ts_ms, token) = match (ts_ms_opt, token_opt) {
+        (Some(ts), Some(tok)) => (ts, tok),
+        _ => return false,
+    };
+
+    // Check timestamp freshness using absolute difference to handle skewed clocks.
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    if now_ms.abs_diff(ts_ms) > RELAY_TOKEN_MAX_AGE_MS {
+        return false;
+    }
+
+    // Constant-time token comparison to prevent timing attacks.
+    // We use a manual XOR-fold instead of ring::constant_time::verify_slices_are_equal
+    // because that function is marked deprecated in ring 0.17 and the workspace uses
+    // aws_lc_rs as the primary provider.  The fold achieves the same O(n) constant-time
+    // property: all byte differences are OR-ed together before the final comparison.
+    let expected = compute_relay_token(hmac_secret, ts_ms);
+    if expected.len() != token.len() {
+        return false;
+    }
+    expected
+        .bytes()
+        .zip(token.bytes())
+        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+        == 0
+}
+
 /// Start the combined edge WebSocket server (relay + voice) on `edge_port`.
 ///
 /// Binds to `0.0.0.0:edge_port` (TCP) and dispatches incoming WebSocket connections
@@ -47,11 +139,15 @@ const VOICE_TCP_CHAN_BUF: usize = 256;
 /// - `/relay` → Hub proxy relay (for Edges that can't reach Hub directly)
 /// - `/voice` → Edge-to-Edge voice delivery channel
 ///
+/// When `hmac_secret` is `Some`, incoming `/relay` connections must include a
+/// valid HMAC token in the query string (see module documentation).
+///
 /// This function never returns under normal operation.
 pub async fn run_edge_ws_server(
     edge_port: u16,
     hub_host: String,
     hub_port: u16,
+    hmac_secret: Option<String>,
     edge_state: Arc<EdgeState>,
 ) {
     let bind_addr = format!("0.0.0.0:{}", edge_port);
@@ -65,7 +161,7 @@ pub async fn run_edge_ws_server(
             return;
         }
     };
-    run_edge_ws_server_with_listener(listener, hub_host, hub_port, edge_state).await;
+    run_edge_ws_server_with_listener(listener, hub_host, hub_port, hmac_secret, edge_state).await;
 }
 
 /// Accept-loop variant that takes a pre-bound listener — used in tests to avoid
@@ -74,6 +170,7 @@ pub async fn run_edge_ws_server_with_listener(
     listener: TcpListener,
     hub_host: String,
     hub_port: u16,
+    hmac_secret: Option<String>,
     edge_state: Arc<EdgeState>,
 ) {
     loop {
@@ -81,12 +178,16 @@ pub async fn run_edge_ws_server_with_listener(
             Ok((stream, peer_addr)) => {
                 let hub_host = hub_host.clone();
                 let hub_port = hub_port;
+                let hmac_secret = hmac_secret.clone();
                 let edge_state = edge_state.clone();
                 tokio::spawn(async move {
-                    // Capture the HTTP upgrade path via a header callback
+                    // Capture the HTTP upgrade path and query via a header callback.
+                    // When hmac_secret is set, reject /relay connections without a
+                    // valid HMAC token immediately during the HTTP upgrade.
                     let captured_path: Arc<StdMutex<String>> =
                         Arc::new(StdMutex::new(String::new()));
                     let cp = captured_path.clone();
+                    let secret_for_cb = hmac_secret.clone();
 
                     let ws_result = timeout(
                         Duration::from_secs(30),
@@ -94,7 +195,28 @@ pub async fn run_edge_ws_server_with_listener(
                             stream,
                             move |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
                                   response: tokio_tungstenite::tungstenite::handshake::server::Response| {
-                                *cp.lock().unwrap() = req.uri().path().to_string();
+                                let path = req.uri().path().to_string();
+                                *cp.lock().unwrap() = path.clone();
+
+                                // Authenticate /relay connections when hmac_secret is configured.
+                                // /voice connections carry their own session-level auth.
+                                if path != "/voice" {
+                                    if let Some(secret) = &secret_for_cb {
+                                        let query = req.uri().query();
+                                        if !verify_relay_auth(secret, query) {
+                                            warn!(
+                                                "Relay auth failed for connection from {} to {}",
+                                                peer_addr,
+                                                path,
+                                            );
+                                            // Return an HTTP 401 response to reject the upgrade.
+                                            return Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                                                .status(tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED)
+                                                .body(Some("relay authentication required".to_string()))
+                                                .unwrap());
+                                        }
+                                    }
+                                }
                                 Ok(response)
                             },
                         ),
@@ -443,5 +565,82 @@ where
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A valid token must pass verification.
+    #[test]
+    fn relay_auth_valid_token_accepted() {
+        let secret = "test-secret";
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let token = compute_relay_token(secret, ts_ms);
+        let query = format!("ts={}&token={}", ts_ms, token);
+        assert!(verify_relay_auth(secret, Some(&query)));
+    }
+
+    /// A token with a wrong HMAC must be rejected.
+    #[test]
+    fn relay_auth_wrong_token_rejected() {
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let query = format!("ts={}&token=deadbeef", ts_ms);
+        assert!(!verify_relay_auth("secret", Some(&query)));
+    }
+
+    /// A token signed with a different secret must be rejected.
+    #[test]
+    fn relay_auth_wrong_secret_rejected() {
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let token = compute_relay_token("real-secret", ts_ms);
+        let query = format!("ts={}&token={}", ts_ms, token);
+        assert!(!verify_relay_auth("wrong-secret", Some(&query)));
+    }
+
+    /// An expired timestamp must be rejected.
+    #[test]
+    fn relay_auth_expired_token_rejected() {
+        let secret = "test-secret";
+        // 60 seconds in the past — well beyond the 30-second window.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let old_ts = now_ms.saturating_sub(60_000);
+        let token = compute_relay_token(secret, old_ts);
+        let query = format!("ts={}&token={}", old_ts, token);
+        assert!(!verify_relay_auth(secret, Some(&query)));
+    }
+
+    /// Missing query string must be rejected when a secret is configured.
+    #[test]
+    fn relay_auth_no_query_rejected() {
+        assert!(!verify_relay_auth("secret", None));
+        assert!(!verify_relay_auth("secret", Some("")));
+    }
+
+    /// Token with missing fields must be rejected.
+    #[test]
+    fn relay_auth_incomplete_query_rejected() {
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        // Only ts, no token
+        assert!(!verify_relay_auth("secret", Some(&format!("ts={}", ts_ms))));
+        // Only token, no ts
+        let token = compute_relay_token("secret", ts_ms);
+        assert!(!verify_relay_auth("secret", Some(&format!("token={}", token))));
+    }
 }
 

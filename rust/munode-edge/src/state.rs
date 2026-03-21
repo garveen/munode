@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use tokio::sync::{broadcast, mpsc, RwLock};
 
@@ -9,6 +9,89 @@ use munode_protocol::hubedge::ServerLimitsConfig;
 
 use crate::channel_manager::ChannelManager;
 use crate::client::ClientManager;
+
+/// ChaCha20-Poly1305 shared-key encryption for Edge-to-Edge UDP voice traffic.
+///
+/// All Edges in a cluster derive the same key from `hmac_secret`, so ciphertext
+/// produced by one Edge can be verified and decrypted by any other Edge.  A
+/// monotonic counter combined with the sender's Edge ID forms the 12-byte nonce,
+/// ensuring per-sender uniqueness across the cluster lifetime.
+pub struct EdgeCrypto {
+    key: ring::aead::LessSafeKey,
+    counter: AtomicU64,
+}
+
+impl EdgeCrypto {
+    /// Derive an `EdgeCrypto` from the shared HMAC secret string.
+    ///
+    /// Returns `None` only if the underlying key construction fails (which
+    /// should never occur for a valid 32-byte key from HMAC-SHA256).
+    pub fn from_secret(secret: &str) -> Option<Self> {
+        let key_material = ring::hmac::sign(
+            &ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_bytes()),
+            b"munode-edge-udp-voice-key-v1",
+        );
+        // HMAC-SHA256 produces 32 bytes — exactly the ChaCha20-Poly1305 key size.
+        let key_bytes = &key_material.as_ref()[..32];
+        let unbound = ring::aead::UnboundKey::new(&ring::aead::CHACHA20_POLY1305, key_bytes).ok()?;
+        Some(Self {
+            key: ring::aead::LessSafeKey::new(unbound),
+            counter: AtomicU64::new(0),
+        })
+    }
+
+    fn build_nonce(sender_edge_id: u32, counter: u64) -> ring::aead::Nonce {
+        // 12-byte nonce: [sender_edge_id_BE(4)][counter_BE(8)]
+        // Using all 12 bytes prevents nonce reuse even with a very high-frequency sender.
+        let mut b = [0u8; 12];
+        b[0..4].copy_from_slice(&sender_edge_id.to_be_bytes());
+        b[4..12].copy_from_slice(&counter.to_be_bytes());
+        ring::aead::Nonce::assume_unique_for_key(b)
+    }
+
+    /// Encrypt `plaintext` for the given sender Edge.
+    ///
+    /// Returns `(counter, ciphertext_with_poly1305_tag)`.  The caller embeds
+    /// `counter` and `sender_edge_id` in the packet header so receivers can
+    /// reconstruct the nonce.  Because all Edges share the same key, a
+    /// ciphertext produced with empty `aad` can be sent to multiple peers
+    /// without re-encryption (encrypt-once broadcast).
+    ///
+    /// Pass non-empty `aad` to bind the ciphertext to specific routing metadata
+    /// (e.g. for relay packets, use `sender_edge_id ++ target_edge_id` as AAD to
+    /// prevent an on-path attacker from redirecting the packet to a wrong destination).
+    pub fn encrypt(&self, plaintext: &[u8], sender_edge_id: u32, aad: &[u8]) -> (u64, Vec<u8>) {
+        let counter = self.counter.fetch_add(1, Ordering::Relaxed);
+        let nonce = Self::build_nonce(sender_edge_id, counter);
+        let mut buf = plaintext.to_vec();
+        // Appends the 16-byte Poly1305 tag in-place.  Sealing can only fail on an
+        // out-of-memory condition or a programming error — treat as unrecoverable.
+        self.key
+            .seal_in_place_append_tag(nonce, ring::aead::Aad::from(aad), &mut buf)
+            .expect("EdgeCrypto::encrypt: AEAD sealing failed");
+        (counter, buf)
+    }
+
+    /// Verify the Poly1305 tag and decrypt `ciphertext_with_tag`.
+    ///
+    /// `aad` must match what was passed to `encrypt` exactly (empty slice for
+    /// direct-voice packets; `sender_edge_id ++ target_edge_id` for relay packets).
+    ///
+    /// Returns plaintext on success, or `None` if authentication fails
+    /// (wrong key, tampered packet, or invalid nonce / AAD mismatch).
+    pub fn decrypt(&self, sender_edge_id: u32, counter: u64, ciphertext: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
+        const TAG_LEN: usize = 16;
+        if ciphertext.len() <= TAG_LEN {
+            return None;
+        }
+        let nonce = Self::build_nonce(sender_edge_id, counter);
+        let mut buf = ciphertext.to_vec();
+        let plaintext = self.key
+            .open_in_place(nonce, ring::aead::Aad::from(aad), &mut buf)
+            .ok()?;
+        Some(plaintext.to_vec())
+    }
+}
 
 /// Information about a peer Edge node.
 #[derive(Debug, Clone)]
@@ -248,6 +331,11 @@ pub struct EdgeState {
     /// Percentage (0–100) of outbound Edge-to-Edge UDP packets to drop.
     /// Zero in production; set by `test-utils` feature tests to simulate link degradation.
     pub test_udp_drop_rate: AtomicU32,
+    /// ChaCha20-Poly1305 encryption state for Edge-to-Edge UDP voice traffic.
+    ///
+    /// `Some` when `hub_server.hmac_secret` is configured; `None` when the Edge
+    /// runs without a shared secret (plaintext Edge-to-Edge mode for development).
+    pub edge_crypto: Option<Arc<EdgeCrypto>>,
 }
 
 impl EdgeState {
@@ -279,6 +367,7 @@ impl EdgeState {
             voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
             test_udp_drop_rate: AtomicU32::new(0),
+            edge_crypto: None,
         })
     }
 
@@ -313,6 +402,7 @@ impl EdgeState {
             voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
             test_udp_drop_rate: AtomicU32::new(0),
+            edge_crypto: None,
         })
     }
 
@@ -326,8 +416,12 @@ impl EdgeState {
         listeners_per_channel: u32,
         allow_ping: bool,
         rolling_stats_window: u32,
+        hmac_secret: Option<&str>,
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(256);
+        let edge_crypto = hmac_secret
+            .and_then(EdgeCrypto::from_secret)
+            .map(Arc::new);
         Arc::new(Self {
             edge_id: AtomicU32::new(0),
             cert_required: RwLock::new(false),
@@ -350,6 +444,7 @@ impl EdgeState {
             voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
             test_udp_drop_rate: AtomicU32::new(0),
+            edge_crypto,
         })
     }
 

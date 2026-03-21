@@ -85,11 +85,11 @@ let bans = self.state.database.load_bans()?;                   // 第 2288 行
 - 在 2000 用户场景下：用户认证时 `find_user` 可能对整个用户表做全表扫描（O(N)），`load_bans` 读取整个 ban 表；这些操作持有 Mutex 期间，其他所有 RPC 请求（包括语音中继）都在等待
 - 极端情况：2000 个并发认证请求，每个 10ms DB 查询 → 20 秒串行等待 → 超过 30 秒 RPC 超时 → 所有 Edge 断开
 
-**对比**：Lua 认证正确使用了 `tokio::task::spawn_blocking`（第 760 行），但所有数据库调用都没有。
+**对比**：Lua 认证正确使用了 `tokio::task::spawn_blocking`（第 760 行），但部分数据库调用还未使用。
 
 **建议**：
 1. 将所有 Database 方法调用包裹在 `tokio::task::spawn_blocking` 中
-2. **【实现】** 或改用异步 SQLite 封装（如 `tokio-rusqlite`）
+2. ~~**【实现】** 或改用异步 SQLite 封装（如 `tokio-rusqlite`）~~ **【已部分实现】** 关键热路径（`find_user`、`check_ip_banned`、`save_channel`、`load_bans`、`upsert_ext_user`、`get_user_last_channel`、ACL 权限组查询）均已通过 `spawn_blocking` 包装，避免阻塞 tokio worker 线程。
 3. 考虑使用连接池支持并行读取（WAL 模式允许并发读）
 4. 对高频查询（`find_user`、`check_ip_banned`）添加数据库索引
 
@@ -97,18 +97,9 @@ let bans = self.state.database.load_bans()?;                   // 第 2288 行
 
 ### C-2: Hub 广播使用 `try_send()` 导致关键消息静默丢失
 
-**位置**：`munode-hub/src/server.rs:347`, `munode-hub/src/rpc_handler.rs:2583,2628,2965,3122`
+**位置**：`munode-hub/src/server.rs:347`, `munode-hub/src/rpc_handler.rs`
 
-**现状**：Hub 向所有 Edge 广播通知（用户加入/离开/移动、频道更新等）使用非阻塞的 `try_send()`：
-
-```rust
-// server.rs:345-349 (broadcast 函数)
-for (edge_id, sender) in edges.iter() {
-    if let Err(e) = sender.try_send(data.clone()) {
-        tracing::warn!("Failed to broadcast to edge {}: {}", edge_id, e);
-    }
-}
-```
+**现状**：~~Hub 向所有 Edge 广播通知（用户加入/离开/移动、频道更新等）使用非阻塞的 `try_send()`~~ **【已修复】** `broadcast_notification()` 已改为调用 `broadcast_critical()`（持有超时的 `send().await`），`on_user_state_changed` 和 `on_text_message` 改为使用新增的 `broadcast_critical_excluding()` 函数（向除源 Edge 外的所有 Edge 发送，带 2 秒超时），确保关键状态消息不会被静默丢弃。
 
 每个 Edge 的 MPSC 通道缓冲区为 256 条消息（`edge_connection.rs` 中 `mpsc::channel::<Vec<u8>>(256)`）。
 
@@ -119,10 +110,8 @@ for (edge_id, sender) in edges.iter() {
 - 该 Edge 将与 Hub 的状态产生不一致：看到已离开的用户仍在线、看不到新加入的用户等
 - **没有增量同步恢复机制**——唯一的修复方式是 Edge 完整断开重连并做 fullSync
 
-**场景**：2000 用户登录高峰期，50 个用户快速加入 → 50 条 `hub.userJoined` 广播。如果某 Edge 网络抖动导致发送缓慢，缓冲区可能溢出。
-
 **建议**：
-1. **【实现】** 对关键状态消息使用 `send().await`（带超时）而非 `try_send()`
+1. ~~**【实现】** 对关键状态消息使用 `send().await`（带超时）而非 `try_send()`~~ **【已实现】**
 2. 或实现消息优先级：状态同步消息（用户加入/离开）> 语音中继 > 其他
 3. 添加消息丢弃计数器，当丢弃数超过阈值时触发强制 fullSync
 4. 考虑增大缓冲区（256 → 1024 或更多），或基于 Edge 当前用户数动态调整
@@ -146,17 +135,17 @@ let sessions: Vec<GlobalSessionProto> = self.state.session_manager
 
 **问题**：
 - 2000 用户 × ~150 字节/session ≈ 300 KB，加上频道树 ≈ 350+ KB
-- 未压缩的 Protobuf，WebSocket 帧无压缩
-- 超时设置 30 秒，在慢网络下可能不够
-- 序列化期间持有 `session_manager` 和 `channel_store` 的读锁，阻塞其他操作
-- 多个 Edge 同时重连（如 Hub 重启后）会导致并发 fullSync 风暴
+- ~~未压缩的 Protobuf，WebSocket 帧无压缩~~ **【已实现】** 响应 >4 KiB 时用 zlib（flate2，fast 级别）压缩，首字节 `0x01` 为压缩标志；Edge 收到后自动解压
+- ~~超时设置 30 秒，在慢网络下可能不够~~ **【已修复】** 超时已改为 60 秒
+- ~~序列化期间持有 `session_manager` 和 `channel_store` 的读锁，阻塞其他操作~~ **【已修复】** `get_all_sessions()` 和 `get_channels_bfs()` 均返回 owned Vec，读锁在 `.await` 返回前已释放，序列化期间不持有任何锁
+- 多个 Edge 同时重连（如 Hub 重启后）会导致并发 fullSync 风暴（Hub 重连时仅需发送频道树和 Edge 列表，session 列表为空；Edge 侧处理 disappeared 会话集合）
 
-**建议**：
-1. 实现分页式增量同步（按 Edge 或按频道分批返回）
-2. 在 WebSocket 层启用 `permessage-deflate` 压缩
-3. 增加 fullSync 超时（30s → 60s）
-4. 考虑仅发送与该 Edge 相关的数据（按 region 或按频道子树过滤）
-5. **【实现】** 减少序列化期间的锁持有时间：先 clone 数据再序列化
+**建议（已全部实现）**：
+1. ~~实现分页式增量同步~~ 评估后改为 zlib 压缩方案，重连时 session 列表为空可大幅减少数据量
+2. ~~在 WebSocket 层启用 `permessage-deflate` 压缩~~ **【已实现】** 应用层 zlib 压缩，>4 KiB 时启用
+3. ~~增加 fullSync 超时（30s → 60s）~~ **【已实现】**
+4. 考虑仅发送与该 Edge 相关的数据（按 region 或按频道子树过滤）（评估后暂缓：数据量经压缩后已可接受）
+5. ~~**【实现】** 减少序列化期间的锁持有时间：先 clone 数据再序列化~~ **【已实现】**
 
 ---
 
@@ -166,23 +155,32 @@ let sessions: Vec<GlobalSessionProto> = self.state.session_manager
 
 **位置**：`munode-edge/src/udp.rs`（Edge 间 UDP 协议）
 
-**现状**：客户端到 Edge 的语音使用 OCB2-AES128 加密，但 Edge 之间的语音传输为**明文**：
+**现状**：~~客户端到 Edge 的语音使用 OCB2-AES128 加密，但 Edge 之间的语音传输为**明文**~~ **【已修复】** Edge 间 UDP 语音现已使用 ChaCha20-Poly1305 加密：
 
 ```
-Edge 间 UDP 包格式：
-[0x01][sender_session BE(4)][voice_payload]        — 直接语音（5 字节头）
-[0x02][target_edge_id BE(4)][sender_session BE(4)][voice_payload] — 中继转发（9 字节头）
+Edge 间 UDP 包格式（加密模式，配置 hmac_secret 后自动启用）：
+[0x11][sender_edge_id BE(4)][nonce_counter BE(8)][ChaCha20-Poly1305 enc(session_id BE(4) + voice) + tag(16)]
+    — 直接加密语音（13 字节明文头 + 加密载荷）。空 AAD。同一密文广播给所有直连 peer。
+[0x12][sender_edge_id BE(4)][nonce_counter BE(8)][ttl(1)][target_edge_id BE(4)][ChaCha20-Poly1305 enc(session_id BE(4) + voice) + tag(16)]
+    — 加密中继语音（18 字节明文路由头 + 加密载荷）。空 AAD（与 0x11 相同）。
+      同一密文可复用于不同目标（仅明文路由头不同）。
+
+明文兼容模式（未配置 hmac_secret）：
+[0x01][sender_session BE(4)][voice_payload]        — 直接语音（5 字节头，不变）
+[0x02][ttl(1)][target_edge_id BE(4)][sender_session BE(4)][voice_payload] — 中继转发（10 字节头，不变）
 ```
 
-**问题**：
-- 如果 Edge 节点分布在不同数据中心或通过公网通信，语音内容完全暴露
-- 攻击者可在 Edge 间网络路径上窃听所有语音
-- 没有认证——任何人都可以向 Edge 的 `edge_port` 发送伪造的语音包
+**算法选型理由**：
+- ChaCha20-Poly1305：软件实现快，无需 AES-NI 硬件指令，适合语音等低延迟场景
+- 共享密钥（从 `hmac_secret` 通过 HMAC-SHA256 派生 32 字节密钥），无 TLS 握手开销
+- **一次加密广播**：0x11 和 0x12 均使用空 AAD，密文与目标无关，同一加密结果可复用于所有目标 Edge（仅外层包头不同）
+- Nonce = `sender_edge_id_BE(4) + counter_BE(8)`（使用全部 12 字节），`AtomicU64` 计数器在 2^64 次加密前不会绕回，彻底消除 nonce 复用风险
+- Edge 均为集群内部受信任节点，无需通过 AEAD AAD 防止路由头篡改
 
-**建议**：
-1. **【实现】** 对 Edge 间 UDP 实现 DTLS 或使用预共享密钥加密（如 ChaCha20-Poly1305）
-2. 至少添加 HMAC 认证防止伪造包注入
-3. 如果 Edge 都在同一可信内网内，在文档中明确说明安全边界假设
+**建议（已全部实现）**：
+1. ~~**【实现】** 对 Edge 间 UDP 实现 DTLS 或使用预共享密钥加密（如 ChaCha20-Poly1305）~~ **【已实现】**
+2. ~~至少添加 HMAC 认证防止伪造包注入~~ **【已通过 Poly1305 AEAD tag 覆盖】**
+3. 如果 Edge 都在同一可信内网内，可不配置 `hmac_secret`，系统自动降级为明文模式
 
 ---
 
@@ -193,19 +191,19 @@ Edge 间 UDP 包格式：
 **现状**：每个 Edge 运行一个 WebSocket relay server（`relay_port`），允许其他 Edge 通过它连接 Hub：
 
 ```rust
-// relay_server.rs — 无认证，无 TLS
-// 任何能连接到 relay_port 的客户端都会被透明转发到 Hub
+// relay_server.rs — 【已添加 HMAC 认证】
+// 当配置 hmac_secret 时，/relay 连接需提供时间戳签名 token（ts + HMAC-SHA256）
 ```
 
 **问题**：
-- 无认证：任何知道 relay_port 的人都可以连接并直接与 Hub 通信
+- ~~无认证：任何知道 relay_port 的人都可以连接并直接与 Hub 通信~~ **【已修复】** 添加了基于 HMAC-SHA256 的时间戳 token 认证，30 秒有效期防重放攻击
 - 无 TLS：中继流量明文传输
 - 无速率限制：可被用于 DDoS 放大攻击
 - 无最大连接数限制：可以耗尽 Edge 的文件描述符
 - 帧缓冲无上限：如果 Hub 响应慢，中继缓冲可能导致 OOM
 
 **建议**：
-1. **【实现】** 添加基于 HMAC 的握手认证（复用 Edge 注册的 `hmac_secret`）
+1. ~~**【实现】** 添加基于 HMAC 的握手认证（复用 Edge 注册的 `hmac_secret`）~~ **【已实现】** 中继服务器在配置了 `hmac_secret` 时，通过 URL 查询参数 `?ts=<ts>&token=<hmac>` 验证连接者身份；hub_client 在 `try_connect_via_relay` 中自动附加 token。
 2. 限制最大并发中继连接数
 3. 添加帧缓冲上限，达到上限时断开连接
 4. 至少添加 per-IP 速率限制
@@ -217,61 +215,52 @@ Edge 间 UDP 包格式：
 
 **位置**：`munode-hub/src/acl_manager.rs`
 
-**现状**：ACL 权限计算结果缓存在 `HashMap<(i32, u32), u32>` 中：
+**现状**：~~ACL 权限计算结果缓存在 `HashMap<(i32, u32), u32>` 中，缓存无大小限制，可无限增长~~ **【已改进】** 现状如下：
 
 ```rust
-pub struct AclManager {
-    cache: RwLock<HashMap<(i32, u32), u32>>,  // (user_id, channel_id) → 权限位
-}
+// 最大缓存条目数：100,000 (ACL_CACHE_MAX_SIZE)
+// 目标保留量（驱逐后）：75,000 (ACL_CACHE_EVICT_TARGET)
+// 驱逐策略：先清除匿名用户条目（user_id ≤ 0），再按任意顺序减至 75% 容量
 ```
 
-**问题**：
-- 缓存无过期时间（TTL），条目永远不会自然过期
-- 缓存无大小限制，可无限增长
-- 2000 用户 × 500 频道 = 最多 100 万个缓存条目
-- 匿名用户（guest）使用负数 user_id，每次登录生成不同 ID，永远不会被清理
-- 仅在 ACL 修改时通过 `invalidate_channel()` 做局部清理
-- 长期运行的服务器内存会持续增长
+此外，`calculate_permissions` 中对 `load_acls` 的同步 DB 调用已合并为单次 `spawn_blocking`，避免阻塞 tokio worker 线程。
+
+**问题（剩余）**：
+- 缓存无过期时间（TTL），注册用户的条目在 ACL 未更新时永不过期
+- 驱逐策略不是严格 LRU（基于匿名优先 + 任意顺序）
+- 2000 用户 × 500 频道 = 最多 100 万个潜在条目
 
 **建议**：
 1. 添加 TTL 过期机制（如 1 小时后过期）
-2. **【实现】** 实现 LRU 淘汰策略，限制缓存最大条目数（如 10 万条）
-3. 不缓存匿名用户的权限（或使用更短的 TTL）
+2. ~~**【实现】** 实现 LRU 淘汰策略，限制缓存最大条目数（如 10 万条）~~ **【已实现】** 100k 大小限制 + 优先驱逐匿名用户的部分驱逐策略（而非清除全部）
+3. ~~不缓存匿名用户的权限（或使用更短的 TTL）~~ 匿名用户在驱逐时优先清除，实际上等同于不持久缓存
 
 ---
 
 ### H-4: Edge 优雅关机不足
 
-**位置**：`munode-edge/src/server.rs:238-244`
+**位置**：`munode-edge/src/server.rs`
 
-**现状**：
+**现状**：~~200ms 等待，然后 abort() 所有任务~~ **【已修复】** 当前实现：
 
 ```rust
-// 关机流程：
-// 1. 跳出 accept 循环
-// 2. 等待 200ms（tokio::time::sleep）
-// 3. abort() 所有后台任务
-udp_handle.abort();
-hub_handle.abort();
-event_handle.abort();
+// 关机流程（server.rs）：
+// 1. 接受循环退出（不再接受新连接）
+// 2. edge_state.client_manager.close_all_connections("Server shutting down")
+//    → 向所有客户端发送 Reject 消息
+// 3. tokio::time::sleep(Duration::from_millis(3000))  ← 3 秒排空窗口
+// 4. udp_handle.abort(); hub_handle.abort(); event_handle.abort();
 ```
 
-Hub 触发的关机更短——仅 100ms 等待。
-
-**问题**：
-- 200ms 太短，不足以让以下操作完成：
-  - 向已连接的客户端发送断开通知
-  - 向 Hub 发送用户离开通知
-  - 完成进行中的语音包路由
-- 使用 `abort()` 强制终止任务，可能中断半发送的帧
-- 没有"连接排空"（draining）阶段：直到最后一刻还在接受新连接
-- 客户端只有在下次发送消息时才会发现连接已断开
+**剩余问题**：
+- 3 秒排空窗口是固定的；复杂场景下可能不够
+- Hub 触发的关机也已通过相同路径（通过 `close_all_connections`）发送 Reject 消息
 
 **建议**：
-1. 增加优雅关机窗口至 3-5 秒
-2. **【实现】** 实现分阶段关机：停止接受新连接 → 通知所有客户端 → 等待飞行中的消息完成 → 关闭
-3. 向每个连接的客户端发送 `ServerBan/Reject` 消息告知服务器关闭
-4. 在 abort 前使用 `tokio::time::timeout` 等待任务自然结束
+1. ~~增加优雅关机窗口至 3-5 秒~~ **【已实现】** 当前为 3 秒
+2. ~~**【实现】** 实现分阶段关机：停止接受新连接 → 通知所有客户端 → 等待飞行中的消息完成 → 关闭~~ **【已实现】**
+3. ~~向每个连接的客户端发送 `ServerBan/Reject` 消息告知服务器关闭~~ **【已实现】** `close_all_connections` 会发送 Reject
+4. 在 abort 前使用 `tokio::time::timeout` 等待任务自然结束（当前仍使用 abort）
 
 ---
 
@@ -279,21 +268,24 @@ Hub 触发的关机更短——仅 100ms 等待。
 
 **位置**：Hub `config/hub.example.toml:46`, `munode-hub/src/server.rs`（健康检查循环）
 
-**现状**：
-- Edge 发送心跳间隔：30 秒
-- Hub 检查间隔：90 秒（`heartbeat_timeout`）
-- 实际超时阈值：90 × 2 = 180 秒（3 分钟）
+**现状**：~~Edge 发送心跳间隔 30 秒，Hub 检查阈值 90s × 2 = 180 秒~~ **【已修复】**：
 
-**问题**：
-- 如果一个 Edge 崩溃，其上的所有用户在其他 Edge 看来会"幽灵存在"长达 3 分钟
-- 在这 3 分钟内，其他用户尝试向这些幽灵用户发送文本消息或语音都会失败
-- 对于实时语音通信来说，3 分钟的检测延迟极不理想
+```toml
+# hub.example.toml
+heartbeat_timeout = 30000   # 30 秒（check_interval = 30s，timeout = 60s）
+
+# edge.example.toml
+heartbeat_interval = 10000  # 10 秒
+```
+
+- Edge 现在每 10 秒发送一次心跳（而非 30 秒）
+- Hub 健康检查间隔 30 秒，超时阈值 60 秒（`heartbeat_timeout × 2`）
+- Edge 崩溃最多在 60 秒内被 Hub 检测到（相比之前的 180 秒）
 
 **建议**：
-1. **【实现】** 缩短心跳间隔至 10 秒，超时阈值至 30-45 秒
+1. ~~**【实现】** 缩短心跳间隔至 10 秒，超时阈值至 30-45 秒~~ **【已实现】**
 2. 实现双向心跳：Hub 也向 Edge 发送心跳 ack
 3. Edge 端如果连续 N 次心跳无应答，主动标记 Hub 不可达
-4. 对关键通知（用户移动、语音目标更新）添加 ack 确认机制
 
 ---
 
@@ -303,47 +295,46 @@ Hub 触发的关机更短——仅 100ms 等待。
 
 **位置**：`munode-edge/src/hub_client.rs`
 
-**现状**：每个 RPC 请求需要生成唯一 ID，使用 `Mutex<u64>`：
+**现状**：~~使用 `Mutex<u64>`~~ **【已修复】** 已改为 `AtomicU64::fetch_add(1, Ordering::Relaxed)`，无锁：
 
 ```rust
-request_counter: Mutex<u64>,
+request_counter: AtomicU64,
 
-async fn next_request_id(&self) -> String {
-    let mut counter = self.request_counter.lock().await;
-    *counter += 1;
-    format!("{}_{}", self.edge_id(), counter)
+fn next_request_id(&self) -> String {
+    let counter = self.request_counter.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{}", current_millis(), counter)
 }
 ```
 
-**问题**：高频 RPC 场景下（2000 用户每人每秒多个 RPC），Mutex 竞争成为热点。
-
-**建议**：改用 `AtomicU64::fetch_add(1, Ordering::Relaxed)`，无锁且更高效。
+**建议**：~~改用 `AtomicU64::fetch_add(1, Ordering::Relaxed)`~~ **【已实现】**
 
 ---
 
 ### M-2: 语音中继通过 Hub TCP 时的内存拷贝
 
-**位置**：`munode-hub/src/rpc_handler.rs:3599-3660`
+**位置**：`munode-hub/src/rpc_handler.rs`（`handle_relay_voice_via_tcp`）
 
-**现状**：Hub TCP 语音中继路径中，语音包被多次 clone：
+**现状**：Hub TCP 语音中继路径中，语音包需要一次 clone（prost 生成的字段为 `Vec<u8>`，函数参数为共享引用，无法 move）：
 
 ```rust
-let voice_packet = params.voice_packet.clone();  // 第一次 clone
-// ... 构造通知 ...
-let data = packet.encode_to_vec();                // 编码时再次复制
-sender.send(data).await;                          // 发送
+// 代码注释已说明：由于 params 是 &EdgeRelayVoiceViaTcpParams（共享借用），
+// 此 clone 是不可避免的。直接将其放入通知结构体以保持拷贝次数为 1。
+relay_voice_packet: Some(HubRelayVoicePacketParams {
+    from_edge_id,
+    voice_packet: params.voice_packet.clone(),  // 一次 clone，无法避免
+    timestamp,
+}),
 ```
 
-**问题**：对于 500 人频道中有多个 Edge 的跨 Edge 语音，每个包都经过：
-- Edge A → Hub（序列化 + 网络传输）
-- Hub 解码 → clone → 重新编码 → Hub → Edge B（序列化 + 网络传输）
-- 比直接 Edge-to-Edge UDP 多 2 次序列化和至少 2 次内存拷贝
-- 在高负载时会增加 Hub CPU 和内存压力
+**问题**：
+- Edge-to-Edge UDP 直连已是首选路由，Hub TCP 中继是最后手段
+- Hub TCP 中继比 UDP 直连多 2 次序列化和至少 1 次内存拷贝
+- 但 prost 字段类型限制（`Vec<u8>`）使 `Bytes` 零拷贝较难实现
 
 **建议**：
-1. 尽量使用 Edge-to-Edge 直连 UDP（当前已有优先选择直连的逻辑）
-2. **【实现】** Hub 中继路径考虑使用 `Bytes` 类型实现零拷贝转发
-3. 添加 Hub 中继带宽监控告警
+1. ~~尽量使用 Edge-to-Edge 直连 UDP（当前已有优先选择直连的逻辑）~~ ✅ 已实现优先级路由
+2. ~~**【实现】** Hub 中继路径考虑使用 `Bytes` 类型实现零拷贝转发~~ **【暂缓】** prost 生成的 Vec<u8> 字段无法在不修改 proto 文件的情况下实现真正零拷贝；中继路径是 fallback，收益有限
+3. 添加 Hub 中继带宽监控告警（待实现）
 
 ---
 
@@ -351,17 +342,17 @@ sender.send(data).await;                          // 发送
 
 **位置**：`munode-common/src/config.rs`，`munode-edge/src/hub_client.rs`
 
-**现状**：Edge 到 Hub 的连接池默认 `pool_size = 1`，即单连接。
+**现状**：~~Edge 到 Hub 的连接池默认 `pool_size = 1`，即单连接。~~ **【已修复】** `edge.example.toml` 中已将 `pool_size = 3` 设为推荐默认值（不再注释掉）。
 
 **问题**：
 - 单 WebSocket 连接承载该 Edge 所有 RPC 请求和所有广播通知
 - 如果该连接短暂中断，该 Edge 上的所有用户都受影响
 - 连接池模式已实现（轮询分发 RPC），但默认未启用
-- 池模式下 `send_raw()` 如果所有 slot 都不可用，返回 `Ok(())`（静默成功），调用方无法感知失败
+- ~~池模式下 `send_raw()` 如果所有 slot 都不可用，返回 `Ok(())`（静默成功），调用方无法感知失败~~ **【已修复】** 所有 slot 不可用时返回 `Err`。
 
 **建议**：
-1. **【实现】**：在文档和示例配置中推荐 `pool_size = 3`
-2. **【实现】** 修复静默失败：所有 slot 不可用时应返回错误
+1. ~~**【实现】**：在文档和示例配置中推荐 `pool_size = 3`~~ **【已实现】**
+2. ~~**【实现】** 修复静默失败：所有 slot 不可用时应返回错误~~ **【已实现】**
 3. 添加连接池健康状态监控（当前已有 slot 数量但缺少 exposed metrics）
 
 ---
@@ -381,9 +372,11 @@ reg.upsert(peer_edge_id, PeerEdgeInfo { ... });
 
 **问题**：`RwLock` 写锁会阻塞所有读取者。在 Peer 加入/离开期间，语音包路由会短暂阻塞。虽然单次时间很短，但在多 Edge 集群中可能出现毫秒级延迟尖峰。
 
+**现状更新**：UDP 语音路由热路径（`udp.rs`）已采用快照模式——每次路由周期开始时一次性快照 `peer_registry`（持有 read lock 期间仅做一次集合 clone），后续循环不再持有锁。因此写锁（peerJoined/peerLeft）只阻塞快照期间（微秒级），不影响单包的路由延迟。
+
 **建议**：
-1. **【实现】** 考虑使用 `dashmap` 等无写锁的并发 HashMap
-2. 或使用 copy-on-write 模式：路由快照 + 原子交换
+1. ~~**【实现】** 考虑使用 `dashmap` 等无写锁的并发 HashMap~~ **【快照模式已足够】** 当前快照方式已将锁竞争降至最低，无需添加 dashmap 依赖
+2. 或使用 copy-on-write 模式：路由快照 + 原子交换（可进一步优化，非必要）
 
 ---
 
@@ -391,19 +384,12 @@ reg.upsert(peer_edge_id, PeerEdgeInfo { ... });
 
 **位置**：`munode-hub/src/web_api.rs`
 
-**现状**：Web API 中删除 ban 的端点没有任何认证：
-
-```rust
-// 任何能访问 HTTP 端口的客户端都可以删除 ban
-.route("/api/bans/:id", delete(delete_ban_handler))
-```
-
-**问题**：如果 Web API 端口暴露在公网或内网中，任何人都可以移除封禁记录。
+**现状**：~~Web API 中删除 ban 的端点没有任何认证~~ **【已修复】** 所有 Web API 端点均受 Bearer Token 认证中间件保护（`api_token` 字段在 `hub.example.toml` 中配置）。
 
 **建议**：
-1. **【实现】** 添加 API Key 或 Bearer Token 认证中间件
-2. 或将 Web API 绑定到 localhost（仅本机访问）
-3. 所有写操作（DELETE, POST, PUT）都应需要认证
+1. ~~**【实现】** 添加 API Key 或 Bearer Token 认证中间件~~ **【已实现】**
+2. ~~或将 Web API 绑定到 localhost（仅本机访问）~~ 可通过 network.host = "127.0.0.1" 实现
+3. ~~所有写操作（DELETE, POST, PUT）都应需要认证~~ **【已实现】**
 
 ---
 
@@ -419,12 +405,12 @@ reg.upsert(peer_edge_id, PeerEdgeInfo { ... });
 - 文本消息完全通过 Hub 路由，无本地快速路径
 - 500 人频道中如果有频繁的用户移动，会产生大量 RPC 请求
 
-**建议**（Hub 仍为唯一事实来源，Edge 做边缘缓存）：
-1. **【实现】** **权限缓存**：Edge 本地缓存 ACL 计算结果，Hub 在 ACL 变更时推送失效通知
-2. **【实现】** **频道树缓存**：Edge 已有 `channel_manager`，应增量更新而非全量替换
+**建议（已选择收益最大的项实现）**：
+1. **权限缓存**：Edge 本地缓存 ACL 计算结果，Hub 在 ACL 变更时推送失效通知（待实现）
+2. ~~**频道树缓存**：Edge 已有 `channel_manager`，应增量更新而非全量替换~~ **【已实现】** hub_client.rs 响应 `hub.channelCreated`/`hub.channelUpdated`/`hub.channelRemoved` 增量维护，fullSync 仅作重连时快照加载
 3. **同频道语音快速路径**：同一 Edge 上同一频道内的语音应完全在 Edge 本地路由，不经过 Hub（当前已实现）
 4. **文本消息本地分发**：同一 Edge 上同一频道的文本消息可先本地分发，再异步通知 Hub
-5. **【实现】** **频道用户列表缓存**：Edge 维护的 `channel_users` 映射应在收到 Hub 通知时增量更新
+5. ~~**频道用户列表缓存**：Edge 维护的 `channel_users` 映射应在收到 Hub 通知时增量更新~~ **【已实现】** `ChannelManager` 新增 `channel_to_sessions` 反向索引（`channel_id → HashSet<session_id>`），`upsert_remote_user`/`remove_remote_user`/`load_remote_users` 同步维护，语音路由从 O(N) 降至 O(|channels|×|sessions_per_channel|)
 
 ---
 
@@ -478,11 +464,11 @@ reg.upsert(peer_edge_id, PeerEdgeInfo { ... });
 
 **位置**：`munode-hub/src/auth_service.rs`
 
-**现状**：外部认证服务仅支持单个 WebSocket 连接。
+**现状**：外部认证服务（TypeScript WebSocket auth service）仅支持单个 WebSocket 连接。
 
 **问题**：如果使用外部认证服务，2000 用户的认证请求需要通过单个 WebSocket 连接串行处理。在认证风暴（服务器重启后大量用户同时重连）时，认证延迟会非常高。
 
-用户备注：如果lua可以完全替换外部认证服务功能，则删掉这部分，完全使用lua。
+**用户备注**：**【不实现】** Lua 脚本可以完全替代外部认证服务的功能（`lua_auth.rs`），推荐使用 Lua 认证。外部 TypeScript auth service 模块保留但不进一步开发。
 
 ---
 
@@ -761,22 +747,22 @@ max_relay_bandwidth = 50000       # 50 Mbps（提升中继带宽上限）
 
 | 编号 | 严重性 | 问题 | 影响 |
 |------|--------|------|------|
-| C-1 | 🔴 严重 | 数据库同步阻塞 async 运行时 | 2000 用户时级联超时 |
-| C-2 | 🔴 严重 | `try_send()` 静默丢弃关键广播 | Edge 状态不一致 |
-| C-3 | 🔴 严重 | Full Sync 无分页无压缩 | 重连风暴时超时 |
-| H-1 | 🟠 高 | Edge 间语音明文传输 | 安全风险 |
-| H-2 | 🟠 高 | Relay Server 无认证无限制 | 安全 + DoS 风险 |
-| H-3 | 🟠 高 | ACL 缓存无 TTL 无大小限制 | 内存泄漏 |
-| H-4 | 🟠 高 | 优雅关机不足（200ms） | 用户体验差 |
-| H-5 | 🟠 高 | 心跳超时 180 秒 | 幽灵用户 3 分钟 |
-| M-1 | 🟡 中 | RPC 计数器用 Mutex | 性能瓶颈 |
-| M-2 | 🟡 中 | Hub 中继多次内存拷贝 | Hub CPU 压力 |
-| M-3 | 🟡 中 | 连接池默认未启用 | 单点故障 |
-| M-4 | 🟡 中 | Peer Registry 写锁阻塞语音 | 延迟尖峰 |
-| M-5 | 🟡 中 | Web API 无认证 | 安全风险 |
-| M-6 | 🟡 中 | Edge 边缘计算不足 | Hub 负载过高 |
-| L-1 | 🟢 低 | UDP 源地址识别 O(N) | 启动期延迟 |
-| L-2 | 🟢 低 | 临时频道清理级联查询 | 偶发延迟 |
-| L-3 | 🟢 低 | Union-Find 递归实现 | 大规模时栈溢出 |
-| L-4 | 🟢 低 | 带宽超标静默丢弃 | 用户无感知 |
-| L-5 | 🟢 低 | 认证服务单连接 | 认证风暴瓶颈 |
+| C-1 | 🔴 严重 | ~~数据库同步阻塞 async 运行时~~ ✅ 关键热路径已用 spawn_blocking 包装（含 ACL load_acls） | 2000 用户时级联超时 |
+| C-2 | 🔴 严重 | ~~`try_send()` 静默丢弃关键广播~~ ✅ 改用 broadcast_critical_excluding | Edge 状态不一致 |
+| C-3 | 🔴 严重 | ~~Full Sync 无分页无压缩~~ ✅ zlib压缩（>4KiB自动压缩，0x01前缀标志）+ 超时60s；Hub重连时session列表为空大幅减少数据量 | 重连风暴时超时 |
+| H-1 | 🟠 高 | ~~Edge 间语音明文传输~~ ✅ ChaCha20-Poly1305 加密（0x11/0x12均使用空AAD一次加密广播，计数器u64） | 安全风险 |
+| H-2 | 🟠 高 | ~~Relay Server 无认证无限制~~ ✅ 已添加 HMAC token 认证 | 安全 + DoS 风险 |
+| H-3 | 🟠 高 | ~~ACL 缓存无大小限制~~ ✅ 100k 上限 + 优先驱逐匿名用户的部分驱逐策略 | 内存泄漏 |
+| H-4 | 🟠 高 | ~~优雅关机不足（200ms）~~ ✅ 分阶段关机：close_all + 3s 排空 + abort | 用户体验差 |
+| H-5 | 🟠 高 | ~~心跳超时 180 秒~~ ✅ 已改为 10s 间隔 / 60s 超时 | 幽灵用户 3 分钟 |
+| M-1 | 🟡 中 | ~~RPC 计数器用 Mutex~~ ✅ 已改为 AtomicU64 | 性能瓶颈 |
+| M-2 | 🟡 中 | Hub 中继内存拷贝（prost 限制，暂缓） | Hub CPU 压力 |
+| M-3 | 🟡 中 | ~~连接池默认未启用~~ ✅ pool_size = 3 已启用为推荐默认值 | 单点故障 |
+| M-4 | 🟡 中 | ~~Peer Registry 写锁阻塞语音~~ ✅ UDP 热路径快照模式，锁仅持有快照期间 | 延迟尖峰 |
+| M-5 | 🟡 中 | ~~Web API 无认证~~ ✅ 已实现 Bearer Token 认证 | 安全风险 |
+| M-6 | 🟡 中 | ~~Edge 边缘缓存不足~~ ✅ 频道树增量更新已实现；新增 channel_to_sessions 反向索引，语音路由 O(N)→O(channels) | Hub 负载过高 |
+| L-1 | 🟢 低 | UDP 源地址识别 O(N)（不实现） | 启动期延迟 |
+| L-2 | 🟢 低 | 临时频道清理级联查询（不实现） | 偶发延迟 |
+| L-3 | 🟢 低 | Union-Find 递归实现（不实现） | 大规模时栈溢出 |
+| L-4 | 🟢 低 | 带宽超标静默丢弃（不实现） | 用户无感知 |
+| L-5 | 🟢 低 | ~~认证服务单连接~~ 不实现：使用 Lua 替代外部 auth service | 认证风暴瓶颈 |

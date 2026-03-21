@@ -79,7 +79,7 @@ async fn start_voice_ws_server() -> (u16, Arc<EdgeState>) {
     let server_state = state.clone();
     tokio::spawn(async move {
         // Hub host/port are unused because tests only exercise the /voice path.
-        run_edge_ws_server_with_listener(listener, "127.0.0.1".to_string(), 0, server_state).await;
+        run_edge_ws_server_with_listener(listener, "127.0.0.1".to_string(), 0, None, server_state).await;
     });
 
     // Give the accept loop a moment to start.

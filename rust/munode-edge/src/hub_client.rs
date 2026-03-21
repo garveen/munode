@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
+use flate2::read::ZlibDecoder;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message;
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
@@ -295,15 +297,16 @@ impl HubClient {
     async fn try_connect_via_relay(self: &Arc<Self>, slot: usize, is_primary: bool) -> Result<()> {
         // 1. Static peers from config (for bootstrap before Hub connection)
         for (host, relay_port) in &self.static_relay_peers {
-            let relay_url = format!("ws://{}:{}", host, relay_port);
-            info!("Attempting Hub relay via static peer at {}", relay_url);
+            let relay_url = build_relay_url(host, *relay_port, self.config.hmac_secret.as_deref());
+            let safe_url = safe_relay_url(host, *relay_port);
+            info!("Attempting Hub relay via static peer at {}", safe_url);
             match self.try_connect_via_url(&relay_url, slot, is_primary).await {
                 Ok(()) => {
-                    info!("Static peer relay connection ({}) closed normally", relay_url);
+                    info!("Static peer relay connection ({}) closed normally", safe_url);
                     return Ok(());
                 }
                 Err(e) => {
-                    warn!("Static peer relay via {} failed: {}", relay_url, e);
+                    warn!("Static peer relay via {} failed: {}", safe_url, e);
                 }
             }
         }
@@ -314,15 +317,16 @@ impl HubClient {
             return Err(anyhow::anyhow!("No relay peers available"));
         }
         for (peer_id, host, relay_port) in &dynamic_peers {
-            let relay_url = format!("ws://{}:{}", host, relay_port);
-            info!("Attempting Hub relay via peer {} at {}", peer_id, relay_url);
+            let relay_url = build_relay_url(host, *relay_port, self.config.hmac_secret.as_deref());
+            let safe_url = safe_relay_url(host, *relay_port);
+            info!("Attempting Hub relay via peer {} at {}", peer_id, safe_url);
             match self.try_connect_via_url(&relay_url, slot, is_primary).await {
                 Ok(()) => {
                     info!("Dynamic peer relay (peer {}) closed normally", peer_id);
                     return Ok(());
                 }
                 Err(e) => {
-                    warn!("Dynamic peer relay via {} failed: {}", relay_url, e);
+                    warn!("Dynamic peer relay via {} failed: {}", safe_url, e);
                 }
             }
         }
@@ -654,6 +658,21 @@ impl HubClient {
     /// `is_primary = false` → process RPC responses only (suppress notifications to
     ///                        avoid duplicate state updates in pool mode).
     async fn handle_incoming_slot(&self, data: &[u8], is_primary: bool) -> Result<()> {
+        // Decompress if the Hub compressed the payload (prefix byte 0x01).
+        // Raw protobuf frames always begin with a field tag (≥ 0x08), so 0x01 is unambiguous.
+        let decompressed: Vec<u8>;
+        let data: &[u8] = if data.first() == Some(&0x01) {
+            let mut dec = ZlibDecoder::new(&data[1..]);
+            let mut buf = Vec::new();
+            if let Err(e) = dec.read_to_end(&mut buf) {
+                warn!("Failed to decompress Hub message: {}", e);
+                return Ok(());
+            }
+            decompressed = buf;
+            &decompressed
+        } else {
+            data
+        };
         let packet = EdgeHubPacket::decode(data)
             .context("Failed to decode EdgeHubPacket")?;
 
@@ -1233,7 +1252,7 @@ impl HubClient {
         let request = TypedRpcRequest {
             request_id,
             method: "edge.fullSync".to_string(),
-            timeout_ms: Some(30000),
+            timeout_ms: Some(60000),
             edge_full_sync: Some(EdgeFullSyncParams {
                 for_user_id: None,
                 for_user_groups: vec![],
@@ -2259,6 +2278,40 @@ impl HubClient {
             debug!("report_quality to edge {} failed: {}", target_edge_id, e);
         }
     }
+}
+
+/// Build a relay WebSocket URL.
+///
+/// When `hmac_secret` is provided, appends a timestamp-based HMAC token to
+/// authenticate with relay servers that require it:
+///
+/// ```text
+/// ws://host:port/relay?ts=<unix_ms>&token=<hex_hmac>
+/// ```
+///
+/// Without a secret, returns `ws://host:port/relay` — the relay server accepts
+/// connections without authentication when no `hmac_secret` is configured.
+fn build_relay_url(host: &str, port: u16, hmac_secret: Option<&str>) -> String {
+    match hmac_secret {
+        Some(secret) => {
+            use ring::hmac;
+            let ts_ms = current_millis();
+            let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
+            let msg = format!("relay:{}", ts_ms);
+            let sig = hmac::sign(&key, msg.as_bytes());
+            let token = hex::encode(sig.as_ref());
+            format!("ws://{}:{}/relay?ts={}&token={}", host, port, ts_ms, token)
+        }
+        None => format!("ws://{}:{}/relay", host, port),
+    }
+}
+
+/// Build a log-safe relay URL (no authentication query parameters).
+///
+/// Use this in log messages instead of the full URL returned by `build_relay_url`
+/// to avoid leaking HMAC tokens that are valid within the replay-prevention window.
+fn safe_relay_url(host: &str, port: u16) -> String {
+    format!("ws://{}:{}/relay", host, port)
 }
 
 /// Simple timestamp in millis (no external dependency needed).
