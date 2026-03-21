@@ -1,0 +1,17 @@
+[package]
+name = "munode-client"
+version.workspace = true
+edition.workspace = true
+description = "Mumble client library for MuNode (headless-capable)"
+
+[dependencies]
+munode-protocol = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+prost = { workspace = true }
+bytes = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

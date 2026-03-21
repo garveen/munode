@@ -8,6 +8,8 @@ prost = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }
 num_enum = { workspace = true }
+aes = { workspace = true }
+ring = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

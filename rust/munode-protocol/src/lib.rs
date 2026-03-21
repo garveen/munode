@@ -22,3 +22,5 @@ pub mod authservice {
 
 pub mod message_type;
 pub mod transport;
+pub mod crypto;
+pub mod varint;

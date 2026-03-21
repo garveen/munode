@@ -4,6 +4,7 @@ members = [
     "munode-common",
     "munode-edge",
     "munode-hub",
+    "munode-client",
 ]
 resolver = "2"
 
@@ -50,6 +51,7 @@ bytes = "1"
 uuid = { version = "1", features = ["v4"] }
 regex = "1"
 num_enum = "0.7"
+tokio-util = { version = "0.7", features = ["rt"] }
 
 # Crypto
 ring = "0.17"
