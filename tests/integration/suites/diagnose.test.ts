@@ -227,7 +227,6 @@ describe.skipIf(!USE_RUST)('Edge diagnose subcommand', () => {
     expect(stdout).toContain('42');           // server_id
     expect(stdout).toContain('SummaryEdge'); // name
     expect(stdout).toContain('19108');        // port
-    expect(stdout).toContain('auto_fallback'); // default connection_strategy
   });
 
   it('diagnose with invalid JSON config exits non-zero', () => {

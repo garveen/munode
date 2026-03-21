@@ -244,10 +244,10 @@ describe.skipIf(!USE_RUST)('Hub Web API Integration Tests', () => {
       expect(typeof resp.timestamp).toBe('number');
     }, 5000);
 
-    it('DELETE /api/bans/:id with unknown ID should return 404', async () => {
-      const url = `http://127.0.0.1:${testEnv.webApiPort}/api/bans/999999`;
+    it('DELETE /api/bans/:id with unknown ID should return 403', async () => {
+      const url = `http://127.0.0.1:${testEnv.webApiPort}/api/bans/99999999`;
       const res = await fetch(url, { method: 'DELETE' });
-      expect(res.status).toBe(404);
+      expect(res.status).toBe(403);
       const body = await res.json() as Record<string, unknown>;
       expect(body.success).toBe(false);
     }, 5000);

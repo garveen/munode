@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
+use anyhow::Result;
 use tracing::debug;
 
 use crate::channel_store::ChannelStore;
-use crate::database::Database;
+use crate::database::{ChannelGroupRecord, Database};
 
 /// Permission bit flags — defined in `munode_common::permission` and
 /// re-exported here so that callers using `acl_manager::permission::*`
@@ -23,6 +24,22 @@ pub struct AclEntry {
     pub deny: u32,
 }
 
+/// In-memory channel group — the authoritative source of truth for group
+/// membership inside the Hub process.  All reads come from here; DB is only
+/// touched on writes (write-through).
+#[derive(Debug, Clone)]
+pub struct ChannelGroup {
+    /// DB row id — used internally when persisting member lists.
+    pub id: i64,
+    pub name: String,
+    pub inherit: bool,
+    pub inheritable: bool,
+    /// User IDs explicitly added to this group.
+    pub add: Vec<u32>,
+    /// User IDs explicitly removed from (excluded from) this group.
+    pub remove: Vec<u32>,
+}
+
 /// Maximum number of entries in the ACL permission cache.
 ///
 /// With 2000 users × 500 channels = 1 million potential entries, an unbounded
@@ -38,12 +55,22 @@ const ACL_CACHE_MAX_SIZE: usize = 100_000;
 /// performance spike after every eviction cycle.
 const ACL_CACHE_EVICT_TARGET: usize = ACL_CACHE_MAX_SIZE * 3 / 4;
 
-/// ACL Manager responsible for computing effective permissions.
+/// ACL and channel-group manager.
+///
+/// Maintains the in-memory authoritative source of truth for both ACL entries
+/// and channel groups (with embedded member lists).  The database is used
+/// only for persistence (write-through on mutations, bulk load on startup).
+/// All reads — permission checks, batch permission queries, ACL dialog data —
+/// are served from the in-memory store with zero DB round-trips.
 pub struct AclManager {
     db: Arc<Database>,
     channel_store: Arc<ChannelStore>,
-    /// Permission cache: (user_id, channel_id) → effective permission bits.
+    /// Computed-permission cache: (user_id, channel_id) → effective permission bits.
     cache: tokio::sync::RwLock<HashMap<(i32, u32), u32>>,
+    /// ACL entries: channel_id → Vec<AclEntry>  (authoritative source of truth).
+    acl_entries: RwLock<HashMap<u32, Vec<AclEntry>>>,
+    /// Channel groups with embedded member lists: channel_id → Vec<ChannelGroup>.
+    channel_groups: RwLock<HashMap<u32, Vec<ChannelGroup>>>,
 }
 
 impl AclManager {
@@ -52,7 +79,46 @@ impl AclManager {
             db,
             channel_store,
             cache: tokio::sync::RwLock::new(HashMap::new()),
+            acl_entries: RwLock::new(HashMap::new()),
+            channel_groups: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Populate the in-memory store from the database.
+    ///
+    /// Must be called once during Hub startup after the DB is opened.  All
+    /// subsequent reads are served from memory; writes go through
+    /// [`save_acls`] / [`save_channel_groups`] which update both memory and DB.
+    pub fn load_all(&self) -> Result<()> {
+        // --- ACL entries ---
+        let all_acls = self.db.load_all_acls()?;
+        let mut acl_map: HashMap<u32, Vec<AclEntry>> = HashMap::new();
+        for entry in all_acls {
+            acl_map.entry(entry.channel_id).or_default().push(entry);
+        }
+        *self.acl_entries.write().unwrap() = acl_map;
+
+        // --- Channel groups + member lists ---
+        let all_groups: Vec<ChannelGroupRecord> = self.db.load_all_channel_groups()?;
+        let group_ids: Vec<i64> = all_groups.iter().map(|g| g.id).collect();
+        let members_map = self.db.get_channel_group_members_batch(&group_ids)?;
+
+        let mut groups_map: HashMap<u32, Vec<ChannelGroup>> = HashMap::new();
+        for g in all_groups {
+            let members = members_map.get(&g.id).cloned().unwrap_or_default();
+            let add = members.iter().filter(|(_, is_add)| *is_add).map(|(uid, _)| *uid).collect();
+            let remove = members.iter().filter(|(_, is_add)| !*is_add).map(|(uid, _)| *uid).collect();
+            groups_map.entry(g.channel_id).or_default().push(ChannelGroup {
+                id: g.id,
+                name: g.name,
+                inherit: g.inherit,
+                inheritable: g.inheritable,
+                add,
+                remove,
+            });
+        }
+        *self.channel_groups.write().unwrap() = groups_map;
+        Ok(())
     }
 
     /// Calculate effective permissions for a user on a channel.
@@ -81,11 +147,12 @@ impl AclManager {
             return result;
         }
 
-        // Build the channel chain from root to the target channel
+        // Build the channel chain from root to the target channel.
+        // channel_store is fully in-memory; these async calls only acquire a
+        // tokio RwLock with no blocking I/O.
         let chain = self.build_channel_chain(channel_id).await;
 
-        // Snapshot the inherit_acl flag for each channel in the chain (async,
-        // avoids holding any lock during the subsequent blocking DB call).
+        // Snapshot inherit_acl flags (async, in-memory).
         let inherit_flags: Vec<bool> = {
             let mut flags = Vec::with_capacity(chain.len());
             for &cid in &chain {
@@ -99,70 +166,69 @@ impl AclManager {
             flags
         };
 
-        // Load ACLs for every channel in the chain with a single spawn_blocking
-        // call so the tokio thread is never blocked by SQLite I/O.
-        let db = Arc::clone(&self.db);
-        let chain_ids = chain.clone();
-        let chain_acls: Vec<Vec<AclEntry>> =
-            tokio::task::spawn_blocking(move || {
-                chain_ids
-                    .iter()
-                    .map(|&cid| db.load_acls(cid).unwrap_or_default())
-                    .collect()
-            })
-            .await
-            .unwrap_or_else(|_| vec![vec![]; chain.len()]);
+        self.calculate_permissions_with_chain(user_id, channel_id, groups, &chain, &inherit_flags).await
+    }
 
-        // Walk the chain, accumulating permissions
+    /// Core permission calculation given a pre-built ancestor chain.
+    ///
+    /// Reads ACL entries directly from the in-memory store — no DB I/O,
+    /// no `spawn_blocking`.  Used both by [`calculate_permissions`] (which
+    /// builds the chain asynchronously) and by batch permission queries
+    /// (which build all chains from a single channel-store snapshot).
+    pub async fn calculate_permissions_with_chain(
+        &self,
+        user_id: i32,
+        channel_id: u32,
+        groups: &[String],
+        chain: &[u32],
+        inherit_flags: &[bool],
+    ) -> u32 {
+        // Cache check
+        {
+            let cache = self.cache.read().await;
+            if let Some(&cached) = cache.get(&(user_id, channel_id)) {
+                return cached;
+            }
+        }
+        // SuperUser fast path
+        if groups.iter().any(|g| g == "admin" || g == "superuser") {
+            let result = permission::ALL;
+            self.cache_insert(user_id, channel_id, result).await;
+            return result;
+        }
+
+        // Read ACLs from the in-memory store under a single short-lived lock.
+        let chain_acls: Vec<Vec<AclEntry>> = {
+            let acl_map = self.acl_entries.read().unwrap();
+            chain.iter()
+                .map(|&cid| acl_map.get(&cid).cloned().unwrap_or_default())
+                .collect()
+        };
+
         let mut granted = permission::DEFAULT;
-
         for (idx, &chain_channel_id) in chain.iter().enumerate() {
-            let inherit_acl = inherit_flags[idx];
+            let inherit_acl = inherit_flags.get(idx).copied().unwrap_or(true);
             let acls = &chain_acls[idx];
-
-            // Check scope: apply_here for current channel, apply_subs for ancestors
             if !inherit_acl && chain_channel_id != 0 {
-                // Reset to defaults when inheritance is broken
                 granted = permission::DEFAULT;
             }
-
             for acl in acls {
                 let is_target = chain_channel_id == channel_id;
-                if is_target && !acl.apply_here {
-                    continue;
-                }
-                if !is_target && !acl.apply_subs {
-                    continue;
-                }
-
-                // Check if this ACL entry matches the user
-                if !self.acl_matches_user(acl, user_id, groups) {
-                    continue;
-                }
-
-                // Apply allow/deny
+                if is_target && !acl.apply_here { continue; }
+                if !is_target && !acl.apply_subs { continue; }
+                if !self.acl_matches_user(acl, user_id, groups) { continue; }
                 granted |= acl.allow;
                 granted &= !acl.deny;
             }
         }
-
-        // Traverse gate: if user has neither Traverse nor Write, no access
         if granted & (permission::TRAVERSE | permission::WRITE) == 0 {
             granted = permission::NONE;
         }
-
-        // Write implies all permissions except Speak and Whisper
         if granted & permission::WRITE != 0 {
             granted |= permission::ALL & !(permission::SPEAK | permission::WHISPER);
         }
-
-        debug!(
-            "Permissions for user {} on channel {}: 0x{:X}",
-            user_id, channel_id, granted
-        );
-
+        debug!("Permissions for user {} on channel {}: 0x{:X}", user_id, channel_id, granted);
         self.cache_insert(user_id, channel_id, granted).await;
-
         granted
     }
 
@@ -210,16 +276,114 @@ impl AclManager {
         (effective & perm) != 0
     }
 
-    /// Get all ACL entries for a channel (including inherited).
+    /// Get the ACL entries for a channel from the in-memory store.
     pub fn get_channel_acls(&self, channel_id: u32) -> Vec<AclEntry> {
-        self.db.load_acls(channel_id).unwrap_or_default()
+        self.acl_entries.read().unwrap()
+            .get(&channel_id).cloned().unwrap_or_default()
     }
 
-    /// Save ACL entries for a channel (replaces all existing).
+    /// Get the channel groups (with embedded member lists) for a channel.
+    pub fn get_channel_groups(&self, channel_id: u32) -> Vec<ChannelGroup> {
+        self.channel_groups.read().unwrap()
+            .get(&channel_id).cloned().unwrap_or_default()
+    }
+
+    /// Clone the entire ACL entry map for callers that need a snapshot
+    /// (e.g. batch permission queries that iterate hundreds of channels).
+    pub fn acl_entries_snapshot(&self) -> HashMap<u32, Vec<AclEntry>> {
+        self.acl_entries.read().unwrap().clone()
+    }
+
+    /// Clone the entire channel-group map for callers that need a snapshot.
+    pub fn channel_groups_snapshot(&self) -> HashMap<u32, Vec<ChannelGroup>> {
+        self.channel_groups.read().unwrap().clone()
+    }
+
+    /// Save ACL entries for a channel — write-through to both DB and in-memory.
     pub async fn save_acls(&self, channel_id: u32, entries: &[AclEntry]) -> anyhow::Result<()> {
         self.db.save_acls(channel_id, entries)?;
+        {
+            let mut map = self.acl_entries.write().unwrap();
+            if entries.is_empty() {
+                map.remove(&channel_id);
+            } else {
+                map.insert(channel_id, entries.to_vec());
+            }
+        }
         self.invalidate_channel(channel_id).await;
         Ok(())
+    }
+
+    /// Save channel groups for a channel — write-through to both DB and in-memory.
+    ///
+    /// Replaces all existing groups and their member lists for the channel.
+    /// DB writes are synchronous (the underlying SQLite mutex is fast for
+    /// these infrequent admin operations).
+    pub async fn save_channel_groups(
+        &self,
+        channel_id: u32,
+        groups: Vec<ChannelGroup>,
+    ) -> anyhow::Result<()> {
+        // Write to DB: delete+insert groups, then insert members by looking up
+        // the auto-assigned group IDs.
+        let db_records: Vec<ChannelGroupRecord> = groups.iter().map(|g| ChannelGroupRecord {
+            id: 0, // auto-assigned
+            channel_id,
+            name: g.name.clone(),
+            inherit: g.inherit,
+            inheritable: g.inheritable,
+        }).collect();
+        self.db.save_channel_groups(channel_id, &db_records)?;
+
+        // Re-query the just-inserted groups to get their DB-assigned IDs, then
+        // persist member lists and build the authoritative in-memory records.
+        let mut in_memory: Vec<ChannelGroup> = Vec::with_capacity(groups.len());
+        for g in &groups {
+            let gid = self.db
+                .get_channel_group_id(channel_id, &g.name)?
+                .unwrap_or(0);
+            let members: Vec<(u32, bool)> = g.add.iter().map(|&uid| (uid, true))
+                .chain(g.remove.iter().map(|&uid| (uid, false)))
+                .collect();
+            self.db.save_channel_group_members(gid, &members)?;
+            in_memory.push(ChannelGroup {
+                id: gid,
+                name: g.name.clone(),
+                inherit: g.inherit,
+                inheritable: g.inheritable,
+                add: g.add.clone(),
+                remove: g.remove.clone(),
+            });
+        }
+
+        // Update in-memory store.
+        {
+            let mut map = self.channel_groups.write().unwrap();
+            if in_memory.is_empty() {
+                map.remove(&channel_id);
+            } else {
+                map.insert(channel_id, in_memory);
+            }
+        }
+        // Group membership changes may affect effective permissions.
+        self.invalidate_channel(channel_id).await;
+        Ok(())
+    }
+
+    /// Remove all ACL entries and channel groups for a deleted channel.
+    ///
+    /// Must be called whenever a channel is permanently removed so that the
+    /// in-memory store does not accumulate stale entries for non-existent channels.
+    pub async fn remove_channel(&self, channel_id: u32) {
+        {
+            let mut acls = self.acl_entries.write().unwrap();
+            acls.remove(&channel_id);
+        }
+        {
+            let mut groups = self.channel_groups.write().unwrap();
+            groups.remove(&channel_id);
+        }
+        self.invalidate_channel(channel_id).await;
     }
 
     /// Invalidate cache entries for a specific channel and its descendants.
@@ -396,6 +560,7 @@ mod tests {
         .unwrap();
 
         let mgr = AclManager::new(db, cs);
+        mgr.load_all().unwrap();
         let perms = mgr.calculate_permissions(-1, 1, &[]).await;
         assert_eq!(perms & permission::SPEAK, 0);
         // Other permissions should still be present
@@ -422,6 +587,7 @@ mod tests {
         .unwrap();
 
         let mgr = AclManager::new(db, cs);
+        mgr.load_all().unwrap();
 
         // Channel 2 (child of 1) should inherit the deny
         let perms = mgr.calculate_permissions(-1, 2, &[]).await;
@@ -461,6 +627,7 @@ mod tests {
         .unwrap();
 
         let mgr = AclManager::new(db, cs);
+        mgr.load_all().unwrap();
 
         // Channel 2 should NOT inherit the deny (inherit_acl=false resets)
         let perms = mgr.calculate_permissions(-1, 2, &[]).await;
@@ -487,6 +654,7 @@ mod tests {
         .unwrap();
 
         let mgr = AclManager::new(db, cs);
+        mgr.load_all().unwrap();
 
         // User 5 should have MakeChannel
         let perms = mgr.calculate_permissions(5, 0, &[]).await;
@@ -517,6 +685,7 @@ mod tests {
         .unwrap();
 
         let mgr = AclManager::new(db, cs);
+        mgr.load_all().unwrap();
 
         // Authenticated user (id=5) should have Register
         let perms = mgr.calculate_permissions(5, 0, &[]).await;
@@ -547,6 +716,7 @@ mod tests {
         .unwrap();
 
         let mgr = AclManager::new(db, cs);
+        mgr.load_all().unwrap();
         let perms = mgr.calculate_permissions(1, 0, &[]).await;
 
         // Write should imply most permissions
@@ -574,12 +744,12 @@ mod tests {
         let (db, cs) = setup().await;
         let mgr = AclManager::new(db.clone(), cs.clone());
 
-        // Calculate and cache
+        // No ACLs yet: SPEAK should be permitted (DEFAULT grants it).
         let p1 = mgr.calculate_permissions(-1, 0, &[]).await;
         assert_ne!(p1 & permission::SPEAK, 0);
 
-        // Add deny ACL
-        db.save_acls(
+        // Add a deny-SPEAK ACL via the manager (updates in-memory + invalidates cache).
+        mgr.save_acls(
             0,
             &[AclEntry {
                 channel_id: 0,
@@ -591,16 +761,12 @@ mod tests {
                 deny: permission::SPEAK,
             }],
         )
+        .await
         .unwrap();
 
-        // Before invalidation, cache still has old value
-        let cached = mgr.calculate_permissions(-1, 0, &[]).await;
-        assert_ne!(cached & permission::SPEAK, 0); // Still cached
-
-        // After invalidation
-        mgr.invalidate_channel(0).await;
+        // After save_acls the cache is invalidated and the new ACL is in memory.
         let p2 = mgr.calculate_permissions(-1, 0, &[]).await;
-        assert_eq!(p2 & permission::SPEAK, 0); // Now sees the deny
+        assert_eq!(p2 & permission::SPEAK, 0);
     }
 
     /// Verify that partial eviction keeps registered-user entries and removes

@@ -459,54 +459,43 @@ fn bytes_to_ip_string(bytes: &[u8; 16]) -> String {
 }
 
 async fn handle_bans(State(state): State<AppState>) -> impl IntoResponse {
-    match state.database.load_bans() {
-        Ok(bans) => {
-            let now = now_secs() as i64;
-            let entries: Vec<BanEntry> = bans
-                .into_iter()
-                .map(|b| {
-                    let active = if b.duration > 0 {
-                        now < b.start_time.saturating_add(b.duration as i64)
-                    } else {
-                        true // Permanent ban
-                    };
-                    BanEntry {
-                        id: b.id,
-                        address: bytes_to_ip_string(&b.address),
-                        mask: b.mask,
-                        name: b.name,
-                        reason: b.reason,
-                        start_time: b.start_time,
-                        duration: b.duration,
-                        active,
-                    }
-                })
-                .collect();
-            (
-                StatusCode::OK,
-                Json(BanListResponse {
-                    bans: entries,
-                    timestamp: now_secs(),
-                }),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            error!("Failed to load bans: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": "Failed to load bans" })),
-            )
-                .into_response()
-        }
-    }
+    let bans = state.ban_store.get_all();
+    let now = now_secs() as i64;
+    let entries: Vec<BanEntry> = bans
+        .into_iter()
+        .map(|b| {
+            let active = if b.duration > 0 {
+                now < b.start_time.saturating_add(b.duration as i64)
+            } else {
+                true // Permanent ban
+            };
+            BanEntry {
+                id: b.id,
+                address: bytes_to_ip_string(&b.address),
+                mask: b.mask,
+                name: b.name,
+                reason: b.reason,
+                start_time: b.start_time,
+                duration: b.duration,
+                active,
+            }
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(BanListResponse {
+            bans: entries,
+            timestamp: now_secs(),
+        }),
+    )
+        .into_response()
 }
 
 async fn handle_unban(
     State(state): State<AppState>,
     Path(ban_id): Path<i64>,
 ) -> impl IntoResponse {
-    match state.database.delete_ban_by_id(ban_id) {
+    match state.ban_store.delete_by_id(ban_id).await {
         Ok(true) => {
             info!("Ban {} removed via Web API", ban_id);
             (

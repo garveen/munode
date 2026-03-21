@@ -12,6 +12,7 @@ use munode_common::config::HubConfig;
 use munode_protocol::hubedge::*;
 
 use crate::acl_manager::AclManager;
+use crate::ban_store::BanStore;
 use crate::blob_store::BlobStore;
 use crate::channel_store::ChannelStore;
 use crate::database::Database;
@@ -21,6 +22,7 @@ use crate::session_manager::SessionManager;
 use crate::topology_manager::TopologyManager;
 use crate::auth_service::{AuthServiceHandle, run_auth_service_listener};
 use crate::lua_auth::LuaAuthEngine;
+use crate::user_store::UserStore;
 
 /// A single whisper-target slot as reported by an Edge via `EdgeSyncVoiceTarget`.
 ///
@@ -119,6 +121,10 @@ pub struct HubState {
     pub channel_store: Arc<ChannelStore>,
     pub database: Arc<Database>,
     pub acl_manager: AclManager,
+    /// In-memory user store (passwords excluded — never cached).
+    pub user_store: UserStore,
+    /// In-memory ban store.
+    pub ban_store: BanStore,
     /// Filesystem-backed blob storage.
     pub blob_store: Arc<BlobStore>,
     pub edge_connections: RwLock<HashMap<u32, EdgeSender>>,
@@ -161,7 +167,7 @@ impl HubServer {
         let database = Arc::new(Database::open(&self.config.database.path)
             .context("Failed to open database")?);
 
-        let channel_store = Arc::new(ChannelStore::new());
+        let channel_store = Arc::new(ChannelStore::new(database.clone()));
 
         // Open filesystem blob store
         let blob_store = Arc::new(BlobStore::open(&self.config.blob_store.path)
@@ -196,6 +202,8 @@ impl HubServer {
             session_manager: SessionManager::new(),
             channel_store: channel_store.clone(),
             acl_manager: AclManager::new(database.clone(), channel_store.clone()),
+            user_store: UserStore::new(database.clone()),
+            ban_store: BanStore::new(database.clone()),
             database,
             blob_store,
             edge_connections: RwLock::new(HashMap::new()),
@@ -211,7 +219,21 @@ impl HubServer {
         });
 
         // Load channels from database
-        state.channel_store.load_from_db(&state.database).await?;
+        state.channel_store.load_from_db().await?;
+
+        // Populate the in-memory ACL + channel-group store from the database.
+        // After this point all ACL reads are served from memory; DB is only
+        // written to on mutations (write-through).
+        state.acl_manager.load_all()
+            .context("Failed to load ACL entries and channel groups into memory")?;
+
+        // Load users into memory (passwords excluded).
+        state.user_store.load_from_db()
+            .context("Failed to load users into memory")?;
+
+        // Load bans into memory.
+        state.ban_store.load_from_db()
+            .context("Failed to load bans into memory")?;
 
         // Create RPC handler
         let rpc_handler = Arc::new(RpcHandler::new(state.clone()));
@@ -237,18 +259,13 @@ impl HubServer {
 
         // Periodically clean up expired ban records (every 5 minutes)
         {
-            let ban_db = state.database.clone();
+            let ban_state = state.clone();
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_secs(300)).await;
-                    match ban_db.cleanup_expired_bans() {
-                        Ok(removed) if removed > 0 => {
-                            tracing::info!("Cleaned up {} expired ban record(s)", removed);
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to clean up expired bans: {}", e);
-                        }
-                        _ => {}
+                    let removed = ban_state.ban_store.cleanup_expired().await;
+                    if removed > 0 {
+                        tracing::info!("Cleaned up {} expired ban record(s)", removed);
                     }
                 }
             });

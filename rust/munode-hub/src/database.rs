@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::types::ToSql;
 use tracing::info;
 
 /// A user record from the database.
@@ -509,6 +511,73 @@ impl Database {
         Ok(())
     }
 
+    /// Load all users from the database **without** their password hashes.
+    ///
+    /// Returns `(id, name, last_channel, texture_blob, comment_blob)` for every row.
+    /// Used by [`crate::user_store::UserStore::load_from_db`] at startup.
+    pub fn load_all_users_summary(&self) -> Result<Vec<(u32, String, u32, Option<String>, Option<String>)>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = conn.prepare(
+            "SELECT u.id, u.name,
+                    COALESCE(ulc.last_channel, COALESCE(u.last_channel, 0)),
+                    u.texture_blob,
+                    u.comment_blob
+             FROM users u
+             LEFT JOIN user_last_channels ulc ON ulc.id = u.id
+             ORDER BY u.id"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, u32>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u32>(2).unwrap_or(0),
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// Fetch only the password hash for a specific user from the database.
+    ///
+    /// Returns `None` if the user does not exist, `Some("")` if no password is set.
+    /// Call this only at authentication time — never cache the returned value.
+    pub fn get_user_password_hash(&self, user_id: u32) -> Result<Option<String>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let hash: Option<String> = conn.query_row(
+            "SELECT COALESCE(password_hash, '') FROM users WHERE id = ?1",
+            params![user_id],
+            |row| row.get(0),
+        ).optional()?;
+        Ok(hash)
+    }
+
+    /// Load all channel listeners for all users in a single table scan.
+    ///
+    /// Returns a map of `user_id → Vec<channel_id>`.
+    /// Used by [`crate::user_store::UserStore::load_from_db`] at startup.
+    pub fn load_all_channel_listeners(&self) -> Result<HashMap<u32, Vec<u32>>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = match conn.prepare("SELECT user_id, channel_id FROM channel_listeners") {
+            Ok(s) => s,
+            Err(e) if e.to_string().contains("no such table") => return Ok(HashMap::new()),
+            Err(e) => return Err(e.into()),
+        };
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?))
+        })?;
+        let mut map: HashMap<u32, Vec<u32>> = HashMap::new();
+        for row in rows {
+            let (user_id, channel_id) = row?;
+            map.entry(user_id).or_default().push(channel_id);
+        }
+        Ok(map)
+    }
+
     /// Find a user by username.
     pub fn find_user(&self, username: &str) -> Result<Option<UserRecord>> {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
@@ -696,6 +765,110 @@ impl Database {
         Ok(())
     }
 
+    /// Load ACL entries for multiple channels in a single query.
+    ///
+    /// Returns a map of `channel_id → Vec<AclEntry>`. Channels with no ACL entries are absent
+    /// from the map. Queries are chunked to stay under SQLite's default variable limit (999).
+    pub fn load_acls_batch(&self, channel_ids: &[u32]) -> Result<HashMap<u32, Vec<crate::acl_manager::AclEntry>>> {
+        if channel_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut result: HashMap<u32, Vec<crate::acl_manager::AclEntry>> = HashMap::new();
+        for chunk in channel_ids.chunks(500) {
+            let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(",");
+            let sql = format!(
+                r#"SELECT channel_id, user_id, "group", apply_here, apply_subs, allow, deny
+                   FROM acls WHERE channel_id IN ({}) AND deleted_at IS NULL"#,
+                placeholders
+            );
+            let params_vec: Vec<Box<dyn ToSql>> = chunk.iter().map(|&v| Box::new(v) as Box<dyn ToSql>).collect();
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(params_vec.iter().map(|b| b.as_ref())), |row| {
+                let uid: i32 = row.get::<_, i32>(1).unwrap_or(-1);
+                Ok(crate::acl_manager::AclEntry {
+                    channel_id: row.get(0)?,
+                    user_id: if uid == -1 { None } else { Some(uid) },
+                    group_name: row.get(2)?,
+                    apply_here: row.get::<_, i32>(3)? != 0,
+                    apply_subs: row.get::<_, i32>(4)? != 0,
+                    allow: row.get::<_, u32>(5).unwrap_or(0),
+                    deny: row.get::<_, u32>(6).unwrap_or(0),
+                })
+            })?;
+            for row in rows {
+                let entry = row?;
+                result.entry(entry.channel_id).or_default().push(entry);
+            }
+        }
+        Ok(result)
+    }
+
+    /// Load channel groups for multiple channels in a single query.
+    ///
+    /// Returns a map of `channel_id → Vec<ChannelGroupRecord>`.
+    /// Channels with no groups are absent from the map.
+    pub fn get_channel_groups_batch(&self, channel_ids: &[u32]) -> Result<HashMap<u32, Vec<ChannelGroupRecord>>> {
+        if channel_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut result: HashMap<u32, Vec<ChannelGroupRecord>> = HashMap::new();
+        for chunk in channel_ids.chunks(500) {
+            let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "SELECT id, channel_id, name, inherit, inheritable FROM channel_groups WHERE channel_id IN ({})",
+                placeholders
+            );
+            let params_vec: Vec<Box<dyn ToSql>> = chunk.iter().map(|&v| Box::new(v) as Box<dyn ToSql>).collect();
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(params_vec.iter().map(|b| b.as_ref())), |row| {
+                let ch_id: u32 = row.get(1)?;
+                Ok(ChannelGroupRecord {
+                    id: row.get(0)?,
+                    channel_id: ch_id,
+                    name: row.get(2)?,
+                    inherit: row.get::<_, i32>(3)? != 0,
+                    inheritable: row.get::<_, i32>(4)? != 0,
+                })
+            })?;
+            for row in rows {
+                let g = row?;
+                result.entry(g.channel_id).or_default().push(g);
+            }
+        }
+        Ok(result)
+    }
+
+    /// Load channel group members for multiple groups in a single query.
+    ///
+    /// Returns a map of `group_id → Vec<(user_id, is_add)>`.
+    /// Groups with no members are absent from the map.
+    pub fn get_channel_group_members_batch(&self, group_ids: &[i64]) -> Result<HashMap<i64, Vec<(u32, bool)>>> {
+        if group_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut result: HashMap<i64, Vec<(u32, bool)>> = HashMap::new();
+        for chunk in group_ids.chunks(500) {
+            let placeholders = std::iter::repeat("?").take(chunk.len()).collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "SELECT channel_group_id, user_id, is_add FROM channel_group_members WHERE channel_group_id IN ({})",
+                placeholders
+            );
+            let params_vec: Vec<Box<dyn ToSql>> = chunk.iter().map(|&v| Box::new(v) as Box<dyn ToSql>).collect();
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(params_vec.iter().map(|b| b.as_ref())), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, u32>(1)?, row.get::<_, i32>(2)? != 0))
+            })?;
+            for row in rows {
+                let (gid, uid, is_add) = row?;
+                result.entry(gid).or_default().push((uid, is_add));
+            }
+        }
+        Ok(result)
+    }
+
     /// Load all ACL entries from the database.
     pub fn load_all_acls(&self) -> Result<Vec<crate::acl_manager::AclEntry>> {
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
@@ -726,6 +899,30 @@ impl Database {
     // ==================== Ban Management ====================
 
     // ==================== Channel Group Management ====================
+
+    /// Load every channel group from the database in a single query.
+    ///
+    /// Used by [`AclManager::load_all`] at startup to populate the in-memory
+    /// source of truth.  Separate calls to [`Self::get_channel_groups`] are
+    /// only needed for write-through operations after that.
+    pub fn load_all_channel_groups(&self) -> Result<Vec<ChannelGroupRecord>> {
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, channel_id, name, inherit, inheritable FROM channel_groups"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ChannelGroupRecord {
+                id: row.get(0)?,
+                channel_id: row.get(1)?,
+                name: row.get(2)?,
+                inherit: row.get::<_, i32>(3)? != 0,
+                inheritable: row.get::<_, i32>(4)? != 0,
+            })
+        })?;
+        let mut groups = Vec::new();
+        for row in rows { groups.push(row?); }
+        Ok(groups)
+    }
 
     /// Load channel groups for a channel.
     pub fn get_channel_groups(&self, channel_id: u32) -> Result<Vec<ChannelGroupRecord>> {

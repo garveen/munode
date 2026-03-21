@@ -11,13 +11,12 @@ use prost::Message;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, info, trace, warn};
 
 use munode_protocol::authservice::{AuthRequest as ExtAuthRequest};
 use munode_protocol::hubedge::*;
 
 use crate::channel_store::ChannelRecord;
-use crate::database::DbChannelRecord;
 use crate::lua_auth::LuaAuthRequest;
 use crate::server::HubState;
 use crate::session_manager::SessionInfo;
@@ -449,53 +448,25 @@ impl RpcHandler {
             // Periodically purge stale tracking entries
             self.state.failed_auth_tracker.write().await.purge_stale(config.auto_ban.time_window);
 
-            // Check if this IP is currently in the ban list
+            // Check if this IP is currently in the ban list (in-memory, no I/O)
             if let Some(ip_bytes) = parse_ip_to_bytes(&client_ip) {
-                // spawn_blocking: DB call on hot path
-                let db = self.state.database.clone();
-                match tokio::task::spawn_blocking(move || db.check_ip_banned(&ip_bytes))
-                    .await
-                    .context("spawn_blocking join error")?
-                {
-                    Ok(Some(ban)) => {
-                        warn!("Rejecting connection from banned IP {}: {}", client_ip, ban.reason);
-                        let result = EdgeAuthenticateUserResult {
-                            success: false,
-                            user_id: None, username: None, display_name: None,
-                            groups: vec![],
-                            reason: Some(format!("You are banned: {}", ban.reason)),
-                            reject_type: Some(2), // Banned
-                            channel_id: None,
-                            mute: None, deaf: None, suppress: None,
-                            self_mute: None, self_deaf: None,
-                            priority_speaker: None, recording: None,
-                            cert_required: None,
-                        };
-                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
-                            r.edge_authenticate_user = Some(result);
-                        }));
-                    }
-                    Ok(None) => {} // Not banned, proceed
-                    Err(e) => {
-                        error!("Failed to check ban list for IP {}: {}", client_ip, e);
-                        // Fail closed: if we can't verify the ban list, reject the connection
-                        // to prevent banned users from connecting during a DB outage.
-                        let result = EdgeAuthenticateUserResult {
-                            success: false,
-                            user_id: None, username: None, display_name: None,
-                            groups: vec![],
-                            reason: Some("Server error: unable to verify ban status".to_string()),
-                            reject_type: Some(0), // None (reason is provided in the reason field)
-                            channel_id: None,
-                            mute: None, deaf: None, suppress: None,
-                            self_mute: None, self_deaf: None,
-                            priority_speaker: None, recording: None,
-                            cert_required: None,
-                        };
-                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
-                            r.edge_authenticate_user = Some(result);
-                        }));
-                    }
+                if let Some(ban) = self.state.ban_store.check_ip_banned(&ip_bytes) {
+                    warn!("Rejecting connection from banned IP {}: {}", client_ip, ban.reason);
+                    let result = EdgeAuthenticateUserResult {
+                        success: false,
+                        user_id: None, username: None, display_name: None,
+                        groups: vec![],
+                        reason: Some(format!("You are banned: {}", ban.reason)),
+                        reject_type: Some(2), // Banned
+                        channel_id: None,
+                        mute: None, deaf: None, suppress: None,
+                        self_mute: None, self_deaf: None,
+                        priority_speaker: None, recording: None,
+                        cert_required: None,
+                    };
+                    return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                        r.edge_authenticate_user = Some(result);
+                    }));
                 }
             }
         }
@@ -608,37 +579,19 @@ impl RpcHandler {
                     // External auth succeeded — create session from response.
                     let user_id = resp.user_id.unwrap_or(0);
                     let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
-                    // Ensure ext-auth user exists in DB so last_channel can be tracked
+                    // Ensure ext-auth user exists in memory+DB so last_channel can be tracked.
                     if user_id > 0 {
-                        let db = self.state.database.clone();
                         let auth_username_owned = auth_username.clone();
-                        // spawn_blocking: DB call on hot path
-                        if let Err(e) = tokio::task::spawn_blocking(move || db.upsert_ext_user(user_id, &auth_username_owned))
-                            .await
-                            .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking join error: {}", e)))
-                        {
-                            warn!("Failed to persist ext-auth user to database: {}", e);
+                        if let Err(e) = self.state.user_store.upsert_ext_user(user_id, &auth_username_owned).await {
+                            warn!("Failed to persist ext-auth user: {}", e);
                         }
                     }
                     // Prefer ext auth's channel, fall back to DB last_channel, then default
                     let channel_id = if let Some(ch) = resp.channel_id {
                         ch
                     } else if user_id > 0 {
-                        // Check DB for last_channel saved from previous session
-                        let db = self.state.database.clone();
-                        // spawn_blocking: DB call on hot path
-                        match tokio::task::spawn_blocking(move || db.get_user_last_channel(user_id)).await {
-                            Ok(Ok(last_ch)) if last_ch > 0 => last_ch,
-                            Ok(Ok(_)) => config.auth.default_channel,
-                            Ok(Err(e)) => {
-                                warn!("Failed to load last_channel for user {}: {}", user_id, e);
-                                config.auth.default_channel
-                            }
-                            Err(e) => {
-                                warn!("spawn_blocking join error for get_user_last_channel: {}", e);
-                                config.auth.default_channel
-                            }
-                        }
+                        let last_ch = self.state.user_store.get_last_channel(user_id).await;
+                        if last_ch > 0 { last_ch } else { config.auth.default_channel }
                     } else {
                         config.auth.default_channel
                     };
@@ -810,31 +763,14 @@ impl RpcHandler {
                     let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
                     let groups = resp.groups.clone().unwrap_or_default();
                     if user_id > 0 {
-                        let db = self.state.database.clone();
                         let auth_username_owned = auth_username.clone();
-                        // spawn_blocking: DB call on hot path
-                        if let Err(e) = tokio::task::spawn_blocking(move || db.upsert_ext_user(user_id, &auth_username_owned))
-                            .await
-                            .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking join error: {}", e)))
-                        {
-                            warn!("Failed to persist ext-auth user to database: {}", e);
+                        if let Err(e) = self.state.user_store.upsert_ext_user(user_id, &auth_username_owned).await {
+                            warn!("Failed to persist Lua-auth user: {}", e);
                         }
                     }
                     let channel_id = if user_id > 0 {
-                        let db = self.state.database.clone();
-                        // spawn_blocking: DB call on hot path
-                        match tokio::task::spawn_blocking(move || db.get_user_last_channel(user_id)).await {
-                            Ok(Ok(last_ch)) if last_ch > 0 => last_ch,
-                            Ok(Ok(_)) => config.auth.default_channel,
-                            Ok(Err(e)) => {
-                                warn!("Failed to load last_channel for user {}: {}", user_id, e);
-                                config.auth.default_channel
-                            }
-                            Err(e) => {
-                                warn!("spawn_blocking join error for get_user_last_channel: {}", e);
-                                config.auth.default_channel
-                            }
-                        }
+                        let last_ch = self.state.user_store.get_last_channel(user_id).await;
+                        if last_ch > 0 { last_ch } else { config.auth.default_channel }
                     } else {
                         config.auth.default_channel
                     };
@@ -976,34 +912,17 @@ impl RpcHandler {
                     let user_id = resp.user_id.unwrap_or(0);
                     let auth_username = resp.username.clone().unwrap_or_else(|| username.clone());
                     let groups = resp.groups.clone().unwrap_or_default();
-                    // Ensure ext-auth user exists in DB for last_channel tracking
+                    // Ensure ext-auth user exists in memory+DB for last_channel tracking
                     if user_id > 0 {
-                        let db = self.state.database.clone();
                         let auth_username_owned = auth_username.clone();
-                        // spawn_blocking: DB call on hot path
-                        if let Err(e) = tokio::task::spawn_blocking(move || db.upsert_ext_user(user_id, &auth_username_owned))
-                            .await
-                            .unwrap_or_else(|e| Err(anyhow::anyhow!("spawn_blocking join error: {}", e)))
-                        {
-                            warn!("Failed to persist ext-auth user to database: {}", e);
+                        if let Err(e) = self.state.user_store.upsert_ext_user(user_id, &auth_username_owned).await {
+                            warn!("Failed to persist HTTP-auth user: {}", e);
                         }
                     }
-                    // Check DB for last_channel saved from previous session
+                    // Fetch last_channel from DB for this user
                     let channel_id = if user_id > 0 {
-                        let db = self.state.database.clone();
-                        // spawn_blocking: DB call on hot path
-                        match tokio::task::spawn_blocking(move || db.get_user_last_channel(user_id)).await {
-                            Ok(Ok(last_ch)) if last_ch > 0 => last_ch,
-                            Ok(Ok(_)) => config.auth.default_channel,
-                            Ok(Err(e)) => {
-                                warn!("Failed to load last_channel for user {}: {}", user_id, e);
-                                config.auth.default_channel
-                            }
-                            Err(e) => {
-                                warn!("spawn_blocking join error for get_user_last_channel: {}", e);
-                                config.auth.default_channel
-                            }
-                        }
+                        let last_ch = self.state.user_store.get_last_channel(user_id).await;
+                        if last_ch > 0 { last_ch } else { config.auth.default_channel }
                     } else {
                         config.auth.default_channel
                     };
@@ -1153,13 +1072,7 @@ impl RpcHandler {
 
         // Check guest mode
         if !config.auth.allow_guest {
-            // Look up user in database
-            // spawn_blocking: DB call on hot path
-            let db = self.state.database.clone();
-            let username_owned = username.to_string();
-            let db_user = tokio::task::spawn_blocking(move || db.find_user(&username_owned))
-                .await
-                .context("spawn_blocking join error")??;
+            let db_user = self.state.user_store.find_by_name(username).await?;
             if db_user.is_none() {
                 // Track failed attempt (unknown username with no guest access counts toward auto-ban)
                 self.record_auth_failure(&client_ip).await;
@@ -1188,41 +1101,55 @@ impl RpcHandler {
         }
 
         // Look up user; verify password if they have one set
-        // spawn_blocking: DB call on hot path
-        let db = self.state.database.clone();
-        let username_owned = username.to_string();
-        let db_user = tokio::task::spawn_blocking(move || db.find_user(&username_owned))
-            .await
-            .context("spawn_blocking join error")??;
+        let db_user = self.state.user_store.find_by_name(username).await?;
+        // Argon2 is CPU-intensive; fetch the hash from DB (never cached) and verify off the executor.
+        let pw_ok: bool = if let Some(ref u) = db_user {
+            let db = self.state.database.clone();
+            let uid = u.id;
+            let pw_hash_opt = tokio::task::spawn_blocking(move || db.get_user_password_hash(uid))
+                .await
+                .context("spawn_blocking join error for fetch_password_hash")??;
+            match pw_hash_opt {
+                None => true, // user not in users table, no password required
+                Some(ref h) if h.is_empty() => true, // no password set
+                Some(pw_hash) => {
+                    let password_owned = password.to_string();
+                    tokio::task::spawn_blocking(move || verify_password(&pw_hash, &password_owned))
+                        .await
+                        .context("spawn_blocking join error for argon2 verify")?
+                }
+            }
+        } else {
+            true
+        };
+
         let (user_id, channel_id) = match db_user {
             Some(ref u) => {
                 // If user has a stored password hash, verify the supplied password
-                if !u.pw_hash.is_empty() {
-                    if !verify_password(&u.pw_hash, password) {
-                        // Track failed auth attempt for auto-ban (via unified helper)
-                        self.record_auth_failure(&client_ip).await;
-                        let result = EdgeAuthenticateUserResult {
-                            success: false,
-                            user_id: None,
-                            username: None,
-                            display_name: None,
-                            groups: vec![],
-                            reason: Some("Wrong password".to_string()),
-                            reject_type: Some(3), // WrongUserPW
-                            channel_id: None,
-                            mute: None,
-                            deaf: None,
-                            suppress: None,
-                            self_mute: None,
-                            self_deaf: None,
-                            priority_speaker: None,
-                            recording: None,
-                            cert_required: None,
-                        };
-                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
-                            r.edge_authenticate_user = Some(result);
-                        }));
-                    }
+                if !pw_ok {
+                    // Track failed auth attempt for auto-ban (via unified helper)
+                    self.record_auth_failure(&client_ip).await;
+                    let result = EdgeAuthenticateUserResult {
+                        success: false,
+                        user_id: None,
+                        username: None,
+                        display_name: None,
+                        groups: vec![],
+                        reason: Some("Wrong password".to_string()),
+                        reject_type: Some(3), // WrongUserPW
+                        channel_id: None,
+                        mute: None,
+                        deaf: None,
+                        suppress: None,
+                        self_mute: None,
+                        self_deaf: None,
+                        priority_speaker: None,
+                        recording: None,
+                        cert_required: None,
+                    };
+                    return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                        r.edge_authenticate_user = Some(result);
+                    }));
                 }
                 (u.id, u.last_channel)
             }
@@ -1628,94 +1555,52 @@ impl RpcHandler {
             None => Vec::new(),
         };
 
-        // Augment with DB channel group memberships for the entire ancestor chain.
-        // This lets ACL rules that reference named groups work correctly when
-        // users are assigned to those groups via the ACL editor.
+        // Augment with in-memory channel group memberships along the ancestor chain.
         let user_id_u32 = params.actor_user_id;
         let mut effective_groups = groups;
         {
-            // Build ancestor chain (root → target) to check inherited group memberships
-            let mut chain: Vec<u32> = Vec::new();
-            let mut current = params.channel_id;
-            loop {
-                chain.push(current);
-                if current == 0 { break; }
-                match self.state.channel_store.get_channel(current).await {
-                    Some(ch) => {
-                        if let Some(parent) = ch.parent_id {
-                            current = parent;
-                        } else { break; }
-                    }
-                    None => break,
-                }
-            }
-            chain.reverse(); // root first
-
-            // spawn_blocking: all DB group-membership lookups for the chain in one shot.
-            let db = self.state.database.clone();
+            let channel_snapshot = self.state.channel_store.get_parent_and_inherit_snapshot().await;
+            let chain = build_ancestor_chain(&channel_snapshot, params.channel_id);
             let target_channel_id = params.channel_id;
-            let db_groups_result = tokio::task::spawn_blocking(move || {
-                let mut accumulated_groups: Vec<String> = Vec::new();
-                for ancestor_id in chain {
-                    let db_groups = match db.get_channel_groups(ancestor_id) {
-                        Ok(g) => g,
-                        Err(_) => continue,
-                    };
-                    for db_group in &db_groups {
-                        if !db_group.inherit && ancestor_id != target_channel_id {
-                            continue;
-                        }
-                        match db.get_channel_group_members(db_group.id) {
-                            Ok(members) => {
-                                let is_explicitly_added = members.iter()
-                                    .any(|(uid, is_add)| *uid == user_id_u32 && *is_add);
-                                let is_explicitly_removed = members.iter()
-                                    .any(|(uid, is_add)| *uid == user_id_u32 && !*is_add);
-                                if is_explicitly_added && !is_explicitly_removed
-                                    && !accumulated_groups.contains(&db_group.name)
-                                {
-                                    accumulated_groups.push(db_group.name.clone());
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to load group members for group '{}' (id {}): {}",
-                                    db_group.name, db_group.id, e
-                                );
-                            }
-                        }
+            for &ancestor_id in &chain {
+                for g in &self.state.acl_manager.get_channel_groups(ancestor_id) {
+                    if !g.inherit && ancestor_id != target_channel_id {
+                        continue;
+                    }
+                    let is_added = g.add.contains(&user_id_u32);
+                    let is_removed = g.remove.contains(&user_id_u32);
+                    if is_added && !is_removed && !effective_groups.contains(&g.name) {
+                        effective_groups.push(g.name.clone());
                     }
                 }
-                accumulated_groups
-            })
-            .await
-            .unwrap_or_default();
-
-            for g in db_groups_result {
-                if !effective_groups.contains(&g) {
-                    effective_groups.push(g);
-                }
             }
+
+            let inherit_flags: Vec<bool> = chain
+                .iter()
+                .map(|&cid| channel_snapshot.get(&cid).map(|(_, inh)| *inh).unwrap_or(true))
+                .collect();
+
+            // Calculate effective permissions using the ACL manager (reads from in-memory store).
+            let permissions = self.state.acl_manager
+                .calculate_permissions_with_chain(
+                    params.actor_user_id as i32,
+                    params.channel_id,
+                    &effective_groups,
+                    &chain,
+                    &inherit_flags,
+                )
+                .await;
+
+            let result = EdgeHandlePermissionQueryResult {
+                success: true,
+                permissions: Some(permissions),
+                error: None,
+            };
+
+            return Ok(self.make_response_packet(request_id, "edge.handlePermissionQuery", |r| {
+                r.edge_handle_permission_query = Some(result);
+            }));
         }
-
-        // Calculate effective permissions using the ACL manager
-        let permissions = self.state.acl_manager
-            .calculate_permissions(
-                params.actor_user_id as i32,
-                params.channel_id,
-                &effective_groups,
-            )
-            .await;
-
-        let result = EdgeHandlePermissionQueryResult {
-            success: true,
-            permissions: Some(permissions),
-            error: None,
-        };
-
-        Ok(self.make_response_packet(request_id, "edge.handlePermissionQuery", |r| {
-            r.edge_handle_permission_query = Some(result);
-        }))
     }
 
     async fn handle_batch_permission_query(
@@ -1726,111 +1611,75 @@ impl RpcHandler {
         let params = request.edge_batch_permission_query.as_ref()
             .context("Missing edge_batch_permission_query params")?;
 
-        // Look up user groups from the session (done once for all channels)
+        let user_id_u32 = params.actor_user_id;
+
+        // [1] Single async lock: snapshot the entire (parent_id, inherit_acl) map.
+        //     This replaces O(N × depth) individual get_channel() calls with one.
+        let channel_snapshot = self.state.channel_store.get_parent_and_inherit_snapshot().await;
+
+        // [2] Resolve base groups from the session (also one async call).
         let base_groups: Vec<String> = match self.state.session_manager
             .get_session(params.actor_session).await {
             Some(s) => s.groups.clone(),
             None => Vec::new(),
         };
 
-        let user_id_u32 = params.actor_user_id;
+        // [3] Build every ancestor chain synchronously from the in-memory snapshot.
+        //     No lock acquisitions needed beyond step [1].
+        let chains: Vec<Vec<u32>> = params.channel_ids
+            .iter()
+            .map(|&cid| build_ancestor_chain(&channel_snapshot, cid))
+            .collect();
 
-        // Compute permissions for every requested channel.
-        // Group augmentation (DB channel-group memberships) is done per-channel,
-        // matching the single-query logic exactly.
+        // [4] Read channel groups from the in-memory store (single sync lock, replaces batch DB queries).
+        let groups_snapshot = self.state.acl_manager.channel_groups_snapshot();
+
+        // [5] Compute one entry per requested channel — entirely in-memory.
         let mut entries: Vec<ChannelPermissionEntry> = Vec::with_capacity(params.channel_ids.len());
-        for &channel_id in &params.channel_ids {
+        for (idx, &channel_id) in params.channel_ids.iter().enumerate() {
+            let chain = &chains[idx];
+
+            // Build inherit_flags from the snapshot (no lock).
+            let inherit_flags: Vec<bool> = chain
+                .iter()
+                .map(|&cid| channel_snapshot.get(&cid).map(|(_, inherit)| *inherit).unwrap_or(true))
+                .collect();
+
+            // Accumulate extra group memberships from in-memory channel groups along the chain.
             let mut effective_groups = base_groups.clone();
-
-            // Build ancestor chain (root → channel_id) to check inherited group memberships
-            {
-                let mut chain: Vec<u32> = Vec::new();
-                let mut current = channel_id;
-                loop {
-                    chain.push(current);
-                    if current == 0 { break; }
-                    match self.state.channel_store.get_channel(current).await {
-                        Some(ch) => {
-                            if let Some(parent) = ch.parent_id {
-                                current = parent;
-                            } else { break; }
+            for &ancestor_id in chain {
+                if let Some(ancestor_groups) = groups_snapshot.get(&ancestor_id) {
+                    for g in ancestor_groups {
+                        if !g.inherit && ancestor_id != channel_id {
+                            continue;
                         }
-                        None => break,
-                    }
-                }
-                chain.reverse(); // root first
-
-                // spawn_blocking: all DB group-membership lookups for the chain in one shot.
-                let db = self.state.database.clone();
-                let db_groups_result = tokio::task::spawn_blocking(move || {
-                    let mut accumulated_groups: Vec<String> = Vec::new();
-                    for ancestor_id in chain {
-                        let db_groups = match db.get_channel_groups(ancestor_id) {
-                            Ok(g) => g,
-                            Err(_) => continue,
-                        };
-                        for db_group in &db_groups {
-                            if !db_group.inherit && ancestor_id != channel_id {
-                                continue;
-                            }
-                            match db.get_channel_group_members(db_group.id) {
-                                Ok(members) => {
-                                    let is_added = members.iter()
-                                        .any(|(uid, is_add)| *uid == user_id_u32 && *is_add);
-                                    let is_removed = members.iter()
-                                        .any(|(uid, is_add)| *uid == user_id_u32 && !*is_add);
-                                    if is_added && !is_removed && !accumulated_groups.contains(&db_group.name) {
-                                        accumulated_groups.push(db_group.name.clone());
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "Failed to load group members for group '{}' (id {}): {}",
-                                        db_group.name, db_group.id, e
-                                    );
-                                }
-                            }
+                        let is_added = g.add.contains(&user_id_u32);
+                        let is_removed = g.remove.contains(&user_id_u32);
+                        if is_added && !is_removed && !effective_groups.contains(&g.name) {
+                            effective_groups.push(g.name.clone());
                         }
-                    }
-                    accumulated_groups
-                })
-                .await
-                .unwrap_or_default();
-
-                for g in db_groups_result {
-                    if !effective_groups.contains(&g) {
-                        effective_groups.push(g);
                     }
                 }
             }
 
-            // Calculate effective permissions for this channel.
-            // The ACL manager writes results into its cache on first compute, so
-            // subsequent PermissionQuery calls for the same (user, channel) pair
-            // (e.g. from a live client's UI) will be served from cache.
+            // Calculate permissions using the in-memory ACL data.
             let permissions = self.state.acl_manager
-                .calculate_permissions(
-                    params.actor_user_id as i32,
+                .calculate_permissions_with_chain(
+                    user_id_u32 as i32,
                     channel_id,
                     &effective_groups,
+                    chain,
+                    &inherit_flags,
                 )
                 .await;
 
-            // Compute is_enter_restricted: does the channel have any ACL entry
-            // that explicitly denies Enter?  This is a channel-level property
-            // independent of the querying user — it mirrors Murmur's
-            // isChannelEnterRestricted() which iterates the channel's own ACL
-            // list and returns true when any entry has pDeny & ChanACL::Enter.
-            // Only the channel's own (non-inherited) ACL entries are checked.
+            // Derive is_enter_restricted from the in-memory ACL entries.
             let is_enter_restricted = {
                 use munode_common::permission;
-                let db = self.state.database.clone();
-                // spawn_blocking: DB call on hot path
-                let acls = tokio::task::spawn_blocking(move || db.load_acls(channel_id))
-                    .await
-                    .unwrap_or_else(|_| Ok(vec![]))
-                    .unwrap_or_default();
-                acls.iter().any(|a| a.deny & permission::ENTER != 0)
+                self.state.acl_manager
+                    .get_channel_acls(channel_id)
+                    .iter()
+                    .any(|a| a.deny & permission::ENTER != 0)
             };
 
             entries.push(ChannelPermissionEntry {
@@ -1998,36 +1847,19 @@ impl RpcHandler {
                 inherit_acl: params.inherit_acl.unwrap_or(true),
                 links: std::collections::HashSet::new(),
             };
-            let id = self.state.channel_store.create_channel_auto_id(ch.clone()).await;
-
-            // Save to database
-            let db_ch = DbChannelRecord {
-                id,
-                parent_id: params.parent_id,
-                name: params.name.clone().unwrap_or_else(|| "New Channel".to_string()),
-                description: params.description.clone().unwrap_or_default(),
-                position: params.position.unwrap_or(0),
-                max_users: params.max_users.unwrap_or(0),
-                temporary: false,
-                inherit_acl: params.inherit_acl.unwrap_or(true),
-            };
-            // spawn_blocking: DB call on hot path
-            let db = self.state.database.clone();
-            let db_ch_owned = db_ch.clone();
-            tokio::task::spawn_blocking(move || db.save_channel(&db_ch_owned))
-                .await
-                .context("spawn_blocking join error")??;
+            let id = self.state.channel_store.create_and_persist(ch.clone()).await
+                .context("Failed to create and persist channel")?;
 
             // Broadcast channel created
             let proto = ChannelDataProto {
                 channel_id: id,
-                name: db_ch.name.clone(),
-                parent_id: db_ch.parent_id,
-                description: Some(db_ch.description),
-                position: Some(db_ch.position),
-                max_users: if db_ch.max_users > 0 { Some(db_ch.max_users) } else { None },
+                name: ch.name.clone(),
+                parent_id: ch.parent_id,
+                description: Some(ch.description.clone()),
+                position: Some(ch.position),
+                max_users: if ch.max_users > 0 { Some(ch.max_users) } else { None },
                 temporary: Some(false),
-                inherit_acl: Some(db_ch.inherit_acl),
+                inherit_acl: Some(ch.inherit_acl),
                 links: vec![],
             };
             self.broadcast_notification("hub.channelCreated", |n| {
@@ -2059,25 +1891,8 @@ impl RpcHandler {
                     ch.description = desc.clone();
                 }
 
-                self.state.channel_store.update_channel(ch.clone()).await;
-
-                // Save to database
-                let db_ch = DbChannelRecord {
-                    id: ch.id,
-                    parent_id: ch.parent_id,
-                    name: ch.name.clone(),
-                    description: ch.description.clone(),
-                    position: ch.position,
-                    max_users: ch.max_users,
-                    temporary: ch.temporary,
-                    inherit_acl: ch.inherit_acl,
-                };
-                // spawn_blocking: DB call on hot path
-                let db = self.state.database.clone();
-                let db_ch_owned = db_ch.clone();
-                tokio::task::spawn_blocking(move || db.save_channel(&db_ch_owned))
-                    .await
-                    .context("spawn_blocking join error")??;
+                self.state.channel_store.update_and_persist(ch.clone()).await
+                    .context("Failed to update and persist channel")?;
 
                 // Broadcast channel updated
                 let proto = ChannelDataProto {
@@ -2191,34 +2006,20 @@ impl RpcHandler {
                 });
             }
 
-            // Load channel groups for this channel
-            let groups_db = match self.state.database.get_channel_groups(channel_id) {
-                Ok(groups) => groups,
-                Err(e) => {
-                    warn!("Failed to load channel groups for channel {}: {}", channel_id, e);
-                    vec![]
-                }
-            };
-            let groups_proto: Vec<munode_protocol::mumbleproto::acl::ChanGroup> = groups_db.iter().map(|g| {
-                let members_db = match self.state.database.get_channel_group_members(g.id) {
-                    Ok(m) => m,
-                    Err(e) => {
-                        warn!("Failed to load members for group '{}' (id {}): {}", g.name, g.id, e);
-                        vec![]
-                    }
-                };
-                let add: Vec<u32> = members_db.iter().filter(|(_, is_add)| *is_add).map(|(uid, _)| *uid).collect();
-                let remove: Vec<u32> = members_db.iter().filter(|(_, is_add)| !*is_add).map(|(uid, _)| *uid).collect();
-                munode_protocol::mumbleproto::acl::ChanGroup {
-                    name: g.name.clone(),
-                    inherited: Some(false),
-                    inherit: Some(g.inherit),
-                    inheritable: Some(g.inheritable),
-                    add,
-                    remove,
-                    inherited_members: vec![],
-                }
-            }).collect();
+            // Load channel groups for this channel from the in-memory store.
+            let groups_proto: Vec<munode_protocol::mumbleproto::acl::ChanGroup> =
+                self.state.acl_manager.get_channel_groups(channel_id)
+                    .iter()
+                    .map(|g| munode_protocol::mumbleproto::acl::ChanGroup {
+                        name: g.name.clone(),
+                        inherited: Some(false),
+                        inherit: Some(g.inherit),
+                        inheritable: Some(g.inheritable),
+                        add: g.add.clone(),
+                        remove: g.remove.clone(),
+                        inherited_members: vec![],
+                    })
+                    .collect();
 
             // Encode ACL data as raw bytes (Mumble ACL message format)
             let acl_msg = munode_protocol::mumbleproto::Acl {
@@ -2261,29 +2062,19 @@ impl RpcHandler {
 
             self.state.acl_manager.save_acls(params.channel_id, &entries).await?;
 
-            // Save channel groups from the decoded ACL message
-            let groups_to_save: Vec<crate::database::ChannelGroupRecord> = acl_msg.groups.iter().map(|g| {
-                crate::database::ChannelGroupRecord {
-                    id: 0, // auto-assigned by DB
-                    channel_id: params.channel_id,
+            // Save channel groups through the AclManager (write-through: DB + in-memory).
+            let channel_groups: Vec<crate::acl_manager::ChannelGroup> = acl_msg.groups.iter().map(|g| {
+                crate::acl_manager::ChannelGroup {
+                    id: 0,
                     name: g.name.clone(),
                     inherit: g.inherit.unwrap_or(true),
                     inheritable: g.inheritable.unwrap_or(true),
+                    add: g.add.clone(),
+                    remove: g.remove.clone(),
                 }
             }).collect();
-            if let Err(e) = self.state.database.save_channel_groups(params.channel_id, &groups_to_save) {
+            if let Err(e) = self.state.acl_manager.save_channel_groups(params.channel_id, channel_groups).await {
                 warn!("Failed to save channel groups: {}", e);
-            }
-            // Save members for each group
-            for g in &acl_msg.groups {
-                if let Ok(Some(gid)) = self.state.database.get_channel_group_id(params.channel_id, &g.name) {
-                    let members: Vec<(u32, bool)> = g.add.iter().map(|&uid| (uid, true))
-                        .chain(g.remove.iter().map(|&uid| (uid, false)))
-                        .collect();
-                    if let Err(e) = self.state.database.save_channel_group_members(gid, &members) {
-                        warn!("Failed to save channel group members for group '{}': {}", g.name, e);
-                    }
-                }
             }
 
             // Update inherit_acl flag on channel if provided
@@ -2359,7 +2150,7 @@ impl RpcHandler {
         };
         // Only save for registered users (user_id > 0); guests (user_id == 0) are skipped.
         if params.user_id > 0 {
-            if let Err(e) = self.state.database.save_channel_listeners(params.user_id, &params.channel_ids) {
+            if let Err(e) = self.state.user_store.save_listeners(params.user_id, &params.channel_ids).await {
                 warn!("Failed to save channel listeners for user {}: {}", params.user_id, e);
                 return Ok(self.make_response_packet(request_id, "edge.saveChannelListeners", |r| {
                     r.edge_save_channel_listeners = Some(EdgeSaveChannelListenersResult {
@@ -2398,39 +2189,22 @@ impl RpcHandler {
                 });
             }));
         }
-        match self.state.database.load_channel_listeners(params.user_id) {
-            Ok(channel_ids) => {
-                debug!("Loaded {} channel listeners for user {}", channel_ids.len(), params.user_id);
-                Ok(self.make_response_packet(request_id, "edge.loadChannelListeners", |r| {
-                    r.edge_load_channel_listeners = Some(EdgeLoadChannelListenersResult {
-                        success: true,
-                        channel_ids,
-                        error: None,
-                    });
-                }))
-            }
-            Err(e) => {
-                warn!("Failed to load channel listeners for user {}: {}", params.user_id, e);
-                Ok(self.make_response_packet(request_id, "edge.loadChannelListeners", |r| {
-                    r.edge_load_channel_listeners = Some(EdgeLoadChannelListenersResult {
-                        success: false,
-                        channel_ids: vec![],
-                        error: Some(e.to_string()),
-                    });
-                }))
-            }
-        }
+        let channel_ids = self.state.user_store.get_listeners(params.user_id);
+        debug!("Loaded {} channel listeners for user {}", channel_ids.len(), params.user_id);
+        Ok(self.make_response_packet(request_id, "edge.loadChannelListeners", |r| {
+            r.edge_load_channel_listeners = Some(EdgeLoadChannelListenersResult {
+                success: true,
+                channel_ids,
+                error: None,
+            });
+        }))
     }
 
     async fn handle_get_ban_list(
         &self,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        // spawn_blocking: DB call on hot path
-        let db = self.state.database.clone();
-        let bans = tokio::task::spawn_blocking(move || db.load_bans())
-            .await
-            .context("spawn_blocking join error")??;
+        let bans = self.state.ban_store.get_all();
 
         let ban_entries: Vec<munode_protocol::mumbleproto::ban_list::BanEntry> = bans.iter().map(|b| {
             munode_protocol::mumbleproto::ban_list::BanEntry {
@@ -2498,7 +2272,7 @@ impl RpcHandler {
             }
         }).collect();
 
-        self.state.database.replace_bans(&bans_data)?;
+        self.state.ban_store.replace_bans(&bans_data).await?;
         info!("Updated ban list: {} entries", bans_data.len());
 
         let result = EdgeHandleAclResult {
@@ -2515,7 +2289,7 @@ impl RpcHandler {
     }
 
     async fn handle_get_user_list(&self, request_id: &str) -> Result<EdgeHubPacket> {
-        let users = self.state.database.list_users()?;
+        let users = self.state.user_store.list().await?;
         let user_list = munode_protocol::mumbleproto::UserList {
             users: users
                 .iter()
@@ -2555,9 +2329,9 @@ impl RpcHandler {
             if let Some(new_name) = &u.name {
                 if new_name.is_empty() {
                     // Empty name = de-register
-                    self.state.database.delete_user(u.user_id)?;
+                    self.state.user_store.delete(u.user_id).await?;
                 } else {
-                    match self.state.database.rename_user(u.user_id, new_name) {
+                    match self.state.user_store.rename(u.user_id, new_name).await {
                         Ok(false) => {
                             error_msg = Some(format!("User {} not found", u.user_id));
                         }
@@ -2775,32 +2549,13 @@ impl RpcHandler {
                     let links_remove: Vec<u32> = p.links_remove.clone();
 
                     for target_id in &links_add {
-                        if let Err(e) = self.state.database.add_channel_link(ch_id, *target_id) {
+                        if let Err(e) = self.state.channel_store.add_link(ch_id, *target_id).await {
                             warn!("Failed to add channel link {} <-> {}: {}", ch_id, target_id, e);
-                        } else {
-                            // Update in-memory channel store both directions
-                            if let Some(mut ch) = self.state.channel_store.get_channel(ch_id).await {
-                                ch.links.insert(*target_id);
-                                self.state.channel_store.update_channel(ch).await;
-                            }
-                            if let Some(mut peer) = self.state.channel_store.get_channel(*target_id).await {
-                                peer.links.insert(ch_id);
-                                self.state.channel_store.update_channel(peer).await;
-                            }
                         }
                     }
                     for target_id in &links_remove {
-                        if let Err(e) = self.state.database.remove_channel_link(ch_id, *target_id) {
+                        if let Err(e) = self.state.channel_store.remove_link(ch_id, *target_id).await {
                             warn!("Failed to remove channel link {} <-> {}: {}", ch_id, target_id, e);
-                        } else {
-                            if let Some(mut ch) = self.state.channel_store.get_channel(ch_id).await {
-                                ch.links.remove(target_id);
-                                self.state.channel_store.update_channel(ch).await;
-                            }
-                            if let Some(mut peer) = self.state.channel_store.get_channel(*target_id).await {
-                                peer.links.remove(&ch_id);
-                                self.state.channel_store.update_channel(peer).await;
-                            }
                         }
                     }
 
@@ -2873,19 +2628,7 @@ impl RpcHandler {
             return; // Don't allow removing root channel
         }
 
-        if let Some(removed) = self.state.channel_store.remove_channel(channel_id).await {
-            info!("Channel removed: {} (id={})", removed.name, channel_id);
-
-            // Delete from database
-            if let Err(e) = self.state.database.delete_channel(channel_id) {
-                warn!("Failed to delete channel {} from database: {}", channel_id, e);
-            }
-
-            // Broadcast to all edges
-            self.broadcast_notification("hub.channelRemoved", |n| {
-                n.channel_removed = Some(HubChannelRemovedParams { channel_id });
-            }).await;
-        }
+        self.remove_channel_coordinated(channel_id).await;
     }
 
     async fn on_plugin_data(&self, notification: &TypedRpcNotification, source_edge_id: u32) {
@@ -2953,9 +2696,9 @@ impl RpcHandler {
     async fn save_user_last_channel(&self, session_id: u32) {
         if let Some(session) = self.state.session_manager.get_session(session_id).await {
             if session.user_id > 0 {
-                if let Err(e) = self.state.database.save_user_last_channel(
+                if let Err(e) = self.state.user_store.save_last_channel(
                     session.user_id, session.channel_id
-                ) {
+                ).await {
                     warn!("Failed to save last channel for user {}: {}", session.user_id, e);
                 }
             }
@@ -2991,7 +2734,7 @@ impl RpcHandler {
                         .as_secs() as i64,
                     duration: config.auto_ban.duration as u32,
                 };
-                if let Err(e) = self.state.database.add_ban(&ban) {
+                if let Err(e) = self.state.ban_store.add_ban(&ban).await {
                     warn!("Failed to add auto-ban: {}", e);
                 }
             } else {
@@ -3179,23 +2922,42 @@ impl RpcHandler {
                 return;
             }
             let parent_id = ch.parent_id;
-            // Delete this empty temporary channel
-            self.state.channel_store.remove_channel(current_id).await;
-            if let Err(e) = self.state.database.delete_channel(current_id) {
-                warn!("Failed to delete temporary channel {} from DB: {}", current_id, e);
-            }
-            info!("Deleted empty temporary channel {} ('{}')", current_id, ch.name);
-            self.broadcast_notification("hub.channelRemoved", |n| {
-                n.channel_removed = Some(HubChannelRemovedParams {
-                    channel_id: current_id,
-                });
-            }).await;
+            // Delete this empty temporary channel via the coordinated helper
+            // (persists to DB, clears ACL/group memory, broadcasts to edges).
+            info!("Deleting empty temporary channel {} ('{}')", current_id, ch.name);
+            self.remove_channel_coordinated(current_id).await;
             // Continue to check the parent channel
             match parent_id {
                 Some(pid) => current_id = pid,
                 None => return,
             }
         }
+    }
+
+    /// Remove a channel from all in-memory stores, persist the deletion to the
+    /// database, and broadcast `hub.channelRemoved` to all connected Edges.
+    ///
+    /// This is the single authoritative call site for channel removal — both
+    /// the explicit admin delete path and the automatic temporary-channel
+    /// cleanup loop must go through here, so that all stores stay consistent
+    /// without the caller having to know about every downstream store.
+    async fn remove_channel_coordinated(&self, channel_id: u32) {
+        match self.state.channel_store.remove_and_persist(channel_id).await {
+            Ok(Some(removed)) => {
+                info!("Channel removed: {} (id={})", removed.name, channel_id);
+            }
+            Ok(None) => {
+                // Already gone — still clean up memory and notify edges.
+            }
+            Err(e) => {
+                warn!("Failed to remove channel {} from DB: {}", channel_id, e);
+                // Proceed anyway: keep memory and edges consistent even if DB write failed.
+            }
+        }
+        self.state.acl_manager.remove_channel(channel_id).await;
+        self.broadcast_notification("hub.channelRemoved", |n| {
+            n.channel_removed = Some(HubChannelRemovedParams { channel_id });
+        }).await;
     }
 
     fn make_response_packet<F>(
@@ -3382,9 +3144,9 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_get_user_texture.as_ref().context("Missing blob_get_user_texture params")?;
-        let hash_result = self.state.database.get_user_blob_hash(params.user_id, "texture");
-        match hash_result {
-            Ok(Some(hash)) => {
+        let hash_opt = self.state.user_store.get_blob_hash(params.user_id, "texture").await?;
+        match hash_opt {
+            Some(hash) => {
                 match self.state.blob_store.get(&hash) {
                     Ok(Some(data)) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
                         r.blob_get_user_texture = Some(BlobGetUserTextureResult {
@@ -3403,14 +3165,9 @@ impl RpcHandler {
                     })),
                 }
             }
-            Ok(None) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
+            None => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
                 r.blob_get_user_texture = Some(BlobGetUserTextureResult {
                     success: false, data: None, hash: None, error: Some("Not found".into()),
-                });
-            })),
-            Err(e) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
-                r.blob_get_user_texture = Some(BlobGetUserTextureResult {
-                    success: false, data: None, hash: None, error: Some(e.to_string()),
                 });
             })),
         }
@@ -3422,9 +3179,9 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_get_user_comment.as_ref().context("Missing blob_get_user_comment params")?;
-        let hash_result = self.state.database.get_user_blob_hash(params.user_id, "comment");
-        match hash_result {
-            Ok(Some(hash)) => {
+        let hash_opt = self.state.user_store.get_blob_hash(params.user_id, "comment").await?;
+        match hash_opt {
+            Some(hash) => {
                 match self.state.blob_store.get(&hash) {
                     Ok(Some(data)) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
                         r.blob_get_user_comment = Some(BlobGetUserCommentResult {
@@ -3443,14 +3200,9 @@ impl RpcHandler {
                     })),
                 }
             }
-            Ok(None) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
+            None => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
                 r.blob_get_user_comment = Some(BlobGetUserCommentResult {
                     success: false, data: None, hash: None, error: Some("Not found".into()),
-                });
-            })),
-            Err(e) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
-                r.blob_get_user_comment = Some(BlobGetUserCommentResult {
-                    success: false, data: None, hash: None, error: Some(e.to_string()),
                 });
             })),
         }
@@ -3464,7 +3216,7 @@ impl RpcHandler {
         let params = request.blob_set_user_texture.as_ref().context("Missing blob_set_user_texture params")?;
         match self.state.blob_store.put(&params.data) {
             Ok(hash) => {
-                match self.state.database.set_user_blob_hash(params.user_id, "texture", &hash) {
+                match self.state.user_store.set_blob_hash(params.user_id, "texture", &hash).await {
                     Ok(()) => Ok(self.make_response_packet(request_id, "blob.setUserTexture", |r| {
                         r.blob_set_user_texture = Some(BlobSetUserTextureResult {
                             success: true, hash: Some(hash.clone()), error: None,
@@ -3493,7 +3245,7 @@ impl RpcHandler {
         let params = request.blob_set_user_comment.as_ref().context("Missing blob_set_user_comment params")?;
         match self.state.blob_store.put(&params.data) {
             Ok(hash) => {
-                match self.state.database.set_user_blob_hash(params.user_id, "comment", &hash) {
+                match self.state.user_store.set_blob_hash(params.user_id, "comment", &hash).await {
                     Ok(()) => Ok(self.make_response_packet(request_id, "blob.setUserComment", |r| {
                         r.blob_set_user_comment = Some(BlobSetUserCommentResult {
                             success: true, hash: Some(hash.clone()), error: None,
@@ -3811,6 +3563,29 @@ fn compute_hmac(secret: &str, challenge: &str, server_id: u32) -> String {
 
 fn hex_encode(data: &[u8]) -> String {
     data.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Build the ancestor chain `[root, …, parent, channel_id]` from a pre-snapshotted
+/// parent map (produced by [`ChannelStore::get_parent_and_inherit_snapshot`]).
+///
+/// Using this free function instead of `ChannelStore::get_channel()` in a loop
+/// avoids O(depth) async lock acquisitions per channel.  The snapshot is acquired
+/// once before the batch and shared read-only across all chain builds.
+fn build_ancestor_chain(snapshot: &HashMap<u32, (Option<u32>, bool)>, channel_id: u32) -> Vec<u32> {
+    let mut chain = Vec::new();
+    let mut current = channel_id;
+    loop {
+        chain.push(current);
+        if current == 0 {
+            break;
+        }
+        match snapshot.get(&current) {
+            Some((Some(parent), _)) => current = *parent,
+            _ => break,
+        }
+    }
+    chain.reverse();
+    chain
 }
 
 fn current_millis() -> u64 {

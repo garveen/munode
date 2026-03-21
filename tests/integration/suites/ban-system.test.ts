@@ -230,8 +230,10 @@ describe('Ban System Integration Tests', () => {
 
   describe('Cross-Edge Ban Synchronization', () => {
     it('should synchronize ban list across edges', async () => {
-      const adminClient1 = new MumbleClient(); // Edge 1
-      const adminClient2 = new MumbleClient(); // Edge 2
+      // Use two different admin accounts to avoid hitting max_sessions_per_user=1
+      // when both clients are connected simultaneously to different edges.
+      const adminClient1 = new MumbleClient(); // Edge 1 — 'admin'
+      const adminClient2 = new MumbleClient(); // Edge 2 — 'admin_password'
 
       await adminClient1.connect({
         host: 'localhost',
@@ -244,8 +246,8 @@ describe('Ban System Integration Tests', () => {
       await adminClient2.connect({
         host: 'localhost',
         port: testEnv.edgePort2,
-        username: 'admin',
-        password: 'admin123',
+        username: 'admin_password',
+        password: 'admin_password',
         rejectUnauthorized: false,
       });
 

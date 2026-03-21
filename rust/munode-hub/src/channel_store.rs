@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tokio::sync::RwLock;
 use tracing::info;
 
-use crate::database::Database;
+use crate::database::{Database, DbChannelRecord};
 
 /// In-memory representation of a channel.
 #[derive(Debug, Clone)]
@@ -22,23 +22,29 @@ pub struct ChannelRecord {
 }
 
 /// Thread-safe channel tree store.
+///
+/// This is the **authoritative source of truth** for channel data.  The database
+/// is used only for persistence: all reads are served from the in-memory map, and
+/// all mutations write through to both the in-memory map and the database.
 pub struct ChannelStore {
     channels: RwLock<HashMap<u32, ChannelRecord>>,
     next_id: AtomicU32,
+    db: std::sync::Arc<Database>,
 }
 
 impl ChannelStore {
-    pub fn new() -> Self {
+    pub fn new(db: std::sync::Arc<Database>) -> Self {
         Self {
             channels: RwLock::new(HashMap::new()),
             next_id: AtomicU32::new(1),
+            db,
         }
     }
 
     /// Load channels and links from the database into memory.
-    pub async fn load_from_db(&self, db: &Database) -> Result<()> {
-        let db_channels = db.load_channels()?;
-        let db_links = db.load_channel_links()?;
+    pub async fn load_from_db(&self) -> Result<()> {
+        let db_channels = self.db.load_channels()?;
+        let db_links = self.db.load_channel_links()?;
 
         let mut channels = self.channels.write().await;
         channels.clear();
@@ -84,6 +90,21 @@ impl ChannelStore {
     /// Get all channels.
     pub async fn get_all_channels(&self) -> Vec<ChannelRecord> {
         self.channels.read().await.values().cloned().collect()
+    }
+
+    /// Returns a snapshot of `(channel_id → (parent_id, inherit_acl))` for every channel,
+    /// acquired under a single read-lock.
+    ///
+    /// Use this instead of calling [`get_channel`] repeatedly when multiple ancestor chains
+    /// need to be built (e.g. batch permission queries) — it avoids O(N × depth) lock
+    /// acquisitions and replaces them with a single lock + in-memory HashMap lookups.
+    pub async fn get_parent_and_inherit_snapshot(&self) -> HashMap<u32, (Option<u32>, bool)> {
+        self.channels
+            .read()
+            .await
+            .iter()
+            .map(|(&id, ch)| (id, (ch.parent_id, ch.inherit_acl)))
+            .collect()
     }
 
     /// Get all channels in BFS order starting from the root (id=0).
@@ -180,6 +201,91 @@ impl ChannelStore {
     /// using AUTOINCREMENT, so the in-memory counter is the authoritative source.
     pub fn next_channel_id(&self) -> u32 {
         self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    // ── Write-through mutations ────────────────────────────────────────────
+
+    /// Convert an in-memory [`ChannelRecord`] to a [`DbChannelRecord`] for persistence.
+    fn to_db_record(ch: &ChannelRecord) -> DbChannelRecord {
+        DbChannelRecord {
+            id: ch.id,
+            parent_id: ch.parent_id,
+            name: ch.name.clone(),
+            description: ch.description.clone(),
+            position: ch.position,
+            max_users: ch.max_users,
+            temporary: ch.temporary,
+            inherit_acl: ch.inherit_acl,
+        }
+    }
+
+    /// Create a channel with an auto-assigned ID, save it to the database, and
+    /// insert it into the in-memory store.  Returns the new channel ID.
+    pub async fn create_and_persist(&self, mut ch: ChannelRecord) -> Result<u32> {
+        ch.id = self.next_channel_id();
+        let id = ch.id;
+        let db_rec = Self::to_db_record(&ch);
+        let db = self.db.clone();
+        tokio::task::spawn_blocking(move || db.save_channel(&db_rec))
+            .await
+            .context("spawn_blocking join error")??;
+        self.channels.write().await.insert(id, ch);
+        Ok(id)
+    }
+
+    /// Update a channel in the in-memory store and persist it to the database.
+    pub async fn update_and_persist(&self, ch: ChannelRecord) -> Result<()> {
+        let db_rec = Self::to_db_record(&ch);
+        let db = self.db.clone();
+        tokio::task::spawn_blocking(move || db.save_channel(&db_rec))
+            .await
+            .context("spawn_blocking join error")??;
+        self.channels.write().await.insert(ch.id, ch);
+        Ok(())
+    }
+
+    /// Remove a channel from the in-memory store and delete it from the database.
+    ///
+    /// Also removes all link references to the channel in other channel records.
+    pub async fn remove_and_persist(&self, channel_id: u32) -> Result<Option<ChannelRecord>> {
+        let db = self.db.clone();
+        tokio::task::spawn_blocking(move || db.delete_channel(channel_id))
+            .await
+            .context("spawn_blocking join error")??;
+        let mut channels = self.channels.write().await;
+        let removed = channels.remove(&channel_id);
+        if removed.is_some() {
+            for ch in channels.values_mut() {
+                ch.links.remove(&channel_id);
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Add a bidirectional link between two channels.  Updates both channels in
+    /// memory and persists the link to the database.
+    pub async fn add_link(&self, ch1: u32, ch2: u32) -> Result<()> {
+        let db = self.db.clone();
+        tokio::task::spawn_blocking(move || db.add_channel_link(ch1, ch2))
+            .await
+            .context("spawn_blocking join error")??;
+        let mut channels = self.channels.write().await;
+        if let Some(ch) = channels.get_mut(&ch1) { ch.links.insert(ch2); }
+        if let Some(ch) = channels.get_mut(&ch2) { ch.links.insert(ch1); }
+        Ok(())
+    }
+
+    /// Remove a bidirectional link between two channels.  Updates both channels in
+    /// memory and removes the link from the database.
+    pub async fn remove_link(&self, ch1: u32, ch2: u32) -> Result<()> {
+        let db = self.db.clone();
+        tokio::task::spawn_blocking(move || db.remove_channel_link(ch1, ch2))
+            .await
+            .context("spawn_blocking join error")??;
+        let mut channels = self.channels.write().await;
+        if let Some(ch) = channels.get_mut(&ch1) { ch.links.remove(&ch2); }
+        if let Some(ch) = channels.get_mut(&ch2) { ch.links.remove(&ch1); }
+        Ok(())
     }
 
     /// Return the total number of channels.

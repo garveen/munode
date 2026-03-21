@@ -11,3 +11,5 @@ pub mod auth_service;
 pub mod lua_auth;
 pub mod web_api;
 pub mod geoip;
+pub mod user_store;
+pub mod ban_store;
