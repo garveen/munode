@@ -23,7 +23,7 @@ async fn test_kick_user_disconnects_target() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (admin, target) = (&clients[0], &clients[1]);
 
-    let target_session = target.session_id().await.expect("target must have session");
+    let target_session = target.session_id().expect("target must have session");
     let mut target_rx = target.subscribe();
 
     admin.kick_user(target_session, Some("Test kick")).await?;
@@ -62,7 +62,7 @@ async fn test_kick_notify_observer() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (admin, target, observer) = (&clients[0], &clients[1], &clients[2]);
 
-    let target_session = target.session_id().await.unwrap();
+    let target_session = target.session_id().unwrap();
     let mut obs_rx = observer.subscribe();
 
     admin.kick_user(target_session, Some("Kick for test")).await?;
@@ -99,7 +99,7 @@ async fn test_non_admin_cannot_kick() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (user1, user2) = (&clients[0], &clients[1]);
 
-    let user2_session = user2.session_id().await.unwrap();
+    let user2_session = user2.session_id().unwrap();
 
     // Non-admin tries to kick — server should deny or ignore
     user1.kick_user(user2_session, None).await.ok(); // May return error; that's fine
@@ -123,7 +123,7 @@ async fn test_admin_move_user_to_different_channel() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (admin, target) = (&clients[0], &clients[1]);
 
-    let target_session = target.session_id().await.unwrap();
+    let target_session = target.session_id().unwrap();
     let mut rx = target.subscribe();
 
     // Admin moves target to Lobby (channel 1)
@@ -167,7 +167,7 @@ async fn test_admin_mute_user() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (admin, target) = (&clients[0], &clients[1]);
 
-    let target_session = target.session_id().await.unwrap();
+    let target_session = target.session_id().unwrap();
     let mut rx = target.subscribe();
 
     use munode_protocol::mumbleproto;
@@ -210,7 +210,7 @@ async fn test_ban_user_kicks_and_prevents_rejoin() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (admin, target) = (&clients[0], &clients[1]);
 
-    let target_session = target.session_id().await.unwrap();
+    let target_session = target.session_id().unwrap();
 
     // Get target's address (127.0.0.1) and ban for 1 second
     admin.ban_user(target_session, Some("Ban test"), Some(1)).await?;

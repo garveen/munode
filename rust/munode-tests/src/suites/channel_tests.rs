@@ -17,7 +17,7 @@ use crate::harness::{
 async fn test_channel_list_not_empty() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(&env, &[ClientConfig::new("admin", 1)]).await?;
-    let channels = clients[0].channels().await;
+    let channels = clients[0].channels();
     assert!(!channels.is_empty(), "Channel list must not be empty");
     cleanup_clients(clients).await;
     Ok(())
@@ -27,7 +27,7 @@ async fn test_channel_list_not_empty() -> Result<()> {
 async fn test_root_channel_exists() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
-    let channels = clients[0].channels().await;
+    let channels = clients[0].channels();
     let root = channels.iter().find(|c| c.channel_id == 0);
     assert!(root.is_some(), "Root channel (id=0) must exist");
     cleanup_clients(clients).await;
@@ -38,7 +38,7 @@ async fn test_root_channel_exists() -> Result<()> {
 async fn test_seeded_channels_present() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(&env, &[ClientConfig::new("admin", 1)]).await?;
-    let channels = clients[0].channels().await;
+    let channels = clients[0].channels();
     let names: Vec<&str> = channels.iter().map(|c| c.name.as_str()).collect();
     assert!(names.contains(&"Root"),    "Root channel missing");
     assert!(names.contains(&"Lobby"),   "Lobby channel missing");
@@ -52,7 +52,7 @@ async fn test_seeded_channels_present() -> Result<()> {
 async fn test_child_channels_have_correct_parent() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(&env, &[ClientConfig::new("admin", 1)]).await?;
-    let channels = clients[0].channels().await;
+    let channels = clients[0].channels();
 
     for name in &["Lobby", "General", "Private"] {
         let ch = channels.iter().find(|c| c.name.as_str() == *name)
@@ -67,7 +67,7 @@ async fn test_child_channels_have_correct_parent() -> Result<()> {
 async fn test_channel_ids_are_unique() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(&env, &[ClientConfig::new("admin", 1)]).await?;
-    let channels = clients[0].channels().await;
+    let channels = clients[0].channels();
     let mut ids: Vec<u32> = channels.iter().map(|c| c.channel_id).collect();
     let original = ids.len();
     ids.dedup();
@@ -91,12 +91,12 @@ async fn test_create_channel() -> Result<()> {
         .unwrap_or_default()
         .as_millis());
 
-    let new_id = client.create_channel(0, &name).await?;
+    let new_id = client.create_channel(&name, 0).await?;
     assert!(new_id > 0, "New channel ID should be > 0");
 
     sleep_ms(300).await;
 
-    let channels = client.channels().await;
+    let channels = client.channels();
     let found = channels.iter().find(|c| c.channel_id == new_id);
     assert!(found.is_some(), "Newly created channel should appear in channel list");
     assert_eq!(found.unwrap().name, name);
@@ -118,7 +118,7 @@ async fn test_create_channel_observers_notified() -> Result<()> {
     let mut rx = observer.subscribe();
     let name = format!("Notify_{}", chrono_now_ms());
 
-    admin.create_channel(0, &name).await?;
+    admin.create_channel(&name, 0).await?;
 
     // Wait for ChannelCreated/ChannelUpdated event on observer
     let got = wait_for_channel_event(&mut rx, &name, Duration::from_secs(5)).await;
@@ -142,7 +142,7 @@ async fn test_create_channel_cross_edge_notified() -> Result<()> {
     let mut rx = observer.subscribe();
     let name = format!("CrossCh_{}", chrono_now_ms());
 
-    admin.create_channel(0, &name).await?;
+    admin.create_channel(&name, 0).await?;
 
     let got = wait_for_channel_event(&mut rx, &name, Duration::from_secs(8)).await;
     assert!(got, "Cross-edge observer should receive channel creation notification");
@@ -161,13 +161,13 @@ async fn test_delete_channel() -> Result<()> {
 
     // Create a channel, then delete it
     let name = format!("Del_{}", chrono_now_ms());
-    let ch_id = client.create_channel(0, &name).await?;
+    let ch_id = client.create_channel(&name, 0).await?;;
     sleep_ms(300).await;
 
     client.delete_channel(ch_id).await?;
     sleep_ms(300).await;
 
-    let channels = client.channels().await;
+    let channels = client.channels();
     let found = channels.iter().find(|c| c.channel_id == ch_id);
     assert!(found.is_none(), "Deleted channel should no longer appear");
 
@@ -186,7 +186,7 @@ async fn test_join_channel_updates_own_state() -> Result<()> {
     client.join_channel(1).await?; // Lobby
     sleep_ms(300).await;
 
-    let session = client.session().await.expect("should have session");
+    let session = client.session().expect("should have session");
     assert_eq!(session.channel_id, 1);
 
     cleanup_clients(clients).await;
@@ -203,7 +203,7 @@ async fn test_move_user_notified_to_observer() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (mover, observer) = (&clients[0], &clients[1]);
 
-    let mover_session = mover.session_id().await.unwrap();
+    let mover_session = mover.session_id().unwrap();
     let mut rx = observer.subscribe();
 
     mover.join_channel(1).await?; // Move to Lobby
@@ -242,8 +242,8 @@ async fn test_channel_link_add_notifies_same_edge_observer() -> Result<()> {
     let (admin, observer) = (&clients[0], &clients[1]);
 
     let ts = chrono_now_ms();
-    let ch_a = admin.create_channel(0, &format!("LinkA_{ts}")).await?;
-    let ch_b = admin.create_channel(0, &format!("LinkB_{ts}")).await?;
+    let ch_a = admin.create_channel(&format!("LinkA_{ts}"), 0).await?;
+    let ch_b = admin.create_channel(&format!("LinkB_{ts}"), 0).await?;
     sleep_ms(400).await;
 
     let mut rx = observer.subscribe();
@@ -289,8 +289,8 @@ async fn test_channel_link_remove_notifies_observer() -> Result<()> {
     let (admin, observer) = (&clients[0], &clients[1]);
 
     let ts = chrono_now_ms();
-    let ch_a = admin.create_channel(0, &format!("UnlinkA_{ts}")).await?;
-    let ch_b = admin.create_channel(0, &format!("UnlinkB_{ts}")).await?;
+    let ch_a = admin.create_channel(&format!("UnlinkA_{ts}"), 0).await?;
+    let ch_b = admin.create_channel(&format!("UnlinkB_{ts}"), 0).await?;
     sleep_ms(400).await;
 
     // Link first

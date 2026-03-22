@@ -97,7 +97,7 @@ async fn test_receive_channel_list_after_auth() -> Result<()> {
     let clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
     let client = &clients[0];
 
-    let channels = client.channels().await;
+    let channels = client.channels();
     assert!(!channels.is_empty(), "Should receive channel list");
 
     // Root channel ID=0 must exist
@@ -112,7 +112,7 @@ async fn test_receive_channel_list_after_auth() -> Result<()> {
 async fn test_initial_channel_names_are_correct() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(&env, &[ClientConfig::new("admin", 1)]).await?;
-    let channels = clients[0].channels().await;
+    let channels = clients[0].channels();
 
     let names: Vec<&str> = channels.iter().map(|c| c.name.as_str()).collect();
     assert!(names.contains(&"Root"), "Root channel missing");
@@ -133,7 +133,7 @@ async fn test_join_channel() -> Result<()> {
     client.join_channel(1).await?;
     sleep_ms(300).await;
 
-    let session = client.session().await;
+    let session = client.session();
     assert_eq!(session.map(|s| s.channel_id), Some(1), "User should be in channel 1");
 
     cleanup_clients(clients).await;
@@ -168,8 +168,8 @@ async fn test_users_can_see_each_other() -> Result<()> {
 
     sleep_ms(200).await;
 
-    let users1 = clients[0].users().await;
-    let users2 = clients[1].users().await;
+    let users1 = clients[0].users();
+    let users2 = clients[1].users();
 
     assert!(users1.len() >= 2, "user1 should see at least 2 users");
     assert!(users2.len() >= 2, "user2 should see at least 2 users");
@@ -192,7 +192,7 @@ async fn test_user_left_event_on_disconnect() -> Result<()> {
     let mut rx = c2.subscribe();
 
     // User1 disconnects
-    let session1 = c1.session_id().await;
+    let session1 = c1.session_id();
     c1.disconnect().await?;
 
     // Wait for UserLeft event
@@ -229,7 +229,7 @@ async fn test_user_left_event_propagates_across_edges() -> Result<()> {
     sleep_ms(500).await;
 
     let mut rx = c2.subscribe();
-    let session1 = c1.session_id().await;
+    let session1 = c1.session_id();
     c1.disconnect().await?;
 
     let timeout = Duration::from_secs(8);
@@ -262,7 +262,7 @@ async fn test_user_left_event_propagates_across_edges() -> Result<()> {
 async fn test_client_knows_its_own_session() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(&env, &[ClientConfig::new("admin", 1)]).await?;
-    let session = clients[0].session().await;
+    let session = clients[0].session();
     assert!(session.is_some(), "Client should have a session after auth");
     cleanup_clients(clients).await;
     Ok(())
@@ -272,8 +272,8 @@ async fn test_client_knows_its_own_session() -> Result<()> {
 async fn test_client_username_is_correct() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
-    let session_id = clients[0].session_id().await.expect("should have session id");
-    let users = clients[0].users().await;
+    let session_id = clients[0].session_id().expect("should have session id");
+    let users = clients[0].users();
     let me = users.iter().find(|u| u.session == session_id);
     assert!(me.is_some(), "should find self in user list");
     assert_eq!(me.unwrap().name, "user1");
@@ -313,8 +313,8 @@ async fn test_users_on_different_edges_see_each_other() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     sleep_ms(800).await;
 
-    let users1 = clients[0].users().await;
-    let users2 = clients[1].users().await;
+    let users1 = clients[0].users();
+    let users2 = clients[1].users();
 
     // Each should see at least themselves + the other
     assert!(users1.len() >= 2, "Edge1 user should see cross-edge user");

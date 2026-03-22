@@ -23,7 +23,7 @@ async fn test_add_listening_channel_broadcasts_to_same_edge() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (user1, observer) = (&clients[0], &clients[1]);
 
-    let user1_session = user1.session_id().await.unwrap();
+    let user1_session = user1.session_id().unwrap();
     let mut rx = observer.subscribe();
 
     user1.add_listening_channel(1).await?; // Listen to Lobby
@@ -60,7 +60,7 @@ async fn test_add_listening_channel_broadcasts_cross_edge() -> Result<()> {
     let (user1, observer) = (&clients[0], &clients[1]);
     sleep_ms(500).await;
 
-    let user1_session = user1.session_id().await.unwrap();
+    let user1_session = user1.session_id().unwrap();
     let mut rx = observer.subscribe();
 
     user1.add_listening_channel(1).await?;
@@ -125,7 +125,7 @@ async fn test_listener_receives_voice_from_listened_channel() -> Result<()> {
     listener.add_listening_channel(1).await?; // Listen to Lobby
     sleep_ms(300).await;
 
-    let speaker_session = speaker.session_id().await.unwrap();
+    let speaker_session = speaker.session_id().unwrap();
     let mut rx = listener.subscribe_voice();
 
     let audio = crate::harness::random_voice_data(20);

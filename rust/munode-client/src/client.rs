@@ -564,6 +564,11 @@ impl MumbleClient {
         })
     }
 
+    /// Alias for [`send_text_to_user`] (send a private text message by session).
+    pub async fn send_text_to_session(&self, target_session: u32, message: &str) -> Result<()> {
+        self.send_text_to_user(target_session, message).await
+    }
+
     /// Send a text message to the subtree rooted at `channel_id`.
     pub async fn send_text_to_tree(&self, channel_id: u32, message: &str) -> Result<()> {
         self.send_proto(MessageType::TextMessage, &mumbleproto::TextMessage {
@@ -603,6 +608,11 @@ impl MumbleClient {
         self.send_proto(MessageType::Acl, &acl)
     }
 
+    /// Alias for [`save_acl`].
+    pub async fn send_acl(&self, acl: mumbleproto::Acl) -> Result<()> {
+        self.save_acl(acl).await
+    }
+
     /// Send a `PermissionQuery` for a channel.
     pub async fn check_permission(&self, channel_id: u32, permission: u32) -> Result<()> {
         self.send_proto(MessageType::PermissionQuery, &mumbleproto::PermissionQuery {
@@ -610,6 +620,11 @@ impl MumbleClient {
             permissions: Some(permission),
             flush: Some(false),
         })
+    }
+
+    /// Alias for [`check_permission`].
+    pub async fn query_permission(&self, channel_id: u32, permission: u32) -> Result<()> {
+        self.check_permission(channel_id, permission).await
     }
 
     // ── Listening channels ─────────────────────────────────────────────────
@@ -666,7 +681,50 @@ impl MumbleClient {
         Ok(())
     }
 
+    /// Alias for [`query_ban_list`].
+    pub async fn request_ban_list(&self) -> Result<()> {
+        self.query_ban_list().await
+    }
+
+    /// Alias for [`update_ban_list`].
+    pub async fn send_ban_list(&self, bans: Vec<mumbleproto::BanList>) -> Result<()> {
+        self.update_ban_list(bans).await
+    }
+
+    /// Ban a user by session ID (sends `UserRemove` with `ban = true`).
+    pub async fn ban_user(
+        &self,
+        target_session: u32,
+        reason: Option<&str>,
+        _duration: Option<u32>,
+    ) -> Result<()> {
+        let actor = self.my_session()?;
+        self.send_proto(MessageType::UserRemove, &mumbleproto::UserRemove {
+            session: target_session,
+            actor: Some(actor),
+            reason: reason.map(str::to_owned),
+            ban: Some(true),
+        })
+    }
+
     // ── User statistics ────────────────────────────────────────────────────
+
+    /// Send a TCP `Ping` and wait for the server's `Ping` reply.
+    pub async fn send_ping(&self) -> Result<()> {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or(0);
+        self.send_proto(MessageType::Ping, &mumbleproto::Ping {
+            timestamp: Some(ts),
+            ..Default::default()
+        })
+    }
+
+    /// Send a `QueryUsers` request (look up users by registered ID or name).
+    pub async fn query_users(&self, ids: Vec<u32>, names: Vec<String>) -> Result<()> {
+        self.send_proto(MessageType::QueryUsers, &mumbleproto::QueryUsers { ids, names })
+    }
 
     /// Request user statistics from the server.
     pub async fn request_user_stats(&self, target_session: u32, stats_only: bool) -> Result<()> {
@@ -754,6 +812,11 @@ impl MumbleClient {
         self.inner.state.try_read().ok()?.session.clone()
     }
 
+    /// Convenience: returns own session ID, or `None` if not authenticated.
+    pub fn session_id(&self) -> Option<u32> {
+        self.session().map(|s| s.session)
+    }
+
     /// All known channels.
     pub fn channels(&self) -> Vec<Channel> {
         self.inner.state.try_read().ok()
@@ -786,6 +849,11 @@ impl MumbleClient {
     /// delivered (use a buffer size large enough for your workload).
     pub fn subscribe(&self) -> broadcast::Receiver<ClientEvent> {
         self.inner.event_tx.subscribe()
+    }
+
+    /// Alias for [`subscribe`] — subscribe to all events including voice.
+    pub fn subscribe_voice(&self) -> broadcast::Receiver<ClientEvent> {
+        self.subscribe()
     }
 
     /// Wait until an event matching `predicate` arrives, or `duration` elapses.

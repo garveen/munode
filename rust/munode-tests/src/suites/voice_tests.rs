@@ -60,7 +60,7 @@ async fn test_voice_received_by_same_channel_user() -> Result<()> {
     sleep_ms(300).await;
 
     let mut rx = receiver.subscribe_voice();
-    let sender_session = sender.session_id().await.unwrap();
+    let sender_session = sender.session_id().unwrap();
 
     let audio = random_voice_data(20);
     sender.send_voice(4, 0, 1, &audio).await?;
@@ -98,7 +98,7 @@ async fn test_voice_not_received_by_different_channel_user() -> Result<()> {
     sleep_ms(300).await;
 
     let mut rx = receiver.subscribe_voice();
-    let sender_session = sender.session_id().await.unwrap();
+    let sender_session = sender.session_id().unwrap();
 
     let audio = random_voice_data(20);
     sender.send_voice(4, 0, 1, &audio).await?;
@@ -137,7 +137,7 @@ async fn test_voice_received_cross_edge_same_channel() -> Result<()> {
     sleep_ms(500).await;
 
     let mut rx = receiver.subscribe_voice();
-    let sender_session = sender.session_id().await.unwrap();
+    let sender_session = sender.session_id().unwrap();
 
     let audio = random_voice_data(20);
     sender.send_voice(4, 0, 1, &audio).await?;
@@ -177,7 +177,7 @@ async fn test_deaf_user_does_not_receive_voice() -> Result<()> {
     sleep_ms(300).await;
 
     let mut rx = receiver.subscribe_voice();
-    let sender_session = sender.session_id().await.unwrap();
+    let sender_session = sender.session_id().unwrap();
 
     let audio = random_voice_data(20);
     sender.send_voice(4, 0, 1, &audio).await?;
@@ -219,8 +219,8 @@ async fn test_voice_routes_through_linked_channels() -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let ch_a = admin.create_channel(0, &format!("VA_{ts}")).await?;
-    let ch_b = admin.create_channel(0, &format!("VB_{ts}")).await?;
+    let ch_a = admin.create_channel(&format!("VA_{ts}"), 0).await?;
+    let ch_b = admin.create_channel(&format!("VB_{ts}"), 0).await?;
     sleep_ms(300).await;
 
     // Link A → B
@@ -237,7 +237,7 @@ async fn test_voice_routes_through_linked_channels() -> Result<()> {
     sleep_ms(300).await;
 
     let mut rx = user2.subscribe_voice();
-    let sender_session = user1.session_id().await.unwrap();
+    let sender_session = user1.session_id().unwrap();
 
     let audio = random_voice_data(20);
     user1.send_voice(4, 0, 1, &audio).await?;
@@ -278,8 +278,8 @@ async fn test_whisper_to_specific_channel() -> Result<()> {
     non_target.join_channel(2).await?; // General — different channel
     sleep_ms(300).await;
 
-    let sender_session = sender.session_id().await.unwrap();
-    let target_session = target.session_id().await.unwrap();
+    let sender_session = sender.session_id().unwrap();
+    let target_session = target.session_id().unwrap();
 
     // Set voice target 1 to whisper to target user
     sender.set_voice_target(1, vec![mumbleproto::voice_target::Target {
@@ -341,8 +341,8 @@ async fn test_multiple_senders_in_same_channel() -> Result<()> {
     sleep_ms(300).await;
 
     let mut rx = receiver.subscribe_voice();
-    let s1_session = s1.session_id().await.unwrap();
-    let s2_session = s2.session_id().await.unwrap();
+    let s1_session = s1.session_id().unwrap();
+    let s2_session = s2.session_id().unwrap();
 
     let audio = random_voice_data(20);
     s1.send_voice(4, 0, 1, &audio).await?;

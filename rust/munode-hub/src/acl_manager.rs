@@ -475,7 +475,7 @@ mod tests {
 
     async fn setup() -> (Arc<Database>, Arc<ChannelStore>) {
         let db = Arc::new(Database::open(":memory:").unwrap());
-        let channel_store = Arc::new(ChannelStore::new());
+        let channel_store = Arc::new(ChannelStore::new(db.clone()));
 
         // Add root channel
         channel_store.create_channel(ChannelRecord {

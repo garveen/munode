@@ -19,8 +19,8 @@ async fn test_user_list_includes_self() -> Result<()> {
     let clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
     let client = &clients[0];
 
-    let session_id = client.session_id().await.expect("should have session");
-    let users = client.users().await;
+    let session_id = client.session_id().expect("should have session");
+    let users = client.users();
     let me = users.iter().find(|u| u.session == session_id);
     assert!(me.is_some(), "Self should appear in the user list");
     assert_eq!(me.unwrap().name, "user1");
@@ -39,7 +39,7 @@ async fn test_user_state_self_mute_broadcast() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (user1, user2) = (&clients[0], &clients[1]);
 
-    let user1_session = user1.session_id().await.unwrap();
+    let user1_session = user1.session_id().unwrap();
     let mut rx = user2.subscribe();
 
     user1.set_self_mute(true).await?;
@@ -75,7 +75,7 @@ async fn test_user_state_self_deaf_broadcast() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (user1, user2) = (&clients[0], &clients[1]);
 
-    let user1_session = user1.session_id().await.unwrap();
+    let user1_session = user1.session_id().unwrap();
     let mut rx = user2.subscribe();
 
     user1.set_self_deaf(true).await?;
@@ -112,7 +112,7 @@ async fn test_user_state_cross_edge_broadcast() -> Result<()> {
     let (user1, user2) = (&clients[0], &clients[1]);
     sleep_ms(500).await;
 
-    let user1_session = user1.session_id().await.unwrap();
+    let user1_session = user1.session_id().unwrap();
     let mut rx = user2.subscribe();
 
     user1.set_self_mute(true).await?;
@@ -155,7 +155,7 @@ async fn test_text_message_to_channel() -> Result<()> {
     receiver.join_channel(1).await?;
     sleep_ms(300).await;
 
-    let sender_session = sender.session_id().await.unwrap();
+    let sender_session = sender.session_id().unwrap();
     let mut rx = receiver.subscribe();
 
     sender.send_text_to_channel(1, "Hello, world!").await?;
@@ -195,7 +195,7 @@ async fn test_text_message_cross_edge() -> Result<()> {
     receiver.join_channel(1).await?;
     sleep_ms(500).await;
 
-    let sender_session = sender.session_id().await.unwrap();
+    let sender_session = sender.session_id().unwrap();
     let mut rx = receiver.subscribe();
 
     sender.send_text_to_channel(1, "Cross-edge message").await?;
@@ -231,8 +231,8 @@ async fn test_private_message_to_session() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (sender, receiver) = (&clients[0], &clients[1]);
 
-    let receiver_session = receiver.session_id().await.unwrap();
-    let sender_session = sender.session_id().await.unwrap();
+    let receiver_session = receiver.session_id().unwrap();
+    let sender_session = sender.session_id().unwrap();
     let mut rx = receiver.subscribe();
 
     sender.send_text_to_session(receiver_session, "Private hello").await?;
@@ -270,7 +270,7 @@ async fn test_set_and_receive_comment() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (user1, user2) = (&clients[0], &clients[1]);
 
-    let user1_session = user1.session_id().await.unwrap();
+    let user1_session = user1.session_id().unwrap();
     let mut rx = user2.subscribe();
 
     user1.set_comment("My test comment").await?;

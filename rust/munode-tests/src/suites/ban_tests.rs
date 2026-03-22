@@ -117,7 +117,7 @@ async fn test_ban_user_disconnects_target() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (admin, target) = (&clients[0], &clients[1]);
 
-    let target_session = target.session_id().await.unwrap();
+    let target_session = target.session_id().unwrap();
 
     let mut target_rx = target.subscribe();
     admin.ban_user(target_session, Some("integration test ban"), None).await?;
@@ -153,7 +153,7 @@ async fn test_ban_notifies_observers() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (admin, target, observer) = (&clients[0], &clients[1], &clients[2]);
 
-    let target_session = target.session_id().await.unwrap();
+    let target_session = target.session_id().unwrap();
     let mut obs_rx = observer.subscribe();
 
     admin.ban_user(target_session, Some("test"), None).await?;
@@ -247,7 +247,7 @@ async fn test_ban_cross_edge_removes_target() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (admin, target) = (&clients[0], &clients[1]);
 
-    let target_session = target.session_id().await.unwrap();
+    let target_session = target.session_id().unwrap();
     let mut target_rx = target.subscribe();
 
     admin.ban_user(target_session, Some("cross-edge ban test"), None).await?;

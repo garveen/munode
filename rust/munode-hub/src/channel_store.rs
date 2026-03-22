@@ -298,6 +298,12 @@ impl ChannelStore {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+    use std::sync::Arc;
+    use crate::database::Database;
+
+    fn test_db() -> Arc<Database> {
+        Arc::new(Database::open(":memory:").unwrap())
+    }
 
     fn make_channel(id: u32, parent_id: Option<u32>, name: &str, pos: i32) -> ChannelRecord {
         ChannelRecord {
@@ -315,7 +321,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_and_get_channel() {
-        let store = ChannelStore::new();
+        let store = ChannelStore::new(test_db());
         let ch = make_channel(0, None, "Root", 0);
         store.create_channel(ch).await;
 
@@ -326,7 +332,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_channel() {
-        let store = ChannelStore::new();
+        let store = ChannelStore::new(test_db());
         store.create_channel(make_channel(1, Some(0), "Test", 0)).await;
 
         let mut ch = store.get_channel(1).await.unwrap();
@@ -339,7 +345,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_remove_channel_cleans_links() {
-        let store = ChannelStore::new();
+        let store = ChannelStore::new(test_db());
         let mut ch1 = make_channel(1, Some(0), "A", 0);
         ch1.links.insert(2);
         let mut ch2 = make_channel(2, Some(0), "B", 1);
@@ -356,7 +362,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bfs_order() {
-        let store = ChannelStore::new();
+        let store = ChannelStore::new(test_db());
         store.create_channel(make_channel(0, None, "Root", 0)).await;
         store.create_channel(make_channel(1, Some(0), "A", 0)).await;
         store.create_channel(make_channel(2, Some(0), "B", 1)).await;
@@ -372,7 +378,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_next_channel_id() {
-        let store = ChannelStore::new();
+        let store = ChannelStore::new(test_db());
         let id1 = store.next_channel_id();
         let id2 = store.next_channel_id();
         assert_ne!(id1, id2);

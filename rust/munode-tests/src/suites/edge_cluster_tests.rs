@@ -48,8 +48,8 @@ async fn test_users_visible_across_edges() -> Result<()> {
     // Give the cluster a moment to propagate sessions
     sleep_ms(800).await;
 
-    let e2_session = e2_client.session_id().await.unwrap();
-    let e1_users = e1_client.users().await;
+    let e2_session = e2_client.session_id().unwrap();
+    let e1_users = e1_client.users();
 
     let saw_e2_user = e1_users.iter().any(|u| u.session == e2_session);
     assert!(
@@ -75,8 +75,8 @@ async fn test_users_visible_bidirectionally() -> Result<()> {
 
     sleep_ms(800).await;
 
-    let e1_session = e1_client.session_id().await.unwrap();
-    let e2_users = e2_client.users().await;
+    let e1_session = e1_client.session_id().unwrap();
+    let e2_users = e2_client.users();
 
     let saw_e1_user = e2_users.iter().any(|u| u.session == e1_session);
     assert!(
@@ -101,8 +101,8 @@ async fn test_channels_synced_across_edges() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (e1_client, e2_client) = (&clients[0], &clients[1]);
 
-    let e1_channels: Vec<_> = e1_client.channels().await;
-    let e2_channels: Vec<_> = e2_client.channels().await;
+    let e1_channels: Vec<_> = e1_client.channels();
+    let e2_channels: Vec<_> = e2_client.channels();
 
     assert!(!e1_channels.is_empty(), "Edge 1 client should see channels");
     assert!(!e2_channels.is_empty(), "Edge 2 client should see channels");
@@ -129,7 +129,7 @@ async fn test_new_channel_propagates_across_edges() -> Result<()> {
     let (creator, observer) = (&clients[0], &clients[1]);
 
     let mut obs_rx = observer.subscribe();
-    let ch_id = creator.create_channel(0, "ClusterSyncChannel").await?;
+    let ch_id = creator.create_channel("ClusterSyncChannel", 0).await?;
 
     // Observer on Edge 2 should receive ChannelCreated
     let ch_created = tokio::time::timeout(Duration::from_secs(8), async {
@@ -170,7 +170,7 @@ async fn test_user_state_propagates_across_edges() -> Result<()> {
     // Wait for initial full-sync to settle
     sleep_ms(500).await;
 
-    let e1_session = e1_client.session_id().await.unwrap();
+    let e1_session = e1_client.session_id().unwrap();
     let mut e2_rx = e2_client.subscribe();
 
     e1_client.set_self_mute(true).await?;
@@ -257,7 +257,7 @@ async fn test_user_leave_propagates_across_edges() -> Result<()> {
 
     sleep_ms(500).await;
 
-    let e2_session = e2_client.session_id().await.unwrap();
+    let e2_session = e2_client.session_id().unwrap();
     let mut e1_rx = e1_client.subscribe();
 
     e2_client.disconnect().await?;
@@ -325,10 +325,10 @@ async fn test_four_edge_all_users_visible_from_edge1() -> Result<()> {
     sleep_ms(1000).await;
 
     let e1 = &clients[0];
-    let e1_users = e1.users().await;
+    let e1_users = e1.users();
 
     for (i, other) in clients[1..].iter().enumerate() {
-        let session = other.session_id().await.unwrap();
+        let session = other.session_id().unwrap();
         let found = e1_users.iter().any(|u| u.session == session);
         assert!(
             found,
@@ -358,8 +358,8 @@ async fn test_single_edge_multi_user_visibility() -> Result<()> {
 
     sleep_ms(300).await;
 
-    let b_session = b.session_id().await.unwrap();
-    let a_users = a.users().await;
+    let b_session = b.session_id().unwrap();
+    let a_users = a.users();
     let saw_b = a_users.iter().any(|u| u.session == b_session);
     assert!(saw_b, "Single-edge: user1 should see user2");
 
@@ -385,7 +385,7 @@ async fn test_late_join_visible_cross_edge() -> Result<()> {
     // Edge 2 user joins after
     let late_clients = create_clients(&env, &[ClientConfig::new("user_edge2", 2)]).await?;
     let late = &late_clients[0];
-    let late_session = late.session_id().await.unwrap();
+    let late_session = late.session_id().unwrap();
 
     // Edge 1 client should receive a UserJoined event for the Edge 2 user
     let saw_join = tokio::time::timeout(Duration::from_secs(8), async {

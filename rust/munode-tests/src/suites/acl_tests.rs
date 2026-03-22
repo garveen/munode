@@ -154,7 +154,7 @@ async fn test_set_acl_on_channel() -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let ch_id = client.create_channel(0, &format!("AclTest_{ts}")).await?;
+    let ch_id = client.create_channel(&format!("AclTest_{ts}"), 0).await?;
     sleep_ms(300).await;
 
     // Set an ACL entry: allow 'admin' group to do everything
