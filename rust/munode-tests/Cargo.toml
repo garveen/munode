@@ -1,0 +1,19 @@
+[package]
+name = "munode-tests"
+version.workspace = true
+edition.workspace = true
+description = "Integration tests for MuNode Hub and Edge servers"
+
+[dependencies]
+munode-client = { path = "../munode-client" }
+munode-protocol = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+axum = { workspace = true }
+tempfile = "3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rusqlite = { workspace = true }

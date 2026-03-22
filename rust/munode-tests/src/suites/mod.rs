@@ -1,0 +1,12 @@
+pub mod hub_edge;
+pub mod auth_tests;
+pub mod channel_tests;
+pub mod voice_tests;
+pub mod acl_tests;
+pub mod user_tests;
+pub mod moderation_tests;
+pub mod edge_cluster_tests;
+pub mod udp_tests;
+pub mod listening_channel_tests;
+pub mod plugin_tests;
+pub mod ban_tests;

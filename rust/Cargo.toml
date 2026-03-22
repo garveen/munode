@@ -5,6 +5,7 @@ members = [
     "munode-edge",
     "munode-hub",
     "munode-client",
+    "munode-tests",
 ]
 resolver = "2"
 
@@ -58,6 +59,9 @@ ring = "0.17"
 aes = "0.8"
 argon2 = "0.5"
 sha1 = "0.10"
+
+# SQLite
+rusqlite = { version = "0.33", features = ["bundled"] }
 hex = "0.4"
 
 # Compression
