@@ -13,18 +13,17 @@ RUN apk add --no-cache protobuf-dev cmake musl-dev openssl-dev openssl-libs-stat
 run cargo install cargo-chef --locked
 WORKDIR /build
 COPY rust/Cargo.toml rust/Cargo.lock ./
+# Strip client/tests from workspace so they are not compiled inside Docker
+RUN sed -i '/"munode-client"/d; /"munode-tests"/d' Cargo.toml
 COPY rust/munode-protocol/Cargo.toml rust/munode-protocol/build.rs munode-protocol/
 COPY rust/munode-common/Cargo.toml munode-common/
 COPY rust/munode-edge/Cargo.toml munode-edge/
 COPY rust/munode-hub/Cargo.toml munode-hub/
-COPY rust/munode-client/Cargo.toml munode-client/
-COPY rust/munode-tests/Cargo.toml munode-tests/
 # Dummy sources for cargo metadata + prepare + cook dependencies (cached until Cargo.* changes)
-RUN mkdir -p munode-protocol/src munode-common/src munode-edge/src munode-hub/src munode-client/src munode-tests/src
+RUN mkdir -p munode-protocol/src munode-common/src munode-edge/src munode-hub/src
 RUN touch munode-protocol/src/lib.rs munode-common/src/lib.rs \
            munode-edge/src/lib.rs munode-edge/src/main.rs \
-           munode-hub/src/lib.rs munode-hub/src/main.rs \
-           munode-client/src/lib.rs munode-tests/src/lib.rs
+           munode-hub/src/lib.rs munode-hub/src/main.rs
 RUN cargo chef prepare --recipe-path recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
@@ -37,8 +36,6 @@ COPY rust/munode-protocol/ munode-protocol/
 COPY rust/munode-common/ munode-common/
 COPY rust/munode-edge/ munode-edge/
 COPY rust/munode-hub/ munode-hub/
-COPY rust/munode-client/ munode-client/
-COPY rust/munode-tests/ munode-tests/
 RUN cargo build --release --bin munode-edge --bin munode-hub
 
 # Stage 3: Minimal runtime image
