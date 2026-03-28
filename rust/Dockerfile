@@ -34,6 +34,7 @@ COPY rust/munode-protocol/ munode-protocol/
 COPY rust/munode-common/ munode-common/
 COPY rust/munode-edge/ munode-edge/
 COPY rust/munode-hub/ munode-hub/
+COPY rust/munode-client/ munode-client/
 RUN cargo build --release --bin munode-edge --bin munode-hub
 
 # Stage 3: Minimal runtime image
