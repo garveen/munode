@@ -174,34 +174,51 @@ impl EdgeConnection {
                     }
 
                     let edge_id = self.server_id.unwrap_or(0);
-                    let response_data = self
-                        .rpc_handler
-                        .handle_request(request, edge_id)
-                        .await?;
-                    send_tx
-                        .send(response_data)
-                        .await
-                        .context("Failed to send RPC response")?;
+                    let rpc_handler = Arc::clone(&self.rpc_handler);
+                    let send_tx_clone = send_tx.clone();
+                    let ninja_enabled = edge_id != 0 && self.state.config.channel_ninja.enabled;
+                    let ninja_channels = if ninja_enabled {
+                        self.state.config.channel_ninja.ninja_channels.clone()
+                    } else {
+                        vec![]
+                    };
+                    let is_register = request.method == "edge.register";
 
-                    // After successful registration, send ninja config notification to the new edge
-                    if edge_id != 0 && self.state.config.channel_ninja.enabled {
-                        let ninja_channels = self.state.config.channel_ninja.ninja_channels.clone();
-                        self.rpc_handler.send_notification_to_edge(edge_id, "hub.ninjaConfig", |n| {
-                            let json = serde_json::json!({
-                                "enabled": true,
-                                "ninja_channels": ninja_channels
-                            });
-                            n.unknown_params_json = Some(json.to_string());
-                        }).await;
-                    }
+                    // Spawn each RPC request as an independent task so that a slow handler
+                    // (e.g. Argon2 authentication, ~100-300 ms) does not block subsequent
+                    // messages from other clients sharing the same Edge→Hub connection.
+                    tokio::spawn(async move {
+                        match rpc_handler.handle_request(request, edge_id).await {
+                            Ok(response_data) => {
+                                if send_tx_clone.send(response_data).await.is_err() {
+                                    debug!("Edge {} connection closed before RPC response could be sent", edge_id);
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Unexpected RPC handler error for edge {}: {}", edge_id, e);
+                            }
+                        }
+                        if is_register && ninja_enabled {
+                            rpc_handler
+                                .send_notification_to_edge(edge_id, "hub.ninjaConfig", |n| {
+                                    let json = serde_json::json!({
+                                        "enabled": true,
+                                        "ninja_channels": ninja_channels
+                                    });
+                                    n.unknown_params_json = Some(json.to_string());
+                                })
+                                .await;
+                        }
+                    });
                 }
             }
             Ok(PacketType::RpcNotification) => {
                 if let Some(notification) = packet.rpc_notification {
                     let edge_id = self.server_id.unwrap_or(0);
-                    self.rpc_handler
-                        .handle_notification(notification, edge_id)
-                        .await;
+                    let rpc_handler = Arc::clone(&self.rpc_handler);
+                    tokio::spawn(async move {
+                        rpc_handler.handle_notification(notification, edge_id).await;
+                    });
                 }
             }
             Ok(PacketType::Heartbeat) => {

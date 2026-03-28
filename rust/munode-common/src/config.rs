@@ -586,6 +586,10 @@ pub struct HubLimitsConfig {
     /// 0 = unlimited. Default: 1.
     #[serde(default = "default_max_sessions_per_user")]
     pub max_sessions_per_user: u32,
+    /// Whether to respond to unauthenticated UDP ping probes (default: true).
+    /// Set to false to prevent the server from appearing in public server browsers.
+    #[serde(default = "default_true")]
+    pub allow_ping: bool,
 }
 
 impl Default for HubLimitsConfig {
@@ -604,6 +608,7 @@ impl Default for HubLimitsConfig {
             channel_nesting_limit: 0,
             channel_count_limit: 0,
             max_sessions_per_user: default_max_sessions_per_user(),
+            allow_ping: true,
         }
     }
 }

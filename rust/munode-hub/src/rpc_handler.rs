@@ -1102,23 +1102,22 @@ impl RpcHandler {
 
         // Look up user; verify password if they have one set
         let db_user = self.state.user_store.find_by_name(username).await?;
-        // Argon2 is CPU-intensive; fetch the hash from DB (never cached) and verify off the executor.
+        // Argon2 is CPU-intensive; merge DB hash fetch + verify into a single
+        // spawn_blocking call to avoid two thread-pool scheduling round-trips.
         let pw_ok: bool = if let Some(ref u) = db_user {
             let db = self.state.database.clone();
             let uid = u.id;
-            let pw_hash_opt = tokio::task::spawn_blocking(move || db.get_user_password_hash(uid))
-                .await
-                .context("spawn_blocking join error for fetch_password_hash")??;
-            match pw_hash_opt {
-                None => true, // user not in users table, no password required
-                Some(ref h) if h.is_empty() => true, // no password set
-                Some(pw_hash) => {
-                    let password_owned = password.to_string();
-                    tokio::task::spawn_blocking(move || verify_password(&pw_hash, &password_owned))
-                        .await
-                        .context("spawn_blocking join error for argon2 verify")?
-                }
-            }
+            let password_owned = password.to_string();
+            tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+                let pw_hash_opt = db.get_user_password_hash(uid)?;
+                Ok(match pw_hash_opt {
+                    None => true, // user not in users table, no password required
+                    Some(ref h) if h.is_empty() => true, // no password set
+                    Some(ref pw_hash) => verify_password(pw_hash, &password_owned),
+                })
+            })
+            .await
+            .context("spawn_blocking join error for password verification")??
         } else {
             true
         };
@@ -2898,6 +2897,7 @@ impl RpcHandler {
             } else {
                 None
             },
+            allow_ping: Some(limits.allow_ping),
         }
     }
 

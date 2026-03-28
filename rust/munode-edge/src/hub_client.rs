@@ -700,6 +700,9 @@ impl HubClient {
                 if let Some(ack) = packet.heartbeat_ack {
                     if let Some(limits) = ack.server_limits {
                         debug!("Received updated server limits from Hub heartbeat");
+                        if let Some(allow_ping) = limits.allow_ping {
+                            self.edge_state.allow_ping.store(allow_ping, std::sync::atomic::Ordering::Relaxed);
+                        }
                         *self.edge_state.hub_limits.write().await = Some(limits);
                     }
                 }
@@ -1182,6 +1185,9 @@ impl HubClient {
 
         // Store server limits received from Hub
         if let Some(limits) = result.server_limits {
+            if let Some(allow_ping) = limits.allow_ping {
+                self.edge_state.allow_ping.store(allow_ping, std::sync::atomic::Ordering::Relaxed);
+            }
             *self.edge_state.hub_limits.write().await = Some(limits);
             debug!("Stored server limits from Hub registration");
         }
@@ -1236,6 +1242,9 @@ impl HubClient {
 
         // Store server limits received from Hub
         if let Some(limits) = result.server_limits {
+            if let Some(allow_ping) = limits.allow_ping {
+                self.edge_state.allow_ping.store(allow_ping, std::sync::atomic::Ordering::Relaxed);
+            }
             *self.edge_state.hub_limits.write().await = Some(limits);
             debug!("Stored server limits from Hub registration (challenge)");
         }

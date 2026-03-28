@@ -51,17 +51,23 @@ impl<'a> LoginHandler<'a> {
         auth_result: &munode_protocol::hubedge::EdgeAuthenticateUserResult,
         opus_supported: bool,
     ) -> Result<()> {
+        debug!(session_id, "Login sequence started");
+
         // 1. Send CryptSetup and initialise OCB2 state for this session
+        debug!(session_id, "Step 1: sending CryptSetup");
         self.send_crypt_setup(session_id).await?;
 
         // 2. Send CodecVersion
+        debug!(session_id, "Step 2: sending CodecVersion");
         self.send_codec_version(opus_supported).await?;
 
         // Pre-fetch all channel permissions in a single Hub RPC call.
         // This includes the root channel (id=0) which is needed by ServerSync.
         // Doing it once here avoids N sequential RPCs during send_channel_tree.
+        debug!(session_id, "Step 3: fetching channel list and batch permission query");
         let channels = self.edge_state.channel_manager.get_channels_bfs().await;
         let channel_ids: Vec<u32> = channels.iter().map(|c| c.id).collect();
+        debug!(session_id, channel_count = channel_ids.len(), "Fetched {} channels, querying permissions", channel_ids.len());
         // Collect unique IDs (channel 0 will be in the list; no need to add separately)
         // perm_map: channel_id → (effective_permissions, is_enter_restricted)
         let perm_map: std::collections::HashMap<u32, (u32, bool)> = {
@@ -78,23 +84,29 @@ impl<'a> LoginHandler<'a> {
         };
 
         // 3. Send channel tree (BFS order), using pre-fetched permissions
+        debug!(session_id, "Step 4: sending channel tree (BFS order)");
         self.send_channel_tree_with_perms(&channels, &perm_map).await?;
 
         // 4. Send UserState for all remote users
+        debug!(session_id, "Step 5: sending remote user states");
         self.send_remote_users(session_id).await?;
 
         // 5. Send self UserState
+        debug!(session_id, "Step 6: sending self UserState");
         self.send_self_user_state(session_id, auth_result).await?;
 
         // 6. Send ServerSync (include actual root-channel permissions so the
         //    Mumble client caches them and doesn't spam PermissionQuery for
         //    channel 0 on every UI event during startup).
+        debug!(session_id, "Step 7: sending ServerSync");
         let root_permissions = perm_map.get(&0).map(|(p, _)| *p).unwrap_or(0);
         self.send_server_sync(session_id, root_permissions).await?;
 
         // 7. Send ServerConfig
+        debug!(session_id, "Step 8: sending ServerConfig");
         self.send_server_config().await?;
 
+        debug!(session_id, "Login sequence completed");
         Ok(())
     }
 

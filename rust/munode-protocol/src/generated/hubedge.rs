@@ -724,6 +724,9 @@ pub struct ServerLimitsConfig {
     /// 每频道最大用户数（全局限制）。0 = 无限制。
     #[prost(uint32, optional, tag = "15")]
     pub max_users_per_channel: ::core::option::Option<u32>,
+    /// 是否响应未认证的 UDP ping 探测。false = 不响应（服务器不会出现在公共浏览器中）。
+    #[prost(bool, optional, tag = "16")]
+    pub allow_ping: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeInfo {

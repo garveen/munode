@@ -301,8 +301,101 @@ impl UdpServer {
         }
     }
 
+    /// Detect and respond to an unencrypted Mumble UDP ping packet.
+    ///
+    /// Two formats are recognized:
+    ///
+    /// **Legacy** (Mumble < 1.5): exactly 12 bytes, first 4 are `[0x00,0x00,0x00,0x00]`.
+    /// Response: 24 bytes = `[4B version BE][8B timestamp echo][4B users BE][4B max_users BE][4B bandwidth BE]`.
+    ///
+    /// **Protobuf** (Mumble ≥ 1.5): first byte is `0x01` (`UDPMessageType::Ping`),
+    /// followed by a protobuf-serialised `MumbleUDP.Ping` message.
+    /// Response: same header + serialised Ping with server info filled in.
+    ///
+    /// When `allow_ping` is false the packet is recognised (returns `true`) but
+    /// no reply is sent, so the caller still short-circuits cleanly.
+    ///
+    /// Returns `true` if the packet was a recognised ping format.
+    async fn try_handle_udp_ping(&self, data: &[u8], peer_addr: SocketAddr) -> bool {
+        // ── Legacy ping: 12 bytes, first 4 bytes are all zero ────────────────
+        if data.len() == 12
+            && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 0
+        {
+            if self.edge_state.allow_ping.load(std::sync::atomic::Ordering::Relaxed) {
+                let (user_count, max_users, bandwidth) = self.ping_server_info().await;
+                let mut resp = [0u8; 24];
+                // Version in legacy format: major<<16 | minor<<8 | patch  (report 1.5.0)
+                let version: u32 = (1u32 << 16) | (5u32 << 8);
+                resp[0..4].copy_from_slice(&version.to_be_bytes());
+                // Echo the 8-byte timestamp verbatim (byte order is opaque to us)
+                resp[4..12].copy_from_slice(&data[4..12]);
+                resp[12..16].copy_from_slice(&(user_count as u32).to_be_bytes());
+                resp[16..20].copy_from_slice(&(max_users as u32).to_be_bytes());
+                resp[20..24].copy_from_slice(&bandwidth.to_be_bytes());
+                if let Err(e) = self.socket.send_to(&resp, peer_addr).await {
+                    debug!("Failed to send legacy UDP ping response to {}: {}", peer_addr, e);
+                } else {
+                    debug!("Responded to legacy UDP ping from {}", peer_addr);
+                }
+            }
+            return true;
+        }
+
+        // ── Protobuf ping: first byte == 0x01 (UDPMessageType::Ping) ─────────
+        if data.len() >= 2 && data[0] == 0x01 {
+            if self.edge_state.allow_ping.load(std::sync::atomic::Ordering::Relaxed) {
+                let payload = &data[1..];
+                let (timestamp, request_extra) = parse_mumble_udp_ping(payload);
+                let (user_count, max_users, bandwidth) = if request_extra {
+                    self.ping_server_info().await
+                } else {
+                    (0, 0, 0)
+                };
+                // Version v2 format: major<<48 | minor<<32 | patch<<16
+                let server_version_v2: u64 = (1u64 << 48) | (5u64 << 32);
+                let mut resp = Vec::with_capacity(32);
+                resp.push(0x01u8);
+                encode_mumble_udp_ping_response(
+                    &mut resp,
+                    timestamp,
+                    request_extra,
+                    server_version_v2,
+                    user_count as u32,
+                    max_users as u32,
+                    bandwidth,
+                );
+                if let Err(e) = self.socket.send_to(&resp, peer_addr).await {
+                    debug!("Failed to send protobuf UDP ping response to {}: {}", peer_addr, e);
+                } else {
+                    debug!("Responded to protobuf UDP ping from {}", peer_addr);
+                }
+            }
+            return true;
+        }
+
+        false
+    }
+
+    /// Returns (current_users, max_users, max_bandwidth_bps) for ping responses.
+    async fn ping_server_info(&self) -> (usize, usize, u32) {
+        let local = self.edge_state.client_manager.client_count().await;
+        let remote = self.edge_state.channel_manager.get_all_remote_users().await.len();
+        let hub_limits = self.edge_state.hub_limits.read().await;
+        let max_users = hub_limits.as_ref().and_then(|l| l.max_users).unwrap_or(0) as usize;
+        let bandwidth = hub_limits.as_ref().and_then(|l| l.max_bandwidth).unwrap_or(0);
+        (local + remote, max_users, bandwidth)
+    }
+
     /// Dispatch a datagram received on the client-facing socket.
     async fn handle_client_datagram(&self, data: &[u8], peer_addr: SocketAddr) {
+        // Check for unencrypted Mumble UDP ping BEFORE the EDGE_MAGIC check.
+        // The legacy ping format starts with [0x00,0x00,0x00,0x00] which shares
+        // the same two-byte prefix as EDGE_MAGIC — detect pings first to avoid
+        // misrouting them as Edge-to-Edge packets.
+        if self.try_handle_udp_ping(data, peer_addr).await {
+            return;
+        }
+
         // Edge-to-Edge packet on client port (fallback when no dedicated edge port)
         if data.len() >= 2 && data[0] == EDGE_MAGIC[0] && data[1] == EDGE_MAGIC[1] {
             self.handle_edge_packet(&data[2..], peer_addr).await;
@@ -1092,6 +1185,118 @@ impl UdpServer {
                     failures.insert(edge_id, 0);
                 }
             }
+        }
+    }
+}
+
+/// Parse a Mumble UDP protobuf `Ping` payload (the bytes after the `0x01` header).
+/// Returns `(timestamp, request_extended_information)`.
+fn parse_mumble_udp_ping(payload: &[u8]) -> (u64, bool) {
+    let mut timestamp: u64 = 0;
+    let mut request_extra = false;
+    let mut pos = 0;
+    while pos < payload.len() {
+        let (tag, n) = match read_pb_varint(payload, pos) {
+            Some(v) => v,
+            None => break,
+        };
+        pos += n;
+        let field = tag >> 3;
+        let wire_type = tag & 0x7;
+        match (field, wire_type) {
+            (1, 0) => {
+                if let Some((v, n)) = read_pb_varint(payload, pos) {
+                    timestamp = v;
+                    pos += n;
+                } else {
+                    break;
+                }
+            }
+            (2, 0) => {
+                if let Some((v, n)) = read_pb_varint(payload, pos) {
+                    request_extra = v != 0;
+                    pos += n;
+                } else {
+                    break;
+                }
+            }
+            (_, 0) => {
+                // skip unknown varint field
+                if let Some((_, n)) = read_pb_varint(payload, pos) {
+                    pos += n;
+                } else {
+                    break;
+                }
+            }
+            _ => break, // unsupported wire type
+        }
+    }
+    (timestamp, request_extra)
+}
+
+/// Encode a Mumble UDP protobuf `Ping` response into `out`.
+/// Always writes `timestamp`; writes server info fields only when `include_server_info` is true.
+fn encode_mumble_udp_ping_response(
+    out: &mut Vec<u8>,
+    timestamp: u64,
+    include_server_info: bool,
+    server_version_v2: u64,
+    user_count: u32,
+    max_user_count: u32,
+    max_bandwidth_per_user: u32,
+) {
+    // field 1: timestamp
+    write_pb_varint(out, 0x08);
+    write_pb_varint(out, timestamp);
+    if include_server_info {
+        // field 3: server_version_v2
+        write_pb_varint(out, 0x18);
+        write_pb_varint(out, server_version_v2);
+        // field 4: user_count
+        write_pb_varint(out, 0x20);
+        write_pb_varint(out, user_count as u64);
+        // field 5: max_user_count
+        write_pb_varint(out, 0x28);
+        write_pb_varint(out, max_user_count as u64);
+        // field 6: max_bandwidth_per_user
+        write_pb_varint(out, 0x30);
+        write_pb_varint(out, max_bandwidth_per_user as u64);
+    }
+}
+
+/// Decode a standard protobuf varint from `buf` starting at `pos`.
+/// Returns `Some((value, bytes_consumed))` or `None` on underflow / overflow.
+fn read_pb_varint(buf: &[u8], mut pos: usize) -> Option<(u64, usize)> {
+    let start = pos;
+    let mut result: u64 = 0;
+    let mut shift = 0u32;
+    loop {
+        if pos >= buf.len() {
+            return None;
+        }
+        let b = buf[pos];
+        pos += 1;
+        result |= ((b & 0x7F) as u64) << shift;
+        if b & 0x80 == 0 {
+            return Some((result, pos - start));
+        }
+        shift += 7;
+        if shift >= 64 {
+            return None;
+        }
+    }
+}
+
+/// Encode a standard protobuf varint and append it to `out`.
+fn write_pb_varint(out: &mut Vec<u8>, mut value: u64) {
+    loop {
+        let b = (value & 0x7F) as u8;
+        value >>= 7;
+        if value == 0 {
+            out.push(b);
+            break;
+        } else {
+            out.push(b | 0x80);
         }
     }
 }
