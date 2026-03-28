@@ -1227,6 +1227,7 @@ dependencies = [
  "munode-protocol",
  "reqwest",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",

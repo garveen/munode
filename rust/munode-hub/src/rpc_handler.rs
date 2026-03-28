@@ -2399,6 +2399,37 @@ impl RpcHandler {
             return;
         }
 
+        // Permission check: if initiated by a user (actor_session != 0),
+        // the actor must have KICK (or BAN for ban operations) at the root channel.
+        if p.actor_session != 0 {
+            use munode_common::permission;
+            let required = if p.ban { permission::BAN } else { permission::KICK };
+            let groups: Vec<String> = match self.state.session_manager
+                .get_session(p.actor_session)
+                .await
+            {
+                Some(s) => s.groups.clone(),
+                None => {
+                    warn!(
+                        actor_session = p.actor_session,
+                        "kick/ban rejected: actor session not found"
+                    );
+                    return;
+                }
+            };
+            if !self.state.acl_manager
+                .has_permission(p.actor_user_id as i32, 0, &groups, required)
+                .await
+            {
+                warn!(
+                    actor_session = p.actor_session,
+                    target_session,
+                    "kick/ban rejected: actor lacks permission"
+                );
+                return;
+            }
+        }
+
         if let Some(removed) = self.state.session_manager.remove_session(target_session).await {
             info!("User removed: {} (session={})", removed.username, target_session);
 

@@ -6,6 +6,7 @@ use std::fs;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -14,6 +15,19 @@ use serde_json::{json, Value};
 
 use crate::auth::start_auth_server;
 use crate::users::find_user;
+
+// ── Crypto provider initialization ────────────────────────────────────────
+
+static CRYPTO_INIT: OnceLock<()> = OnceLock::new();
+
+/// Install the default rustls CryptoProvider (ring) once per process.
+/// Required because both `ring` and `aws-lc-rs` are present in the dep graph
+/// and rustls cannot automatically choose between them.
+fn ensure_crypto_provider() {
+    CRYPTO_INIT.get_or_init(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -103,32 +117,11 @@ pub fn seed_database(db_path: &Path) -> Result<()> {
         }
     }
 
-    // We need the Hub itself to create the schema (migrations).
-    // We do this by starting it briefly with a temp config, letting it
-    // initialize the DB, then stopping it and injecting our seed data.
-    // However that's complex. Instead, we create the schema manually using
-    // the same DDL that the Rust Hub uses.
+    // Create the schema using the exact same DDL as the Rust Hub's init_tables(),
+    // so the Hub can open this database without any incompatibility.
     let conn = rusqlite::Connection::open(db_path)?;
     conn.execute_batch(r#"
         PRAGMA journal_mode=WAL;
-        PRAGMA foreign_keys=ON;
-
-        CREATE TABLE IF NOT EXISTS channels (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            position INTEGER NOT NULL DEFAULT 0,
-            max_users INTEGER NOT NULL DEFAULT 0,
-            parent_id INTEGER NOT NULL DEFAULT 0,
-            inherit_acl INTEGER NOT NULL DEFAULT 1,
-            description_blob TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_channel_parentid ON channels(parent_id);
-
-        CREATE TABLE IF NOT EXISTS channel_links (
-            channel_id INTEGER NOT NULL,
-            linked_channel_id INTEGER NOT NULL,
-            PRIMARY KEY (channel_id, linked_channel_id)
-        );
 
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY,
@@ -144,113 +137,103 @@ pub fn seed_database(db_path: &Path) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_users_name ON users(name);
 
+        CREATE TABLE IF NOT EXISTS user_last_channels (
+            id INTEGER PRIMARY KEY,
+            last_channel INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS channels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            max_users INTEGER NOT NULL DEFAULT 0,
+            parent_id INTEGER NOT NULL DEFAULT 0,
+            inherit_acl INTEGER NOT NULL DEFAULT 1,
+            description_blob TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_channel_parentid ON channels(parent_id);
+
+        CREATE TABLE IF NOT EXISTS channel_links (
+            channel_id INTEGER NOT NULL,
+            link_id INTEGER NOT NULL,
+            PRIMARY KEY (channel_id, link_id),
+            FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+            FOREIGN KEY (link_id) REFERENCES channels(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS acls (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at DATETIME,
+            updated_at DATETIME,
+            deleted_at DATETIME,
             channel_id INTEGER NOT NULL,
-            user_id INTEGER,
-            group_name TEXT,
+            user_id INTEGER NOT NULL DEFAULT -1,
+            "group" TEXT,
             apply_here INTEGER NOT NULL DEFAULT 1,
             apply_subs INTEGER NOT NULL DEFAULT 1,
-            priority INTEGER NOT NULL DEFAULT 0,
             allow INTEGER NOT NULL DEFAULT 0,
             deny INTEGER NOT NULL DEFAULT 0
         );
-        CREATE INDEX IF NOT EXISTS idx_acls_channel ON acls(channel_id);
+        CREATE INDEX IF NOT EXISTS idx_acls_deleted_at ON acls(deleted_at);
+        CREATE INDEX IF NOT EXISTS idx_acl_channelid ON acls(channel_id);
 
         CREATE TABLE IF NOT EXISTS channel_groups (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             channel_id INTEGER NOT NULL,
             name TEXT NOT NULL,
             inherit INTEGER NOT NULL DEFAULT 1,
-            inheritable INTEGER NOT NULL DEFAULT 1
+            inheritable INTEGER NOT NULL DEFAULT 1,
+            created_at DATETIME,
+            updated_at DATETIME,
+            UNIQUE(channel_id, name),
+            FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
         );
-        CREATE INDEX IF NOT EXISTS idx_groups_channel ON channel_groups(channel_id);
+        CREATE INDEX IF NOT EXISTS idx_channel_groups_channel ON channel_groups(channel_id);
 
         CREATE TABLE IF NOT EXISTS channel_group_members (
-            group_id INTEGER NOT NULL REFERENCES channel_groups(id) ON DELETE CASCADE,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_group_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
-            exclude INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY(group_id, user_id, exclude)
+            is_add INTEGER NOT NULL,
+            created_at DATETIME,
+            FOREIGN KEY (channel_group_id) REFERENCES channel_groups(id) ON DELETE CASCADE
         );
+        CREATE INDEX IF NOT EXISTS idx_channel_group_members_group ON channel_group_members(channel_group_id);
 
         CREATE TABLE IF NOT EXISTS bans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            address TEXT NOT NULL,
-            mask INTEGER NOT NULL DEFAULT 32,
-            username TEXT,
+            created_at DATETIME,
+            updated_at DATETIME,
+            deleted_at DATETIME,
+            address BLOB NOT NULL,
+            mask INTEGER NOT NULL DEFAULT 128,
+            name TEXT,
             hash TEXT,
             reason TEXT,
-            start_time INTEGER NOT NULL DEFAULT 0,
-            duration INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL DEFAULT 0
+            start INTEGER NOT NULL DEFAULT 0,
+            duration INTEGER NOT NULL DEFAULT 0
         );
-
-        CREATE TABLE IF NOT EXISTS sessions (
-            session_id INTEGER PRIMARY KEY,
-            user_id INTEGER,
-            username TEXT NOT NULL,
-            edge_id INTEGER NOT NULL,
-            channel_id INTEGER NOT NULL DEFAULT 0,
-            joined_at INTEGER NOT NULL DEFAULT 0
-        );
-
-        CREATE TABLE IF NOT EXISTS edges (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            host TEXT NOT NULL,
-            port INTEGER NOT NULL,
-            edge_port INTEGER NOT NULL,
-            connected_at INTEGER NOT NULL DEFAULT 0
-        );
+        CREATE INDEX IF NOT EXISTS idx_bans_deleted_at ON bans(deleted_at);
+        CREATE INDEX IF NOT EXISTS idx_bans_address ON bans(address);
+        CREATE INDEX IF NOT EXISTS idx_bans_hash ON bans(hash);
 
         CREATE TABLE IF NOT EXISTS schema_versions (
             version INTEGER PRIMARY KEY,
             description TEXT NOT NULL,
-            applied_at INTEGER NOT NULL
+            applied_at INTEGER NOT NULL DEFAULT 0
         );
 
-        CREATE TABLE IF NOT EXISTS audit_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp INTEGER NOT NULL,
-            actor_session INTEGER,
-            actor_name TEXT,
-            action TEXT NOT NULL,
-            target TEXT,
-            details TEXT
-        );
+        -- Root channel (ID=0). parent_id=-1 is the sentinel for "no parent".
+        INSERT OR IGNORE INTO channels (id, name, position, parent_id, inherit_acl, description_blob)
+            VALUES (0, 'Root', 0, -1, 1, '');
 
-        CREATE TABLE IF NOT EXISTS configs (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS user_last_channels (
-            user_id INTEGER PRIMARY KEY,
-            channel_id INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS voice_targets (
-            session_id INTEGER NOT NULL,
-            target_id INTEGER NOT NULL,
-            data BLOB,
-            PRIMARY KEY (session_id, target_id)
-        );
-
-        -- Root channel (ID=0) — use INSERT OR IGNORE since AUTOINCREMENT won't give us 0
-        INSERT OR IGNORE INTO channels (id, name, position, parent_id, inherit_acl)
-            VALUES (0, 'Root', -1, 0, 1);
-
-        -- Test channels
-        INSERT OR IGNORE INTO channels (id, name, position, parent_id, inherit_acl)
-            VALUES (1, 'Lobby', 0, 0, 1);
-        INSERT OR IGNORE INTO channels (id, name, position, parent_id, inherit_acl)
-            VALUES (2, 'General', 1, 0, 1);
-        INSERT OR IGNORE INTO channels (id, name, position, parent_id, inherit_acl)
-            VALUES (3, 'Private', 2, 0, 1);
-
-        -- Record schema version
-        INSERT OR IGNORE INTO schema_versions (version, description, applied_at)
-            VALUES (1, 'initial schema', strftime('%s', 'now'));
+        -- Test channels (parent_id=0 means child of Root)
+        INSERT OR IGNORE INTO channels (id, name, position, parent_id, inherit_acl, description_blob)
+            VALUES (1, 'Lobby', 0, 0, 1, '');
+        INSERT OR IGNORE INTO channels (id, name, position, parent_id, inherit_acl, description_blob)
+            VALUES (2, 'General', 1, 0, 1, '');
+        INSERT OR IGNORE INTO channels (id, name, position, parent_id, inherit_acl, description_blob)
+            VALUES (3, 'Private', 2, 0, 1, '');
     "#).context("seed database")?;
 
     Ok(())
@@ -459,6 +442,7 @@ impl TestEnvBuilder {
 
     /// Start everything and return the environment.
     pub async fn start(self) -> Result<TestEnvironment> {
+        ensure_crypto_provider();
         let verbose = self.verbose || std::env::var("MUNODE_TEST_LOG").is_ok();
         let tmp = tempfile::TempDir::new()?;
         let tmp_path = tmp.path().to_path_buf();

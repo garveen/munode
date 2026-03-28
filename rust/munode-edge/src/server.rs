@@ -343,6 +343,15 @@ async fn handle_client_connection(
         None
     };
 
+    // Per-connection close signal: fired by remove_client() when the client is
+    // kicked or banned.  The read loop selects on this receiver so that the TCP
+    // connection is closed immediately without waiting for the client to send
+    // another packet.
+    let (close_tx, mut close_rx) = tokio::sync::oneshot::channel::<()>();
+    // The sender is registered with ClientManager after successful auth (below).
+    // We wrap it in an Option so we can move it into register_close_signal exactly once.
+    let mut close_tx_opt: Option<tokio::sync::oneshot::Sender<()>> = Some(close_tx);
+
     'outer: loop {
         // Read data from TLS stream with idle timeout to drop zombie connections.
         // Before authentication, also enforce the pre-auth connection timeout.
@@ -356,29 +365,39 @@ async fn handle_client_connection(
         } else {
             CLIENT_IDLE_TIMEOUT
         };
-        let n = match tokio::time::timeout(read_timeout, reader.read_buf(&mut buf)).await {
-            Ok(Ok(n)) => n,
-            Ok(Err(e)) => {
-                info!("Client {} connection error: {}", peer_addr, e);
+        let n = tokio::select! {
+            // Check close signal first (biased) so kick/ban takes priority.
+            biased;
+            _ = &mut close_rx => {
+                debug!("Client {} force-disconnected (kicked/banned)", peer_addr);
                 break 'outer;
             }
-            Err(_) => {
-                if client_state != ClientState::Ready {
-                    if let Some(deadline) = auth_deadline {
-                        if tokio::time::Instant::now() >= deadline {
-                            info!("Client {} auth timeout — closing unauthenticated connection", peer_addr);
-                            let reject = mumbleproto::Reject {
-                                r#type: Some(mumbleproto::reject::RejectType::None as i32),
-                                reason: Some("Authentication timed out".to_string()),
-                                ..Default::default()
-                            };
-                            client_sender.send_message(MessageType::Reject, &reject).await;
-                            break 'outer;
+            result = tokio::time::timeout(read_timeout, reader.read_buf(&mut buf)) => {
+                match result {
+                    Ok(Ok(n)) => n,
+                    Ok(Err(e)) => {
+                        info!("Client {} connection error: {}", peer_addr, e);
+                        break 'outer;
+                    }
+                    Err(_) => {
+                        if client_state != ClientState::Ready {
+                            if let Some(deadline) = auth_deadline {
+                                if tokio::time::Instant::now() >= deadline {
+                                    info!("Client {} auth timeout — closing unauthenticated connection", peer_addr);
+                                    let reject = mumbleproto::Reject {
+                                        r#type: Some(mumbleproto::reject::RejectType::None as i32),
+                                        reason: Some("Authentication timed out".to_string()),
+                                        ..Default::default()
+                                    };
+                                    client_sender.send_message(MessageType::Reject, &reject).await;
+                                    break 'outer;
+                                }
+                            }
                         }
+                        info!("Client {} idle timeout — closing connection", peer_addr);
+                        break 'outer;
                     }
                 }
-                info!("Client {} idle timeout — closing connection", peer_addr);
-                break 'outer;
             }
         };
         if n == 0 {
@@ -571,6 +590,10 @@ async fn handle_client_connection(
                     };
                     // Add client to manager first so permission queries can resolve user_id
                     edge_state.client_manager.add_client(client.clone(), client_sender.clone()).await;
+                    // Register the close signal so this client can be force-disconnected.
+                    if let Some(tx) = close_tx_opt.take() {
+                        edge_state.client_manager.register_close_signal(sid, tx).await;
+                    }
 
                     // Check Speak permission for initial channel to determine suppress
                     // (done AFTER add_client so hub_client.handle_permission_query gets the right user_id)
@@ -897,10 +920,11 @@ async fn handle_client_connection(
                                     }
                                 }
                             } else {
-                                // Normal broadcast (target=0): route to same channel + linked channels
+                                // Normal broadcast (target=0): route to same channel + linked channels + listeners
                                 let linked_channels = edge_state.channel_manager
                                     .get_all_linked_channels(client.channel_id)
                                     .await;
+                                let linked_channels_vec: Vec<u32> = linked_channels.iter().copied().collect();
 
                                 // Build frame once with sender session injected
                                 let forwarded = inject_session_into_voice(&frame.payload, sid);
@@ -912,21 +936,16 @@ async fn handle_client_connection(
                                 // without per-target heap allocation.
                                 let data = std::sync::Arc::new(buf.to_vec());
 
-                                // Local clients in all linked channels
-                                for ch_id in &linked_channels {
-                                    let sessions = edge_state.client_manager.get_channel_sessions(*ch_id).await;
-                                    for target_session in sessions {
-                                        if target_session == sid {
-                                            continue;
-                                        }
-                                        if let Some(target_client) = edge_state.client_manager.get_client(target_session).await {
-                                            if target_client.deaf || target_client.self_deaf {
-                                                continue;
-                                            }
-                                        }
-                                        if let Some(sender) = edge_state.client_manager.get_sender(target_session).await {
-                                            sender.send_raw((*data).clone()).await;
-                                        }
+                                // Local clients in all linked channels + channel listeners
+                                let targets = edge_state.client_manager
+                                    .get_channel_voice_targets_with_listeners(&linked_channels_vec, sid)
+                                    .await;
+                                for (target_session, is_deaf, _cs) in targets {
+                                    if is_deaf {
+                                        continue;
+                                    }
+                                    if let Some(sender) = edge_state.client_manager.get_sender(target_session).await {
+                                        sender.send_raw((*data).clone()).await;
                                     }
                                 }
 
@@ -1776,12 +1795,11 @@ async fn handle_user_state_update(
             let uid = client.user_id;
             let data = comment.as_bytes().to_vec();
             let data_len = data.len();
-            if let Some(hash_hex) = hub_client.blob_set_user_comment(uid, data).await {
-                if let Some(hash_bytes) = hex_to_bytes(&hash_hex) {
-                    // Only broadcast comment_hash for long comments (> 128 bytes),
-                    // matching the Mumble protocol convention.  Short comments are
-                    // sent inline (comment field) rather than by reference.
-                    if data_len > 128 {
+            if data_len > 128 {
+                // Long comments: persist to blob store and broadcast the hash so
+                // peers can request the full text via RequestBlob.
+                if let Some(hash_hex) = hub_client.blob_set_user_comment(uid, data).await {
+                    if let Some(hash_bytes) = hex_to_bytes(&hash_hex) {
                         let hash_msg = mumbleproto::UserState {
                             session: Some(session_id),
                             actor: Some(session_id),
@@ -1793,6 +1811,19 @@ async fn handle_user_state_update(
                         edge_state.client_manager.broadcast(MessageType::UserState, &hash_msg, None).await;
                     }
                 }
+            } else {
+                // Short comments: broadcast inline immediately.  Also persist to
+                // blob store for later retrieval, but don't gate the broadcast on it.
+                let inline_msg = mumbleproto::UserState {
+                    session: Some(session_id),
+                    actor: Some(session_id),
+                    comment: Some(comment.clone()),
+                    ..Default::default()
+                };
+                client.comment_hash = None;
+                edge_state.client_manager.update_client(client.clone()).await;
+                edge_state.client_manager.broadcast(MessageType::UserState, &inline_msg, None).await;
+                hub_client.blob_set_user_comment(uid, data).await;
             }
         }
 

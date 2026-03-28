@@ -793,8 +793,10 @@ impl HubClient {
                             params.reason.as_deref(),
                         );
                         sender.send_message(MessageType::UserRemove, &msg).await;
-                        // Drop sender by removing client from manager - this closes the TCP connection
+                        // Remove the client from the manager and then fire the close signal
+                        // so the per-client read loop breaks and the TCP connection closes.
                         self.edge_state.client_manager.remove_client(target_session).await;
+                        self.edge_state.client_manager.send_close_signal(target_session).await;
                     }
                     // Remove from remote user tracking and broadcast removal to local clients
                     self.edge_state.channel_manager.remove_remote_user(target_session).await;

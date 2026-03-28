@@ -226,7 +226,11 @@ impl MumbleClient {
             let tok = token.clone();
             tokio::spawn(async move {
                 tokio::select! {
-                    _ = connection::tcp_read_loop(read_half, state, event_tx, crypt_tx) => {}
+                    _ = connection::tcp_read_loop(read_half, state, event_tx, crypt_tx) => {
+                        // Server closed the connection — cancel all other tasks so the
+                        // writer loop exits and `tcp_tx.is_closed()` returns true.
+                        tok.cancel();
+                    }
                     _ = tok.cancelled() => {}
                 }
             });
@@ -329,7 +333,14 @@ impl MumbleClient {
             .unwrap_or(false)
     }
 
-    // ── UDP ────────────────────────────────────────────────────────────────
+    /// Returns `true` if `CryptSetup` has been received from the server.
+    ///
+    /// This allows callers to check whether encryption is ready without
+    /// waiting for a `CryptoReady` event that may have already fired.
+    pub fn is_crypto_ready(&self) -> bool {
+        self.inner.crypt_rx.borrow().is_some()
+    }
+
 
     /// Initiate the UDP handshake and wait for the first ping reply.
     ///
@@ -992,11 +1003,20 @@ pub(crate) async fn dispatch_frame(
         }
         UserRemove => {
             if let Ok(msg) = mumbleproto::UserRemove::decode(&*frame.payload) {
+                let own_session = state.read().await.session.as_ref().map(|s| s.session);
                 state.write().await.remove_user(msg.session);
-                let _ = event_tx.send(ClientEvent::UserLeft {
-                    session: msg.session,
-                    reason: msg.reason.clone(),
-                });
+                // If the removed user is us, emit Kicked so callers can detect being kicked.
+                if Some(msg.session) == own_session {
+                    let _ = event_tx.send(ClientEvent::Kicked {
+                        session: msg.session,
+                        reason: msg.reason.clone(),
+                    });
+                } else {
+                    let _ = event_tx.send(ClientEvent::UserLeft {
+                        session: msg.session,
+                        reason: msg.reason.clone(),
+                    });
+                }
             }
         }
         UdpTunnel => {

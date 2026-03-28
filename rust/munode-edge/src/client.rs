@@ -106,6 +106,9 @@ pub struct ClientManager {
     /// in sync with `clients.listening_channels` to provide O(1) lookup instead
     /// of the O(N clients) linear scan that `get_listening_sessions` previously did.
     listening_index: RwLock<HashMap<u32, Vec<u32>>>,
+    /// Per-session close signals.  Sending on these channels causes the
+    /// per-client read loop to break and the TCP connection to close.
+    close_signals: RwLock<HashMap<u32, tokio::sync::oneshot::Sender<()>>>,
 }
 
 impl ClientManager {
@@ -117,7 +120,31 @@ impl ClientManager {
             crypt_states: RwLock::new(HashMap::new()),
             bandwidth_records: RwLock::new(HashMap::new()),
             listening_index: RwLock::new(HashMap::new()),
+            close_signals: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// Register a close-signal sender for a connected client.
+    ///
+    /// Once registered, [`send_close_signal`] will trigger the signal,
+    /// causing the per-client read loop to break and the TCP connection to close.
+    pub async fn register_close_signal(
+        &self,
+        session: u32,
+        tx: tokio::sync::oneshot::Sender<()>,
+    ) {
+        self.close_signals.write().await.insert(session, tx);
+    }
+
+    /// Fire the close signal for a session, causing the per-client read loop to
+    /// break and the TCP connection to be closed from the server side.
+    ///
+    /// This is used for kick/ban scenarios. Regular `remove_client` (used for
+    /// channel moves and natural disconnects) does NOT fire this signal.
+    pub async fn send_close_signal(&self, session: u32) {
+        if let Some(tx) = self.close_signals.write().await.remove(&session) {
+            let _ = tx.send(());
+        }
     }
 
     /// Register a new client with a given session ID and sender.
@@ -551,6 +578,8 @@ impl ClientManager {
         // read half will then get EOF, the connection handler task will break out of its
         // read loop and run the normal cleanup path (remove_client, notify Hub, etc.).
         senders.clear();
+        // Also trigger all close signals so read loops exit immediately.
+        self.close_signals.write().await.clear();
     }
 }
 

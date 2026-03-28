@@ -14,6 +14,8 @@ pub const TEST_USERS: &[TestUser] = &[
     TestUser { username: "user1",            password: "password1",    user_id: 2,   groups: &["user"] },
     TestUser { username: "user2",            password: "password2",    user_id: 3,   groups: &["user"] },
     TestUser { username: "guest",            password: "guest123",     user_id: 4,   groups: &["user"] },
+    TestUser { username: "user3",            password: "password3",    user_id: 5,   groups: &["user"] },
+    TestUser { username: "user5",            password: "password5",    user_id: 7,   groups: &["user"] },
     TestUser { username: "admin_password",   password: "admin_password",user_id: 11,  groups: &["admin"] },
     TestUser { username: "ninja_user1",      password: "ninja_password",user_id: 15,  groups: &["ninja"] },
     TestUser { username: "ninja_user2",      password: "ninja_password",user_id: 16,  groups: &["ninja"] },

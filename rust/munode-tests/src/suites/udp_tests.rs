@@ -17,18 +17,23 @@ async fn test_udp_crypto_setup_received() -> Result<()> {
     let clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
     let client = &clients[0];
 
-    let mut rx = client.subscribe();
-    let got = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            match rx.recv().await {
-                Ok(ClientEvent::CryptoReady) => break true,
-                Ok(_) => continue,
-                Err(_) => break false,
+    // CryptSetup may have been received before we subscribe; check directly first.
+    let got = if client.is_crypto_ready() {
+        true
+    } else {
+        let mut rx = client.subscribe();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match rx.recv().await {
+                    Ok(ClientEvent::CryptoReady) => break true,
+                    Ok(_) => continue,
+                    Err(_) => break false,
+                }
             }
-        }
-    })
-    .await
-    .unwrap_or(false);
+        })
+        .await
+        .unwrap_or(false)
+    };
 
     assert!(got, "CryptSetup should be received from server after auth");
     cleanup_clients(clients).await;
