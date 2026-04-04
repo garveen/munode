@@ -26,6 +26,7 @@ use axum::{
     Router,
 };
 use serde::Serialize;
+use serde_json::json;
 use tracing::{error, info};
 
 use crate::server::HubState;
@@ -66,7 +67,13 @@ async fn api_key_middleware(
     match &state.config.web_api.api_key {
         None => {
             // No key configured — reject all write operations.
-            (StatusCode::FORBIDDEN, "API key not configured; write operations are disabled")
+            (
+                StatusCode::FORBIDDEN,
+                axum::response::Json(json!({
+                    "success": false,
+                    "message": "API key not configured; write operations are disabled"
+                })),
+            )
                 .into_response()
         }
         Some(configured_key) => {
@@ -78,7 +85,14 @@ async fn api_key_middleware(
             if provided_key.is_some_and(|k| constant_time_eq(k, configured_key)) {
                 next.run(request).await
             } else {
-                (StatusCode::UNAUTHORIZED, "Invalid or missing API key").into_response()
+                (
+                    StatusCode::UNAUTHORIZED,
+                    axum::response::Json(json!({
+                        "success": false,
+                        "message": "Invalid or missing API key"
+                    })),
+                )
+                    .into_response()
             }
         }
     }
