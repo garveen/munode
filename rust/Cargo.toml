@@ -68,9 +68,7 @@ hex = "0.4"
 flate2 = "1"
 
 # Embedded scripting
-mlua = { version = "0.10", features = ["lua54", "send", "serialize", "vendored"] }
-ureq = { version = "2", features = ["json"] }
-
+mlua = { version = "0.10", features = ["lua54", "send", "serialize", "vendored", "async"] }
 # Web API
 axum = { version = "0.7", features = [] }
 

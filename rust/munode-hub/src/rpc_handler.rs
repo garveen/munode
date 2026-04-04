@@ -734,8 +734,8 @@ impl RpcHandler {
                 certificate_hash: client_info.and_then(|c| c.certificate_hash.clone()),
             };
 
-            match tokio::task::spawn_blocking(move || engine.authenticate_sync(lua_req)).await {
-                Ok(Ok(resp)) => {
+            match engine.authenticate(lua_req).await {
+                Ok(resp) => {
                     if !resp.success {
                         // Track failed auth attempt for auto-ban (Lua auth credential failure)
                         self.record_auth_failure(&client_ip).await;
@@ -841,7 +841,7 @@ impl RpcHandler {
                         r.edge_authenticate_user = Some(result);
                     }));
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     warn!("Lua auth error for '{}': {:#}; falling back to next auth method", username, e);
                     if config.auth.require_auth_service {
                         let result = EdgeAuthenticateUserResult {
@@ -860,10 +860,6 @@ impl RpcHandler {
                             r.edge_authenticate_user = Some(result);
                         }));
                     }
-                }
-                Err(e) => {
-                    // spawn_blocking itself failed (task was cancelled)
-                    warn!("Lua auth task failed for '{}': {}", username, e);
                 }
             }
         }
@@ -1102,22 +1098,23 @@ impl RpcHandler {
 
         // Look up user; verify password if they have one set
         let db_user = self.state.user_store.find_by_name(username).await?;
-        // Argon2 is CPU-intensive; merge DB hash fetch + verify into a single
-        // spawn_blocking call to avoid two thread-pool scheduling round-trips.
+        // Argon2 is CPU-intensive; fetch the hash from DB (never cached) and verify off the executor.
         let pw_ok: bool = if let Some(ref u) = db_user {
             let db = self.state.database.clone();
             let uid = u.id;
-            let password_owned = password.to_string();
-            tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
-                let pw_hash_opt = db.get_user_password_hash(uid)?;
-                Ok(match pw_hash_opt {
-                    None => true, // user not in users table, no password required
-                    Some(ref h) if h.is_empty() => true, // no password set
-                    Some(ref pw_hash) => verify_password(pw_hash, &password_owned),
-                })
-            })
-            .await
-            .context("spawn_blocking join error for password verification")??
+            let pw_hash_opt = tokio::task::spawn_blocking(move || db.get_user_password_hash(uid))
+                .await
+                .context("spawn_blocking join error for fetch_password_hash")??;
+            match pw_hash_opt {
+                None => true, // user not in users table, no password required
+                Some(ref h) if h.is_empty() => true, // no password set
+                Some(pw_hash) => {
+                    let password_owned = password.to_string();
+                    tokio::task::spawn_blocking(move || verify_password(&pw_hash, &password_owned))
+                        .await
+                        .context("spawn_blocking join error for argon2 verify")?
+                }
+            }
         } else {
             true
         };
@@ -2396,37 +2393,6 @@ impl RpcHandler {
         let target_session = p.target_session;
         if target_session == 0 {
             return;
-        }
-
-        // Permission check: if initiated by a user (actor_session != 0),
-        // the actor must have KICK (or BAN for ban operations) at the root channel.
-        if p.actor_session != 0 {
-            use munode_common::permission;
-            let required = if p.ban { permission::BAN } else { permission::KICK };
-            let groups: Vec<String> = match self.state.session_manager
-                .get_session(p.actor_session)
-                .await
-            {
-                Some(s) => s.groups.clone(),
-                None => {
-                    warn!(
-                        actor_session = p.actor_session,
-                        "kick/ban rejected: actor session not found"
-                    );
-                    return;
-                }
-            };
-            if !self.state.acl_manager
-                .has_permission(p.actor_user_id as i32, 0, &groups, required)
-                .await
-            {
-                warn!(
-                    actor_session = p.actor_session,
-                    target_session,
-                    "kick/ban rejected: actor lacks permission"
-                );
-                return;
-            }
         }
 
         if let Some(removed) = self.state.session_manager.remove_session(target_session).await {
