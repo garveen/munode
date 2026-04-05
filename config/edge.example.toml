@@ -48,6 +48,30 @@ external_port = 64738                   # Default: same as port
 # Used for proximity-based client assignment and routing optimization
 region = "asia-east"                    # Default: not set (recommended to set for multi-region deployments)
 
+# PROXY Protocol support (v1 and v2) for deployments behind nginx or HAProxy.
+# When enabled, the real client IP is read from the PROXY Protocol header that
+# the upstream proxy prepends to each connection.  All direct connections that
+# do not carry a valid PROXY Protocol header will be rejected.
+# Default: false (disabled)
+#
+# nginx example:
+#   stream {
+#     server {
+#       listen 64738;
+#       proxy_pass  backend_edge;
+#       proxy_protocol on;
+#     }
+#   }
+#
+# HAProxy example:
+#   frontend mumble
+#     bind :64738
+#     default_backend edge
+#   backend edge
+#     server edge1 127.0.0.1:64738 send-proxy-v2
+#
+# proxy_protocol = false
+
 # ---------------------------------------------------------------------------
 # TLS/SSL
 # ---------------------------------------------------------------------------

@@ -103,6 +103,13 @@ pub struct NetworkConfig {
     pub external_port: Option<u16>,
     /// Geographic region identifier.
     pub region: Option<String>,
+    /// Enable PROXY Protocol support (v1 and v2) for connections behind nginx/HAProxy.
+    /// When enabled, the real client IP is extracted from the PROXY Protocol header
+    /// instead of the TCP peer address. Requires the upstream proxy to be configured
+    /// to send PROXY Protocol headers. All direct (non-proxied) connections will be
+    /// rejected when this is enabled.
+    #[serde(default)]
+    pub proxy_protocol: bool,
 }
 
 /// TLS certificate configuration.
