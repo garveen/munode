@@ -328,6 +328,10 @@ pub struct EdgeState {
     /// Client-facing limits pushed from Hub on registration (and updated via heartbeat).
     /// When set, overrides Edge-local config for ServerSync/ServerConfig/rate limiting.
     pub hub_limits: RwLock<Option<ServerLimitsConfig>>,
+    /// Maximum voice bandwidth per user in bits-per-second, mirrored from `hub_limits`
+    /// as an `AtomicU32` for lock-free reads on the UDP voice hot path.
+    /// 0 = unlimited.  Updated atomically whenever `hub_limits` is written.
+    pub max_bandwidth_bps: AtomicU32,
     /// Percentage (0–100) of outbound Edge-to-Edge UDP packets to drop.
     /// Zero in production; set by `test-utils` feature tests to simulate link degradation.
     pub test_udp_drop_rate: AtomicU32,
@@ -366,6 +370,7 @@ impl EdgeState {
             route_table: RwLock::new(std::collections::HashMap::new()),
             voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
+            max_bandwidth_bps: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
             edge_crypto: None,
         })
@@ -401,6 +406,7 @@ impl EdgeState {
             route_table: RwLock::new(std::collections::HashMap::new()),
             voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
+            max_bandwidth_bps: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
             edge_crypto: None,
         })
@@ -443,6 +449,7 @@ impl EdgeState {
             route_table: RwLock::new(std::collections::HashMap::new()),
             voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
+            max_bandwidth_bps: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
             edge_crypto,
         })

@@ -177,7 +177,12 @@ impl UdpServer {
     }
 
     /// Main receive loop.  Polls both the client socket and the edge socket.
-    pub async fn run(&self) -> Result<()> {
+    ///
+    /// Called with `Arc<Self>` so that per-packet voice routing can be offloaded
+    /// to separate tokio tasks.  This decouples the receive loop from the fan-out
+    /// work (`route_voice`, `deliver_voice_locally`), allowing the kernel socket
+    /// buffer to drain at wire speed even when processing a large channel.
+    pub async fn run(self: Arc<Self>) -> Result<()> {
         let mut client_buf = [0u8; 2048];
         let mut edge_buf = [0u8; 2048];
 
@@ -256,7 +261,13 @@ impl UdpServer {
                     res = self.socket.recv_from(&mut client_buf) => {
                         let (len, peer_addr) = res?;
                         if len >= 4 {
-                            self.handle_client_datagram(&client_buf[..len], peer_addr).await;
+                            // Copy packet to heap so the stack buffer is immediately free
+                            // for the next recv_from, and the handler runs in a separate task.
+                            let data = client_buf[..len].to_vec();
+                            let server = Arc::clone(&self);
+                            tokio::spawn(async move {
+                                server.handle_client_datagram(&data, peer_addr).await;
+                            });
                         }
                     }
                     res = self.edge_socket.recv_from(&mut edge_buf) => {
@@ -267,23 +278,40 @@ impl UdpServer {
                         match edge_buf[0] {
                             // Direct voice for this Edge: [0x01][session_BE(4)][voice...]
                             EDGE_PKT_VOICE if len >= 6 => {
-                                self.handle_edge_packet(&edge_buf[1..len], peer_addr).await;
+                                let data = edge_buf[1..len].to_vec();
+                                let server = Arc::clone(&self);
+                                tokio::spawn(async move {
+                                    server.handle_edge_packet(&data, peer_addr).await;
+                                });
                             }
                             // Relay-forward: [0x02][target_BE(4)][session_BE(4)][voice...]
                             EDGE_PKT_RELAY if len >= 10 => {
-                                self.handle_relay_packet(&edge_buf[1..len]).await;
+                                let data = edge_buf[1..len].to_vec();
+                                let server = Arc::clone(&self);
+                                tokio::spawn(async move {
+                                    server.handle_relay_packet(&data).await;
+                                });
                             }
                             // Quality probe: [0x03][subtype(1)][seq_BE(4)][ts_BE(8)]
+                            // Probes are tiny and latency-sensitive; handle inline.
                             EDGE_PKT_PROBE if len >= 14 => {
                                 self.handle_probe_packet(&edge_buf[1..len], peer_addr).await;
                             }
                             // Encrypted direct voice: [0x11][sender_edge_id_BE(4)][counter_BE(8)][enc(session_BE(4)+voice)+tag(16)]
                             EDGE_PKT_ENC_VOICE if len >= 33 => {
-                                self.handle_enc_voice_packet(&edge_buf[1..len], peer_addr).await;
+                                let data = edge_buf[1..len].to_vec();
+                                let server = Arc::clone(&self);
+                                tokio::spawn(async move {
+                                    server.handle_enc_voice_packet(&data, peer_addr).await;
+                                });
                             }
                             // Encrypted relay: [0x12][sender_edge_id_BE(4)][counter_BE(8)][ttl(1)][target_BE(4)][enc(session_BE(4)+voice)+tag(16)]
                             EDGE_PKT_ENC_RELAY if len >= 38 => {
-                                self.handle_enc_relay_packet(&edge_buf[1..len]).await;
+                                let data = edge_buf[1..len].to_vec();
+                                let server = Arc::clone(&self);
+                                tokio::spawn(async move {
+                                    server.handle_enc_relay_packet(&data).await;
+                                });
                             }
                             _ => {
                                 debug!("Unknown edge packet type 0x{:02X} from {} ({} bytes)",
@@ -295,7 +323,11 @@ impl UdpServer {
             } else {
                 let (len, peer_addr) = self.socket.recv_from(&mut client_buf).await?;
                 if len >= 4 {
-                    self.handle_client_datagram(&client_buf[..len], peer_addr).await;
+                    let data = client_buf[..len].to_vec();
+                    let server = Arc::clone(&self);
+                    tokio::spawn(async move {
+                        server.handle_client_datagram(&data, peer_addr).await;
+                    });
                 }
             }
         }
@@ -526,13 +558,10 @@ impl UdpServer {
         // 0 is passed through as-is; BandwidthRecord::new(0) uses DEFAULT_WINDOW_SLOTS (360).
         let window_secs = (self.edge_state.rolling_stats_window.load(std::sync::atomic::Ordering::Relaxed) as usize)
             .min(crate::bandwidth::MAX_WINDOW_SLOTS);
-        // max_bandwidth is in bps → convert to bytes-per-second.
-        // 0 means unlimited; the record still tracks bytes even when uncapped.
+        // max_bandwidth_bps is mirrored as an AtomicU32 (lock-free read).
+        // 0 means unlimited; convert bps → bytes_per_second for the budget check.
         {
-            let max_bps = self.edge_state.hub_limits.read().await
-                .as_ref()
-                .and_then(|l| l.max_bandwidth)
-                .unwrap_or(0);
+            let max_bps = self.edge_state.max_bandwidth_bps.load(std::sync::atomic::Ordering::Relaxed);
             let max_bytes = if max_bps > 0 { max_bps / 8 } else { 0 };
             let within_budget = self.edge_state.client_manager
                 .record_voice_bytes(sender_session, plaintext.len() as u32, max_bytes, window_secs)
@@ -572,13 +601,23 @@ impl UdpServer {
 
         debug!("route_voice: {} targets in channels {:?}", targets.len(), &linked_channels);
 
-        let session_addrs = self.session_to_addr.read().await;
+        // Snapshot (target, udp_addr_opt, cs_opt) while holding the read lock for the
+        // minimum possible time.  The guard must NOT span any `.await` points because
+        // `register_client` / `unregister_client` take a *write* lock and would stall
+        // for the entire fan-out loop duration otherwise.
+        let send_targets: Vec<(u32, Option<SocketAddr>, Option<Arc<std::sync::Mutex<crate::crypto::CryptState>>>)> = {
+            let session_addrs = self.session_to_addr.read().await;
+            targets
+                .iter()
+                .filter(|(target, is_deaf, _)| !is_deaf && *target != sender_session)
+                .map(|(target, _, cs_opt)| {
+                    (*target, session_addrs.get(target).copied(), cs_opt.clone())
+                })
+                .collect()
+        }; // read lock released here — writers can proceed concurrently
 
-        for (target, is_deaf, cs_opt) in &targets {
-            if *is_deaf || *target == sender_session {
-                continue;
-            }
-            if let Some(&addr) = session_addrs.get(target) {
+        for (target, addr_opt, cs_opt) in &send_targets {
+            if let Some(addr) = addr_opt {
                 // Has UDP address: OCB2-encrypt and send
                 if let Some(cs_arc) = cs_opt {
                     let mut encrypted = Vec::with_capacity(forwarded.len() + 16);
@@ -589,7 +628,7 @@ impl UdpServer {
                             continue;
                         }
                     }
-                    if let Err(e) = self.socket.send_to(&encrypted, addr).await {
+                    if let Err(e) = self.socket.send_to(&encrypted, *addr).await {
                         warn!("UDP send to session {} failed: {}", target, e);
                     }
                 }
@@ -599,7 +638,6 @@ impl UdpServer {
                 self.fallback_to_tcp(*target, &forwarded).await;
             }
         }
-        drop(session_addrs);
 
         // --- Remote users (on other edges) ---
         // Compute relay_payload once — it is the same for all remote edges.
@@ -1082,13 +1120,25 @@ impl UdpServer {
         // Inject sender_session so clients know who sent the audio
         let forwarded = inject_session_into_voice(voice_data, sender_session);
 
-        // Deliver to local clients in the same channel
-        let local_targets = self.edge_state.client_manager.get_channel_sessions(channel_id).await;
-        let session_addrs = self.session_to_addr.read().await;
+        // Batch lookup: single pair of lock acquisitions (clients + crypt_states) for all
+        // local targets, avoiding the previous O(N) per-target get_crypt_state() pattern.
+        let targets = self.edge_state.client_manager
+            .get_channel_voice_targets(&[channel_id], 0)
+            .await;
 
-        for target in local_targets {
-            if let Some(&addr) = session_addrs.get(&target) {
-                if let Some(cs_arc) = self.edge_state.client_manager.get_crypt_state(target).await {
+        // Snapshot UDP addresses while holding the read lock for minimum time.
+        // Do NOT hold session_to_addr across .await points (blocks register_client writers).
+        let send_targets: Vec<(u32, bool, Option<SocketAddr>, Option<Arc<std::sync::Mutex<crate::crypto::CryptState>>>)> = {
+            let session_addrs = self.session_to_addr.read().await;
+            targets.iter()
+                .map(|(tgt, is_deaf, cs)| (*tgt, *is_deaf, session_addrs.get(tgt).copied(), cs.clone()))
+                .collect()
+        };
+
+        for (target, is_deaf, addr_opt, cs_opt) in &send_targets {
+            if *is_deaf { continue; }
+            if let Some(addr) = addr_opt {
+                if let Some(cs_arc) = cs_opt {
                     let mut encrypted = Vec::new();
                     match cs_arc.lock() {
                         Ok(mut cs) => { cs.encrypt(&forwarded, &mut encrypted); }
@@ -1097,12 +1147,12 @@ impl UdpServer {
                             continue;
                         }
                     }
-                    if let Err(e) = self.socket.send_to(&encrypted, addr).await {
+                    if let Err(e) = self.socket.send_to(&encrypted, *addr).await {
                         warn!("UDP relay to session {} failed: {}", target, e);
                     }
                 }
             } else {
-                self.fallback_to_tcp(target, &forwarded).await;
+                self.fallback_to_tcp(*target, &forwarded).await;
             }
         }
     }
@@ -1120,12 +1170,23 @@ impl UdpServer {
         };
 
         let forwarded = inject_session_into_voice(voice_data, sender_session);
-        let local_targets = self.edge_state.client_manager.get_channel_sessions(channel_id).await;
-        let session_addrs = self.session_to_addr.read().await;
 
-        for target in local_targets {
-            if let Some(&addr) = session_addrs.get(&target) {
-                if let Some(cs_arc) = self.edge_state.client_manager.get_crypt_state(target).await {
+        // Batch lookup + snapshot in one pass (same pattern as handle_edge_packet).
+        let targets = self.edge_state.client_manager
+            .get_channel_voice_targets(&[channel_id], 0)
+            .await;
+
+        let send_targets: Vec<(u32, bool, Option<SocketAddr>, Option<Arc<std::sync::Mutex<crate::crypto::CryptState>>>)> = {
+            let session_addrs = self.session_to_addr.read().await;
+            targets.iter()
+                .map(|(tgt, is_deaf, cs)| (*tgt, *is_deaf, session_addrs.get(tgt).copied(), cs.clone()))
+                .collect()
+        };
+
+        for (target, is_deaf, addr_opt, cs_opt) in &send_targets {
+            if *is_deaf { continue; }
+            if let Some(addr) = addr_opt {
+                if let Some(cs_arc) = cs_opt {
                     let mut encrypted = Vec::new();
                     match cs_arc.lock() {
                         Ok(mut cs) => { cs.encrypt(&forwarded, &mut encrypted); }
@@ -1134,12 +1195,12 @@ impl UdpServer {
                             continue;
                         }
                     }
-                    if let Err(e) = self.socket.send_to(&encrypted, addr).await {
+                    if let Err(e) = self.socket.send_to(&encrypted, *addr).await {
                         warn!("UDP relay to session {} failed: {}", target, e);
                     }
                 }
             } else {
-                self.fallback_to_tcp(target, &forwarded).await;
+                self.fallback_to_tcp(*target, &forwarded).await;
             }
         }
     }

@@ -100,7 +100,10 @@ pub struct ClientManager {
     /// Per-session OCB2-AES128 cryptographic states.
     crypt_states: RwLock<HashMap<u32, Arc<Mutex<CryptState>>>>,
     /// Per-session voice bandwidth records. Keyed by session_id.
-    bandwidth_records: RwLock<HashMap<u32, BandwidthRecord>>,
+    /// Each session holds its own `Arc<Mutex<BandwidthRecord>>` so concurrent
+    /// callers from different spawned voice tasks can record bytes in parallel
+    /// without serialising on a single global write lock.
+    bandwidth_records: RwLock<HashMap<u32, Arc<Mutex<BandwidthRecord>>>>,
     /// Listening index: channel_id → Vec<session_id> of clients listening to
     /// that channel but whose primary channel is different.  This is maintained
     /// in sync with `clients.listening_channels` to provide O(1) lookup instead
@@ -414,6 +417,8 @@ impl ClientManager {
     /// be dropped because it exceeds `max_bytes_per_sec`.
     ///
     /// The bandwidth record is created with `window_secs` slots on first access.
+    /// Concurrent callers for *different* sessions acquire independent per-session
+    /// Mutexes, so they never block each other.
     pub async fn record_voice_bytes(
         &self,
         session: u32,
@@ -421,10 +426,26 @@ impl ClientManager {
         max_bytes_per_sec: u32,
         window_secs: usize,
     ) -> bool {
-        let mut records = self.bandwidth_records.write().await;
-        let record = records
-            .entry(session)
-            .or_insert_with(|| BandwidthRecord::new(window_secs));
+        // Fast path: record already exists — take a read lock, clone the Arc, drop lock.
+        let record_arc = {
+            let records = self.bandwidth_records.read().await;
+            records.get(&session).cloned()
+        };
+        // Slow path: first voice packet from this session.
+        let record_arc = match record_arc {
+            Some(arc) => arc,
+            None => self.bandwidth_records
+                .write()
+                .await
+                .entry(session)
+                .or_insert_with(|| Arc::new(Mutex::new(BandwidthRecord::new(window_secs))))
+                .clone(),
+        };
+        // Global lock is released; operate on the per-session Mutex independently.
+        let mut record = match record_arc.lock() {
+            Ok(g) => g,
+            Err(_) => return true, // poisoned — allow packet through
+        };
         // If `rolling_stats_window` was hot-reloaded to a different size,
         // recreate the record so it uses the updated window length.
         if record.window_secs() != crate::bandwidth::effective_window(window_secs) {
@@ -436,9 +457,9 @@ impl ClientManager {
     /// Return the bytes-per-second in the most recently completed second for a session.
     /// Returns `0` if no bandwidth data has been recorded.
     pub async fn get_bandwidth_stats(&self, session: u32) -> u32 {
-        let records = self.bandwidth_records.read().await;
-        match records.get(&session) {
-            Some(r) => r.bytes_last_second(),
+        let arc = self.bandwidth_records.read().await.get(&session).cloned();
+        match arc {
+            Some(r) => r.lock().map(|g| g.bytes_last_second()).unwrap_or(0),
             None => 0,
         }
     }

@@ -703,6 +703,10 @@ impl HubClient {
                         if let Some(allow_ping) = limits.allow_ping {
                             self.edge_state.allow_ping.store(allow_ping, std::sync::atomic::Ordering::Relaxed);
                         }
+                        self.edge_state.max_bandwidth_bps.store(
+                            limits.max_bandwidth.unwrap_or(0),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
                         *self.edge_state.hub_limits.write().await = Some(limits);
                     }
                 }
@@ -1188,6 +1192,10 @@ impl HubClient {
             if let Some(allow_ping) = limits.allow_ping {
                 self.edge_state.allow_ping.store(allow_ping, std::sync::atomic::Ordering::Relaxed);
             }
+            self.edge_state.max_bandwidth_bps.store(
+                limits.max_bandwidth.unwrap_or(0),
+                std::sync::atomic::Ordering::Relaxed,
+            );
             *self.edge_state.hub_limits.write().await = Some(limits);
             debug!("Stored server limits from Hub registration");
         }
@@ -1245,6 +1253,10 @@ impl HubClient {
             if let Some(allow_ping) = limits.allow_ping {
                 self.edge_state.allow_ping.store(allow_ping, std::sync::atomic::Ordering::Relaxed);
             }
+            self.edge_state.max_bandwidth_bps.store(
+                limits.max_bandwidth.unwrap_or(0),
+                std::sync::atomic::Ordering::Relaxed,
+            );
             *self.edge_state.hub_limits.write().await = Some(limits);
             debug!("Stored server limits from Hub registration (challenge)");
         }

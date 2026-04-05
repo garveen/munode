@@ -85,10 +85,13 @@ impl EdgeServer {
         let edge_port = self.config.network.edge_port.unwrap_or(self.config.network.port + 1);
         let edge_udp_addr: SocketAddr = format!("{}:{}", self.config.network.host, edge_port)
             .parse()?;
-        let udp_server = UdpServer::new(udp_addr, edge_udp_addr, edge_state.clone(), hub_client.clone()).await?;
-        let udp_handle = tokio::spawn(async move {
-            if let Err(e) = udp_server.run().await {
-                error!("UDP server error: {}", e);
+        let udp_server = Arc::new(UdpServer::new(udp_addr, edge_udp_addr, edge_state.clone(), hub_client.clone()).await?);
+        let udp_handle = tokio::spawn({
+            let udp = Arc::clone(&udp_server);
+            async move {
+                if let Err(e) = udp.run().await {
+                    error!("UDP server error: {}", e);
+                }
             }
         });
 
