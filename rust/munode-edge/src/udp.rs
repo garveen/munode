@@ -589,79 +589,168 @@ impl UdpServer {
         // Lock-free read of our own edge ID (AtomicU32).
         let my_edge_id = self.edge_state.get_edge_id();
 
-        // Get all linked channels (sender's channel + any linked channels), as Vec for slicing
-        let linked_channels: Vec<u32> = self.edge_state.channel_manager
-            .get_all_linked_channels(sender_channel)
-            .await
-            .into_iter()
-            .collect();
+        // --- Compute relay_payload + by_edge + deliver locally, branching on voice_target ---
+        let relay_payload: Vec<u8>;
+        let by_edge: std::collections::HashMap<u32, bool>;
 
-        // Inject sender session ID into voice packet for forwarding to local clients.
-        // Client-to-server format: [header(1B)][sequence_varint][audio]
-        // Server-to-client format: [header(1B)][sender_session_varint][sequence_varint][audio]
-        let forwarded = inject_session_into_voice(plaintext, sender_session);
+        if voice_target >= 1 && voice_target <= 30 {
+            // WHISPER / SHOUT target: resolve via pre-computed VoiceTarget config.
+            let vt_config = {
+                let cache = self.edge_state.voice_targets.read().await;
+                cache.get(&sender_session).and_then(|m| m.get(&voice_target)).cloned()
+            };
+            if let Some(vt) = vt_config {
+                // Preserve original Mumble header byte (including voice_target_id in low 5 bits).
+                let forwarded = inject_session_into_voice(plaintext, sender_session);
+                let direct_sessions: std::collections::HashSet<u32> =
+                    vt.sessions.iter().copied().collect();
 
-        // --- Local clients (same edge, all linked channels + listeners) ---
-        // Batch lookup: one `clients.read` + one `crypt_states.read` for all targets.
-        let targets = self.edge_state.client_manager
-            .get_channel_voice_targets_with_listeners(&linked_channels, sender_session)
-            .await;
-
-        debug!("route_voice: {} targets in channels {:?}", targets.len(), &linked_channels);
-
-        // Snapshot (target, udp_addr_opt, cs_opt) while holding the read lock for the
-        // minimum possible time.  The guard must NOT span any `.await` points because
-        // `register_client` / `unregister_client` take a *write* lock and would stall
-        // for the entire fan-out loop duration otherwise.
-        let send_targets: Vec<(u32, Option<SocketAddr>, Option<Arc<std::sync::Mutex<crate::crypto::CryptState>>>)> = {
-            let session_addrs = self.session_to_addr.read().await;
-            targets
-                .iter()
-                .filter(|(target, is_deaf, _)| !is_deaf && *target != sender_session)
-                .map(|(target, _, cs_opt)| {
-                    (*target, session_addrs.get(target).copied(), cs_opt.clone())
-                })
-                .collect()
-        }; // read lock released here — writers can proceed concurrently
-
-        for (target, addr_opt, cs_opt) in &send_targets {
-            if let Some(addr) = addr_opt {
-                // Has UDP address: OCB2-encrypt and send
-                if let Some(cs_arc) = cs_opt {
-                    let mut encrypted = Vec::with_capacity(forwarded.len() + 16);
-                    match cs_arc.lock() {
-                        Ok(mut cs) => { cs.encrypt(&forwarded, &mut encrypted); }
-                        Err(e) => {
-                            warn!("CryptState mutex poisoned for session {} — packet dropped: {}", target, e);
-                            continue;
+                // Direct-session targets.
+                for &target in &direct_sessions {
+                    if target == sender_session { continue; }
+                    let deaf = self.edge_state.client_manager.get_client(target).await
+                        .map(|c| c.deaf || c.self_deaf).unwrap_or(true);
+                    if deaf { continue; }
+                    let addr_opt = self.session_to_addr.read().await.get(&target).copied();
+                    if let Some(addr) = addr_opt {
+                        if let Some(cs_arc) =
+                            self.edge_state.client_manager.get_crypt_state(target).await
+                        {
+                            let mut enc = Vec::with_capacity(forwarded.len() + 16);
+                            match cs_arc.lock() {
+                                Ok(mut cs) => { cs.encrypt(&forwarded, &mut enc); }
+                                Err(e) => {
+                                    warn!("CryptState poisoned session {} — dropped: {}", target, e);
+                                    continue;
+                                }
+                            }
+                            let _ = self.socket.send_to(&enc, addr).await;
                         }
-                    }
-                    if let Err(e) = self.socket.send_to(&encrypted, *addr).await {
-                        warn!("UDP send to session {} failed: {}", target, e);
+                    } else {
+                        self.fallback_to_tcp(target, &forwarded).await;
                     }
                 }
-            } else {
-                // No UDP address: deliver via TCP UDPTunnel (includes session ID)
-                debug!("route_voice: fallback_to_tcp for session {}", target);
-                self.fallback_to_tcp(*target, &forwarded).await;
+
+                // Channel targets with optional group filter.
+                for (&ch_id, group_filter) in &vt.resolved_channels {
+                    let ch_sessions =
+                        self.edge_state.client_manager.get_channel_sessions(ch_id).await;
+                    for target in ch_sessions {
+                        if target == sender_session || direct_sessions.contains(&target) {
+                            continue;
+                        }
+                        let client_info =
+                            self.edge_state.client_manager.get_client(target).await;
+                        let deaf = client_info.as_ref()
+                            .map(|c| c.deaf || c.self_deaf).unwrap_or(true);
+                        if deaf { continue; }
+                        if let Some(groups) = group_filter {
+                            let in_group = client_info.as_ref()
+                                .map(|c| c.groups.iter().any(|g| groups.contains(g)))
+                                .unwrap_or(false);
+                            if !in_group { continue; }
+                        }
+                        let addr_opt =
+                            self.session_to_addr.read().await.get(&target).copied();
+                        if let Some(addr) = addr_opt {
+                            if let Some(cs_arc) =
+                                self.edge_state.client_manager.get_crypt_state(target).await
+                            {
+                                let mut enc = Vec::with_capacity(forwarded.len() + 16);
+                                match cs_arc.lock() {
+                                    Ok(mut cs) => { cs.encrypt(&forwarded, &mut enc); }
+                                    Err(e) => {
+                                        warn!(
+                                            "CryptState poisoned session {} — dropped: {}",
+                                            target, e
+                                        );
+                                        continue;
+                                    }
+                                }
+                                let _ = self.socket.send_to(&enc, addr).await;
+                            }
+                        } else {
+                            self.fallback_to_tcp(target, &forwarded).await;
+                        }
+                    }
+                }
             }
-        }
-
-        // --- Remote users (on other edges) ---
-        // Compute relay_payload once — it is the same for all remote edges.
-        let relay_payload = forwarded; // forwarded == inject_session_into_voice(plaintext, session)
-
-        let linked_channels_set: std::collections::HashSet<u32> = linked_channels.iter().copied().collect();
-        let remote_users = self.edge_state.channel_manager
-            .get_remote_users_in_channels(&linked_channels_set)
-            .await;
-
-        // Group by edge (send once per edge; the receiving edge delivers to its local clients)
-        let mut by_edge: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
-        for ru in &remote_users {
-            if ru.deaf || ru.self_deaf { continue; }
-            if my_edge_id != 0 && ru.edge_id == my_edge_id { continue; }
-            by_edge.insert(ru.edge_id, true);
+            // relay_payload preserves the original voice_target_id in header low-5 bits.
+            // Each receiving edge applies its own VoiceTarget config for routing.
+            relay_payload = inject_session_into_voice(plaintext, sender_session);
+            // Relay to ALL remote edges — voice-target routing is done by each receiving edge.
+            let all_remote = self.edge_state.channel_manager.get_all_remote_users().await;
+            let mut edges = std::collections::HashMap::new();
+            for ru in &all_remote {
+                if my_edge_id != 0 && ru.edge_id == my_edge_id { continue; }
+                edges.insert(ru.edge_id, true);
+            }
+            by_edge = edges;
+        } else if voice_target == 0 {
+            // PTT (normal speech): broadcast to sender's channel + linked channels.
+            let linked_channels: Vec<u32> = self.edge_state.channel_manager
+                .get_all_linked_channels(sender_channel)
+                .await
+                .into_iter()
+                .collect();
+            let forwarded = inject_session_into_voice(plaintext, sender_session);
+            let targets = self.edge_state.client_manager
+                .get_channel_voice_targets_with_listeners(&linked_channels, sender_session)
+                .await;
+            debug!("route_voice: {} targets in channels {:?}", targets.len(), &linked_channels);
+            let send_targets: Vec<(
+                u32,
+                Option<SocketAddr>,
+                Option<Arc<std::sync::Mutex<crate::crypto::CryptState>>>,
+            )> = {
+                let session_addrs = self.session_to_addr.read().await;
+                targets
+                    .iter()
+                    .filter(|(target, is_deaf, _)| !is_deaf && *target != sender_session)
+                    .map(|(target, _, cs_opt)| {
+                        (*target, session_addrs.get(target).copied(), cs_opt.clone())
+                    })
+                    .collect()
+            };
+            for (target, addr_opt, cs_opt) in &send_targets {
+                if let Some(addr) = addr_opt {
+                    if let Some(cs_arc) = cs_opt {
+                        let mut encrypted = Vec::with_capacity(forwarded.len() + 16);
+                        match cs_arc.lock() {
+                            Ok(mut cs) => { cs.encrypt(&forwarded, &mut encrypted); }
+                            Err(e) => {
+                                warn!(
+                                    "CryptState mutex poisoned for session {} — packet dropped: {}",
+                                    target, e
+                                );
+                                continue;
+                            }
+                        }
+                        if let Err(e) = self.socket.send_to(&encrypted, *addr).await {
+                            warn!("UDP send to session {} failed: {}", target, e);
+                        }
+                    }
+                } else {
+                    debug!("route_voice: fallback_to_tcp for session {}", target);
+                    self.fallback_to_tcp(*target, &forwarded).await;
+                }
+            }
+            relay_payload = forwarded;
+            let linked_channels_set: std::collections::HashSet<u32> =
+                linked_channels.iter().copied().collect();
+            let remote_users = self.edge_state.channel_manager
+                .get_remote_users_in_channels(&linked_channels_set)
+                .await;
+            let mut edges = std::collections::HashMap::new();
+            for ru in &remote_users {
+                if ru.deaf || ru.self_deaf { continue; }
+                if my_edge_id != 0 && ru.edge_id == my_edge_id { continue; }
+                edges.insert(ru.edge_id, true);
+            }
+            by_edge = edges;
+        } else {
+            // voice_target == 31 (loopback) or other reserved value: not routed, silently drop.
+            return;
         }
 
         if by_edge.is_empty() {
@@ -1109,103 +1198,23 @@ impl UdpServer {
         }
         let sender_session = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
         let voice_data = &data[4..];
-
         debug!("Relayed voice from edge {} (sender_session={}, {} bytes)", peer_addr, sender_session, voice_data.len());
-
-        // Find the channel this remote user is in
-        let channel_id = if let Some(ru) = self.edge_state.channel_manager.get_remote_user(sender_session).await {
-            ru.channel_id
-        } else {
-            // Remote user not known — fall back to all channels (shouldn't normally happen)
-            debug!("Unknown remote session {} in edge packet", sender_session);
-            return;
-        };
-
-        // Inject sender_session so clients know who sent the audio
-        let forwarded = inject_session_into_voice(voice_data, sender_session);
-
-        // Batch lookup: single pair of lock acquisitions (clients + crypt_states) for all
-        // local targets, avoiding the previous O(N) per-target get_crypt_state() pattern.
-        let targets = self.edge_state.client_manager
-            .get_channel_voice_targets(&[channel_id], 0)
-            .await;
-
-        // Snapshot UDP addresses while holding the read lock for minimum time.
-        // Do NOT hold session_to_addr across .await points (blocks register_client writers).
-        let send_targets: Vec<(u32, bool, Option<SocketAddr>, Option<Arc<std::sync::Mutex<crate::crypto::CryptState>>>)> = {
-            let session_addrs = self.session_to_addr.read().await;
-            targets.iter()
-                .map(|(tgt, is_deaf, cs)| (*tgt, *is_deaf, session_addrs.get(tgt).copied(), cs.clone()))
-                .collect()
-        };
-
-        for (target, is_deaf, addr_opt, cs_opt) in &send_targets {
-            if *is_deaf { continue; }
-            if let Some(addr) = addr_opt {
-                if let Some(cs_arc) = cs_opt {
-                    let mut encrypted = Vec::new();
-                    match cs_arc.lock() {
-                        Ok(mut cs) => { cs.encrypt(&forwarded, &mut encrypted); }
-                        Err(e) => {
-                            warn!("CryptState mutex poisoned for session {} — packet dropped: {}", target, e);
-                            continue;
-                        }
-                    }
-                    if let Err(e) = self.socket.send_to(&encrypted, *addr).await {
-                        warn!("UDP relay to session {} failed: {}", target, e);
-                    }
-                }
-            } else {
-                self.fallback_to_tcp(*target, &forwarded).await;
-            }
-        }
+        // Delegate to deliver_voice_locally, which emits RelayedVoice for unified routing.
+        self.deliver_voice_locally(sender_session, voice_data).await;
     }
 
     /// Deliver a relayed voice packet to local clients on this Edge.
-    /// Extracted from handle_edge_packet to avoid needing a dummy peer address.
+    /// The packet is emitted as `EdgeEvent::RelayedVoice` so that the server.rs event
+    /// loop handles it with the same VoiceTarget-aware routing used for Hub TCP relay
+    /// and direct-TCP relay (relay_server.rs).  This keeps all receiving-side routing
+    /// in one place.
     async fn deliver_voice_locally(&self, sender_session: u32, voice_data: &[u8]) {
         debug!("deliver_voice_locally: session={}, {} bytes", sender_session, voice_data.len());
-
-        let channel_id = if let Some(ru) = self.edge_state.channel_manager.get_remote_user(sender_session).await {
-            ru.channel_id
-        } else {
-            debug!("Unknown remote session {} in relay delivery", sender_session);
-            return;
-        };
-
-        let forwarded = inject_session_into_voice(voice_data, sender_session);
-
-        // Batch lookup + snapshot in one pass (same pattern as handle_edge_packet).
-        let targets = self.edge_state.client_manager
-            .get_channel_voice_targets(&[channel_id], 0)
-            .await;
-
-        let send_targets: Vec<(u32, bool, Option<SocketAddr>, Option<Arc<std::sync::Mutex<crate::crypto::CryptState>>>)> = {
-            let session_addrs = self.session_to_addr.read().await;
-            targets.iter()
-                .map(|(tgt, is_deaf, cs)| (*tgt, *is_deaf, session_addrs.get(tgt).copied(), cs.clone()))
-                .collect()
-        };
-
-        for (target, is_deaf, addr_opt, cs_opt) in &send_targets {
-            if *is_deaf { continue; }
-            if let Some(addr) = addr_opt {
-                if let Some(cs_arc) = cs_opt {
-                    let mut encrypted = Vec::new();
-                    match cs_arc.lock() {
-                        Ok(mut cs) => { cs.encrypt(&forwarded, &mut encrypted); }
-                        Err(e) => {
-                            warn!("CryptState mutex poisoned for session {} — packet dropped: {}", target, e);
-                            continue;
-                        }
-                    }
-                    if let Err(e) = self.socket.send_to(&encrypted, *addr).await {
-                        warn!("UDP relay to session {} failed: {}", target, e);
-                    }
-                }
-            } else {
-                self.fallback_to_tcp(*target, &forwarded).await;
-            }
+        // Build server-to-client format: [header][session_varint][seq][audio]
+        // The voice_target_id in the header low-5 bits is preserved by inject_session_into_voice.
+        let voice_packet = inject_session_into_voice(voice_data, sender_session);
+        if !voice_packet.is_empty() {
+            self.edge_state.emit(crate::state::EdgeEvent::RelayedVoice { voice_packet });
         }
     }
 
@@ -1456,6 +1465,8 @@ fn inject_session_into_voice(payload: &[u8], sender_session: u32) -> Vec<u8> {
     result.extend_from_slice(&payload[1..]);
     result
 }
+
+
 
 /// Test-only: attempt to route a single voice packet directly via UDP to the given target Edge,
 /// applying the `test_udp_drop_rate` network-degradation hook.

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -167,6 +167,11 @@ impl PeerRegistry {
 pub struct VoiceTargetConfig {
     pub sessions: Vec<u32>,
     pub channels: Vec<VoiceTargetChannelConfig>,
+    /// Pre-computed expanded channel set, built once at config-write time.
+    /// Maps channel_id → group filter (None = no filter, Some = user must be
+    /// in at least one of the named groups). Rebuilt whenever the config
+    /// changes OR when the channel link/tree structure changes.
+    pub resolved_channels: HashMap<u32, Option<Vec<String>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -175,6 +180,76 @@ pub struct VoiceTargetChannelConfig {
     pub links: bool,
     pub children: bool,
     pub group: Option<String>,
+}
+
+// ── VoiceTarget channel resolution helpers ────────────────────────────────
+
+/// Recursively collect all descendant channel IDs into `out`.
+pub fn collect_children_into(
+    ch_id: u32,
+    out: &mut HashSet<u32>,
+    children_map: &HashMap<u32, Vec<u32>>,
+) {
+    if let Some(children) = children_map.get(&ch_id) {
+        for &child in children {
+            if out.insert(child) {
+                collect_children_into(child, out, children_map);
+            }
+        }
+    }
+}
+
+/// Expand a slice of `VoiceTargetChannelConfig` into a flat map of
+/// `channel_id → group filter` by resolving `links` and `children` flags.
+/// Multiple entries targeting the same channel are merged: a no-filter entry
+/// wins over any group restriction (union semantics).
+///
+/// Resolution order (matches Mumble C++ server behaviour):
+///   1. Start with the base channel.
+///   2. If `links=true`, extend with all transitively linked channels.
+///   3. If `children=true`, extend with all recursive sub-channels of EVERY
+///      channel collected so far (base + links), not just the base channel.
+/// An empty-string group is treated the same as no group (no filter).
+pub async fn resolve_voice_target_channels(
+    channels: &[VoiceTargetChannelConfig],
+    channel_manager: &ChannelManager,
+) -> HashMap<u32, Option<Vec<String>>> {
+    let mut resolved: HashMap<u32, Option<Vec<String>>> = HashMap::new();
+    for ch_cfg in channels {
+        let mut ch_ids = HashSet::new();
+        ch_ids.insert(ch_cfg.channel_id);
+        if ch_cfg.links {
+            let linked = channel_manager.get_all_linked_channels(ch_cfg.channel_id).await;
+            ch_ids.extend(linked);
+        }
+        if ch_cfg.children {
+            // Apply children expansion to all channels collected so far (base + linked).
+            // This matches the Mumble C++ server which iterates the current set and
+            // adds all recursive sub-channels of each channel in the set.
+            let children_map = channel_manager.get_all_children_map().await;
+            let snapshot: Vec<u32> = ch_ids.iter().copied().collect();
+            for ch_id in snapshot {
+                collect_children_into(ch_id, &mut ch_ids, &children_map);
+            }
+        }
+        // Normalise: empty group string → no filter (same as omitting the group).
+        let effective_group: Option<&str> = ch_cfg.group.as_deref().filter(|s| !s.is_empty());
+        for ch_id in ch_ids {
+            resolved
+                .entry(ch_id)
+                .and_modify(|existing| match (effective_group, existing.as_mut()) {
+                    (None, _) => *existing = None,       // no-group overrides any restriction
+                    (Some(_), None) => {}                // already unrestricted, keep
+                    (Some(g), Some(groups)) => {
+                        if !groups.iter().any(|e| e == g) {
+                            groups.push(g.to_owned());
+                        }
+                    }
+                })
+                .or_insert_with(|| effective_group.map(|g| vec![g.to_owned()]));
+        }
+    }
+    resolved
 }
 
 /// Delta of boolean state fields for a remote user state change.
@@ -513,6 +588,39 @@ impl EdgeState {
     /// Broadcast an event.
     pub fn emit(&self, event: EdgeEvent) {
         let _ = self.event_tx.send(event);
+    }
+
+    /// Recompute `resolved_channels` for every cached VoiceTarget configuration.
+    /// Call this whenever the channel link/tree structure changes so that
+    /// per-packet routing uses up-to-date expanded channel sets.
+    pub async fn recompute_all_vt_channels(&self) {
+        // Snapshot all (session, target, channels) under a read lock.
+        let snapshots: Vec<(u32, u32, Vec<VoiceTargetChannelConfig>)> = {
+            let cache = self.voice_targets.read().await;
+            cache
+                .iter()
+                .flat_map(|(&sid, vts)| {
+                    vts.iter()
+                        .map(move |(&tid, vt)| (sid, tid, vt.channels.clone()))
+                })
+                .collect()
+        };
+        if snapshots.is_empty() {
+            return;
+        }
+        // Re-resolve each config outside the lock (async channel_manager calls).
+        let mut resolved_list = Vec::with_capacity(snapshots.len());
+        for (sid, tid, channels) in &snapshots {
+            let r = resolve_voice_target_channels(channels, &self.channel_manager).await;
+            resolved_list.push((*sid, *tid, r));
+        }
+        // Write all results back under a single write lock.
+        let mut cache = self.voice_targets.write().await;
+        for (sid, tid, resolved) in resolved_list {
+            if let Some(vt) = cache.get_mut(&sid).and_then(|m| m.get_mut(&tid)) {
+                vt.resolved_channels = resolved;
+            }
+        }
     }
 }
 

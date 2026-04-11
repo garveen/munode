@@ -427,6 +427,8 @@ impl HubClient {
             let disappeared = self.do_full_sync().await?;
             // Clear stale voice-target cache from before the reconnect.
             self.edge_state.voice_targets.write().await.clear();
+            // Repopulate voice-target cache with all existing targets from Hub.
+            self.do_fetch_voice_targets().await;
             self.do_join_cluster().await?;
             // Report any already-connected local users (Hub may have restarted)
             if let Err(e) = self.do_report_local_users().await {
@@ -597,6 +599,8 @@ impl HubClient {
             let disappeared = self.do_full_sync().await?;
             // Clear stale voice-target cache from before the reconnect.
             self.edge_state.voice_targets.write().await.clear();
+            // Repopulate voice-target cache with all existing targets from Hub.
+            self.do_fetch_voice_targets().await;
             // Join cluster topology
             self.do_join_cluster().await?;
             // Report any already-connected local users (Hub may have restarted)
@@ -986,6 +990,10 @@ impl HubClient {
                     let links_remove: Vec<u32> = old_links.iter().filter(|l| !new_links.contains(l)).copied().collect();
                     debug!("Channel updated: {} (id {}), links_add={:?}, links_remove={:?}", channel.name, channel_id, links_add, links_remove);
                     self.edge_state.channel_manager.upsert_channel(channel).await;
+                    // If links changed, VoiceTarget channel caches that include this channel may be stale.
+                    if !links_add.is_empty() || !links_remove.is_empty() {
+                        self.edge_state.recompute_all_vt_channels().await;
+                    }
                     self.edge_state.emit(EdgeEvent::ChannelUpdated { channel_id, links_add, links_remove });
                 }
             }
@@ -1037,7 +1045,7 @@ impl HubClient {
                     let client_session = params.client_session;
                     let target_id = params.target_id;
                     if let Some(cfg) = &params.config {
-                        use crate::state::{VoiceTargetConfig, VoiceTargetChannelConfig};
+                        use crate::state::{VoiceTargetConfig, VoiceTargetChannelConfig, resolve_voice_target_channels};
                         let sessions: Vec<u32> = cfg.sessions.iter().map(|s| s.session).collect();
                         let channels: Vec<VoiceTargetChannelConfig> = cfg.channels.iter().map(|c| {
                             VoiceTargetChannelConfig {
@@ -1047,12 +1055,17 @@ impl HubClient {
                                 group: c.group.clone(),
                             }
                         }).collect();
-                        let mut vt_cache = self.edge_state.voice_targets.write().await;
-                        let session_vts = vt_cache.entry(client_session).or_default();
                         if sessions.is_empty() && channels.is_empty() {
-                            session_vts.remove(&target_id);
+                            let mut vt_cache = self.edge_state.voice_targets.write().await;
+                            if let Some(session_vts) = vt_cache.get_mut(&client_session) {
+                                session_vts.remove(&target_id);
+                            }
                         } else {
-                            session_vts.insert(target_id, VoiceTargetConfig { sessions, channels });
+                            // Pre-compute expanded channel set before acquiring the write lock.
+                            let resolved = resolve_voice_target_channels(&channels, &self.edge_state.channel_manager).await;
+                            let mut vt_cache = self.edge_state.voice_targets.write().await;
+                            let session_vts = vt_cache.entry(client_session).or_default();
+                            session_vts.insert(target_id, VoiceTargetConfig { sessions, channels, resolved_channels: resolved });
                         }
                         debug!("Synced voice target {} for session {}", target_id, client_session);
                     } else {
@@ -1427,6 +1440,57 @@ impl HubClient {
             result.sessions.len()
         );
         Ok(disappeared)
+    }
+
+    /// Fetch all existing VoiceTarget configs from Hub and populate the local cache.
+    /// Called once after FullSync + cache clear so that voice targets set by users
+    /// on other edges (or before this edge connected) are immediately available.
+    async fn do_fetch_voice_targets(&self) {
+        use munode_protocol::hubedge::{EdgeGetVoiceTargetsParams};
+        use crate::state::{VoiceTargetConfig, VoiceTargetChannelConfig, resolve_voice_target_channels};
+        let request_id = self.next_request_id();
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.getVoiceTargets".to_string(),
+            timeout_ms: Some(10000),
+            edge_get_voice_targets: Some(EdgeGetVoiceTargetsParams { edge_id: None }),
+            ..Default::default()
+        };
+        let result = match self.rpc_call(request).await {
+            Ok(r) => match r.edge_get_voice_targets {
+                Some(v) => v,
+                None => { warn!("edge.getVoiceTargets: empty response"); return; }
+            },
+            Err(e) => { warn!("edge.getVoiceTargets RPC failed: {}", e); return; }
+        };
+        if result.voice_targets.is_empty() {
+            return;
+        }
+        // Resolve each entry's channels outside the write lock, then batch-write.
+        let mut resolved_entries = Vec::with_capacity(result.voice_targets.len());
+        for entry in &result.voice_targets {
+            let channels: Vec<VoiceTargetChannelConfig> = entry.config.as_ref()
+                .map(|c| c.channels.iter().map(|ch| VoiceTargetChannelConfig {
+                    channel_id: ch.channel_id,
+                    links: ch.links.unwrap_or(false),
+                    children: ch.children.unwrap_or(false),
+                    group: ch.group.clone(),
+                }).collect())
+                .unwrap_or_default();
+            let sessions: Vec<u32> = entry.config.as_ref()
+                .map(|c| c.sessions.iter().map(|s| s.session).collect())
+                .unwrap_or_default();
+            let resolved = resolve_voice_target_channels(&channels, &self.edge_state.channel_manager).await;
+            resolved_entries.push((entry.client_session, entry.target_id, sessions, channels, resolved));
+        }
+        let mut cache = self.edge_state.voice_targets.write().await;
+        for (client_session, target_id, sessions, channels, resolved) in resolved_entries {
+            if sessions.is_empty() && channels.is_empty() { continue; }
+            let session_vts = cache.entry(client_session).or_default();
+            session_vts.insert(target_id, VoiceTargetConfig { sessions, channels, resolved_channels: resolved });
+        }
+        let total: usize = cache.values().map(|m| m.len()).sum();
+        debug!("Fetched {} voice target entries from Hub ({} sessions)", result.voice_targets.len(), total);
     }
 
     /// Join the cluster topology so Hub can broadcast our address to peer Edges.

@@ -729,6 +729,11 @@ async fn handle_client_connection(
                         auth_result.user_id,
                         channel_id
                     );
+                    debug!(
+                        session = sid,
+                        groups = ?auth_result.groups,
+                        "User groups assigned at login"
+                    );
 
                     // Prefer display_name over username (matches JS implementation behaviour).
                     let display_name = auth_result.display_name.clone()
@@ -753,7 +758,7 @@ async fn handle_client_connection(
                         connected_at: std::time::Instant::now(),
                         last_active: std::time::Instant::now(),
                         cert_hash: certificate_hash.clone(),
-                        groups: vec![],
+                        groups: auth_result.groups.clone(),
                         opus_supported: opus,
                         listening_channels: vec![],
             listening_volume_adjustments: HashMap::new(),
@@ -987,7 +992,7 @@ async fn handle_client_connection(
                                 // Silently drop the packet
                             } else if voice_target == 31 {
                                 // Loopback: send back to the sender (inject session ID per protocol)
-                                let forwarded = inject_session_into_voice(&frame.payload, sid);
+                                let forwarded = inject_session_into_voice(&frame.payload, sid, 0);
                                 let mut buf = BytesMut::new();
                                 bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
                                 bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
@@ -997,100 +1002,83 @@ async fn handle_client_connection(
                                     sender_tx.send_raw(data).await;
                                 }
                             } else if voice_target >= 1 && voice_target <= 30 {
-                                // Whisper/voice target: route to configured sessions/channels
+                                // Whisper/voice target: route to configured sessions/channels.
+                                // Channel expansion (links, children) was pre-computed when the
+                                // VoiceTarget was registered; just look up the cached result.
                                 let vt_config = {
                                     let cache = edge_state.voice_targets.read().await;
                                     cache.get(&sid).and_then(|m| m.get(&voice_target)).cloned()
                                 };
                                 if let Some(vt) = vt_config {
-                                    let mut target_sessions: std::collections::HashSet<u32> = std::collections::HashSet::new();
-                                    // Direct session targets
+                                    // Separate direct session targets (WHISPER context=2) from
+                                    // channel-expanded targets (SHOUT context=1) so recipients see
+                                    // the correct talking state in their Mumble client.
+                                    let mut direct_sessions: std::collections::HashSet<u32> = std::collections::HashSet::new();
                                     for s in &vt.sessions {
-                                        target_sessions.insert(*s);
+                                        direct_sessions.insert(*s);
                                     }
-                                    // Channel targets: collect local sessions AND track remote channels
-                                    let mut channel_target_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
-                                    for ch_cfg in &vt.channels {
-                                        let mut ch_ids = std::collections::HashSet::new();
-                                        ch_ids.insert(ch_cfg.channel_id);
-                                        if ch_cfg.links {
-                                            let linked = edge_state.channel_manager.get_all_linked_channels(ch_cfg.channel_id).await;
-                                            ch_ids.extend(linked);
-                                        }
-                                        if ch_cfg.children {
-                                            fn collect_children(
-                                                ch_id: u32,
-                                                ch_ids: &mut std::collections::HashSet<u32>,
-                                                children_map: &std::collections::HashMap<u32, Vec<u32>>,
-                                            ) {
-                                                if let Some(children) = children_map.get(&ch_id) {
-                                                    for &child in children {
-                                                        if ch_ids.insert(child) {
-                                                            collect_children(child, ch_ids, children_map);
-                                                        }
-                                                    }
-                                                }
+                                    // Collect local sessions from pre-computed channel set.
+                                    let mut channel_sessions: std::collections::HashSet<u32> = std::collections::HashSet::new();
+                                    for (ch_id, group_filter) in &vt.resolved_channels {
+                                        let local_sessions = edge_state.client_manager.get_channel_sessions(*ch_id).await;
+                                        for s in local_sessions {
+                                            if s == sid || direct_sessions.contains(&s) { continue; }
+                                            if let Some(groups) = group_filter {
+                                                let in_group = edge_state.client_manager.get_client(s).await
+                                                    .map(|c| c.groups.iter().any(|g| groups.contains(g)))
+                                                    .unwrap_or(false);
+                                                if !in_group { continue; }
                                             }
-                                            let children_map = edge_state.channel_manager.get_all_children_map().await;
-                                            collect_children(ch_cfg.channel_id, &mut ch_ids, &children_map);
-                                        }
-                                        channel_target_ids.extend(&ch_ids);
-                                        for ch_id in ch_ids {
-                                            let local_sessions = edge_state.client_manager.get_channel_sessions(ch_id).await;
-                                            for s in local_sessions {
-                                                if s != sid {
-                                                    // If a group filter is set, only include users in that group
-                                                    if let Some(ref group_filter) = ch_cfg.group {
-                                                        if let Some(target_client) = edge_state.client_manager.get_client(s).await {
-                                                            if !target_client.groups.iter().any(|g| g == group_filter) {
-                                                                continue;
-                                                            }
-                                                        }
-                                                    }
-                                                    target_sessions.insert(s);
-                                                }
-                                            }
+                                            channel_sessions.insert(s);
                                         }
                                     }
-                                    // Build frame with sender session injected
-                                    let forwarded = inject_session_into_voice(&frame.payload, sid);
-                                    let mut buf = BytesMut::new();
-                                    bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-                                    bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
-                                    bytes::BufMut::put_slice(&mut buf, &forwarded);
-                                    // Wrap in Arc to share the frame buffer across target senders
-                                    // without per-target heap allocation.
-                                    let data = std::sync::Arc::new(buf.to_vec());
-                                    // Send to local targets
-                                    for target_session in &target_sessions {
+                                    // Build two frames with Mumble server-to-client context bytes:
+                                    //   WHISPER=2 for direct session targets (密语)
+                                    //   SHOUT=1   for channel-expanded targets (呼喊)
+                                    let mk_frame = |ctx: u8| {
+                                        let forwarded = inject_session_into_voice(&frame.payload, sid, ctx);
+                                        let mut buf = BytesMut::new();
+                                        bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
+                                        bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
+                                        bytes::BufMut::put_slice(&mut buf, &forwarded);
+                                        std::sync::Arc::new(buf.to_vec())
+                                    };
+                                    let data_whisper = mk_frame(2); // WHISPER: direct session targets
+                                    let data_shout   = mk_frame(1); // SHOUT:   channel-expanded targets
+                                    // Send WHISPER frame to direct session targets
+                                    for target_session in &direct_sessions {
                                         if let Some(target_client) = edge_state.client_manager.get_client(*target_session).await {
                                             if !target_client.deaf && !target_client.self_deaf {
                                                 if let Some(sender) = edge_state.client_manager.get_sender(*target_session).await {
-                                                    sender.send_raw((*data).clone()).await;
+                                                    sender.send_raw((*data_whisper).clone()).await;
                                                 }
                                             }
                                         }
                                     }
-                                    // Send to remote edges via Hub relay
-                                    // For session targets: relay those specific sessions
-                                    // For channel targets: also relay to remote users in those channels
-                                    let local_edge_id = edge_state.get_edge_id();
-                                    let remote_users = edge_state.channel_manager.get_all_remote_users().await;
-                                    let mut by_edge: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
-                                    for ru in &remote_users {
-                                        if ru.deaf || ru.self_deaf { continue; }
-                                        if local_edge_id != 0 && ru.edge_id == local_edge_id { continue; }
-                                        let in_session_target = target_sessions.contains(&ru.session_id);
-                                        let in_channel_target = !channel_target_ids.is_empty() && channel_target_ids.contains(&ru.channel_id);
-                                        if in_session_target || in_channel_target {
-                                            by_edge.entry(ru.edge_id).or_default().push(ru.session_id);
+                                    // Send SHOUT frame to channel-expanded targets
+                                    for target_session in &channel_sessions {
+                                        if let Some(target_client) = edge_state.client_manager.get_client(*target_session).await {
+                                            if !target_client.deaf && !target_client.self_deaf {
+                                                if let Some(sender) = edge_state.client_manager.get_sender(*target_session).await {
+                                                    sender.send_raw((*data_shout).clone()).await;
+                                                }
+                                            }
                                         }
                                     }
-                                    for (target_edge_id, _sessions_on_edge) in by_edge {
-                                        // Relay format: standard Mumble server-to-client packet
-                                        // [header][session_varint][seq][voice_data]
-                                        // (matches TS hub relay format)
-                                        let relay_payload = inject_session_into_voice(&frame.payload, sid);
+                                    // Relay to all remote edges with the ORIGINAL packet bytes
+                                    // (sender session injected, original voice_target_id preserved
+                                    // in the low 5 bits of byte 0).  Each remote edge uses its own
+                                    // synced VoiceTarget cache to decide who receives the packet,
+                                    // so we do NOT pre-filter by resolved_channels here.
+                                    let local_edge_id = edge_state.get_edge_id();
+                                    let remote_users = edge_state.channel_manager.get_all_remote_users().await;
+                                    let mut by_edge: std::collections::HashSet<u32> = std::collections::HashSet::new();
+                                    for ru in &remote_users {
+                                        if local_edge_id != 0 && ru.edge_id == local_edge_id { continue; }
+                                        by_edge.insert(ru.edge_id);
+                                    }
+                                    for target_edge_id in by_edge {
+                                        let relay_payload = inject_session_into_voice(&frame.payload, sid, voice_target as u8);
                                         if edge_state.enable_hub_tcp_fallback {
                                             hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                                         }
@@ -1103,8 +1091,8 @@ async fn handle_client_connection(
                                     .await;
                                 let linked_channels_vec: Vec<u32> = linked_channels.iter().copied().collect();
 
-                                // Build frame once with sender session injected
-                                let forwarded = inject_session_into_voice(&frame.payload, sid);
+                                // Build frame once with sender session injected (context=0: normal speech)
+                                let forwarded = inject_session_into_voice(&frame.payload, sid, 0);
                                 let mut buf = BytesMut::new();
                                 bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
                                 bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
@@ -1142,7 +1130,8 @@ async fn handle_client_connection(
                                     debug!("edge={:?} TCP voice: relaying broadcast from session {} to edge {}", local_edge_id, sid, target_edge_id);
                                     // Relay format: standard Mumble server-to-client packet
                                     // [header][session_varint][seq][voice_data]
-                                    let relay_payload = inject_session_into_voice(&frame.payload, sid);
+                                    // Relay broadcast: context=0 (normal speech)
+                                    let relay_payload = inject_session_into_voice(&frame.payload, sid, 0);
                                     if edge_state.enable_hub_tcp_fallback {
                                         hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
                                     }
@@ -1187,12 +1176,13 @@ async fn handle_client_connection(
 
                             // Cache voice target locally for routing
                             {
-                                use crate::state::{VoiceTargetChannelConfig, VoiceTargetConfig};
+                                use crate::state::{VoiceTargetChannelConfig, VoiceTargetConfig, resolve_voice_target_channels};
                                 use std::collections::HashMap;
-                                let mut vt_cache = edge_state.voice_targets.write().await;
-                                let session_vts = vt_cache.entry(sid).or_insert_with(HashMap::new);
                                 if vt.targets.is_empty() {
-                                    session_vts.remove(&(target_id as u32));
+                                    let mut vt_cache = edge_state.voice_targets.write().await;
+                                    if let Some(session_vts) = vt_cache.get_mut(&sid) {
+                                        session_vts.remove(&(target_id as u32));
+                                    }
                                 } else {
                                     let mut vt_sessions = Vec::new();
                                     let mut vt_channels = Vec::new();
@@ -1209,7 +1199,15 @@ async fn handle_client_connection(
                                             });
                                         }
                                     }
-                                    session_vts.insert(target_id as u32, VoiceTargetConfig { sessions: vt_sessions, channels: vt_channels });
+                                    // Pre-compute expanded channel set outside the write lock
+                                    let resolved = resolve_voice_target_channels(&vt_channels, &edge_state.channel_manager).await;
+                                    let mut vt_cache = edge_state.voice_targets.write().await;
+                                    let session_vts = vt_cache.entry(sid).or_insert_with(HashMap::new);
+                                    session_vts.insert(target_id as u32, VoiceTargetConfig {
+                                        sessions: vt_sessions,
+                                        channels: vt_channels,
+                                        resolved_channels: resolved,
+                                    });
                                 }
                             }
 
@@ -2440,11 +2438,16 @@ fn decode_mumble_varint(data: &[u8]) -> Option<(u32, usize)> {
 /// Inject sender session ID into a voice packet for forwarding.
 /// Client sends: [header(1B)][sequence_varint][audio_data]
 /// Server forwards: [header(1B)][sender_session_varint][sequence_varint][audio_data]
-fn inject_session_into_voice(payload: &[u8], sender_session: u32) -> Vec<u8> {
+/// Build a server-to-client voice payload:
+/// - Rewrites the lower 5 bits of the header byte to `context`
+///   (0 = normal speech, 1 = SHOUT/channel target, 2 = WHISPER/direct target)
+/// - Inserts sender_session varint after the header byte (Mumble server-to-client format)
+fn inject_session_into_voice(payload: &[u8], sender_session: u32, context: u8) -> Vec<u8> {
     if payload.is_empty() {
         return Vec::new();
     }
-    let header = payload[0];
+    // Preserve codec type (high 3 bits), overwrite target/context (low 5 bits)
+    let header = (payload[0] & 0xe0) | (context & 0x1f);
     let session_varint = encode_mumble_varint(sender_session);
     let mut result = Vec::with_capacity(1 + session_varint.len() + payload.len() - 1);
     result.push(header);
@@ -3370,45 +3373,46 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                                 trace!("edge={} Delivered relayed broadcast from session {} to {} local clients in {} linked channels", my_edge_id, sender_session, delivered, linked_channels.len());
                             }
                             1..=30 => {
-                                // Whisper: use synced VoiceTarget config for sender's session
+                                // Whisper/shout: use this edge's locally-synced VoiceTarget config
+                                // for sender_session to decide which LOCAL sessions receive the packet.
+                                // The sending edge sent only the raw voice_target_id in the header;
+                                // routing decisions are made independently on each receiving edge.
                                 let vt_config = {
                                     let cache = state.voice_targets.read().await;
                                     cache.get(&sender_session).and_then(|m| m.get(&voice_target)).cloned()
                                 };
                                 if let Some(vt) = vt_config {
-                                    let mut target_sessions: std::collections::HashSet<u32> = std::collections::HashSet::new();
-                                    for s in &vt.sessions {
-                                        target_sessions.insert(*s);
-                                    }
-                                    for ch_cfg in &vt.channels {
-                                        let mut ch_ids = std::collections::HashSet::new();
-                                        ch_ids.insert(ch_cfg.channel_id);
-                                        if ch_cfg.links {
-                                            let linked = state.channel_manager.get_all_linked_channels(ch_cfg.channel_id).await;
-                                            ch_ids.extend(linked);
-                                        }
-                                        for ch_id in ch_ids {
-                                            let local_sessions = state.client_manager.get_channel_sessions(ch_id).await;
-                                            for s in local_sessions {
-                                                if s != sender_session {
-                                                    target_sessions.insert(s);
-                                                }
+                                    // Direct (per-session) targets in VoiceTarget.sessions.
+                                    let direct_sessions: std::collections::HashSet<u32> =
+                                        vt.sessions.iter().copied().collect();
+                                    // Channel targets from pre-computed resolved_channels with optional group filter.
+                                    let mut channel_sessions: std::collections::HashSet<u32> = std::collections::HashSet::new();
+                                    for (ch_id, group_filter) in &vt.resolved_channels {
+                                        let local_sessions = state.client_manager.get_channel_sessions(*ch_id).await;
+                                        for s in local_sessions {
+                                            if s == sender_session || direct_sessions.contains(&s) { continue; }
+                                            if let Some(groups) = group_filter {
+                                                let in_group = state.client_manager.get_client(s).await
+                                                    .map(|c| c.groups.iter().any(|g| groups.contains(g)))
+                                                    .unwrap_or(false);
+                                                if !in_group { continue; }
                                             }
+                                            channel_sessions.insert(s);
                                         }
                                     }
+                                    // Deliver to matching local sessions only, preserving the
+                                    // original Mumble header byte (voice_target_id in low 5 bits).
                                     let mut delivered = 0usize;
-                                    for target_session in &target_sessions {
+                                    for target_session in direct_sessions.iter().chain(channel_sessions.iter()) {
                                         if let Some(target_client) = state.client_manager.get_client(*target_session).await {
-                                            if target_client.deaf || target_client.self_deaf {
-                                                continue;
-                                            }
+                                            if target_client.deaf || target_client.self_deaf { continue; }
                                         }
                                         if let Some(sender_tx) = state.client_manager.get_sender(*target_session).await {
                                             sender_tx.send_raw(frame.clone()).await;
                                             delivered += 1;
                                         }
                                     }
-                                    trace!("edge={} Delivered relayed whisper from session {} to {}/{} targets", my_edge_id, sender_session, delivered, target_sessions.len());
+                                    trace!("edge={} Delivered relayed whisper from session {} to {}/{} targets", my_edge_id, sender_session, delivered, direct_sessions.len() + channel_sessions.len());
                                 } else {
                                     debug!("edge={} RelayedVoice whisper: no VoiceTarget config for session {} target {}", my_edge_id, sender_session, voice_target);
                                 }

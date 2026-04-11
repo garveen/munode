@@ -118,6 +118,7 @@ impl RpcHandler {
             "edge.handlePermissionQuery" => self.handle_permission_query(&request, &request_id).await,
             "edge.batchPermissionQuery" => self.handle_batch_permission_query(&request, &request_id).await,
             "edge.syncVoiceTarget" => self.handle_sync_voice_target(&request, &request_id).await,
+            "edge.getVoiceTargets" => self.handle_get_voice_targets(&request_id).await,
             "edge.saveChannel" => self.handle_save_channel(&request, &request_id).await,
             "edge.handleACL" => self.handle_acl(&request, &request_id).await,
             "edge.saveACL" => self.handle_save_acl(&request, &request_id).await,
@@ -1617,7 +1618,7 @@ impl RpcHandler {
         let channel_snapshot = self.state.channel_store.get_parent_and_inherit_snapshot().await;
 
         // [2] Resolve base groups from the session (also one async call).
-        let mut base_groups: Vec<String> = match self.state.session_manager
+        let base_groups: Vec<String> = match self.state.session_manager
             .get_session(params.actor_session).await {
             Some(s) => s.groups.clone(),
             None => Vec::new(),
@@ -1699,6 +1700,31 @@ impl RpcHandler {
 
         Ok(self.make_response_packet(request_id, "edge.batchPermissionQuery", |r| {
             r.edge_batch_permission_query = Some(result);
+        }))
+    }
+
+    async fn handle_get_voice_targets(
+        &self,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        use munode_protocol::hubedge::{EdgeGetVoiceTargetsResult, VoiceTargetConfigEntry};
+        let entries: Vec<VoiceTargetConfigEntry> = self
+            .state
+            .voice_targets
+            .read()
+            .await
+            .values()
+            .map(|e| VoiceTargetConfigEntry {
+                edge_id: e.edge_id,
+                client_session: e.client_session,
+                target_id: e.target_id,
+                config: e.config.clone(),
+                timestamp: e.timestamp,
+            })
+            .collect();
+        let result = EdgeGetVoiceTargetsResult { voice_targets: entries };
+        Ok(self.make_response_packet(request_id, "edge.getVoiceTargets", |r| {
+            r.edge_get_voice_targets = Some(result);
         }))
     }
 
