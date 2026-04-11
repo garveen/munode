@@ -530,6 +530,37 @@ impl RpcHandler {
         }
 
         // ------------------------------------------------------------------
+        // Step 0.6: Server capacity check — reject if max_users is reached
+        // ------------------------------------------------------------------
+        {
+            let max_users = self.state.config.limits.max_users;
+            if max_users > 0 {
+                let current = self.state.session_manager.count_sessions().await;
+                if current >= max_users as usize {
+                    warn!(
+                        "Rejecting user '{}': server at capacity ({}/{})",
+                        username, current, max_users
+                    );
+                    let result = EdgeAuthenticateUserResult {
+                        success: false,
+                        user_id: None, username: None, display_name: None,
+                        groups: vec![],
+                        reason: Some(format!("Server is full ({}/{})", current, max_users)),
+                        reject_type: Some(6), // ServerFull
+                        channel_id: None,
+                        mute: None, deaf: None, suppress: None,
+                        self_mute: None, self_deaf: None,
+                        priority_speaker: None, recording: None,
+                        cert_required: None,
+                    };
+                    return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                        r.edge_authenticate_user = Some(result);
+                    }));
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------
         // Step 1: Try external auth service (if connected)
         // ------------------------------------------------------------------
         if self.state.auth_service.is_connected().await {

@@ -179,14 +179,13 @@ impl EdgeServer {
         let listener = TcpListener::bind(listen_addr).await?;
         info!("TLS server listening on {}", listen_addr);
 
-        // Semaphore to cap concurrent connections at the configured capacity.
-        // capacity = 0 means unlimited; use a large sentinel value in that case.
-        let max_conn = if self.config.server.capacity > 0 {
-            self.config.server.capacity as usize
-        } else {
-            10_000
-        };
-        let conn_semaphore = Arc::new(tokio::sync::Semaphore::new(max_conn));
+        // Semaphore to limit concurrent TCP connections for DoS protection only.
+        // This is NOT the user-count limit — that is enforced by the Hub via
+        // session_manager.count_sessions() in handle_authenticate_user.
+        // Use a fixed large ceiling so that pre-auth connections (TLS handshake,
+        // version exchange) do not consume slots intended for authenticated users.
+        const MAX_TCP_CONNECTIONS: usize = 65_535;
+        let conn_semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_TCP_CONNECTIONS));
 
         // Accept loop
         loop {
@@ -194,11 +193,11 @@ impl EdgeServer {
                 result = listener.accept() => {
                     match result {
                         Ok((stream, peer_addr)) => {
-                            // Reject the connection immediately if the server is at capacity.
+                            // Drop connection only under extreme TCP flood (DoS protection).
                             let permit = match conn_semaphore.clone().try_acquire_owned() {
                                 Ok(permit) => permit,
                                 Err(_) => {
-                                    warn!("Connection from {} rejected: server at capacity ({})", peer_addr, max_conn);
+                                    warn!("Connection from {} dropped: TCP connection limit reached", peer_addr);
                                     drop(stream);
                                     continue;
                                 }
@@ -646,6 +645,30 @@ async fn handle_client_connection(
                         drop(client_sender);
                         writer_handle.await.ok();
                         return Ok(());
+                    }
+
+                    // Local session-count pre-check: fast reject before spending an RPC.
+                    // max_users reflects the Hub-provided global limit (0 = unlimited).
+                    // Note: this is a best-effort local check; the Hub enforces the
+                    // authoritative global count in handle_authenticate_user.
+                    {
+                        let max_users = edge_state.max_users.load(std::sync::atomic::Ordering::Relaxed);
+                        if max_users > 0 {
+                            let local_count = edge_state.client_manager.client_count().await;
+                            if local_count >= max_users as usize {
+                                warn!(
+                                    "Rejecting {} pre-auth: local session count ({}) >= max_users ({})",
+                                    peer_addr, local_count, max_users
+                                );
+                                client_sender.send_raw(handler::encode_reject(
+                                    Some(mumbleproto::reject::RejectType::ServerFull as i32),
+                                    &format!("Server is full ({}/{})", local_count, max_users),
+                                )).await;
+                                drop(client_sender);
+                                writer_handle.await.ok();
+                                return Ok(());
+                            }
+                        }
                     }
 
                     // Allocate session ID from Hub
