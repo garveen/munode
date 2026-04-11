@@ -1220,6 +1220,9 @@ pub struct GlobalSessionProto {
     pub priority_speaker: ::core::option::Option<bool>,
     #[prost(bool, optional, tag = "16")]
     pub recording: ::core::option::Option<bool>,
+    /// Channel listener state
+    #[prost(uint32, repeated, packed = "false", tag = "17")]
+    pub listening_channels: ::prost::alloc::vec::Vec<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeInfoProto {

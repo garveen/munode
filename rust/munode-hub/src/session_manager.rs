@@ -20,6 +20,7 @@ pub struct SessionInfo {
     pub self_deaf: bool,
     pub priority_speaker: bool,
     pub recording: bool,
+    pub listening_channels: Vec<u32>,
 }
 
 /// Manages globally-unique session IDs and tracks active sessions.
@@ -124,6 +125,7 @@ mod tests {
             self_deaf: false,
             priority_speaker: false,
             recording: false,
+            listening_channels: vec![],
         }
     }
 

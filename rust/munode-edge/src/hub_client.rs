@@ -1625,6 +1625,7 @@ impl HubClient {
                 self_deaf: Some(client.self_deaf),
                 priority_speaker: Some(client.priority_speaker),
                 recording: Some(client.recording),
+                listening_channels: client.listening_channels.clone(),
             };
             let request_id = self.next_request_id();
             let request = TypedRpcRequest {

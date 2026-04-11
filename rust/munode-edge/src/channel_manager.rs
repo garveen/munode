@@ -73,7 +73,7 @@ impl From<&GlobalSessionProto> for RemoteUser {
             self_deaf: proto.self_deaf.unwrap_or(false),
             priority_speaker: proto.priority_speaker.unwrap_or(false),
             recording: proto.recording.unwrap_or(false),
-            listening_channels: vec![],
+            listening_channels: proto.listening_channels.clone(),
         }
     }
 }
@@ -139,6 +139,9 @@ impl ChannelManager {
         for proto in sessions {
             let user = RemoteUser::from(proto);
             index.entry(user.channel_id).or_default().insert(user.session_id);
+            for &ch in &user.listening_channels {
+                index.entry(ch).or_default().insert(user.session_id);
+            }
             users.insert(user.session_id, user);
         }
         info!("Loaded {} remote users from Hub", users.len());
@@ -221,6 +224,7 @@ impl ChannelManager {
     pub async fn upsert_remote_user(&self, user: RemoteUser) {
         let sid = user.session_id;
         let new_channel = user.channel_id;
+        let new_listening = user.listening_channels.clone();
         let mut users = self.remote_users.write().await;
         let mut index = self.channel_to_sessions.write().await;
         // Remove from the old channel bucket if the user already existed and moved.
@@ -230,8 +234,20 @@ impl ChannelManager {
                     set.remove(&sid);
                 }
             }
+            // Remove from listening channel buckets that are no longer active.
+            for &ch in &old.listening_channels {
+                if !new_listening.contains(&ch) {
+                    if let Some(set) = index.get_mut(&ch) {
+                        set.remove(&sid);
+                    }
+                }
+            }
         }
         index.entry(new_channel).or_default().insert(sid);
+        // Add new listening channel entries.
+        for &ch in &new_listening {
+            index.entry(ch).or_default().insert(sid);
+        }
         users.insert(sid, user);
     }
 
@@ -242,6 +258,11 @@ impl ChannelManager {
         if let Some(user) = users.remove(&session_id) {
             if let Some(set) = index.get_mut(&user.channel_id) {
                 set.remove(&session_id);
+            }
+            for &ch in &user.listening_channels {
+                if let Some(set) = index.get_mut(&ch) {
+                    set.remove(&session_id);
+                }
             }
             Some(user)
         } else {

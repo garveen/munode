@@ -648,6 +648,7 @@ impl RpcHandler {
                         self_deaf: params.self_deaf.unwrap_or(false),
                         priority_speaker: params.priority_speaker.unwrap_or(false),
                         recording: params.recording.unwrap_or(false),
+                        listening_channels: vec![],
                     };
                     self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
                     self.state.session_manager.add_session(session_info).await;
@@ -827,6 +828,7 @@ impl RpcHandler {
                         self_deaf: params.self_deaf.unwrap_or(false),
                         priority_speaker: params.priority_speaker.unwrap_or(false),
                         recording: params.recording.unwrap_or(false),
+                        listening_channels: vec![],
                     };
                     self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
                     self.state.session_manager.add_session(session_info).await;
@@ -975,6 +977,7 @@ impl RpcHandler {
                         self_deaf: params.self_deaf.unwrap_or(false),
                         priority_speaker: params.priority_speaker.unwrap_or(false),
                         recording: params.recording.unwrap_or(false),
+                        listening_channels: vec![],
                     };
                     self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
                     self.state.session_manager.add_session(session_info).await;
@@ -1206,6 +1209,7 @@ impl RpcHandler {
             self_deaf: params.self_deaf.unwrap_or(false),
             priority_speaker: params.priority_speaker.unwrap_or(false),
             recording: params.recording.unwrap_or(false),
+            listening_channels: vec![],
         };
 
         self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
@@ -1325,6 +1329,7 @@ impl RpcHandler {
             self_deaf: s.self_deaf.unwrap_or(false),
             priority_speaker: s.priority_speaker.unwrap_or(false),
             recording: s.recording.unwrap_or(false),
+            listening_channels: vec![],
         };
         self.state.session_manager.add_session(session_info).await;
 
@@ -1515,6 +1520,7 @@ impl RpcHandler {
                 self_deaf: Some(s.self_deaf),
                 priority_speaker: Some(s.priority_speaker),
                 recording: Some(s.recording),
+                listening_channels: s.listening_channels.clone(),
             })
             .collect();
 
@@ -2591,6 +2597,12 @@ impl RpcHandler {
             if let Some(v) = p.suppress  { session.suppress = v; }
             if let Some(v) = p.priority_speaker { session.priority_speaker = v; }
             if let Some(v) = p.recording { session.recording = v; }
+            for &ch in &p.listening_channel_add {
+                if !session.listening_channels.contains(&ch) {
+                    session.listening_channels.push(ch);
+                }
+            }
+            session.listening_channels.retain(|ch| !p.listening_channel_remove.contains(ch));
             sessions.add_session(session).await;
         }
 

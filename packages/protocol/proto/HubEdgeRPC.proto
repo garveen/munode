@@ -354,6 +354,8 @@ message GlobalSessionProto {
   optional bool self_deaf = 14;
   optional bool priority_speaker = 15;
   optional bool recording = 16;
+  // Channel listener state
+  repeated uint32 listening_channels = 17;
 }
 
 message EdgeInfoProto {

@@ -294,12 +294,13 @@ impl<'a> LoginHandler<'a> {
                 priority_speaker: if user.priority_speaker { Some(true) } else { None },
                 recording: if user.recording { Some(true) } else { None },
                 hash: user.cert_hash.clone(),
+                listening_channel_add: user.listening_channels.clone(),
                 ..Default::default()
             };
             self.send(MessageType::UserState, &msg).await?;
         }
 
-        for client in &local_clients {
+        for client in local_clients.iter().filter(|c| c.state == crate::client::ClientState::Ready) {
             if client.session == self_session {
                 continue;
             }
