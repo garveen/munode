@@ -856,7 +856,7 @@ fn default_blob_store_path() -> String {
     "data/blobs".to_string()
 }
 fn default_relay_bandwidth() -> u32 {
-    10000
+    0
 }
 fn default_relay_cost_factor() -> f32 {
     1.2

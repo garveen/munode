@@ -172,6 +172,6 @@ consecutive_failure_threshold = 2             # Default: 2
 [voice_routing.relay]
 # Enable Hub-mediated voice relay
 enabled            = true              # Default: true
-# Maximum total relay bandwidth across all streams (kbps)
-max_relay_bandwidth = 10000            # Default: 10000 kbps
+# Maximum total relay bandwidth across all streams (kbps, 0 = unlimited)
+max_relay_bandwidth = 0                # Default: 0 (unlimited)
 
