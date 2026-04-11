@@ -361,7 +361,7 @@ describe('Channel Ninja Disabled Tests', () => {
 
   beforeAll(async () => {
     // Create test environment with ninja DISABLED
-    testEnv = await setupTestEnvironment(8200, {
+    testEnv = await setupTestEnvironment(12260, {
       reuse: false, // 禁用复用以确保配置生效
       hubConfig: {
         channel_ninja: false, // Disable Channel Ninja

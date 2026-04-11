@@ -49,7 +49,7 @@ describe('Voice Routing Integration Tests', () => {
   beforeAll(async () => {
     // 使用较高的基础端口避免与其他测试冲突
     // 启用日志用于调试
-    testEnv = await setupTestEnvironment(8200, { 
+    testEnv = await setupTestEnvironment(12200, { 
       silent: false,
       startEdge2: true, // 确保启动两个 Edge
       startEdge3: true, // 启动第三个 Edge 用于中转测试
@@ -273,7 +273,7 @@ describe('Voice Routing Stress Tests', () => {
 
   beforeAll(async () => {
     // setupTestEnvironment with reuse=false will clean up any previous environment properly
-    testEnv = await setupTestEnvironment(8300, { 
+    testEnv = await setupTestEnvironment(12300, { 
       silent: true,
       startEdge2: true,
       reuse: false,
@@ -339,7 +339,7 @@ describe('4-Edge Voice Routing Tests', () => {
   beforeAll(async () => {
     // setupTestEnvironment with reuse=false will clean up any previous environment properly
     // 启动 4 个 Edge 进行完整路由测试
-    testEnv = await setupTestEnvironment(8400, { 
+    testEnv = await setupTestEnvironment(12400, { 
       silent: false,
       startEdge2: true,
       startEdge3: true,

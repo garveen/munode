@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use bytes::BytesMut;
 use prost::Message;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, oneshot, RwLock};
 use tracing::warn;
 
 use munode_protocol::message_type::MessageType;
@@ -92,38 +92,50 @@ pub struct ClientInfo {
     pub plugin_context: Vec<u8>,
 }
 
+/// All per-session data stored in a single struct to allow a single RwLock
+/// to cover all session-level state.  Previously 5 separate `RwLock<HashMap>`
+/// fields caused 6 sequential write-lock acquisitions on `remove_client` and
+/// up to 4 separate read-lock acquisitions on the voice hot path.
+/// Consolidating to one lock cuts `remove_client` to 2 write locks and the
+/// voice hot path to at most 3 read locks.
+struct SessionEntry {
+    info: ClientInfo,
+    sender: ClientSender,
+    /// OCB2-AES128 per-session crypto state.  `None` until CryptSetup.
+    crypt_state: Option<Arc<Mutex<CryptState>>>,
+    /// Per-session voice bandwidth tracker (independent std::Mutex for lock-free
+    /// concurrent per-session accounting without blocking other sessions).
+    bandwidth: Arc<Mutex<BandwidthRecord>>,
+    /// Kick/ban close-signal.  Sent to make the per-client TCP read loop exit.
+    close_signal: Option<oneshot::Sender<()>>,
+}
+
 /// Manages all connected clients and their message senders.
+///
+/// Internal layout (three RwLocks instead of the previous seven):
+/// - `sessions`        — all per-session data (info, sender, crypto, bw, close-signal)
+/// - `channel_users`   — channel_id → member session IDs
+/// - `listening_index` — channel_id → listening session IDs
 pub struct ClientManager {
-    clients: RwLock<HashMap<u32, ClientInfo>>,
-    senders: RwLock<HashMap<u32, ClientSender>>,
+    /// Unified per-session state.  Merging the former `clients`, `senders`,
+    /// `crypt_states`, `bandwidth_records`, and `close_signals` maps into one
+    /// reduces write-lock acquisitions on connect/disconnect and read-lock
+    /// acquisitions on the voice hot path.
+    sessions: RwLock<HashMap<u32, SessionEntry>>,
+    /// channel_id → Vec<session_id>: local clients in each channel.
     channel_users: RwLock<HashMap<u32, Vec<u32>>>,
-    /// Per-session OCB2-AES128 cryptographic states.
-    crypt_states: RwLock<HashMap<u32, Arc<Mutex<CryptState>>>>,
-    /// Per-session voice bandwidth records. Keyed by session_id.
-    /// Each session holds its own `Arc<Mutex<BandwidthRecord>>` so concurrent
-    /// callers from different spawned voice tasks can record bytes in parallel
-    /// without serialising on a single global write lock.
-    bandwidth_records: RwLock<HashMap<u32, Arc<Mutex<BandwidthRecord>>>>,
-    /// Listening index: channel_id → Vec<session_id> of clients listening to
-    /// that channel but whose primary channel is different.  This is maintained
-    /// in sync with `clients.listening_channels` to provide O(1) lookup instead
-    /// of the O(N clients) linear scan that `get_listening_sessions` previously did.
+    /// channel_id → Vec<session_id>: local clients *listening* to each channel
+    /// (secondary listen, not primary channel).  Maintained in sync with
+    /// `SessionEntry::info.listening_channels`.
     listening_index: RwLock<HashMap<u32, Vec<u32>>>,
-    /// Per-session close signals.  Sending on these channels causes the
-    /// per-client read loop to break and the TCP connection to close.
-    close_signals: RwLock<HashMap<u32, tokio::sync::oneshot::Sender<()>>>,
 }
 
 impl ClientManager {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            clients: RwLock::new(HashMap::new()),
-            senders: RwLock::new(HashMap::new()),
+            sessions: RwLock::new(HashMap::new()),
             channel_users: RwLock::new(HashMap::new()),
-            crypt_states: RwLock::new(HashMap::new()),
-            bandwidth_records: RwLock::new(HashMap::new()),
             listening_index: RwLock::new(HashMap::new()),
-            close_signals: RwLock::new(HashMap::new()),
         })
     }
 
@@ -134,9 +146,11 @@ impl ClientManager {
     pub async fn register_close_signal(
         &self,
         session: u32,
-        tx: tokio::sync::oneshot::Sender<()>,
+        tx: oneshot::Sender<()>,
     ) {
-        self.close_signals.write().await.insert(session, tx);
+        if let Some(entry) = self.sessions.write().await.get_mut(&session) {
+            entry.close_signal = Some(tx);
+        }
     }
 
     /// Fire the close signal for a session, causing the per-client read loop to
@@ -145,8 +159,10 @@ impl ClientManager {
     /// This is used for kick/ban scenarios. Regular `remove_client` (used for
     /// channel moves and natural disconnects) does NOT fire this signal.
     pub async fn send_close_signal(&self, session: u32) {
-        if let Some(tx) = self.close_signals.write().await.remove(&session) {
-            let _ = tx.send(());
+        if let Some(entry) = self.sessions.write().await.get_mut(&session) {
+            if let Some(tx) = entry.close_signal.take() {
+                let _ = tx.send(());
+            }
         }
     }
 
@@ -154,21 +170,35 @@ impl ClientManager {
     pub async fn add_client(&self, client: ClientInfo, sender: ClientSender) {
         let session = client.session;
         let channel_id = client.channel_id;
-        // Update listening_index for any pre-configured listening channels
-        if !client.listening_channels.is_empty() {
-            let mut idx = self.listening_index.write().await;
-            for &ch in &client.listening_channels {
-                idx.entry(ch).or_default().push(session);
-            }
+        let listening = client.listening_channels.clone();
+
+        // Insert session entry — one write lock for all per-session state.
+        {
+            let mut sess = self.sessions.write().await;
+            sess.insert(session, SessionEntry {
+                info: client,
+                sender,
+                crypt_state: None,
+                bandwidth: Arc::new(Mutex::new(BandwidthRecord::new(0))),
+                close_signal: None,
+            });
         }
-        self.senders.write().await.insert(session, sender);
-        self.clients.write().await.insert(session, client);
+
+        // Register in channel membership index.
         self.channel_users
             .write()
             .await
             .entry(channel_id)
             .or_default()
             .push(session);
+
+        // Register pre-configured listen channels in the index.
+        if !listening.is_empty() {
+            let mut idx = self.listening_index.write().await;
+            for ch in listening {
+                idx.entry(ch).or_default().push(session);
+            }
+        }
     }
 
     /// Update a client's info (without changing the sender).
@@ -176,78 +206,236 @@ impl ClientManager {
     pub async fn update_client(&self, client: ClientInfo) {
         let session = client.session;
         let new_listening = client.listening_channels.clone();
-        {
-            let mut clients = self.clients.write().await;
-            let old_listening = clients
+        let old_listening = {
+            let mut sess = self.sessions.write().await;
+            let old = sess
                 .get(&session)
-                .map(|c| c.listening_channels.clone())
+                .map(|e| e.info.listening_channels.clone())
                 .unwrap_or_default();
-            clients.insert(session, client);
+            if let Some(entry) = sess.get_mut(&session) {
+                entry.info = client;
+            }
+            old
+        };
 
-            // Update listening_index for changed channels
-            if old_listening != new_listening {
-                drop(clients); // release write lock before taking listening_index write
-                let mut idx = self.listening_index.write().await;
-                // Remove from channels no longer listened to
-                for ch in &old_listening {
-                    if !new_listening.contains(ch) {
-                        if let Some(sessions) = idx.get_mut(ch) {
-                            sessions.retain(|&s| s != session);
-                        }
+        if old_listening != new_listening {
+            let mut idx = self.listening_index.write().await;
+            for ch in &old_listening {
+                if !new_listening.contains(ch) {
+                    if let Some(sessions) = idx.get_mut(ch) {
+                        sessions.retain(|&s| s != session);
                     }
                 }
-                // Add to newly listened channels
-                for ch in &new_listening {
-                    if !old_listening.contains(ch) {
-                        idx.entry(*ch).or_default().push(session);
-                    }
+            }
+            for ch in &new_listening {
+                if !old_listening.contains(ch) {
+                    idx.entry(*ch).or_default().push(session);
                 }
-                return;
             }
         }
+    }
+
+    /// Move a client to a different channel without disturbing any other session state.
+    ///
+    /// Updates `channel_id` and `suppress` in-place within the existing
+    /// `SessionEntry`, preserving the close-signal, crypt-state, and bandwidth
+    /// record.  Returns `false` if the session is not found.
+    pub async fn move_client_to_channel(
+        &self,
+        session: u32,
+        new_channel: u32,
+        new_suppress: bool,
+    ) -> bool {
+        let old_channel = {
+            let mut sess = self.sessions.write().await;
+            let Some(entry) = sess.get_mut(&session) else {
+                return false;
+            };
+            let old = entry.info.channel_id;
+            entry.info.channel_id = new_channel;
+            entry.info.suppress = new_suppress;
+            old
+        };
+
+        if old_channel != new_channel {
+            let mut ch = self.channel_users.write().await;
+            if let Some(users) = ch.get_mut(&old_channel) {
+                users.retain(|&s| s != session);
+            }
+            ch.entry(new_channel).or_default().push(session);
+        }
+
+        true
+    }
+
+    /// Attempt to move a client to a new channel, atomically checking the channel
+    /// capacity limit as part of the membership update.
+    ///
+    /// Unlike the separate `count_in_channel` + `move_client_to_channel` pattern,
+    /// this method performs the count check and the `channel_users` update within a
+    /// single write-lock acquisition, eliminating the TOCTOU race where two
+    /// concurrent tasks both observe "channel not full" and both complete the move.
+    ///
+    /// Returns `Ok(())` on success, or `Err(())` if `max_users > 0` and
+    /// `channel_users[new_channel].len() >= max_users`.
+    ///
+    /// On capacity failure the sessions state is rolled back to its original values
+    /// before returning, so the caller does not need to perform any cleanup.
+    pub async fn move_client_to_channel_checked(
+        &self,
+        session: u32,
+        new_channel: u32,
+        new_suppress: bool,
+        max_users: u32,
+    ) -> Result<(), ()> {
+        // Step 1: Update sessions (record new channel_id/suppress).
+        // We save the old values so we can roll back if the capacity check fails.
+        let (old_channel, old_suppress) = {
+            let mut sess = self.sessions.write().await;
+            let Some(entry) = sess.get_mut(&session) else {
+                return Ok(()); // Session gone — nothing to do.
+            };
+            if entry.info.channel_id == new_channel {
+                return Ok(()); // No-op move.
+            }
+            let old_ch = entry.info.channel_id;
+            let old_sup = entry.info.suppress;
+            entry.info.channel_id = new_channel;
+            entry.info.suppress = new_suppress;
+            (old_ch, old_sup)
+        };
+
+        // Step 2: Atomically check capacity and update channel membership.
+        // Both the count check and the Vec push happen inside the same write lock,
+        // so no other task can slip through between them.
+        {
+            let mut ch = self.channel_users.write().await;
+
+            if max_users > 0 {
+                let current_count = ch.get(&new_channel).map(|v| v.len() as u32).unwrap_or(0);
+                if current_count >= max_users {
+                    // Capacity exceeded: roll back the sessions update.
+                    // The channel_users lock must be dropped first so that acquiring
+                    // sessions.write() preserves the sessions → channel_users lock order.
+                    drop(ch);
+                    let mut sess = self.sessions.write().await;
+                    if let Some(entry) = sess.get_mut(&session) {
+                        // Only roll back if another task has not already moved the session
+                        // to a different channel in the meantime.
+                        if entry.info.channel_id == new_channel {
+                            entry.info.channel_id = old_channel;
+                            entry.info.suppress = old_suppress;
+                        }
+                    }
+                    return Err(());
+                }
+            }
+
+            if let Some(users) = ch.get_mut(&old_channel) {
+                users.retain(|&s| s != session);
+            }
+            ch.entry(new_channel).or_default().push(session);
+        }
+
+        Ok(())
+    }
+
+    /// Add a listener for `session` on `channel`, atomically checking the
+    /// per-channel listener capacity limit.
+    ///
+    /// The `listening_index` update and the capacity check are performed within
+    /// a single write-lock acquisition, preventing the TOCTOU race where two
+    /// concurrent tasks both observe "channel has room" and both complete the add.
+    ///
+    /// `max_per_channel = 0` means no limit.
+    ///
+    /// Returns `true` if the listener was added (or was already present),
+    /// `false` if the channel's listener limit was reached.
+    ///
+    /// On success, `sessions[session].listening_channels` is also updated so that
+    /// a subsequent `update_client` call does not re-add or re-remove the channel.
+    pub async fn add_listener_checked(
+        &self,
+        session: u32,
+        channel: u32,
+        max_per_channel: u32,
+    ) -> bool {
+        // Step 1: Atomically check per-channel limit and update listening_index.
+        let newly_added = {
+            let mut idx = self.listening_index.write().await;
+            if max_per_channel > 0 {
+                let count = idx.get(&channel).map(|v| v.len() as u32).unwrap_or(0);
+                if count >= max_per_channel {
+                    return false;
+                }
+            }
+            let ch_sessions = idx.entry(channel).or_default();
+            if ch_sessions.contains(&session) {
+                false // Already listening — no-op.
+            } else {
+                ch_sessions.push(session);
+                true
+            }
+        };
+
+        if newly_added {
+            // Step 2: Mirror the add into sessions.listening_channels so that a later
+            // update_client call sees old == new and does not attempt to re-sync the index.
+            let mut sess = self.sessions.write().await;
+            if let Some(entry) = sess.get_mut(&session) {
+                if !entry.info.listening_channels.contains(&channel) {
+                    entry.info.listening_channels.push(channel);
+                }
+            }
+        }
+
+        true
     }
 
     /// Remove a client by session ID.
     pub async fn remove_client(&self, session: u32) -> Option<ClientInfo> {
-        self.senders.write().await.remove(&session);
-        self.crypt_states.write().await.remove(&session);
-        self.bandwidth_records.write().await.remove(&session);
-        let client = self.clients.write().await.remove(&session);
-        if let Some(ref c) = client {
-            if let Some(users) = self.channel_users.write().await.get_mut(&c.channel_id) {
+        // One write lock for all per-session state.
+        let entry = self.sessions.write().await.remove(&session);
+        let entry = entry?;
+        let info = entry.info;
+
+        // Update channel membership.
+        {
+            let mut ch = self.channel_users.write().await;
+            if let Some(users) = ch.get_mut(&info.channel_id) {
                 users.retain(|&s| s != session);
             }
-            // Remove from listening_index
-            if !c.listening_channels.is_empty() {
-                let mut idx = self.listening_index.write().await;
-                for ch in &c.listening_channels {
-                    if let Some(sessions) = idx.get_mut(ch) {
-                        sessions.retain(|&s| s != session);
-                        // Remove the entry entirely when the Vec is empty to prevent
-                        // unbounded growth of the listening_index map.
-                        if sessions.is_empty() {
-                            idx.remove(ch);
-                        }
+        }
+
+        // Update listen index.
+        if !info.listening_channels.is_empty() {
+            let mut idx = self.listening_index.write().await;
+            for ch in &info.listening_channels {
+                if let Some(sessions) = idx.get_mut(ch) {
+                    sessions.retain(|&s| s != session);
+                    if sessions.is_empty() {
+                        idx.remove(ch);
                     }
                 }
             }
         }
-        client
+
+        Some(info)
     }
 
     /// Get a client by session ID.
     pub async fn get_client(&self, session: u32) -> Option<ClientInfo> {
-        self.clients.read().await.get(&session).cloned()
+        self.sessions.read().await.get(&session).map(|e| e.info.clone())
     }
 
     /// Get a sender for a specific client.
     pub async fn get_sender(&self, session: u32) -> Option<ClientSender> {
-        self.senders.read().await.get(&session).cloned()
+        self.sessions.read().await.get(&session).map(|e| e.sender.clone())
     }
 
     /// Get the number of connected clients.
     pub async fn client_count(&self) -> usize {
-        self.clients.read().await.len()
+        self.sessions.read().await.len()
     }
 
     /// Get all sessions in a channel.
@@ -262,19 +450,19 @@ impl ClientManager {
 
     /// Get all connected clients.
     pub async fn get_all_clients(&self) -> Vec<ClientInfo> {
-        self.clients.read().await.values().cloned().collect()
+        self.sessions.read().await.values().map(|e| e.info.clone()).collect()
     }
 
     /// Get all session IDs.
     pub async fn get_all_sessions(&self) -> Vec<u32> {
-        self.clients.read().await.keys().copied().collect()
+        self.sessions.read().await.keys().copied().collect()
     }
 
     /// Batch voice dispatch target lookup for local UDP delivery.
     ///
     /// For each session in `channels` (excluding `exclude_session`), returns a tuple
     /// `(session, is_deaf, Option<Arc<Mutex<CryptState>>>)` in a **single pair of
-    /// lock acquisitions** (`clients.read` + `crypt_states.read`), rather than the
+    /// lock acquisitions** (`channel_users.read` + `sessions.read`), rather than the
     /// prior N×2 per-session lock pattern.
     ///
     /// The caller is responsible for the actual UDP send (which happens outside any lock).
@@ -283,7 +471,7 @@ impl ClientManager {
         channels: &[u32],
         exclude_session: u32,
     ) -> Vec<(u32, bool, Option<Arc<Mutex<CryptState>>>)> {
-        let sessions: Vec<u32> = {
+        let session_ids: Vec<u32> = {
             let ch_users = self.channel_users.read().await;
             channels
                 .iter()
@@ -299,22 +487,18 @@ impl ClientManager {
                 .collect()
         };
 
-        if sessions.is_empty() {
+        if session_ids.is_empty() {
             return Vec::new();
         }
 
-        let clients = self.clients.read().await;
-        let crypt_states = self.crypt_states.read().await;
-
-        sessions
+        let sess = self.sessions.read().await;
+        session_ids
             .into_iter()
             .map(|s| {
-                let is_deaf = clients
-                    .get(&s)
-                    .map(|c| c.deaf || c.self_deaf)
-                    .unwrap_or(false);
-                let cs = crypt_states.get(&s).cloned();
-                (s, is_deaf, cs)
+                let e = sess.get(&s);
+                let deaf = e.map(|e| e.info.deaf || e.info.self_deaf).unwrap_or(false);
+                let cs = e.and_then(|e| e.crypt_state.clone());
+                (s, deaf, cs)
             })
             .collect()
     }
@@ -328,13 +512,12 @@ impl ClientManager {
         channels: &[u32],
         exclude_session: u32,
     ) -> Vec<(u32, bool, Option<Arc<Mutex<CryptState>>>)> {
-        let sessions: Vec<u32> = {
+        let session_ids: Vec<u32> = {
             let ch_users = self.channel_users.read().await;
             let listen_idx = self.listening_index.read().await;
             let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
             let mut result = Vec::new();
             for &ch in channels {
-                // Channel members
                 if let Some(members) = ch_users.get(&ch) {
                     for &s in members {
                         if s != exclude_session && seen.insert(s) {
@@ -342,7 +525,6 @@ impl ClientManager {
                         }
                     }
                 }
-                // Listeners for this channel (from index — O(listeners) not O(all clients))
                 if let Some(listeners) = listen_idx.get(&ch) {
                     for &s in listeners {
                         if s != exclude_session && seen.insert(s) {
@@ -354,69 +536,109 @@ impl ClientManager {
             result
         };
 
-        if sessions.is_empty() {
+        if session_ids.is_empty() {
             return Vec::new();
         }
 
-        let clients = self.clients.read().await;
-        let crypt_states = self.crypt_states.read().await;
-
-        sessions
+        let sess = self.sessions.read().await;
+        session_ids
             .into_iter()
             .map(|s| {
-                let is_deaf = clients
-                    .get(&s)
-                    .map(|c| c.deaf || c.self_deaf)
-                    .unwrap_or(false);
-                let cs = crypt_states.get(&s).cloned();
-                (s, is_deaf, cs)
+                let e = sess.get(&s);
+                let deaf = e.map(|e| e.info.deaf || e.info.self_deaf).unwrap_or(false);
+                let cs = e.and_then(|e| e.crypt_state.clone());
+                (s, deaf, cs)
             })
             .collect()
     }
+
     /// Store a CryptState for a session.
     pub async fn set_crypt_state(&self, session: u32, state: CryptState) {
-        self.crypt_states
-            .write()
-            .await
-            .insert(session, Arc::new(Mutex::new(state)));
+        if let Some(entry) = self.sessions.write().await.get_mut(&session) {
+            entry.crypt_state = Some(Arc::new(Mutex::new(state)));
+        }
     }
 
     /// Get the CryptState handle for a session (shared, lockable).
     pub async fn get_crypt_state(&self, session: u32) -> Option<Arc<Mutex<CryptState>>> {
-        self.crypt_states.read().await.get(&session).cloned()
+        self.sessions.read().await.get(&session)?.crypt_state.clone()
     }
 
     /// Restore a previously-saved CryptState Arc directly (used when re-adding a
     /// client after a channel move so the existing crypto session is preserved).
     pub async fn restore_crypt_state(&self, session: u32, state: Arc<Mutex<CryptState>>) {
-        self.crypt_states.write().await.insert(session, state);
+        if let Some(entry) = self.sessions.write().await.get_mut(&session) {
+            entry.crypt_state = Some(state);
+        }
     }
 
     /// Update the decrypt IV for a session (called on CryptSetup resync).
     pub async fn update_decrypt_iv(&self, session: u32, client_nonce: &[u8; 16]) {
-        if let Some(arc) = self.crypt_states.read().await.get(&session) {
+        if let Some(arc) = self.sessions.read().await.get(&session)
+            .and_then(|e| e.crypt_state.clone())
+        {
             arc.lock().unwrap().update_decrypt_iv(client_nonce);
         }
     }
 
     /// Get the current encrypt IV for a session (to send in CryptSetup resync response).
     pub async fn get_encrypt_iv(&self, session: u32) -> Option<Vec<u8>> {
-        self.crypt_states
-            .read()
-            .await
-            .get(&session)
-            .map(|arc| arc.lock().unwrap().encrypt_iv.to_vec())
+        let cs_arc = self.sessions.read().await.get(&session)?.crypt_state.clone()?;
+        Some(cs_arc.lock().unwrap().encrypt_iv.to_vec())
     }
 
     /// Get all sessions that have a CryptState registered (i.e., have completed login).
     pub async fn get_authenticated_sessions(&self) -> Vec<u32> {
-        self.crypt_states.read().await.keys().copied().collect()
+        self.sessions
+            .read()
+            .await
+            .iter()
+            .filter_map(|(&s, e)| if e.crypt_state.is_some() { Some(s) } else { None })
+            .collect()
+    }
+
+    /// Get sender info for the voice hot path in a single `sessions.read()`.
+    ///
+    /// Returns `(crypt_arc, channel_id, suppress)` for the given session, or `None`
+    /// if the session does not exist or has no CryptState yet (pre-auth).
+    /// Callers (e.g. `UdpServer::handle_known_client`) use this to avoid a second
+    /// lock acquisition that the old `get_crypt_state` + `get_client` pattern required.
+    pub async fn get_sender_voice_info(
+        &self,
+        session: u32,
+    ) -> Option<(Arc<Mutex<CryptState>>, u32, bool, Arc<Mutex<BandwidthRecord>>)> {
+        let sess = self.sessions.read().await;
+        let entry = sess.get(&session)?;
+        let cs = entry.crypt_state.clone()?;
+        Some((cs, entry.info.channel_id, entry.info.suppress, entry.bandwidth.clone()))
+    }
+
+    /// Snapshot all candidates for UDP session identification in a single lock acquisition.
+    ///
+    /// Returns `(session_id, crypt_arc, channel_id, suppress, bw_arc)` for every session that
+    /// has a CryptState but whose `session_id` is NOT in `already_mapped`.  Used by
+    /// `UdpServer::try_identify_and_handle` to replace the prior `get_authenticated_sessions`
+    /// + N×`get_crypt_state` pattern (N+1 lock acquisitions) with a single read.
+    pub async fn get_udp_identification_candidates(
+        &self,
+        already_mapped: &std::collections::HashSet<u32>,
+    ) -> Vec<(u32, Arc<Mutex<CryptState>>, u32, bool, Arc<Mutex<BandwidthRecord>>)> {
+        self.sessions
+            .read()
+            .await
+            .iter()
+            .filter_map(|(&sid, e)| {
+                if already_mapped.contains(&sid) { return None; }
+                e.crypt_state.as_ref().map(|cs| (sid, Arc::clone(cs), e.info.channel_id, e.info.suppress, e.bandwidth.clone()))
+            })
+            .collect()
     }
 
     /// Record a voice frame for the given session, returning `false` if it should
     /// be dropped because it exceeds `max_bytes_per_sec`.
     ///
-    /// The bandwidth record is created with `window_secs` slots on first access.
+    /// The bandwidth Arc is pre-allocated when the session is added, so no write
+    /// lock is ever needed here — only a brief read lock to clone the Arc.
     /// Concurrent callers for *different* sessions acquire independent per-session
     /// Mutexes, so they never block each other.
     pub async fn record_voice_bytes(
@@ -426,28 +648,20 @@ impl ClientManager {
         max_bytes_per_sec: u32,
         window_secs: usize,
     ) -> bool {
-        // Fast path: record already exists — take a read lock, clone the Arc, drop lock.
+        // Brief read lock — clone the bandwidth Arc and release immediately.
         let record_arc = {
-            let records = self.bandwidth_records.read().await;
-            records.get(&session).cloned()
+            let sess = self.sessions.read().await;
+            sess.get(&session).map(|e| e.bandwidth.clone())
         };
-        // Slow path: first voice packet from this session.
         let record_arc = match record_arc {
             Some(arc) => arc,
-            None => self.bandwidth_records
-                .write()
-                .await
-                .entry(session)
-                .or_insert_with(|| Arc::new(Mutex::new(BandwidthRecord::new(window_secs))))
-                .clone(),
+            None => return true, // session gone — let packet through
         };
-        // Global lock is released; operate on the per-session Mutex independently.
+        // Global lock released; operate on the per-session Mutex independently.
         let mut record = match record_arc.lock() {
             Ok(g) => g,
             Err(_) => return true, // poisoned — allow packet through
         };
-        // If `rolling_stats_window` was hot-reloaded to a different size,
-        // recreate the record so it uses the updated window length.
         if record.window_secs() != crate::bandwidth::effective_window(window_secs) {
             *record = BandwidthRecord::new(window_secs);
         }
@@ -457,7 +671,7 @@ impl ClientManager {
     /// Return the bytes-per-second in the most recently completed second for a session.
     /// Returns `0` if no bandwidth data has been recorded.
     pub async fn get_bandwidth_stats(&self, session: u32) -> u32 {
-        let arc = self.bandwidth_records.read().await.get(&session).cloned();
+        let arc = self.sessions.read().await.get(&session).map(|e| e.bandwidth.clone());
         match arc {
             Some(r) => r.lock().map(|g| g.bytes_last_second()).unwrap_or(0),
             None => 0,
@@ -466,8 +680,8 @@ impl ClientManager {
 
     /// Update client state.
     pub async fn set_client_state(&self, session: u32, state: ClientState) {
-        if let Some(client) = self.clients.write().await.get_mut(&session) {
-            client.state = state;
+        if let Some(entry) = self.sessions.write().await.get_mut(&session) {
+            entry.info.state = state;
         }
     }
 
@@ -477,18 +691,20 @@ impl ClientManager {
         encode_message(msg_type, message, &mut buf);
         let data = buf.to_vec();
 
-        let senders = self.senders.read().await;
-        let clients = self.clients.read().await;
-        for (&session, sender) in senders.iter() {
-            if Some(session) == exclude_session {
-                continue;
-            }
-            if let Some(client) = clients.get(&session) {
-                if client.state == ClientState::Ready {
-                    if !sender.send_raw(data.clone()).await {
-                        warn!("Failed to send broadcast to session {}", session);
-                    }
-                }
+        // Snapshot sender handles for Ready clients while holding the read lock,
+        // then release before any async I/O to avoid holding it across N sends.
+        let targets: Vec<(u32, ClientSender)> = {
+            let sess = self.sessions.read().await;
+            sess.iter()
+                .filter(|&(&s, _)| Some(s) != exclude_session)
+                .filter(|(_, e)| e.info.state == ClientState::Ready)
+                .map(|(&s, e)| (s, e.sender.clone()))
+                .collect()
+        };
+
+        for (session, sender) in targets {
+            if !sender.send_raw(data.clone()).await {
+                warn!("Failed to send broadcast to session {}", session);
             }
         }
     }
@@ -505,21 +721,23 @@ impl ClientManager {
         encode_message(msg_type, message, &mut buf);
         let data = buf.to_vec();
 
-        let sessions = self.get_channel_sessions(channel_id).await;
-        let senders = self.senders.read().await;
-        let clients = self.clients.read().await;
-        for session in sessions {
-            if Some(session) == exclude_session {
-                continue;
-            }
-            if let Some(client) = clients.get(&session) {
-                if client.state == ClientState::Ready {
-                    if let Some(sender) = senders.get(&session) {
-                        if !sender.send_raw(data.clone()).await {
-                            warn!("Failed to send channel broadcast to session {}", session);
-                        }
-                    }
-                }
+        let member_ids = self.get_channel_sessions(channel_id).await;
+
+        let targets: Vec<(u32, ClientSender)> = {
+            let sess = self.sessions.read().await;
+            member_ids.iter()
+                .filter(|&&s| Some(s) != exclude_session)
+                .filter_map(|&s| {
+                    sess.get(&s)
+                        .filter(|e| e.info.state == ClientState::Ready)
+                        .map(|e| (s, e.sender.clone()))
+                })
+                .collect()
+        };
+
+        for (session, sender) in targets {
+            if !sender.send_raw(data.clone()).await {
+                warn!("Failed to send channel broadcast to session {}", session);
             }
         }
     }
@@ -528,8 +746,9 @@ impl ClientManager {
     pub async fn send_to<M: Message>(&self, session: u32, msg_type: MessageType, message: &M) -> bool {
         let mut buf = BytesMut::new();
         encode_message(msg_type, message, &mut buf);
-        if let Some(sender) = self.senders.read().await.get(&session) {
-            sender.send_raw(buf.to_vec()).await
+        let sender = self.sessions.read().await.get(&session).map(|e| e.sender.clone());
+        if let Some(s) = sender {
+            s.send_raw(buf.to_vec()).await
         } else {
             false
         }
@@ -557,28 +776,26 @@ impl ClientManager {
     }
 
     /// Count how many local clients are currently in the given channel.
+    /// Uses the `channel_users` index for O(1) lookup.
     pub async fn count_in_channel(&self, channel_id: u32) -> u32 {
-        self.clients
+        self.channel_users
             .read()
             .await
-            .values()
-            .filter(|c| c.channel_id == channel_id)
-            .count() as u32
+            .get(&channel_id)
+            .map(|v| v.len() as u32)
+            .unwrap_or(0)
     }
 
     /// Update the plugin_context for a session.
     pub async fn update_plugin_context(&self, session_id: u32, ctx: Vec<u8>) {
-        let mut clients = self.clients.write().await;
-        if let Some(client) = clients.get_mut(&session_id) {
-            client.plugin_context = ctx;
+        if let Some(entry) = self.sessions.write().await.get_mut(&session_id) {
+            entry.info.plugin_context = ctx;
         }
     }
 
     /// Send a Reject message to all connected clients and close their connections.
     ///
     /// Used when Hub becomes completely unreachable (direct + relay both failed).
-    /// After sending the message, all sender channels are dropped so the writer
-    /// tasks exit and TLS connections are closed from the server side.
     pub async fn close_all_connections(&self, reason: &str) {
         use munode_protocol::mumbleproto;
         let reject = mumbleproto::Reject {
@@ -589,18 +806,18 @@ impl ClientManager {
         encode_message(MessageType::Reject, &reject, &mut buf);
         let data = buf.to_vec();
 
-        let mut senders = self.senders.write().await;
-        for sender in senders.values() {
-            // Best-effort send; ignore errors since we are about to drop the channel anyway.
-            sender.send_raw(data.clone()).await;
+        // Take a write lock once, send to all, then clear senders and close signals.
+        let mut sess = self.sessions.write().await;
+        for entry in sess.values() {
+            entry.sender.send_raw(data.clone()).await;
         }
-        // Dropping all senders causes the per-client writer tasks to receive None from
-        // recv() and exit, which closes the write half of each TLS stream.  The client's
-        // read half will then get EOF, the connection handler task will break out of its
-        // read loop and run the normal cleanup path (remove_client, notify Hub, etc.).
-        senders.clear();
-        // Also trigger all close signals so read loops exit immediately.
-        self.close_signals.write().await.clear();
+        // Drop all senders so writer tasks get None → close write half of TLS.
+        // Also consume close signals so read loops exit immediately.
+        for entry in sess.values_mut() {
+            let _ = entry.close_signal.take();
+        }
+        // Clear the senders by re-inserting nothing; dropping old Arc is equivalent.
+        sess.clear();
     }
 }
 
@@ -737,7 +954,9 @@ mod tests {
     #[tokio::test]
     async fn test_record_voice_bytes_enforces_cap() {
         let mgr = ClientManager::new();
+        let (tx, _rx) = mpsc::channel(16);
         let session = 42u32;
+        mgr.add_client(make_test_client(session, 0), ClientSender::new(tx)).await;
         let cap = 500u32;
         let frame_bytes = 100u32;
 
@@ -768,7 +987,9 @@ mod tests {
     #[tokio::test]
     async fn test_record_voice_bytes_no_cap() {
         let mgr = ClientManager::new();
+        let (tx, _rx) = mpsc::channel(16);
         let session = 99u32;
+        mgr.add_client(make_test_client(session, 0), ClientSender::new(tx)).await;
 
         // cap = 0 means unlimited — all frames should be accepted.
         for _ in 0..10 {
@@ -784,16 +1005,19 @@ mod tests {
         use crate::bandwidth::effective_window;
 
         let mgr = ClientManager::new();
+        let (tx, _rx) = mpsc::channel(16);
         let session = 7u32;
+        mgr.add_client(make_test_client(session, 0), ClientSender::new(tx)).await;
 
         // Seed an initial record with a 60-s window.
         mgr.record_voice_bytes(session, 100, 0, 60).await;
 
         // Verify the record has the expected window before resizing.
         {
-            let records = mgr.bandwidth_records.read().await;
+            let sess = mgr.sessions.read().await;
             assert_eq!(
-                records.get(&session).expect("bandwidth record should exist after recording frames").window_secs(),
+                sess.get(&session).expect("session should exist")
+                    .bandwidth.lock().unwrap().window_secs(),
                 effective_window(60),
                 "initial window should be 60 slots"
             );
@@ -804,9 +1028,10 @@ mod tests {
         mgr.record_voice_bytes(session, 100, 0, 120).await;
 
         {
-            let records = mgr.bandwidth_records.read().await;
+            let sess = mgr.sessions.read().await;
             assert_eq!(
-                records.get(&session).expect("bandwidth record should exist after window resize").window_secs(),
+                sess.get(&session).expect("session should exist after window resize")
+                    .bandwidth.lock().unwrap().window_secs(),
                 effective_window(120),
                 "window should be updated to 120 slots after hot-reload"
             );

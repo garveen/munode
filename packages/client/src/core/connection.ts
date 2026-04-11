@@ -298,11 +298,11 @@ export class ConnectionManager {
    * 发送语音包（自动选择UDP或TCP）
    */
   async sendVoicePacket(packet: Buffer): Promise<void> {
-    console.log(`[ConnectionManager] sendVoicePacket: size=${packet.length}, isUsingTcpVoice=${this.isUsingTcpVoice()}`);
+    // console.log(`[ConnectionManager] sendVoicePacket: size=${packet.length}, isUsingTcpVoice=${this.isUsingTcpVoice()}`);
 
     if (this.isUsingTcpVoice()) {
       // TCP is already TLS-encrypted; no OCB2 encryption needed
-      console.log('[ConnectionManager] Using TCP tunnel for voice (no OCB2)');
+      // console.log('[ConnectionManager] Using TCP tunnel for voice (no OCB2)');
       return this.sendTCPVoicePacket(packet);
     } else {
       // UDP requires OCB2 encryption
@@ -327,10 +327,10 @@ export class ConnectionManager {
    * 通过TCP隧道发送语音包
    */
   async sendTCPVoicePacket(packet: Buffer): Promise<void> {
-    console.log(`[ConnectionManager] sendTCPVoicePacket: wrapping ${packet.length} bytes as UDPTunnel message`);
+    // console.log(`[ConnectionManager] sendTCPVoicePacket: wrapping ${packet.length} bytes as UDPTunnel message`);
     // 使用 UDPTunnel 消息类型 (MessageType = 1)
     const message = this.wrapMessage(MessageType.UDPTunnel, packet);
-    console.log(`[ConnectionManager] sendTCPVoicePacket: sending ${message.length} bytes via TCP`);
+    // console.log(`[ConnectionManager] sendTCPVoicePacket: sending ${message.length} bytes via TCP`);
     return this.sendTCP(message);
   }
 

@@ -15,6 +15,7 @@ use tracing::{debug, info, trace, warn};
 
 use munode_protocol::authservice::{AuthRequest as ExtAuthRequest};
 use munode_protocol::hubedge::*;
+use munode_common::permission;
 
 use crate::channel_store::ChannelRecord;
 use crate::lua_auth::LuaAuthRequest;
@@ -1554,12 +1555,14 @@ impl RpcHandler {
         // Augment with in-memory channel group memberships along the ancestor chain.
         let user_id_u32 = params.actor_user_id;
         let mut effective_groups = groups;
+
+
         {
             let channel_snapshot = self.state.channel_store.get_parent_and_inherit_snapshot().await;
             let chain = build_ancestor_chain(&channel_snapshot, params.channel_id);
             let target_channel_id = params.channel_id;
             for &ancestor_id in &chain {
-                for g in &self.state.acl_manager.get_channel_groups(ancestor_id) {
+                for g in &self.state.acl_manager.get_channel_groups(ancestor_id).await {
                     if !g.inherit && ancestor_id != target_channel_id {
                         continue;
                     }
@@ -1614,11 +1617,13 @@ impl RpcHandler {
         let channel_snapshot = self.state.channel_store.get_parent_and_inherit_snapshot().await;
 
         // [2] Resolve base groups from the session (also one async call).
-        let base_groups: Vec<String> = match self.state.session_manager
+        let mut base_groups: Vec<String> = match self.state.session_manager
             .get_session(params.actor_session).await {
             Some(s) => s.groups.clone(),
             None => Vec::new(),
         };
+
+
 
         // [3] Build every ancestor chain synchronously from the in-memory snapshot.
         //     No lock acquisitions needed beyond step [1].
@@ -1628,7 +1633,7 @@ impl RpcHandler {
             .collect();
 
         // [4] Read channel groups from the in-memory store (single sync lock, replaces batch DB queries).
-        let groups_snapshot = self.state.acl_manager.channel_groups_snapshot();
+        let groups_snapshot = self.state.acl_manager.channel_groups_snapshot().await;
 
         // [5] Compute one entry per requested channel — entirely in-memory.
         let mut entries: Vec<ChannelPermissionEntry> = Vec::with_capacity(params.channel_ids.len());
@@ -1674,6 +1679,7 @@ impl RpcHandler {
                 use munode_common::permission;
                 self.state.acl_manager
                     .get_channel_acls(channel_id)
+                    .await
                     .iter()
                     .any(|a| a.deny & permission::ENTER != 0)
             };
@@ -1971,7 +1977,7 @@ impl RpcHandler {
             let mut acls_proto: Vec<munode_protocol::mumbleproto::acl::ChanAcl> = Vec::new();
 
             for &ancestor_id in &ancestor_chain {
-                let ancestor_acls = self.state.acl_manager.get_channel_acls(ancestor_id);
+                let ancestor_acls = self.state.acl_manager.get_channel_acls(ancestor_id).await;
                 for a in &ancestor_acls {
                     if !a.apply_subs {
                         continue; // only include ACLs that propagate to sub-channels
@@ -1989,7 +1995,7 @@ impl RpcHandler {
             }
 
             // Own ACLs for the target channel (not inherited).
-            let own_acls = self.state.acl_manager.get_channel_acls(channel_id);
+            let own_acls = self.state.acl_manager.get_channel_acls(channel_id).await;
             for a in &own_acls {
                 acls_proto.push(munode_protocol::mumbleproto::acl::ChanAcl {
                     apply_here: Some(a.apply_here),
@@ -2004,7 +2010,7 @@ impl RpcHandler {
 
             // Load channel groups for this channel from the in-memory store.
             let groups_proto: Vec<munode_protocol::mumbleproto::acl::ChanGroup> =
-                self.state.acl_manager.get_channel_groups(channel_id)
+                self.state.acl_manager.get_channel_groups(channel_id).await
                     .iter()
                     .map(|g| munode_protocol::mumbleproto::acl::ChanGroup {
                         name: g.name.clone(),
@@ -2018,12 +2024,18 @@ impl RpcHandler {
                     .collect();
 
             // Encode ACL data as raw bytes (Mumble ACL message format)
+            // Do NOT set query=true in the response: the official Mumble client initialises its
+            // ACLEditor with msg=server_response, then re-uses msg for the save (without
+            // clearing the query field).  If the server encodes query=true in the response, the
+            // protobuf field survives into the save message and the server incorrectly treats
+            // the save as another query — re-sending the ACL and causing the dialog to reopen.
+            // C++ Murmur avoids this with an explicit msg.clear_query() before sending.
             let acl_msg = munode_protocol::mumbleproto::Acl {
                 channel_id,
                 inherit_acls: Some(inherit_acl),
                 groups: groups_proto,
                 acls: acls_proto,
-                query: Some(true),
+                query: None,
             };
 
             let raw = prost::Message::encode_to_vec(&acl_msg);
@@ -2078,6 +2090,38 @@ impl RpcHandler {
                 if let Some(mut ch) = self.state.channel_store.get_channel(params.channel_id).await {
                     ch.inherit_acl = inherit;
                     self.state.channel_store.update_channel(ch).await;
+                }
+            }
+
+            // Self-protection: if the actor lost Write access after applying the new ACLs,
+            // re-insert a Write|Traverse ACL for them so they cannot lock themselves out.
+            // Mirrors Murmur's msgACL post-write check in Messages.cpp.
+            // Super-users are always guaranteed Write regardless of ACL entries, so skip.
+            let actor_user_id = params.actor_user_id as i32;
+            if actor_user_id > 0 {
+                let actor_groups: Vec<String> = match self.state.session_manager
+                    .get_session(params.actor_session).await {
+                    Some(s) => s.groups.clone(),
+                    None => vec![],
+                };
+                let still_has_write = self.state.acl_manager
+                    .has_permission(actor_user_id, params.channel_id, &actor_groups, permission::WRITE)
+                    .await;
+                if !still_has_write {
+                    let mut entries = self.state.acl_manager
+                        .get_channel_acls(params.channel_id).await;
+                    entries.push(crate::acl_manager::AclEntry {
+                        channel_id: params.channel_id,
+                        user_id: Some(actor_user_id),
+                        group_name: None,
+                        apply_here: true,
+                        apply_subs: false,
+                        allow: permission::WRITE | permission::TRAVERSE,
+                        deny: 0,
+                    });
+                    if let Err(e) = self.state.acl_manager.save_acls(params.channel_id, &entries).await {
+                        warn!("Failed to save self-protection ACL for user {}: {}", actor_user_id, e);
+                    }
                 }
             }
 
@@ -2392,6 +2436,34 @@ impl RpcHandler {
         };
         let target_session = p.target_session;
         if target_session == 0 {
+            return;
+        }
+
+        // Permission check: actor must have Kick (or Ban for bans) permission
+        // on the target's current channel.
+        let required_perm = if p.ban { permission::BAN } else { permission::KICK };
+        let (target_channel, actor_groups) = {
+            let target_info = self.state.session_manager.get_session(target_session).await;
+            let actor_info = if p.actor_session != 0 {
+                self.state.session_manager.get_session(p.actor_session).await
+            } else {
+                None
+            };
+            (
+                target_info.map(|s| s.channel_id).unwrap_or(0),
+                actor_info.map(|s| s.groups.clone()).unwrap_or_default(),
+            )
+        };
+        let allowed = self.state.acl_manager
+            .has_permission(p.actor_user_id as i32, target_channel, &actor_groups, required_perm)
+            .await;
+        if !allowed {
+            debug!(
+                "UserRemove denied: actor={} (session={}) → target={}: no {} permission on channel {}",
+                p.actor_username, p.actor_session, target_session,
+                if p.ban { "Ban" } else { "Kick" },
+                target_channel
+            );
             return;
         }
 
@@ -3106,7 +3178,7 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_put.as_ref().context("Missing blob_put params")?;
-        match self.state.blob_store.put(&params.data) {
+        match self.state.blob_store.put_async(params.data.clone()).await {
             Ok(hash) => Ok(self.make_response_packet(request_id, "blob.put", |r| {
                 r.blob_put = Some(BlobPutResult { success: true, hash: Some(hash), error: None });
             })),
@@ -3122,7 +3194,7 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_get.as_ref().context("Missing blob_get params")?;
-        match self.state.blob_store.get(&params.hash) {
+        match self.state.blob_store.get_async(params.hash.clone()).await {
             Ok(Some(data)) => Ok(self.make_response_packet(request_id, "blob.get", |r| {
                 r.blob_get = Some(BlobGetResult { success: true, data: Some(data), error: None });
             })),
@@ -3144,7 +3216,7 @@ impl RpcHandler {
         let hash_opt = self.state.user_store.get_blob_hash(params.user_id, "texture").await?;
         match hash_opt {
             Some(hash) => {
-                match self.state.blob_store.get(&hash) {
+                match self.state.blob_store.get_async(hash.clone()).await {
                     Ok(Some(data)) => Ok(self.make_response_packet(request_id, "blob.getUserTexture", |r| {
                         r.blob_get_user_texture = Some(BlobGetUserTextureResult {
                             success: true, data: Some(data), hash: Some(hash.clone()), error: None,
@@ -3179,7 +3251,7 @@ impl RpcHandler {
         let hash_opt = self.state.user_store.get_blob_hash(params.user_id, "comment").await?;
         match hash_opt {
             Some(hash) => {
-                match self.state.blob_store.get(&hash) {
+                match self.state.blob_store.get_async(hash.clone()).await {
                     Ok(Some(data)) => Ok(self.make_response_packet(request_id, "blob.getUserComment", |r| {
                         r.blob_get_user_comment = Some(BlobGetUserCommentResult {
                             success: true, data: Some(data), hash: Some(hash.clone()), error: None,
@@ -3211,7 +3283,7 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_set_user_texture.as_ref().context("Missing blob_set_user_texture params")?;
-        match self.state.blob_store.put(&params.data) {
+        match self.state.blob_store.put_async(params.data.clone()).await {
             Ok(hash) => {
                 match self.state.user_store.set_blob_hash(params.user_id, "texture", &hash).await {
                     Ok(()) => Ok(self.make_response_packet(request_id, "blob.setUserTexture", |r| {
@@ -3240,7 +3312,7 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_set_user_comment.as_ref().context("Missing blob_set_user_comment params")?;
-        match self.state.blob_store.put(&params.data) {
+        match self.state.blob_store.put_async(params.data.clone()).await {
             Ok(hash) => {
                 match self.state.user_store.set_blob_hash(params.user_id, "comment", &hash).await {
                     Ok(()) => Ok(self.make_response_packet(request_id, "blob.setUserComment", |r| {

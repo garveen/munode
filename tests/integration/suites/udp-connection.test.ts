@@ -19,7 +19,7 @@ import * as crypto from 'crypto';
 let testEnv: TestEnvironment;
 
 beforeAll(async () => {
-  testEnv = await setupTestEnvironment();
+  testEnv = await setupTestEnvironment(9200);
 }, 60000);
 
 afterAll(async () => {

@@ -412,9 +412,9 @@ impl UdpServer {
     async fn ping_server_info(&self) -> (usize, usize, u32) {
         let local = self.edge_state.client_manager.client_count().await;
         let remote = self.edge_state.channel_manager.get_all_remote_users().await.len();
-        let hub_limits = self.edge_state.hub_limits.read().await;
-        let max_users = hub_limits.as_ref().and_then(|l| l.max_users).unwrap_or(0) as usize;
-        let bandwidth = hub_limits.as_ref().and_then(|l| l.max_bandwidth).unwrap_or(0);
+        // max_users and max_bandwidth are mirrored as AtomicU32 (lock-free reads).
+        let max_users = self.edge_state.max_users.load(std::sync::atomic::Ordering::Relaxed) as usize;
+        let bandwidth = self.edge_state.max_bandwidth_bps.load(std::sync::atomic::Ordering::Relaxed);
         (local + remote, max_users, bandwidth)
     }
 
@@ -444,17 +444,27 @@ impl UdpServer {
     }
 
     /// Handle a packet from an already-identified client.
+    ///
+    /// Gets the CryptState, sender channel, and suppress flag in a **single**
+    /// `sessions.read()` acquisition and drops the lock immediately before
+    /// calling `decrypt`, reducing the hot-path lock count by one compared to
+    /// the former separate `get_crypt_state` + `get_client` calls.
     async fn handle_known_client(&self, data: &[u8], session_id: u32) {
         debug!("handle_known_client: session={} len={}", session_id, data.len());
+
+        // One sessions.read() to get all needed sender info including bandwidth.
+        let (crypt_arc, sender_channel, suppress, bw_arc) = match self.edge_state.client_manager
+            .get_sender_voice_info(session_id).await
+        {
+            Some(info) => info,
+            None => {
+                debug!("No session/CryptState for {} — UDP packet dropped", session_id);
+                return;
+            }
+        };
+
         let plaintext = {
-            let cs_arc = match self.edge_state.client_manager.get_crypt_state(session_id).await {
-                Some(a) => a,
-                None => {
-                    debug!("No CryptState for session {} — UDP packet dropped", session_id);
-                    return;
-                }
-            };
-            let mut cs = match cs_arc.lock() {
+            let mut cs = match crypt_arc.lock() {
                 Ok(cs) => cs,
                 Err(e) => {
                     warn!("CryptState mutex poisoned for session {} — packet dropped: {}", session_id, e);
@@ -480,30 +490,33 @@ impl UdpServer {
                 self.send_encrypted(session_id, &plaintext).await;
             }
         } else {
-            // Voice: route to channel members
-            self.route_voice(session_id, &plaintext).await;
+            // Voice: pass pre-fetched sender info to avoid a second sessions.read().
+            self.route_voice(session_id, &plaintext, sender_channel, suppress, bw_arc).await;
         }
     }
 
     /// Attempt to identify an unknown UDP source by trying decryption with
     /// all TCP-authenticated sessions that don't yet have a UDP address.
+    ///
+    /// Snapshots (session_id, crypt_arc, channel_id, suppress) in a **single**
+    /// `sessions.read()` instead of the prior `get_authenticated_sessions` +
+    /// N×`get_crypt_state` pattern (N+1 lock acquisitions → 1).
     async fn try_identify_and_handle(&self, data: &[u8], peer_addr: SocketAddr) {
         if data.len() < 4 {
             return;
         }
 
-        let authenticated = self.edge_state.client_manager.get_authenticated_sessions().await;
-        let already_mapped: Vec<u32> = self.session_to_addr.read().await.keys().copied().collect();
+        // Build the set of already-mapped sessions for quick exclusion.
+        let already_mapped: std::collections::HashSet<u32> = {
+            self.session_to_addr.read().await.keys().copied().collect()
+        };
 
-        for session_id in authenticated {
-            if already_mapped.contains(&session_id) {
-                continue;
-            }
-            let cs_arc = match self.edge_state.client_manager.get_crypt_state(session_id).await {
-                Some(a) => a,
-                None => continue,
-            };
+        // Single lock: get all session candidates for identification.
+        let candidates = self.edge_state.client_manager
+            .get_udp_identification_candidates(&already_mapped)
+            .await;
 
+        for (session_id, cs_arc, sender_channel, suppress, bw_arc) in candidates {
             let mut plain = Vec::new();
             let identified = {
                 let mut cs = match cs_arc.lock() {
@@ -529,7 +542,7 @@ impl UdpServer {
                         self.send_encrypted(session_id, &plain).await;
                     }
                 } else {
-                    self.route_voice(session_id, &plain).await;
+                    self.route_voice(session_id, &plain, sender_channel, suppress, bw_arc).await;
                 }
                 return;
             }
@@ -541,40 +554,35 @@ impl UdpServer {
 
     /// Route decrypted voice to channel members, encrypting per-recipient.
     /// Also relays to remote users (on other edges) via Hub TCP.
-    async fn route_voice(&self, sender_session: u32, plaintext: &[u8]) {
-        let sender_client = match self.edge_state.client_manager.get_client(sender_session).await {
-            Some(c) => c,
-            None => {
-                debug!("route_voice: sender session {} not found in clients", sender_session);
-                return;
-            }
-        };
-        let sender_channel = sender_client.channel_id;
+    ///
+    /// `sender_channel`, `suppress`, and `bw_arc` are pre-fetched by the caller (from the same
+    /// `sessions.read()` used for decrypt) to avoid a second lock acquisition here.
+    async fn route_voice(&self, sender_session: u32, plaintext: &[u8], sender_channel: u32, suppress: bool, bw_arc: Arc<std::sync::Mutex<crate::bandwidth::BandwidthRecord>>) {
         debug!("route_voice: session={} channel={}", sender_session, sender_channel);
 
-        // Record voice bandwidth for this sender session.
-        // Use rolling_stats_window from EdgeState for the window size.
-        // Clamp to MAX_WINDOW_SLOTS (3600) to prevent excessive memory allocation.
-        // 0 is passed through as-is; BandwidthRecord::new(0) uses DEFAULT_WINDOW_SLOTS (360).
+        // Record voice bandwidth for this sender session — uses pre-fetched Arc, no sessions.read().
         let window_secs = (self.edge_state.rolling_stats_window.load(std::sync::atomic::Ordering::Relaxed) as usize)
             .min(crate::bandwidth::MAX_WINDOW_SLOTS);
-        // max_bandwidth_bps is mirrored as an AtomicU32 (lock-free read).
-        // 0 means unlimited; convert bps → bytes_per_second for the budget check.
         {
             let max_bps = self.edge_state.max_bandwidth_bps.load(std::sync::atomic::Ordering::Relaxed);
             let max_bytes = if max_bps > 0 { max_bps / 8 } else { 0 };
-            let within_budget = self.edge_state.client_manager
-                .record_voice_bytes(sender_session, plaintext.len() as u32, max_bytes, window_secs)
-                .await;
+            let within_budget = match bw_arc.lock() {
+                Ok(mut record) => {
+                    if record.window_secs() != crate::bandwidth::effective_window(window_secs) {
+                        *record = crate::bandwidth::BandwidthRecord::new(window_secs);
+                    }
+                    record.add_frame(plaintext.len() as u32, max_bytes)
+                }
+                Err(_) => true, // poisoned — allow packet through
+            };
             if !within_budget {
-                // Drop the packet — sender exceeded their per-second bandwidth cap.
                 return;
             }
         }
 
         // Block suppressed users from speaking
         let voice_target = if !plaintext.is_empty() { (plaintext[0] & 0x1F) as u32 } else { 0 };
-        if sender_client.suppress && voice_target != 31 {
+        if suppress && voice_target != 31 {
             return;
         }
 
@@ -719,22 +727,28 @@ impl UdpServer {
 
             // Select best candidate not over failure threshold.
             let decision = if let Some(candidates) = route_snapshot.get(&target_edge_id) {
-                let failures = self.edge_state.next_hop_failures.read().await;
-                let mut chosen = None;
-                for candidate in candidates {
-                    let next_hop_id = match &candidate.decision {
-                        RouteDecision::DirectUdp => Some(target_edge_id),
-                        RouteDecision::RelayChain { hops, .. } => hops.first().copied(),
-                        _ => None,
-                    };
-                    let fail_count = next_hop_id
-                        .and_then(|id| failures.get(&id).copied())
-                        .unwrap_or(0);
-                    if threshold == 0 || fail_count < threshold {
-                        chosen = Some(candidate.decision.clone());
-                        break;
+                // Sync read lock — no await, releases immediately after the selection loop.
+                let chosen = if let Ok(failures) = self.edge_state.next_hop_failures.read() {
+                    let mut chosen = None;
+                    for candidate in candidates {
+                        let next_hop_id = match &candidate.decision {
+                            RouteDecision::DirectUdp => Some(target_edge_id),
+                            RouteDecision::RelayChain { hops, .. } => hops.first().copied(),
+                            _ => None,
+                        };
+                        let fail_count = next_hop_id
+                            .and_then(|id| failures.get(&id)
+                                .map(|a| a.load(std::sync::atomic::Ordering::Relaxed)))
+                            .unwrap_or(0);
+                        if threshold == 0 || fail_count < threshold {
+                            chosen = Some(candidate.decision.clone());
+                            break;
+                        }
                     }
-                }
+                    chosen
+                } else {
+                    None // poisoned — treat as no preference
+                };
                 // Fall back to first candidate even if over threshold (better than silence)
                 chosen.or_else(|| candidates.first().map(|c| c.decision.clone()))
             } else {
@@ -763,18 +777,12 @@ impl UdpServer {
                         };
                         if let Err(e) = self.edge_socket.send_to(&pkt, peer_addr).await {
                             warn!("Direct UDP to edge {} failed: {}; trying Hub TCP", target_edge_id, e);
-                            {
-                                let mut failures = self.edge_state.next_hop_failures.write().await;
-                                *failures.entry(target_edge_id).or_insert(0) += 1;
-                            }
+                            increment_hop_failure(&self.edge_state.next_hop_failures, target_edge_id);
                             if self.edge_state.enable_hub_tcp_fallback {
                                 self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
                             }
                         } else {
-                            if threshold > 0 {
-                                let mut failures = self.edge_state.next_hop_failures.write().await;
-                                failures.insert(target_edge_id, 0);
-                            }
+                            reset_hop_failure(&self.edge_state.next_hop_failures, target_edge_id, threshold);
                         }
                     } else if self.edge_state.enable_hub_tcp_fallback {
                         self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
@@ -808,18 +816,12 @@ impl UdpServer {
                         if let Err(e) = self.edge_socket.send_to(&pkt, relay_addr).await {
                             warn!("Relay via edge {} to {} failed: {}; Hub TCP fallback",
                                 first_hop, target_edge_id, e);
-                            {
-                                let mut failures = self.edge_state.next_hop_failures.write().await;
-                                *failures.entry(first_hop).or_insert(0) += 1;
-                            }
+                            increment_hop_failure(&self.edge_state.next_hop_failures, first_hop);
                             if self.edge_state.enable_hub_tcp_fallback {
                                 self.hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
                             }
                         } else {
-                            if threshold > 0 {
-                                let mut failures = self.edge_state.next_hop_failures.write().await;
-                                failures.insert(first_hop, 0);
-                            }
+                            reset_hop_failure(&self.edge_state.next_hop_failures, first_hop, threshold);
                             debug!("Voice relayed via edge {} → {}", first_hop, target_edge_id);
                         }
                     } else if self.edge_state.enable_hub_tcp_fallback {
@@ -880,18 +882,20 @@ impl UdpServer {
 
     /// Send encrypted data to a specific session's UDP address.
     async fn send_encrypted(&self, session_id: u32, plaintext: &[u8]) {
-        if let Some(addr) = self.session_to_addr.read().await.get(&session_id).copied() {
-            if let Some(cs_arc) = self.edge_state.client_manager.get_crypt_state(session_id).await {
-                let mut encrypted = Vec::new();
-                match cs_arc.lock() {
-                    Ok(mut cs) => { cs.encrypt(plaintext, &mut encrypted); }
-                    Err(e) => {
-                        warn!("CryptState mutex poisoned for session {} — packet dropped: {}", session_id, e);
-                        return;
-                    }
+        let addr = match self.session_to_addr.read().await.get(&session_id).copied() {
+            Some(a) => a,
+            None => return,
+        };
+        if let Some(cs_arc) = self.edge_state.client_manager.get_crypt_state(session_id).await {
+            let mut encrypted = Vec::new();
+            match cs_arc.lock() {
+                Ok(mut cs) => { cs.encrypt(plaintext, &mut encrypted); }
+                Err(e) => {
+                    warn!("CryptState mutex poisoned for session {} — packet dropped: {}", session_id, e);
+                    return;
                 }
-                let _ = self.socket.send_to(&encrypted, addr).await;
             }
+            let _ = self.socket.send_to(&encrypted, addr).await;
         }
     }
 
@@ -1226,11 +1230,10 @@ impl UdpServer {
             let now_ms = probe_current_millis();
             let sender_edge_id = {
                 let reg = self.edge_state.peer_registry.read().await;
-                reg.all_udp_peers().into_iter().find(|(_, addr)| *addr == from_addr).map(|(id, _)| id)
+                reg.find_by_addr(from_addr)
             };
             if let Some(edge_id) = sender_edge_id {
-                let mut pq = self.peer_quality.lock().await;
-                let entry = pq.entry(edge_id).or_default();
+                let mut pq = self.peer_quality.lock().await;                let entry = pq.entry(edge_id).or_default();
                 if let Some(sent) = entry.pending_pings.remove(&seq) {
                     let rtt = (now_ms.saturating_sub(sent)) as f32;
                     entry.rtt_samples.push_back(rtt);
@@ -1241,10 +1244,11 @@ impl UdpServer {
                 }
                 drop(pq);
                 // Successful pong resets consecutive failure counter for this peer
-                if self.edge_state.consecutive_failure_threshold > 0 {
-                    let mut failures = self.edge_state.next_hop_failures.write().await;
-                    failures.insert(edge_id, 0);
-                }
+                reset_hop_failure(
+                    &self.edge_state.next_hop_failures,
+                    edge_id,
+                    self.edge_state.consecutive_failure_threshold,
+                );
             }
         }
     }
@@ -1371,6 +1375,51 @@ fn build_udp_tunnel_packet(data: &[u8]) -> Vec<u8> {
     buf.to_vec()
 }
 
+/// Atomically increment the consecutive failure counter for `edge_id`.
+///
+/// Uses a read lock for the common case (key already present) and falls back to
+/// a write lock only if the edge ID has never been seen before.  Both operations
+/// are synchronous (std::sync::RwLock, no await), so they can be called from the
+/// voice hot path without blocking the tokio scheduler.
+fn increment_hop_failure(
+    failures: &std::sync::RwLock<std::collections::HashMap<u32, std::sync::atomic::AtomicU32>>,
+    edge_id: u32,
+) {
+    use std::sync::atomic::Ordering;
+    // Fast path: key exists — just increment.
+    {
+        if let Ok(map) = failures.read() {
+            if let Some(counter) = map.get(&edge_id) {
+                counter.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+    }
+    // Slow path: first time we try to reach this edge.  Insert atomically.
+    if let Ok(mut map) = failures.write() {
+        map.entry(edge_id)
+            .or_insert_with(|| std::sync::atomic::AtomicU32::new(0))
+            .fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Atomically reset the consecutive failure counter for `edge_id` to 0.
+///
+/// Silently no-ops when `threshold == 0` (failure tracking disabled) or when the
+/// edge ID is not in the map — neither case warrants inserting a zero entry.
+fn reset_hop_failure(
+    failures: &std::sync::RwLock<std::collections::HashMap<u32, std::sync::atomic::AtomicU32>>,
+    edge_id: u32,
+    threshold: u32,
+) {
+    if threshold == 0 { return; }
+    if let Ok(map) = failures.read() {
+        if let Some(counter) = map.get(&edge_id) {
+            counter.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
 /// Current time in milliseconds (for probe RTT measurement).
 fn probe_current_millis() -> u64 {
     std::time::SystemTime::now()
@@ -1447,15 +1496,15 @@ pub async fn test_route_to_edge(
 
     match edge_socket.send_to(&pkt, target_addr).await {
         Ok(_) => {
-            if edge_state.consecutive_failure_threshold > 0 {
-                let mut failures = edge_state.next_hop_failures.write().await;
-                failures.insert(target_edge_id, 0);
-            }
+            reset_hop_failure(
+                &edge_state.next_hop_failures,
+                target_edge_id,
+                edge_state.consecutive_failure_threshold,
+            );
             true
         }
         Err(_) => {
-            let mut failures = edge_state.next_hop_failures.write().await;
-            *failures.entry(target_edge_id).or_insert(0) += 1;
+            increment_hop_failure(&edge_state.next_hop_failures, target_edge_id);
             false
         }
     }

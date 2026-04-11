@@ -1472,6 +1472,32 @@ async fn handle_client_connection(
                     let uid = client_info.as_ref().map(|c| c.user_id).unwrap_or(0);
                     let uname = client_info.as_ref().map(|c| c.username.clone()).unwrap_or_default();
                     let ch_id = acl_msg.channel_id;
+
+                    // Permission gate: actor must have Write on the target channel OR on the root
+                    // channel (mirrors Murmur's msgACL check — root-Write lets admins manage every
+                    // channel even if a sub-channel creator denied them Write there).
+                    let has_ch_write = match hub_client.handle_permission_query(sid, ch_id).await {
+                        Ok(r) => r.permissions.map(|p| p & perm::WRITE != 0).unwrap_or(false),
+                        Err(_) => false,
+                    };
+                    let has_write = if has_ch_write {
+                        true
+                    } else {
+                        match hub_client.handle_permission_query(sid, 0).await {
+                            Ok(r) => r.permissions.map(|p| p & perm::WRITE != 0).unwrap_or(false),
+                            Err(_) => false,
+                        }
+                    };
+                    if !has_write {
+                        let pq = mumbleproto::PermissionDenied {
+                            r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                            channel_id: Some(ch_id),
+                            ..Default::default()
+                        };
+                        client_sender.send_message(MessageType::PermissionDenied, &pq).await;
+                        continue;
+                    }
+
                     tokio::spawn(async move {
                         if let Some(raw_data) = hub.rpc_handle_acl(sid, uid, &uname, ch_id, is_query, &raw).await {
                             if let Ok(acl_resp) = mumbleproto::Acl::decode(raw_data.as_slice()) {
@@ -1735,9 +1761,10 @@ async fn handle_user_state_update(
                     Err(_) => true, // Fail open if Hub unreachable
                 };
                 if can_enter {
-                    // Check channel user limit (max_users from channel config, or global per-channel limit)
-                    let channel_full = if let Some(ch) = edge_state.channel_manager.get_channel(target_channel_id).await {
-                        let effective_limit = if ch.max_users > 0 {
+                    // Compute the effective user limit for the target channel before
+                    // any locks are held, so we only need to pass it to the atomic move.
+                    let effective_limit = if let Some(ch) = edge_state.channel_manager.get_channel(target_channel_id).await {
+                        if ch.max_users > 0 {
                             ch.max_users
                         } else {
                             let hub_limits = edge_state.hub_limits.read().await;
@@ -1748,52 +1775,50 @@ async fn handle_user_state_update(
                                     None
                                 }
                             }).unwrap_or(0)
-                        };
-                        if effective_limit > 0 {
-                            let user_count = edge_state.client_manager.count_in_channel(target_channel_id).await;
-                            user_count >= effective_limit
-                        } else {
-                            false
                         }
                     } else {
-                        false
+                        0
                     };
-                    if channel_full {
-                        debug!("Channel {} is full, denying move for session {}", target_channel_id, session_id);
-                        if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
-                            let pq = mumbleproto::PermissionDenied {
-                                r#type: Some(mumbleproto::permission_denied::DenyType::ChannelFull as i32),
-                                channel_id: Some(target_channel_id),
-                                reason: Some("Channel is full".to_string()),
-                                ..Default::default()
-                            };
-                            sender.send_message(MessageType::PermissionDenied, &pq).await;
-                        }
-                        return;
-                    }
-                    debug!("User {} moving to channel {}", session_id, target_channel_id);
-                    let saved_crypt = edge_state.client_manager.get_crypt_state(session_id).await;
-                    let sender = edge_state.client_manager.get_sender(session_id).await;
-                    edge_state.client_manager.remove_client(session_id).await;
-                    client.channel_id = target_channel_id;
-                    // Check Speak permission; suppress the user if they can't speak in the new channel
+
+                    // Check Speak permission before the atomic move so we know the
+                    // suppress flag to set without holding any internal locks.
                     let can_speak = match hub_client.handle_permission_query(session_id, target_channel_id).await {
                         Ok(r) => r.permissions.map(|p| p & perm::SPEAK != 0).unwrap_or(true),
                         Err(_) => true,
                     };
                     let new_suppress = !can_speak;
-                    suppress_changed = new_suppress != client.suppress;
-                    client.suppress = new_suppress;
-                    if let Some(sender) = sender {
-                        edge_state.client_manager.add_client(client.clone(), sender).await;
+
+                    debug!("User {} moving to channel {}", session_id, target_channel_id);
+
+                    // Atomically check capacity and update channel membership.
+                    // This replaces the previous non-atomic count_in_channel + move_client_to_channel
+                    // pattern, which was susceptible to a TOCTOU race where multiple concurrent tasks
+                    // could all observe "channel not full" and all complete the move, exceeding the limit.
+                    match edge_state.client_manager.move_client_to_channel_checked(
+                        session_id, target_channel_id, new_suppress, effective_limit,
+                    ).await {
+                        Ok(()) => {
+                            suppress_changed = new_suppress != client.suppress;
+                            client.channel_id = target_channel_id;
+                            client.suppress = new_suppress;
+                            needs_broadcast = true;
+                            channel_moved = true;
+                        }
+                        Err(()) => {
+                            // Atomic capacity check failed: channel is full.
+                            debug!("Channel {} is full, denying move for session {}", target_channel_id, session_id);
+                            if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                                let pq = mumbleproto::PermissionDenied {
+                                    r#type: Some(mumbleproto::permission_denied::DenyType::ChannelFull as i32),
+                                    channel_id: Some(target_channel_id),
+                                    reason: Some("Channel is full".to_string()),
+                                    ..Default::default()
+                                };
+                                sender.send_message(MessageType::PermissionDenied, &pq).await;
+                            }
+                            return;
+                        }
                     }
-                    // Preserve the UDP CryptState across the channel move so voice
-                    // continues to work after the user returns to any channel.
-                    if let Some(cs_arc) = saved_crypt {
-                        edge_state.client_manager.restore_crypt_state(session_id, cs_arc).await;
-                    }
-                    needs_broadcast = true;
-                    channel_moved = true;
                 } else {
                     debug!("Channel move denied for session {} → channel {} (no Enter permission)", session_id, target_channel_id);
                     // Send permission denied back to client
@@ -1853,7 +1878,9 @@ async fn handle_user_state_update(
         let mut actually_added_channels: Vec<u32> = Vec::new();
         if !user_state.listening_channel_add.is_empty() || !user_state.listening_channel_remove.is_empty() {
             for &ch in &user_state.listening_channel_add {
-                // Check per-user listener limit
+                // Check per-user listener limit using the local clone's length;
+                // add_listener_checked keeps sessions in sync so the length is accurate
+                // even for channels added earlier in this same loop.
                 let per_user_limit = edge_state.listeners_per_user;
                 if per_user_limit > 0 && client.listening_channels.len() as u32 >= per_user_limit {
                     debug!("Listener limit ({}) reached for session {}", per_user_limit, session_id);
@@ -1872,31 +1899,7 @@ async fn handle_user_state_update(
                     continue;
                 }
 
-                // Check per-channel listener limit
-                let per_channel_limit = edge_state.listeners_per_channel;
-                if per_channel_limit > 0 {
-                    let listener_count = edge_state.client_manager
-                        .get_listening_count(ch)
-                        .await;
-                    if listener_count >= per_channel_limit {
-                        debug!("Channel {} listener limit ({}) reached", ch, per_channel_limit);
-                        if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
-                            let pq = mumbleproto::PermissionDenied {
-                                r#type: Some(mumbleproto::permission_denied::DenyType::ChannelFull as i32),
-                                channel_id: Some(ch),
-                                reason: Some(format!(
-                                    "Channel listener limit reached: this channel allows at most {} listener(s)",
-                                    per_channel_limit
-                                )),
-                                ..Default::default()
-                            };
-                            sender.send_message(MessageType::PermissionDenied, &pq).await;
-                        }
-                        continue;
-                    }
-                }
-
-                // Check Listen permission (0x800) before adding
+                // Check Listen permission (0x800) before the atomic add.
                 let can_listen = match hub_client.handle_permission_query(session_id, ch).await {
                     Ok(r) => r.permissions.map(|p| p & perm::LISTEN != 0).unwrap_or(true),
                     Err(_) => true,
@@ -1913,9 +1916,37 @@ async fn handle_user_state_update(
                     }
                     continue;
                 }
-                if !client.listening_channels.contains(&ch) {
-                    client.listening_channels.push(ch);
+
+                // Atomically check per-channel capacity and register the listener.
+                // This replaces the previous non-atomic get_listening_count + deferred
+                // update_client pattern, eliminating the TOCTOU race where multiple tasks
+                // could both observe "channel has room" and both complete the add.
+                let per_channel_limit = edge_state.listeners_per_channel;
+                let added = edge_state.client_manager
+                    .add_listener_checked(session_id, ch, per_channel_limit)
+                    .await;
+
+                if added {
+                    // Keep the local client clone in sync so the per-user limit check
+                    // above remains accurate for subsequent channels in this loop.
+                    if !client.listening_channels.contains(&ch) {
+                        client.listening_channels.push(ch);
+                    }
                     actually_added_channels.push(ch);
+                } else {
+                    debug!("Channel {} listener limit ({}) reached", ch, per_channel_limit);
+                    if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                        let pq = mumbleproto::PermissionDenied {
+                            r#type: Some(mumbleproto::permission_denied::DenyType::ChannelFull as i32),
+                            channel_id: Some(ch),
+                            reason: Some(format!(
+                                "Channel listener limit reached: this channel allows at most {} listener(s)",
+                                per_channel_limit
+                            )),
+                            ..Default::default()
+                        };
+                        sender.send_message(MessageType::PermissionDenied, &pq).await;
+                    }
                 }
             }
             client.listening_channels.retain(|ch| !user_state.listening_channel_remove.contains(ch));
@@ -2132,10 +2163,46 @@ async fn handle_admin_user_state_update(
         let mut suppress_changed = false;
         if let Some(target_channel_id) = user_state.channel_id {
             if client.channel_id != target_channel_id {
-                let saved_crypt = edge_state.client_manager.get_crypt_state(target_session).await;
-                let sender = edge_state.client_manager.get_sender(target_session).await;
-                edge_state.client_manager.remove_client(target_session).await;
-                client.channel_id = target_channel_id;
+                // Check 1: actor needs Move permission in the victim's current channel
+                // (mirrors Murmur: "!hasPermission(uSource, pDstServerUser->cChannel, ChanACL::Move)").
+                let actor_can_move_out = match hub_client.handle_permission_query(actor_session, client.channel_id).await {
+                    Ok(r) => r.permissions.map(|p| p & perm::MOVE != 0).unwrap_or(false),
+                    Err(_) => false,
+                };
+                if !actor_can_move_out {
+                    if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                        let pq = mumbleproto::PermissionDenied {
+                            r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                            channel_id: Some(client.channel_id),
+                            ..Default::default()
+                        };
+                        sender.send_message(MessageType::PermissionDenied, &pq).await;
+                    }
+                    return;
+                }
+
+                // Check 2: actor has Move in the target channel OR victim has Enter there
+                // (mirrors Murmur: "!hasPermission(uSource, c, Move) && !hasPermission(pDst, c, Enter)").
+                let actor_can_move_in = match hub_client.handle_permission_query(actor_session, target_channel_id).await {
+                    Ok(r) => r.permissions.map(|p| p & perm::MOVE != 0).unwrap_or(false),
+                    Err(_) => false,
+                };
+                let victim_can_enter = match hub_client.handle_permission_query(target_session, target_channel_id).await {
+                    Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(false),
+                    Err(_) => false,
+                };
+                if !actor_can_move_in && !victim_can_enter {
+                    if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                        let pq = mumbleproto::PermissionDenied {
+                            r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                            channel_id: Some(target_channel_id),
+                            ..Default::default()
+                        };
+                        sender.send_message(MessageType::PermissionDenied, &pq).await;
+                    }
+                    return;
+                }
+
                 // Re-check suppress for the new channel
                 let can_speak = match hub_client.handle_permission_query(target_session, target_channel_id).await {
                     Ok(r) => r.permissions.map(|p| p & perm::SPEAK != 0).unwrap_or(true),
@@ -2143,14 +2210,11 @@ async fn handle_admin_user_state_update(
                 };
                 let new_suppress = !can_speak;
                 suppress_changed = new_suppress != client.suppress;
+                client.channel_id = target_channel_id;
                 client.suppress = new_suppress;
-                if let Some(sender) = sender {
-                    edge_state.client_manager.add_client(client.clone(), sender).await;
-                }
-                // Preserve the UDP CryptState across the admin-initiated channel move.
-                if let Some(cs_arc) = saved_crypt {
-                    edge_state.client_manager.restore_crypt_state(target_session, cs_arc).await;
-                }
+                // Move in-place: preserves close-signal, crypt-state, and bandwidth record
+                // so the TCP read loop is not interrupted by the admin-initiated move.
+                edge_state.client_manager.move_client_to_channel(target_session, target_channel_id, new_suppress).await;
                 needs_broadcast = true;
                 channel_moved = true;
             }
@@ -2191,6 +2255,57 @@ async fn handle_admin_user_state_update(
                     vec![],
                 ).await;
             }
+        }
+    } else if let Some(target_channel_id) = user_state.channel_id {
+        // Target user is not on this edge — check if it is a known remote user and
+        // forward the admin move to Hub so the owner edge can apply it.
+        let remote_user = edge_state.channel_manager.get_remote_user(target_session).await;
+        if let Some(remote) = remote_user {
+            if remote.channel_id == target_channel_id {
+                return; // already in target channel, nothing to do
+            }
+
+            // Permission check 1: actor must have Move in victim's current channel.
+            let actor_can_move_out = match hub_client.handle_permission_query(actor_session, remote.channel_id).await {
+                Ok(r) => r.permissions.map(|p| p & perm::MOVE != 0).unwrap_or(false),
+                Err(_) => false,
+            };
+            if !actor_can_move_out {
+                if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                        channel_id: Some(remote.channel_id),
+                        ..Default::default()
+                    };
+                    sender.send_message(MessageType::PermissionDenied, &pq).await;
+                }
+                return;
+            }
+
+            // Permission check 2: actor has Move in target OR victim has Enter there.
+            let actor_can_move_in = match hub_client.handle_permission_query(actor_session, target_channel_id).await {
+                Ok(r) => r.permissions.map(|p| p & perm::MOVE != 0).unwrap_or(false),
+                Err(_) => false,
+            };
+            let victim_can_enter = match hub_client.handle_permission_query(target_session, target_channel_id).await {
+                Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(false),
+                Err(_) => false,
+            };
+            if !actor_can_move_in && !victim_can_enter {
+                if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                        channel_id: Some(target_channel_id),
+                        ..Default::default()
+                    };
+                    sender.send_message(MessageType::PermissionDenied, &pq).await;
+                }
+                return;
+            }
+
+            // Permissions OK: forward to Hub. Hub updates session state and broadcasts
+            // hub.userMoved to all edges; the owner edge will apply the actual move.
+            hub_client.notify_user_moved(target_session, target_channel_id, actor_session).await;
         }
     }
 }
@@ -2380,6 +2495,7 @@ mod tests {
                 external_host: "127.0.0.1".to_string(),
                 external_port: None,
                 region: None,
+                proxy_protocol: false,
             },
             tls: TlsConfig {
                 cert: "test.pem".to_string(),
@@ -2812,6 +2928,94 @@ mod tests {
         assert_eq!(msg.self_mute, Some(false), "un-mute delta must carry Some(false)");
         // Other fields still absent.
         assert_eq!(msg.recording, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: admin channel-move is DENIED when Hub is unreachable.
+    //
+    // When the Hub cannot be reached, all permission queries fail with Err,
+    // which our code maps to `false` (fail-closed).  The two Move/Enter checks
+    // therefore both return false → PermissionDenied is sent to the actor and
+    // the victim stays in its original channel.
+    //
+    // This test verifies the denial path of the two-step Move permission check
+    // added to mirror Murmur's msgUserState behaviour:
+    //   1. actor needs Move in victim's current channel   (check 1)
+    //   2. actor needs Move OR victim needs Enter in target (check 2)
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_admin_move_denied_when_hub_unreachable() {
+        let (es, hub) = test_edge_and_hub(); // HubClient has no real connection
+
+        let (tx_admin, mut rx_admin) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_victim, _rx_victim) = mpsc::channel::<Vec<u8>>(16);
+
+        // Admin in channel 0, victim starts in channel 0.
+        es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_admin)).await;
+        es.client_manager.add_client(ready_client(2, 0), ClientSender::new(tx_victim)).await;
+
+        // Admin tries to drag victim to channel 1.
+        let us = mumbleproto::UserState {
+            session: Some(2),
+            channel_id: Some(1),
+            ..Default::default()
+        };
+        handle_admin_user_state_update(&es, &hub, 1, 2, &us).await;
+
+        // Admin must receive PermissionDenied (not UserState).
+        let raw = rx_admin.recv().await.expect("admin must receive a message");
+        let mut buf = BytesMut::from(raw.as_slice());
+        let frame = decode_frame(&mut buf).unwrap().unwrap();
+        assert_eq!(
+            frame.message_type,
+            MessageType::PermissionDenied,
+            "admin must receive PermissionDenied when Hub is unreachable"
+        );
+        let pq = mumbleproto::PermissionDenied::decode(&frame.payload[..]).unwrap();
+        assert_eq!(
+            pq.r#type,
+            Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+            "must be a generic Permission denial"
+        );
+
+        // Victim must NOT have been moved.
+        let victim = es.client_manager.get_client(2).await.unwrap();
+        assert_eq!(victim.channel_id, 0, "victim must remain in channel 0");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: admin mute-only op still succeeds even when Hub is unreachable.
+    //
+    // The Move permission checks only run when channel_id is present in the
+    // UserState message.  A pure mute/unmute operation (no channel_id) must
+    // NOT be gated by Hub permission queries.
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_admin_mute_without_move_succeeds_when_hub_unreachable() {
+        let (es, hub) = test_edge_and_hub();
+
+        let (tx_admin, mut rx_admin) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_victim, mut rx_victim) = mpsc::channel::<Vec<u8>>(16);
+        es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_admin)).await;
+        es.client_manager.add_client(ready_client(2, 0), ClientSender::new(tx_victim)).await;
+
+        // Admin mutes victim (no channel_id → no Move perm check).
+        let us = mumbleproto::UserState {
+            session: Some(2),
+            mute: Some(true),
+            ..Default::default()
+        };
+        handle_admin_user_state_update(&es, &hub, 1, 2, &us).await;
+
+        // Both admin and victim must receive UserState (not PermissionDenied).
+        let msg_admin = decode_user_state(&rx_admin.recv().await.unwrap());
+        assert_eq!(msg_admin.mute, Some(true), "admin: victim mute must propagate");
+
+        let msg_victim = decode_user_state(&rx_victim.recv().await.unwrap());
+        assert_eq!(msg_victim.mute, Some(true), "victim: must be notified of mute");
+
+        let victim = es.client_manager.get_client(2).await.unwrap();
+        assert!(victim.mute, "victim.mute must be updated");
     }
 }
 

@@ -111,19 +111,34 @@ pub struct PeerEdgeInfo {
 #[derive(Debug, Default)]
 pub struct PeerRegistry {
     peers: HashMap<u32, PeerEdgeInfo>,
+    /// Reverse index: UDP address → edge_id, used for O(1) probe-pong lookup.
+    addr_to_id: HashMap<SocketAddr, u32>,
 }
 
 impl PeerRegistry {
     pub fn upsert(&mut self, edge_id: u32, info: PeerEdgeInfo) {
+        // Remove stale reverse-index entry if the peer's address changed.
+        if let Some(old) = self.peers.get(&edge_id) {
+            self.addr_to_id.remove(&old.udp_addr);
+        }
+        self.addr_to_id.insert(info.udp_addr, edge_id);
         self.peers.insert(edge_id, info);
     }
 
     pub fn remove(&mut self, edge_id: u32) {
-        self.peers.remove(&edge_id);
+        if let Some(old) = self.peers.remove(&edge_id) {
+            self.addr_to_id.remove(&old.udp_addr);
+        }
     }
 
     pub fn get(&self, edge_id: u32) -> Option<&PeerEdgeInfo> {
         self.peers.get(&edge_id)
+    }
+
+    /// O(1) lookup of the edge ID for a given UDP address.
+    /// Used by the probe-pong handler to avoid a linear scan over all peers.
+    pub fn find_by_addr(&self, addr: SocketAddr) -> Option<u32> {
+        self.addr_to_id.get(&addr).copied()
     }
 
     /// Collect all peers that have a relay_port advertised.
@@ -294,7 +309,10 @@ pub struct EdgeState {
     /// 0 means never skip (rely solely on Hub route table updates).
     pub consecutive_failure_threshold: u32,
     /// Per next-hop consecutive failure counter.
-    pub next_hop_failures: RwLock<HashMap<u32, u32>>,
+    /// Uses a sync `RwLock` (never `await`ed) with per-edge `AtomicU32` values so that
+    /// the hot path only needs a *read* lock to do an atomic increment/reset, keeping
+    /// write locks exclusively for new edge registrations (peerJoined) which are rare.
+    pub next_hop_failures: std::sync::RwLock<HashMap<u32, std::sync::atomic::AtomicU32>>,
     /// Hub-pushed cluster-level TTL cap for relay packets.
     pub max_ttl: std::sync::atomic::AtomicU32,
     /// Maximum number of channels a single user may listen to simultaneously.
@@ -332,6 +350,10 @@ pub struct EdgeState {
     /// as an `AtomicU32` for lock-free reads on the UDP voice hot path.
     /// 0 = unlimited.  Updated atomically whenever `hub_limits` is written.
     pub max_bandwidth_bps: AtomicU32,
+    /// Maximum number of concurrent users, mirrored from `hub_limits` as an `AtomicU32`
+    /// for lock-free reads in the UDP ping hot path.
+    /// 0 = unlimited.  Updated atomically whenever `hub_limits` is written.
+    pub max_users: AtomicU32,
     /// Percentage (0–100) of outbound Edge-to-Edge UDP packets to drop.
     /// Zero in production; set by `test-utils` feature tests to simulate link degradation.
     pub test_udp_drop_rate: AtomicU32,
@@ -359,7 +381,7 @@ impl EdgeState {
             peer_registry: RwLock::new(PeerRegistry::default()),
             enable_hub_tcp_fallback,
             consecutive_failure_threshold: 2,
-            next_hop_failures: RwLock::new(HashMap::new()),
+            next_hop_failures: std::sync::RwLock::new(HashMap::new()),
             max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
             listeners_per_user: 0,
             listeners_per_channel: 0,
@@ -371,6 +393,7 @@ impl EdgeState {
             voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
             max_bandwidth_bps: AtomicU32::new(0),
+            max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
             edge_crypto: None,
         })
@@ -395,7 +418,7 @@ impl EdgeState {
             peer_registry: RwLock::new(PeerRegistry::default()),
             enable_hub_tcp_fallback,
             consecutive_failure_threshold: 2,
-            next_hop_failures: RwLock::new(HashMap::new()),
+            next_hop_failures: std::sync::RwLock::new(HashMap::new()),
             max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
             listeners_per_user,
             listeners_per_channel,
@@ -407,6 +430,7 @@ impl EdgeState {
             voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
             max_bandwidth_bps: AtomicU32::new(0),
+            max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
             edge_crypto: None,
         })
@@ -438,7 +462,7 @@ impl EdgeState {
             peer_registry: RwLock::new(PeerRegistry::default()),
             enable_hub_tcp_fallback,
             consecutive_failure_threshold,
-            next_hop_failures: RwLock::new(HashMap::new()),
+            next_hop_failures: std::sync::RwLock::new(HashMap::new()),
             max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
             listeners_per_user,
             listeners_per_channel,
@@ -450,6 +474,7 @@ impl EdgeState {
             voice_tcp_conns: RwLock::new(HashMap::new()),
             hub_limits: RwLock::new(None),
             max_bandwidth_bps: AtomicU32::new(0),
+            max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
             edge_crypto,
         })

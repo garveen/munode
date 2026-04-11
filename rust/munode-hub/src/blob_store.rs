@@ -148,6 +148,25 @@ impl BlobStore {
 
         Ok(BlobStoreStats { total_blobs, total_size })
     }
+
+    /// Non-blocking async wrapper around [`put`] for use in async contexts.
+    ///
+    /// Runs the blocking file I/O on tokio's `spawn_blocking` thread pool so the
+    /// scheduler thread is never stalled.
+    pub async fn put_async(&self, data: Vec<u8>) -> Result<String> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.put(&data))
+            .await
+            .context("spawn_blocking join error (blob put)")?
+    }
+
+    /// Non-blocking async wrapper around [`get`] for use in async contexts.
+    pub async fn get_async(&self, hash: String) -> Result<Option<Vec<u8>>> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.get(&hash))
+            .await
+            .context("spawn_blocking join error (blob get)")?
+    }
 }
 
 /// SHA-256 hex digest of `data`.

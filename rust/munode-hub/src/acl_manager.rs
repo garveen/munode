@@ -1,7 +1,8 @@
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use anyhow::Result;
+use tokio::sync::RwLock;
 use tracing::debug;
 
 use crate::channel_store::ChannelStore;
@@ -89,19 +90,28 @@ impl AclManager {
     /// Must be called once during Hub startup after the DB is opened.  All
     /// subsequent reads are served from memory; writes go through
     /// [`save_acls`] / [`save_channel_groups`] which update both memory and DB.
-    pub fn load_all(&self) -> Result<()> {
-        // --- ACL entries ---
-        let all_acls = self.db.load_all_acls()?;
+    pub async fn load_all(&self) -> Result<()> {
+        // --- ACL entries --- (DB call in spawn_blocking)
+        let db = self.db.clone();
+        let all_acls = tokio::task::spawn_blocking(move || db.load_all_acls())
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {}", e))??;
         let mut acl_map: HashMap<u32, Vec<AclEntry>> = HashMap::new();
         for entry in all_acls {
             acl_map.entry(entry.channel_id).or_default().push(entry);
         }
-        *self.acl_entries.write().unwrap() = acl_map;
+        *self.acl_entries.write().await = acl_map;
 
         // --- Channel groups + member lists ---
-        let all_groups: Vec<ChannelGroupRecord> = self.db.load_all_channel_groups()?;
-        let group_ids: Vec<i64> = all_groups.iter().map(|g| g.id).collect();
-        let members_map = self.db.get_channel_group_members_batch(&group_ids)?;
+        let db = self.db.clone();
+        let (all_groups, members_map) = tokio::task::spawn_blocking(move || -> Result<_> {
+            let all_groups: Vec<ChannelGroupRecord> = db.load_all_channel_groups()?;
+            let group_ids: Vec<i64> = all_groups.iter().map(|g| g.id).collect();
+            let members_map = db.get_channel_group_members_batch(&group_ids)?;
+            Ok((all_groups, members_map))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {}", e))??;
 
         let mut groups_map: HashMap<u32, Vec<ChannelGroup>> = HashMap::new();
         for g in all_groups {
@@ -117,7 +127,7 @@ impl AclManager {
                 remove,
             });
         }
-        *self.channel_groups.write().unwrap() = groups_map;
+        *self.channel_groups.write().await = groups_map;
         Ok(())
     }
 
@@ -197,9 +207,9 @@ impl AclManager {
             return result;
         }
 
-        // Read ACLs from the in-memory store under a single short-lived lock.
+        // Read ACLs from the in-memory store under a single short-lived async lock.
         let chain_acls: Vec<Vec<AclEntry>> = {
-            let acl_map = self.acl_entries.read().unwrap();
+            let acl_map = self.acl_entries.read().await;
             chain.iter()
                 .map(|&cid| acl_map.get(&cid).cloned().unwrap_or_default())
                 .collect()
@@ -277,33 +287,39 @@ impl AclManager {
     }
 
     /// Get the ACL entries for a channel from the in-memory store.
-    pub fn get_channel_acls(&self, channel_id: u32) -> Vec<AclEntry> {
-        self.acl_entries.read().unwrap()
+    pub async fn get_channel_acls(&self, channel_id: u32) -> Vec<AclEntry> {
+        self.acl_entries.read().await
             .get(&channel_id).cloned().unwrap_or_default()
     }
 
     /// Get the channel groups (with embedded member lists) for a channel.
-    pub fn get_channel_groups(&self, channel_id: u32) -> Vec<ChannelGroup> {
-        self.channel_groups.read().unwrap()
+    pub async fn get_channel_groups(&self, channel_id: u32) -> Vec<ChannelGroup> {
+        self.channel_groups.read().await
             .get(&channel_id).cloned().unwrap_or_default()
     }
 
     /// Clone the entire ACL entry map for callers that need a snapshot
     /// (e.g. batch permission queries that iterate hundreds of channels).
-    pub fn acl_entries_snapshot(&self) -> HashMap<u32, Vec<AclEntry>> {
-        self.acl_entries.read().unwrap().clone()
+    pub async fn acl_entries_snapshot(&self) -> HashMap<u32, Vec<AclEntry>> {
+        self.acl_entries.read().await.clone()
     }
 
     /// Clone the entire channel-group map for callers that need a snapshot.
-    pub fn channel_groups_snapshot(&self) -> HashMap<u32, Vec<ChannelGroup>> {
-        self.channel_groups.read().unwrap().clone()
+    pub async fn channel_groups_snapshot(&self) -> HashMap<u32, Vec<ChannelGroup>> {
+        self.channel_groups.read().await.clone()
     }
 
     /// Save ACL entries for a channel — write-through to both DB and in-memory.
+    ///
+    /// DB write uses `spawn_blocking` to avoid blocking the tokio executor thread.
     pub async fn save_acls(&self, channel_id: u32, entries: &[AclEntry]) -> anyhow::Result<()> {
-        self.db.save_acls(channel_id, entries)?;
+        let db = self.db.clone();
+        let entries_owned = entries.to_vec();
+        tokio::task::spawn_blocking(move || db.save_acls(channel_id, &entries_owned))
+            .await
+            .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {}", e))??;
         {
-            let mut map = self.acl_entries.write().unwrap();
+            let mut map = self.acl_entries.write().await;
             if entries.is_empty() {
                 map.remove(&channel_id);
             } else {
@@ -317,15 +333,13 @@ impl AclManager {
     /// Save channel groups for a channel — write-through to both DB and in-memory.
     ///
     /// Replaces all existing groups and their member lists for the channel.
-    /// DB writes are synchronous (the underlying SQLite mutex is fast for
-    /// these infrequent admin operations).
+    /// DB writes use `spawn_blocking` to avoid blocking the tokio executor thread.
     pub async fn save_channel_groups(
         &self,
         channel_id: u32,
         groups: Vec<ChannelGroup>,
     ) -> anyhow::Result<()> {
-        // Write to DB: delete+insert groups, then insert members by looking up
-        // the auto-assigned group IDs.
+        let db = self.db.clone();
         let db_records: Vec<ChannelGroupRecord> = groups.iter().map(|g| ChannelGroupRecord {
             id: 0, // auto-assigned
             channel_id,
@@ -333,39 +347,39 @@ impl AclManager {
             inherit: g.inherit,
             inheritable: g.inheritable,
         }).collect();
-        self.db.save_channel_groups(channel_id, &db_records)?;
+        let groups_clone = groups.clone();
+        // All DB work in one spawn_blocking to avoid multiple thread round-trips.
+        let in_memory: Vec<ChannelGroup> = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            db.save_channel_groups(channel_id, &db_records)?;
+            let mut result = Vec::with_capacity(groups_clone.len());
+            for g in &groups_clone {
+                let gid = db.get_channel_group_id(channel_id, &g.name)?.unwrap_or(0);
+                let members: Vec<(u32, bool)> = g.add.iter().map(|&uid| (uid, true))
+                    .chain(g.remove.iter().map(|&uid| (uid, false)))
+                    .collect();
+                db.save_channel_group_members(gid, &members)?;
+                result.push(ChannelGroup {
+                    id: gid,
+                    name: g.name.clone(),
+                    inherit: g.inherit,
+                    inheritable: g.inheritable,
+                    add: g.add.clone(),
+                    remove: g.remove.clone(),
+                });
+            }
+            Ok(result)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("spawn_blocking join error: {}", e))??;
 
-        // Re-query the just-inserted groups to get their DB-assigned IDs, then
-        // persist member lists and build the authoritative in-memory records.
-        let mut in_memory: Vec<ChannelGroup> = Vec::with_capacity(groups.len());
-        for g in &groups {
-            let gid = self.db
-                .get_channel_group_id(channel_id, &g.name)?
-                .unwrap_or(0);
-            let members: Vec<(u32, bool)> = g.add.iter().map(|&uid| (uid, true))
-                .chain(g.remove.iter().map(|&uid| (uid, false)))
-                .collect();
-            self.db.save_channel_group_members(gid, &members)?;
-            in_memory.push(ChannelGroup {
-                id: gid,
-                name: g.name.clone(),
-                inherit: g.inherit,
-                inheritable: g.inheritable,
-                add: g.add.clone(),
-                remove: g.remove.clone(),
-            });
-        }
-
-        // Update in-memory store.
         {
-            let mut map = self.channel_groups.write().unwrap();
+            let mut map = self.channel_groups.write().await;
             if in_memory.is_empty() {
                 map.remove(&channel_id);
             } else {
                 map.insert(channel_id, in_memory);
             }
         }
-        // Group membership changes may affect effective permissions.
         self.invalidate_channel(channel_id).await;
         Ok(())
     }
@@ -375,14 +389,8 @@ impl AclManager {
     /// Must be called whenever a channel is permanently removed so that the
     /// in-memory store does not accumulate stale entries for non-existent channels.
     pub async fn remove_channel(&self, channel_id: u32) {
-        {
-            let mut acls = self.acl_entries.write().unwrap();
-            acls.remove(&channel_id);
-        }
-        {
-            let mut groups = self.channel_groups.write().unwrap();
-            groups.remove(&channel_id);
-        }
+        self.acl_entries.write().await.remove(&channel_id);
+        self.channel_groups.write().await.remove(&channel_id);
         self.invalidate_channel(channel_id).await;
     }
 
@@ -560,7 +568,7 @@ mod tests {
         .unwrap();
 
         let mgr = AclManager::new(db, cs);
-        mgr.load_all().unwrap();
+        mgr.load_all().await.unwrap();
         let perms = mgr.calculate_permissions(-1, 1, &[]).await;
         assert_eq!(perms & permission::SPEAK, 0);
         // Other permissions should still be present
@@ -587,7 +595,7 @@ mod tests {
         .unwrap();
 
         let mgr = AclManager::new(db, cs);
-        mgr.load_all().unwrap();
+        mgr.load_all().await.unwrap();
 
         // Channel 2 (child of 1) should inherit the deny
         let perms = mgr.calculate_permissions(-1, 2, &[]).await;
@@ -627,7 +635,7 @@ mod tests {
         .unwrap();
 
         let mgr = AclManager::new(db, cs);
-        mgr.load_all().unwrap();
+        mgr.load_all().await.unwrap();
 
         // Channel 2 should NOT inherit the deny (inherit_acl=false resets)
         let perms = mgr.calculate_permissions(-1, 2, &[]).await;
@@ -654,7 +662,7 @@ mod tests {
         .unwrap();
 
         let mgr = AclManager::new(db, cs);
-        mgr.load_all().unwrap();
+        mgr.load_all().await.unwrap();
 
         // User 5 should have MakeChannel
         let perms = mgr.calculate_permissions(5, 0, &[]).await;
@@ -685,7 +693,7 @@ mod tests {
         .unwrap();
 
         let mgr = AclManager::new(db, cs);
-        mgr.load_all().unwrap();
+        mgr.load_all().await.unwrap();
 
         // Authenticated user (id=5) should have Register
         let perms = mgr.calculate_permissions(5, 0, &[]).await;
@@ -716,7 +724,7 @@ mod tests {
         .unwrap();
 
         let mgr = AclManager::new(db, cs);
-        mgr.load_all().unwrap();
+        mgr.load_all().await.unwrap();
         let perms = mgr.calculate_permissions(1, 0, &[]).await;
 
         // Write should imply most permissions
@@ -822,6 +830,108 @@ mod tests {
         assert!(
             cache.contains_key(&(999_999, 1)),
             "the triggering insertion must be present after eviction"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: Write-revocation detection used by the ACL self-protection logic.
+    //
+    // After save_acls() replaces a channel's ACLs with ones that remove Write
+    // from a specific user, has_permission(user_id, channel, WRITE) must
+    // return false.  Confirming this is the precondition for the self-protection
+    // code in rpc_handler that auto-reinserts Write|Traverse for the actor.
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_has_permission_false_after_write_acl_removed() {
+        let (db, cs) = setup().await;
+        let mgr = AclManager::new(db.clone(), cs);
+
+        // Give user 42 explicit Write on channel 1.
+        mgr.save_acls(1, &[AclEntry {
+            channel_id: 1,
+            user_id: Some(42),
+            group_name: None,
+            apply_here: true,
+            apply_subs: false,
+            allow: permission::WRITE,
+            deny: 0,
+        }]).await.unwrap();
+
+        assert!(
+            mgr.has_permission(42, 1, &[], permission::WRITE).await,
+            "user 42 must have Write before ACL removal"
+        );
+
+        // Now overwrite with ACLs that no longer grant Write to user 42.
+        mgr.save_acls(1, &[AclEntry {
+            channel_id: 1,
+            user_id: Some(99), // different user
+            group_name: None,
+            apply_here: true,
+            apply_subs: false,
+            allow: permission::WRITE,
+            deny: 0,
+        }]).await.unwrap();
+
+        assert!(
+            !mgr.has_permission(42, 1, &[], permission::WRITE).await,
+            "user 42 must NOT have Write after their ACL was replaced"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: self-protection ACL insertion restores Write after revocation.
+    //
+    // Simulates the full self-protection sequence from rpc_handler:
+    //   1. Actor saves ACLs that accidentally revoke their own Write.
+    //   2. has_permission returns false → self-protection is triggered.
+    //   3. A Write|Traverse ACL is appended and saved.
+    //   4. has_permission returns true again.
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_self_protection_acl_restores_write() {
+        let (db, cs) = setup().await;
+        let mgr = AclManager::new(db.clone(), cs);
+        let actor_user_id: i32 = 7;
+        let channel_id: u32 = 1;
+
+        // Initial state: actor has Write via an ACL entry.
+        mgr.save_acls(channel_id, &[AclEntry {
+            channel_id,
+            user_id: Some(actor_user_id),
+            group_name: None,
+            apply_here: true,
+            apply_subs: false,
+            allow: permission::WRITE,
+            deny: 0,
+        }]).await.unwrap();
+        assert!(mgr.has_permission(actor_user_id, channel_id, &[], permission::WRITE).await);
+
+        // Actor saves new ACLs that inadvertently exclude themselves.
+        mgr.save_acls(channel_id, &[]).await.unwrap(); // clear all, actor loses Write
+        let lost_write = !mgr.has_permission(actor_user_id, channel_id, &[], permission::WRITE).await;
+        assert!(lost_write, "Write must be gone after clearing ACLs");
+
+        // Self-protection: append Write|Traverse ACL for actor.
+        let mut entries = mgr.get_channel_acls(channel_id).await;
+        entries.push(AclEntry {
+            channel_id,
+            user_id: Some(actor_user_id),
+            group_name: None,
+            apply_here: true,
+            apply_subs: false,
+            allow: permission::WRITE | permission::TRAVERSE,
+            deny: 0,
+        });
+        mgr.save_acls(channel_id, &entries).await.unwrap();
+
+        assert!(
+            mgr.has_permission(actor_user_id, channel_id, &[], permission::WRITE).await,
+            "Write must be restored after self-protection ACL insertion"
+        );
+        assert!(
+            mgr.has_permission(actor_user_id, channel_id, &[], permission::TRAVERSE).await,
+            "Traverse must also be granted by the self-protection ACL"
         );
     }
 }

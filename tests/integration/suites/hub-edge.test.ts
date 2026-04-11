@@ -17,7 +17,7 @@ describe('Hub-Edge Communication Integration Tests', () => {
   let testEnv: TestEnvironment;
 
   beforeAll(async () => {
-    testEnv = await setupTestEnvironment(8084);
+    testEnv = await setupTestEnvironment(9300);
   }, 60000);
 
   afterAll(async () => {
@@ -82,7 +82,7 @@ describe('Hub-Edge Communication Integration Tests', () => {
         { username: 'user1', password: 'password1' },
         { username: 'user2', password: 'password2' },
         { username: 'guest', password: 'guest123' },
-        { username: 'admin', password: 'admin123' }, // 重复使用 admin 作为第5个
+        { username: 'moderator', password: 'mod123' },
       ];
       
       const clients = await Promise.all(

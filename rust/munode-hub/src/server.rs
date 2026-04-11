@@ -224,7 +224,7 @@ impl HubServer {
         // Populate the in-memory ACL + channel-group store from the database.
         // After this point all ACL reads are served from memory; DB is only
         // written to on mutations (write-through).
-        state.acl_manager.load_all()
+        state.acl_manager.load_all().await
             .context("Failed to load ACL entries and channel groups into memory")?;
 
         // Load users into memory (passwords excluded).

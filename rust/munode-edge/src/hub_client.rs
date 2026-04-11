@@ -127,6 +127,10 @@ pub struct HubClient {
     request_counter: AtomicU64,
     /// Time when this HubClient was created (for uptime reporting).
     start_time: Instant,
+    /// Sender for the serial notification processor task (primary slot only).
+    /// Notifications are enqueued here by the reader task and processed one-at-a-time,
+    /// preserving the same serial ordering as the C++ Mumble Qt event loop.
+    notification_tx: Mutex<Option<mpsc::UnboundedSender<TypedRpcNotification>>>,
 }
 
 impl HubClient {
@@ -163,6 +167,7 @@ impl HubClient {
             pool_rr: AtomicUsize::new(0),
             request_counter: AtomicU64::new(0),
             start_time: Instant::now(),
+            notification_tx: Mutex::new(None),
         })
     }
 
@@ -363,6 +368,27 @@ impl HubClient {
             }
         });
 
+        // For the primary slot, set up a serial notification processor task.
+        // This mirrors C++ Mumble's Qt event loop: all notifications are queued and
+        // processed one-at-a-time in arrival order. Keeping them serial prevents
+        // race conditions (e.g. hub.userJoined must complete before hub.userMoved).
+        // The processor runs in a separate task so the reader task is never blocked
+        // by notification handlers that make outbound RPC calls (which would
+        // otherwise deadlock the reader task that must receive those RPC responses).
+        let notif_handle = if is_primary {
+            let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<TypedRpcNotification>();
+            *self.notification_tx.lock().await = Some(notif_tx);
+            let notif_self = self.clone();
+            Some(tokio::spawn(async move {
+                while let Some(notification) = notif_rx.recv().await {
+                    notif_self.handle_notification(notification).await;
+                }
+                debug!("Notification processor stopped (slot {})", slot);
+            }))
+        } else {
+            None
+        };
+
         let (reader_done_tx, reader_done_rx) = tokio::sync::oneshot::channel::<()>();
         let reader_self = self.clone();
         let reader_handle = tokio::spawn(async move {
@@ -370,7 +396,7 @@ impl HubClient {
                 match ws_read.next().await {
                     Some(Ok(msg)) => match msg {
                         tungstenite::Message::Binary(data) => {
-                            if let Err(e) = reader_self.handle_incoming_slot(&data, is_primary).await {
+                            if let Err(e) = reader_self.handle_incoming_slot(&data).await {
                                 warn!("Error handling Hub message (slot {}): {}", slot, e);
                             }
                         }
@@ -417,9 +443,16 @@ impl HubClient {
         });
 
         let _ = reader_done_rx.await;
+        // Drop the notification sender so the processor task sees channel-closed and exits.
+        if is_primary {
+            *self.notification_tx.lock().await = None;
+        }
         heartbeat_handle.abort();
         reader_handle.abort();
         writer_handle.abort();
+        if let Some(h) = notif_handle {
+            h.abort();
+        }
         Ok(())
     }
 
@@ -502,6 +535,27 @@ impl HubClient {
             }
         });
 
+        // For the primary slot, set up a serial notification processor task.
+        // This mirrors C++ Mumble's Qt event loop: all notifications are queued and
+        // processed one-at-a-time in arrival order. Keeping them serial prevents
+        // race conditions (e.g. hub.userJoined must complete before hub.userMoved).
+        // The processor runs in a separate task so the reader task is never blocked
+        // by notification handlers that make outbound RPC calls (which would
+        // otherwise deadlock the reader task that must receive those RPC responses).
+        let notif_handle = if is_primary {
+            let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<TypedRpcNotification>();
+            *self.notification_tx.lock().await = Some(notif_tx);
+            let notif_self = self.clone();
+            Some(tokio::spawn(async move {
+                while let Some(notification) = notif_rx.recv().await {
+                    notif_self.handle_notification(notification).await;
+                }
+                debug!("Notification processor stopped (slot {})", slot);
+            }))
+        } else {
+            None
+        };
+
         // Reader task
         let (reader_done_tx, reader_done_rx) = tokio::sync::oneshot::channel::<()>();
         let reader_self = self.clone();
@@ -510,7 +564,7 @@ impl HubClient {
                 match ws_read.next().await {
                     Some(Ok(msg)) => match msg {
                         tungstenite::Message::Binary(data) => {
-                            if let Err(e) = reader_self.handle_incoming_slot(&data, is_primary).await {
+                            if let Err(e) = reader_self.handle_incoming_slot(&data).await {
                                 warn!("Error handling Hub message (slot {}): {}", slot, e);
                             }
                         }
@@ -562,9 +616,16 @@ impl HubClient {
         });
 
         let _ = reader_done_rx.await;
+        // Drop the notification sender so the processor task sees channel-closed and exits.
+        if is_primary {
+            *self.notification_tx.lock().await = None;
+        }
         heartbeat_handle.abort();
         reader_handle.abort();
         writer_handle.abort();
+        if let Some(h) = notif_handle {
+            h.abort();
+        }
         Ok(())
     }
 
@@ -654,10 +715,10 @@ impl HubClient {
     }
 
     /// Handle an incoming message from a specific pool slot.
-    /// `is_primary = true`  → process both RPC responses and push notifications.
-    /// `is_primary = false` → process RPC responses only (suppress notifications to
-    ///                        avoid duplicate state updates in pool mode).
-    async fn handle_incoming_slot(&self, data: &[u8], is_primary: bool) -> Result<()> {
+    /// Notifications are forwarded to the serial processor channel (`self.notification_tx`)
+    /// and processed in arrival order, matching C++ Mumble's Qt event-loop serial semantics.
+    /// Non-primary slots have no notification_tx set, so only RPC responses are handled.
+    async fn handle_incoming_slot(self: &Arc<Self>, data: &[u8]) -> Result<()> {
         // Decompress if the Hub compressed the payload (prefix byte 0x01).
         // Raw protobuf frames always begin with a field tag (≥ 0x08), so 0x01 is unambiguous.
         let decompressed: Vec<u8>;
@@ -688,11 +749,17 @@ impl HubClient {
                 }
             }
             Ok(PacketType::RpcNotification) => {
-                // Only the primary slot processes push notifications.
-                if is_primary {
-                    if let Some(notification) = packet.rpc_notification {
-                        self.handle_notification(notification).await;
+                // Only the primary slot has a notification_tx set.
+                // Enqueue into the serial processor channel — never blocks the reader task,
+                // and guarantees notifications are handled in arrival order.
+                if let Some(notification) = packet.rpc_notification {
+                    let guard = self.notification_tx.lock().await;
+                    if let Some(tx) = guard.as_ref() {
+                        if tx.send(notification).is_err() {
+                            warn!("Notification processor channel closed");
+                        }
                     }
+                    // If no tx is set (non-primary slot), notification is silently dropped.
                 }
             }
             Ok(PacketType::HeartbeatAck) => {
@@ -705,6 +772,10 @@ impl HubClient {
                         }
                         self.edge_state.max_bandwidth_bps.store(
                             limits.max_bandwidth.unwrap_or(0),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                        self.edge_state.max_users.store(
+                            limits.max_users.unwrap_or(0),
                             std::sync::atomic::Ordering::Relaxed,
                         );
                         *self.edge_state.hub_limits.write().await = Some(limits);
@@ -849,9 +920,27 @@ impl HubClient {
             "hub.userMoved" => {
                 if let Some(params) = &notification.user_moved {
                     debug!("Remote user moved: session {} -> channel {}", params.session_id, params.channel_id);
+                    // Update remote-user tracking if the mover is tracked as remote on this edge.
                     if let Some(mut user) = self.edge_state.channel_manager.get_remote_user(params.session_id).await {
                         user.channel_id = params.channel_id;
                         self.edge_state.channel_manager.upsert_remote_user(user).await;
+                    }
+                    // If the moved user is LOCAL on this edge (i.e. the admin move came from
+                    // a different edge), update client_manager so that voice routing and
+                    // subsequent ACL checks use the correct channel.
+                    if self.edge_state.client_manager.get_client(params.session_id).await.is_some() {
+                        // Determine new suppress state: check speak permission in the new channel.
+                        let new_suppress = match self.handle_permission_query(params.session_id, params.channel_id).await {
+                            Ok(r) => r.permissions.map(|p| p & munode_common::permission::SPEAK != 0).map(|can| !can).unwrap_or(false),
+                            Err(_) => false,
+                        };
+                        self.edge_state.client_manager.move_client_to_channel(
+                            params.session_id,
+                            params.channel_id,
+                            new_suppress,
+                        ).await;
+                        debug!("Local client {} moved to channel {} by remote admin (suppress={})",
+                            params.session_id, params.channel_id, new_suppress);
                     }
                     // actor_session: 0 means server-initiated; fall back to session_id for user self-moves
                     let actor_session = params.actor_session
@@ -1196,6 +1285,10 @@ impl HubClient {
                 limits.max_bandwidth.unwrap_or(0),
                 std::sync::atomic::Ordering::Relaxed,
             );
+            self.edge_state.max_users.store(
+                limits.max_users.unwrap_or(0),
+                std::sync::atomic::Ordering::Relaxed,
+            );
             *self.edge_state.hub_limits.write().await = Some(limits);
             debug!("Stored server limits from Hub registration");
         }
@@ -1255,6 +1348,10 @@ impl HubClient {
             }
             self.edge_state.max_bandwidth_bps.store(
                 limits.max_bandwidth.unwrap_or(0),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            self.edge_state.max_users.store(
+                limits.max_users.unwrap_or(0),
                 std::sync::atomic::Ordering::Relaxed,
             );
             *self.edge_state.hub_limits.write().await = Some(limits);
