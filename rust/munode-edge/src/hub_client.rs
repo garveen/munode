@@ -27,7 +27,7 @@ use munode_protocol::hubedge::{
     EdgeHandleUserStateChangedParams, EdgeHandleTextMessageParams,
     EdgeHandleChannelStateParams, EdgeHandleChannelRemoveParams,
     EdgeReportSessionParams, GlobalSessionProto,
-    EdgeContextActionParams,
+    EdgeContextActionParams, ServerLimitsConfig,
 };
 
 use crate::channel_manager::{ChannelData, RemoteUser};
@@ -771,18 +771,7 @@ impl HubClient {
                 if let Some(ack) = packet.heartbeat_ack {
                     if let Some(limits) = ack.server_limits {
                         debug!("Received updated server limits from Hub heartbeat");
-                        if let Some(allow_ping) = limits.allow_ping {
-                            self.edge_state.allow_ping.store(allow_ping, std::sync::atomic::Ordering::Relaxed);
-                        }
-                        self.edge_state.max_bandwidth_bps.store(
-                            limits.max_bandwidth.unwrap_or(0),
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
-                        self.edge_state.max_users.store(
-                            limits.max_users.unwrap_or(0),
-                            std::sync::atomic::Ordering::Relaxed,
-                        );
-                        *self.edge_state.hub_limits.write().await = Some(limits);
+                        self.apply_server_limits(limits).await;
                     }
                 }
             }
@@ -1201,8 +1190,14 @@ impl HubClient {
                 }
             }
             _ => {
+                // Check for hub.serverConfigUpdate — Hub hot-reload push
+                if method == "hub.serverConfigUpdate" {
+                    if let Some(limits) = notification.server_config_update {
+                        info!("Received server config update from Hub hot-reload");
+                        self.apply_server_limits(limits).await;
+                    }
                 // Check for hub.aclUpdated (uses unknown_params_json)
-                if method == "hub.aclUpdated" {
+                } else if method == "hub.aclUpdated" {
                     if let Some(json_str) = &notification.unknown_params_json {
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
                             if let Some(channel_id) = val.get("channel_id").and_then(|v| v.as_u64()) {
@@ -1236,6 +1231,23 @@ impl HubClient {
                 }
             }
         }
+    }
+
+    /// Apply a `ServerLimitsConfig` received from Hub (on registration, heartbeat ACK,
+    /// or `hub.serverConfigUpdate` hot-reload push).
+    async fn apply_server_limits(&self, limits: ServerLimitsConfig) {
+        if let Some(allow_ping) = limits.allow_ping {
+            self.edge_state.allow_ping.store(allow_ping, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.edge_state.max_bandwidth_bps.store(
+            limits.max_bandwidth.unwrap_or(0),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.edge_state.max_users.store(
+            limits.max_users.unwrap_or(0),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        *self.edge_state.hub_limits.write().await = Some(limits);
     }
 
     // ==================== RPC Methods ====================
@@ -1291,19 +1303,8 @@ impl HubClient {
 
         // Store server limits received from Hub
         if let Some(limits) = result.server_limits {
-            if let Some(allow_ping) = limits.allow_ping {
-                self.edge_state.allow_ping.store(allow_ping, std::sync::atomic::Ordering::Relaxed);
-            }
-            self.edge_state.max_bandwidth_bps.store(
-                limits.max_bandwidth.unwrap_or(0),
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            self.edge_state.max_users.store(
-                limits.max_users.unwrap_or(0),
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            *self.edge_state.hub_limits.write().await = Some(limits);
             debug!("Stored server limits from Hub registration");
+            self.apply_server_limits(limits).await;
         }
 
         Ok(())

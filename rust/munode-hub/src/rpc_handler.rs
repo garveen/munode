@@ -15,6 +15,7 @@ use tracing::{debug, info, trace, warn};
 
 use munode_protocol::authservice::{AuthRequest as ExtAuthRequest};
 use munode_protocol::hubedge::*;
+use munode_common::config::HubConfig;
 use munode_common::permission;
 
 use crate::channel_store::ChannelRecord;
@@ -329,7 +330,7 @@ impl RpcHandler {
             })
             .collect();
 
-        let mut server_limits = self.build_server_limits();
+        let mut server_limits = self.build_server_limits().await;
         server_limits.welcome_text = self.load_welcome_text().await;
         let result = EdgeRegisterResult {
             success: true,
@@ -2960,40 +2961,10 @@ impl RpcHandler {
         crate::server::broadcast_critical(&self.state, data).await;
     }
 
-    /// Build a ServerLimitsConfig from the current Hub configuration.
-    /// This is sent to Edge on registration and via heartbeat ack when limits change.
-    pub(crate) fn build_server_limits(&self) -> ServerLimitsConfig {
-        let limits = &self.state.config.limits;
-        let suggest = &self.state.config.suggest;
-        let (suggest_version, suggest_version_v2) = suggest.parse_version()
-            .map(|(v1, v2)| (Some(v1), Some(v2)))
-            .unwrap_or((None, None));
-        // Welcome text: inline config value only. The file variant is loaded
-        // asynchronously by callers via `load_welcome_text()` to avoid blocking
-        // the tokio executor with synchronous file I/O.
-        let welcome = self.state.config.auth.welcome_text.clone();
-        ServerLimitsConfig {
-            max_bandwidth: Some(limits.max_bandwidth),
-            text_message_length: Some(limits.text_message_length),
-            image_message_length: Some(limits.image_message_length),
-            plugin_message_length: Some(limits.plugin_message_length),
-            message_rate: Some(limits.message_rate),
-            message_burst: Some(limits.message_burst),
-            max_users: Some(limits.max_users),
-            listeners_per_channel: Some(limits.listeners_per_channel),
-            listeners_per_user: Some(limits.listeners_per_user),
-            suggest_version,
-            suggest_positional: suggest.positional,
-            suggest_push_to_talk: suggest.push_to_talk,
-            welcome_text: welcome,
-            suggest_version_v2,
-            max_users_per_channel: if limits.max_users_per_channel > 0 {
-                Some(limits.max_users_per_channel)
-            } else {
-                None
-            },
-            allow_ping: Some(limits.allow_ping),
-        }
+    /// Return the current live server limits (updated on hot-reload).
+    /// Used when building responses to edge registration and heartbeat ACK.
+    pub(crate) async fn build_server_limits(&self) -> ServerLimitsConfig {
+        self.state.live_limits.read().await.clone()
     }
 
     /// Load the welcome text asynchronously.
@@ -3779,5 +3750,46 @@ pub(crate) fn maybe_compress(data: Vec<u8>) -> Vec<u8> {
     match enc.finish() {
         Ok(_) => out,
         Err(_) => data,
+    }
+}
+
+/// Build a `ServerLimitsConfig` from the given `HubConfig`.
+///
+/// This free function is used both at startup (to initialise `HubState::live_limits`)
+/// and inside the SIGHUP hot-reload handler (to compute the updated limits from the
+/// newly loaded config before broadcasting them to all connected Edges).
+///
+/// Note: the `welcome_text_file` path is intentionally NOT read here because this
+/// function is synchronous.  Callers that need the file-based welcome text should
+/// overwrite `welcome_text` after calling this function (see the SIGHUP handler in
+/// `server.rs` and `RpcHandler::handle_register`).
+pub(crate) fn server_limits_from_config(config: &HubConfig) -> ServerLimitsConfig {
+    let limits = &config.limits;
+    let suggest = &config.suggest;
+    let (suggest_version, suggest_version_v2) = suggest.parse_version()
+        .map(|(v1, v2)| (Some(v1), Some(v2)))
+        .unwrap_or((None, None));
+    let welcome = config.auth.welcome_text.clone();
+    ServerLimitsConfig {
+        max_bandwidth: Some(limits.max_bandwidth),
+        text_message_length: Some(limits.text_message_length),
+        image_message_length: Some(limits.image_message_length),
+        plugin_message_length: Some(limits.plugin_message_length),
+        message_rate: Some(limits.message_rate),
+        message_burst: Some(limits.message_burst),
+        max_users: Some(limits.max_users),
+        listeners_per_channel: Some(limits.listeners_per_channel),
+        listeners_per_user: Some(limits.listeners_per_user),
+        suggest_version,
+        suggest_positional: suggest.positional,
+        suggest_push_to_talk: suggest.push_to_talk,
+        welcome_text: welcome,
+        suggest_version_v2,
+        max_users_per_channel: if limits.max_users_per_channel > 0 {
+            Some(limits.max_users_per_channel)
+        } else {
+            None
+        },
+        allow_ping: Some(limits.allow_ping),
     }
 }

@@ -337,42 +337,10 @@ async fn main() -> Result<()> {
         "Starting MuNode Hub Server (Rust)"
     );
 
-    // SIGHUP hot-reload task: reload the config and apply log-level changes.
-    #[cfg(unix)]
-    {
-        let reload_path = config_path.clone();
-        tokio::spawn(async move {
-            use tokio::signal::unix::{signal, SignalKind};
-            let mut sighup = match signal(SignalKind::hangup()) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::warn!("Failed to register SIGHUP handler: {}", e);
-                    return;
-                }
-            };
-            loop {
-                sighup.recv().await;
-                tracing::info!("SIGHUP received — attempting config hot-reload");
-                match load_hub_config(&reload_path) {
-                    Ok(new_cfg) => {
-                        // Update the active log-level filter via the reload handle so the
-                        // change takes effect immediately without re-initialising the global
-                        // subscriber (which would be a no-op after the first init).
-                        log_reload.reload_level(&new_cfg.log_level);
-                        tracing::info!(
-                            log_level = %new_cfg.log_level,
-                            "Hub config hot-reload applied (log level updated)"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!("SIGHUP hot-reload failed — could not parse config '{}': {}", reload_path, e);
-                    }
-                }
-            }
-        });
-    }
-
-    let server = HubServer::new(config);
+    // SIGHUP hot-reload is handled inside HubServer::run() where the shared state
+    // and rpc_handler are accessible, so the updated limits can be pushed to all
+    // connected Edges immediately.
+    let server = HubServer::new_with_path(config, config_path, log_reload);
     server.run().await?;
 
     Ok(())

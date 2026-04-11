@@ -2389,6 +2389,9 @@ pub struct TypedRpcNotification {
     /// Edge → Hub: client triggered a context action (tag 37).
     #[prost(message, optional, tag = "37")]
     pub context_action: ::core::option::Option<EdgeContextActionParams>,
+    /// Hub → Edge: 热重载后将最新服务器限制配置推送给所有 Edge (tag 38).
+    #[prost(message, optional, tag = "38")]
+    pub server_config_update: ::core::option::Option<ServerLimitsConfig>,
     /// For unknown notification types, store params as JSON string
     #[prost(string, optional, tag = "99")]
     pub unknown_params_json: ::core::option::Option<::prost::alloc::string::String>,

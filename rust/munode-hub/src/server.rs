@@ -8,7 +8,8 @@ use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
-use munode_common::config::HubConfig;
+use munode_common::config::{HubConfig, load_hub_config};
+use munode_common::logging::LogReloadHandle;
 use munode_protocol::hubedge::*;
 
 use crate::acl_manager::AclManager;
@@ -149,16 +150,33 @@ pub struct HubState {
     /// Written by `RpcHandler::handle_sync_voice_target` on every `EdgeSyncVoiceTarget` RPC.
     /// Read by the web API to expose diagnostics.
     pub voice_targets: RwLock<HashMap<(u32, u32), VoiceTargetEntry>>,
+    /// Live server-limits config pushed to Edges.
+    ///
+    /// Initialised from the startup config and updated in-place on SIGHUP hot-reload.
+    /// All reads use the async `RwLock` so callers never block the runtime.
+    pub live_limits: RwLock<ServerLimitsConfig>,
 }
 
 /// The main Hub server.
 pub struct HubServer {
     config: HubConfig,
+    /// Path to the TOML config file, used by the SIGHUP hot-reload task.
+    config_path: Option<String>,
+    /// Handle for dynamically reloading the active log-level filter at runtime.
+    log_reload: Option<LogReloadHandle>,
 }
 
 impl HubServer {
     pub fn new(config: HubConfig) -> Self {
-        Self { config }
+        Self { config, config_path: None, log_reload: None }
+    }
+
+    /// Create a Hub server with a known config file path and log-reload handle.
+    ///
+    /// Use this constructor from `main` so the SIGHUP hot-reload task can re-read
+    /// the config file and push updated limits to all connected Edges at runtime.
+    pub fn new_with_path(config: HubConfig, config_path: String, log_reload: LogReloadHandle) -> Self {
+        Self { config, config_path: Some(config_path), log_reload: Some(log_reload) }
     }
 
     /// Start the Hub server and listen for edge connections.
@@ -216,6 +234,7 @@ impl HubServer {
             geoip,
             started_at: std::time::Instant::now(),
             voice_targets: RwLock::new(HashMap::new()),
+            live_limits: RwLock::new(crate::rpc_handler::server_limits_from_config(&self.config)),
         });
 
         // Load channels from database
@@ -237,6 +256,76 @@ impl HubServer {
 
         // Create RPC handler
         let rpc_handler = Arc::new(RpcHandler::new(state.clone()));
+
+        // SIGHUP hot-reload: reload config from disk, update live_limits, and push
+        // the new ServerLimitsConfig to all currently-connected Edges.
+        #[cfg(unix)]
+        {
+            let reload_path = self.config_path.clone();
+            let reload_state = state.clone();
+            let log_reload_handle = self.log_reload.clone();
+            tokio::spawn(async move {
+                use tokio::signal::unix::{signal, SignalKind};
+                let mut sighup = match signal(SignalKind::hangup()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("Failed to register SIGHUP handler: {}", e);
+                        return;
+                    }
+                };
+                loop {
+                    sighup.recv().await;
+                    info!("SIGHUP received — reloading config and pushing limits to connected Edges");
+                    let Some(ref path) = reload_path else {
+                        warn!("SIGHUP received but no config path known; skipping hot-reload");
+                        continue;
+                    };
+                    let path_clone = path.clone();
+                    let load_result = tokio::task::spawn_blocking(move || load_hub_config(&path_clone)).await;
+                    match load_result {
+                        Ok(Ok(new_cfg)) => {
+                            if let Some(ref lr) = log_reload_handle {
+                                lr.reload_level(&new_cfg.log_level);
+                            }
+                            // Compute new limits from the reloaded config.
+                            let mut new_limits = crate::rpc_handler::server_limits_from_config(&new_cfg);
+                            // Optionally override welcome_text with file contents.
+                            if let Some(ref file_path) = new_cfg.auth.welcome_text_file {
+                                match tokio::fs::read_to_string(file_path).await {
+                                    Ok(text) => { new_limits.welcome_text = Some(text.trim_end().to_string()); }
+                                    Err(e) => { warn!("SIGHUP: failed to read welcome_text_file '{}': {}", file_path, e); }
+                                }
+                            }
+                            // Update the live limits cache.
+                            *reload_state.live_limits.write().await = new_limits.clone();
+                            // Broadcast the new limits to all connected Edges.
+                            let packet = EdgeHubPacket {
+                                r#type: PacketType::RpcNotification as i32,
+                                rpc_notification: Some(TypedRpcNotification {
+                                    method: "hub.serverConfigUpdate".to_string(),
+                                    timestamp: Some(current_millis() as i64),
+                                    server_config_update: Some(new_limits),
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            };
+                            let data = packet.encode_to_vec();
+                            broadcast_critical(&reload_state, data).await;
+                            info!(
+                                log_level = %new_cfg.log_level,
+                                "Hub config hot-reload applied and pushed to all connected Edges"
+                            );
+                        }
+                        Ok(Err(e)) => {
+                            warn!("SIGHUP hot-reload failed — could not parse config '{}': {}", path, e);
+                        }
+                        Err(e) => {
+                            warn!("SIGHUP: spawn_blocking task panicked: {}", e);
+                        }
+                    }
+                }
+            });
+        }
 
         // Start auth service WS listener if port is configured
         if let Some(auth_port) = self.config.network.auth_service_port {
