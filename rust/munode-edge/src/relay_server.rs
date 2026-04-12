@@ -198,23 +198,23 @@ pub async fn run_edge_ws_server_with_listener(
                                 let path = req.uri().path().to_string();
                                 *cp.lock().unwrap() = path.clone();
 
-                                // Authenticate /relay connections when hmac_secret is configured.
-                                // /voice connections carry their own session-level auth.
-                                if path != "/voice" {
-                                    if let Some(secret) = &secret_for_cb {
-                                        let query = req.uri().query();
-                                        if !verify_relay_auth(secret, query) {
-                                            warn!(
-                                                "Relay auth failed for connection from {} to {}",
-                                                peer_addr,
-                                                path,
-                                            );
-                                            // Return an HTTP 401 response to reject the upgrade.
-                                            return Err(tokio_tungstenite::tungstenite::http::Response::builder()
-                                                .status(tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED)
-                                                .body(Some("relay authentication required".to_string()))
-                                                .unwrap());
-                                        }
+                                // Authenticate ALL incoming connections (/relay and /voice)
+                                // when hmac_secret is configured.  The /voice endpoint is
+                                // equally sensitive — an unauthenticated peer can inject
+                                // arbitrary voice frames claiming any sender session ID.
+                                if let Some(secret) = &secret_for_cb {
+                                    let query = req.uri().query();
+                                    if !verify_relay_auth(secret, query) {
+                                        warn!(
+                                            "Edge WS auth failed for connection from {} to {}",
+                                            peer_addr,
+                                            path,
+                                        );
+                                        // Return an HTTP 401 response to reject the upgrade.
+                                        return Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                                            .status(tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED)
+                                            .body(Some("edge authentication required".to_string()))
+                                            .unwrap());
                                     }
                                 }
                                 Ok(response)
@@ -374,14 +374,28 @@ async fn handle_voice_connection(
 /// removed from `voice_tcp_conns` and the function returns.  The caller (spawned
 /// via `hub.peerJoined`) is expected to re-spawn this function if a persistent
 /// channel is needed.
+///
+/// When `hmac_secret` is `Some`, a timestamp-based HMAC token is appended to the
+/// URL query string so the receiving relay server can authenticate the connection.
 pub async fn connect_peer_voice_tcp(
     peer_edge_id: u32,
     peer_host: String,
     peer_edge_port: u16,
     self_edge_id: u32,
     edge_state: Arc<EdgeState>,
+    hmac_secret: Option<String>,
 ) {
-    let url = format!("ws://{}:{}/voice", peer_host, peer_edge_port);
+    // Build the URL, appending auth query params when a shared secret is configured.
+    let url = if let Some(ref secret) = hmac_secret {
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let token = compute_relay_token(secret, ts_ms);
+        format!("ws://{}:{}/voice?ts={}&token={}", peer_host, peer_edge_port, ts_ms, token)
+    } else {
+        format!("ws://{}:{}/voice", peer_host, peer_edge_port)
+    };
 
     let ws = match timeout(
         Duration::from_secs(15),

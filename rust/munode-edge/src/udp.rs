@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::Result;
 use bytes::BytesMut;
 use tokio::net::UdpSocket;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, Semaphore};
 use tracing::{debug, info, warn};
 
 use munode_protocol::message_type::MessageType;
@@ -131,6 +131,13 @@ pub struct UdpServer {
     session_to_addr: Arc<RwLock<HashMap<u32, SocketAddr>>>,
     /// Per-edge quality tracking for UDP probes.
     peer_quality: Arc<Mutex<HashMap<u32, PeerQualityState>>>,
+    /// Bounds the number of in-flight voice-routing tasks.
+    ///
+    /// The recv loop calls `try_acquire_owned()` (non-blocking).  If the
+    /// semaphore is exhausted the packet is silently dropped rather than
+    /// blocking the hot recv loop.  2048 permits ≈ comfortable headroom for
+    /// 200 clients × 50 fps each, with room for burst.
+    task_semaphore: Arc<Semaphore>,
 }
 
 impl UdpServer {
@@ -159,6 +166,7 @@ impl UdpServer {
             addr_to_session: Arc::new(RwLock::new(HashMap::new())),
             session_to_addr: Arc::new(RwLock::new(HashMap::new())),
             peer_quality: Arc::new(Mutex::new(HashMap::new())),
+            task_semaphore: Arc::new(Semaphore::new(2048)),
         })
     }
 
@@ -263,11 +271,16 @@ impl UdpServer {
                         if len >= 4 {
                             // Copy packet to heap so the stack buffer is immediately free
                             // for the next recv_from, and the handler runs in a separate task.
-                            let data = client_buf[..len].to_vec();
-                            let server = Arc::clone(&self);
-                            tokio::spawn(async move {
-                                server.handle_client_datagram(&data, peer_addr).await;
-                            });
+                            if let Ok(permit) = Arc::clone(&self.task_semaphore).try_acquire_owned() {
+                                let data = client_buf[..len].to_vec();
+                                let server = Arc::clone(&self);
+                                tokio::spawn(async move {
+                                    let _permit = permit;
+                                    server.handle_client_datagram(&data, peer_addr).await;
+                                });
+                            } else {
+                                debug!("UDP semaphore exhausted, dropping client packet from {}", peer_addr);
+                            }
                         }
                     }
                     res = self.edge_socket.recv_from(&mut edge_buf) => {
@@ -278,19 +291,29 @@ impl UdpServer {
                         match edge_buf[0] {
                             // Direct voice for this Edge: [0x01][session_BE(4)][voice...]
                             EDGE_PKT_VOICE if len >= 6 => {
-                                let data = edge_buf[1..len].to_vec();
-                                let server = Arc::clone(&self);
-                                tokio::spawn(async move {
-                                    server.handle_edge_packet(&data, peer_addr).await;
-                                });
+                                if let Ok(permit) = Arc::clone(&self.task_semaphore).try_acquire_owned() {
+                                    let data = edge_buf[1..len].to_vec();
+                                    let server = Arc::clone(&self);
+                                    tokio::spawn(async move {
+                                        let _permit = permit;
+                                        server.handle_edge_packet(&data, peer_addr).await;
+                                    });
+                                } else {
+                                    debug!("UDP semaphore exhausted, dropping edge voice from {}", peer_addr);
+                                }
                             }
                             // Relay-forward: [0x02][target_BE(4)][session_BE(4)][voice...]
                             EDGE_PKT_RELAY if len >= 10 => {
-                                let data = edge_buf[1..len].to_vec();
-                                let server = Arc::clone(&self);
-                                tokio::spawn(async move {
-                                    server.handle_relay_packet(&data).await;
-                                });
+                                if let Ok(permit) = Arc::clone(&self.task_semaphore).try_acquire_owned() {
+                                    let data = edge_buf[1..len].to_vec();
+                                    let server = Arc::clone(&self);
+                                    tokio::spawn(async move {
+                                        let _permit = permit;
+                                        server.handle_relay_packet(&data).await;
+                                    });
+                                } else {
+                                    debug!("UDP semaphore exhausted, dropping relay packet");
+                                }
                             }
                             // Quality probe: [0x03][subtype(1)][seq_BE(4)][ts_BE(8)]
                             // Probes are tiny and latency-sensitive; handle inline.
@@ -299,19 +322,29 @@ impl UdpServer {
                             }
                             // Encrypted direct voice: [0x11][sender_edge_id_BE(4)][counter_BE(8)][enc(session_BE(4)+voice)+tag(16)]
                             EDGE_PKT_ENC_VOICE if len >= 33 => {
-                                let data = edge_buf[1..len].to_vec();
-                                let server = Arc::clone(&self);
-                                tokio::spawn(async move {
-                                    server.handle_enc_voice_packet(&data, peer_addr).await;
-                                });
+                                if let Ok(permit) = Arc::clone(&self.task_semaphore).try_acquire_owned() {
+                                    let data = edge_buf[1..len].to_vec();
+                                    let server = Arc::clone(&self);
+                                    tokio::spawn(async move {
+                                        let _permit = permit;
+                                        server.handle_enc_voice_packet(&data, peer_addr).await;
+                                    });
+                                } else {
+                                    debug!("UDP semaphore exhausted, dropping encrypted voice from {}", peer_addr);
+                                }
                             }
                             // Encrypted relay: [0x12][sender_edge_id_BE(4)][counter_BE(8)][ttl(1)][target_BE(4)][enc(session_BE(4)+voice)+tag(16)]
                             EDGE_PKT_ENC_RELAY if len >= 38 => {
-                                let data = edge_buf[1..len].to_vec();
-                                let server = Arc::clone(&self);
-                                tokio::spawn(async move {
-                                    server.handle_enc_relay_packet(&data).await;
-                                });
+                                if let Ok(permit) = Arc::clone(&self.task_semaphore).try_acquire_owned() {
+                                    let data = edge_buf[1..len].to_vec();
+                                    let server = Arc::clone(&self);
+                                    tokio::spawn(async move {
+                                        let _permit = permit;
+                                        server.handle_enc_relay_packet(&data).await;
+                                    });
+                                } else {
+                                    debug!("UDP semaphore exhausted, dropping encrypted relay packet");
+                                }
                             }
                             _ => {
                                 debug!("Unknown edge packet type 0x{:02X} from {} ({} bytes)",
@@ -323,11 +356,16 @@ impl UdpServer {
             } else {
                 let (len, peer_addr) = self.socket.recv_from(&mut client_buf).await?;
                 if len >= 4 {
-                    let data = client_buf[..len].to_vec();
-                    let server = Arc::clone(&self);
-                    tokio::spawn(async move {
-                        server.handle_client_datagram(&data, peer_addr).await;
-                    });
+                    if let Ok(permit) = Arc::clone(&self.task_semaphore).try_acquire_owned() {
+                        let data = client_buf[..len].to_vec();
+                        let server = Arc::clone(&self);
+                        tokio::spawn(async move {
+                            let _permit = permit;
+                            server.handle_client_datagram(&data, peer_addr).await;
+                        });
+                    } else {
+                        debug!("UDP semaphore exhausted, dropping client packet from {}", peer_addr);
+                    }
                 }
             }
         }
@@ -1142,6 +1180,13 @@ impl UdpServer {
         let voice_data = &data[9..];
 
         let my_edge_id = self.edge_state.get_edge_id();
+        // Drop relay packets until we have a registered edge_id.  Without this guard,
+        // a spoofed packet with target_edge_id=0 would be misdelivered locally because
+        // 0 == 0 before registration completes.
+        if my_edge_id == 0 {
+            debug!("Relay packet dropped: local edge_id not yet initialized");
+            return;
+        }
         if target_edge_id == my_edge_id {
             // Deliver locally — this Edge is the final destination.
             self.deliver_voice_locally(sender_session, voice_data).await;

@@ -123,7 +123,7 @@ impl RpcHandler {
             "edge.saveChannel" => self.handle_save_channel(&request, &request_id).await,
             "edge.handleACL" => self.handle_acl(&request, &request_id).await,
             "edge.saveACL" => self.handle_save_acl(&request, &request_id).await,
-            "edge.getBanList" => self.handle_get_ban_list(&request_id).await,
+            "edge.getBanList" => self.handle_get_ban_list(&request, &request_id).await,
             "edge.updateBanList" => self.handle_update_ban_list(&request, &request_id).await,
             "edge.getUserList" => self.handle_get_user_list(&request_id).await,
             "edge.updateUserList" => self.handle_update_user_list(&request, &request_id).await,
@@ -2320,8 +2320,39 @@ impl RpcHandler {
 
     async fn handle_get_ban_list(
         &self,
+        request: &TypedRpcRequest,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
+        // Permission check: actor must have WRITE on the root channel (channel 0).
+        // Hub is the authoritative enforcer; Edge passes actor info rather than
+        // making a separate permission_query RPC, reducing total RPC round-trips.
+        if let Some(params) = request.edge_handle_acl.as_ref() {
+            if params.actor_user_id > 0 {
+                let actor_groups = self.state.session_manager
+                    .get_session(params.actor_session).await
+                    .map(|s| s.groups.clone())
+                    .unwrap_or_default();
+                let allowed = self.state.acl_manager
+                    .has_permission(params.actor_user_id as i32, 0, &actor_groups, permission::WRITE)
+                    .await;
+                if !allowed {
+                    debug!(
+                        "getBanList denied: actor_session={} actor_user_id={}: no WRITE on root channel",
+                        params.actor_session, params.actor_user_id
+                    );
+                    let result = EdgeHandleAclResult {
+                        success: false,
+                        permission_denied: Some(true),
+                        error: Some("permission denied".to_string()),
+                        ..Default::default()
+                    };
+                    return Ok(self.make_response_packet(request_id, "edge.getBanList", |r| {
+                        r.edge_handle_acl = Some(result);
+                    }));
+                }
+            }
+        }
+
         let bans = self.state.ban_store.get_all();
 
         let ban_entries: Vec<munode_protocol::mumbleproto::ban_list::BanEntry> = bans.iter().map(|b| {
@@ -2363,6 +2394,33 @@ impl RpcHandler {
     ) -> Result<EdgeHubPacket> {
         let params = request.edge_handle_acl.as_ref()
             .context("Missing ban list data (via edge_handle_acl.raw_data)")?;
+
+        // Permission check: actor must have BAN on the root channel (channel 0).
+        // Hub is the authoritative enforcer — validates before touching the ban store.
+        if params.actor_user_id > 0 {
+            let actor_groups = self.state.session_manager
+                .get_session(params.actor_session).await
+                .map(|s| s.groups.clone())
+                .unwrap_or_default();
+            let allowed = self.state.acl_manager
+                .has_permission(params.actor_user_id as i32, 0, &actor_groups, permission::BAN)
+                .await;
+            if !allowed {
+                debug!(
+                    "updateBanList denied: actor_session={} actor_user_id={}: no BAN on root channel",
+                    params.actor_session, params.actor_user_id
+                );
+                let result = EdgeHandleAclResult {
+                    success: false,
+                    permission_denied: Some(true),
+                    error: Some("permission denied".to_string()),
+                    ..Default::default()
+                };
+                return Ok(self.make_response_packet(request_id, "edge.updateBanList", |r| {
+                    r.edge_handle_acl = Some(result);
+                }));
+            }
+        }
 
         let ban_list: munode_protocol::mumbleproto::BanList =
             prost::Message::decode(params.raw_data.as_slice())

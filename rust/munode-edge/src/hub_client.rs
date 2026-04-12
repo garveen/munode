@@ -1220,6 +1220,7 @@ impl HubClient {
                             let peer_host = host.clone();
                             let self_id = self.edge_state.get_edge_id();
                             let state_clone = self.edge_state.clone();
+                            let secret = self.config.hmac_secret.clone();
                             tokio::spawn(async move {
                                 crate::relay_server::connect_peer_voice_tcp(
                                     peer_edge_id,
@@ -1227,6 +1228,7 @@ impl HubClient {
                                     voice_port,
                                     self_id,
                                     state_clone,
+                                    secret,
                                 )
                                 .await;
                             });
@@ -1669,6 +1671,7 @@ impl HubClient {
                 if !already_connected {
                     let self_id = self.edge_state.get_edge_id();
                     let state_clone = self.edge_state.clone();
+                    let secret = self.config.hmac_secret.clone();
                     tokio::spawn(async move {
                         crate::relay_server::connect_peer_voice_tcp(
                             peer_id,
@@ -1676,6 +1679,7 @@ impl HubClient {
                             voice_port,
                             self_id,
                             state_clone,
+                            secret,
                         )
                         .await;
                     });
@@ -2294,31 +2298,66 @@ impl HubClient {
         }
     }
 
-    /// RPC: Get ban list from Hub. Returns raw BanList protobuf bytes.
-    pub async fn rpc_get_ban_list(&self) -> Option<Vec<u8>> {
+    /// RPC: Get ban list from Hub.
+    ///
+    /// Returns `Ok(raw_bytes)` on success, `Err(true)` when Hub explicitly denied
+    /// the request (actor lacks WRITE on root channel), or `Err(false)` on a
+    /// transport / internal error.
+    ///
+    /// Hub is the authoritative permission enforcer; passing actor info here
+    /// eliminates the separate `permission_query` RPC that was previously needed,
+    /// reducing total round-trips from 2 to 1 for this operation.
+    pub async fn rpc_get_ban_list(
+        &self,
+        actor_session: u32,
+        actor_user_id: u32,
+    ) -> Result<Vec<u8>, bool> {
         let request = TypedRpcRequest {
             request_id: self.next_request_id(),
             method: "edge.getBanList".to_string(),
+            edge_handle_acl: Some(EdgeHandleAclParams {
+                edge_id: self.edge_id(),
+                actor_session,
+                actor_user_id,
+                actor_username: String::new(),
+                channel_id: 0,
+                query: true,
+                raw_data: vec![],
+            }),
             ..Default::default()
         };
         match self.rpc_call(request).await {
-            Ok(resp) => resp.edge_handle_acl.and_then(|r| r.raw_data),
+            Ok(resp) => {
+                let r = resp.edge_handle_acl.unwrap_or_default();
+                if !r.success {
+                    return Err(r.permission_denied.unwrap_or(false));
+                }
+                r.raw_data.ok_or(false)
+            }
             Err(e) => {
                 warn!("Failed to get ban list: {}", e);
-                None
+                Err(false)
             }
         }
     }
 
     /// RPC: Update ban list on Hub using raw BanList protobuf bytes.
-    pub async fn rpc_update_ban_list(&self, raw_ban_list: &[u8]) {
+    ///
+    /// Returns `Ok(())` on success, `Err(true)` when Hub denied the request
+    /// (actor lacks BAN on root channel), or `Err(false)` on transport error.
+    pub async fn rpc_update_ban_list(
+        &self,
+        raw_ban_list: &[u8],
+        actor_session: u32,
+        actor_user_id: u32,
+    ) -> Result<(), bool> {
         let request = TypedRpcRequest {
             request_id: self.next_request_id(),
             method: "edge.updateBanList".to_string(),
             edge_handle_acl: Some(EdgeHandleAclParams {
                 edge_id: self.edge_id(),
-                actor_session: 0,
-                actor_user_id: 0,
+                actor_session,
+                actor_user_id,
                 actor_username: String::new(),
                 channel_id: 0,
                 query: false,
@@ -2327,8 +2366,19 @@ impl HubClient {
             ..Default::default()
         };
         match self.rpc_call(request).await {
-            Ok(_) => debug!("Ban list updated on Hub"),
-            Err(e) => warn!("Failed to update ban list: {}", e),
+            Ok(resp) => {
+                let r = resp.edge_handle_acl.unwrap_or_default();
+                if !r.success {
+                    Err(r.permission_denied.unwrap_or(false))
+                } else {
+                    debug!("Ban list updated on Hub");
+                    Ok(())
+                }
+            }
+            Err(e) => {
+                warn!("Failed to update ban list: {}", e);
+                Err(false)
+            }
         }
     }
 

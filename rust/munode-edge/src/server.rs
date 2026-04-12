@@ -336,6 +336,17 @@ async fn read_proxy_protocol_addr(stream: &mut tokio::net::TcpStream) -> Result<
         let fam_proto = fixed[1];
         let addr_len  = u16::from_be_bytes([fixed[2], fixed[3]]) as usize;
 
+        // PROXY Protocol v2: address payload is at most ~216 bytes for
+        // AF_INET6 (36 bytes) plus the maximum defined TLV extensions.
+        // Cap here to prevent a crafted header from forcing a large heap
+        // allocation before we have read a single byte of address data.
+        if addr_len > 512 {
+            return Err(anyhow!(
+                "PROXY Protocol v2 address payload too large: {} bytes (max 512)",
+                addr_len
+            ));
+        }
+
         let mut addr_buf = vec![0u8; addr_len];
         if addr_len > 0 {
             stream.read_exact(&mut addr_buf).await
@@ -1397,6 +1408,28 @@ async fn handle_client_connection(
                     if let Some(requester_sid) = session_id {
                         debug!("UserStats request for session {:?}", stats.session);
                         if let Some(target_session) = stats.session {
+                            let is_stats_only = stats.stats_only.unwrap_or(false);
+                            let is_self = target_session == requester_sid;
+
+                            // Full stats (stats_only=false) for a *different* user expose the IP
+                            // address and other sensitive fields.  Require WRITE on the root
+                            // channel (i.e. server admin) before proceeding.
+                            if !is_stats_only && !is_self {
+                                let has_perm = match hub_client.handle_permission_query(requester_sid, 0).await {
+                                    Ok(r) => r.permissions.map(|p| p & perm::WRITE != 0).unwrap_or(false),
+                                    Err(_) => false,
+                                };
+                                if !has_perm {
+                                    let pd = mumbleproto::PermissionDenied {
+                                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                        channel_id: Some(0),
+                                        ..Default::default()
+                                    };
+                                    client_sender.send_message(MessageType::PermissionDenied, &pd).await;
+                                    continue;
+                                }
+                            }
+
                             if let Some(target) = edge_state.client_manager.get_client(target_session).await {
                                 // Fetch real crypto stats
                                 let (good, late, lost, resync) =
@@ -1416,8 +1449,6 @@ async fn handle_client_connection(
                                 // Fetch bandwidth stats: bytes-per-second in the last slot.
                                 let bps_last =
                                     edge_state.client_manager.get_bandwidth_stats(target_session).await;
-
-                                let is_stats_only = stats.stats_only.unwrap_or(false);
 
                                 let response = if is_stats_only {
                                     // stats_only=true: return only mutable stats, no certs/address
@@ -1589,41 +1620,60 @@ async fn handle_client_connection(
                     });
                 }
                 MessageType::BanList if client_state == ClientState::Ready => {
-                    // BanList query/update - forward to Hub
+                    // BanList query/update — forward to Hub which enforces permissions
+                    // authoritatively.  Actor info is passed so Hub can check WRITE (query)
+                    // or BAN (update) on the root channel without a separate permission_query
+                    // RPC, reducing the total round-trip count from 2 (pre-check + ban RPC)
+                    // to 1 (ban RPC with embedded actor info).
                     let Ok(ban_list) = mumbleproto::BanList::decode(&frame.payload[..]) else { continue; };
                     debug!("BanList from {}: query={:?}, {} entries", peer_addr, ban_list.query, ban_list.bans.len());
+                    let sid = session_id.unwrap_or(0);
+                    let actor_user_id = edge_state.client_manager.get_client(sid).await
+                        .map(|c| c.user_id).unwrap_or(0);
                     if ban_list.query.unwrap_or(false) {
-                        // Check admin (Write) permission on root channel
-                        let sid = session_id.unwrap_or(0);
-                        let is_admin = match hub_client.handle_permission_query(sid, 0).await {
-                            Ok(r) => r.permissions.map(|p| p & perm::WRITE != 0).unwrap_or(false),
-                            Err(_) => false,
-                        };
-                        if !is_admin {
-                            let pq = mumbleproto::PermissionDenied {
-                                r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
-                                channel_id: Some(0),
-                                ..Default::default()
-                            };
-                            client_sender.send_message(MessageType::PermissionDenied, &pq).await;
-                        } else {
-                        // Query: fetch ban list from Hub
                         let hub = hub_client.clone();
                         let sender = client_sender.clone();
                         tokio::spawn(async move {
-                            if let Some(raw_data) = hub.rpc_get_ban_list().await {
-                                if let Ok(ban_resp) = mumbleproto::BanList::decode(raw_data.as_slice()) {
-                                    sender.send_message(MessageType::BanList, &ban_resp).await;
+                            match hub.rpc_get_ban_list(sid, actor_user_id).await {
+                                Ok(raw_data) => {
+                                    if let Ok(ban_resp) = mumbleproto::BanList::decode(raw_data.as_slice()) {
+                                        sender.send_message(MessageType::BanList, &ban_resp).await;
+                                    }
+                                }
+                                Err(true) => {
+                                    // Hub explicitly denied: no WRITE on root channel
+                                    let pq = mumbleproto::PermissionDenied {
+                                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                        channel_id: Some(0),
+                                        ..Default::default()
+                                    };
+                                    sender.send_message(MessageType::PermissionDenied, &pq).await;
+                                }
+                                Err(false) => {
+                                    warn!("Failed to get ban list from Hub (session={})", sid);
                                 }
                             }
                         });
-                        }
                     } else {
-                        // Update: forward ban list to Hub
                         let raw = frame.payload.to_vec();
                         let hub = hub_client.clone();
+                        let sender = client_sender.clone();
                         tokio::spawn(async move {
-                            hub.rpc_update_ban_list(&raw).await;
+                            match hub.rpc_update_ban_list(&raw, sid, actor_user_id).await {
+                                Ok(()) => {}
+                                Err(true) => {
+                                    // Hub explicitly denied: no BAN on root channel
+                                    let pq = mumbleproto::PermissionDenied {
+                                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                        channel_id: Some(0),
+                                        ..Default::default()
+                                    };
+                                    sender.send_message(MessageType::PermissionDenied, &pq).await;
+                                }
+                                Err(false) => {
+                                    warn!("Failed to update ban list on Hub (session={})", sid);
+                                }
+                            }
                         });
                     }
                 }
