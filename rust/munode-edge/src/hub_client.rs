@@ -401,8 +401,10 @@ impl HubClient {
         *self.state.write().await = HubConnectionState::Connecting;
         info!("Connecting to Hub via {} (slot {})", url, slot);
 
-        let (ws_stream, _) = tokio_tungstenite::connect_async(url)
+        const CONNECT_TIMEOUT_VIA: Duration = Duration::from_secs(15);
+        let (ws_stream, _) = time::timeout(CONNECT_TIMEOUT_VIA, tokio_tungstenite::connect_async(url))
             .await
+            .with_context(|| format!("Hub WebSocket connect via relay timed out after {:?} (slot {})", CONNECT_TIMEOUT_VIA, slot))?
             .with_context(|| format!("Failed to connect to Hub WebSocket via {} (slot {})", url, slot))?;
 
         info!("WebSocket connected via {} (slot {})", url, slot);
@@ -417,10 +419,14 @@ impl HubClient {
             *s.lock().await = Some(send_tx);
         }
 
+        let (writer_fail_tx_via, writer_fail_rx_via) = tokio::sync::oneshot::channel::<()>();
+
         let writer_handle = tokio::spawn(async move {
+            let mut fail_tx = Some(writer_fail_tx_via);
             while let Some(data) = send_rx.recv().await {
                 if let Err(e) = ws_write.send(tungstenite::Message::Binary(Bytes::from(data))).await {
                     error!("WebSocket write error (slot {}): {}", slot, e);
+                    if let Some(tx) = fail_tx.take() { let _ = tx.send(()); }
                     break;
                 }
             }
@@ -469,31 +475,39 @@ impl HubClient {
         let (reader_done_tx, reader_done_rx) = tokio::sync::oneshot::channel::<()>();
         let reader_self = self.clone();
         let reader_handle = tokio::spawn(async move {
+            let mut writer_fail = writer_fail_rx_via;
             loop {
-                match ws_read.next().await {
-                    Some(Ok(msg)) => match msg {
-                        tungstenite::Message::Binary(data) => {
-                            if let Err(e) = reader_self.handle_incoming_slot(&data).await {
-                                error!("Fatal Hub message error (slot {}), closing connection: {}", slot, e);
+                tokio::select! {
+                    biased;
+                    _ = &mut writer_fail => {
+                        debug!("Reader (slot {} via relay): writer failed, breaking read loop", slot);
+                        break;
+                    }
+                    msg = ws_read.next() => {
+                        match msg {
+                            Some(Ok(tungstenite::Message::Binary(data))) => {
+                                if let Err(e) = reader_self.handle_incoming_slot(&data).await {
+                                    error!("Fatal Hub message error (slot {}), closing connection: {}", slot, e);
+                                    break;
+                                }
+                            }
+                            Some(Ok(tungstenite::Message::Close(_))) => {
+                                info!("Hub sent close frame (slot {})", slot);
+                                break;
+                            }
+                            Some(Ok(tungstenite::Message::Ping(data))) => {
+                                reader_self.send_on_slot(slot, tungstenite::Message::Pong(data).into_data().to_vec()).await.ok();
+                            }
+                            Some(Ok(_)) => {}
+                            Some(Err(e)) => {
+                                error!("WebSocket read error (slot {}): {}", slot, e);
+                                break;
+                            }
+                            None => {
+                                info!("WebSocket stream ended (slot {})", slot);
                                 break;
                             }
                         }
-                        tungstenite::Message::Close(_) => {
-                            info!("Hub sent close frame (slot {})", slot);
-                            break;
-                        }
-                        tungstenite::Message::Ping(data) => {
-                            reader_self.send_on_slot(slot, tungstenite::Message::Pong(data).into_data().to_vec()).await.ok();
-                        }
-                        _ => {}
-                    },
-                    Some(Err(e)) => {
-                        error!("WebSocket read error (slot {}): {}", slot, e);
-                        break;
-                    }
-                    None => {
-                        info!("WebSocket stream ended (slot {})", slot);
-                        break;
                     }
                 }
             }
@@ -593,8 +607,10 @@ impl HubClient {
         let url = format!("{}://{}:{}", scheme, self.config.host, self.config.control_port);
         info!("Connecting to Hub at {} (slot {})", url, slot);
 
-        let (ws_stream, _) = tokio_tungstenite::connect_async(&url)
+        const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+        let (ws_stream, _) = time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(&url))
             .await
+            .with_context(|| format!("Hub WebSocket connect timed out after {:?} (slot {})", CONNECT_TIMEOUT, slot))?
             .with_context(|| format!("Failed to connect to Hub WebSocket (slot {})", slot))?;
 
         info!("WebSocket connected to Hub (slot {})", slot);
@@ -610,11 +626,19 @@ impl HubClient {
             *s.lock().await = Some(send_tx);
         }
 
+        // The writer signals the reader when it encounters a fatal write error
+        // so the reader loop exits promptly rather than blocking on a half-dead
+        // connection until the OS decides to surface the error on the read side.
+        let (writer_fail_tx, writer_fail_rx) = tokio::sync::oneshot::channel::<()>();
+
         // Writer task
         let writer_handle = tokio::spawn(async move {
+            let mut fail_tx = Some(writer_fail_tx);
             while let Some(data) = send_rx.recv().await {
                 if let Err(e) = ws_write.send(tungstenite::Message::Binary(Bytes::from(data))).await {
                     error!("WebSocket write error (slot {}): {}", slot, e);
+                    // Notify the reader so it breaks out of its blocking next() call.
+                    if let Some(tx) = fail_tx.take() { let _ = tx.send(()); }
                     break;
                 }
             }
@@ -664,31 +688,40 @@ impl HubClient {
         let (reader_done_tx, reader_done_rx) = tokio::sync::oneshot::channel::<()>();
         let reader_self = self.clone();
         let reader_handle = tokio::spawn(async move {
+            let mut writer_fail = writer_fail_rx;
             loop {
-                match ws_read.next().await {
-                    Some(Ok(msg)) => match msg {
-                        tungstenite::Message::Binary(data) => {
-                            if let Err(e) = reader_self.handle_incoming_slot(&data).await {
-                                error!("Fatal Hub message error (slot {}), closing connection: {}", slot, e);
+                tokio::select! {
+                    biased;
+                    // Writer signalled a fatal send error — stop reading immediately.
+                    _ = &mut writer_fail => {
+                        debug!("Reader (slot {}): writer failed, breaking read loop", slot);
+                        break;
+                    }
+                    msg = ws_read.next() => {
+                        match msg {
+                            Some(Ok(tungstenite::Message::Binary(data))) => {
+                                if let Err(e) = reader_self.handle_incoming_slot(&data).await {
+                                    error!("Fatal Hub message error (slot {}), closing connection: {}", slot, e);
+                                    break;
+                                }
+                            }
+                            Some(Ok(tungstenite::Message::Close(_))) => {
+                                info!("Hub sent close frame (slot {})", slot);
+                                break;
+                            }
+                            Some(Ok(tungstenite::Message::Ping(data))) => {
+                                reader_self.send_on_slot(slot, tungstenite::Message::Pong(data).into_data().to_vec()).await.ok();
+                            }
+                            Some(Ok(_)) => {}
+                            Some(Err(e)) => {
+                                error!("WebSocket read error (slot {}): {}", slot, e);
+                                break;
+                            }
+                            None => {
+                                info!("WebSocket stream ended (slot {})", slot);
                                 break;
                             }
                         }
-                        tungstenite::Message::Close(_) => {
-                            info!("Hub sent close frame (slot {})", slot);
-                            break;
-                        }
-                        tungstenite::Message::Ping(data) => {
-                            reader_self.send_on_slot(slot, tungstenite::Message::Pong(data).into_data().to_vec()).await.ok();
-                        }
-                        _ => {}
-                    },
-                    Some(Err(e)) => {
-                        error!("WebSocket read error (slot {}): {}", slot, e);
-                        break;
-                    }
-                    None => {
-                        info!("WebSocket stream ended (slot {})", slot);
-                        break;
                     }
                 }
             }
@@ -1241,7 +1274,13 @@ impl HubClient {
                 if let Some(p) = &notification.cluster_peer_left {
                     let peer_edge_id = p.edge_id;
                     warn!("Peer edge left cluster: id {}", peer_edge_id);
+                    // Remove from peer registry (UDP routing).
                     self.edge_state.peer_registry.write().await.remove(peer_edge_id);
+                    // Signal the voice TCP reconnect loop to stop by removing the peer ID.
+                    // The loop checks this set before each retry and exits when absent.
+                    // Also drop the active tx so the running writer loop sees channel-closed.
+                    self.edge_state.voice_tcp_peers.write().await.remove(&peer_edge_id);
+                    self.edge_state.voice_tcp_conns.write().await.remove(&peer_edge_id);
                 }
             }
             "hub.routeTableUpdate" => {

@@ -542,6 +542,10 @@ pub struct EdgeState {
     /// Maps peer_edge_id → channel sender for binary frames to deliver over the /voice WebSocket.
     /// Populated when we successfully connect to a peer's /voice endpoint on peerJoined.
     pub voice_tcp_conns: RwLock<HashMap<u32, mpsc::Sender<Vec<u8>>>>,
+    /// Set of peer edge IDs for which a voice TCP connection manager task is running.
+    /// Inserting an ID before spawning the task prevents duplicate reconnect tasks.
+    /// Removing an ID (on hub.peerLeft) causes the reconnect loop to stop.
+    pub voice_tcp_peers: RwLock<HashSet<u32>>,
     /// Client-facing limits pushed from Hub on registration (and updated via heartbeat).
     /// When set, overrides Edge-local config for ServerSync/ServerConfig/rate limiting.
     pub hub_limits: RwLock<Option<ServerLimitsConfig>>,
@@ -594,6 +598,7 @@ impl EdgeState {
             ninja_visible_to: RwLock::new(HashMap::new()),
             route_table: RwLock::new(std::collections::HashMap::new()),
             voice_tcp_conns: RwLock::new(HashMap::new()),
+            voice_tcp_peers: RwLock::new(HashSet::new()),
             hub_limits: RwLock::new(None),
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),
@@ -632,6 +637,7 @@ impl EdgeState {
             ninja_visible_to: RwLock::new(HashMap::new()),
             route_table: RwLock::new(std::collections::HashMap::new()),
             voice_tcp_conns: RwLock::new(HashMap::new()),
+            voice_tcp_peers: RwLock::new(HashSet::new()),
             hub_limits: RwLock::new(None),
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),
@@ -677,6 +683,7 @@ impl EdgeState {
             ninja_visible_to: RwLock::new(HashMap::new()),
             route_table: RwLock::new(std::collections::HashMap::new()),
             voice_tcp_conns: RwLock::new(HashMap::new()),
+            voice_tcp_peers: RwLock::new(HashSet::new()),
             hub_limits: RwLock::new(None),
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),

@@ -67,6 +67,8 @@ pub struct RpcHandler {
     username_regex: Option<Regex>,
     /// Pre-compiled channel name regex (cached from config at startup).
     channel_name_regex: Option<Regex>,
+    /// Shared HTTP client for external auth requests (keeps connection pool alive).
+    http_client: reqwest::Client,
 }
 
 impl RpcHandler {
@@ -91,6 +93,7 @@ impl RpcHandler {
             state,
             username_regex,
             channel_name_regex,
+            http_client: reqwest::Client::new(),
         }
     }
 
@@ -1408,12 +1411,11 @@ impl RpcHandler {
             certificate_hash: client_info.and_then(|c| c.certificate_hash.clone()),
         };
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_millis(timeout_ms))
-            .build()?;
-
-        let response = client
+        // Reuse the shared client; apply the timeout at the request level so each
+        // call can have its own deadline without rebuilding the connection pool.
+        let response = self.http_client
             .post(url)
+            .timeout(std::time::Duration::from_millis(timeout_ms))
             .json(&body)
             .send()
             .await;
@@ -2496,6 +2498,40 @@ impl RpcHandler {
     ) -> Result<EdgeHubPacket> {
         let params = request.edge_handle_acl.as_ref()
             .context("Missing user list data (via edge_handle_acl.raw_data)")?;
+
+        // Permission check: actor must have WRITE on root channel (i.e. server admin).
+        // `actor_user_id == 0` means unauthenticated or unset — always deny.
+        if params.actor_user_id == 0 {
+            return Ok(self.make_response_packet(request_id, "edge.updateUserList", |r| {
+                r.edge_handle_acl = Some(EdgeHandleAclResult {
+                    success: false,
+                    raw_data: None,
+                    error: Some("Permission denied".to_string()),
+                    channel_id: None,
+                    permission_denied: Some(true),
+                });
+            }));
+        }
+        let actor_groups: Vec<String> = match self.state.session_manager
+            .get_session(params.actor_session).await {
+            Some(s) => s.groups.clone(),
+            None => vec![],
+        };
+        let has_perm = self.state.acl_manager
+            .has_permission(params.actor_user_id as i32, 0, &actor_groups, permission::WRITE)
+            .await;
+        if !has_perm {
+            return Ok(self.make_response_packet(request_id, "edge.updateUserList", |r| {
+                r.edge_handle_acl = Some(EdgeHandleAclResult {
+                    success: false,
+                    raw_data: None,
+                    error: Some("Permission denied".to_string()),
+                    channel_id: None,
+                    permission_denied: Some(true),
+                });
+            }));
+        }
+
         let raw: &[u8] = &params.raw_data;
         let user_list: munode_protocol::mumbleproto::UserList =
             prost::Message::decode(raw).context("Failed to decode UserList message")?;
@@ -2546,6 +2582,11 @@ impl RpcHandler {
 
         if let Some(removed) = self.state.session_manager.remove_session(session_id).await {
             info!("User left: {} (session={})", removed.username, session_id);
+
+            // Purge all voice target slots for this session so the map does not
+            // accumulate stale entries indefinitely.
+            self.state.voice_targets.write().await
+                .retain(|&(s, _), _| s != session_id);
 
             // Broadcast user removal to all edges
             let remove_params = HubUserRemoveBroadcastParams {
@@ -2605,6 +2646,10 @@ impl RpcHandler {
 
         if let Some(removed) = self.state.session_manager.remove_session(target_session).await {
             info!("User removed: {} (session={})", removed.username, target_session);
+
+            // Purge all voice target slots for this session.
+            self.state.voice_targets.write().await
+                .retain(|&(s, _), _| s != target_session);
 
             let remove_params = HubUserRemoveBroadcastParams {
                 session: target_session,
@@ -3315,12 +3360,26 @@ impl RpcHandler {
 
     // ==================== Blob RPC Handlers ====================
 
+    /// Maximum blob payload accepted from an Edge (bytes).
+    /// Mumble avatars (textures) are capped at 600×60 JPEG ≈ 128 KiB in practice;
+    /// comments are plain text.  1 MiB gives comfortable headroom while preventing
+    /// a rogue or compromised Edge from filling the Hub's disk.
+    const MAX_BLOB_BYTES: usize = 1024 * 1024; // 1 MiB
+
     async fn handle_blob_put(
         &self,
         request: &TypedRpcRequest,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_put.as_ref().context("Missing blob_put params")?;
+        if params.data.len() > Self::MAX_BLOB_BYTES {
+            return Ok(self.make_response_packet(request_id, "blob.put", |r| {
+                r.blob_put = Some(BlobPutResult {
+                    success: false, hash: None,
+                    error: Some(format!("Blob too large: {} bytes (max {})", params.data.len(), Self::MAX_BLOB_BYTES)),
+                });
+            }));
+        };
         match self.state.blob_store.put_async(params.data.clone()).await {
             Ok(hash) => Ok(self.make_response_packet(request_id, "blob.put", |r| {
                 r.blob_put = Some(BlobPutResult { success: true, hash: Some(hash), error: None });
@@ -3426,6 +3485,14 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_set_user_texture.as_ref().context("Missing blob_set_user_texture params")?;
+        if params.data.len() > Self::MAX_BLOB_BYTES {
+            return Ok(self.make_response_packet(request_id, "blob.setUserTexture", |r| {
+                r.blob_set_user_texture = Some(BlobSetUserTextureResult {
+                    success: false, hash: None,
+                    error: Some(format!("Blob too large: {} bytes (max {})", params.data.len(), Self::MAX_BLOB_BYTES)),
+                });
+            }));
+        };
         match self.state.blob_store.put_async(params.data.clone()).await {
             Ok(hash) => {
                 match self.state.user_store.set_blob_hash(params.user_id, "texture", &hash).await {
@@ -3455,6 +3522,14 @@ impl RpcHandler {
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
         let params = request.blob_set_user_comment.as_ref().context("Missing blob_set_user_comment params")?;
+        if params.data.len() > Self::MAX_BLOB_BYTES {
+            return Ok(self.make_response_packet(request_id, "blob.setUserComment", |r| {
+                r.blob_set_user_comment = Some(BlobSetUserCommentResult {
+                    success: false, hash: None,
+                    error: Some(format!("Blob too large: {} bytes (max {})", params.data.len(), Self::MAX_BLOB_BYTES)),
+                });
+            }));
+        };
         match self.state.blob_store.put_async(params.data.clone()).await {
             Ok(hash) => {
                 match self.state.user_store.set_blob_hash(params.user_id, "comment", &hash).await {
@@ -3535,11 +3610,32 @@ impl RpcHandler {
         };
         let notify_data = notify_packet.encode_to_vec();
 
-        let edge_connections = self.state.edge_connections.read().await;
-        for (&eid, sender) in edge_connections.iter() {
-            if eid != join_edge_id {
-                let _ = sender.send(notify_data.clone()).await;
-            }
+        // Snapshot senders before releasing the read-lock so no await is held
+        // under the lock.  Cluster join is low-frequency but state-critical:
+        // use the same join_all+timeout pattern as broadcast_critical so a
+        // stalled Edge cannot block the notification to others.
+        let peer_senders: Vec<(u32, mpsc::Sender<Vec<u8>>)> = {
+            let edge_connections = self.state.edge_connections.read().await;
+            edge_connections.iter()
+                .filter(|&(&eid, _)| eid != join_edge_id)
+                .map(|(&eid, tx)| (eid, tx.clone()))
+                .collect()
+        }; // read-lock released here
+
+        {
+            use futures_util::future::join_all;
+            use tokio::time::{timeout, Duration};
+            let futs = peer_senders.into_iter().map(|(eid, sender)| {
+                let data = notify_data.clone();
+                async move {
+                    match timeout(Duration::from_secs(2), sender.send(data)).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => warn!("peerJoined notify: edge {} channel closed: {}", eid, e),
+                        Err(_) => warn!("peerJoined notify: edge {} send timeout", eid),
+                    }
+                }
+            });
+            join_all(futs).await;
         }
 
         info!("Edge {} ({}) joined cluster — {} peers", join_edge_id, params.name, peers_snapshot.len());
@@ -3603,12 +3699,8 @@ impl RpcHandler {
                     ..Default::default()
                 };
                 let data = packet.encode_to_vec();
-                {
-                    let edges = self.state.edge_connections.read().await;
-                    for sender in edges.values() {
-                        let _ = sender.send(data.clone()).await;
-                    }
-                }
+                // Snapshot senders before awaiting to avoid holding RwLock during send.
+                crate::server::broadcast_critical(&self.state, data).await;
 
                 // Detect network partitions and shut down smallest partition
                 self.handle_partition_after_disconnect().await;
@@ -3733,14 +3825,16 @@ impl RpcHandler {
         };
         let data = packet.encode_to_vec();
 
+        // Clone the sender before releasing the read-lock so no await is held
+        // under the lock.  relay_voice_via_tcp is on the hot path for Hub-relayed
+        // voice; try_send avoids any blocking if the channel is momentarily full,
+        // which is acceptable for voice (drop-on-overload semantics).
         let sent = {
             let edges = self.state.edge_connections.read().await;
-            if let Some(sender) = edges.get(&target_edge_id) {
-                sender.send(data).await.is_ok()
-            } else {
-                false
-            }
-        };
+            edges.get(&target_edge_id).cloned()
+        }
+        .map(|sender| sender.try_send(data).is_ok())
+        .unwrap_or(false);
 
         if !sent {
             debug!("Could not relay voice to edge {} (not connected)", target_edge_id);

@@ -47,9 +47,14 @@ impl EdgeConnection {
         let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(256);
         // Graceful-shutdown signal for the writer task.
         let (writer_stop_tx, mut writer_stop_rx) = mpsc::channel::<()>(1);
+        // Writer-to-reader failure signal: when the writer encounters a fatal send error
+        // it notifies the reader so the read loop exits promptly without waiting for
+        // the OS to surface the error on the receive side (may take minutes on a black-hole link).
+        let (writer_fail_tx, writer_fail_rx) = tokio::sync::oneshot::channel::<()>();
 
         // Writer task: forwards messages from send_rx to WebSocket
         let writer_handle = tokio::spawn(async move {
+            let mut fail_tx = Some(writer_fail_tx);
             loop {
                 tokio::select! {
                     biased;
@@ -62,6 +67,7 @@ impl EdgeConnection {
                                     .await
                                 {
                                     error!("WebSocket write error for edge: {}", e);
+                                    if let Some(tx) = fail_tx.take() { let _ = tx.send(()); }
                                     break;
                                 }
                             }
@@ -73,31 +79,39 @@ impl EdgeConnection {
         });
 
         // Read loop
+        let mut writer_fail = writer_fail_rx;
         loop {
-            match ws_read.next().await {
-                Some(Ok(msg)) => match msg {
-                    tungstenite::Message::Binary(data) => {
-                        if let Err(e) = self.handle_incoming(&data, &send_tx).await {
-                            warn!("Error handling edge message from {}: {}", addr, e);
-                        }
-                    }
-                    tungstenite::Message::Close(_) => {
-                        info!("Edge {} sent close frame", addr);
-                        break;
-                    }
-                    tungstenite::Message::Ping(data) => {
-                        let pong = tungstenite::Message::Pong(data).into_data().to_vec();
-                        let _ = send_tx.send(pong).await;
-                    }
-                    _ => {}
-                },
-                Some(Err(e)) => {
-                    error!("WebSocket read error from edge {}: {}", addr, e);
+            tokio::select! {
+                biased;
+                _ = &mut writer_fail => {
+                    debug!("Hub edge_connection reader: writer failed, closing read loop for {}", addr);
                     break;
                 }
-                None => {
-                    info!("WebSocket stream ended for edge {}", addr);
-                    break;
+                msg = ws_read.next() => {
+                    match msg {
+                        Some(Ok(tungstenite::Message::Binary(data))) => {
+                            if let Err(e) = self.handle_incoming(&data, &send_tx).await {
+                                warn!("Error handling edge message from {}: {}", addr, e);
+                            }
+                        }
+                        Some(Ok(tungstenite::Message::Close(_))) => {
+                            info!("Edge {} sent close frame", addr);
+                            break;
+                        }
+                        Some(Ok(tungstenite::Message::Ping(data))) => {
+                            let pong = tungstenite::Message::Pong(data).into_data().to_vec();
+                            let _ = send_tx.send(pong).await;
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(e)) => {
+                            error!("WebSocket read error from edge {}: {}", addr, e);
+                            break;
+                        }
+                        None => {
+                            info!("WebSocket stream ended for edge {}", addr);
+                            break;
+                        }
+                    }
                 }
             }
         }

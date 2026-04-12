@@ -420,9 +420,9 @@ impl HubServer {
                 }
                 _ = tokio::signal::ctrl_c() => {
                     info!("Received Ctrl+C, shutting down Hub server...");
-                    // Notify all edges
-                    let edges = state.edge_connections.read().await;
-                    for (edge_id, sender) in edges.iter() {
+                    // Build the shutdown packet once, then snapshot senders to avoid
+                    // holding the read-lock across send().await calls.
+                    let shutdown_data = {
                         let notification = TypedRpcNotification {
                             method: "edge.forceDisconnect".to_string(),
                             timestamp: Some(current_millis() as i64),
@@ -431,16 +431,13 @@ impl HubServer {
                             }),
                             ..Default::default()
                         };
-                        let packet = EdgeHubPacket {
+                        EdgeHubPacket {
                             r#type: PacketType::RpcNotification as i32,
                             rpc_notification: Some(notification),
                             ..Default::default()
-                        };
-                        let data = packet.encode_to_vec();
-                        if let Err(e) = sender.send(data).await {
-                            error!("Failed to notify edge {} of shutdown: {}", edge_id, e);
-                        }
-                    }
+                        }.encode_to_vec()
+                    };
+                    broadcast_critical(&state, shutdown_data).await;
                     break;
                 }
             }
@@ -579,10 +576,26 @@ async fn health_check_loop(
         };
 
         for edge_id in timed_out {
-            warn!("Edge {} heartbeat timeout — cleaning up", edge_id);
-            state.edge_connections.write().await.remove(&edge_id);
-            state.edge_health.write().await.remove(&edge_id);
-            rpc_handler.cleanup_edge(edge_id).await;
+            // Guard against the race where the Edge reconnected (and sent a fresh
+            // heartbeat) between the snapshot above and this removal.  We re-check
+            // the heartbeat timestamp under the *write* lock so no new heartbeat
+            // can slip through after we decide to clean up.
+            let should_clean = {
+                let mut health_map = state.edge_health.write().await;
+                match health_map.get(&edge_id) {
+                    Some(h) if h.last_heartbeat.elapsed() > timeout => {
+                        health_map.remove(&edge_id);
+                        true
+                    }
+                    _ => false, // heartbeat was refreshed — do not clean up
+                }
+            };
+
+            if should_clean {
+                warn!("Edge {} heartbeat timeout — cleaning up", edge_id);
+                state.edge_connections.write().await.remove(&edge_id);
+                rpc_handler.cleanup_edge(edge_id).await;
+            }
         }
     }
 }
