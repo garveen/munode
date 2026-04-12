@@ -201,60 +201,37 @@ impl HubClient {
             self.run_single_slot(0, true).await;
         } else {
             info!("Hub connection pool mode: {} slots", self.pool_size);
-            // Start the primary slot first and wait for it to register.
-            self.run_primary_slot_init().await?;
-            // Start remaining slots in background (they only need to authenticate,
-            // not do full sync / cluster join, since the primary already did that).
+
+            // Spawn primary slot (slot 0) as a background task.  It uses the
+            // same run_single_slot path as single-connection mode, which gives
+            // it relay fallback and full reconnect logic with HubUnreachable
+            // emission.  do_register / do_full_sync / cluster join only happen
+            // on is_primary=true connections.
+            {
+                let me = self.clone();
+                tokio::spawn(async move { me.run_single_slot(0, true).await; });
+            }
+
+            // Wait until the primary has registered before starting secondary
+            // slots.  Secondary slots only carry RPC load and do not need to
+            // participate in the sync sequence.
+            loop {
+                if self.state().await == HubConnectionState::Registered {
+                    break;
+                }
+                time::sleep(Duration::from_millis(SECONDARY_SLOT_WAIT_POLL_INTERVAL_MS)).await;
+            }
+
+            // Spawn remaining slots.  Each runs its own independent reconnect
+            // loop so all slots come up (roughly) simultaneously.
             for slot in 1..self.pool_size {
                 let me = self.clone();
-                tokio::spawn(async move {
-                    me.run_secondary_slot(slot).await;
-                });
+                tokio::spawn(async move { me.run_secondary_slot(slot).await; });
             }
-            // Keep primary alive with reconnection loop (exponential backoff).
-            let mut backoff = ExponentialBackoff::new(self.config.reconnect_interval);
-            let mut first_failure_at: Option<std::time::Instant> = None;
-            let mut unreachable_emitted = false;
-            loop {
-                match self.try_connect_slot(0, true).await {
-                    Ok(()) => {
-                        info!("Primary Hub connection closed, reconnecting…");
-                        backoff.reset();
-                        first_failure_at = Some(std::time::Instant::now());
-                        unreachable_emitted = false;
-                    }
-                    Err(e) => {
-                        error!("Primary Hub connection error: {}", e);
-                        if first_failure_at.is_none() {
-                            first_failure_at = Some(std::time::Instant::now());
-                        }
-                    }
-                }
-                self.clear_slot(0).await;
-                // If ALL slots are gone, the edge is fully disconnected.
-                if !self.any_slot_connected().await {
-                    *self.state.write().await = HubConnectionState::Disconnected;
-                    self.pending.lock().await.clear();
-                    self.edge_state.emit(EdgeEvent::HubDisconnected);
 
-                    // Emit HubUnreachable once the outage exceeds the threshold.
-                    if !unreachable_emitted {
-                        if let Some(since) = first_failure_at {
-                            if since.elapsed() >= UNREACHABLE_TIMEOUT {
-                                warn!(
-                                    elapsed_secs = since.elapsed().as_secs(),
-                                    "Hub unreachable — disconnecting all clients and refusing new connections"
-                                );
-                                self.edge_state.emit(EdgeEvent::HubUnreachable);
-                                unreachable_emitted = true;
-                            }
-                        }
-                    }
-                }
-                let delay = backoff.next_delay();
-                warn!("Primary: reconnecting to Hub in {:?}", delay);
-                time::sleep(delay).await;
-            }
+            // All pool tasks are self-managing.  Keep this future alive so the
+            // JoinHandle in server.rs represents "hub client is running".
+            std::future::pending::<()>().await;
         }
         Ok(())
     }
@@ -557,12 +534,6 @@ impl HubClient {
         Ok(())
     }
 
-    /// Connect the primary slot and wait until it has registered.  Returns an
-    /// error if the initial connection fails.
-    async fn run_primary_slot_init(self: &Arc<Self>) -> Result<()> {
-        self.try_connect_slot(0, true).await
-    }
-
     /// Background reconnect loop for a secondary pool slot with exponential backoff.
     async fn run_secondary_slot(self: &Arc<Self>, slot: usize) {
         let mut backoff = ExponentialBackoff::new(self.config.reconnect_interval);
@@ -580,16 +551,6 @@ impl HubClient {
             debug!("Pool slot {} reconnecting in {:?}", slot, delay);
             time::sleep(delay).await;
         }
-    }
-
-    /// True if at least one pool slot has a live send channel.
-    async fn any_slot_connected(&self) -> bool {
-        for sender in &self.pool_senders {
-            if sender.lock().await.is_some() {
-                return true;
-            }
-        }
-        false
     }
 
     /// Clear a slot's send channel.
