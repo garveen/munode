@@ -202,6 +202,12 @@ impl EdgeServer {
                                     continue;
                                 }
                             };
+                            // Refuse new connections while Hub is unreachable.
+                            if !edge_state.accepting_connections.load(std::sync::atomic::Ordering::Relaxed) {
+                                debug!("Connection from {} refused: Hub is unreachable", peer_addr);
+                                drop(stream);
+                                continue;
+                            }
                             let acceptor = tls_acceptor.clone();
                             let config = self.config.clone();
                             let hub = hub_client.clone();
@@ -3165,6 +3171,8 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         debug!("Broadcast channel updated: {}", channel_id);
                     }
                     EdgeEvent::HubRegistered { disappeared_session_ids } => {
+                        // Hub reconnected — resume accepting new client connections.
+                        state.accepting_connections.store(true, std::sync::atomic::Ordering::Relaxed);
                         // After Hub reconnect / full-sync, resync the local clients' view of the
                         // world:
                         //  1. Send UserRemove for sessions that disappeared from Hub's snapshot
@@ -3270,7 +3278,8 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         warn!("Hub disconnected - local clients will continue but some features unavailable");
                     }
                     EdgeEvent::HubUnreachable => {
-                        warn!("Hub is unreachable (direct and relay both failed) — disconnecting all clients");
+                        warn!("Hub is unreachable (>30s without connection) — disconnecting all clients and refusing new connections");
+                        state.accepting_connections.store(false, std::sync::atomic::Ordering::Relaxed);
                         state.client_manager.close_all_connections(
                             "Server temporarily unavailable, please reconnect later",
                         ).await;

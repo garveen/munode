@@ -65,6 +65,9 @@ try {
     startAuth:  true,
     silent:     false,  // 输出详细日志（TS 模式），Rust 模式同时启用 'inherit' stdio
     reuse:      false,  // 每次都创建全新环境，避免残留状态
+    fixedEdgePort:  8086,
+    fixedEdgePort2: 8088,
+    fixedEdgePort3: 8090,
     hubConfig: {
       bandwidth: 40000,
     }

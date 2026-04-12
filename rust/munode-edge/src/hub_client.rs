@@ -46,6 +46,10 @@ const SECONDARY_SLOT_WAIT_MAX_POLLS: u32 = 100;
 /// (e.g. when `reconnect_interval = 0` is set in config) from causing a tight reconnect loop.
 const MIN_BACKOFF_MS: u64 = 100;
 
+/// Duration without a successful Hub connection before all local Mumble clients are
+/// disconnected and new connections are refused.
+const UNREACHABLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 struct ExponentialBackoff {
     base_ms: u64,
     current_ms: u64,
@@ -210,13 +214,22 @@ impl HubClient {
             }
             // Keep primary alive with reconnection loop (exponential backoff).
             let mut backoff = ExponentialBackoff::new(self.config.reconnect_interval);
+            let mut first_failure_at: Option<std::time::Instant> = None;
+            let mut unreachable_emitted = false;
             loop {
                 match self.try_connect_slot(0, true).await {
                     Ok(()) => {
                         info!("Primary Hub connection closed, reconnecting…");
                         backoff.reset();
+                        first_failure_at = Some(std::time::Instant::now());
+                        unreachable_emitted = false;
                     }
-                    Err(e) => error!("Primary Hub connection error: {}", e),
+                    Err(e) => {
+                        error!("Primary Hub connection error: {}", e);
+                        if first_failure_at.is_none() {
+                            first_failure_at = Some(std::time::Instant::now());
+                        }
+                    }
                 }
                 self.clear_slot(0).await;
                 // If ALL slots are gone, the edge is fully disconnected.
@@ -224,6 +237,20 @@ impl HubClient {
                     *self.state.write().await = HubConnectionState::Disconnected;
                     self.pending.lock().await.clear();
                     self.edge_state.emit(EdgeEvent::HubDisconnected);
+
+                    // Emit HubUnreachable once the outage exceeds the threshold.
+                    if !unreachable_emitted {
+                        if let Some(since) = first_failure_at {
+                            if since.elapsed() >= UNREACHABLE_TIMEOUT {
+                                warn!(
+                                    elapsed_secs = since.elapsed().as_secs(),
+                                    "Hub unreachable — disconnecting all clients and refusing new connections"
+                                );
+                                self.edge_state.emit(EdgeEvent::HubUnreachable);
+                                unreachable_emitted = true;
+                            }
+                        }
+                    }
                 }
                 let delay = backoff.next_delay();
                 warn!("Primary: reconnecting to Hub in {:?}", delay);
@@ -240,10 +267,20 @@ impl HubClient {
     /// Relay candidates are tried in priority order:
     ///   1. Statically configured peers (`hub_server.static_peers` in config)
     ///   2. Dynamically discovered peers (received via `hub.peerJoined` notifications)
+    ///
+    /// If the Hub (including all relay paths) remains unreachable for
+    /// `UNREACHABLE_TIMEOUT`, all local clients are disconnected and new
+    /// connections are refused until registration succeeds again.
     async fn run_single_slot(self: &Arc<Self>, slot: usize, is_primary: bool) {
         let mut backoff = ExponentialBackoff::new(self.config.reconnect_interval);
         let mut direct_fail_count: u32 = 0;
         const RELAY_FALLBACK_THRESHOLD: u32 = 3;
+
+        // Tracks when we first lost the Hub connection.  Set on first failure or
+        // on normal close; cleared when registration succeeds (HubRegistered).
+        let mut first_failure_at: Option<std::time::Instant> = None;
+        // Prevent emitting HubUnreachable multiple times for the same outage.
+        let mut unreachable_emitted = false;
 
         loop {
             // After several consecutive direct failures, try relay via a peer Edge.
@@ -259,9 +296,17 @@ impl HubClient {
                     info!("Hub connection closed normally");
                     backoff.reset();
                     direct_fail_count = 0;
+                    // Connection was alive and has just closed — start the
+                    // disconnected timer from this moment.
+                    first_failure_at = Some(std::time::Instant::now());
+                    unreachable_emitted = false;
                 }
                 Err(e) => {
                     error!("Hub connection error: {}", e);
+                    // Record the start of this outage on the very first failure.
+                    if first_failure_at.is_none() {
+                        first_failure_at = Some(std::time::Instant::now());
+                    }
                     if !use_relay {
                         direct_fail_count += 1;
                         if direct_fail_count == RELAY_FALLBACK_THRESHOLD {
@@ -272,13 +317,27 @@ impl HubClient {
                             );
                         }
                     } else {
-                        // Relay also failed — Hub is completely unreachable.
-                        // Signal that all connected clients should be disconnected.
-                        warn!("Hub relay connection also failed — Hub is unreachable, disconnecting all clients");
-                        self.edge_state.emit(EdgeEvent::HubUnreachable);
+                        warn!("Hub relay connection also failed — will keep retrying");
                     }
                 }
             }
+
+            // Emit HubUnreachable once the outage has lasted longer than the
+            // configured threshold.  This kicks all local clients and stops
+            // new connections from being accepted.
+            if !unreachable_emitted {
+                if let Some(since) = first_failure_at {
+                    if since.elapsed() >= UNREACHABLE_TIMEOUT {
+                        warn!(
+                            elapsed_secs = since.elapsed().as_secs(),
+                            "Hub unreachable — disconnecting all clients and refusing new connections"
+                        );
+                        self.edge_state.emit(EdgeEvent::HubUnreachable);
+                        unreachable_emitted = true;
+                    }
+                }
+            }
+
             // Clean up state
             *self.state.write().await = HubConnectionState::Disconnected;
             self.clear_slot(slot).await;

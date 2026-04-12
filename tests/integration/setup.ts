@@ -948,6 +948,14 @@ export async function setupTestEnvironment(
     silent?: boolean;
     /** When true, creates an isolated environment without affecting globalTestEnvironment */
     isolated?: boolean;
+    /** Fixed port for Edge 1 client listener (skips auto-allocation) */
+    fixedEdgePort?: number;
+    /** Fixed port for Edge 2 client listener (skips auto-allocation) */
+    fixedEdgePort2?: number;
+    /** Fixed port for Edge 3 client listener (skips auto-allocation) */
+    fixedEdgePort3?: number;
+    /** Fixed port for Edge 4 client listener (skips auto-allocation) */
+    fixedEdgePort4?: number;
   } = {}
 ): Promise<TestEnvironment> {
   // Isolated mode: bypass global environment management entirely
@@ -1167,22 +1175,30 @@ export async function setupTestEnvironment(
   
   const edgeBasePort = Math.max(webApiPort, basePort - 1);
   // Edge1: Mumble 客户端端口 + Edge 间专用 TLS 端口
-  const edgePort = finalOptions.startEdge !== false ? await findAvailablePort(edgeBasePort + 2) : 0;
+  const edgePort = finalOptions.startEdge !== false
+    ? (finalOptions.fixedEdgePort ?? await findAvailablePort(edgeBasePort + 2))
+    : 0;
   const edgeEdgePort = (finalOptions.startEdge !== false && edgePort > 0) ? await findAvailablePort(edgePort + 1) : 0;
   const edgeUdpPort = edgePort; // 统一UDP端口：与TLS端口相同
 
   // Edge2
-  const edgePort2 = (finalOptions.startEdge2 === true && edgeEdgePort > 0) ? await findAvailablePort(edgeEdgePort + 1) : 0;
+  const edgePort2 = (finalOptions.startEdge2 === true && edgeEdgePort > 0)
+    ? (finalOptions.fixedEdgePort2 ?? await findAvailablePort(edgeEdgePort + 1))
+    : 0;
   const edgeEdgePort2 = (finalOptions.startEdge2 === true && edgePort2 > 0) ? await findAvailablePort(edgePort2 + 1) : 0;
   const edgeUdpPort2 = edgePort2; // 统一UDP端口：与TLS端口相同
 
   // Edge3
-  const edgePort3 = (finalOptions.startEdge3 === true && edgeEdgePort2 > 0) ? await findAvailablePort(edgeEdgePort2 + 1) : 0;
+  const edgePort3 = (finalOptions.startEdge3 === true && edgeEdgePort2 > 0)
+    ? (finalOptions.fixedEdgePort3 ?? await findAvailablePort(edgeEdgePort2 + 1))
+    : 0;
   const edgeEdgePort3 = (finalOptions.startEdge3 === true && edgePort3 > 0) ? await findAvailablePort(edgePort3 + 1) : 0;
   const edgeUdpPort3 = edgePort3; // 统一UDP端口：与TLS端口相同
 
   // Edge4
-  const edgePort4 = (finalOptions.startEdge4 === true && edgeEdgePort3 > 0) ? await findAvailablePort(edgeEdgePort3 + 1) : 0;
+  const edgePort4 = (finalOptions.startEdge4 === true && edgeEdgePort3 > 0)
+    ? (finalOptions.fixedEdgePort4 ?? await findAvailablePort(edgeEdgePort3 + 1))
+    : 0;
   const edgeEdgePort4 = (finalOptions.startEdge4 === true && edgePort4 > 0) ? await findAvailablePort(edgePort4 + 1) : 0;
   const edgeUdpPort4 = edgePort4; // 统一UDP端口：与TLS端口相同
 

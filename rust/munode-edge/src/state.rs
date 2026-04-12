@@ -432,6 +432,10 @@ pub struct EdgeState {
     /// Percentage (0–100) of outbound Edge-to-Edge UDP packets to drop.
     /// Zero in production; set by `test-utils` feature tests to simulate link degradation.
     pub test_udp_drop_rate: AtomicU32,
+    /// Whether this Edge is currently accepting new Mumble client connections.
+    /// Set to `false` when Hub becomes unreachable for too long; restored to `true`
+    /// when Hub reconnects and registration completes.
+    pub accepting_connections: AtomicBool,
     /// ChaCha20-Poly1305 encryption state for Edge-to-Edge UDP voice traffic.
     ///
     /// `Some` when `hub_server.hmac_secret` is configured; `None` when the Edge
@@ -470,6 +474,7 @@ impl EdgeState {
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
+            accepting_connections: AtomicBool::new(true),
             edge_crypto: None,
         })
     }
@@ -507,6 +512,7 @@ impl EdgeState {
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
+            accepting_connections: AtomicBool::new(true),
             edge_crypto: None,
         })
     }
@@ -551,6 +557,7 @@ impl EdgeState {
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),
             test_udp_drop_rate: AtomicU32::new(0),
+            accepting_connections: AtomicBool::new(true),
             edge_crypto,
         })
     }
