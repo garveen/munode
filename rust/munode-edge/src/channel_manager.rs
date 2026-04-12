@@ -440,6 +440,7 @@ mod tests {
                 recording: None,
                 ip_address: None,
                 connected_at: None,
+                listening_channels: vec![],
             },
         ];
         mgr.load_remote_users(&sessions).await;

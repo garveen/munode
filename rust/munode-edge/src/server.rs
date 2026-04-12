@@ -435,6 +435,275 @@ fn parse_proxy_v2(ver_cmd: u8, fam_proto: u8, addrs: &[u8]) -> Result<Option<Soc
     }
 }
 
+/// Arguments passed into the spawned login task.
+struct LoginTaskArgs {
+    hub_client: Arc<HubClient>,
+    edge_state: Arc<EdgeState>,
+    client_sender: ClientSender,
+    config: EdgeConfig,
+    peer_addr: SocketAddr,
+    /// oneshot sender consumed by `register_close_signal`.
+    close_tx: tokio::sync::oneshot::Sender<()>,
+    username: String,
+    password: String,
+    tokens: Vec<String>,
+    opus: bool,
+    preconnect_self_mute: Option<bool>,
+    preconnect_self_deaf: Option<bool>,
+    client_version: Option<u32>,
+    client_release: String,
+    client_os: String,
+    client_os_version: String,
+    certificate_hash: Option<String>,
+}
+
+/// Performs the full authentication and login sequence for a new client.
+///
+/// This is spawned as an independent tokio task so the read loop of
+/// `handle_client_connection` remains free to respond to TCP Ping messages
+/// while potentially slow Hub RPCs are in flight.
+///
+/// Returns `Some(session_id)` on success.  On failure the function sends a
+/// Reject to the client, calls `remove_client` / `notify_user_left` if the
+/// session was already registered, and returns `None`.
+async fn do_login_task(args: LoginTaskArgs) -> Option<u32> {
+    let LoginTaskArgs {
+        hub_client,
+        edge_state,
+        client_sender,
+        config,
+        peer_addr,
+        close_tx,
+        username,
+        password,
+        tokens,
+        opus,
+        preconnect_self_mute,
+        preconnect_self_deaf,
+        client_version,
+        client_release,
+        client_os,
+        client_os_version,
+        certificate_hash,
+    } = args;
+
+    // Allocate session ID from Hub
+    let sid = match hub_client.allocate_session_id().await {
+        Ok(sid) => sid,
+        Err(e) => {
+            error!("Failed to allocate session ID: {}", e);
+            client_sender.send_raw(handler::encode_reject(
+                Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
+                "Internal server error",
+            )).await;
+            return None;
+        }
+    };
+
+    // Build client info for Hub (use data from Version message)
+    let client_info = hubedge::ClientInfo {
+        ip_address: peer_addr.ip().to_string(),
+        ip_version: if peer_addr.is_ipv4() { "IPv4" } else { "IPv6" }.to_string(),
+        release: client_release.clone(),
+        version: client_version,
+        os: client_os.clone(),
+        os_version: client_os_version.clone(),
+        certificate_hash: certificate_hash.clone(),
+    };
+
+    // Authenticate via Hub
+    let auth_result = match hub_client.authenticate_user(
+        sid, &username, &password, tokens, Some(client_info),
+        preconnect_self_mute, preconnect_self_deaf,
+    ).await {
+        Ok(result) => result,
+        Err(e) => {
+            error!("Authentication RPC failed: {}", e);
+            client_sender.send_raw(handler::encode_reject(
+                Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
+                "Authentication failed",
+            )).await;
+            return None;
+        }
+    };
+
+    if !auth_result.success {
+        let reason = auth_result.reason.clone().unwrap_or_else(|| "Authentication denied".to_string());
+        info!("Authentication failed for {}: {}", username, reason);
+        if auth_result.cert_required.unwrap_or(false) {
+            let pd = mumbleproto::PermissionDenied {
+                r#type: Some(mumbleproto::permission_denied::DenyType::MissingCertificate as i32),
+                session: Some(sid),
+                ..Default::default()
+            };
+            client_sender.send_message(MessageType::PermissionDenied, &pd).await;
+        }
+        client_sender.send_raw(handler::encode_reject(
+            auth_result.reject_type.map(|t| t as i32)
+                .or_else(|| if auth_result.cert_required.unwrap_or(false) {
+                    Some(mumbleproto::reject::RejectType::NoCertificate as i32)
+                } else { None }),
+            &reason,
+        )).await;
+        return None;
+    }
+
+    // Authentication succeeded — build and register the client.
+    let channel_id = auth_result.channel_id.unwrap_or(config.server.default_channel);
+    let display_name = auth_result.display_name.clone()
+        .or(auth_result.username.clone())
+        .unwrap_or(username.clone());
+
+    info!(
+        "User {} authenticated (session={}, user_id={:?}, channel={})",
+        auth_result.username.as_deref().unwrap_or(&username),
+        sid,
+        auth_result.user_id,
+        channel_id
+    );
+    debug!(
+        session = sid,
+        groups = ?auth_result.groups,
+        "User groups assigned at login"
+    );
+
+    let mut client = ClientInfo {
+        session: sid,
+        user_id: auth_result.user_id.unwrap_or(0),
+        username: display_name,
+        channel_id,
+        state: ClientState::Authenticated,
+        mute: auth_result.mute.unwrap_or(false),
+        deaf: auth_result.deaf.unwrap_or(false),
+        suppress: auth_result.suppress.unwrap_or(false),
+        self_mute: preconnect_self_mute.unwrap_or(auth_result.self_mute.unwrap_or(false)),
+        self_deaf: preconnect_self_deaf.unwrap_or(auth_result.self_deaf.unwrap_or(false)),
+        priority_speaker: auth_result.priority_speaker.unwrap_or(false),
+        recording: auth_result.recording.unwrap_or(false),
+        ip_address: peer_addr.ip().to_string(),
+        connected_at: std::time::Instant::now(),
+        last_active: std::time::Instant::now(),
+        cert_hash: certificate_hash.clone(),
+        groups: auth_result.groups.clone(),
+        opus_supported: opus,
+        listening_channels: vec![],
+        listening_volume_adjustments: HashMap::new(),
+        texture_hash: None,
+        comment_hash: None,
+        client_version,
+        client_release: client_release.clone(),
+        client_os: client_os.clone(),
+        client_os_version: client_os_version.clone(),
+        plugin_context: vec![],
+    };
+
+    // Add client to manager first so permission queries can resolve user_id.
+    edge_state.client_manager.add_client(client.clone(), client_sender.clone()).await;
+    // Register the close signal so the main loop can force-disconnect on kick/ban.
+    edge_state.client_manager.register_close_signal(sid, close_tx).await;
+
+    // Helper: clean up and return None after the session is in the manager.
+    macro_rules! fail {
+        () => {{
+            edge_state.client_manager.remove_client(sid).await;
+            hub_client.notify_user_left(sid, None).await;
+            return None;
+        }};
+    }
+
+    // Check Speak permission for initial channel to determine suppress
+    // (done AFTER add_client so hub_client.handle_permission_query gets the right user_id)
+    if !auth_result.suppress.unwrap_or(false) {
+        let can_speak = match hub_client.handle_permission_query(sid, channel_id).await {
+            Ok(r) => r.permissions.map(|p| p & munode_common::permission::SPEAK != 0).unwrap_or(true),
+            Err(_) => true,
+        };
+        if !can_speak {
+            client.suppress = true;
+            edge_state.client_manager.update_client(client.clone()).await;
+        }
+    }
+
+    // Execute full login sequence (CryptSetup → CodecVersion → ChannelStates →
+    // UserStates → ServerSync → ServerConfig).
+    let login = LoginHandler::new(&client_sender, &config, &edge_state, &hub_client);
+    if let Err(e) = login.execute_login(sid, &auth_result, opus).await {
+        info!("Login sequence failed for {} (session={}): {}", peer_addr, sid, e);
+        fail!();
+    }
+
+    // Broadcast updated codec version to all clients now that this client's
+    // opus capability is registered.
+    broadcast_codec_version(&edge_state).await;
+
+    edge_state.client_manager.set_client_state(sid, ClientState::Ready).await;
+
+    // Populate ninja channel permission cache for this client.
+    {
+        let ninja_channels = edge_state.ninja_channels.read().await.clone();
+        if !ninja_channels.is_empty() {
+            let mut visible_set = std::collections::HashSet::new();
+            for &ch_id in &ninja_channels {
+                let can_enter = match hub_client.handle_permission_query(sid, ch_id).await {
+                    Ok(r) => r.permissions.map(|p| p & munode_common::permission::ENTER != 0).unwrap_or(false),
+                    Err(_) => false,
+                };
+                if can_enter {
+                    visible_set.insert(ch_id);
+                }
+            }
+            edge_state.ninja_visible_to.write().await.insert(sid, visible_set);
+        }
+    }
+
+    // If suppress was set by permission check, notify the client itself.
+    if client.suppress && !auth_result.suppress.unwrap_or(false) {
+        let suppress_msg = mumbleproto::UserState {
+            session: Some(sid),
+            suppress: Some(true),
+            ..Default::default()
+        };
+        client_sender.send_message(MessageType::UserState, &suppress_msg).await;
+    }
+
+    // If pre-connect self_deaf/self_mute was set, notify client.
+    if preconnect_self_deaf.is_some() || preconnect_self_mute.is_some() {
+        let preconnect_msg = mumbleproto::UserState {
+            session: Some(sid),
+            self_mute: preconnect_self_mute,
+            self_deaf: preconnect_self_deaf,
+            ..Default::default()
+        };
+        client_sender.send_message(MessageType::UserState, &preconnect_msg).await;
+    }
+
+    // Broadcast new user to all other Ready clients.
+    let user_state_msg = handler::build_user_state_msg(&client);
+    edge_state.client_manager.broadcast(
+        MessageType::UserState,
+        &user_state_msg,
+        Some(sid),
+    ).await;
+
+    // Restore persisted channel listeners for registered users.
+    let user_id = client.user_id;
+    if user_id > 0 {
+        let saved_listeners = hub_client.load_channel_listeners(user_id).await;
+        if !saved_listeners.is_empty() {
+            let restore_state = mumbleproto::UserState {
+                session: Some(sid),
+                listening_channel_add: saved_listeners,
+                ..Default::default()
+            };
+            handle_user_state_update(&edge_state, &hub_client, sid, &restore_state).await;
+            debug!("Restored saved channel listeners for user {} (session {})", user_id, sid);
+        }
+    }
+
+    info!("Client {} is now Ready (session={})", peer_addr, sid);
+    Some(sid)
+}
+
 /// Handle a single Mumble client connection (TLS).
 async fn handle_client_connection(
     stream: tokio::net::TcpStream,
@@ -534,6 +803,17 @@ async fn handle_client_connection(
     // We wrap it in an Option so we can move it into register_close_signal exactly once.
     let mut close_tx_opt: Option<tokio::sync::oneshot::Sender<()>> = Some(close_tx);
 
+    // Login task: spawned when Authenticate is received so that the read loop
+    // remains free to respond to TCP Ping messages while Hub RPCs and the
+    // login message burst are in flight.  Without this, Hub RPCs that take
+    // longer than ~20 s cause the C++ client to hit its ping-timeout and
+    // call serverConnectionClosed(), making the connection appear "frozen".
+    //
+    // login_rx  — oneshot receiver fed by the spawned task (Some(sid) = success)
+    // login_abort — AbortHandle to cancel the task if close_rx fires first
+    let mut login_rx: Option<tokio::sync::oneshot::Receiver<Option<u32>>> = None;
+    let mut login_abort: Option<tokio::task::AbortHandle> = None;
+
     'outer: loop {
         // Read data from TLS stream with idle timeout to drop zombie connections.
         // Before authentication, also enforce the pre-auth connection timeout.
@@ -547,37 +827,89 @@ async fn handle_client_connection(
         } else {
             CLIENT_IDLE_TIMEOUT
         };
-        let n = tokio::select! {
-            // Check close signal first (biased) so kick/ban takes priority.
-            biased;
-            _ = &mut close_rx => {
-                debug!("Client {} force-disconnected (kicked/banned)", peer_addr);
-                break 'outer;
-            }
-            result = tokio::time::timeout(read_timeout, reader.read_buf(&mut buf)) => {
-                match result {
-                    Ok(Ok(n)) => n,
-                    Ok(Err(e)) => {
-                        info!("Client {} connection error: {}", peer_addr, e);
-                        break 'outer;
+
+        // --- Outer select: three branches when a login task is running
+        //     (close | login-done | read), otherwise two branches (close | read).
+        //
+        // We take `login_recv` out of `login_rx` so the async block can hold an
+        // *owned* Receiver instead of a borrow, avoiding lifetime conflicts with
+        // the &mut close_rx in the same select!.  On the read branch we put it
+        // back so subsequent iterations still see it.
+        let n = if let Some(mut login_recv) = login_rx.take() {
+            tokio::select! {
+                biased;
+                _ = &mut close_rx => {
+                    debug!("Client {} force-disconnected (kicked/banned)", peer_addr);
+                    if let Some(ab) = login_abort.take() { ab.abort(); }
+                    break 'outer;
+                }
+                result = &mut login_recv => {
+                    // Login task finished.
+                    login_abort = None;
+                    match result.ok().flatten() {
+                        Some(sid) => {
+                            session_id = Some(sid);
+                            client_state = ClientState::Ready;
+                        }
+                        None => {
+                            // Login failed; the task already cleaned up.
+                            break 'outer;
+                        }
                     }
-                    Err(_) => {
-                        if client_state != ClientState::Ready {
-                            if let Some(deadline) = auth_deadline {
-                                if tokio::time::Instant::now() >= deadline {
-                                    info!("Client {} auth timeout — closing unauthenticated connection", peer_addr);
-                                    let reject = mumbleproto::Reject {
-                                        r#type: Some(mumbleproto::reject::RejectType::None as i32),
-                                        reason: Some("Authentication timed out".to_string()),
-                                        ..Default::default()
-                                    };
-                                    client_sender.send_message(MessageType::Reject, &reject).await;
-                                    break 'outer;
+                    // No data was read — restart loop so frame processing
+                    // re-evaluates with the new client_state.
+                    continue 'outer;
+                }
+                result = tokio::time::timeout(read_timeout, reader.read_buf(&mut buf)) => {
+                    // TCP data arrived while login is still in progress.
+                    // Put the receiver back so the next iteration sees it.
+                    login_rx = Some(login_recv);
+                    match result {
+                        Ok(Ok(n)) => n,
+                        Ok(Err(e)) => {
+                            info!("Client {} connection error: {}", peer_addr, e);
+                            break 'outer;
+                        }
+                        Err(_) => {
+                            info!("Client {} idle timeout during login — closing connection", peer_addr);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+        } else {
+            tokio::select! {
+                // Check close signal first (biased) so kick/ban takes priority.
+                biased;
+                _ = &mut close_rx => {
+                    debug!("Client {} force-disconnected (kicked/banned)", peer_addr);
+                    break 'outer;
+                }
+                result = tokio::time::timeout(read_timeout, reader.read_buf(&mut buf)) => {
+                    match result {
+                        Ok(Ok(n)) => n,
+                        Ok(Err(e)) => {
+                            info!("Client {} connection error: {}", peer_addr, e);
+                            break 'outer;
+                        }
+                        Err(_) => {
+                            if client_state != ClientState::Ready {
+                                if let Some(deadline) = auth_deadline {
+                                    if tokio::time::Instant::now() >= deadline {
+                                        info!("Client {} auth timeout — closing unauthenticated connection", peer_addr);
+                                        let reject = mumbleproto::Reject {
+                                            r#type: Some(mumbleproto::reject::RejectType::None as i32),
+                                            reason: Some("Authentication timed out".to_string()),
+                                            ..Default::default()
+                                        };
+                                        client_sender.send_message(MessageType::Reject, &reject).await;
+                                        break 'outer;
+                                    }
                                 }
                             }
+                            info!("Client {} idle timeout — closing connection", peer_addr);
+                            break 'outer;
                         }
-                        info!("Client {} idle timeout — closing connection", peer_addr);
-                        break 'outer;
                     }
                 }
             }
@@ -634,11 +966,10 @@ async fn handle_client_connection(
                 MessageType::Authenticate if client_state == ClientState::Connected => {
                     let Ok(auth) = mumbleproto::Authenticate::decode(&frame.payload[..]) else { continue; };
                     let username = auth.username.clone().unwrap_or_default();
-                    let password = auth.password.clone().unwrap_or_default();
-                    let tokens: Vec<String> = auth.tokens.clone();
-                    let opus = auth.opus.unwrap_or(false);
 
                     info!("Authentication request from {}: username={}", peer_addr, username);
+
+                    // --- Fast synchronous checks (no Hub RPCs) ---
 
                     // Check Hub connectivity
                     if hub_client.state().await != HubConnectionState::Registered {
@@ -677,230 +1008,41 @@ async fn handle_client_connection(
                         }
                     }
 
-                    // Allocate session ID from Hub
-                    let sid = match hub_client.allocate_session_id().await {
-                        Ok(sid) => sid,
-                        Err(e) => {
-                            error!("Failed to allocate session ID: {}", e);
-                            client_sender.send_raw(handler::encode_reject(
-                                Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
-                                "Internal server error",
-                            )).await;
-                            drop(client_sender);
-                            writer_handle.await.ok();
-                            return Ok(());
-                        }
-                    };
-
-                    // Build client info for Hub (use data from Version message)
-                    let client_info = hubedge::ClientInfo {
-                        ip_address: peer_addr.ip().to_string(),
-                        ip_version: if peer_addr.is_ipv4() { "IPv4" } else { "IPv6" }.to_string(),
-                        release: client_release.clone(),
-                        version: client_version,
-                        os: client_os.clone(),
-                        os_version: client_os_version.clone(),
+                    // --- Spawn the slow login work as a separate task ---
+                    //
+                    // This keeps the read loop alive so the server can continue
+                    // responding to TCP Ping messages while Hub RPCs and the
+                    // message burst are in flight.  The task sends back the
+                    // allocated session_id (or None on failure) via the oneshot.
+                    let (task_tx, task_rx) = tokio::sync::oneshot::channel::<Option<u32>>();
+                    let task_args = LoginTaskArgs {
+                        hub_client: hub_client.clone(),
+                        edge_state: edge_state.clone(),
+                        client_sender: client_sender.clone(),
+                        config: config.clone(),
+                        peer_addr,
+                        close_tx: close_tx_opt.take().expect("close_tx used by login task"),
+                        username: auth.username.unwrap_or_default(),
+                        password: auth.password.unwrap_or_default(),
+                        tokens: auth.tokens,
+                        opus: auth.opus.unwrap_or(false),
+                        preconnect_self_mute,
+                        preconnect_self_deaf,
+                        client_version,
+                        client_release: client_release.clone(),
+                        client_os: client_os.clone(),
+                        client_os_version: client_os_version.clone(),
                         certificate_hash: certificate_hash.clone(),
                     };
-
-                    // Authenticate via Hub
-                    let auth_result = match hub_client.authenticate_user(
-                        sid, &username, &password, tokens, Some(client_info),
-                        preconnect_self_mute, preconnect_self_deaf,
-                    ).await {
-                        Ok(result) => result,
-                        Err(e) => {
-                            error!("Authentication RPC failed: {}", e);
-                            client_sender.send_raw(handler::encode_reject(
-                                Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
-                                "Authentication failed",
-                            )).await;
-                            drop(client_sender);
-                            writer_handle.await.ok();
-                            return Ok(());
-                        }
-                    };
-
-                    if !auth_result.success {
-                        let reason = auth_result.reason.clone().unwrap_or_else(|| "Authentication denied".to_string());
-                        info!("Authentication failed for {}: {}", username, reason);
-                        // If the server requires a certificate, send PermissionDenied(MissingCertificate)
-                        // first so modern clients show the appropriate dialog, then fall through to Reject.
-                        if auth_result.cert_required.unwrap_or(false) {
-                            let pd = mumbleproto::PermissionDenied {
-                                r#type: Some(mumbleproto::permission_denied::DenyType::MissingCertificate as i32),
-                                session: Some(sid),
-                                ..Default::default()
-                            };
-                            client_sender.send_message(MessageType::PermissionDenied, &pd).await;
-                        }
-                        client_sender.send_raw(handler::encode_reject(
-                            auth_result.reject_type.map(|t| t as i32)
-                                .or_else(|| if auth_result.cert_required.unwrap_or(false) {
-                                    Some(mumbleproto::reject::RejectType::NoCertificate as i32)
-                                } else { None }),
-                            &reason,
-                        )).await;
-                        // Drop sender so the writer task drains and flushes the Reject before exiting
-                        drop(client_sender);
-                        writer_handle.await.ok();
-                        return Ok(());
-                    }
-
-                    // Authentication succeeded
-                    session_id = Some(sid);
-                    let channel_id = auth_result.channel_id.unwrap_or(config.server.default_channel);
-
-                    info!(
-                        "User {} authenticated (session={}, user_id={:?}, channel={})",
-                        auth_result.username.as_deref().unwrap_or(&username),
-                        sid,
-                        auth_result.user_id,
-                        channel_id
-                    );
-                    debug!(
-                        session = sid,
-                        groups = ?auth_result.groups,
-                        "User groups assigned at login"
-                    );
-
-                    // Prefer display_name over username (matches JS implementation behaviour).
-                    let display_name = auth_result.display_name.clone()
-                        .or(auth_result.username.clone())
-                        .unwrap_or(username.clone());
-
-                    // Create local client (suppress will be recomputed after add)
-                    let mut client = ClientInfo {
-                        session: sid,
-                        user_id: auth_result.user_id.unwrap_or(0),
-                        username: display_name,
-                        channel_id,
-                        state: ClientState::Authenticated,
-                        mute: auth_result.mute.unwrap_or(false),
-                        deaf: auth_result.deaf.unwrap_or(false),
-                        suppress: auth_result.suppress.unwrap_or(false),
-                        self_mute: preconnect_self_mute.unwrap_or(auth_result.self_mute.unwrap_or(false)),
-                        self_deaf: preconnect_self_deaf.unwrap_or(auth_result.self_deaf.unwrap_or(false)),
-                        priority_speaker: auth_result.priority_speaker.unwrap_or(false),
-                        recording: auth_result.recording.unwrap_or(false),
-                        ip_address: peer_addr.ip().to_string(),
-                        connected_at: std::time::Instant::now(),
-                        last_active: std::time::Instant::now(),
-                        cert_hash: certificate_hash.clone(),
-                        groups: auth_result.groups.clone(),
-                        opus_supported: opus,
-                        listening_channels: vec![],
-            listening_volume_adjustments: HashMap::new(),
-            texture_hash: None,
-            comment_hash: None,
-            client_version,
-            client_release: client_release.clone(),
-            client_os: client_os.clone(),
-            client_os_version: client_os_version.clone(),
-            plugin_context: vec![],
-                    };
-                    // Add client to manager first so permission queries can resolve user_id
-                    edge_state.client_manager.add_client(client.clone(), client_sender.clone()).await;
-                    // Register the close signal so this client can be force-disconnected.
-                    if let Some(tx) = close_tx_opt.take() {
-                        edge_state.client_manager.register_close_signal(sid, tx).await;
-                    }
-
-                    // Check Speak permission for initial channel to determine suppress
-                    // (done AFTER add_client so hub_client.handle_permission_query gets the right user_id)
-                    if !auth_result.suppress.unwrap_or(false) {
-                        let can_speak = match hub_client.handle_permission_query(sid, channel_id).await {
-                            Ok(r) => r.permissions.map(|p| p & perm::SPEAK != 0).unwrap_or(true),
-                            Err(_) => true,
-                        };
-                        if !can_speak {
-                            client.suppress = true;
-                            edge_state.client_manager.update_client(client.clone()).await;
-                        }
-                    }
-
-                    // Execute full login sequence
-                    let login = LoginHandler::new(
-                        &client_sender, config, &edge_state, &hub_client,
-                    );
-                    if let Err(e) = login.execute_login(sid, &auth_result, opus).await {
-                        info!("Login sequence failed for {} (session={}): {}", peer_addr, sid, e);
-                        break 'outer;
-                    }
-
-                    // Broadcast updated codec version to all clients now that this client's
-                    // opus capability is registered
-                    broadcast_codec_version(&edge_state).await;
-
-                    client_state = ClientState::Ready;
-                    edge_state.client_manager.set_client_state(sid, ClientState::Ready).await;
-
-                    // Populate ninja channel permission cache for this client
-                    {
-                        let ninja_channels = edge_state.ninja_channels.read().await.clone();
-                        if !ninja_channels.is_empty() {
-                            let mut visible_set = std::collections::HashSet::new();
-                            for &ch_id in &ninja_channels {
-                                let can_enter = match hub_client.handle_permission_query(sid, ch_id).await {
-                                    Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(false),
-                                    Err(_) => false,
-                                };
-                                if can_enter {
-                                    visible_set.insert(ch_id);
-                                }
-                            }
-                            edge_state.ninja_visible_to.write().await.insert(sid, visible_set);
-                        }
-                    }
-
-                    // If suppress was set by permission check, notify the client itself
-                    if client.suppress && !auth_result.suppress.unwrap_or(false) {
-                        let suppress_msg = mumbleproto::UserState {
-                            session: Some(sid),
-                            suppress: Some(true),
-                            ..Default::default()
-                        };
-                        client_sender.send_message(MessageType::UserState, &suppress_msg).await;
-                    }
-
-                    // If pre-connect self_deaf/self_mute was set, notify client and broadcast
-                    if preconnect_self_deaf.is_some() || preconnect_self_mute.is_some() {
-                        let preconnect_msg = mumbleproto::UserState {
-                            session: Some(sid),
-                            self_mute: preconnect_self_mute,
-                            self_deaf: preconnect_self_deaf,
-                            ..Default::default()
-                        };
-                        // Notify the client itself
-                        client_sender.send_message(MessageType::UserState, &preconnect_msg).await;
-                    }
-
-                    // Broadcast new user to all other clients (use updated client state)
-                    let user_state_msg = handler::build_user_state_msg(&client);
-                    edge_state.client_manager.broadcast(
-                        MessageType::UserState,
-                        &user_state_msg,
-                        Some(sid),
-                    ).await;
-
-                    // Restore persisted channel listeners for registered users.
-                    // This runs after the login sequence so permissions are cached.
-                    let user_id = client.user_id;
-                    if user_id > 0 {
-                        let saved_listeners = hub_client.load_channel_listeners(user_id).await;
-                        if !saved_listeners.is_empty() {
-                            // Apply the saved listeners through the normal permission-checked path.
-                            let restore_state = mumbleproto::UserState {
-                                session: Some(sid),
-                                listening_channel_add: saved_listeners,
-                                ..Default::default()
-                            };
-                            handle_user_state_update(&edge_state, &hub_client, sid, &restore_state).await;
-                            debug!("Restored saved channel listeners for user {} (session {})", user_id, sid);
-                        }
-                    }
-
-                    info!("Client {} is now Ready (session={})", peer_addr, sid);
+                    let task = tokio::spawn(async move {
+                        let result = do_login_task(task_args).await;
+                        task_tx.send(result).ok();
+                    });
+                    login_abort = Some(task.abort_handle());
+                    login_rx = Some(task_rx);
+                    // Transition to Authenticated: the read loop will now process
+                    // only Ping frames until the login task completes.
+                    client_state = ClientState::Authenticated;
                 }
                 MessageType::Ping => {
                     let Ok(response) = handler::encode_ping_response(&frame.payload) else { continue; };
