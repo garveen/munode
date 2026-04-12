@@ -207,7 +207,6 @@ pool_size          = 1
 
 [server]
 capacity        = 1000
-max_bandwidth   = 558000
 default_channel = 0
 # welcome_text  = "Welcome!"
 

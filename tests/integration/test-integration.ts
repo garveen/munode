@@ -65,6 +65,9 @@ try {
     startAuth:  true,
     silent:     false,  // 输出详细日志（TS 模式），Rust 模式同时启用 'inherit' stdio
     reuse:      false,  // 每次都创建全新环境，避免残留状态
+    hubConfig: {
+      bandwidth: 40000,
+    }
   });
 } catch (err) {
   console.error('\n✗ 测试环境启动失败:', err);

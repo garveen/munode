@@ -181,9 +181,6 @@ pub struct ServerConfig {
     /// Maximum number of connected users.
     #[serde(default = "default_capacity")]
     pub capacity: u32,
-    /// Maximum bandwidth per user (kbps).
-    #[serde(default = "default_max_bandwidth")]
-    pub max_bandwidth: u32,
     /// Default channel ID for new users.
     #[serde(default)]
     pub default_channel: u32,
@@ -246,7 +243,6 @@ impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             capacity: default_capacity(),
-            max_bandwidth: default_max_bandwidth(),
             default_channel: 0,
             welcome_text: None,
             disable_hub_relay: false,

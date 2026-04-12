@@ -390,9 +390,7 @@ impl<'a> LoginHandler<'a> {
     /// has no permissions and to keep querying until an async reply arrives.
     async fn send_server_sync(&self, session_id: u32, root_permissions: u32) -> Result<()> {
         let hub_limits = self.edge_state.hub_limits.read().await;
-        let max_bandwidth = hub_limits.as_ref()
-            .and_then(|l| l.max_bandwidth)
-            .unwrap_or(self.config.server.max_bandwidth);
+        let max_bandwidth = hub_limits.as_ref().and_then(|l| l.max_bandwidth);
         let welcome = hub_limits.as_ref()
             .and_then(|l| l.welcome_text.clone())
             .or_else(|| self.config.server.welcome_text.clone())
@@ -400,7 +398,7 @@ impl<'a> LoginHandler<'a> {
         drop(hub_limits);
         let msg = mumbleproto::ServerSync {
             session: Some(session_id),
-            max_bandwidth: Some(max_bandwidth),
+            max_bandwidth,
             welcome_text: Some(welcome),
             permissions: Some(root_permissions.into()),
         };
@@ -416,9 +414,7 @@ impl<'a> LoginHandler<'a> {
     /// notifications on some clients.
     async fn send_server_config(&self) -> Result<()> {
         let hub_limits = self.edge_state.hub_limits.read().await;
-        let max_bandwidth = hub_limits.as_ref()
-            .and_then(|l| l.max_bandwidth)
-            .unwrap_or(self.config.server.max_bandwidth);
+        let max_bandwidth = hub_limits.as_ref().and_then(|l| l.max_bandwidth);
         let text_message_length = hub_limits.as_ref()
             .and_then(|l| l.text_message_length)
             .unwrap_or(self.config.server.text_message_length);
@@ -435,7 +431,7 @@ impl<'a> LoginHandler<'a> {
         drop(hub_limits);
 
         let msg = mumbleproto::ServerConfig {
-            max_bandwidth: Some(max_bandwidth),
+            max_bandwidth,
             welcome_text: None,
             allow_html: Some(self.config.server.allow_html),
             message_length: Some(text_message_length),

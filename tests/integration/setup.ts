@@ -1239,6 +1239,30 @@ export async function setupTestEnvironment(
         await waitForCondition(() => fs.existsSync(dbPath), 2000, 50, 'database file to exist');
 
         const hmacSecret = 'test-hmac-secret-key-for-integration-tests';
+        // Translate hubConfig fields to Rust Hub JSON config format.
+        // hubConfig uses the deprecated TypeScript config schema; Rust Hub uses a
+        // different JSON structure.  We convert the fields we care about here so
+        // that callers can pass either hubConfig or rustHubExtraConfig.
+        const rustHubExtraFromHubConfig: Record<string, unknown> = {};
+        if (finalOptions.hubConfig?.bandwidth != null) {
+          rustHubExtraFromHubConfig['limits'] = { max_bandwidth: finalOptions.hubConfig.bandwidth };
+        }
+        // Merge: rustHubExtraConfig takes precedence over derived values.
+        // For nested objects (e.g. limits), do a shallow object merge so that
+        // rustHubExtraConfig.limits.* fields don't silently drop others.
+        const rustHubExplicit = (finalOptions as { rustHubExtraConfig?: Record<string, unknown> }).rustHubExtraConfig ?? {};
+        const mergedRustHubExtra: Record<string, unknown> = { ...rustHubExtraFromHubConfig };
+        for (const [key, value] of Object.entries(rustHubExplicit)) {
+          if (
+            key in mergedRustHubExtra &&
+            typeof mergedRustHubExtra[key] === 'object' && mergedRustHubExtra[key] !== null &&
+            typeof value === 'object' && value !== null && !Array.isArray(value)
+          ) {
+            mergedRustHubExtra[key] = { ...(mergedRustHubExtra[key] as object), ...(value as object) };
+          } else {
+            mergedRustHubExtra[key] = value;
+          }
+        }
         hubProcess = await startRustHubServer({
           basePort,
           controlPort,
@@ -1247,7 +1271,7 @@ export async function setupTestEnvironment(
           dbPath,
           hmacSecret,
           silent,
-          extraConfig: (finalOptions as { rustHubExtraConfig?: Record<string, unknown> }).rustHubExtraConfig,
+          extraConfig: Object.keys(mergedRustHubExtra).length > 0 ? mergedRustHubExtra : undefined,
         });
         // Wait for Rust Hub control port to be listening
         await waitForCondition(

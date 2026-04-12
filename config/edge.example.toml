@@ -128,11 +128,6 @@ hmac_secret = "change-me-to-match-hub-secret"  # Default: not set
 # Maximum number of concurrent client connections
 capacity       = 1000                   # Default: 1000
 
-# Maximum bandwidth per user in bits per second
-# Hub-pushed: configured in hub.toml [limits] bandwidth. This is the local fallback
-# used only if the Hub has not yet pushed its limits to this Edge.
-max_bandwidth  = 558000                 # Default: 558000 (bps, ~558 kbps)
-
 
 
 # Test/debug flag: disable Hub relay for cross-edge voice (use direct UDP only)
