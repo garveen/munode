@@ -368,6 +368,17 @@ impl HubClient {
             }
         });
 
+        // Sync gate (primary only): holds the notification processor until the full
+        // register → fullSync → reportLocalUsers sequence completes.  This prevents
+        // notifications that arrive during the sync window from racing with
+        // load_remote_users / load_channels, which clear and repopulate the caches.
+        // If the sync fails (sender is dropped without sending), the receiver returns
+        // Err and the notification processor exits cleanly without processing stale data.
+        let (sync_gate_tx, sync_gate_rx_opt) = {
+            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+            (tx, if is_primary { Some(rx) } else { None })
+        };
+
         // For the primary slot, set up a serial notification processor task.
         // This mirrors C++ Mumble's Qt event loop: all notifications are queued and
         // processed one-at-a-time in arrival order. Keeping them serial prevents
@@ -376,10 +387,18 @@ impl HubClient {
         // by notification handlers that make outbound RPC calls (which would
         // otherwise deadlock the reader task that must receive those RPC responses).
         let notif_handle = if is_primary {
+            let sync_gate_rx = sync_gate_rx_opt.expect("sync gate rx present for primary");
             let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<TypedRpcNotification>();
             *self.notification_tx.lock().await = Some(notif_tx);
             let notif_self = self.clone();
             Some(tokio::spawn(async move {
+                // Buffer all notifications until the sync gate opens.  If the gate
+                // is cancelled (sender dropped = sync failed / connection closed)
+                // we exit without processing to avoid acting on stale data.
+                if sync_gate_rx.await.is_err() {
+                    debug!("Notification processor: sync gate cancelled (slot {})", slot);
+                    return;
+                }
                 while let Some(notification) = notif_rx.recv().await {
                     notif_self.handle_notification(notification).await;
                 }
@@ -434,6 +453,11 @@ impl HubClient {
             if let Err(e) = self.do_report_local_users().await {
                 warn!("Failed to report existing users to Hub: {}", e);
             }
+            // Sync sequence complete — open the gate so buffered notifications are
+            // processed.  Any state changes applied by the notification processor
+            // are visible to the HubRegistered handler because UserState/ChannelState
+            // broadcasts are idempotent on the Mumble client side.
+            let _ = sync_gate_tx.send(());
             *self.state.write().await = HubConnectionState::Registered;
             self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
             info!("Edge registered with Hub successfully (via {}, slot {})", url, slot);
@@ -537,6 +561,17 @@ impl HubClient {
             }
         });
 
+        // Sync gate (primary only): holds the notification processor until the full
+        // register → fullSync → reportLocalUsers sequence completes.  This prevents
+        // notifications that arrive during the sync window from racing with
+        // load_remote_users / load_channels, which clear and repopulate the caches.
+        // If the sync fails (sender is dropped without sending), the receiver returns
+        // Err and the notification processor exits cleanly without processing stale data.
+        let (sync_gate_tx, sync_gate_rx_opt) = {
+            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+            (tx, if is_primary { Some(rx) } else { None })
+        };
+
         // For the primary slot, set up a serial notification processor task.
         // This mirrors C++ Mumble's Qt event loop: all notifications are queued and
         // processed one-at-a-time in arrival order. Keeping them serial prevents
@@ -545,10 +580,18 @@ impl HubClient {
         // by notification handlers that make outbound RPC calls (which would
         // otherwise deadlock the reader task that must receive those RPC responses).
         let notif_handle = if is_primary {
+            let sync_gate_rx = sync_gate_rx_opt.expect("sync gate rx present for primary");
             let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<TypedRpcNotification>();
             *self.notification_tx.lock().await = Some(notif_tx);
             let notif_self = self.clone();
             Some(tokio::spawn(async move {
+                // Buffer all notifications until the sync gate opens.  If the gate
+                // is cancelled (sender dropped = sync failed / connection closed)
+                // we exit without processing to avoid acting on stale data.
+                if sync_gate_rx.await.is_err() {
+                    debug!("Notification processor: sync gate cancelled (slot {})", slot);
+                    return;
+                }
                 while let Some(notification) = notif_rx.recv().await {
                     notif_self.handle_notification(notification).await;
                 }
@@ -607,7 +650,11 @@ impl HubClient {
             if let Err(e) = self.do_report_local_users().await {
                 warn!("Failed to report existing users to Hub: {}", e);
             }
-
+            // Sync sequence complete — open the gate so buffered notifications are
+            // processed.  Any state changes applied by the notification processor
+            // are visible to the HubRegistered handler because UserState/ChannelState
+            // broadcasts are idempotent on the Mumble client side.
+            let _ = sync_gate_tx.send(());
             *self.state.write().await = HubConnectionState::Registered;
             self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
             info!("Edge registered with Hub successfully (pool primary)");

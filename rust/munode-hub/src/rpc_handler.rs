@@ -275,10 +275,16 @@ impl RpcHandler {
                 "Edge {} re-registered with {} stale session(s) — cleaning up",
                 params.server_id, stale_sessions.len()
             );
+            let reconnecting_edge_id = params.server_id;
             for session in &stale_sessions {
                 self.state.session_manager.remove_session(session.session_id).await;
                 let session_id = session.session_id;
-                self.broadcast_notification("hub.userRemoveBroadcast", |n| {
+                // Exclude the re-registering edge from this broadcast: its local users are
+                // still connected and must not be kicked by the stale-session cleanup.
+                // Other edges need the notification so they can remove the ghost sessions
+                // from their own caches.  The re-registering edge will learn the authoritative
+                // state via do_full_sync + do_report_local_users.
+                self.broadcast_notification_excluding("hub.userRemoveBroadcast", reconnecting_edge_id, |n| {
                     n.user_remove_broadcast = Some(HubUserRemoveBroadcastParams {
                         session: session_id,
                         actor: None,
@@ -2973,6 +2979,33 @@ impl RpcHandler {
         crate::server::broadcast_critical(&self.state, data).await;
     }
 
+    /// Like [`broadcast_notification`] but skips the edge identified by `exclude_edge_id`.
+    ///
+    /// Used when the notification originates from (or is only relevant to) a specific edge
+    /// so that edge does not receive it back — for example, stale-session cleanup when an
+    /// edge re-registers should only be sent to *other* edges, not to the re-registering
+    /// edge itself, which would otherwise kick its own still-connected local users.
+    async fn broadcast_notification_excluding<F>(&self, method: &str, exclude_edge_id: u32, build: F)
+    where
+        F: FnOnce(&mut TypedRpcNotification),
+    {
+        let mut notification = TypedRpcNotification {
+            method: method.to_string(),
+            timestamp: Some(current_millis() as i64),
+            ..Default::default()
+        };
+        build(&mut notification);
+
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+
+        let data = packet.encode_to_vec();
+        crate::server::broadcast_critical_excluding(&self.state, data, exclude_edge_id).await;
+    }
+
     /// Return the current live server limits (updated on hot-reload).
     /// Used when building responses to edge registration and heartbeat ACK.
     pub(crate) async fn build_server_limits(&self) -> ServerLimitsConfig {
@@ -3190,7 +3223,11 @@ impl RpcHandler {
                 ban: None,
                 target_sessions: vec![],
             };
-            self.broadcast_notification("hub.userRemoveBroadcast", |n| {
+            // Exclude the disconnecting/reconnecting edge from the broadcast.
+            // If the edge is reconnecting, its new connection must not receive a
+            // spurious UserRemove for its own still-connected local clients.
+            // Other edges still need the notification to purge stale remote-user entries.
+            self.broadcast_notification_excluding("hub.userRemoveBroadcast", server_id, |n| {
                 n.user_remove_broadcast = Some(remove_params);
             })
             .await;
