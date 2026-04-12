@@ -27,8 +27,13 @@ impl BanStore {
     /// Load all ban records from the database into memory.
     ///
     /// Must be called once at startup before serving any requests.
-    pub fn load_from_db(&self) -> Result<()> {
-        let bans = self.db.load_bans().context("Failed to load bans from database")?;
+    pub async fn load_from_db(&self) -> Result<()> {
+        let db = self.db.clone();
+        let bans = tokio::task::spawn_blocking(move || {
+            db.load_bans().context("Failed to load bans from database")
+        })
+        .await
+        .context("spawn_blocking join error")??;
         let count = bans.len();
         *self.bans.write().unwrap() = bans;
         info!("Loaded {} ban records from database", count);
@@ -106,11 +111,12 @@ impl BanStore {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-        let mut bans = self.bans.write().unwrap();
-        let before = bans.len();
-        bans.retain(|b| b.duration == 0 || b.start_time.saturating_add(b.duration as i64) > now);
-        let removed = (before - bans.len()) as u32;
-        drop(bans);
+        let removed = {
+            let mut bans = self.bans.write().unwrap();
+            let before = bans.len();
+            bans.retain(|b| b.duration == 0 || b.start_time.saturating_add(b.duration as i64) > now);
+            (before - bans.len()) as u32
+        };
         if removed > 0 {
             // Sync the cleanup to DB as well.
             let db = self.db.clone();
@@ -118,7 +124,7 @@ impl BanStore {
                 if let Err(e) = db.cleanup_expired_bans() {
                     tracing::warn!("Failed to clean up expired bans in database: {}", e);
                 }
-            });
+            }).await.ok();
         }
         removed
     }

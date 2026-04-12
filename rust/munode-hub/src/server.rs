@@ -182,8 +182,13 @@ impl HubServer {
     /// Start the Hub server and listen for edge connections.
     pub async fn run(&self) -> Result<()> {
         // Open database
-        let database = Arc::new(Database::open(&self.config.database.path)
-            .context("Failed to open database")?);
+        let db_path = self.config.database.path.clone();
+        let database = Arc::new(
+            tokio::task::spawn_blocking(move || Database::open(&db_path))
+                .await
+                .context("spawn_blocking join error")?
+                .context("Failed to open database")?,
+        );
 
         let channel_store = Arc::new(ChannelStore::new(database.clone()));
 
@@ -247,11 +252,11 @@ impl HubServer {
             .context("Failed to load ACL entries and channel groups into memory")?;
 
         // Load users into memory (passwords excluded).
-        state.user_store.load_from_db()
+        state.user_store.load_from_db().await
             .context("Failed to load users into memory")?;
 
         // Load bans into memory.
-        state.ban_store.load_from_db()
+        state.ban_store.load_from_db().await
             .context("Failed to load bans into memory")?;
 
         // Create RPC handler

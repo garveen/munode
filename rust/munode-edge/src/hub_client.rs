@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -475,7 +474,8 @@ impl HubClient {
                     Some(Ok(msg)) => match msg {
                         tungstenite::Message::Binary(data) => {
                             if let Err(e) = reader_self.handle_incoming_slot(&data).await {
-                                warn!("Error handling Hub message (slot {}): {}", slot, e);
+                                error!("Fatal Hub message error (slot {}), closing connection: {}", slot, e);
+                                break;
                             }
                         }
                         tungstenite::Message::Close(_) => {
@@ -669,7 +669,8 @@ impl HubClient {
                     Some(Ok(msg)) => match msg {
                         tungstenite::Message::Binary(data) => {
                             if let Err(e) = reader_self.handle_incoming_slot(&data).await {
-                                warn!("Error handling Hub message (slot {}): {}", slot, e);
+                                error!("Fatal Hub message error (slot {}), closing connection: {}", slot, e);
+                                break;
                             }
                         }
                         tungstenite::Message::Close(_) => {
@@ -831,16 +832,23 @@ impl HubClient {
     async fn handle_incoming_slot(self: &Arc<Self>, data: &[u8]) -> Result<()> {
         // Decompress if the Hub compressed the payload (prefix byte 0x01).
         // Raw protobuf frames always begin with a field tag (≥ 0x08), so 0x01 is unambiguous.
-        let decompressed: Vec<u8>;
+        let owned: Vec<u8>;
         let data: &[u8] = if data.first() == Some(&0x01) {
-            let mut dec = ZlibDecoder::new(&data[1..]);
-            let mut buf = Vec::new();
-            if let Err(e) = dec.read_to_end(&mut buf) {
-                warn!("Failed to decompress Hub message: {}", e);
-                return Ok(());
+            let payload = data[1..].to_vec();
+            let result = tokio::task::spawn_blocking(move || {
+                use std::io::Read;
+                let mut dec = ZlibDecoder::new(payload.as_slice());
+                let mut buf = Vec::new();
+                dec.read_to_end(&mut buf).map(|_| buf)
+            })
+            .await
+            .context("spawn_blocking join error")?;
+            match result {
+                Ok(buf) => { owned = buf; &owned }
+                Err(e) => {
+                    return Err(anyhow::anyhow!("Failed to decompress Hub message: {}", e));
+                }
             }
-            decompressed = buf;
-            &decompressed
         } else {
             data
         };

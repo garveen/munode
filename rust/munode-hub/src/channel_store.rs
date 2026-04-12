@@ -43,8 +43,15 @@ impl ChannelStore {
 
     /// Load channels and links from the database into memory.
     pub async fn load_from_db(&self) -> Result<()> {
-        let db_channels = self.db.load_channels()?;
-        let db_links = self.db.load_channel_links()?;
+        let db = self.db.clone();
+        let (db_channels, db_links) = tokio::task::spawn_blocking(move || {
+            let channels = db.load_channels()?;
+            let links = db.load_channel_links()?;
+            Ok::<_, anyhow::Error>((channels, links))
+        })
+        .await
+        .context("spawn_blocking join error")??;
+
 
         let mut channels = self.channels.write().await;
         channels.clear();

@@ -43,9 +43,14 @@ impl UserStore {
     /// Load channel listeners from the database into memory.
     ///
     /// Must be called once at startup before serving any requests.
-    pub fn load_from_db(&self) -> Result<()> {
-        let all_listeners = self.db.load_all_channel_listeners()
-            .context("Failed to load channel listeners from database")?;
+    pub async fn load_from_db(&self) -> Result<()> {
+        let db = self.db.clone();
+        let all_listeners = tokio::task::spawn_blocking(move || {
+            db.load_all_channel_listeners()
+                .context("Failed to load channel listeners from database")
+        })
+        .await
+        .context("spawn_blocking join error")??;
         *self.listeners.write().unwrap() = all_listeners;
         info!("Loaded channel listener map from database");
         Ok(())

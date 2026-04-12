@@ -150,7 +150,15 @@ impl RpcHandler {
         match response {
             Ok(packet) => {
                 let data: Vec<u8> = packet.encode_to_vec();
-                Ok(maybe_compress(data))
+                // Offload compression to a blocking thread to avoid stalling the Tokio worker.
+                let compressed =
+                    tokio::task::spawn_blocking(move || maybe_compress(data))
+                        .await
+                        .unwrap_or_else(|e| {
+                            warn!("Compression task panicked: {}", e);
+                            vec![]
+                        });
+                Ok(compressed)
             }
             Err(e) => {
                 warn!("RPC handler error for {}: {}", method, e);
