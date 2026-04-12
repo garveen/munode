@@ -414,7 +414,6 @@ impl<'a> LoginHandler<'a> {
     /// notifications on some clients.
     async fn send_server_config(&self) -> Result<()> {
         let hub_limits = self.edge_state.hub_limits.read().await;
-        let max_bandwidth = hub_limits.as_ref().and_then(|l| l.max_bandwidth);
         let text_message_length = hub_limits.as_ref()
             .and_then(|l| l.text_message_length)
             .unwrap_or(self.config.server.text_message_length);
@@ -431,7 +430,7 @@ impl<'a> LoginHandler<'a> {
         drop(hub_limits);
 
         let msg = mumbleproto::ServerConfig {
-            max_bandwidth,
+            max_bandwidth: None,
             welcome_text: None,
             allow_html: Some(self.config.server.allow_html),
             message_length: Some(text_message_length),

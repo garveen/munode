@@ -398,7 +398,9 @@ impl HubClient {
 
     /// Connect via a specific WebSocket URL (used for both direct and relay connections).
     async fn try_connect_via_url(self: &Arc<Self>, url: &str, slot: usize, is_primary: bool) -> Result<()> {
-        *self.state.write().await = HubConnectionState::Connecting;
+        if is_primary {
+            *self.state.write().await = HubConnectionState::Connecting;
+        }
         info!("Connecting to Hub via {} (slot {})", url, slot);
 
         const CONNECT_TIMEOUT_VIA: Duration = Duration::from_secs(15);
@@ -601,7 +603,9 @@ impl HubClient {
     /// `is_primary` = true  → handles notifications + runs do_register/do_full_sync/do_join_cluster.
     /// `is_primary` = false → secondary slot, only processes RPC responses.
     async fn try_connect_slot(self: &Arc<Self>, slot: usize, is_primary: bool) -> Result<()> {
-        *self.state.write().await = HubConnectionState::Connecting;
+        if is_primary {
+            *self.state.write().await = HubConnectionState::Connecting;
+        }
 
         let scheme = if self.config.tls { "wss" } else { "ws" };
         let url = format!("{}://{}:{}", scheme, self.config.host, self.config.control_port);
@@ -1391,6 +1395,24 @@ impl HubClient {
     /// Apply a `ServerLimitsConfig` received from Hub (on registration, heartbeat ACK,
     /// or `hub.serverConfigUpdate` hot-reload push).
     async fn apply_server_limits(&self, limits: ServerLimitsConfig) {
+        debug!(
+            max_bandwidth = limits.max_bandwidth.unwrap_or(0),
+            max_users = limits.max_users.unwrap_or(0),
+            max_users_per_channel = limits.max_users_per_channel.unwrap_or(0),
+            text_message_length = limits.text_message_length.unwrap_or(0),
+            image_message_length = limits.image_message_length.unwrap_or(0),
+            plugin_message_length = limits.plugin_message_length.unwrap_or(0),
+            message_rate = limits.message_rate.unwrap_or(0.0),
+            message_burst = limits.message_burst.unwrap_or(0),
+            listeners_per_channel = limits.listeners_per_channel.unwrap_or(0),
+            listeners_per_user = limits.listeners_per_user.unwrap_or(0),
+            allow_ping = limits.allow_ping.unwrap_or(false),
+            suggest_version = limits.suggest_version.unwrap_or(0),
+            suggest_positional = limits.suggest_positional.unwrap_or(false),
+            suggest_push_to_talk = limits.suggest_push_to_talk.unwrap_or(false),
+            welcome_text = limits.welcome_text.as_deref().unwrap_or(""),
+            "Applying server limits from Hub"
+        );
         if let Some(allow_ping) = limits.allow_ping {
             self.edge_state.allow_ping.store(allow_ping, std::sync::atomic::Ordering::Relaxed);
         }
