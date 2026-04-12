@@ -200,7 +200,7 @@ message_rate  = 10.0                   # Default: 10.0 msg/s
 message_burst = 5                      # Default: 5
 
 # Maximum bandwidth per user in bits per second (pushed to clients via ServerConfig)
-bandwidth     = 558000                 # Default: 558000 (bps, ~558 kbps)
+max_bandwidth = 558000                 # Default: 558000 (bps, ~558 kbps)
 
 # Welcome message (MOTD) displayed to all connecting clients (0 = use server default)
 # welcome_text = "Welcome to MuNode!"  # Default: not set
