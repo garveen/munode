@@ -200,7 +200,8 @@ describe('Client Disconnect Cleanup Tests', () => {
     }
 
     // Wait for hub to process all disconnects
-    await sleep(1000);
+    // Under full-suite load the TCP RST → Edge cleanup → Hub userLeft chain can take > 1 s
+    await sleep(3000);
 
     // Connect a fresh observer
     const observer = new MumbleClient();

@@ -423,6 +423,11 @@ impl<'a> LoginHandler<'a> {
         let max_users = hub_limits.as_ref()
             .and_then(|l| l.max_users)
             .unwrap_or(self.config.server.capacity);
+        let max_bandwidth = hub_limits.as_ref().and_then(|l| l.max_bandwidth)
+            .or_else(|| {
+                let bw = self.edge_state.max_bandwidth_bps.load(std::sync::atomic::Ordering::Relaxed);
+                if bw > 0 { Some(bw) } else { None }
+            });
         let suggest_version = hub_limits.as_ref().and_then(|l| l.suggest_version);
         let suggest_version_v2 = hub_limits.as_ref().and_then(|l| l.suggest_version_v2);
         let suggest_positional = hub_limits.as_ref().and_then(|l| l.suggest_positional);
@@ -430,7 +435,7 @@ impl<'a> LoginHandler<'a> {
         drop(hub_limits);
 
         let msg = mumbleproto::ServerConfig {
-            max_bandwidth: None,
+            max_bandwidth,
             welcome_text: None,
             allow_html: Some(self.config.server.allow_html),
             message_length: Some(text_message_length),

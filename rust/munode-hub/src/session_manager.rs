@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use tokio::sync::RwLock;
 
@@ -23,27 +22,16 @@ pub struct SessionInfo {
     pub listening_channels: Vec<u32>,
 }
 
-/// Manages globally-unique session IDs and tracks active sessions.
+/// Manages active sessions.
 pub struct SessionManager {
-    next_id: AtomicU32,
     sessions: RwLock<HashMap<u32, SessionInfo>>,
 }
 
 impl SessionManager {
     pub fn new() -> Self {
         Self {
-            next_id: AtomicU32::new(1),
             sessions: RwLock::new(HashMap::new()),
         }
-    }
-
-    /// Allocate the next unique session ID.
-    ///
-    /// The `edge_id` parameter is reserved for future use (e.g., generating
-    /// edge-scoped IDs or for routing hints).  It is currently not used in
-    /// ID generation, which is a single global monotonic counter.
-    pub fn allocate_session_id(&self, _edge_id: u32) -> u32 {
-        self.next_id.fetch_add(1, Ordering::Relaxed)
     }
 
     /// Add a session to the registry.
@@ -127,16 +115,6 @@ mod tests {
             recording: false,
             listening_channels: vec![],
         }
-    }
-
-    #[tokio::test]
-    async fn test_allocate_session_id() {
-        let mgr = SessionManager::new();
-        let id1 = mgr.allocate_session_id(1);
-        let id2 = mgr.allocate_session_id(1);
-        let id3 = mgr.allocate_session_id(2);
-        assert_ne!(id1, id2);
-        assert_ne!(id2, id3);
     }
 
     #[tokio::test]

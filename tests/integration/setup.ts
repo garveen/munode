@@ -473,7 +473,18 @@ export async function createClients(testEnv: TestEnvironment, configs: ClientCon
 
       if (config.channelId !== undefined) {
         await client.sendUserState({ channel_id: config.channelId });
-        await new Promise(resolve => setTimeout(resolve, 200));
+        // Wait until the server confirms the channel move (client sees its own updated channel_id)
+        // rather than a fixed 200 ms delay that can be too tight under full-suite load.
+        const moved = await waitForCondition(
+          () => client.getStateManager().getSession()?.channel_id === config.channelId,
+          3000,
+          50,
+          `${config.username} channel move to ${config.channelId}`
+        );
+        if (!moved) {
+          // Fallback: extra 200 ms in the unlikely case waitForCondition is wrong
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
       }
       
       clients.push(client);

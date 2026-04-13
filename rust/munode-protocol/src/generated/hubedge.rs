@@ -829,19 +829,6 @@ pub struct EdgeHeartbeatResult {
     pub server_limits: ::core::option::Option<ServerLimitsConfig>,
 }
 /// ---------------------------------------------------------------------------
-/// edge.allocateSessionId - Edge 分配 Session ID
-/// ---------------------------------------------------------------------------
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct EdgeAllocateSessionIdParams {
-    #[prost(uint32, required, tag = "1")]
-    pub edge_id: u32,
-}
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct EdgeAllocateSessionIdResult {
-    #[prost(uint32, required, tag = "1")]
-    pub session_id: u32,
-}
-/// ---------------------------------------------------------------------------
 /// edge.authenticateUser - Edge 请求用户认证
 /// ---------------------------------------------------------------------------
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2117,8 +2104,6 @@ pub struct TypedRpcRequest {
     pub edge_register: ::core::option::Option<EdgeRegisterParams>,
     #[prost(message, optional, tag = "11")]
     pub edge_heartbeat: ::core::option::Option<EdgeHeartbeatParams>,
-    #[prost(message, optional, tag = "12")]
-    pub edge_allocate_session_id: ::core::option::Option<EdgeAllocateSessionIdParams>,
     #[prost(message, optional, tag = "13")]
     pub edge_authenticate_user: ::core::option::Option<EdgeAuthenticateUserParams>,
     #[prost(message, optional, tag = "14")]
@@ -2201,8 +2186,6 @@ pub struct TypedRpcResponse {
     pub edge_register: ::core::option::Option<EdgeRegisterResult>,
     #[prost(message, optional, tag = "11")]
     pub edge_heartbeat: ::core::option::Option<EdgeHeartbeatResult>,
-    #[prost(message, optional, tag = "12")]
-    pub edge_allocate_session_id: ::core::option::Option<EdgeAllocateSessionIdResult>,
     #[prost(message, optional, tag = "13")]
     pub edge_authenticate_user: ::core::option::Option<EdgeAuthenticateUserResult>,
     #[prost(message, optional, tag = "14")]

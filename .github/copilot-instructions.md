@@ -5,7 +5,7 @@ MuNode is a distributed Mumble voice server. The server-side (Hub + Edge) is wri
 ## Mandatory Rules
 
 - When you finish work or have questions that need clarification, call the ask-questions tool for further instructions instead of ending the conversation directly.
-- When asked to fix one of the integration tests, do not run all tests — you must specify the file or use the `-t` parameter to run only that specific test.
+- When asked to fix one of the integration tests, do not run all tests — you must specify the file or use the `-t` parameter to run only that specific test. Do NOT use "--" for params, it's not needed.
 - This system is still in the pre-0.1 stage. Everything except `Mumble.proto` — including any protocols — may be modified freely.
 
 ## Tech Stack

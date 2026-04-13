@@ -496,14 +496,18 @@ impl HubClient {
         if is_primary {
             self.do_register().await?;
             let disappeared = self.do_full_sync().await?;
-            // Clear stale voice-target cache from before the reconnect.
-            self.edge_state.voice_targets.write().await.clear();
             // Repopulate voice-target cache with all existing targets from Hub.
+            // NOTE: do NOT clear() before this — Edge must preserve local VoiceTarget
+            // configs so they can be re-uploaded to Hub if Hub restarted.
             self.do_fetch_voice_targets().await;
             self.do_join_cluster().await?;
             // Report any already-connected local users (Hub may have restarted)
             if let Err(e) = self.do_report_local_users().await {
                 warn!("Failed to report existing users to Hub: {}", e);
+            }
+            // Re-upload all local VoiceTarget configs to Hub (Hub does not persist them)
+            if let Err(e) = self.do_report_local_voice_targets().await {
+                warn!("Failed to re-upload local VoiceTarget configs to Hub: {}", e);
             }
             // Sync sequence complete — open the gate so buffered notifications are
             // processed.  Any state changes applied by the notification processor
@@ -698,15 +702,19 @@ impl HubClient {
             self.do_register().await?;
             // Request full sync; capture disappeared session IDs for the event.
             let disappeared = self.do_full_sync().await?;
-            // Clear stale voice-target cache from before the reconnect.
-            self.edge_state.voice_targets.write().await.clear();
             // Repopulate voice-target cache with all existing targets from Hub.
+            // NOTE: do NOT clear() before this — Edge must preserve local VoiceTarget
+            // configs so they can be re-uploaded to Hub if Hub restarted.
             self.do_fetch_voice_targets().await;
             // Join cluster topology
             self.do_join_cluster().await?;
             // Report any already-connected local users (Hub may have restarted)
             if let Err(e) = self.do_report_local_users().await {
                 warn!("Failed to report existing users to Hub: {}", e);
+            }
+            // Re-upload all local VoiceTarget configs to Hub (Hub does not persist them)
+            if let Err(e) = self.do_report_local_voice_targets().await {
+                warn!("Failed to re-upload local VoiceTarget configs to Hub: {}", e);
             }
             // Sync sequence complete — open the gate so buffered notifications are
             // processed.  Any state changes applied by the notification processor
@@ -979,6 +987,8 @@ impl HubClient {
                         // Remove the client from the manager and then fire the close signal
                         // so the per-client read loop breaks and the TCP connection closes.
                         self.edge_state.client_manager.remove_client(target_session).await;
+                        // Free session ID back to local pool
+                        self.edge_state.free_session_id(target_session).await;
                         self.edge_state.client_manager.send_close_signal(target_session).await;
                     }
                     // Remove from remote user tracking and broadcast removal to local clients
@@ -1785,6 +1795,60 @@ impl HubClient {
         Ok(())
     }
 
+    /// Re-upload all local VoiceTarget configs to Hub after reconnect.
+    /// Necessary because Hub does not persist VoiceTarget data to database —
+    /// if Hub restarts, all VoiceTarget configs are lost, causing "no VoiceTarget
+    /// config for session X target Y" errors when clients use whisper/shout.
+    async fn do_report_local_voice_targets(&self) -> Result<()> {
+        use munode_protocol::hubedge::{VoiceTargetConfigProto, VoiceTargetSession, VoiceTargetChannel};
+        let edge_id = self.edge_id();
+        let vt_cache = self.edge_state.voice_targets.read().await;
+        if vt_cache.is_empty() {
+            return Ok(());
+        }
+
+        let mut upload_count = 0;
+        for (&session_id, targets) in vt_cache.iter() {
+            for (&target_id, vt_config) in targets.iter() {
+                let sessions: Vec<VoiceTargetSession> = vt_config.sessions.iter()
+                    .map(|&s| VoiceTargetSession { session: s })
+                    .collect();
+                let channels: Vec<VoiceTargetChannel> = vt_config.channels.iter()
+                    .map(|ch| VoiceTargetChannel {
+                        channel_id: ch.channel_id,
+                        children: Some(ch.children),
+                        links: Some(ch.links),
+                        group: ch.group.clone(),
+                    })
+                    .collect();
+                let config = VoiceTargetConfigProto { sessions, channels };
+                let request_id = self.next_request_id();
+                let request = TypedRpcRequest {
+                    request_id,
+                    method: "edge.syncVoiceTarget".to_string(),
+                    timeout_ms: Some(10000),
+                    edge_sync_voice_target: Some(hubedge::EdgeSyncVoiceTargetParams {
+                        edge_id,
+                        client_session: session_id,
+                        target_id,
+                        config: Some(config),
+                    }),
+                    ..Default::default()
+                };
+                if let Err(e) = self.rpc_call(request).await {
+                    warn!("Failed to re-upload VoiceTarget session={} target={} to Hub: {}", session_id, target_id, e);
+                } else {
+                    upload_count += 1;
+                }
+            }
+        }
+
+        if upload_count > 0 {
+            info!("Re-uploaded {} VoiceTarget configs to Hub after reconnect", upload_count);
+        }
+        Ok(())
+    }
+
     /// Heartbeat loop.
     async fn heartbeat_loop(&self) {
         let interval = Duration::from_millis(self.config.heartbeat_interval);
@@ -2089,29 +2153,6 @@ impl HubClient {
             .context("edge.syncVoiceTarget RPC failed")?;
         response.edge_sync_voice_target
             .ok_or_else(|| anyhow::anyhow!("No edge_sync_voice_target in response"))
-    }
-
-    /// Allocate a session ID from the Hub.
-    pub async fn allocate_session_id(&self) -> Result<u32> {
-        let request_id = self.next_request_id();
-        let edge_id = self.edge_id();
-        let request = TypedRpcRequest {
-            request_id,
-            method: "edge.allocateSessionId".to_string(),
-            timeout_ms: Some(10000),
-            edge_allocate_session_id: Some(hubedge::EdgeAllocateSessionIdParams {
-                edge_id,
-            }),
-            ..Default::default()
-        };
-
-        let response = self.rpc_call(request).await
-            .context("edge.allocateSessionId RPC failed")?;
-
-        let result = response.edge_allocate_session_id
-            .ok_or_else(|| anyhow::anyhow!("No edge_allocate_session_id in response"))?;
-
-        Ok(result.session_id)
     }
 
     /// Forward a channel create/edit request to Hub via saveChannel RPC.

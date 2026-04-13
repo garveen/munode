@@ -1,7 +1,11 @@
 /**
  * PreConnect State 集成测试
- * 
- * 测试客户端在认证前设置的状态（self_mute, self_deaf等）是否：
+ *
+ * Mumble C++ 客户端通过 serverConnected() 信号（Qt 跨线程异步）在 Authenticate
+ * 之后发送 UserState(self_deaf/self_mute)，因此服务器须在登录任务飞行期间
+ * （Authenticated 状态）也接受这些字段。
+ *
+ * 测试客户端在认证后发送的预连接状态（self_mute, self_deaf等）是否：
  * 1. 正确传输到 Hub
  * 2. 保存到 Hub 的 session manager
  * 3. 广播给所有其他客户端
@@ -60,14 +64,13 @@ describe('PreConnect State Integration Tests', () => {
         });
       });
       
-      // 用户 B 连接，并设置 self_deaf=true
+      // 用户 B 连接，并设置 self_deaf=true（在 Authenticate 之后发送，模拟 C++ 客户端行为）
       await clientB.connect({
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'user2',
         password: 'password2',
         rejectUnauthorized: false,
-        // PreConnect state: 客户端在认证前设置的状态
         preConnectState: {
           self_deaf: true,
         },
@@ -86,17 +89,20 @@ describe('PreConnect State Integration Tests', () => {
       expect(clientBSession?.self_mute).toBe(true); // self_deaf 应该自动设置 self_mute
       
       // 验证用户 A 收到的状态更新
+      // 注意: 服务器会先广播"新用户加入"消息（不含 self_deaf），
+      // 然后再广播预连接状态变更（含 self_deaf=true）。
+      // 因此需要找包含 self_deaf 字段的那次更新，而非第一次更新。
       const clientBSessionId = clientBSession?.session;
-      const userBStateUpdate = userStateUpdates.find(
-        (update) => update.session === clientBSessionId
+      const userBDeafUpdate = userStateUpdates.find(
+        (update) => update.session === clientBSessionId && update.self_deaf !== undefined
       );
       
       console.log(`[TEST] User state updates received by Client A:`, userStateUpdates);
-      console.log(`[TEST] Client B state as seen by A:`, userBStateUpdate);
+      console.log(`[TEST] Client B deaf state update as seen by A:`, userBDeafUpdate);
       
-      expect(userBStateUpdate).toBeDefined();
-      expect(userBStateUpdate?.self_deaf).toBe(true);
-      expect(userBStateUpdate?.self_mute).toBe(true);
+      expect(userBDeafUpdate).toBeDefined();
+      expect(userBDeafUpdate?.self_deaf).toBe(true);
+      expect(userBDeafUpdate?.self_mute).toBe(true);
       
       // 验证用户 A 能在用户列表中看到用户 B 的正确状态
       const usersSeenByA = clientA.getUsers();
@@ -150,14 +156,13 @@ describe('PreConnect State Integration Tests', () => {
         });
       });
       
-      // 用户 B 连接，并设置 self_mute=true
+      // 用户 B 连接，并设置 self_mute=true（在 Authenticate 之后发送，模拟 C++ 客户端行为）
       await clientB.connect({
         host: 'localhost',
         port: testEnv.edgePort,
         username: 'guest',
         password: 'guest123',
         rejectUnauthorized: false,
-        // PreConnect state: 客户端在认证前设置的状态
         preConnectState: {
           self_mute: true,
         },

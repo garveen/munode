@@ -54,13 +54,16 @@ export class AuthManager {
    * 执行认证
    */
   async authenticate(): Promise<void> {
-    // 如果有 PreConnect 状态，先发送 UserState 消息
+    // 发送 Authenticate 消息
+    await this.sendAuthenticate();
+
+    // 如果有 PreConnect 状态，在 Authenticate 之后立即发送 UserState。
+    // 这与 Mumble C++ 客户端的行为一致：C++ 客户端通过 Qt 跨线程信号
+    // 异步触发 serverConnected()，导致 UserState 在 Authenticate 之后才发出。
+    // 服务器须在 Authenticated 状态下（登录任务飞行期间）也捕获这些字段。
     if (this.preConnectState) {
       await this.sendPreConnectState();
     }
-    
-    // 发送 Authenticate 消息
-    await this.sendAuthenticate();
 
     // 等待 ServerSync 或 Reject 消息
     // 这里通过事件监听来处理认证结果
@@ -105,7 +108,8 @@ export class AuthManager {
 
   /**
    * 发送 PreConnect 状态
-   * 在认证前发送用户状态（self_deaf, self_mute 等）
+   * 在 Authenticate 之后发送用户状态（self_deaf, self_mute 等），
+   * 与 Mumble C++ 客户端通过 serverConnected() 信号异步发送的行为保持一致。
    */
   private async sendPreConnectState(): Promise<void> {
     if (!this.preConnectState) {

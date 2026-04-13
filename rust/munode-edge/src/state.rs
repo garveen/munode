@@ -569,6 +569,14 @@ pub struct EdgeState {
     /// `Some` when `hub_server.hmac_secret` is configured; `None` when the Edge
     /// runs without a shared secret (plaintext Edge-to-Edge mode for development).
     pub edge_crypto: Option<Arc<EdgeCrypto>>,
+    /// Local session ID allocator.
+    /// Each Edge owns a range of 10,000 session IDs: edge_id * 10000 to (edge_id + 1) * 10000 - 1.
+    /// This set tracks which IDs within the range are currently in use.
+    /// Using RwLock because: reads are common (check availability), writes only on connect/disconnect.
+    pub used_session_ids: RwLock<HashSet<u32>>,
+    /// Monotonic counter for session ID allocation.  Ensures recently freed IDs are not
+    /// immediately reused, making it easier to detect stale references in tests and clients.
+    pub session_counter: AtomicU32,
 }
 
 impl EdgeState {
@@ -605,6 +613,8 @@ impl EdgeState {
             test_udp_drop_rate: AtomicU32::new(0),
             accepting_connections: AtomicBool::new(true),
             edge_crypto: None,
+            used_session_ids: RwLock::new(HashSet::new()),
+            session_counter: AtomicU32::new(0),
         })
     }
 
@@ -644,6 +654,8 @@ impl EdgeState {
             test_udp_drop_rate: AtomicU32::new(0),
             accepting_connections: AtomicBool::new(true),
             edge_crypto: None,
+            used_session_ids: RwLock::new(HashSet::new()),
+            session_counter: AtomicU32::new(0),
         })
     }
 
@@ -690,6 +702,8 @@ impl EdgeState {
             test_udp_drop_rate: AtomicU32::new(0),
             accepting_connections: AtomicBool::new(true),
             edge_crypto,
+            used_session_ids: RwLock::new(HashSet::new()),
+            session_counter: AtomicU32::new(0),
         })
     }
 
@@ -759,6 +773,51 @@ impl EdgeState {
                 vt.resolved_channels = resolved;
             }
         }
+    }
+
+    /// Allocate a session ID from this Edge's local pool.
+    ///
+    /// Each Edge owns a range of 10,000 session IDs based on its edge_id:
+    /// - Edge 1: 10,000 - 19,999
+    /// - Edge 2: 20,000 - 29,999
+    /// - Edge N: N*10,000 - (N+1)*10,000 - 1
+    ///
+    /// Returns `None` if all 10,000 slots in this Edge's range are currently in use,
+    /// or if the Edge has not yet registered with Hub (edge_id == 0).
+    pub async fn allocate_session_id(&self) -> Option<u32> {
+        let edge_id = self.get_edge_id();
+        if edge_id == 0 {
+            return None; // Not registered yet
+        }
+
+        const POOL_SIZE: u32 = 10_000;
+        let base = edge_id * POOL_SIZE;
+
+        let mut used = self.used_session_ids.write().await;
+
+        // Scan from the current counter position to avoid reusing recently freed IDs.
+        // The counter wraps around the pool; a full scan is still bounded at POOL_SIZE.
+        for _ in 0..POOL_SIZE {
+            let offset = self.session_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % POOL_SIZE;
+            let id = base + offset;
+            if !used.contains(&id) {
+                used.insert(id);
+                return Some(id);
+            }
+        }
+
+        // All 10,000 slots are in use
+        None
+    }
+
+    /// Free a session ID, returning it to this Edge's local pool.
+    pub async fn free_session_id(&self, session_id: u32) {
+        self.used_session_ids.write().await.remove(&session_id);
+    }
+
+    /// Get the count of currently allocated session IDs.
+    pub async fn session_id_count(&self) -> usize {
+        self.used_session_ids.read().await.len()
     }
 }
 

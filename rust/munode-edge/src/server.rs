@@ -498,14 +498,14 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<u32> {
         certificate_hash,
     } = args;
 
-    // Allocate session ID from Hub
-    let sid = match hub_client.allocate_session_id().await {
-        Ok(sid) => sid,
-        Err(e) => {
-            error!("Failed to allocate session ID: {}", e);
+    // Allocate session ID from local Edge pool
+    let sid = match edge_state.allocate_session_id().await {
+        Some(sid) => sid,
+        None => {
+            error!("Failed to allocate session ID: pool exhausted or edge not registered");
             client_sender.send_raw(handler::encode_reject(
-                Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
-                "Internal server error",
+                Some(mumbleproto::reject::RejectType::ServerFull as i32),
+                "Server is full (session pool exhausted)",
             )).await;
             return None;
         }
@@ -617,6 +617,7 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<u32> {
     macro_rules! fail {
         () => {{
             edge_state.client_manager.remove_client(sid).await;
+            edge_state.free_session_id(sid).await;
             hub_client.notify_user_left(sid, None).await;
             return None;
         }};
@@ -677,22 +678,29 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<u32> {
         client_sender.send_message(MessageType::UserState, &suppress_msg).await;
     }
 
-    // If pre-connect self_deaf/self_mute was set, notify client.
-    if preconnect_self_deaf.is_some() || preconnect_self_mute.is_some() {
-        let preconnect_msg = mumbleproto::UserState {
-            session: Some(sid),
-            self_mute: preconnect_self_mute,
-            self_deaf: preconnect_self_deaf,
-            ..Default::default()
-        };
-        client_sender.send_message(MessageType::UserState, &preconnect_msg).await;
-    }
-
-    // Broadcast new user to all other Ready clients.
-    let user_state_msg = handler::build_user_state_msg(&client);
+    // Broadcast new user join to all other Ready clients.
+    // NOTE: self_deaf/self_mute are intentionally excluded here, matching Murmur behaviour.
+    // The preconnect state (self_deaf/self_mute) is applied separately via login_rx after the
+    // client transitions to Ready, which then broadcasts it to ALL clients (including the new
+    // user itself) with the correct actor field.
+    let user_join_msg = mumbleproto::UserState {
+        session: Some(client.session),
+        user_id: if client.user_id > 0 { Some(client.user_id) } else { None },
+        name: Some(client.username.clone()),
+        channel_id: Some(client.channel_id),
+        mute: if client.mute { Some(true) } else { None },
+        deaf: if client.deaf { Some(true) } else { None },
+        suppress: if client.suppress { Some(true) } else { None },
+        priority_speaker: if client.priority_speaker { Some(true) } else { None },
+        recording: if client.recording { Some(true) } else { None },
+        hash: client.cert_hash.clone(),
+        texture_hash: client.texture_hash.clone(),
+        comment_hash: client.comment_hash.clone(),
+        ..Default::default()
+    };
     edge_state.client_manager.broadcast(
         MessageType::UserState,
-        &user_state_msg,
+        &user_join_msg,
         Some(sid),
     ).await;
 
@@ -861,6 +869,22 @@ async fn handle_client_connection(
                         Some(sid) => {
                             session_id = Some(sid);
                             client_state = ClientState::Ready;
+                            // Apply preconnect state (self_deaf/self_mute) that arrived
+                            // while the login RPC was in flight.  The login task captured
+                            // these values at spawn time (before UserState from the client
+                            // arrived), so they may be stale.  Apply the current values now.
+                            if preconnect_self_mute.is_some() || preconnect_self_deaf.is_some() {
+                                let us = mumbleproto::UserState {
+                                    self_mute: preconnect_self_mute,
+                                    self_deaf: preconnect_self_deaf,
+                                    ..Default::default()
+                                };
+                                // Sync to Hub + broadcast to ALL clients (including the new user).
+                                // handle_user_state_update broadcasts with no session exclusion,
+                                // so the new user receives its own state update here — no separate
+                                // self_msg needed.
+                                handle_user_state_update(&edge_state, &hub_client, sid, &us).await;
+                            }
                         }
                         None => {
                             // Login failed; the task already cleaned up.
@@ -1054,6 +1078,20 @@ async fn handle_client_connection(
                     // Transition to Authenticated: the read loop will now process
                     // only Ping frames until the login task completes.
                     client_state = ClientState::Authenticated;
+                }
+                // The Mumble C++ client sends self_deaf/self_mute UserState AFTER Authenticate
+                // (triggered asynchronously via Qt cross-thread signal), so the message arrives
+                // while the login task is in flight and the state is Authenticated.
+                // Capture these fields here with the same logic as the Connected pre-connect handler.
+                MessageType::UserState if client_state == ClientState::Authenticated => {
+                    if let Ok(us) = mumbleproto::UserState::decode(&frame.payload[..]) {
+                        if us.self_mute.is_some() { preconnect_self_mute = us.self_mute; }
+                        if us.self_deaf.is_some() {
+                            preconnect_self_deaf = us.self_deaf;
+                            // self_deaf implies self_mute per Mumble protocol
+                            if us.self_deaf == Some(true) { preconnect_self_mute = Some(true); }
+                        }
+                    }
                 }
                 MessageType::Ping => {
                     let Ok(response) = handler::encode_ping_response(&frame.payload) else { continue; };
@@ -1938,6 +1976,8 @@ async fn handle_client_connection(
         }
 
         edge_state.client_manager.remove_client(sid).await;
+        // Free the session ID back to the local pool
+        edge_state.free_session_id(sid).await;
         // Clean up ninja channel permission cache for this session
         edge_state.ninja_visible_to.write().await.remove(&sid);
 
@@ -1955,7 +1995,15 @@ async fn handle_client_connection(
         info!("Cleaned up session {} for {}", sid, peer_addr);
     }
 
-    writer_handle.abort();
+    // Gracefully drain any pending outgoing messages (e.g. a Reject sent on auth
+    // failure) before the TCP connection is closed.  Dropping the sender closes
+    // the channel; the writer task will exit after flushing its queue.
+    // A 5-second timeout prevents hanging forever when the socket is already dead.
+    drop(client_sender);
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        writer_handle,
+    ).await;
     Ok(())
 }
 

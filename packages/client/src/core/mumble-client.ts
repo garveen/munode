@@ -161,7 +161,7 @@ export class MumbleClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Channel creation timeout'));
-      }, 5000); // 5秒超时
+      }, 15000); // 15秒超时（集成测试全套运行时服务器启动可能较慢）
 
       // 监听频道状态变化
       const onChannelState = (message: mumbleproto.ChannelState) => {

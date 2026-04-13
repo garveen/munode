@@ -115,7 +115,6 @@ impl RpcHandler {
 
         let response = match method.as_str() {
             "edge.register" => self.handle_register(&request, &request_id).await,
-            "edge.allocateSessionId" => self.handle_allocate_session_id(&request, &request_id).await,
             "edge.authenticateUser" => self.handle_authenticate_user(&request, &request_id, edge_server_id).await,
             "edge.reportSession" => self.handle_report_session(&request, &request_id, edge_server_id).await,
             "edge.fullSync" => self.handle_full_sync(&request, &request_id).await,
@@ -367,22 +366,6 @@ impl RpcHandler {
         self.push_route_tables_to_all().await;
 
         Ok(response)
-    }
-
-    async fn handle_allocate_session_id(
-        &self,
-        request: &TypedRpcRequest,
-        request_id: &str,
-    ) -> Result<EdgeHubPacket> {
-        let params = request.edge_allocate_session_id.as_ref()
-            .context("Missing edge_allocate_session_id params")?;
-
-        let session_id = self.state.session_manager.allocate_session_id(params.edge_id);
-
-        let result = EdgeAllocateSessionIdResult { session_id };
-        Ok(self.make_response_packet(request_id, "edge.allocateSessionId", |r| {
-            r.edge_allocate_session_id = Some(result);
-        }))
     }
 
     /// Enforce the per-user concurrent session limit for a non-anonymous user.

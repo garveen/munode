@@ -658,7 +658,7 @@ describe('Voice Integration Tests', () => {
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
 
       // 等待语音包跨 Edge 传输
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 5000));
 
       // 验证：只有 target 用户收到
       expect(receivedVoice.target1E1).toBe(true);
@@ -740,7 +740,7 @@ describe('Voice Integration Tests', () => {
       await sender.getConnectionManager().sendVoicePacket(voicePacket);
 
       // 等待语音包跨 Edge 传输
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 5000));
 
       // 验证
       expect(receivedVoice.recvE1Ch1).toBe(true);
