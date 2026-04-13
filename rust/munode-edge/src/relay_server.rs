@@ -425,6 +425,15 @@ pub async fn connect_peer_voice_tcp(
     let mut retry_ms = VOICE_TCP_MIN_RETRY_MS;
 
     loop {
+        // Re-check after sleep: peerLeft may have fired while we were waiting.
+        if !edge_state.voice_tcp_peers.read().await.contains(&peer_edge_id) {
+            info!(
+                "Voice TCP manager for peer edge {}: peer left cluster, stopping",
+                peer_edge_id
+            );
+            break;
+        }
+
         let url = build_voice_url(&peer_host, peer_edge_port, hmac_secret.as_deref());
 
         let result =

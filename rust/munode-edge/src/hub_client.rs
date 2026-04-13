@@ -1201,6 +1201,11 @@ impl HubClient {
                 // Another Edge joined the cluster (from handle_cluster_join broadcast)
                 if let Some(p) = &notification.cluster_peer_joined {
                     let peer_edge_id = p.edge_id;
+                    // Skip if this is our own edge ID (should not happen, but guard
+                    // against Hub bugs or race conditions during reconnection).
+                    if peer_edge_id == self.edge_state.get_edge_id() {
+                        debug!("Ignoring peerJoined for own edge id {}", peer_edge_id);
+                    } else {
                     let name = &p.name;
                     let host = &p.host;
                     let voice_port = p.voice_port as u16;
@@ -1242,6 +1247,7 @@ impl HubClient {
                             });
                         }
                     }
+                    } // end else (not self)
                 }
             }
             "hub.peerLeft" => {

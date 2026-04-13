@@ -3332,6 +3332,13 @@ impl RpcHandler {
         // Remove from cluster topology
         self.state.topology.write().await.remove_edge(server_id);
 
+        // Notify remaining edges that this peer has left the cluster so they
+        // stop their relay reconnect loops and clean up UDP routing entries.
+        self.broadcast_notification("hub.peerLeft", |n| {
+            n.cluster_peer_left = Some(HubClusterPeerLeftParams { edge_id: server_id });
+        })
+        .await;
+
         if !sessions.is_empty() {
             info!(
                 "Cleaned up {} sessions for disconnected edge {}",
