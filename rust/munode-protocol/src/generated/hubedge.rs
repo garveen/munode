@@ -2563,9 +2563,6 @@ pub struct HeartbeatAck {
     /// 可选的配置更新
     #[prost(message, optional, tag = "4")]
     pub config_update: ::core::option::Option<ConfigUpdate>,
-    /// 如果 Hub 的客户端限制配置有变更，通过心跳确认包推送新配置
-    #[prost(message, optional, tag = "5")]
-    pub server_limits: ::core::option::Option<ServerLimitsConfig>,
 }
 /// *
 /// 服务器统计信息

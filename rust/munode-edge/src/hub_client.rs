@@ -1217,12 +1217,6 @@ impl HubClient {
             }
             Ok(PacketType::HeartbeatAck) => {
                 debug!("Heartbeat ack received");
-                if let Some(ack) = packet.heartbeat_ack {
-                    if let Some(limits) = ack.server_limits {
-                        debug!("Received updated server limits from Hub heartbeat");
-                        self.apply_server_limits(limits).await;
-                    }
-                }
             }
             _ => {
                 debug!("Unknown packet type: {}", packet.r#type);
@@ -1698,8 +1692,8 @@ impl HubClient {
         }
     }
 
-    /// Apply a `ServerLimitsConfig` received from Hub (on registration, heartbeat ACK,
-    /// or `hub.serverConfigUpdate` hot-reload push).
+    /// Apply a `ServerLimitsConfig` received from Hub (on registration or
+    /// `hub.serverConfigUpdate` hot-reload push).
     async fn apply_server_limits(&self, limits: ServerLimitsConfig) {
         debug!(
             max_bandwidth = limits.max_bandwidth.unwrap_or(0),
