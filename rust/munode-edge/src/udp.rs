@@ -594,7 +594,7 @@ impl UdpServer {
     /// `sender_channel`, `suppress`, and `bw_arc` are pre-fetched by the caller (from the same
     /// `sessions.read()` used for decrypt) to avoid a second lock acquisition here.
     async fn route_voice(&self, sender_session: u32, plaintext: &[u8], sender_channel: u32, suppress: bool, bw_arc: Arc<std::sync::Mutex<crate::bandwidth::BandwidthRecord>>) {
-        debug!("route_voice: session={} channel={}", sender_session, sender_channel);
+        trace!("route_voice: session={} channel={}", sender_session, sender_channel);
 
         // Record voice bandwidth for this sender session — uses pre-fetched Arc, no sessions.read().
         let window_secs = (self.edge_state.rolling_stats_window.load(std::sync::atomic::Ordering::Relaxed) as usize)
@@ -733,7 +733,7 @@ impl UdpServer {
             let targets = self.edge_state.client_manager
                 .get_channel_voice_targets_with_listeners(&linked_channels, sender_session)
                 .await;
-            debug!("route_voice: {} targets in channels {:?}", targets.len(), &linked_channels);
+            trace!("route_voice: {} targets in channels {:?}", targets.len(), &linked_channels);
             let send_targets: Vec<(
                 u32,
                 Option<SocketAddr>,
