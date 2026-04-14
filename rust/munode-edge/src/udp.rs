@@ -616,6 +616,17 @@ impl UdpServer {
             }
         }
 
+        // Reject CELT and Speex voice packets — this server is Opus-only.
+        // The top 3 bits of the first byte encode the codec type:
+        //   0 = CELT Alpha, 2 = Speex, 3 = CELT Beta, 4 = Opus
+        if !plaintext.is_empty() {
+            let codec = plaintext[0] >> 5;
+            if codec == 0 || codec == 2 || codec == 3 {
+                trace!("Dropped non-Opus UDP voice packet (codec={})", codec);
+                return;
+            }
+        }
+
         // Block suppressed users from speaking
         let voice_target = if !plaintext.is_empty() { (plaintext[0] & 0x1F) as u32 } else { 0 };
         if suppress && voice_target != 31 {

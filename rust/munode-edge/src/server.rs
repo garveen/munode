@@ -652,7 +652,7 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
     // Execute full login sequence (CryptSetup → CodecVersion → ChannelStates →
     // UserStates → ServerSync → ServerConfig).
     let login = LoginHandler::new(&client_sender, &config, &edge_state, &hub_client);
-    let login_info = match login.execute_login(sid, &auth_result, opus).await {
+    let login_info = match login.execute_login(sid, &auth_result).await {
         Ok(info) => info,
         Err(e) => {
             info!("Login sequence failed for {} (session={}): {}", peer_addr, sid, e);
@@ -1246,6 +1246,14 @@ async fn handle_client_connection(
                     // Voice packet format: first byte is (voice_type << 5) | target
                     // target: 0 = normal broadcast, 1-30 = voice target (whisper), 31 = loopback
                     if let Some(sid) = session_id {
+                        if !frame.payload.is_empty() {
+                            // Reject CELT and Speex — this server is Opus-only.
+                            let codec = frame.payload[0] >> 5;
+                            if codec == 0 || codec == 2 || codec == 3 {
+                                debug!(session = sid, codec, "Dropped non-Opus TCP voice packet");
+                                continue;
+                            }
+                        }
                         if let Some(client) = edge_state.client_manager.get_client(sid).await {
                             // Suppressed users cannot speak (except loopback)
                             let voice_target = if !frame.payload.is_empty() {
@@ -1579,7 +1587,7 @@ async fn handle_client_connection(
                                         bandwidth: Some(bps_last * 8), // bytes→bits per second
                                         opus: Some(target.opus_supported),
                                         strong_certificate: Some(target.cert_hash.is_some()),
-                                        celt_versions: vec![-2147483637], // CELT 0.7.0 (Mumble standard)
+                                        celt_versions: vec![],
                                         version: Some(mumbleproto::Version {
                                             version: target.client_version,
                                             release: if target.client_release.is_empty() { None } else { Some(target.client_release.clone()) },
@@ -2672,16 +2680,14 @@ async fn broadcast_text_message(
     }
 }
 
-/// Recompute global codec preference and broadcast CodecVersion to all clients.
-/// Opus is preferred; fallback to CELT if any client doesn't support Opus.
+/// Broadcast CodecVersion (Opus-only) to all clients.
+/// This server only supports Opus; CELT is not supported.
 async fn broadcast_codec_version(edge_state: &Arc<EdgeState>) {
-    let all_clients = edge_state.client_manager.get_all_clients().await;
-    let all_opus = all_clients.iter().all(|c| c.opus_supported);
     let msg = mumbleproto::CodecVersion {
-        alpha: -2147483637, // CELT 0.7.0
+        alpha: 0,
         beta: 0,
-        prefer_alpha: !all_opus,
-        opus: Some(all_opus),
+        prefer_alpha: false,
+        opus: Some(true),
     };
     edge_state.client_manager.broadcast(MessageType::CodecVersion, &msg, None).await;
 }

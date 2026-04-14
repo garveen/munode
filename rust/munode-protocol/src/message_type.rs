@@ -53,12 +53,11 @@ impl MessageType {
 }
 
 /// UDP voice codec type IDs.
+/// Only Opus (4) and Ping (1) are supported; CELT and Speex are legacy codecs
+/// that this server intentionally rejects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
 #[repr(u8)]
 pub enum UdpVoiceType {
-    CeltAlpha = 0,
     Ping = 1,
-    Speex = 2,
-    CeltBeta = 3,
     Opus = 4,
 }

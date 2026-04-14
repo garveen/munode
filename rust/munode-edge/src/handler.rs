@@ -77,7 +77,6 @@ impl<'a> LoginHandler<'a> {
         &self,
         session_id: u32,
         auth_result: &munode_protocol::hubedge::EdgeAuthenticateUserResult,
-        opus_supported: bool,
     ) -> Result<LoginInfo> {
         debug!(session_id, "Login sequence started");
 
@@ -85,9 +84,9 @@ impl<'a> LoginHandler<'a> {
         debug!(session_id, "Step 1: sending CryptSetup");
         self.send_crypt_setup(session_id).await?;
 
-        // 2. Send CodecVersion
+        // 2. Send CodecVersion (Opus only)
         debug!(session_id, "Step 2: sending CodecVersion");
-        self.send_codec_version(opus_supported).await?;
+        self.send_codec_version().await?;
 
         // Pre-fetch all channel permissions in a single Hub RPC call.
         // This includes the root channel (id=0) which is needed by ServerSync.
@@ -166,18 +165,16 @@ impl<'a> LoginHandler<'a> {
     }
 
     /// Send CodecVersion.
-    async fn send_codec_version(&self, opus: bool) -> Result<()> {
+    /// This server only supports Opus; CELT is not supported.
+    async fn send_codec_version(&self) -> Result<()> {
         let msg = mumbleproto::CodecVersion {
-            alpha: -2147483637, // CELT 0.7.0
-            beta: -2147483632,  // CELT 0.11.0
-            // prefer_alpha must be false when opus=true; otherwise some Mumble clients
-            // (especially older 1.3.x builds) use CELT Alpha even when Opus is available,
-            // which prevents modern 1.4+ receivers from decoding the audio.
-            prefer_alpha: !opus,
-            opus: Some(opus),
+            alpha: 0,
+            beta: 0,
+            prefer_alpha: false,
+            opus: Some(true),
         };
         self.send(MessageType::CodecVersion, &msg).await?;
-        debug!("Sent CodecVersion (opus={}, prefer_alpha={})", opus, !opus);
+        debug!("Sent CodecVersion (opus=true)");
         Ok(())
     }
 
