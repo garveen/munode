@@ -488,8 +488,6 @@ impl UdpServer {
     /// calling `decrypt`, reducing the hot-path lock count by one compared to
     /// the former separate `get_crypt_state` + `get_client` calls.
     async fn handle_known_client(&self, data: &[u8], session_id: u32) {
-        debug!("handle_known_client: session={} len={}", session_id, data.len());
-
         // One sessions.read() to get all needed sender info including bandwidth.
         let (crypt_arc, sender_channel, suppress, bw_arc) = match self.edge_state.client_manager
             .get_sender_voice_info(session_id).await
@@ -769,7 +767,6 @@ impl UdpServer {
                         }
                     }
                 } else {
-                    debug!("route_voice: fallback_to_tcp for session {}", target);
                     self.fallback_to_tcp(*target, &forwarded).await;
                 }
             }
