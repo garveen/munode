@@ -602,12 +602,16 @@ impl UdpServer {
         {
             let max_bps = self.edge_state.max_bandwidth_bps.load(std::sync::atomic::Ordering::Relaxed);
             let max_bytes = if max_bps > 0 { max_bps / 8 } else { 0 };
+            // Include wire overhead to match Murmur's accounting:
+            //   20 bytes IPv4 header + 8 bytes UDP header + 4 bytes OCB2-AES128 overhead = 32 bytes.
+            const WIRE_OVERHEAD: u32 = 32;
+            let packet_size = (plaintext.len() as u32).saturating_add(WIRE_OVERHEAD);
             let within_budget = match bw_arc.lock() {
                 Ok(mut record) => {
                     if record.window_secs() != crate::bandwidth::effective_window(window_secs) {
                         *record = crate::bandwidth::BandwidthRecord::new(window_secs);
                     }
-                    record.add_frame(plaintext.len() as u32, max_bytes)
+                    record.add_frame(packet_size, max_bytes)
                 }
                 Err(_) => true, // poisoned — allow packet through
             };
@@ -1251,7 +1255,7 @@ impl UdpServer {
         }
         let sender_session = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
         let voice_data = &data[4..];
-        debug!("Relayed voice from edge {} (sender_session={}, {} bytes)", peer_addr, sender_session, voice_data.len());
+        trace!("Relayed voice from edge {} (sender_session={}, {} bytes)", peer_addr, sender_session, voice_data.len());
         // Delegate to deliver_voice_locally, which emits RelayedVoice for unified routing.
         self.deliver_voice_locally(sender_session, voice_data).await;
     }
@@ -1262,7 +1266,7 @@ impl UdpServer {
     /// and direct-TCP relay (relay_server.rs).  This keeps all receiving-side routing
     /// in one place.
     async fn deliver_voice_locally(&self, sender_session: u32, voice_data: &[u8]) {
-        debug!("deliver_voice_locally: session={}, {} bytes", sender_session, voice_data.len());
+        trace!("deliver_voice_locally: session={}, {} bytes", sender_session, voice_data.len());
         // Build server-to-client format: [header][session_varint][seq][audio]
         // The voice_target_id in the header low-5 bits is preserved by inject_session_into_voice.
         let voice_packet = inject_session_into_voice(voice_data, sender_session);

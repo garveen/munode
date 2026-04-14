@@ -619,6 +619,16 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
         client_os: client_os.clone(),
         client_os_version: client_os_version.clone(),
         plugin_context: vec![],
+        udp_packets: 0,
+        tcp_packets: 0,
+        udp_ping_avg: 0.0,
+        udp_ping_var: 0.0,
+        tcp_ping_avg: 0.0,
+        tcp_ping_var: 0.0,
+        remote_good: 0,
+        remote_late: 0,
+        remote_lost: 0,
+        remote_resync: 0,
     };
 
     // Add client to manager first so permission queries can resolve user_id.
@@ -1141,8 +1151,51 @@ async fn handle_client_connection(
                     }
                 }
                 MessageType::Ping => {
-                    let Ok(response) = handler::encode_ping_response(&frame.payload) else { continue; };
-                    client_sender.send_raw(response).await;
+                    let Ok(ping) = mumbleproto::Ping::decode(&frame.payload[..]) else { continue; };
+
+                    // When the client is authenticated, save its reported stats and
+                    // reply with the server's own crypt stats (matching Murmur's msgPing).
+                    if let Some(sid) = session_id {
+                        // Persist client-reported stats so UserStats can return them.
+                        edge_state.client_manager.update_ping_stats(
+                            sid,
+                            ping.udp_packets.unwrap_or(0),
+                            ping.tcp_packets.unwrap_or(0),
+                            ping.udp_ping_avg.unwrap_or(0.0),
+                            ping.udp_ping_var.unwrap_or(0.0),
+                            ping.tcp_ping_avg.unwrap_or(0.0),
+                            ping.tcp_ping_var.unwrap_or(0.0),
+                            ping.good.unwrap_or(0),
+                            ping.late.unwrap_or(0),
+                            ping.lost.unwrap_or(0),
+                            ping.resync.unwrap_or(0),
+                        ).await;
+
+                        // Reply with server-side crypt stats + echoed timestamp.
+                        let (good, late, lost, resync) =
+                            if let Some(cs) = edge_state.client_manager.get_crypt_state(sid).await {
+                                let s = cs.lock().unwrap();
+                                (s.good, s.late, s.lost, s.resync)
+                            } else {
+                                (0, 0, 0, 0)
+                            };
+                        let response = mumbleproto::Ping {
+                            timestamp: ping.timestamp,
+                            good: Some(good),
+                            late: Some(late),
+                            lost: Some(lost),
+                            resync: Some(resync),
+                            ..Default::default()
+                        };
+                        client_sender.send_message(MessageType::Ping, &response).await;
+                    } else {
+                        // Pre-auth: just echo the timestamp back.
+                        let response = mumbleproto::Ping {
+                            timestamp: ping.timestamp,
+                            ..Default::default()
+                        };
+                        client_sender.send_message(MessageType::Ping, &response).await;
+                    }
                 }
                 MessageType::UserState if client_state == ClientState::Ready => {
                     let Ok(user_state) = mumbleproto::UserState::decode(&frame.payload[..]) else { continue; };
@@ -1524,7 +1577,9 @@ async fn handle_client_connection(
                             }
 
                             if let Some(target) = edge_state.client_manager.get_client(target_session).await {
-                                // Fetch real crypto stats
+                                // from_client = server's local crypt stats (how server received from client).
+                                // from_server = client-reported stats (how client received from server) —
+                                //               stored in ClientInfo.remote_* from Ping messages.
                                 let (good, late, lost, resync) =
                                     if let Some(cs) = edge_state.client_manager.get_crypt_state(target_session).await {
                                         let s = cs.lock().unwrap();
@@ -1555,11 +1610,17 @@ async fn handle_client_connection(
                                             resync: Some(resync),
                                         }),
                                         from_server: Some(mumbleproto::user_stats::Stats {
-                                            good: Some(good),
-                                            late: Some(late),
-                                            lost: Some(lost),
-                                            resync: Some(resync),
+                                            good: Some(target.remote_good),
+                                            late: Some(target.remote_late),
+                                            lost: Some(target.remote_lost),
+                                            resync: Some(target.remote_resync),
                                         }),
+                                        udp_packets: Some(target.udp_packets),
+                                        tcp_packets: Some(target.tcp_packets),
+                                        udp_ping_avg: Some(target.udp_ping_avg),
+                                        udp_ping_var: Some(target.udp_ping_var),
+                                        tcp_ping_avg: Some(target.tcp_ping_avg),
+                                        tcp_ping_var: Some(target.tcp_ping_var),
                                         onlinesecs: Some(onlinesecs),
                                         idlesecs: Some(idlesecs),
                                         bandwidth: Some(bps_last * 8), // bytes→bits per second
@@ -1576,11 +1637,17 @@ async fn handle_client_connection(
                                             resync: Some(resync),
                                         }),
                                         from_server: Some(mumbleproto::user_stats::Stats {
-                                            good: Some(good),
-                                            late: Some(late),
-                                            lost: Some(lost),
-                                            resync: Some(resync),
+                                            good: Some(target.remote_good),
+                                            late: Some(target.remote_late),
+                                            lost: Some(target.remote_lost),
+                                            resync: Some(target.remote_resync),
                                         }),
+                                        udp_packets: Some(target.udp_packets),
+                                        tcp_packets: Some(target.tcp_packets),
+                                        udp_ping_avg: Some(target.udp_ping_avg),
+                                        udp_ping_var: Some(target.udp_ping_var),
+                                        tcp_ping_avg: Some(target.tcp_ping_avg),
+                                        tcp_ping_var: Some(target.tcp_ping_var),
                                         address: Some(addr_bytes),
                                         onlinesecs: Some(onlinesecs),
                                         idlesecs: Some(idlesecs),
@@ -2875,6 +2942,16 @@ mod tests {
             client_os: String::new(),
             client_os_version: String::new(),
             plugin_context: vec![],
+            udp_packets: 0,
+            tcp_packets: 0,
+            udp_ping_avg: 0.0,
+            udp_ping_var: 0.0,
+            tcp_ping_avg: 0.0,
+            tcp_ping_var: 0.0,
+            remote_good: 0,
+            remote_late: 0,
+            remote_lost: 0,
+            remote_resync: 0,
         }
     }
 

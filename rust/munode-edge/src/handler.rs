@@ -670,6 +670,16 @@ mod tests {
             client_os: String::new(),
             client_os_version: String::new(),
             plugin_context: vec![],
+            udp_packets: 0,
+            tcp_packets: 0,
+            udp_ping_avg: 0.0,
+            udp_ping_var: 0.0,
+            tcp_ping_avg: 0.0,
+            tcp_ping_var: 0.0,
+            remote_good: 0,
+            remote_late: 0,
+            remote_lost: 0,
+            remote_resync: 0,
         };
 
         let msg = build_user_state_msg(&client);

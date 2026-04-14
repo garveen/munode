@@ -90,6 +90,28 @@ pub struct ClientInfo {
     /// Positional audio context (game plugin context).
     /// When set, voice is only routed to users with the same context.
     pub plugin_context: Vec<u8>,
+
+    // ── Ping / statistics (updated from client Ping messages) ──────────────
+    /// Total UDP packets received by the client (client-reported).
+    pub udp_packets: u32,
+    /// Total TCP packets received by the client (client-reported).
+    pub tcp_packets: u32,
+    /// UDP round-trip ping average in ms (client-reported).
+    pub udp_ping_avg: f32,
+    /// UDP round-trip ping variance (client-reported).
+    pub udp_ping_var: f32,
+    /// TCP round-trip ping average in ms (client-reported).
+    pub tcp_ping_avg: f32,
+    /// TCP round-trip ping variance (client-reported).
+    pub tcp_ping_var: f32,
+    /// Client-reported crypt stats: good packets received from server.
+    pub remote_good: u32,
+    /// Client-reported crypt stats: late packets received from server.
+    pub remote_late: u32,
+    /// Client-reported crypt stats: lost packets from server.
+    pub remote_lost: u32,
+    /// Client-reported crypt stats: nonce resyncs from server.
+    pub remote_resync: u32,
 }
 
 /// All per-session data stored in a single struct to allow a single RwLock
@@ -679,6 +701,42 @@ impl ClientManager {
         }
     }
 
+    /// Update the ping / statistics fields for a session from a client Ping message.
+    ///
+    /// * `udp_packets` / `tcp_packets` — client's total packet counters
+    /// * `udp_ping_avg` / `udp_ping_var` / `tcp_ping_avg` / `tcp_ping_var` — latency stats
+    /// * `remote_good` / `remote_late` / `remote_lost` / `remote_resync` — client's view
+    ///   of packets it received from the server (stored as `remote_*` in ClientInfo)
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_ping_stats(
+        &self,
+        session: u32,
+        udp_packets: u32,
+        tcp_packets: u32,
+        udp_ping_avg: f32,
+        udp_ping_var: f32,
+        tcp_ping_avg: f32,
+        tcp_ping_var: f32,
+        remote_good: u32,
+        remote_late: u32,
+        remote_lost: u32,
+        remote_resync: u32,
+    ) {
+        if let Some(entry) = self.sessions.write().await.get_mut(&session) {
+            let info = &mut entry.info;
+            info.udp_packets = udp_packets;
+            info.tcp_packets = tcp_packets;
+            info.udp_ping_avg = udp_ping_avg;
+            info.udp_ping_var = udp_ping_var;
+            info.tcp_ping_avg = tcp_ping_avg;
+            info.tcp_ping_var = tcp_ping_var;
+            info.remote_good = remote_good;
+            info.remote_late = remote_late;
+            info.remote_lost = remote_lost;
+            info.remote_resync = remote_resync;
+        }
+    }
+
     /// Update client state.
     pub async fn set_client_state(&self, session: u32, state: ClientState) {
         if let Some(entry) = self.sessions.write().await.get_mut(&session) {
@@ -856,6 +914,16 @@ mod tests {
             client_os: String::new(),
             client_os_version: String::new(),
             plugin_context: vec![],
+            udp_packets: 0,
+            tcp_packets: 0,
+            udp_ping_avg: 0.0,
+            udp_ping_var: 0.0,
+            tcp_ping_avg: 0.0,
+            tcp_ping_var: 0.0,
+            remote_good: 0,
+            remote_late: 0,
+            remote_lost: 0,
+            remote_resync: 0,
         }
     }
 

@@ -329,26 +329,22 @@ fn ocb_encrypt(
         s2(&mut delta);
 
         // tmp = delta XOR plain_block
-        let plain_block: [u8; 16] = plain[offset..offset + 16].try_into().unwrap();
+        let mut plain_block: [u8; 16] = plain[offset..offset + 16].try_into().unwrap();
         xor16(&mut tmp, &plain_block, &delta);
         if flip_bit {
             tmp[0] ^= 1;
+            plain_block[0] ^= 1; // pre-apply flip so checksum uses the modified value
         }
 
-        // tmp = AES_K(tmp)
-        aes_encrypt(aes, &tmp.clone(), &mut tmp);
+        // tmp = AES_K(tmp) in-place — no .clone() needed
+        aes_encrypt_inplace(aes, &mut tmp);
 
-        // encrypted_block = delta XOR tmp
-        let mut enc_block = [0u8; 16];
-        xor16(&mut enc_block, &tmp, &delta);
-        cipher[offset..offset + 16].copy_from_slice(&enc_block);
+        // tmp = delta XOR AES(tmp) — now tmp holds the ciphertext block
+        xor16_inplace(&mut tmp, &delta);
+        cipher[offset..offset + 16].copy_from_slice(&tmp);
 
-        // checksum ^= plain_block (with flip if needed)
-        let mut plain_for_checksum = plain_block;
-        if flip_bit {
-            plain_for_checksum[0] ^= 1;
-        }
-        xor16_inplace(&mut checksum, &plain_for_checksum);
+        // checksum ^= (possibly flipped) plain_block
+        xor16_inplace(&mut checksum, &plain_block);
 
         offset += 16;
     }
@@ -358,11 +354,10 @@ fn ocb_encrypt(
     s2(&mut delta);
 
     // pad = AES_K(delta XOR [0..0 || (remaining*8)])
-    let mut len_block = [0u8; 16];
-    len_block[15] = (remaining * 8) as u8;
-    xor16(&mut tmp, &len_block, &delta);
-    let mut pad = [0u8; 16];
-    aes_encrypt(aes, &tmp, &mut pad);
+    // Avoid allocating a zero-block: copy delta, XOR the single length byte, encrypt in-place.
+    let mut pad = delta;
+    pad[15] ^= (remaining * 8) as u8;
+    aes_encrypt_inplace(aes, &mut pad);
 
     // blk = plain[offset..] || pad[remaining..]  (16 bytes total)
     let mut blk = [0u8; 16];
@@ -378,7 +373,8 @@ fn ocb_encrypt(
     // Tag = AES_K(S3(delta) XOR checksum)
     s3(&mut delta);
     xor16_inplace(&mut delta, &checksum);
-    aes_encrypt(aes, &delta.clone(), tag);
+    // delta and tag are distinct variables — no .clone() needed
+    aes_encrypt(aes, &delta, tag);
 
     true
 }
@@ -414,15 +410,13 @@ fn ocb_decrypt(
         let cipher_block: [u8; 16] = cipher[offset..offset + 16].try_into().unwrap();
         xor16(&mut tmp, &cipher_block, &delta);
 
-        // tmp = AES_K_inv(tmp)
-        aes_decrypt(aes, &tmp.clone(), &mut tmp);
+        // tmp = AES_K_inv(tmp) in-place — no .clone() needed
+        aes_decrypt_inplace(aes, &mut tmp);
 
-        // plain_block = delta XOR tmp
-        let mut plain_block = [0u8; 16];
-        xor16(&mut plain_block, &tmp, &delta);
-        plain[offset..offset + 16].copy_from_slice(&plain_block);
-
-        xor16_inplace(&mut checksum, &plain_block);
+        // tmp = delta XOR tmp — now tmp holds the plaintext block
+        xor16_inplace(&mut tmp, &delta);
+        plain[offset..offset + 16].copy_from_slice(&tmp);
+        xor16_inplace(&mut checksum, &tmp);
 
         offset += 16;
     }
@@ -431,12 +425,10 @@ fn ocb_decrypt(
     let remaining = len - offset;
     s2(&mut delta);
 
-    // pad = AES_K(delta XOR [0..0 || (remaining*8)])  (AES encrypt)
-    let mut len_block = [0u8; 16];
-    len_block[15] = (remaining * 8) as u8;
-    xor16_inplace(&mut len_block, &delta);
-    let mut pad = [0u8; 16];
-    aes_encrypt(aes, &len_block, &mut pad);
+    // pad = AES_K(delta XOR [0..0 || (remaining*8)])
+    let mut pad = delta;
+    pad[15] ^= (remaining * 8) as u8;
+    aes_encrypt_inplace(aes, &mut pad);
 
     // tmp = cipher[offset..] XOR pad  (partial block decryption)
     let mut tmp2 = [0u8; 16];
@@ -454,67 +446,79 @@ fn ocb_decrypt(
     // Tag = AES_K(S3(delta) XOR checksum)
     s3(&mut delta);
     xor16_inplace(&mut delta, &checksum);
-    aes_encrypt(aes, &delta.clone(), tag);
+    aes_encrypt(aes, &delta, tag);
 
     success
 }
 
 // ─── Block cipher primitives ─────────────────────────────────────────────────
 
+/// AES-128 encrypt: `input` → `output`.  Uses direct slice copy into output
+/// to avoid a separate GenericArray stack allocation.
 #[inline]
 fn aes_encrypt(aes: &Aes128, input: &[u8; 16], output: &mut [u8; 16]) {
-    let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(input);
-    aes.encrypt_block(&mut block);
-    output.copy_from_slice(&block);
+    *output = *input;
+    aes_encrypt_inplace(aes, output);
 }
 
+/// AES-128 encrypt in-place.  Saves one 16-byte copy at every call site where
+/// the input and output are the same buffer.
 #[inline]
-fn aes_decrypt(aes: &Aes128, input: &[u8; 16], output: &mut [u8; 16]) {
-    let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(input);
-    aes.decrypt_block(&mut block);
-    output.copy_from_slice(&block);
+fn aes_encrypt_inplace(aes: &Aes128, block: &mut [u8; 16]) {
+    use aes::cipher::generic_array::GenericArray;
+    let ga = GenericArray::from_mut_slice(block);
+    aes.encrypt_block(ga);
+}
+
+/// AES-128 decrypt in-place.
+#[inline]
+fn aes_decrypt_inplace(aes: &Aes128, block: &mut [u8; 16]) {
+    use aes::cipher::generic_array::GenericArray;
+    let ga = GenericArray::from_mut_slice(block);
+    aes.decrypt_block(ga);
 }
 
 // ─── GF(2^128) field operations ──────────────────────────────────────────────
 
-/// S2: multiply by x in GF(2^128) with reduction polynomial x^128 + x^7 + x^2 + x + 1.
+/// S2: multiply by x in GF(2^128) with reduction polynomial x^128+x^7+x^2+x+1.
 ///
-/// Treats the 16-byte block as a 128-bit big-endian integer:
-/// - Left-shift by 1 bit
-/// - If the original MSB was 1, XOR the result with 0x87 (polynomial constant)
+/// Treats the block as a 128-bit big-endian integer: left-shift by 1, then
+/// conditionally XOR 0x87 based on the original MSB.
+/// Uses a single u128 operation instead of a 16-byte loop.
 #[inline]
 fn s2(block: &mut [u8; 16]) {
-    let carry = block[0] >> 7; // MSB of the 128-bit value
-    for i in 0..15 {
-        block[i] = (block[i] << 1) | (block[i + 1] >> 7);
-    }
-    block[15] = (block[15] << 1) ^ (carry * 0x87);
+    let v = u128::from_be_bytes(*block);
+    let carry = (v >> 127) as u8;
+    *block = (v << 1).to_be_bytes();
+    block[15] ^= carry * 0x87;
 }
 
-/// S3: multiply by 3 = S2(x) XOR x in GF(2^128).
+/// S3 = S2(x) XOR x in GF(2^128).  Computed entirely in u128 domain.
 #[inline]
 fn s3(block: &mut [u8; 16]) {
-    let original = *block;
-    s2(block);
-    xor16_inplace(block, &original);
+    let v = u128::from_be_bytes(*block);
+    let carry = v >> 127;              // 0 or 1
+    let shifted = (v << 1) ^ (carry * 0x87);
+    *block = (shifted ^ v).to_be_bytes();
 }
 
 // ─── 16-byte XOR helpers ─────────────────────────────────────────────────────
 
 /// XOR two 16-byte blocks: `dst = a XOR b`.
+/// Uses a single u128 XOR instead of a 16-byte loop.
 #[inline]
 fn xor16(dst: &mut [u8; 16], a: &[u8; 16], b: &[u8; 16]) {
-    for i in 0..16 {
-        dst[i] = a[i] ^ b[i];
-    }
+    let av = u128::from_ne_bytes(*a);
+    let bv = u128::from_ne_bytes(*b);
+    *dst = (av ^ bv).to_ne_bytes();
 }
 
 /// XOR in-place: `dst ^= src`.
 #[inline]
 fn xor16_inplace(dst: &mut [u8; 16], src: &[u8; 16]) {
-    for i in 0..16 {
-        dst[i] ^= src[i];
-    }
+    let dv = u128::from_ne_bytes(*dst);
+    let sv = u128::from_ne_bytes(*src);
+    *dst = (dv ^ sv).to_ne_bytes();
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
