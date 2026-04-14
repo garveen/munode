@@ -8,7 +8,7 @@ use anyhow::Result;
 use bytes::BytesMut;
 use tokio::net::UdpSocket;
 use tokio::sync::{Mutex, RwLock, Semaphore};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, trace};
 
 use munode_protocol::message_type::MessageType;
 use munode_protocol::transport::EDGE_MAGIC;
