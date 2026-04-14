@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -155,6 +155,13 @@ pub struct HubState {
     /// Initialised from the startup config and updated in-place on SIGHUP hot-reload.
     /// All reads use the async `RwLock` so callers never block the runtime.
     pub live_limits: RwLock<ServerLimitsConfig>,
+    /// Per-edge monotonic notification sequence counter.
+    ///
+    /// Each Edge has its own counter that is incremented every time a sequenced
+    /// notification is sent to it.  The counter is initialised to 0 when the Edge
+    /// registers.  Uses `std::sync::Mutex` (not tokio) because increments are fast
+    /// and never yield.
+    pub notification_seqs: StdMutex<HashMap<u32, u64>>,
 }
 
 /// The main Hub server.
@@ -240,6 +247,7 @@ impl HubServer {
             started_at: std::time::Instant::now(),
             voice_targets: RwLock::new(HashMap::new()),
             live_limits: RwLock::new(crate::rpc_handler::server_limits_from_config(&self.config)),
+            notification_seqs: StdMutex::new(HashMap::new()),
         });
 
         // Load channels from database
@@ -315,7 +323,7 @@ impl HubServer {
                                 ..Default::default()
                             };
                             let data = packet.encode_to_vec();
-                            broadcast_critical(&reload_state, data).await;
+                            broadcast_critical_sequenced(&reload_state, data).await;
                             info!(
                                 log_level = %new_cfg.log_level,
                                 "Hub config hot-reload applied and pushed to all connected Edges"
@@ -545,6 +553,122 @@ pub async fn broadcast_critical_excluding(state: &HubState, data: Vec<u8>, exclu
         }
     });
     join_all(futures).await;
+}
+
+// ---------------------------------------------------------------------------
+// Notification sequence helpers
+// ---------------------------------------------------------------------------
+
+/// Atomically increment and return the next notification sequence number for an edge.
+pub fn next_notification_seq(state: &HubState, edge_id: u32) -> u64 {
+    let mut seqs = state.notification_seqs.lock().unwrap();
+    let entry = seqs.entry(edge_id).or_insert(0);
+    *entry += 1;
+    *entry
+}
+
+/// Return the current (last-assigned) notification sequence number for an edge.
+///
+/// Used by `edge.fullSync` so the Edge knows where to start its expected counter.
+pub fn current_notification_seq(state: &HubState, edge_id: u32) -> u64 {
+    let seqs = state.notification_seqs.lock().unwrap();
+    *seqs.get(&edge_id).unwrap_or(&0)
+}
+
+/// Append a `notification_seq` field (tag=50, varint) to already-encoded
+/// `EdgeHubPacket` bytes.  Protobuf allows fields in any order, so appending
+/// is safe and avoids re-encoding the whole message.
+fn append_notification_seq(data: &mut Vec<u8>, seq: u64) {
+    // Field 50, wire type 0 (varint).  Tag value = (50 << 3) | 0 = 400.
+    // Varint encoding of 400: 0x90 0x03.
+    prost::encoding::encode_key(50, prost::encoding::WireType::Varint, data);
+    prost::encoding::encode_varint(seq, data);
+}
+
+/// Like [`broadcast_critical`] but assigns a per-edge notification sequence
+/// number to each outgoing copy.
+pub async fn broadcast_critical_sequenced(state: &HubState, data: Vec<u8>) {
+    use futures_util::future::join_all;
+    use tokio::time::{timeout, Duration};
+
+    let senders: Vec<(u32, tokio::sync::mpsc::Sender<Vec<u8>>)> = {
+        let edges = state.edge_connections.read().await;
+        edges.iter().map(|(&id, tx)| (id, tx.clone())).collect()
+    };
+
+    let futures = senders.into_iter().map(|(edge_id, sender)| {
+        let mut data = data.clone();
+        let seq = next_notification_seq(state, edge_id);
+        append_notification_seq(&mut data, seq);
+        async move {
+            match timeout(Duration::from_secs(2), sender.send(data)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::warn!("broadcast_critical_sequenced: edge {} channel closed: {}", edge_id, e);
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "broadcast_critical_sequenced: edge {} send timeout — message dropped",
+                        edge_id
+                    );
+                }
+            }
+        }
+    });
+    join_all(futures).await;
+}
+
+/// Like [`broadcast_critical_excluding`] but assigns per-edge sequence numbers.
+pub async fn broadcast_critical_excluding_sequenced(state: &HubState, data: Vec<u8>, exclude_edge_id: u32) {
+    use futures_util::future::join_all;
+    use tokio::time::{timeout, Duration};
+
+    let senders: Vec<(u32, tokio::sync::mpsc::Sender<Vec<u8>>)> = {
+        let edges = state.edge_connections.read().await;
+        edges
+            .iter()
+            .filter(|&(&id, _)| id != exclude_edge_id)
+            .map(|(&id, tx)| (id, tx.clone()))
+            .collect()
+    };
+
+    let futures = senders.into_iter().map(|(edge_id, sender)| {
+        let mut data = data.clone();
+        let seq = next_notification_seq(state, edge_id);
+        append_notification_seq(&mut data, seq);
+        async move {
+            match timeout(Duration::from_secs(2), sender.send(data)).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::warn!(
+                        "broadcast_critical_excluding_sequenced: edge {} channel closed: {}",
+                        edge_id,
+                        e
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "broadcast_critical_excluding_sequenced: edge {} send timeout — message dropped",
+                        edge_id
+                    );
+                }
+            }
+        }
+    });
+    join_all(futures).await;
+}
+
+/// Send a sequenced notification to a specific edge.
+pub async fn notify_sequenced(state: &HubState, edge_id: u32, data: Vec<u8>) {
+    let edges = state.edge_connections.read().await;
+    if let Some(sender) = edges.get(&edge_id) {
+        let mut data = data;
+        let seq = next_notification_seq(state, edge_id);
+        append_notification_seq(&mut data, seq);
+        if let Err(e) = sender.try_send(data) {
+            tracing::warn!("Failed to notify_sequenced edge {}: {}", edge_id, e);
+        }
+    }
 }
 
 fn current_millis() -> u64 {

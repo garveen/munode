@@ -35,6 +35,11 @@ message EdgeHubPacket {
   // 心跳
   optional Heartbeat heartbeat = 40;
   optional HeartbeatAck heartbeat_ack = 41;
+
+  // 通知序列号（Hub→Edge 方向）。Hub 为每个 Edge 维护独立的递增计数器。
+  // 仅在 type = RPC_NOTIFICATION 且为需要有序应用的控制消息时设置。
+  // Edge 根据此字段检测重复、乱序和丢失的通知。
+  optional uint64 notification_seq = 50;
 }
 
 /**

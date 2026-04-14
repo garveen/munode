@@ -4,7 +4,7 @@ MuNode is a distributed Mumble voice server. The server-side (Hub + Edge) is wri
 
 ## Mandatory Rules
 
-- When you finish work or have questions that need clarification, call the ask-questions tool for further instructions instead of ending the conversation directly.
+- When you have questions that need clarification, call ask-questions tool for further instructions instead of ending the conversation directly. DO NOT guess.
 - When asked to fix one of the integration tests, do not run all tests — you must specify the file or use the `-t` parameter to run only that specific test. Do NOT use "--" for params, it's not needed.
 - This system is still in the pre-0.1 stage. Everything except `Mumble.proto` — including any protocols — may be modified freely.
 
@@ -176,8 +176,7 @@ cargo test crypto::tests          # Run specific test module
 - TypeScript integration tests in `tests/integration/` use vitest
 - These tests start real Hub + Edge servers and connect with the TS client
 - Run with: `pnpm test:integration` — Note: running all tests directly is generally forbidden; always specify a file or use `-t` to run a subset.
-- Config: `vitest.config.integration.ts`
-
+- Config: `vitest.config.integration.ts`- **Integration tests use the debug binary** (`rust/target/debug/`), not the release binary. Always run `cargo build` (not `cargo build --release`) before running integration tests.
 ## Boundaries
 
 - **Do not modify** any TypeScript packages except `packages/client/`

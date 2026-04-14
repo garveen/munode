@@ -515,6 +515,7 @@ impl ClientManager {
         let session_ids: Vec<u32> = {
             let ch_users = self.channel_users.read().await;
             let listen_idx = self.listening_index.read().await;
+            // DEBUG: print channel_users contents for queried channels
             let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
             let mut result = Vec::new();
             for &ch in channels {

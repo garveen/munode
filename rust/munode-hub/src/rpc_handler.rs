@@ -117,7 +117,7 @@ impl RpcHandler {
             "edge.register" => self.handle_register(&request, &request_id).await,
             "edge.authenticateUser" => self.handle_authenticate_user(&request, &request_id, edge_server_id).await,
             "edge.reportSession" => self.handle_report_session(&request, &request_id, edge_server_id).await,
-            "edge.fullSync" => self.handle_full_sync(&request, &request_id).await,
+            "edge.fullSync" => self.handle_full_sync(&request, &request_id, edge_server_id).await,
             "edge.handlePermissionQuery" => self.handle_permission_query(&request, &request_id).await,
             "edge.batchPermissionQuery" => self.handle_batch_permission_query(&request, &request_id).await,
             "edge.syncVoiceTarget" => self.handle_sync_voice_target(&request, &request_id).await,
@@ -1438,6 +1438,7 @@ impl RpcHandler {
         &self,
         _request: &TypedRpcRequest,
         request_id: &str,
+        edge_server_id: u32,
     ) -> Result<EdgeHubPacket> {
         // Gather all channels
         let channels: Vec<ChannelDataProto> = self
@@ -1566,7 +1567,7 @@ impl RpcHandler {
             bans: vec![],
             sessions,
             timestamp: current_millis() as i64,
-            sequence: 0,
+            sequence: crate::server::current_notification_seq(&self.state, edge_server_id),
             edges,
         };
 
@@ -2732,7 +2733,7 @@ impl RpcHandler {
             ..Default::default()
         };
         let data = packet.encode_to_vec();
-        crate::server::broadcast_critical_excluding(&self.state, data, source_edge_id).await;
+        crate::server::broadcast_critical_excluding_sequenced(&self.state, data, source_edge_id).await;
     }
 
     /// Handle text message forwarding: relay to all other edges (not the sender).
@@ -2769,7 +2770,7 @@ impl RpcHandler {
         };
         let data = packet.encode_to_vec();
 
-        crate::server::broadcast_critical_excluding(&self.state, data, source_edge_id).await;
+        crate::server::broadcast_critical_excluding_sequenced(&self.state, data, source_edge_id).await;
     }
 
     /// Handle channel state notification from an edge (channel create/edit request).
@@ -2925,7 +2926,7 @@ impl RpcHandler {
                 };
 
                 let data = packet.encode_to_vec();
-                crate::server::notify(&self.state, edge_id, data).await;
+                crate::server::notify_sequenced(&self.state, edge_id, data).await;
             }
         }
     }
@@ -3051,7 +3052,10 @@ impl RpcHandler {
         }
     }
 
-    /// Broadcast a notification to all connected edges.
+    /// Broadcast a sequenced notification to all connected edges.
+    ///
+    /// Each edge receives a per-edge notification sequence number so it can
+    /// detect gaps, duplicates, and apply state changes in order.
     async fn broadcast_notification<F>(&self, method: &str, build: F)
     where
         F: FnOnce(&mut TypedRpcNotification),
@@ -3070,7 +3074,7 @@ impl RpcHandler {
         };
 
         let data = packet.encode_to_vec();
-        crate::server::broadcast_critical(&self.state, data).await;
+        crate::server::broadcast_critical_sequenced(&self.state, data).await;
     }
 
     /// Like [`broadcast_notification`] but skips the edge identified by `exclude_edge_id`.
@@ -3097,7 +3101,7 @@ impl RpcHandler {
         };
 
         let data = packet.encode_to_vec();
-        crate::server::broadcast_critical_excluding(&self.state, data, exclude_edge_id).await;
+        crate::server::broadcast_critical_excluding_sequenced(&self.state, data, exclude_edge_id).await;
     }
 
     /// Return the current live server limits (updated on hot-reload).
@@ -3220,7 +3224,8 @@ impl RpcHandler {
         }
     }
 
-    /// Send a notification to a single specific edge.
+    /// Send a sequenced notification to a single specific edge.
+    #[allow(dead_code)]
     pub(crate) async fn send_notification_to_edge<F>(&self, edge_id: u32, method: &str, build: F)
     where
         F: FnOnce(&mut TypedRpcNotification),
@@ -3239,12 +3244,32 @@ impl RpcHandler {
         };
 
         let data = packet.encode_to_vec();
-        let edges = self.state.edge_connections.read().await;
-        if let Some(sender) = edges.get(&edge_id) {
-            if let Err(e) = sender.try_send(data) {
-                warn!("Failed to send notification to edge {}: {}", edge_id, e);
-            }
-        }
+        crate::server::notify_sequenced(&self.state, edge_id, data).await;
+    }
+
+    /// Send an unsequenced notification to a single edge.
+    ///
+    /// Use this for notifications that do not affect client-visible state (e.g.
+    /// route table updates, ninja config, peer topology changes).
+    pub(crate) async fn send_notification_to_edge_unsequenced<F>(&self, edge_id: u32, method: &str, build: F)
+    where
+        F: FnOnce(&mut TypedRpcNotification),
+    {
+        let mut notification = TypedRpcNotification {
+            method: method.to_string(),
+            timestamp: Some(current_millis() as i64),
+            ..Default::default()
+        };
+        build(&mut notification);
+
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(notification),
+            ..Default::default()
+        };
+
+        let data = packet.encode_to_vec();
+        crate::server::notify(&self.state, edge_id, data).await;
     }
 
     /// Compute and push route tables to all connected edges.
@@ -3268,7 +3293,7 @@ impl RpcHandler {
                 continue;
             }
             let max_ttl_val = self.state.config.voice_routing.max_ttl;
-            self.send_notification_to_edge(edge_id, "hub.routeTableUpdate", |n| {
+            self.send_notification_to_edge_unsequenced(edge_id, "hub.routeTableUpdate", |n| {
                 n.route_table_update = Some(HubRouteTableUpdateParams {
                     routes: routes.into_iter().map(|(target, rtype, relay_chain, cost)| {
                         let relay_transports = vec![0u32; relay_chain.len()]; // all UDP for now

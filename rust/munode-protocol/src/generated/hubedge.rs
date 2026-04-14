@@ -2412,6 +2412,11 @@ pub struct EdgeHubPacket {
     pub heartbeat: ::core::option::Option<Heartbeat>,
     #[prost(message, optional, tag = "41")]
     pub heartbeat_ack: ::core::option::Option<HeartbeatAck>,
+    /// 通知序列号（Hub→Edge 方向）。Hub 为每个 Edge 维护独立的递增计数器。
+    /// 仅在 type = RPC_NOTIFICATION 且为需要有序应用的控制消息时设置。
+    /// Edge 根据此字段检测重复、乱序和丢失的通知。
+    #[prost(uint64, optional, tag = "50")]
+    pub notification_seq: ::core::option::Option<u64>,
 }
 /// *
 /// RPC 错误

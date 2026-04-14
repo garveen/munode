@@ -17,6 +17,21 @@ use crate::crypto::CryptState;
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 
+/// Data returned by [`LoginHandler::execute_login`] that is needed to send the
+/// final end-of-login messages (ServerSync, ServerConfig, SuggestConfig) from
+/// the outer connection loop **after** the client state has been set to `Ready`.
+///
+/// Matching Murmur's pattern: state → Authenticated (≅ Ready) FIRST, then
+/// ServerSync is sent.  This ensures that when the client responds with
+/// `UserState{channel_id}` the server is already in the correct state.
+#[derive(Debug)]
+pub struct LoginInfo {
+    /// Effective permissions on channel 0 (root) for this session, to be sent
+    /// in `ServerSync.permissions`.  Allows the Mumble client to cache the
+    /// value and to avoid spamming PermissionQuery on startup.
+    pub root_permissions: u32,
+}
+
 /// Handles the Mumble protocol login sequence for a client.
 ///
 /// After authentication succeeds, sends in order:
@@ -25,8 +40,10 @@ use crate::state::EdgeState;
 /// 3. ChannelState (for all channels, BFS order)
 /// 4. UserState (for all other users)
 /// 5. Self UserState
-/// 6. ServerSync
-/// 7. ServerConfig
+///
+/// The caller (outer connection loop) is responsible for sending:
+/// 6. ServerSync  — after transitioning client state to `Ready`
+/// 7. ServerConfig / SuggestConfig
 pub struct LoginHandler<'a> {
     sender: &'a ClientSender,
     config: &'a EdgeConfig,
@@ -44,13 +61,24 @@ impl<'a> LoginHandler<'a> {
         Self { sender, config, edge_state, hub_client }
     }
 
-    /// Execute the full login sequence after authentication.
+    /// Execute the pre-ServerSync portion of the login sequence.
+    ///
+    /// Sends: CryptSetup → CodecVersion → ChannelStates → UserStates (remote
+    /// + local) → Self UserState.
+    ///
+    /// Does **not** send ServerSync / ServerConfig / SuggestConfig.  Those
+    /// must be sent by the outer connection loop *after* the client state has
+    /// been transitioned to `Ready`, matching Murmur's ordering (state set to
+    /// Authenticated before ServerSync is transmitted).
+    ///
+    /// Returns [`LoginInfo`] with data required by the outer loop to compose
+    /// the final end-of-login messages.
     pub async fn execute_login(
         &self,
         session_id: u32,
         auth_result: &munode_protocol::hubedge::EdgeAuthenticateUserResult,
         opus_supported: bool,
-    ) -> Result<()> {
+    ) -> Result<LoginInfo> {
         debug!(session_id, "Login sequence started");
 
         // 1. Send CryptSetup and initialise OCB2 state for this session
@@ -95,19 +123,11 @@ impl<'a> LoginHandler<'a> {
         debug!(session_id, "Step 6: sending self UserState");
         self.send_self_user_state(session_id, auth_result).await?;
 
-        // 6. Send ServerSync (include actual root-channel permissions so the
-        //    Mumble client caches them and doesn't spam PermissionQuery for
-        //    channel 0 on every UI event during startup).
-        debug!(session_id, "Step 7: sending ServerSync");
+        // Collect root-channel permissions for the caller to use in ServerSync.
         let root_permissions = perm_map.get(&0).map(|(p, _)| *p).unwrap_or(0);
-        self.send_server_sync(session_id, root_permissions).await?;
 
-        // 7. Send ServerConfig
-        debug!(session_id, "Step 8: sending ServerConfig");
-        self.send_server_config().await?;
-
-        debug!(session_id, "Login sequence completed");
-        Ok(())
+        debug!(session_id, "Pre-ServerSync login sequence completed");
+        Ok(LoginInfo { root_permissions })
     }
 
     /// Send CryptSetup with generated encryption keys, and register the CryptState
@@ -388,7 +408,7 @@ impl<'a> LoginHandler<'a> {
     /// uses it to avoid sending repeated PermissionQuery messages for the root channel
     /// on every UI event during startup. Sending 0 here causes the client to think it
     /// has no permissions and to keep querying until an async reply arrives.
-    async fn send_server_sync(&self, session_id: u32, root_permissions: u32) -> Result<()> {
+    pub async fn send_server_sync(&self, session_id: u32, root_permissions: u32) -> Result<()> {
         let hub_limits = self.edge_state.hub_limits.read().await;
         let max_bandwidth = hub_limits.as_ref().and_then(|l| l.max_bandwidth);
         let welcome = hub_limits.as_ref()
@@ -412,7 +432,7 @@ impl<'a> LoginHandler<'a> {
     /// Note: `welcome_text` is intentionally omitted here; it is already sent
     /// in `ServerSync`. Including it again would cause duplicate MOTD
     /// notifications on some clients.
-    async fn send_server_config(&self) -> Result<()> {
+    pub async fn send_server_config(&self) -> Result<()> {
         let hub_limits = self.edge_state.hub_limits.read().await;
         let text_message_length = hub_limits.as_ref()
             .and_then(|l| l.text_message_length)

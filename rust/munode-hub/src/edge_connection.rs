@@ -214,7 +214,7 @@ impl EdgeConnection {
                         }
                         if is_register && ninja_enabled {
                             rpc_handler
-                                .send_notification_to_edge(edge_id, "hub.ninjaConfig", |n| {
+                                .send_notification_to_edge_unsequenced(edge_id, "hub.ninjaConfig", |n| {
                                     let json = serde_json::json!({
                                         "enabled": true,
                                         "ninja_channels": ninja_channels

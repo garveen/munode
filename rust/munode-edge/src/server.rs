@@ -21,7 +21,7 @@ use munode_protocol::transport::decode_frame;
 
 use crate::channel_manager::ChannelManager;
 use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
-use crate::handler::{self, LoginHandler};
+use crate::handler::{self, LoginHandler, LoginInfo};
 use crate::hub_client::{HubClient, HubConnectionState};
 use crate::state::{EdgeEvent, EdgeState};
 use crate::tls::create_tls_acceptor;
@@ -446,6 +446,19 @@ fn parse_proxy_v2(ver_cmd: u8, fam_proto: u8, addrs: &[u8]) -> Result<Option<Soc
     }
 }
 
+/// Result returned by the spawned login task on success.
+struct LoginTaskResult {
+    session_id: u32,
+    /// Data needed by the outer loop to send ServerSync / ServerConfig after
+    /// transitioning the client state to `Ready`.
+    login_info: LoginInfo,
+    /// The `ClientSender` used during the login task, returned so the outer
+    /// loop can call the final send methods on it.
+    client_sender: ClientSender,
+    /// EdgeConfig clone, needed to compose ServerSync / ServerConfig.
+    config: EdgeConfig,
+}
+
 /// Arguments passed into the spawned login task.
 struct LoginTaskArgs {
     hub_client: Arc<HubClient>,
@@ -474,10 +487,10 @@ struct LoginTaskArgs {
 /// `handle_client_connection` remains free to respond to TCP Ping messages
 /// while potentially slow Hub RPCs are in flight.
 ///
-/// Returns `Some(session_id)` on success.  On failure the function sends a
+/// Returns `Some(LoginTaskResult)` on success.  On failure the function sends a
 /// Reject to the client, calls `remove_client` / `notify_user_left` if the
 /// session was already registered, and returns `None`.
-async fn do_login_task(args: LoginTaskArgs) -> Option<u32> {
+async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
     let LoginTaskArgs {
         hub_client,
         edge_state,
@@ -639,16 +652,22 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<u32> {
     // Execute full login sequence (CryptSetup → CodecVersion → ChannelStates →
     // UserStates → ServerSync → ServerConfig).
     let login = LoginHandler::new(&client_sender, &config, &edge_state, &hub_client);
-    if let Err(e) = login.execute_login(sid, &auth_result, opus).await {
-        info!("Login sequence failed for {} (session={}): {}", peer_addr, sid, e);
-        fail!();
-    }
+    let login_info = match login.execute_login(sid, &auth_result, opus).await {
+        Ok(info) => info,
+        Err(e) => {
+            info!("Login sequence failed for {} (session={}): {}", peer_addr, sid, e);
+            fail!();
+        }
+    };
 
     // Broadcast updated codec version to all clients now that this client's
     // opus capability is registered.
     broadcast_codec_version(&edge_state).await;
 
-    edge_state.client_manager.set_client_state(sid, ClientState::Ready).await;
+    // NOTE: set_client_state(Ready) is now done by the outer connection loop
+    // AFTER receiving this LoginTaskResult and BEFORE sending ServerSync.
+    // This matches Murmur's ordering: state → Authenticated before ServerSync,
+    // so UserState{channel_id} responses from the client are processed correctly.
 
     // Populate ninja channel permission cache for this client.
     {
@@ -719,8 +738,8 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<u32> {
         }
     }
 
-    info!("Client {} is now Ready (session={})", peer_addr, sid);
-    Some(sid)
+    info!("Client {} login task complete, outer loop will finalise (session={})", peer_addr, sid);
+    Some(LoginTaskResult { session_id: sid, login_info, client_sender, config })
 }
 
 /// Handle a single Mumble client connection (TLS).
@@ -830,7 +849,7 @@ async fn handle_client_connection(
     //
     // login_rx  — oneshot receiver fed by the spawned task (Some(sid) = success)
     // login_abort — AbortHandle to cancel the task if close_rx fires first
-    let mut login_rx: Option<tokio::sync::oneshot::Receiver<Option<u32>>> = None;
+    let mut login_rx: Option<tokio::sync::oneshot::Receiver<Option<LoginTaskResult>>> = None;
     let mut login_abort: Option<tokio::task::AbortHandle> = None;
 
     'outer: loop {
@@ -866,13 +885,38 @@ async fn handle_client_connection(
                     // Login task finished.
                     login_abort = None;
                     match result.ok().flatten() {
-                        Some(sid) => {
+                        Some(task_result) => {
+                            let sid = task_result.session_id;
                             session_id = Some(sid);
+
+                            // ── Murmur-aligned ordering ──────────────────────────────────
+                            // Transition to Ready FIRST (equivalent to Murmur setting
+                            // sState = Authenticated before sending ServerSync).  This
+                            // ensures that when the client responds to ServerSync with
+                            // UserState{channel_id} the server is already in Ready state
+                            // and the handler processes the message normally — no buffering
+                            // patch needed.
+                            edge_state.client_manager.set_client_state(sid, ClientState::Ready).await;
                             client_state = ClientState::Ready;
-                            // Apply preconnect state (self_deaf/self_mute) that arrived
-                            // while the login RPC was in flight.  The login task captured
-                            // these values at spawn time (before UserState from the client
-                            // arrived), so they may be stale.  Apply the current values now.
+                            info!("Client {} is now Ready (session={})", peer_addr, sid);
+
+                            // Send ServerSync now that state == Ready.
+                            let login_handler = LoginHandler::new(
+                                &task_result.client_sender,
+                                &task_result.config,
+                                &edge_state,
+                                &hub_client,
+                            );
+                            if login_handler.send_server_sync(sid, task_result.login_info.root_permissions).await.is_err() {
+                                break 'outer;
+                            }
+                            // Send ServerConfig / SuggestConfig.
+                            if login_handler.send_server_config().await.is_err() {
+                                break 'outer;
+                            }
+
+                            // Apply preconnect self_mute/self_deaf that arrived while
+                            // the login RPC was in flight.
                             if preconnect_self_mute.is_some() || preconnect_self_deaf.is_some() {
                                 let us = mumbleproto::UserState {
                                     self_mute: preconnect_self_mute,
@@ -880,11 +924,11 @@ async fn handle_client_connection(
                                     ..Default::default()
                                 };
                                 // Sync to Hub + broadcast to ALL clients (including the new user).
-                                // handle_user_state_update broadcasts with no session exclusion,
-                                // so the new user receives its own state update here — no separate
-                                // self_msg needed.
                                 handle_user_state_update(&edge_state, &hub_client, sid, &us).await;
                             }
+                            // No channel_id buffering needed: the client sends
+                            // UserState{channel_id} after receiving ServerSync, and by
+                            // then the server is already in Ready state.
                         }
                         None => {
                             // Login failed; the task already cleaned up.
@@ -1049,7 +1093,7 @@ async fn handle_client_connection(
                     // responding to TCP Ping messages while Hub RPCs and the
                     // message burst are in flight.  The task sends back the
                     // allocated session_id (or None on failure) via the oneshot.
-                    let (task_tx, task_rx) = tokio::sync::oneshot::channel::<Option<u32>>();
+                    let (task_tx, task_rx) = tokio::sync::oneshot::channel::<Option<LoginTaskResult>>();
                     let task_args = LoginTaskArgs {
                         hub_client: hub_client.clone(),
                         edge_state: edge_state.clone(),
@@ -1083,6 +1127,9 @@ async fn handle_client_connection(
                 // (triggered asynchronously via Qt cross-thread signal), so the message arrives
                 // while the login task is in flight and the state is Authenticated.
                 // Capture these fields here with the same logic as the Connected pre-connect handler.
+                // Note: channel_id is NOT buffered here.  ServerSync is now sent only after the
+                // outer loop transitions to Ready, so any UserState{channel_id} from the client
+                // arrives when the server is already in Ready state and is handled normally.
                 MessageType::UserState if client_state == ClientState::Authenticated => {
                     if let Ok(us) = mumbleproto::UserState::decode(&frame.payload[..]) {
                         if us.self_mute.is_some() { preconnect_self_mute = us.self_mute; }
@@ -3429,10 +3476,15 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         if authenticated_clients.is_empty() {
                             info!("Hub registered — no authenticated clients to notify");
                         } else {
-                            // 1. UserRemove for disappeared sessions
+                            // 1. UserRemove for disappeared sessions.
+                            // Guard: never send UserRemove for session S to the client *with* session S.
+                            // A client receiving UserRemove for its own session would interpret it as
+                            // being kicked, showing a "left the channel" state even though the TCP
+                            // connection is still alive.
                             for &sid in &disappeared_session_ids {
                                 let remove_msg = handler::build_user_remove_msg(sid, None);
                                 for client in &authenticated_clients {
+                                    if client.session == sid { continue; }
                                     state.client_manager.send_to(client.session, MessageType::UserRemove, &remove_msg).await;
                                 }
                             }

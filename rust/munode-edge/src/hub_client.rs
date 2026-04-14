@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -79,6 +79,113 @@ impl ExponentialBackoff {
     }
 }
 
+/// Notification with its optional Hub-assigned sequence number.
+struct SequencedNotification {
+    seq: Option<u64>,
+    notification: TypedRpcNotification,
+}
+
+/// Maximum time to wait for a missing (skipped) sequenced notification before
+/// declaring the connection stale and triggering a reconnect + fullsync.
+const NOTIFICATION_GAP_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Tracks notification sequence state and reorders out-of-order messages.
+///
+/// When a gap is detected (i.e. the Edge receives seq N+2 before N+1), the
+/// out-of-order notification is buffered.  If the gap is not resolved within
+/// [`NOTIFICATION_GAP_TIMEOUT`], the connection is torn down and a full
+/// resync is triggered.
+struct NotificationSequencer {
+    expected_seq: u64,
+    reorder_buffer: BTreeMap<u64, TypedRpcNotification>,
+    /// Instant when the first unresolved gap was detected.
+    gap_since: Option<Instant>,
+}
+
+enum SequenceAction {
+    /// Process this notification immediately; it arrived in order.
+    ProcessNow(TypedRpcNotification),
+    /// Process these notifications immediately (flushed from the reorder buffer
+    /// after the gap was resolved).
+    FlushBatch(Vec<TypedRpcNotification>),
+    /// Notification was buffered because it arrived out of order.
+    Buffered,
+    /// Duplicate notification (seq already processed); discard silently.
+    Duplicate,
+    /// Notification has no sequence number; process immediately (unsequenced).
+    Unsequenced(TypedRpcNotification),
+}
+
+impl NotificationSequencer {
+    fn new(expected_seq: u64) -> Self {
+        Self {
+            expected_seq,
+            reorder_buffer: BTreeMap::new(),
+            gap_since: None,
+        }
+    }
+
+    /// Feed a notification into the sequencer and get the action to take.
+    fn feed(&mut self, sn: SequencedNotification) -> SequenceAction {
+        let seq = match sn.seq {
+            None => return SequenceAction::Unsequenced(sn.notification),
+            Some(s) => s,
+        };
+
+        if seq < self.expected_seq {
+            debug!(
+                seq,
+                expected = self.expected_seq,
+                "Duplicate notification seq — discarding"
+            );
+            return SequenceAction::Duplicate;
+        }
+
+        if seq == self.expected_seq {
+            self.expected_seq += 1;
+            // Check if consecutive buffered notifications can now be flushed.
+            let mut batch = vec![sn.notification];
+            while let Some(notif) = self.reorder_buffer.remove(&self.expected_seq) {
+                self.expected_seq += 1;
+                batch.push(notif);
+            }
+            if self.reorder_buffer.is_empty() {
+                self.gap_since = None;
+            }
+            if batch.len() == 1 {
+                return SequenceAction::ProcessNow(batch.into_iter().next().unwrap());
+            }
+            return SequenceAction::FlushBatch(batch);
+        }
+
+        // seq > expected_seq → gap detected.
+        warn!(
+            seq,
+            expected = self.expected_seq,
+            "Notification gap detected — buffering"
+        );
+        self.reorder_buffer.insert(seq, sn.notification);
+        if self.gap_since.is_none() {
+            self.gap_since = Some(Instant::now());
+        }
+        SequenceAction::Buffered
+    }
+
+    /// Returns true if there is an unresolved gap that has exceeded the timeout.
+    fn is_gap_expired(&self) -> bool {
+        self.gap_since
+            .map(|t| t.elapsed() >= NOTIFICATION_GAP_TIMEOUT)
+            .unwrap_or(false)
+    }
+
+    /// Returns the remaining time before the gap timeout fires, or None if no gap.
+    fn gap_remaining(&self) -> Option<Duration> {
+        self.gap_since.map(|t| {
+            NOTIFICATION_GAP_TIMEOUT.saturating_sub(t.elapsed())
+        })
+    }
+}
+
 /// Connection state for the Hub client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HubConnectionState {
@@ -91,6 +198,10 @@ pub enum HubConnectionState {
 /// Pending RPC request waiting for response.
 struct PendingRequest {
     tx: oneshot::Sender<Result<TypedRpcResponse, String>>,
+    /// Which pool slot this RPC was sent through.  Used to cancel in-flight
+    /// requests when a specific slot disconnects, so the caller sees an
+    /// immediate error instead of hanging for the 30-second timeout.
+    slot: usize,
 }
 
 /// Client for communicating with the Hub server via WebSocket + protobuf.
@@ -133,7 +244,11 @@ pub struct HubClient {
     /// Sender for the serial notification processor task (primary slot only).
     /// Notifications are enqueued here by the reader task and processed one-at-a-time,
     /// preserving the same serial ordering as the C++ Mumble Qt event loop.
-    notification_tx: Mutex<Option<mpsc::UnboundedSender<TypedRpcNotification>>>,
+    notification_tx: Mutex<Option<mpsc::UnboundedSender<SequencedNotification>>>,
+    /// Expected next notification sequence number, set after fullsync.
+    /// The notification processor reads this once after the sync gate opens
+    /// to initialise its sequencer.
+    notification_expected_seq: AtomicU64,
 }
 
 impl HubClient {
@@ -171,6 +286,7 @@ impl HubClient {
             request_counter: AtomicU64::new(0),
             start_time: Instant::now(),
             notification_tx: Mutex::new(None),
+            notification_expected_seq: AtomicU64::new(1),
         })
     }
 
@@ -422,6 +538,11 @@ impl HubClient {
             (tx, if is_primary { Some(rx) } else { None })
         };
 
+        // Per-connection gap-disconnect signal.  A fresh Notify is created for each
+        // connection attempt so that a stale signal from a previous attempt cannot
+        // immediately fire on the next reconnect iteration.
+        let gap_disconnect = Arc::new(tokio::sync::Notify::new());
+
         // For the primary slot, set up a serial notification processor task.
         // This mirrors C++ Mumble's Qt event loop: all notifications are queued and
         // processed one-at-a-time in arrival order. Keeping them serial prevents
@@ -431,19 +552,59 @@ impl HubClient {
         // otherwise deadlock the reader task that must receive those RPC responses).
         let notif_handle = if is_primary {
             let sync_gate_rx = sync_gate_rx_opt.expect("sync gate rx present for primary");
-            let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<TypedRpcNotification>();
+            let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<SequencedNotification>();
             *self.notification_tx.lock().await = Some(notif_tx);
             let notif_self = self.clone();
+            let gap_disconnect = gap_disconnect.clone();
             Some(tokio::spawn(async move {
-                // Buffer all notifications until the sync gate opens.  If the gate
-                // is cancelled (sender dropped = sync failed / connection closed)
-                // we exit without processing to avoid acting on stale data.
                 if sync_gate_rx.await.is_err() {
                     debug!("Notification processor: sync gate cancelled (slot {})", slot);
                     return;
                 }
-                while let Some(notification) = notif_rx.recv().await {
-                    notif_self.handle_notification(notification).await;
+                let initial_seq = notif_self.notification_expected_seq.load(Ordering::Acquire);
+                let mut sequencer = NotificationSequencer::new(initial_seq);
+                info!(initial_seq, "Notification sequencer started (slot {} via relay)", slot);
+                loop {
+                    let gap_remaining = sequencer.gap_remaining();
+                    let notif = if let Some(remaining) = gap_remaining {
+                        tokio::select! {
+                            biased;
+                            n = notif_rx.recv() => n,
+                            _ = tokio::time::sleep(remaining) => {
+                                if sequencer.is_gap_expired() {
+                                    error!(
+                                        expected = sequencer.expected_seq,
+                                        buffered = sequencer.reorder_buffer.len(),
+                                        "Notification gap not resolved in {:?} — triggering reconnect",
+                                        NOTIFICATION_GAP_TIMEOUT,
+                                    );
+                                    gap_disconnect.notify_one();
+                                    return;
+                                }
+                                continue;
+                            }
+                        }
+                    } else {
+                        notif_rx.recv().await
+                    };
+                    let sn = match notif {
+                        Some(sn) => sn,
+                        None => break,
+                    };
+                    match sequencer.feed(sn) {
+                        SequenceAction::ProcessNow(n) => {
+                            notif_self.handle_notification(n).await;
+                        }
+                        SequenceAction::FlushBatch(batch) => {
+                            for n in batch {
+                                notif_self.handle_notification(n).await;
+                            }
+                        }
+                        SequenceAction::Unsequenced(n) => {
+                            notif_self.handle_notification(n).await;
+                        }
+                        SequenceAction::Buffered | SequenceAction::Duplicate => {}
+                    }
                 }
                 debug!("Notification processor stopped (slot {})", slot);
             }))
@@ -453,6 +614,7 @@ impl HubClient {
 
         let (reader_done_tx, reader_done_rx) = tokio::sync::oneshot::channel::<()>();
         let reader_self = self.clone();
+        let gap_disconnect_reader = gap_disconnect.clone();
         let reader_handle = tokio::spawn(async move {
             let mut writer_fail = writer_fail_rx_via;
             loop {
@@ -460,6 +622,10 @@ impl HubClient {
                     biased;
                     _ = &mut writer_fail => {
                         debug!("Reader (slot {} via relay): writer failed, breaking read loop", slot);
+                        break;
+                    }
+                    _ = gap_disconnect_reader.notified() => {
+                        error!("Reader (slot {} via relay): notification gap timeout — disconnecting", slot);
                         break;
                     }
                     msg = ws_read.next() => {
@@ -550,6 +716,10 @@ impl HubClient {
                 Err(e) => warn!("Pool slot {} error: {}", slot, e),
             }
             self.clear_slot(slot).await;
+            // Immediately cancel any in-flight RPCs that were routed through this
+            // slot.  Without this they would hang until the 30-second RPC timeout;
+            // by signalling them now, rpc_call can immediately retry on a live slot.
+            self.cancel_pending_for_slot(slot).await;
 
             let delay = backoff.next_delay();
             debug!("Pool slot {} reconnecting in {:?}", slot, delay);
@@ -624,6 +794,11 @@ impl HubClient {
             (tx, if is_primary { Some(rx) } else { None })
         };
 
+        // Per-connection gap-disconnect signal.  A fresh Notify is created for each
+        // connection attempt so that a stale signal from a previous attempt cannot
+        // immediately fire on the next reconnect iteration.
+        let gap_disconnect = Arc::new(tokio::sync::Notify::new());
+
         // For the primary slot, set up a serial notification processor task.
         // This mirrors C++ Mumble's Qt event loop: all notifications are queued and
         // processed one-at-a-time in arrival order. Keeping them serial prevents
@@ -633,9 +808,10 @@ impl HubClient {
         // otherwise deadlock the reader task that must receive those RPC responses).
         let notif_handle = if is_primary {
             let sync_gate_rx = sync_gate_rx_opt.expect("sync gate rx present for primary");
-            let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<TypedRpcNotification>();
+            let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<SequencedNotification>();
             *self.notification_tx.lock().await = Some(notif_tx);
             let notif_self = self.clone();
+            let gap_disconnect = gap_disconnect.clone();
             Some(tokio::spawn(async move {
                 // Buffer all notifications until the sync gate opens.  If the gate
                 // is cancelled (sender dropped = sync failed / connection closed)
@@ -644,8 +820,51 @@ impl HubClient {
                     debug!("Notification processor: sync gate cancelled (slot {})", slot);
                     return;
                 }
-                while let Some(notification) = notif_rx.recv().await {
-                    notif_self.handle_notification(notification).await;
+                let initial_seq = notif_self.notification_expected_seq.load(Ordering::Acquire);
+                let mut sequencer = NotificationSequencer::new(initial_seq);
+                info!(initial_seq, "Notification sequencer started (slot {})", slot);
+                loop {
+                    // If there's an active gap, select between the gap timeout and the next notification.
+                    let gap_remaining = sequencer.gap_remaining();
+                    let notif = if let Some(remaining) = gap_remaining {
+                        tokio::select! {
+                            biased;
+                            n = notif_rx.recv() => n,
+                            _ = tokio::time::sleep(remaining) => {
+                                if sequencer.is_gap_expired() {
+                                    error!(
+                                        expected = sequencer.expected_seq,
+                                        buffered = sequencer.reorder_buffer.len(),
+                                        "Notification gap not resolved in {:?} — triggering reconnect",
+                                        NOTIFICATION_GAP_TIMEOUT,
+                                    );
+                                    gap_disconnect.notify_one();
+                                    return;
+                                }
+                                continue;
+                            }
+                        }
+                    } else {
+                        notif_rx.recv().await
+                    };
+                    let sn = match notif {
+                        Some(sn) => sn,
+                        None => break, // channel closed
+                    };
+                    match sequencer.feed(sn) {
+                        SequenceAction::ProcessNow(n) => {
+                            notif_self.handle_notification(n).await;
+                        }
+                        SequenceAction::FlushBatch(batch) => {
+                            for n in batch {
+                                notif_self.handle_notification(n).await;
+                            }
+                        }
+                        SequenceAction::Unsequenced(n) => {
+                            notif_self.handle_notification(n).await;
+                        }
+                        SequenceAction::Buffered | SequenceAction::Duplicate => {}
+                    }
                 }
                 debug!("Notification processor stopped (slot {})", slot);
             }))
@@ -656,6 +875,7 @@ impl HubClient {
         // Reader task
         let (reader_done_tx, reader_done_rx) = tokio::sync::oneshot::channel::<()>();
         let reader_self = self.clone();
+        let gap_disconnect_reader = gap_disconnect.clone();
         let reader_handle = tokio::spawn(async move {
             let mut writer_fail = writer_fail_rx;
             loop {
@@ -664,6 +884,11 @@ impl HubClient {
                     // Writer signalled a fatal send error — stop reading immediately.
                     _ = &mut writer_fail => {
                         debug!("Reader (slot {}): writer failed, breaking read loop", slot);
+                        break;
+                    }
+                    // Notification processor detected an unrecoverable gap.
+                    _ = gap_disconnect_reader.notified() => {
+                        error!("Reader (slot {}): notification gap timeout — disconnecting", slot);
                         break;
                     }
                     msg = ws_read.next() => {
@@ -760,18 +985,21 @@ impl HubClient {
 
     /// Send raw bytes through a specific pool slot.
     async fn send_on_slot(&self, slot: usize, data: Vec<u8>) -> Result<()> {
-        if let Some(s) = self.pool_senders.get(slot) {
-            if let Some(tx) = s.lock().await.as_ref() {
-                tx.send(data).await.context("Send channel closed")?;
-            }
+        let sender = self.pool_senders.get(slot)
+            .ok_or_else(|| anyhow::anyhow!("Pool slot {} out of range", slot))?;
+        let guard = sender.lock().await;
+        match guard.as_ref() {
+            Some(tx) => tx.send(data).await.context("Send channel closed"),
+            None => anyhow::bail!("Pool slot {} not connected", slot),
         }
-        Ok(())
     }
 
     /// Send raw bytes through the WebSocket, using round-robin across live pool slots.
-    async fn send_raw(&self, data: Vec<u8>) -> Result<()> {
+    /// Returns the slot index that successfully sent the data.
+    async fn send_raw(&self, data: Vec<u8>) -> Result<usize> {
         if self.pool_size == 1 {
-            return self.send_on_slot(0, data).await;
+            self.send_on_slot(0, data).await?;
+            return Ok(0);
         }
         // Try each slot starting from the round-robin position.
         let start = self.pool_rr.fetch_add(1, Ordering::Relaxed) % self.pool_size;
@@ -783,7 +1011,7 @@ impl HubClient {
             };
             if let Some(tx) = sender_opt {
                 if tx.send(data.clone()).await.is_ok() {
-                    return Ok(());
+                    return Ok(slot);
                 }
             }
         }
@@ -795,30 +1023,127 @@ impl HubClient {
     /// Send an EdgeHubPacket to the Hub.
     async fn send_packet(&self, packet: &EdgeHubPacket) -> Result<()> {
         let data = packet.encode_to_vec();
-        self.send_raw(data).await
+        self.send_raw(data).await.map(|_slot| ())
+    }
+
+    /// Immediately cancel (with an error) all in-flight RPC requests that were sent
+    /// via `slot`.  Called when a pool slot's WebSocket connection closes, so callers
+    /// see an immediate error rather than hanging until the 30-second timeout fires.
+    async fn cancel_pending_for_slot(&self, slot: usize) {
+        let mut pending = self.pending.lock().await;
+        let cancelled: Vec<String> = pending
+            .iter()
+            .filter(|(_, p)| p.slot == slot)
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &cancelled {
+            if let Some(p) = pending.remove(id) {
+                let _ = p.tx.send(Err(format!("pool slot {} disconnected", slot)));
+            }
+        }
+        if !cancelled.is_empty() {
+            debug!("Cancelled {} in-flight RPC(s) for disconnected pool slot {}", cancelled.len(), slot);
+        }
     }
 
     /// Send an RPC request and wait for the response.
-    async fn rpc_call(&self, request: TypedRpcRequest) -> Result<TypedRpcResponse> {
+    ///
+    /// In pool mode, the request is sent via round-robin across live slots.  If the
+    /// chosen slot dies before the response arrives, the pending entry is cancelled
+    /// immediately by `cancel_pending_for_slot`, and this function retries once on a
+    /// different live slot with a new request ID.  This covers the most common failure
+    /// mode: a secondary slot disconnects mid-flight.
+    async fn rpc_call(&self, mut request: TypedRpcRequest) -> Result<TypedRpcResponse> {
+        let method = request.method.clone();
+        // Allow one retry when a slot dies mid-flight.  Two attempts total.
+        for attempt in 0_u32..=1 {
+            if attempt > 0 {
+                // Assign a new request_id so the retry doesn't collide with any
+                // stale response the Hub might still send for the original request.
+                request.request_id = self.next_request_id();
+                debug!("RPC {} retrying after slot failure (attempt {})", method, attempt + 1);
+            }
+
+            let request_id = request.request_id.clone();
+            let (tx, rx) = oneshot::channel();
+
+            let packet = EdgeHubPacket {
+                r#type: PacketType::RpcRequest as i32,
+                rpc_request: Some(request.clone()),
+                ..Default::default()
+            };
+            let data = packet.encode_to_vec();
+
+            let used_slot = match self.send_raw(data).await {
+                Ok(s) => s,
+                Err(e) => {
+                    if attempt == 0 {
+                        return Err(e);
+                    } else {
+                        return Err(e.context(format!("RPC {} failed after retry", method)));
+                    }
+                }
+            };
+
+            self.pending.lock().await.insert(request_id.clone(), PendingRequest { tx, slot: used_slot });
+
+            // Wait for response with timeout
+            let timeout = Duration::from_secs(30);
+            match time::timeout(timeout, rx).await {
+                Ok(Ok(Ok(response))) => return Ok(response),
+                Ok(Ok(Err(err_msg))) => {
+                    // Hub returned an RPC-level error — do not retry, propagate immediately.
+                    anyhow::bail!("RPC {} error: {}", method, err_msg);
+                }
+                Ok(Err(_)) => {
+                    // Slot died mid-flight (cancel_pending_for_slot dropped the sender).
+                    // Retry once on a different slot.
+                    if attempt == 0 {
+                        warn!("RPC {} cancelled (pool slot {} died mid-flight), retrying", method, used_slot);
+                        continue;
+                    } else {
+                        anyhow::bail!("RPC {} cancelled after retry", method);
+                    }
+                }
+                Err(_) => {
+                    // 30-second timeout — Hub may or may not have processed the request;
+                    // do not retry to avoid duplicate state mutations.
+                    self.pending.lock().await.remove(&request_id);
+                    anyhow::bail!("RPC {} timed out", method);
+                }
+            }
+        }
+        // Unreachable: the loop above always returns.
+        anyhow::bail!("RPC {} failed (exhausted retries)", method)
+    }
+
+    /// Send an RPC request through the primary slot (slot 0) specifically.
+    ///
+    /// Used for `edge.register` to ensure the Hub associates the registration
+    /// with the primary WebSocket connection.  If the registration goes through
+    /// a secondary slot via round-robin, the Hub stores that secondary slot's
+    /// sender in `edge_connections`.  When that secondary later disconnects,
+    /// the Hub runs `cleanup_edge` — removing all sessions and the notification
+    /// routing entry — causing the Edge to permanently lose notifications.
+    async fn rpc_call_on_primary(&self, request: TypedRpcRequest) -> Result<TypedRpcResponse> {
         let request_id = request.request_id.clone();
         let method = request.method.clone();
 
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(request_id.clone(), PendingRequest { tx });
 
         let packet = EdgeHubPacket {
             r#type: PacketType::RpcRequest as i32,
             rpc_request: Some(request),
             ..Default::default()
         };
-        if let Err(e) = self.send_packet(&packet).await {
-            // Remove pending entry immediately on send failure to avoid a stale
-            // entry that would only be cleaned up on timeout.
-            self.pending.lock().await.remove(&request_id);
+        let data = packet.encode_to_vec();
+        if let Err(e) = self.send_on_slot(0, data).await {
             return Err(e);
         }
+        // Register pending entry only after confirming the send succeeded, to
+        // avoid a stale orphan entry if send_on_slot returns an error.
+        self.pending.lock().await.insert(request_id.clone(), PendingRequest { tx, slot: 0 });
 
-        // Wait for response with timeout
         let timeout = Duration::from_secs(30);
         match time::timeout(timeout, rx).await {
             Ok(Ok(Ok(response))) => Ok(response),
@@ -879,7 +1204,11 @@ impl HubClient {
                 if let Some(notification) = packet.rpc_notification {
                     let guard = self.notification_tx.lock().await;
                     if let Some(tx) = guard.as_ref() {
-                        if tx.send(notification).is_err() {
+                        let sn = SequencedNotification {
+                            seq: packet.notification_seq,
+                            notification,
+                        };
+                        if tx.send(sn).is_err() {
                             warn!("Notification processor channel closed");
                         }
                     }
@@ -1429,7 +1758,13 @@ impl HubClient {
             ..Default::default()
         };
 
-        let response = self.rpc_call(request).await
+        // Registration MUST go through slot 0 (primary) so that the Hub stores
+        // the primary WebSocket's sender in `edge_connections`.  If round-robin
+        // routes this through a secondary slot, that secondary's Hub-side
+        // EdgeConnection gets `server_id` set — and when the secondary
+        // disconnects, Hub runs `cleanup_edge`, removing all sessions and the
+        // notification routing entry.
+        let response = self.rpc_call_on_primary(request).await
             .context("edge.register RPC failed")?;
 
         let result = response.edge_register
@@ -1494,7 +1829,9 @@ impl HubClient {
             ..Default::default()
         };
 
-        let response = self.rpc_call(request).await
+        // Challenge-response registration must also go through slot 0 (primary)
+        // for the same reason as the initial registration — see do_register().
+        let response = self.rpc_call_on_primary(request).await
             .context("edge.register (challenge) RPC failed")?;
 
         let result = response.edge_register
@@ -1556,13 +1893,36 @@ impl HubClient {
         let result = response.edge_full_sync
             .ok_or_else(|| anyhow::anyhow!("No edge_full_sync in response"))?;
 
+        // Store the notification sequence from Hub so the processor knows where
+        // to start its expected counter.  Notifications with seq <= this value
+        // are already reflected in the fullsync snapshot (or will be discarded
+        // as duplicates).
+        let hub_seq = result.sequence;
+        self.notification_expected_seq.store(hub_seq + 1, Ordering::Release);
+        info!(hub_seq, expected_next = hub_seq + 1, "Full sync: notification sequence initialised");
+
+        // Filter out sessions belonging to this edge — they are tracked locally by
+        // client_manager and must not pollute the remote_users cache.  Without this
+        // filter, a Hub restart causes local session IDs to appear in `disappeared`,
+        // which then triggers UserRemove messages being sent to local clients for
+        // their *own* session — making the C++ client think it was kicked even though
+        // the TCP connection is still alive.
+        let my_edge_id = self.edge_id();
+        let remote_sessions: Vec<&munode_protocol::hubedge::GlobalSessionProto> = result.sessions
+            .iter()
+            .filter(|s| s.edge_id != my_edge_id)
+            .collect();
+
         // Snapshot the old remote-user session IDs **before** clearing the cache so
         // we can compute the "disappeared" diff once the fresh data is loaded.
+        // Only consider sessions from other edges to exclude any stale local sessions
+        // that may have been loaded into the cache by a previous buggy run.
         let old_session_ids: std::collections::HashSet<u32> = self.edge_state
             .channel_manager
             .get_all_remote_users()
             .await
             .iter()
+            .filter(|u| u.edge_id != my_edge_id)
             .map(|u| u.session_id)
             .collect();
 
@@ -1572,11 +1932,13 @@ impl HubClient {
             &result.channel_links,
         ).await;
 
-        // Load remote users (clears and repopulates the cache).
-        self.edge_state.channel_manager.load_remote_users(&result.sessions).await;
+        // Load remote users (clears and repopulates the cache) — only remote sessions.
+        let remote_sessions_owned: Vec<munode_protocol::hubedge::GlobalSessionProto> =
+            remote_sessions.iter().map(|s| (*s).clone()).collect();
+        self.edge_state.channel_manager.load_remote_users(&remote_sessions_owned).await;
 
         // Compute sessions that existed before but are no longer present.
-        let new_session_ids: std::collections::HashSet<u32> = result.sessions
+        let new_session_ids: std::collections::HashSet<u32> = remote_sessions
             .iter()
             .map(|s| s.session_id)
             .collect();
@@ -1590,9 +1952,10 @@ impl HubClient {
         }
 
         info!(
-            "Full sync complete: {} channels, {} sessions",
+            "Full sync complete: {} channels, {} remote sessions ({} total from Hub)",
             result.channels.len(),
-            result.sessions.len()
+            remote_sessions_owned.len(),
+            result.sessions.len(),
         );
         Ok(disappeared)
     }
