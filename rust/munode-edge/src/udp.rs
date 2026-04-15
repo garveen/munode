@@ -733,7 +733,8 @@ impl UdpServer {
             let all_remote = self.edge_state.channel_manager.get_all_remote_users().await;
             let mut edges = std::collections::HashMap::new();
             for ru in &all_remote {
-                if my_edge_id != 0 && ru.edge_id == my_edge_id { continue; }
+                if ru.edge_id == 0 { continue; }
+                if ru.edge_id == my_edge_id { continue; }
                 edges.insert(ru.edge_id, true);
             }
             by_edge = edges;
@@ -794,7 +795,8 @@ impl UdpServer {
             let mut edges = std::collections::HashMap::new();
             for ru in &remote_users {
                 if ru.deaf || ru.self_deaf { continue; }
-                if my_edge_id != 0 && ru.edge_id == my_edge_id { continue; }
+                if ru.edge_id == 0 { continue; }
+                if ru.edge_id == my_edge_id { continue; }
                 edges.insert(ru.edge_id, true);
             }
             by_edge = edges;

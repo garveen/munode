@@ -1440,6 +1440,20 @@ impl RpcHandler {
         request_id: &str,
         edge_server_id: u32,
     ) -> Result<EdgeHubPacket> {
+        // Capture the notification sequence fence BEFORE collecting any data.
+        // Any state-mutating broadcast that happens concurrently with (or after)
+        // this read will be assigned a sequence number > fence_seq.  The Edge
+        // sets expected_seq = fence_seq + 1, so those notifications will NOT be
+        // discarded as duplicates — they will be processed after the sync gate
+        // opens.  Some may be redundant with data already in the snapshot, but
+        // the Edge notification handlers are idempotent so that is harmless.
+        //
+        // Previously the sequence was read AFTER data collection, which created
+        // a race: a state change between data collection and seq read would
+        // generate a notification with seq ≤ fence that the Edge discards as
+        // "duplicate", even though the change was NOT in the snapshot → data loss.
+        let fence_seq = crate::server::current_notification_seq(&self.state, edge_server_id);
+
         // Gather all channels
         let channels: Vec<ChannelDataProto> = self
             .state
@@ -1567,7 +1581,7 @@ impl RpcHandler {
             bans: vec![],
             sessions,
             timestamp: current_millis() as i64,
-            sequence: crate::server::current_notification_seq(&self.state, edge_server_id),
+            sequence: fence_seq,
             edges,
         };
 

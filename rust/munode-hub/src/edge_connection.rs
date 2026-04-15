@@ -164,26 +164,42 @@ impl EdgeConnection {
         match PacketType::try_from(packet.r#type) {
             Ok(PacketType::RpcRequest) => {
                 if let Some(request) = packet.rpc_request {
-                    // Track server_id on registration
+                    // Track server_id on registration.
+                    // With peer-equal pool connections, every slot from the same
+                    // Edge sends edge.register.  The first one to register stores
+                    // its sender in edge_connections (used for Hub→Edge
+                    // notifications); subsequent registrations from the same edge
+                    // only set their own server_id but do NOT overwrite the sender
+                    // — that avoids a disconnect of any pool slot accidentally
+                    // rotating the notification channel and triggering cleanup_edge.
                     if request.method == "edge.register" {
                         if let Some(params) = &request.edge_register {
                             let sid = params.server_id;
                             self.server_id = Some(sid);
-                            // Keep our own sender reference so disconnect cleanup can
-                            // verify it is still the active connection for this server_id.
-                            self.own_sender = Some(send_tx.clone());
-                            // Register sender channel so broadcast can reach this edge
-                            self.state
-                                .edge_connections
-                                .write()
-                                .await
-                                .insert(sid, send_tx.clone());
-                            // Initialise health record
+                            {
+                                let mut connections = self.state.edge_connections.write().await;
+                                if connections.contains_key(&sid) {
+                                    // Another pool connection already registered this
+                                    // edge — keep the existing sender for notifications.
+                                    // This connection will still carry RPC traffic.
+                                    debug!(
+                                        "Pool slot for edge {} connected (notification channel already active)",
+                                        sid
+                                    );
+                                } else {
+                                    // First registration for this edge — this sender
+                                    // becomes the notification channel.
+                                    self.own_sender = Some(send_tx.clone());
+                                    connections.insert(sid, send_tx.clone());
+                                }
+                            }
+                            // Initialise health record (idempotent)
                             self.state
                                 .edge_health
                                 .write()
                                 .await
-                                .insert(sid, EdgeHealth::new());
+                                .entry(sid)
+                                .or_insert_with(EdgeHealth::new);
                         }
                     }
 
