@@ -2101,6 +2101,8 @@ async fn handle_client_connection(
         edge_state.client_manager.remove_client(sid).await;
         // Free the session ID back to the local pool
         edge_state.free_session_id(sid).await;
+        // Clean up voice target cache for this session
+        edge_state.voice_targets.write().await.remove(&sid);
         // Clean up ninja channel permission cache for this session
         edge_state.ninja_visible_to.write().await.remove(&sid);
 

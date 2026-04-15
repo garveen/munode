@@ -877,6 +877,13 @@ impl ClientManager {
         }
         // Clear the senders by re-inserting nothing; dropping old Arc is equivalent.
         sess.clear();
+        drop(sess);
+
+        // Clear secondary indices so stale session IDs don't accumulate.
+        // Individual remove_client calls won't clean these up because
+        // the sessions map is already empty (returns None).
+        self.channel_users.write().await.clear();
+        self.listening_index.write().await.clear();
     }
 }
 

@@ -321,13 +321,28 @@ impl HubClient {
         } else {
             info!("Hub connection pool mode: {} slots (peer-equal)", self.pool_size);
 
+            let mut slot_handles = Vec::with_capacity(self.pool_size);
             for slot in 0..self.pool_size {
                 let me = self.clone();
-                tokio::spawn(async move { me.run_single_slot(slot).await; });
+                slot_handles.push(tokio::spawn(async move { me.run_single_slot(slot).await; }));
             }
 
-            // All pool tasks are self-managing.  Keep this future alive so the
-            // JoinHandle in server.rs represents "hub client is running".
+            // Keep this future alive until all slot tasks complete (they loop
+            // forever under normal operation).  When this task is aborted
+            // (server shutdown via hub_handle.abort()), explicitly abort every
+            // slot task so they don't keep reconnecting during shutdown.
+            // A struct wrapper with Drop is used because Rust doesn't guarantee
+            // that code after the cancelled await point runs.
+            struct AbortOnDrop(Vec<tokio::task::JoinHandle<()>>);
+            impl Drop for AbortOnDrop {
+                fn drop(&mut self) {
+                    for h in &self.0 {
+                        h.abort();
+                    }
+                }
+            }
+            let _guard = AbortOnDrop(slot_handles);
+            // Block forever; the guard aborts all slots if we are cancelled.
             std::future::pending::<()>().await;
         }
         Ok(())
@@ -557,6 +572,9 @@ impl HubClient {
                                             NOTIFICATION_GAP_TIMEOUT,
                                         );
                                         gap_disconnect.notify_one();
+                                        // Clear notification_tx so the next connection
+                                        // attempt creates a fresh processor.
+                                        *notif_self.notification_tx.lock().await = None;
                                         return;
                                     }
                                     continue;
@@ -584,6 +602,9 @@ impl HubClient {
                             SequenceAction::Buffered | SequenceAction::Duplicate => {}
                         }
                     }
+                    // Clear notification_tx so a fresh processor is created on
+                    // the next connection (handles multi-slot race correctly).
+                    *notif_self.notification_tx.lock().await = None;
                     debug!("Notification processor stopped");
                 });
             }
@@ -763,6 +784,9 @@ impl HubClient {
                                             NOTIFICATION_GAP_TIMEOUT,
                                         );
                                         gap_disconnect.notify_one();
+                                        // Clear notification_tx so the next connection
+                                        // attempt creates a fresh processor.
+                                        *notif_self.notification_tx.lock().await = None;
                                         return;
                                     }
                                     continue;
@@ -790,6 +814,9 @@ impl HubClient {
                             SequenceAction::Buffered | SequenceAction::Duplicate => {}
                         }
                     }
+                    // Clear notification_tx so a fresh processor is created on
+                    // the next connection (handles multi-slot race correctly).
+                    *notif_self.notification_tx.lock().await = None;
                     debug!("Notification processor stopped");
                 });
             }
@@ -1165,6 +1192,8 @@ impl HubClient {
                         self.edge_state.client_manager.remove_client(target_session).await;
                         // Free session ID back to local pool
                         self.edge_state.free_session_id(target_session).await;
+                        // Clean up voice target cache for this session
+                        self.edge_state.voice_targets.write().await.remove(&target_session);
                         self.edge_state.client_manager.send_close_signal(target_session).await;
                     }
                     // Remove from remote user tracking and broadcast removal to local clients
