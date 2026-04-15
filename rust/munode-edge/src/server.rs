@@ -63,6 +63,7 @@ impl EdgeServer {
             self.config.server.allow_ping,
             self.config.server.rolling_stats_window,
             self.config.hub_server.hmac_secret.as_deref(),
+            self.config.voice_routing.peer_voice_tcp_pool_size as usize,
         );
 
         // Set up TLS

@@ -67,6 +67,8 @@ fn edge_state_with_zero_failure_threshold() -> Arc<EdgeState> {
         0,     // listeners_per_channel
         true,  // allow_ping
         120,   // rolling_stats_window
+        None,  // hmac_secret
+        1,     // peer_voice_tcp_pool_size
     )
 }
 
@@ -277,16 +279,18 @@ async fn connect_peer_voice_tcp_registers_sender_in_state() {
     // the background and then check the side-effect.
     let cs = client_state.clone();
     tokio::spawn(async move {
-        connect_peer_voice_tcp(peer_edge_id, "127.0.0.1".to_string(), port, 7, cs).await;
+        connect_peer_voice_tcp(peer_edge_id, "127.0.0.1".to_string(), port, 7, cs, None).await;
     });
 
-    // Retry until the sender is registered (or timeout).
+    // Retry until the pool has at least one live sender (or timeout).
     let registered = tokio::time::timeout(tokio::time::Duration::from_secs(2), async {
         loop {
             {
                 let conns = client_state.voice_tcp_conns.read().await;
-                if conns.contains_key(&peer_edge_id) {
-                    return true;
+                if let Some(pool) = conns.get(&peer_edge_id) {
+                    if pool.has_live_sender() {
+                        return true;
+                    }
                 }
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
@@ -297,7 +301,7 @@ async fn connect_peer_voice_tcp_registers_sender_in_state() {
 
     assert!(
         registered,
-        "voice_tcp_conns must contain an entry for the connected peer edge"
+        "voice_tcp_conns must contain a live pool entry for the connected peer edge"
     );
 }
 
@@ -315,21 +319,23 @@ async fn voice_tcp_conn_send_delivers_relayed_voice_event() {
 
     let cs = client_state.clone();
     tokio::spawn(async move {
-        connect_peer_voice_tcp(peer_edge_id, "127.0.0.1".to_string(), port, 55, cs).await;
+        connect_peer_voice_tcp(peer_edge_id, "127.0.0.1".to_string(), port, 55, cs, None).await;
     });
 
-    // Wait for the sender to be registered.
+    // Wait for the pool to have at least one live sender.
     let registered = tokio::time::timeout(tokio::time::Duration::from_secs(2), async {
         loop {
             let conns = client_state.voice_tcp_conns.read().await;
-            if conns.contains_key(&peer_edge_id) { return true; }
+            if let Some(pool) = conns.get(&peer_edge_id) {
+                if pool.has_live_sender() { return true; }
+            }
             drop(conns);
             tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
         }
     })
     .await
     .unwrap_or(false);
-    assert!(registered, "voice_tcp_conns entry must be present before sending");
+    assert!(registered, "voice_tcp_conns pool must have a live sender before sending");
 
     // Build and send a DirectTcp frame: [0x01][session_BE(4)][voice...]
     let session: u32 = 77_777;
@@ -341,8 +347,8 @@ async fn voice_tcp_conn_send_delivers_relayed_voice_event() {
 
     {
         let conns = client_state.voice_tcp_conns.read().await;
-        let tx = conns.get(&peer_edge_id).expect("sender must exist");
-        tx.try_send(frame).expect("try_send must not fail on an open channel");
+        let pool = conns.get(&peer_edge_id).expect("pool must exist");
+        assert!(pool.try_send(frame), "try_send must succeed on a live pool");
     }
 
     // Server must emit RelayedVoice.
@@ -410,9 +416,9 @@ async fn udp_voice_packet_delivered_on_healthy_link() {
     );
     assert_eq!(&buf[5..n], payload, "payload must arrive intact");
 
-    let failures = edge_state.next_hop_failures.read().await;
+    let failures = edge_state.next_hop_failures.read().unwrap();
     assert_eq!(
-        failures.get(&target_edge_id).copied().unwrap_or(0),
+        failures.get(&target_edge_id).map(|a| a.load(Ordering::Relaxed)).unwrap_or(0),
         0,
         "no failures should be recorded on a healthy link"
     );
@@ -455,9 +461,9 @@ async fn degraded_link_increments_failure_counter_and_drops_packets() {
     assert_eq!(dropped, batch, "all packets must be dropped at 100% drop rate");
 
     // Failure counter must equal the number of dropped packets.
-    let failures = edge_state.next_hop_failures.read().await;
+    let failures = edge_state.next_hop_failures.read().unwrap();
     assert_eq!(
-        failures.get(&target_edge_id).copied().unwrap_or(0),
+        failures.get(&target_edge_id).map(|a| a.load(Ordering::Relaxed)).unwrap_or(0),
         batch as u32,
         "each dropped packet must increment next_hop_failures"
     );
@@ -494,9 +500,9 @@ async fn recovery_after_degradation_clears_failure_counter() {
     .await;
 
     {
-        let failures = edge_state.next_hop_failures.read().await;
+        let failures = edge_state.next_hop_failures.read().unwrap();
         assert!(
-            failures.get(&target_edge_id).copied().unwrap_or(0) > 0,
+            failures.get(&target_edge_id).map(|a| a.load(Ordering::Relaxed)).unwrap_or(0) > 0,
             "failure counter should be non-zero after degraded send"
         );
     }
@@ -527,9 +533,9 @@ async fn recovery_after_degradation_clears_failure_counter() {
     .expect("recv error");
 
     // Success resets the failure counter for this hop.
-    let failures = edge_state.next_hop_failures.read().await;
+    let failures = edge_state.next_hop_failures.read().unwrap();
     assert_eq!(
-        failures.get(&target_edge_id).copied().unwrap_or(0),
+        failures.get(&target_edge_id).map(|a| a.load(Ordering::Relaxed)).unwrap_or(0),
         0,
         "failure counter must be reset to 0 after a successful send"
     );
@@ -548,8 +554,8 @@ async fn zero_failure_threshold_does_not_reset_failures_on_success() {
 
     // Manually seed the failure counter to a non-zero value.
     {
-        let mut failures = edge_state.next_hop_failures.write().await;
-        failures.insert(target_edge_id, 7);
+        let mut failures = edge_state.next_hop_failures.write().unwrap();
+        failures.insert(target_edge_id, std::sync::atomic::AtomicU32::new(7));
     }
 
     // Send successfully (drop_rate = 0, socket reachable).
@@ -575,9 +581,9 @@ async fn zero_failure_threshold_does_not_reset_failures_on_success() {
     .expect("recv must succeed");
 
     // With threshold=0, the counter must remain 7 (not reset to 0).
-    let failures = edge_state.next_hop_failures.read().await;
+    let failures = edge_state.next_hop_failures.read().unwrap();
     assert_eq!(
-        failures.get(&target_edge_id).copied().unwrap_or(0),
+        failures.get(&target_edge_id).map(|a| a.load(Ordering::Relaxed)).unwrap_or(0),
         7,
         "failure counter must not be reset when consecutive_failure_threshold=0"
     );

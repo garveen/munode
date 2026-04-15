@@ -393,23 +393,17 @@ fn build_voice_url(peer_host: &str, peer_edge_port: u16, hmac_secret: Option<&st
     }
 }
 
-/// Connect to a peer Edge's `/voice` WebSocket endpoint and store the sender in
-/// `edge_state.voice_tcp_conns[peer_edge_id]`.
+/// Connect to a peer Edge's `/voice` WebSocket endpoint, establishing a pool of
+/// `edge_state.peer_voice_tcp_pool_size` parallel connections for improved
+/// reliability.
 ///
-/// This function runs a **reconnect loop**: if the connection drops for any reason
-/// (network error, NAT timeout, remote reboot) it waits with exponential back-off
-/// and reconnects, unless `hub.peerLeft` has been received in the meantime (which
-/// removes the peer from `voice_tcp_peers`, causing the loop to stop).
+/// Each slot in the pool independently maintains its own TCP connection and
+/// reconnects on failure with exponential back-off.  Outbound voice frames are
+/// distributed round-robin across live slots, so a single slot failure leaves the
+/// remaining connections available until it recovers.
 ///
-/// Each live connection:
-/// - Sends a WebSocket-level Ping at `VOICE_TCP_KEEPALIVE` intervals so that
-///   silent TCP failures (NAT table expiry with no RST) are detected promptly.
-/// - Runs a concurrent reader task to drain incoming Pong and Close frames; if
-///   no frame (including Pong responses) is received within three keepalive
-///   intervals, the connection is considered dead and torn down for reconnection.
-///
-/// When `hmac_secret` is `Some`, a timestamp-based HMAC token is appended to the
-/// URL query string so the receiving relay server can authenticate the connection.
+/// The pool is torn down when `hub.peerLeft` fires (which removes the peer from
+/// `voice_tcp_peers` and calls `pool.close_all()`).
 pub async fn connect_peer_voice_tcp(
     peer_edge_id: u32,
     peer_host: String,
@@ -418,18 +412,81 @@ pub async fn connect_peer_voice_tcp(
     edge_state: Arc<EdgeState>,
     hmac_secret: Option<String>,
 ) {
-    // Mark this peer as one we want to stay connected to.  The reconnect loop
-    // checks this set before every retry attempt.
+    let pool_size = edge_state.peer_voice_tcp_pool_size;
+    info!(
+        "Voice TCP: establishing {}-slot pool to peer edge {} at {}:{}",
+        pool_size, peer_edge_id, peer_host, peer_edge_port
+    );
+
+    // Mark this peer as one we want to stay connected to.  All slot reconnect
+    // loops check this set; removing the ID triggers a graceful stop.
     edge_state.voice_tcp_peers.write().await.insert(peer_edge_id);
 
+    // Create the pool up-front and publish it so callers (udp.rs) can send
+    // immediately once any slot connects.
+    let pool = Arc::new(crate::state::PeerVoiceTcpPool::new(pool_size));
+    edge_state
+        .voice_tcp_conns
+        .write()
+        .await
+        .insert(peer_edge_id, pool.clone());
+
+    // Spawn N independent slot tasks.
+    let mut slot_handles = Vec::with_capacity(pool_size);
+    for slot_idx in 0..pool_size {
+        let peer_host_c = peer_host.clone();
+        let secret_c = hmac_secret.clone();
+        let state_c = edge_state.clone();
+        let pool_c = pool.clone();
+        let handle = tokio::spawn(async move {
+            run_voice_tcp_slot(
+                peer_edge_id,
+                slot_idx,
+                peer_host_c,
+                peer_edge_port,
+                self_edge_id,
+                state_c,
+                pool_c,
+                secret_c,
+            )
+            .await;
+        });
+        slot_handles.push(handle);
+    }
+
+    // Wait for all slots to stop naturally.
+    for h in slot_handles {
+        let _ = h.await;
+    }
+
+    // Final cleanup — no-ops if peerLeft already removed us, but safe to call twice.
+    edge_state.voice_tcp_peers.write().await.remove(&peer_edge_id);
+    edge_state.voice_tcp_conns.write().await.remove(&peer_edge_id);
+    info!("Voice TCP pool for peer edge {} stopped", peer_edge_id);
+}
+
+/// Run the reconnect loop for a single pool slot.
+///
+/// Loops until the peer is removed from `voice_tcp_peers` (hub.peerLeft).
+/// On each iteration it attempts one TCP voice connection; on failure it applies
+/// exponential back-off before retrying.  On success it resets the back-off.
+async fn run_voice_tcp_slot(
+    peer_edge_id: u32,
+    slot_idx: usize,
+    peer_host: String,
+    peer_edge_port: u16,
+    self_edge_id: u32,
+    edge_state: Arc<EdgeState>,
+    pool: Arc<crate::state::PeerVoiceTcpPool>,
+    hmac_secret: Option<String>,
+) {
     let mut retry_ms = VOICE_TCP_MIN_RETRY_MS;
 
     loop {
-        // Re-check after sleep: peerLeft may have fired while we were waiting.
         if !edge_state.voice_tcp_peers.read().await.contains(&peer_edge_id) {
-            info!(
-                "Voice TCP manager for peer edge {}: peer left cluster, stopping",
-                peer_edge_id
+            debug!(
+                "Voice TCP slot [{}/{}]: peer left cluster, stopping",
+                peer_edge_id, slot_idx
             );
             break;
         }
@@ -437,68 +494,62 @@ pub async fn connect_peer_voice_tcp(
         let url = build_voice_url(&peer_host, peer_edge_port, hmac_secret.as_deref());
 
         let result =
-            run_voice_tcp_once(peer_edge_id, &url, self_edge_id, edge_state.clone()).await;
+            run_voice_tcp_once_pooled(peer_edge_id, slot_idx, &url, self_edge_id, pool.clone())
+                .await;
 
-        // Always remove the active connection entry after each attempt so that
-        // callers (udp.rs) see the connection as unavailable during reconnection.
-        edge_state.voice_tcp_conns.write().await.remove(&peer_edge_id);
+        // Always clear this slot's sender while reconnecting so the pool's
+        // round-robin skips it rather than blocking on a dead channel.
+        if let Ok(mut slot) = pool.senders[slot_idx].lock() {
+            *slot = None;
+        }
 
         match result {
             Ok(()) => {
-                // Channel was closed by the peer-left signal (rx.recv() → None).
+                // rx returned None — the sender was dropped by peerLeft→close_all().
                 info!(
-                    "Voice TCP to peer edge {}: connection ended by peer-left signal",
-                    peer_edge_id
+                    "Voice TCP slot [{}/{}]: connection ended by peer-left signal",
+                    peer_edge_id, slot_idx
                 );
                 retry_ms = VOICE_TCP_MIN_RETRY_MS;
             }
             Err(e) => {
-                warn!("Voice TCP to peer edge {}: {}", peer_edge_id, e);
+                warn!("Voice TCP slot [{}/{}]: {}", peer_edge_id, slot_idx, e);
             }
         }
 
-        // Stop if hub.peerLeft was received while the connection was running.
         if !edge_state.voice_tcp_peers.read().await.contains(&peer_edge_id) {
-            info!(
-                "Voice TCP manager for peer edge {}: peer left cluster, stopping",
-                peer_edge_id
-            );
             break;
         }
 
         let delay = Duration::from_millis(retry_ms);
-        warn!(
-            "Voice TCP to peer edge {}: reconnecting in {:?}",
-            peer_edge_id, delay
+        debug!(
+            "Voice TCP slot [{}/{}]: reconnecting in {:?}",
+            peer_edge_id, slot_idx, delay
         );
         tokio::time::sleep(delay).await;
         retry_ms = (retry_ms.saturating_mul(2)).min(VOICE_TCP_MAX_RETRY_MS);
     }
 
-    // Final cleanup — remove from both maps on graceful exit.
-    edge_state.voice_tcp_peers.write().await.remove(&peer_edge_id);
-    edge_state.voice_tcp_conns.write().await.remove(&peer_edge_id);
-    info!(
-        "Voice TCP manager for peer edge {} stopped",
-        peer_edge_id
-    );
+    debug!("Voice TCP slot [{}/{}]: stopped", peer_edge_id, slot_idx);
 }
 
-/// Single connection attempt for the peer voice TCP channel.
+/// Single connection attempt for one pool slot.
 ///
-/// Connects, sends `self_edge_id`, stores the tx in `voice_tcp_conns`, then
-/// runs a writer loop (draining `rx`) with periodic keepalive pings.  A
-/// concurrent reader task drains incoming WebSocket frames; if no frame arrives
-/// within `VOICE_TCP_KEEPALIVE × 3`, the reader declares the connection dead and
-/// the writer loop exits with an error.
+/// Connects, sends `self_edge_id`, stores the tx in `pool.senders[slot_idx]`, then
+/// runs a writer loop (draining `rx`) with periodic keepalive pings.  A concurrent
+/// reader task drains incoming WebSocket frames; if no frame arrives within
+/// `VOICE_TCP_KEEPALIVE × 3`, the reader declares the connection dead and the
+/// writer loop exits with an error.
 ///
-/// Returns `Ok(())` when the channel is closed by a peer-left signal (tx dropped
-/// from `voice_tcp_conns`), or an `Err` on any network or protocol error.
-async fn run_voice_tcp_once(
+/// Returns `Ok(())` when the peer-left signal fires (the sender is dropped via
+/// `pool.close_all()`, causing `rx.recv()` to return `None`), or an `Err` on any
+/// network or protocol error.
+async fn run_voice_tcp_once_pooled(
     peer_edge_id: u32,
+    slot_idx: usize,
     url: &str,
     self_edge_id: u32,
-    edge_state: Arc<EdgeState>,
+    pool: Arc<crate::state::PeerVoiceTcpPool>,
 ) -> anyhow::Result<()> {
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -523,34 +574,33 @@ async fn run_voice_tcp_once(
         .await
         .map_err(|e| anyhow::anyhow!("failed to send edge_id frame: {}", e))?;
 
-    // Create the outbound frame channel and expose the sender to udp.rs.
+    // Create the outbound frame channel and store it in the pool slot.
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(VOICE_TCP_CHAN_BUF);
-    edge_state
-        .voice_tcp_conns
-        .write()
-        .await
-        .insert(peer_edge_id, tx);
+    if let Ok(mut slot) = pool.senders[slot_idx].lock() {
+        *slot = Some(tx);
+    } else {
+        return Err(anyhow::anyhow!("pool slot {} mutex poisoned", slot_idx));
+    }
     info!(
-        "Voice TCP channel to peer edge {} established ({})",
-        peer_edge_id, url
+        "Voice TCP slot [{}/{}]: connected ({})",
+        peer_edge_id, slot_idx, url
     );
 
     // ── Reader task ──────────────────────────────────────────────────────────
-    // Drain incoming frames (primarily Pong responses to our keepalive Pings).
-    // Uses a timeout of 3× the keepalive interval: if we haven't received
-    // *anything* in that window the connection is silently dead.
     let reader_idle_timeout = VOICE_TCP_KEEPALIVE * 3;
     let (reader_done_tx, mut reader_done_rx) =
         tokio::sync::oneshot::channel::<anyhow::Result<()>>();
 
-    // Read half is consumed by the reader task; it is not used by the writer.
     let reader_handle = {
         tokio::spawn(async move {
             let mut fused_read = read;
             let result = loop {
                 match timeout(reader_idle_timeout, fused_read.next()).await {
                     Ok(Some(Ok(WsMessage::Pong(_)))) => {
-                        trace!("Voice TCP reader: pong from peer edge {}", peer_edge_id);
+                        trace!(
+                            "Voice TCP slot [{}/{}]: pong",
+                            peer_edge_id, slot_idx
+                        );
                     }
                     Ok(Some(Ok(WsMessage::Close(_)))) | Ok(None) => {
                         break Ok(());
@@ -564,7 +614,7 @@ async fn run_voice_tcp_once(
                             reader_idle_timeout
                         ));
                     }
-                    Ok(Some(Ok(_))) => {} // ignore other frame types
+                    Ok(Some(Ok(_))) => {}
                 }
             };
             let _ = reader_done_tx.send(result);
@@ -579,7 +629,6 @@ async fn run_voice_tcp_once(
         tokio::select! {
             biased;
 
-            // Reader task exited — connection is dead or cleanly closed.
             reader_result = &mut reader_done_rx => {
                 let msg = match reader_result {
                     Ok(Ok(())) => "remote closed".to_string(),
@@ -589,7 +638,6 @@ async fn run_voice_tcp_once(
                 break Err(anyhow::anyhow!("reader: {}", msg));
             }
 
-            // Outbound voice frame from udp.rs.
             frame = rx.recv() => {
                 match frame {
                     Some(data) => {
@@ -598,18 +646,20 @@ async fn run_voice_tcp_once(
                         }
                     }
                     None => {
-                        // The sender was removed from voice_tcp_conns (peer-left signal).
+                        // Sender was cleared by peerLeft → pool.close_all().
                         break Ok(());
                     }
                 }
             }
 
-            // Keepalive ping — detect silent TCP failures.
             _ = ping_timer.tick() => {
                 if let Err(e) = write.send(WsMessage::Ping(bytes::Bytes::new())).await {
                     break Err(anyhow::anyhow!("keepalive ping failed: {}", e));
                 }
-                debug!("Voice TCP: sent keepalive ping to peer edge {}", peer_edge_id);
+                debug!(
+                    "Voice TCP slot [{}/{}]: keepalive ping sent",
+                    peer_edge_id, slot_idx
+                );
             }
         }
     };

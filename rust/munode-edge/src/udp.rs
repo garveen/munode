@@ -997,16 +997,16 @@ impl UdpServer {
                     }
                 }
                 Some(RouteDecision::DirectTcp) => {
-                    // Send via TCP voice channel if available, else fall back to Hub TCP.
+                    // Send via TCP voice pool if available, else fall back to Hub TCP.
                     let sent = {
                         let conns = self.edge_state.voice_tcp_conns.read().await;
-                        if let Some(tx) = conns.get(&target_edge_id) {
+                        if let Some(pool) = conns.get(&target_edge_id) {
                             // Frame: [0x01][session_BE(4)][plaintext...]
                             let mut frame = Vec::with_capacity(1 + 4 + plaintext.len());
                             frame.push(EDGE_PKT_VOICE);
                             frame.extend_from_slice(&sender_session.to_be_bytes());
                             frame.extend_from_slice(plaintext);
-                            tx.try_send(frame).is_ok()
+                            pool.try_send(frame)
                         } else {
                             false
                         }
@@ -1553,8 +1553,7 @@ pub async fn test_route_to_edge(
         static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let c = COUNTER.fetch_add(1, Ordering::Relaxed);
         if c % 100 < drop_rate {
-            let mut failures = edge_state.next_hop_failures.write().await;
-            *failures.entry(target_edge_id).or_insert(0) += 1;
+            increment_hop_failure(&edge_state.next_hop_failures, target_edge_id);
             return false;
         }
     }

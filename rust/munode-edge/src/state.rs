@@ -217,6 +217,69 @@ impl EdgeCrypto {
     }
 }
 
+/// Outbound TCP voice connection pool for a single peer Edge.
+///
+/// `pool_size` independent WebSocket connections are maintained.  Outbound
+/// frames are distributed round-robin across live slots; failed/reconnecting
+/// slots are skipped transparently.
+pub struct PeerVoiceTcpPool {
+    /// Per-slot senders.  `None` while the slot is reconnecting.
+    pub senders: Vec<std::sync::Mutex<Option<mpsc::Sender<Vec<u8>>>>>,
+    /// Round-robin counter.
+    pub next_rr: std::sync::atomic::AtomicUsize,
+}
+
+impl PeerVoiceTcpPool {
+    pub fn new(pool_size: usize) -> Self {
+        let senders = (0..pool_size.max(1))
+            .map(|_| std::sync::Mutex::new(None))
+            .collect();
+        Self {
+            senders,
+            next_rr: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// Returns `true` if at least one slot currently holds a live sender.
+    pub fn has_live_sender(&self) -> bool {
+        self.senders.iter().any(|m| {
+            m.lock().ok().map_or(false, |g| g.is_some())
+        })
+    }
+
+    /// Try to send `frame` to one live slot (round-robin).
+    ///
+    /// Returns `true` if the frame was accepted by at least one slot.
+    pub fn try_send(&self, frame: Vec<u8>) -> bool {
+        let n = self.senders.len();
+        let start = self.next_rr.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % n;
+        for i in 0..n {
+            let idx = (start + i) % n;
+            let sent = self.senders[idx]
+                .lock()
+                .ok()
+                .and_then(|slot| {
+                    slot.as_ref().map(|tx| tx.try_send(frame.clone()).is_ok())
+                })
+                .unwrap_or(false);
+            if sent {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Drop all slot senders, causing every active writer loop to see
+    /// `rx.recv() → None` and exit cleanly.  Called on `hub.peerLeft`.
+    pub fn close_all(&self) {
+        for slot in &self.senders {
+            if let Ok(mut g) = slot.lock() {
+                *g = None;
+            }
+        }
+    }
+}
+
 /// Information about a peer Edge node.
 #[derive(Debug, Clone)]
 pub struct PeerEdgeInfo {
@@ -538,14 +601,17 @@ pub struct EdgeState {
     pub ninja_visible_to: RwLock<HashMap<u32, std::collections::HashSet<u32>>>,
     /// Route table from Hub. Maps target_edge_id → ordered list of route candidates (best first).
     pub route_table: RwLock<std::collections::HashMap<u32, Vec<RouteCandidate>>>,
-    /// Outbound TCP voice connections to peer Edges.
-    /// Maps peer_edge_id → channel sender for binary frames to deliver over the /voice WebSocket.
+    /// Outbound TCP voice connection pools to peer Edges.
+    /// Maps peer_edge_id → connection pool (N independent WebSocket connections).
     /// Populated when we successfully connect to a peer's /voice endpoint on peerJoined.
-    pub voice_tcp_conns: RwLock<HashMap<u32, mpsc::Sender<Vec<u8>>>>,
+    pub voice_tcp_conns: RwLock<HashMap<u32, Arc<PeerVoiceTcpPool>>>,
     /// Set of peer edge IDs for which a voice TCP connection manager task is running.
     /// Inserting an ID before spawning the task prevents duplicate reconnect tasks.
     /// Removing an ID (on hub.peerLeft) causes the reconnect loop to stop.
     pub voice_tcp_peers: RwLock<HashSet<u32>>,
+    /// Number of parallel TCP voice connections to maintain to each peer Edge.
+    /// Configured from `voice_routing.peer_voice_tcp_pool_size`.
+    pub peer_voice_tcp_pool_size: usize,
     /// Client-facing limits pushed from Hub on registration (and updated via heartbeat).
     /// When set, overrides Edge-local config for ServerSync/ServerConfig/rate limiting.
     pub hub_limits: RwLock<Option<ServerLimitsConfig>>,
@@ -607,6 +673,7 @@ impl EdgeState {
             route_table: RwLock::new(std::collections::HashMap::new()),
             voice_tcp_conns: RwLock::new(HashMap::new()),
             voice_tcp_peers: RwLock::new(HashSet::new()),
+            peer_voice_tcp_pool_size: 2,
             hub_limits: RwLock::new(None),
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),
@@ -648,6 +715,7 @@ impl EdgeState {
             route_table: RwLock::new(std::collections::HashMap::new()),
             voice_tcp_conns: RwLock::new(HashMap::new()),
             voice_tcp_peers: RwLock::new(HashSet::new()),
+            peer_voice_tcp_pool_size: 2,
             hub_limits: RwLock::new(None),
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),
@@ -670,6 +738,7 @@ impl EdgeState {
         allow_ping: bool,
         rolling_stats_window: u32,
         hmac_secret: Option<&str>,
+        peer_voice_tcp_pool_size: usize,
     ) -> Arc<Self> {
         let (event_tx, _) = broadcast::channel(256);
         let edge_crypto = hmac_secret
@@ -696,6 +765,7 @@ impl EdgeState {
             route_table: RwLock::new(std::collections::HashMap::new()),
             voice_tcp_conns: RwLock::new(HashMap::new()),
             voice_tcp_peers: RwLock::new(HashSet::new()),
+            peer_voice_tcp_pool_size: peer_voice_tcp_pool_size.max(1),
             hub_limits: RwLock::new(None),
             max_bandwidth_bps: AtomicU32::new(0),
             max_users: AtomicU32::new(0),

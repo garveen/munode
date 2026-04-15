@@ -68,6 +68,12 @@ pub struct EdgeVoiceRoutingConfig {
     /// Set to 0 to disable local failover (rely solely on Hub route table updates).
     #[serde(default = "default_consecutive_failure_threshold")]
     pub consecutive_failure_threshold: u32,
+    /// Number of parallel TCP voice connections to maintain to each peer Edge.
+    /// `1` disables pooling; values `> 1` spawn multiple independent connections
+    /// for improved reliability — if one TCP path fails the others continue carrying
+    /// voice until the failed connection reconnects.  Default: 2.
+    #[serde(default = "default_peer_voice_tcp_pool_size")]
+    pub peer_voice_tcp_pool_size: u32,
     /// Relay node configuration.
     #[serde(default)]
     pub relay: EdgeVoiceRelayConfig,
@@ -79,6 +85,7 @@ impl Default for EdgeVoiceRoutingConfig {
             enabled: true,
             enable_hub_tcp_fallback: true,
             consecutive_failure_threshold: default_consecutive_failure_threshold(),
+            peer_voice_tcp_pool_size: default_peer_voice_tcp_pool_size(),
             relay: EdgeVoiceRelayConfig::default(),
         }
     }
@@ -895,6 +902,9 @@ fn default_edge_tcp_penalty_ms() -> f64 {
 }
 fn default_max_ttl() -> u32 {
     4
+}
+fn default_peer_voice_tcp_pool_size() -> u32 {
+    2
 }
 
 /// GeoIP configuration.

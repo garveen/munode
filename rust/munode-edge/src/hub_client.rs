@@ -1396,16 +1396,15 @@ impl HubClient {
                             });
                             info!("Registered direct UDP route to peer edge {} at {}", peer_edge_id, udp_addr);
                         }
-                        // Connect TCP voice channel to the new peer, but only if one is
-                        // not already active.  Without this guard a rapid peerJoined +
-                        // full-sync sequence (or duplicate notifications) could spawn two
-                        // concurrent tasks for the same peer — the older task's cleanup
-                        // `remove()` would then silently kill the newer connection.
-                        let already_connected = {
-                            let conns = self.edge_state.voice_tcp_conns.read().await;
-                            conns.contains_key(&peer_edge_id)
+                        // Connect TCP voice pool to the new peer, but only if a pool
+                        // manager task is not already running.  Use voice_tcp_peers as
+                        // the canonical "is managed" flag: connect_peer_voice_tcp inserts
+                        // into this set as its very first action, so its presence means
+                        // a pool task is already in progress.
+                        let already_managed = {
+                            self.edge_state.voice_tcp_peers.read().await.contains(&peer_edge_id)
                         };
-                        if !already_connected {
+                        if !already_managed {
                             let peer_host = host.clone();
                             let self_id = self.edge_state.get_edge_id();
                             let state_clone = self.edge_state.clone();
@@ -1433,11 +1432,14 @@ impl HubClient {
                     warn!("Peer edge left cluster: id {}", peer_edge_id);
                     // Remove from peer registry (UDP routing).
                     self.edge_state.peer_registry.write().await.remove(peer_edge_id);
-                    // Signal the voice TCP reconnect loop to stop by removing the peer ID.
-                    // The loop checks this set before each retry and exits when absent.
-                    // Also drop the active tx so the running writer loop sees channel-closed.
+                    // Signal all pool slots to stop: close_all() drops every slot sender
+                    // so each slot's rx.recv() returns None and the writer loop exits.
+                    // Then remove the pool from voice_tcp_conns and peer from voice_tcp_peers.
+                    let pool = self.edge_state.voice_tcp_conns.write().await.remove(&peer_edge_id);
+                    if let Some(p) = pool {
+                        p.close_all();
+                    }
                     self.edge_state.voice_tcp_peers.write().await.remove(&peer_edge_id);
-                    self.edge_state.voice_tcp_conns.write().await.remove(&peer_edge_id);
                 }
             }
             "hub.routeTableUpdate" => {
@@ -1903,16 +1905,14 @@ impl HubClient {
                     });
                     info!("Registered direct UDP route to existing peer edge {} at {}", peer.id, udp_addr);
                 }
-                // Connect TCP voice channel to the existing peer, dedup by checking
-                // whether a live connection already exists.
+                // Connect TCP voice pool to the existing peer, dedup via voice_tcp_peers.
                 let peer_id = peer.id;
                 let peer_host = peer.host.clone();
                 let voice_port = peer.voice_port as u16;
-                let already_connected = {
-                    let conns = self.edge_state.voice_tcp_conns.read().await;
-                    conns.contains_key(&peer_id)
+                let already_managed = {
+                    self.edge_state.voice_tcp_peers.read().await.contains(&peer_id)
                 };
-                if !already_connected {
+                if !already_managed {
                     let self_id = self.edge_state.get_edge_id();
                     let state_clone = self.edge_state.clone();
                     let secret = self.config.hmac_secret.clone();
