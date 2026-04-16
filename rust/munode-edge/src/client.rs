@@ -1,5 +1,8 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::collections::{HashMap, HashSet};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::time::Instant;
 
 use bytes::BytesMut;
@@ -36,6 +39,21 @@ impl ClientSender {
     /// Send raw bytes to the client.
     pub async fn send_raw(&self, data: Vec<u8>) -> bool {
         self.tx.send(data).await.is_ok()
+    }
+
+    /// Non-blocking send: enqueues `data` without waiting.
+    ///
+    /// Returns `false` if the channel is at capacity (the writer task is behind).
+    /// Use this for broadcast operations where skipping a single slow client is
+    /// preferable to blocking the caller's read loop — which would prevent it from
+    /// responding to TCP Ping messages and cause Mumble's ping-timeout to fire.
+    pub fn try_send_raw(&self, data: Vec<u8>) -> bool {
+        self.tx.try_send(data).is_ok()
+    }
+
+    /// Clone the inner `mpsc::Sender` for storage in a [`crate::hot_slot::HotSlot`].
+    pub fn clone_sender(&self) -> mpsc::Sender<Vec<u8>> {
+        self.tx.clone()
     }
 
     /// Encode and send a Mumble protocol message.
@@ -90,27 +108,26 @@ pub struct ClientInfo {
     /// Positional audio context (game plugin context).
     /// When set, voice is only routed to users with the same context.
     pub plugin_context: Vec<u8>,
+}
 
-    // ── Ping / statistics (updated from client Ping messages) ──────────────
-    /// Total UDP packets received by the client (client-reported).
+/// Client-reported ping and statistics, updated on every TCP Ping message.
+///
+/// Stored in a per-session `std::sync::Mutex` so `update_ping_stats` only needs a
+/// brief **read** lock on the global `sessions` map (to clone the `Arc`) rather than
+/// a **write** lock.  With 400 clients each pinging every 5 s (≈80 writes/s), the
+/// former write-lock approach was a frequent source of serialisation that delayed all
+/// concurrent reads (voice routing, ping response, etc.).
+#[derive(Debug, Default, Clone)]
+pub struct PingStats {
     pub udp_packets: u32,
-    /// Total TCP packets received by the client (client-reported).
     pub tcp_packets: u32,
-    /// UDP round-trip ping average in ms (client-reported).
     pub udp_ping_avg: f32,
-    /// UDP round-trip ping variance (client-reported).
     pub udp_ping_var: f32,
-    /// TCP round-trip ping average in ms (client-reported).
     pub tcp_ping_avg: f32,
-    /// TCP round-trip ping variance (client-reported).
     pub tcp_ping_var: f32,
-    /// Client-reported crypt stats: good packets received from server.
     pub remote_good: u32,
-    /// Client-reported crypt stats: late packets received from server.
     pub remote_late: u32,
-    /// Client-reported crypt stats: lost packets from server.
     pub remote_lost: u32,
-    /// Client-reported crypt stats: nonce resyncs from server.
     pub remote_resync: u32,
 }
 
@@ -122,7 +139,6 @@ pub struct ClientInfo {
 /// voice hot path to at most 3 read locks.
 struct SessionEntry {
     info: ClientInfo,
-    sender: ClientSender,
     /// OCB2-AES128 per-session crypto state.  `None` until CryptSetup.
     crypt_state: Option<Arc<Mutex<CryptState>>>,
     /// Per-session voice bandwidth tracker (independent std::Mutex for lock-free
@@ -130,32 +146,53 @@ struct SessionEntry {
     bandwidth: Arc<Mutex<BandwidthRecord>>,
     /// Kick/ban close-signal.  Sent to make the per-client TCP read loop exit.
     close_signal: Option<oneshot::Sender<()>>,
+    /// Per-session ping statistics (updated on every Ping message).
+    /// Using a dedicated Mutex allows `update_ping_stats` to hold only a read
+    /// lock on `sessions` rather than a write lock, reducing contention.
+    ping_stats: Arc<std::sync::Mutex<PingStats>>,
+    /// Shared readiness flag.  Set to `true` by `set_client_state(Ready)`.
+    /// The same Arc is stored in `ClientManager::sender_registry` so that
+    /// `broadcast` can filter by readiness with a single `AtomicBool::load`
+    /// — no lock acquisition of any kind.
+    ready: Arc<AtomicBool>,
 }
 
 /// Manages all connected clients and their message senders.
 ///
-/// Internal layout (three RwLocks instead of the previous seven):
-/// - `sessions`        — all per-session data (info, sender, crypto, bw, close-signal)
-/// - `channel_users`   — channel_id → member session IDs
-/// - `listening_index` — channel_id → listening session IDs
+/// Internal layout:
+/// - `sessions`         — full per-session state (info, crypto, bw, close-signal)
+/// - `sender_registry`  — lightweight send-only registry; `broadcast` reads this
+///                        exclusively, so it never competes with `sessions` writes
+/// - `channel_users`    — channel_id → member session IDs
+/// - `listening_index`  — channel_id → listening session IDs
 pub struct ClientManager {
-    /// Unified per-session state.  Merging the former `clients`, `senders`,
-    /// `crypt_states`, `bandwidth_records`, and `close_signals` maps into one
-    /// reduces write-lock acquisitions on connect/disconnect and read-lock
-    /// acquisitions on the voice hot path.
+    /// Full per-session state.  Only mutated on connect/disconnect/state-change.
     sessions: RwLock<HashMap<u32, SessionEntry>>,
-    /// channel_id → Vec<session_id>: local clients in each channel.
-    channel_users: RwLock<HashMap<u32, Vec<u32>>>,
-    /// channel_id → Vec<session_id>: local clients *listening* to each channel
+    /// Lightweight per-session sender registry used exclusively by the broadcast
+    /// and targeted-send paths.
+    ///
+    /// Keyed by session ID; value is `(sender, ready_flag)` where `ready_flag`
+    /// is the **same** `Arc<AtomicBool>` stored in `SessionEntry::ready`.
+    /// This lets `set_client_state` flip the flag without touching this map,
+    /// and lets `broadcast` check readiness with a cheap `AtomicBool::load`
+    /// while holding only the lightweight sync read lock.
+    ///
+    /// Using `std::sync::RwLock` (not async) means reads complete entirely
+    /// synchronously — no suspend point, no competition with async state locks.
+    sender_registry: std::sync::RwLock<HashMap<u32, (ClientSender, Arc<AtomicBool>)>>,
+    /// channel_id → HashSet<session_id>: local clients in each channel.
+    channel_users: RwLock<HashMap<u32, HashSet<u32>>>,
+    /// channel_id → HashSet<session_id>: local clients *listening* to each channel
     /// (secondary listen, not primary channel).  Maintained in sync with
     /// `SessionEntry::info.listening_channels`.
-    listening_index: RwLock<HashMap<u32, Vec<u32>>>,
+    listening_index: RwLock<HashMap<u32, HashSet<u32>>>,
 }
 
 impl ClientManager {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             sessions: RwLock::new(HashMap::new()),
+            sender_registry: std::sync::RwLock::new(HashMap::new()),
             channel_users: RwLock::new(HashMap::new()),
             listening_index: RwLock::new(HashMap::new()),
         })
@@ -193,18 +230,35 @@ impl ClientManager {
         let session = client.session;
         let channel_id = client.channel_id;
         let listening = client.listening_channels.clone();
+        // Capture voice-routing fields before `client` is moved into SessionEntry.
+        let deaf = client.deaf;
+        let self_deaf = client.self_deaf;
+        let suppress = client.suppress;
+
+        let initial_ready = client.state == ClientState::Ready;
+        let ready_flag = Arc::new(AtomicBool::new(initial_ready));
 
         // Insert session entry — one write lock for all per-session state.
         {
             let mut sess = self.sessions.write().await;
             sess.insert(session, SessionEntry {
                 info: client,
-                sender,
                 crypt_state: None,
                 bandwidth: Arc::new(Mutex::new(BandwidthRecord::new(0))),
                 close_signal: None,
+                ping_stats: Arc::new(std::sync::Mutex::new(PingStats::default())),
+                ready: ready_flag.clone(),
             });
         }
+
+        // Register sender in the lightweight broadcast registry (sync write, non-blocking).
+        self.sender_registry.write().unwrap()
+            .insert(session, (sender.clone(), ready_flag));
+
+        // Register in HotSlot for lock-free voice-routing reads.
+        crate::hot_slot::get_hot_slot(session).register(
+            session, channel_id, deaf, self_deaf, suppress, sender.clone_sender(),
+        );
 
         // Register in channel membership index.
         self.channel_users
@@ -212,13 +266,13 @@ impl ClientManager {
             .await
             .entry(channel_id)
             .or_default()
-            .push(session);
+            .insert(session);
 
         // Register pre-configured listen channels in the index.
         if !listening.is_empty() {
             let mut idx = self.listening_index.write().await;
             for ch in listening {
-                idx.entry(ch).or_default().push(session);
+                idx.entry(ch).or_default().insert(session);
             }
         }
     }
@@ -228,6 +282,11 @@ impl ClientManager {
     pub async fn update_client(&self, client: ClientInfo) {
         let session = client.session;
         let new_listening = client.listening_channels.clone();
+        // Capture hot fields before `client` is moved into SessionEntry.
+        let new_deaf = client.deaf;
+        let new_self_deaf = client.self_deaf;
+        let new_suppress = client.suppress;
+        let new_channel_id = client.channel_id;
         let old_listening = {
             let mut sess = self.sessions.write().await;
             let old = sess
@@ -240,18 +299,29 @@ impl ClientManager {
             old
         };
 
+        // Sync HotSlot for frequently-read voice-routing fields.
+        {
+            let slot = crate::hot_slot::get_hot_slot(session);
+            if slot.is_active_for(session) {
+                slot.deaf.store(new_deaf, std::sync::atomic::Ordering::Relaxed);
+                slot.self_deaf.store(new_self_deaf, std::sync::atomic::Ordering::Relaxed);
+                slot.suppress.store(new_suppress, std::sync::atomic::Ordering::Relaxed);
+                slot.channel_id.store(new_channel_id, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+
         if old_listening != new_listening {
             let mut idx = self.listening_index.write().await;
             for ch in &old_listening {
                 if !new_listening.contains(ch) {
                     if let Some(sessions) = idx.get_mut(ch) {
-                        sessions.retain(|&s| s != session);
+                        sessions.remove(&session);
                     }
                 }
             }
             for ch in &new_listening {
                 if !old_listening.contains(ch) {
-                    idx.entry(*ch).or_default().push(session);
+                    idx.entry(*ch).or_default().insert(session);
                 }
             }
         }
@@ -282,9 +352,18 @@ impl ClientManager {
         if old_channel != new_channel {
             let mut ch = self.channel_users.write().await;
             if let Some(users) = ch.get_mut(&old_channel) {
-                users.retain(|&s| s != session);
+                users.remove(&session);
             }
-            ch.entry(new_channel).or_default().push(session);
+            ch.entry(new_channel).or_default().insert(session);
+        }
+
+        // Sync HotSlot channel_id and suppress.
+        {
+            let slot = crate::hot_slot::get_hot_slot(session);
+            if slot.is_active_for(session) {
+                slot.channel_id.store(new_channel, std::sync::atomic::Ordering::Relaxed);
+                slot.suppress.store(new_suppress, std::sync::atomic::Ordering::Relaxed);
+            }
         }
 
         true
@@ -354,9 +433,18 @@ impl ClientManager {
             }
 
             if let Some(users) = ch.get_mut(&old_channel) {
-                users.retain(|&s| s != session);
+                users.remove(&session);
             }
-            ch.entry(new_channel).or_default().push(session);
+            ch.entry(new_channel).or_default().insert(session);
+        }
+
+        // Sync HotSlot channel_id and suppress after successful move.
+        {
+            let slot = crate::hot_slot::get_hot_slot(session);
+            if slot.is_active_for(session) {
+                slot.channel_id.store(new_channel, std::sync::atomic::Ordering::Relaxed);
+                slot.suppress.store(new_suppress, std::sync::atomic::Ordering::Relaxed);
+            }
         }
 
         Ok(())
@@ -395,7 +483,7 @@ impl ClientManager {
             if ch_sessions.contains(&session) {
                 false // Already listening — no-op.
             } else {
-                ch_sessions.push(session);
+                ch_sessions.insert(session);
                 true
             }
         };
@@ -416,16 +504,22 @@ impl ClientManager {
 
     /// Remove a client by session ID.
     pub async fn remove_client(&self, session: u32) -> Option<ClientInfo> {
+        // Clear HotSlot first so voice routing stops immediately.
+        crate::hot_slot::get_hot_slot(session).clear();
+
         // One write lock for all per-session state.
         let entry = self.sessions.write().await.remove(&session);
         let entry = entry?;
         let info = entry.info;
 
+        // Remove from sender registry (sync write, non-blocking).
+        self.sender_registry.write().unwrap().remove(&session);
+
         // Update channel membership.
         {
             let mut ch = self.channel_users.write().await;
             if let Some(users) = ch.get_mut(&info.channel_id) {
-                users.retain(|&s| s != session);
+                users.remove(&session);
             }
         }
 
@@ -434,7 +528,7 @@ impl ClientManager {
             let mut idx = self.listening_index.write().await;
             for ch in &info.listening_channels {
                 if let Some(sessions) = idx.get_mut(ch) {
-                    sessions.retain(|&s| s != session);
+                    sessions.remove(&session);
                     if sessions.is_empty() {
                         idx.remove(ch);
                     }
@@ -452,7 +546,7 @@ impl ClientManager {
 
     /// Get a sender for a specific client.
     pub async fn get_sender(&self, session: u32) -> Option<ClientSender> {
-        self.sessions.read().await.get(&session).map(|e| e.sender.clone())
+        self.sender_registry.read().unwrap().get(&session).map(|(s, _)| s.clone())
     }
 
     /// Get the number of connected clients.
@@ -466,7 +560,7 @@ impl ClientManager {
             .read()
             .await
             .get(&channel_id)
-            .cloned()
+            .map(|s| s.iter().copied().collect())
             .unwrap_or_default()
     }
 
@@ -500,9 +594,8 @@ impl ClientManager {
                 .flat_map(|ch| {
                     ch_users
                         .get(ch)
-                        .map(|v| v.as_slice())
-                        .unwrap_or(&[])
-                        .iter()
+                        .into_iter()
+                        .flatten()
                         .copied()
                 })
                 .filter(|&s| s != exclude_session)
@@ -575,10 +668,50 @@ impl ClientManager {
             .collect()
     }
 
+    /// Collect session IDs for all members and listeners in the given channels,
+    /// **excluding** `exclude_session`, without reading the `sessions` map.
+    ///
+    /// Compared to [`get_channel_voice_targets_with_listeners`], this method holds
+    /// only `channel_users.read()` + `listening_index.read()`, never `sessions.read()`.
+    /// Callers that need per-session routing data (deaf flag, crypt state, sender)
+    /// should read those atomically from `hot_slot::get_hot_slot(id)` after this call.
+    pub async fn get_channel_session_ids_with_listeners(
+        &self,
+        channels: &[u32],
+        exclude_session: u32,
+    ) -> Vec<u32> {
+        let ch_users = self.channel_users.read().await;
+        let listen_idx = self.listening_index.read().await;
+        let mut seen = std::collections::HashSet::new();
+        let mut result = Vec::new();
+        for &ch in channels {
+            if let Some(members) = ch_users.get(&ch) {
+                for &s in members {
+                    if s != exclude_session && seen.insert(s) {
+                        result.push(s);
+                    }
+                }
+            }
+            if let Some(listeners) = listen_idx.get(&ch) {
+                for &s in listeners {
+                    if s != exclude_session && seen.insert(s) {
+                        result.push(s);
+                    }
+                }
+            }
+        }
+        result
+    }
+
     /// Store a CryptState for a session.
     pub async fn set_crypt_state(&self, session: u32, state: CryptState) {
+        let cs = Arc::new(Mutex::new(state));
+        // Update HotSlot so the UDP path sees the new crypt state immediately.
+        crate::hot_slot::get_hot_slot(session)
+            .crypt_state
+            .store(Arc::new(Some(Arc::clone(&cs))));
         if let Some(entry) = self.sessions.write().await.get_mut(&session) {
-            entry.crypt_state = Some(Arc::new(Mutex::new(state)));
+            entry.crypt_state = Some(cs);
         }
     }
 
@@ -590,6 +723,10 @@ impl ClientManager {
     /// Restore a previously-saved CryptState Arc directly (used when re-adding a
     /// client after a channel move so the existing crypto session is preserved).
     pub async fn restore_crypt_state(&self, session: u32, state: Arc<Mutex<CryptState>>) {
+        // Update HotSlot so the UDP path sees the restored crypt state immediately.
+        crate::hot_slot::get_hot_slot(session)
+            .crypt_state
+            .store(Arc::new(Some(Arc::clone(&state))));
         if let Some(entry) = self.sessions.write().await.get_mut(&session) {
             entry.crypt_state = Some(state);
         }
@@ -701,12 +838,12 @@ impl ClientManager {
         }
     }
 
-    /// Update the ping / statistics fields for a session from a client Ping message.
+    /// Update ping / statistics from a client Ping message.
     ///
-    /// * `udp_packets` / `tcp_packets` — client's total packet counters
-    /// * `udp_ping_avg` / `udp_ping_var` / `tcp_ping_avg` / `tcp_ping_var` — latency stats
-    /// * `remote_good` / `remote_late` / `remote_lost` / `remote_resync` — client's view
-    ///   of packets it received from the server (stored as `remote_*` in ClientInfo)
+    /// Uses a **read** lock on `sessions` (to clone the per-session `Arc`) rather
+    /// than a write lock, then updates the dedicated `PingStats` Mutex.  With
+    /// hundreds of clients each pinging every 5 s, the former write-lock approach
+    /// serialised all concurrent reads (voice routing, channel lookups, etc.).
     #[allow(clippy::too_many_arguments)]
     pub async fn update_ping_stats(
         &self,
@@ -722,48 +859,69 @@ impl ClientManager {
         remote_lost: u32,
         remote_resync: u32,
     ) {
-        if let Some(entry) = self.sessions.write().await.get_mut(&session) {
-            let info = &mut entry.info;
-            info.udp_packets = udp_packets;
-            info.tcp_packets = tcp_packets;
-            info.udp_ping_avg = udp_ping_avg;
-            info.udp_ping_var = udp_ping_var;
-            info.tcp_ping_avg = tcp_ping_avg;
-            info.tcp_ping_var = tcp_ping_var;
-            info.remote_good = remote_good;
-            info.remote_late = remote_late;
-            info.remote_lost = remote_lost;
-            info.remote_resync = remote_resync;
+        // Brief read lock — just clone the Arc, no write needed.
+        let arc = match self.sessions.read().await.get(&session) {
+            Some(e) => e.ping_stats.clone(),
+            None => return,
+        };
+        // Per-session std::sync::Mutex — never held across await points.
+        if let Ok(mut p) = arc.lock() {
+            p.udp_packets = udp_packets;
+            p.tcp_packets = tcp_packets;
+            p.udp_ping_avg = udp_ping_avg;
+            p.udp_ping_var = udp_ping_var;
+            p.tcp_ping_avg = tcp_ping_avg;
+            p.tcp_ping_var = tcp_ping_var;
+            p.remote_good = remote_good;
+            p.remote_late = remote_late;
+            p.remote_lost = remote_lost;
+            p.remote_resync = remote_resync;
         }
+    }
+
+    /// Get a snapshot of ping statistics for a session.
+    pub async fn get_ping_stats(&self, session: u32) -> Option<PingStats> {
+        let arc = self.sessions.read().await.get(&session).map(|e| e.ping_stats.clone())?;
+        arc.lock().ok().map(|p| p.clone())
     }
 
     /// Update client state.
     pub async fn set_client_state(&self, session: u32, state: ClientState) {
+        let is_ready = state == ClientState::Ready;
         if let Some(entry) = self.sessions.write().await.get_mut(&session) {
             entry.info.state = state;
+            // AtomicBool is shared with sender_registry — update it in place;
+            // no write lock on sender_registry needed.
+            entry.ready.store(is_ready, Ordering::Relaxed);
         }
     }
 
     /// Broadcast a Mumble protocol message to all authenticated clients.
+    ///
+    /// Uses `sender_registry` (a `std::sync::RwLock`) rather than the async
+    /// `sessions` lock, so this method **never suspends on a lock** and never
+    /// competes with state-mutation operations (`update_client`, `move_client`,
+    /// etc.).  Each send is non-blocking (`try_send`): a slow client drops the
+    /// frame instead of stalling the caller's read loop.
     pub async fn broadcast<M: Message>(&self, msg_type: MessageType, message: &M, exclude_session: Option<u32>) {
         let mut buf = BytesMut::new();
         encode_message(msg_type, message, &mut buf);
         let data = buf.to_vec();
 
-        // Snapshot sender handles for Ready clients while holding the read lock,
-        // then release before any async I/O to avoid holding it across N sends.
+        // Sync read lock — acquired and released synchronously, no await.
+        // ready.load(Relaxed) is an atomic read; no additional lock needed.
         let targets: Vec<(u32, ClientSender)> = {
-            let sess = self.sessions.read().await;
-            sess.iter()
+            let reg = self.sender_registry.read().unwrap();
+            reg.iter()
                 .filter(|&(&s, _)| Some(s) != exclude_session)
-                .filter(|(_, e)| e.info.state == ClientState::Ready)
-                .map(|(&s, e)| (s, e.sender.clone()))
+                .filter(|(_, (_, ready))| ready.load(Ordering::Relaxed))
+                .map(|(&s, (sender, _))| (s, sender.clone()))
                 .collect()
         };
 
         for (session, sender) in targets {
-            if !sender.send_raw(data.clone()).await {
-                warn!("Failed to send broadcast to session {}", session);
+            if !sender.try_send_raw(data.clone()) {
+                warn!("Dropped broadcast to session {} (send channel full)", session);
             }
         }
     }
@@ -782,21 +940,22 @@ impl ClientManager {
 
         let member_ids = self.get_channel_sessions(channel_id).await;
 
+        // Sync read lock — no async suspension, no competition with state writes.
         let targets: Vec<(u32, ClientSender)> = {
-            let sess = self.sessions.read().await;
+            let reg = self.sender_registry.read().unwrap();
             member_ids.iter()
                 .filter(|&&s| Some(s) != exclude_session)
                 .filter_map(|&s| {
-                    sess.get(&s)
-                        .filter(|e| e.info.state == ClientState::Ready)
-                        .map(|e| (s, e.sender.clone()))
+                    reg.get(&s)
+                        .filter(|(_, ready)| ready.load(Ordering::Relaxed))
+                        .map(|(sender, _)| (s, sender.clone()))
                 })
                 .collect()
         };
 
         for (session, sender) in targets {
-            if !sender.send_raw(data.clone()).await {
-                warn!("Failed to send channel broadcast to session {}", session);
+            if !sender.try_send_raw(data.clone()) {
+                warn!("Dropped channel broadcast to session {} (send channel full)", session);
             }
         }
     }
@@ -805,7 +964,8 @@ impl ClientManager {
     pub async fn send_to<M: Message>(&self, session: u32, msg_type: MessageType, message: &M) -> bool {
         let mut buf = BytesMut::new();
         encode_message(msg_type, message, &mut buf);
-        let sender = self.sessions.read().await.get(&session).map(|e| e.sender.clone());
+        let sender = self.sender_registry.read().unwrap()
+            .get(&session).map(|(s, _)| s.clone());
         if let Some(s) = sender {
             s.send_raw(buf.to_vec()).await
         } else {
@@ -820,7 +980,7 @@ impl ClientManager {
             .read()
             .await
             .get(&channel_id)
-            .cloned()
+            .map(|s| s.iter().copied().collect())
             .unwrap_or_default()
     }
 
@@ -865,23 +1025,28 @@ impl ClientManager {
         encode_message(MessageType::Reject, &reject, &mut buf);
         let data = buf.to_vec();
 
-        // Take a write lock once, send to all, then clear senders and close signals.
-        let mut sess = self.sessions.write().await;
-        for entry in sess.values() {
-            entry.sender.send_raw(data.clone()).await;
+        // Drain sender_registry synchronously (sync write lock, no await).
+        // We send to these handles after releasing all locks.
+        let senders: Vec<ClientSender> = self.sender_registry.write().unwrap()
+            .drain()
+            .map(|(_, (s, _))| s)
+            .collect();
+
+        // Consume close signals and clear session state (async write lock).
+        {
+            let mut sess = self.sessions.write().await;
+            for entry in sess.values_mut() {
+                let _ = entry.close_signal.take();
+            }
+            sess.clear();
         }
-        // Drop all senders so writer tasks get None → close write half of TLS.
-        // Also consume close signals so read loops exit immediately.
-        for entry in sess.values_mut() {
-            let _ = entry.close_signal.take();
+
+        // Send Reject outside all locks — non-blocking so we don't stall.
+        for sender in senders {
+            sender.try_send_raw(data.clone());
         }
-        // Clear the senders by re-inserting nothing; dropping old Arc is equivalent.
-        sess.clear();
-        drop(sess);
 
         // Clear secondary indices so stale session IDs don't accumulate.
-        // Individual remove_client calls won't clean these up because
-        // the sessions map is already empty (returns None).
         self.channel_users.write().await.clear();
         self.listening_index.write().await.clear();
     }
@@ -921,16 +1086,6 @@ mod tests {
             client_os: String::new(),
             client_os_version: String::new(),
             plugin_context: vec![],
-            udp_packets: 0,
-            tcp_packets: 0,
-            udp_ping_avg: 0.0,
-            udp_ping_var: 0.0,
-            tcp_ping_avg: 0.0,
-            tcp_ping_var: 0.0,
-            remote_good: 0,
-            remote_late: 0,
-            remote_lost: 0,
-            remote_resync: 0,
         }
     }
 

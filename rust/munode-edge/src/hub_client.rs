@@ -908,11 +908,14 @@ impl HubClient {
     async fn send_on_slot(&self, slot: usize, data: Vec<u8>) -> Result<()> {
         let sender = self.pool_senders.get(slot)
             .ok_or_else(|| anyhow::anyhow!("Pool slot {} out of range", slot))?;
-        let guard = sender.lock().await;
-        match guard.as_ref() {
-            Some(tx) => tx.send(data).await.context("Send channel closed"),
-            None => anyhow::bail!("Pool slot {} not connected", slot),
-        }
+        // Clone the Sender under the lock so the Mutex is never held across the
+        // async send — holding it would deadlock clear_slot() / any_slot_alive()
+        // if the send suspends waiting for channel capacity.
+        let tx = sender.lock().await
+            .as_ref()
+            .map(|s| s.clone())
+            .ok_or_else(|| anyhow::anyhow!("Pool slot {} not connected", slot))?;
+        tx.send(data).await.context("Send channel closed")
     }
 
     /// Send raw bytes through the WebSocket, using round-robin across live pool slots.
@@ -1519,9 +1522,16 @@ impl HubClient {
                             .await;
                         debug!("ContextActionModify broadcast to all clients: action={:?}", msg.action.as_str());
                     } else {
+                        // Pre-encode once; use try_send_raw (non-blocking) so a slow
+                        // client cannot stall the notification processor.
+                        let mut buf = bytes::BytesMut::new();
+                        munode_protocol::transport::encode_message(MessageType::ContextActionModify, msg, &mut buf);
+                        let data = buf.to_vec();
                         for &sid in target_sessions {
                             if let Some(sender) = self.edge_state.client_manager.get_sender(sid).await {
-                                sender.send_message(MessageType::ContextActionModify, msg).await;
+                                if !sender.try_send_raw(data.clone()) {
+                                    warn!("Dropped ContextActionModify for slow session {}", sid);
+                                }
                             }
                         }
                         debug!(
@@ -2043,44 +2053,56 @@ impl HubClient {
     async fn do_report_local_voice_targets(&self) -> Result<()> {
         use munode_protocol::hubedge::{VoiceTargetConfigProto, VoiceTargetSession, VoiceTargetChannel};
         let edge_id = self.edge_id();
-        let vt_cache = self.edge_state.voice_targets.read().await;
-        if vt_cache.is_empty() {
-            return Ok(());
-        }
+
+        // Snapshot the entire voice_targets map under a brief read lock, then
+        // release it before any RPC calls.  The read guard must NOT be held
+        // across rpc_call().await: each call has a 10-second timeout, and
+        // keeping the lock live would stall all voice_targets.write() in the
+        // notification handler (hub.syncVoiceTarget) for potentially minutes.
+        let snapshot: Vec<(u32, u32, VoiceTargetConfigProto)> = {
+            let vt_cache = self.edge_state.voice_targets.read().await;
+            if vt_cache.is_empty() {
+                return Ok(());
+            }
+            let mut out = Vec::new();
+            for (&session_id, targets) in vt_cache.iter() {
+                for (&target_id, vt_config) in targets.iter() {
+                    let sessions: Vec<VoiceTargetSession> = vt_config.sessions.iter()
+                        .map(|&s| VoiceTargetSession { session: s })
+                        .collect();
+                    let channels: Vec<VoiceTargetChannel> = vt_config.channels.iter()
+                        .map(|ch| VoiceTargetChannel {
+                            channel_id: ch.channel_id,
+                            children: Some(ch.children),
+                            links: Some(ch.links),
+                            group: ch.group.clone(),
+                        })
+                        .collect();
+                    out.push((session_id, target_id, VoiceTargetConfigProto { sessions, channels }));
+                }
+            }
+            out
+        }; // ← read guard released here, before any await
 
         let mut upload_count = 0;
-        for (&session_id, targets) in vt_cache.iter() {
-            for (&target_id, vt_config) in targets.iter() {
-                let sessions: Vec<VoiceTargetSession> = vt_config.sessions.iter()
-                    .map(|&s| VoiceTargetSession { session: s })
-                    .collect();
-                let channels: Vec<VoiceTargetChannel> = vt_config.channels.iter()
-                    .map(|ch| VoiceTargetChannel {
-                        channel_id: ch.channel_id,
-                        children: Some(ch.children),
-                        links: Some(ch.links),
-                        group: ch.group.clone(),
-                    })
-                    .collect();
-                let config = VoiceTargetConfigProto { sessions, channels };
-                let request_id = self.next_request_id();
-                let request = TypedRpcRequest {
-                    request_id,
-                    method: "edge.syncVoiceTarget".to_string(),
-                    timeout_ms: Some(10000),
-                    edge_sync_voice_target: Some(hubedge::EdgeSyncVoiceTargetParams {
-                        edge_id,
-                        client_session: session_id,
-                        target_id,
-                        config: Some(config),
-                    }),
-                    ..Default::default()
-                };
-                if let Err(e) = self.rpc_call(request).await {
-                    warn!("Failed to re-upload VoiceTarget session={} target={} to Hub: {}", session_id, target_id, e);
-                } else {
-                    upload_count += 1;
-                }
+        for (session_id, target_id, config) in snapshot {
+            let request_id = self.next_request_id();
+            let request = TypedRpcRequest {
+                request_id,
+                method: "edge.syncVoiceTarget".to_string(),
+                timeout_ms: Some(10000),
+                edge_sync_voice_target: Some(hubedge::EdgeSyncVoiceTargetParams {
+                    edge_id,
+                    client_session: session_id,
+                    target_id,
+                    config: Some(config),
+                }),
+                ..Default::default()
+            };
+            if let Err(e) = self.rpc_call(request).await {
+                warn!("Failed to re-upload VoiceTarget session={} target={} to Hub: {}", session_id, target_id, e);
+            } else {
+                upload_count += 1;
             }
         }
 
@@ -2129,6 +2151,23 @@ impl HubClient {
                 continue;
             }
             debug!("Heartbeat sent (seq={})", sequence);
+        }
+    }
+
+    /// Trigger a full-sync with Hub and replay the cluster state into the event bus.
+    ///
+    /// Called when the event listener detects a `Lagged` error, meaning the broadcast
+    /// channel overflowed and some events were dropped.  Re-running a full sync ensures
+    /// all local clients see the current cluster state even after the gap.
+    pub async fn request_full_sync(&self) {
+        match self.do_full_sync().await {
+            Ok(disappeared) => {
+                self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
+                info!("Full-sync triggered after event-bus Lagged");
+            }
+            Err(e) => {
+                warn!("Full-sync after Lagged failed: {:#}", e);
+            }
         }
     }
 

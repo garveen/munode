@@ -11,17 +11,6 @@ const PERM_WRITE: u32 = 1;
 const PERM_TRAVERSE: u32 = 2;
 const PERM_ENTER: u32 = 4;
 const PERM_SPEAK: u32 = 8;
-const PERM_MUTE_DEAFEN: u32 = 16;
-const PERM_MOVE: u32 = 32;
-const PERM_MAKE_CHANNEL: u32 = 64;
-const PERM_LINK_CHANNEL: u32 = 128;
-const PERM_WHISPER: u32 = 256;
-const PERM_TEXT_MESSAGE: u32 = 512;
-const PERM_MAKE_TEMP: u32 = 1024;
-const PERM_KICK: u32 = 65536;
-const PERM_BAN: u32 = 131072;
-const PERM_REGISTER: u32 = 262144;
-const PERM_SELF_REGISTER: u32 = 524288;
 
 // ── ACL query via Mumble protocol ─────────────────────────────────────────
 
@@ -89,7 +78,7 @@ async fn test_query_permission_for_channel() -> Result<()> {
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::PermissionQuery { channel_id, permissions }) => {
+                Ok(ClientEvent::PermissionQuery { channel_id, permissions: _ }) => {
                     break channel_id == 1;
                 }
                 Ok(_) => continue,

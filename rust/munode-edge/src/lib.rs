@@ -1,10 +1,12 @@
 pub mod bandwidth;
 pub mod channel_manager;
 pub mod client;
+pub mod hot_slot;
 pub mod crypto;
 pub mod handler;
 pub mod hub_client;
 pub mod relay_server;
+pub mod routing;
 pub mod server;
 pub mod state;
 pub mod tls;

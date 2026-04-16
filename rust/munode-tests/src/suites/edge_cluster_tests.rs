@@ -10,7 +10,7 @@ use munode_client::ClientEvent;
 
 use crate::harness::{
     cleanup_clients, four_edge_env, single_edge_env, standard_env, sleep_ms,
-    ClientConfig, TestEnvBuilder, create_clients,
+    ClientConfig, create_clients,
 };
 
 // ── Edge registration ─────────────────────────────────────────────────────

@@ -9,7 +9,7 @@ use anyhow::Result;
 use munode_client::ClientEvent;
 
 use crate::harness::{
-    cleanup_clients, single_edge_env, sleep_ms, standard_env, ClientConfig, TestEnvBuilder,
+    cleanup_clients, single_edge_env, sleep_ms, standard_env, ClientConfig,
     create_clients,
 };
 
@@ -44,7 +44,7 @@ async fn test_edge_mumble_port_is_open() -> Result<()> {
 #[tokio::test]
 async fn test_connect_and_authenticate() -> Result<()> {
     let env = single_edge_env().await?;
-    let mut clients = create_clients(&env, &[ClientConfig::new("admin", 1)]).await?;
+    let clients = create_clients(&env, &[ClientConfig::new("admin", 1)]).await?;
     assert!(clients[0].is_connected());
     cleanup_clients(clients).await;
     Ok(())
@@ -288,7 +288,7 @@ async fn test_disconnect_and_reconnect() -> Result<()> {
     let env = single_edge_env().await?;
 
     // First connect
-    let mut clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
+    let clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
     assert!(clients[0].is_connected());
     cleanup_clients(clients).await;
 

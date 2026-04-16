@@ -536,7 +536,11 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
         certificate_hash: certificate_hash.clone(),
     };
 
-    // Authenticate via Hub
+    // Authenticate via Hub (permit limits concurrent auth RPCs to avoid Hub overload)
+    let _auth_permit = edge_state.auth_semaphore
+        .acquire()
+        .await
+        .expect("auth semaphore closed");
     let auth_result = match hub_client.authenticate_user(
         sid, &username, &password, tokens, Some(client_info),
         preconnect_self_mute, preconnect_self_deaf,
@@ -620,16 +624,6 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
         client_os: client_os.clone(),
         client_os_version: client_os_version.clone(),
         plugin_context: vec![],
-        udp_packets: 0,
-        tcp_packets: 0,
-        udp_ping_avg: 0.0,
-        udp_ping_var: 0.0,
-        tcp_ping_avg: 0.0,
-        tcp_ping_var: 0.0,
-        remote_good: 0,
-        remote_late: 0,
-        remote_lost: 0,
-        remote_resync: 0,
     };
 
     // Add client to manager first so permission queries can resolve user_id.
@@ -650,10 +644,8 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
     // Check Speak permission for initial channel to determine suppress
     // (done AFTER add_client so hub_client.handle_permission_query gets the right user_id)
     if !auth_result.suppress.unwrap_or(false) {
-        let can_speak = match hub_client.handle_permission_query(sid, channel_id).await {
-            Ok(r) => r.permissions.map(|p| p & munode_common::permission::SPEAK != 0).unwrap_or(true),
-            Err(_) => true,
-        };
+        let can_speak = get_perm_cached(&hub_client, &edge_state, sid, channel_id, true).await
+            & munode_common::permission::SPEAK != 0;
         if !can_speak {
             client.suppress = true;
             edge_state.client_manager.update_client(client.clone()).await;
@@ -686,10 +678,8 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
         if !ninja_channels.is_empty() {
             let mut visible_set = std::collections::HashSet::new();
             for &ch_id in &ninja_channels {
-                let can_enter = match hub_client.handle_permission_query(sid, ch_id).await {
-                    Ok(r) => r.permissions.map(|p| p & munode_common::permission::ENTER != 0).unwrap_or(false),
-                    Err(_) => false,
-                };
+                let can_enter = get_perm_cached(&hub_client, &edge_state, sid, ch_id, false).await
+                    & munode_common::permission::ENTER != 0;
                 if can_enter {
                     visible_set.insert(ch_id);
                 }
@@ -795,14 +785,40 @@ async fn handle_client_connection(
     let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(256);
     let client_sender = ClientSender::new(send_tx);
 
-    // Writer task: forwards messages from send_rx to TLS socket
+    // Writer task: forwards messages from send_rx to TLS socket.
+    // Batches pending messages with write_vectored + single flush to reduce syscalls.
     let writer_handle = tokio::spawn(async move {
         use tokio::io::AsyncWriteExt;
-        while let Some(data) = send_rx.recv().await {
-            if let Err(e) = writer.write_all(&data).await {
-                debug!("Write error to client: {}", e);
-                break;
+        loop {
+            // Wait for the first message.
+            let first = match send_rx.recv().await {
+                Some(data) => data,
+                None => break, // channel closed → client disconnected
+            };
+
+            let mut pending = vec![first];
+
+            // Non-blocking drain: collect any already-queued messages.
+            while let Ok(more) = send_rx.try_recv() {
+                pending.push(more);
+                if pending.len() >= 32 { break; }
             }
+
+            if pending.len() == 1 {
+                // Common case: single message — avoid building IoSlice vec.
+                if let Err(e) = writer.write_all(&pending[0]).await {
+                    debug!("Write error to client: {}", e);
+                    break;
+                }
+            } else {
+                let iov: Vec<std::io::IoSlice<'_>> =
+                    pending.iter().map(|d| std::io::IoSlice::new(d)).collect();
+                if let Err(e) = writer.write_vectored(&iov).await {
+                    debug!("Write error to client: {}", e);
+                    break;
+                }
+            }
+
             if let Err(e) = writer.flush().await {
                 debug!("Flush error to client: {}", e);
                 break;
@@ -1266,10 +1282,8 @@ async fn handle_client_connection(
                             let mut permitted_channels: Vec<u32> = Vec::new();
                             let mut first_denied: Option<u32> = None;
                             for &ch_id in &text_msg.channel_id {
-                                let has_perm = match hub_client.handle_permission_query(sid, ch_id).await {
-                                    Ok(r) => r.permissions.map(|p| p & perm::TEXT_MESSAGE != 0).unwrap_or(true),
-                                    Err(_) => true, // fail open on Hub error
-                                };
+                                let has_perm = get_perm_cached(&hub_client, &edge_state, sid, ch_id, true).await
+                                    & perm::TEXT_MESSAGE != 0;
                                 if has_perm {
                                     permitted_channels.push(ch_id);
                                 } else if first_denied.is_none() {
@@ -1309,16 +1323,14 @@ async fn handle_client_connection(
                             }
                         }
                         if let Some(client) = edge_state.client_manager.get_client(sid).await {
-                            // Suppressed users cannot speak (except loopback)
                             let voice_target = if !frame.payload.is_empty() {
                                 (frame.payload[0] & 0x1F) as u32
                             } else {
                                 0
                             };
 
-                            // Block suppressed users from speaking (except loopback target=31)
                             if client.suppress && voice_target != 31 {
-                                // Silently drop the packet
+                                // Suppressed users cannot speak — silently drop.
                             } else if voice_target == 31 {
                                 // Loopback: send back to the sender (inject session ID per protocol)
                                 let forwarded = inject_session_into_voice(&frame.payload, sid, 0);
@@ -1330,139 +1342,68 @@ async fn handle_client_connection(
                                 if let Some(sender_tx) = edge_state.client_manager.get_sender(sid).await {
                                     sender_tx.send_raw(data).await;
                                 }
-                            } else if voice_target >= 1 && voice_target <= 30 {
-                                // Whisper/voice target: route to configured sessions/channels.
-                                // Channel expansion (links, children) was pre-computed when the
-                                // VoiceTarget was registered; just look up the cached result.
-                                let vt_config = {
-                                    let cache = edge_state.voice_targets.read().await;
-                                    cache.get(&sid).and_then(|m| m.get(&voice_target)).cloned()
-                                };
-                                if let Some(vt) = vt_config {
-                                    // Separate direct session targets (WHISPER context=2) from
-                                    // channel-expanded targets (SHOUT context=1) so recipients see
-                                    // the correct talking state in their Mumble client.
-                                    let mut direct_sessions: std::collections::HashSet<u32> = std::collections::HashSet::new();
-                                    for s in &vt.sessions {
-                                        direct_sessions.insert(*s);
-                                    }
-                                    // Collect local sessions from pre-computed channel set.
-                                    let mut channel_sessions: std::collections::HashSet<u32> = std::collections::HashSet::new();
-                                    for (ch_id, group_filter) in &vt.resolved_channels {
-                                        let local_sessions = edge_state.client_manager.get_channel_sessions(*ch_id).await;
-                                        for s in local_sessions {
-                                            if s == sid || direct_sessions.contains(&s) { continue; }
-                                            if let Some(groups) = group_filter {
-                                                let in_group = edge_state.client_manager.get_client(s).await
-                                                    .map(|c| c.groups.iter().any(|g| groups.contains(g)))
-                                                    .unwrap_or(false);
-                                                if !in_group { continue; }
-                                            }
-                                            channel_sessions.insert(s);
-                                        }
-                                    }
-                                    // Build two frames with Mumble server-to-client context bytes:
-                                    //   WHISPER=2 for direct session targets (密语)
-                                    //   SHOUT=1   for channel-expanded targets (呼喊)
+                            } else if let Some(targets) = crate::routing::compute_voice_targets(
+                                &frame.payload, sid, client.channel_id, &edge_state,
+                            ).await {
+                                // Shared routing: compute_voice_targets handles VoiceTarget
+                                // lookup, channel expansion, and deaf filtering.
+                                if targets.is_whisper {
+                                    // Build two UdpTunnel frames:
+                                    //   WHISPER (context=2) for direct session targets
+                                    //   SHOUT   (context=1) for channel-expanded targets
                                     let mk_frame = |ctx: u8| {
-                                        let forwarded = inject_session_into_voice(&frame.payload, sid, ctx);
+                                        let f = inject_session_into_voice(&frame.payload, sid, ctx);
                                         let mut buf = BytesMut::new();
                                         bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-                                        bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
-                                        bytes::BufMut::put_slice(&mut buf, &forwarded);
+                                        bytes::BufMut::put_u32(&mut buf, f.len() as u32);
+                                        bytes::BufMut::put_slice(&mut buf, &f);
                                         std::sync::Arc::new(buf.to_vec())
                                     };
-                                    let data_whisper = mk_frame(2); // WHISPER: direct session targets
-                                    let data_shout   = mk_frame(1); // SHOUT:   channel-expanded targets
-                                    // Send WHISPER frame to direct session targets
-                                    for target_session in &direct_sessions {
-                                        if let Some(target_client) = edge_state.client_manager.get_client(*target_session).await {
-                                            if !target_client.deaf && !target_client.self_deaf {
-                                                if let Some(sender) = edge_state.client_manager.get_sender(*target_session).await {
-                                                    sender.send_raw((*data_whisper).clone()).await;
-                                                }
-                                            }
+                                    let data_whisper = mk_frame(2);
+                                    let data_shout   = mk_frame(1);
+                                    for &target_session in &targets.direct_sessions {
+                                        let slot = crate::hot_slot::get_hot_slot(target_session);
+                                        if !slot.is_active_for(target_session) { continue; }
+                                        let sender_guard = slot.sender.load();
+                                        if let Some(sender) = &**sender_guard {
+                                            sender.try_send((*data_whisper).clone()).ok();
                                         }
                                     }
-                                    // Send SHOUT frame to channel-expanded targets
-                                    for target_session in &channel_sessions {
-                                        if let Some(target_client) = edge_state.client_manager.get_client(*target_session).await {
-                                            if !target_client.deaf && !target_client.self_deaf {
-                                                if let Some(sender) = edge_state.client_manager.get_sender(*target_session).await {
-                                                    sender.send_raw((*data_shout).clone()).await;
-                                                }
-                                            }
+                                    for &target_session in &targets.channel_sessions {
+                                        let slot = crate::hot_slot::get_hot_slot(target_session);
+                                        if !slot.is_active_for(target_session) { continue; }
+                                        let sender_guard = slot.sender.load();
+                                        if let Some(sender) = &**sender_guard {
+                                            sender.try_send((*data_shout).clone()).ok();
                                         }
                                     }
-                                    // Relay to all remote edges with the ORIGINAL packet bytes
-                                    // (sender session injected, original voice_target_id preserved
-                                    // in the low 5 bits of byte 0).  Each remote edge uses its own
-                                    // synced VoiceTarget cache to decide who receives the packet,
-                                    // so we do NOT pre-filter by resolved_channels here.
-                                    let local_edge_id = edge_state.get_edge_id();
-                                    let remote_users = edge_state.channel_manager.get_all_remote_users().await;
-                                    let mut by_edge: std::collections::HashSet<u32> = std::collections::HashSet::new();
-                                    for ru in &remote_users {
-                                        if local_edge_id != 0 && ru.edge_id == local_edge_id { continue; }
-                                        by_edge.insert(ru.edge_id);
-                                    }
-                                    for target_edge_id in by_edge {
-                                        let relay_payload = inject_session_into_voice(&frame.payload, sid, voice_target as u8);
-                                        if edge_state.enable_hub_tcp_fallback {
-                                            hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                                } else {
+                                    // Normal broadcast: build single UdpTunnel frame (context=0)
+                                    let forwarded = inject_session_into_voice(&frame.payload, sid, 0);
+                                    let mut buf = BytesMut::new();
+                                    bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
+                                    bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
+                                    bytes::BufMut::put_slice(&mut buf, &forwarded);
+                                    let data = std::sync::Arc::new(buf.to_vec());
+                                    for &target_session in &targets.local_sessions {
+                                        let slot = crate::hot_slot::get_hot_slot(target_session);
+                                        if !slot.is_active_for(target_session) { continue; }
+                                        let sender_guard = slot.sender.load();
+                                        if let Some(sender) = &**sender_guard {
+                                            sender.try_send((*data).clone()).ok();
                                         }
                                     }
                                 }
-                            } else {
-                                // Normal broadcast (target=0): route to same channel + linked channels + listeners
-                                let linked_channels = edge_state.channel_manager
-                                    .get_all_linked_channels(client.channel_id)
-                                    .await;
-                                let linked_channels_vec: Vec<u32> = linked_channels.iter().copied().collect();
 
-                                // Build frame once with sender session injected (context=0: normal speech)
-                                let forwarded = inject_session_into_voice(&frame.payload, sid, 0);
-                                let mut buf = BytesMut::new();
-                                bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-                                bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
-                                bytes::BufMut::put_slice(&mut buf, &forwarded);
-                                // Wrap in Arc to share the frame buffer across target senders
-                                // without per-target heap allocation.
-                                let data = std::sync::Arc::new(buf.to_vec());
-
-                                // Local clients in all linked channels + channel listeners
-                                let targets = edge_state.client_manager
-                                    .get_channel_voice_targets_with_listeners(&linked_channels_vec, sid)
-                                    .await;
-                                for (target_session, is_deaf, _cs) in targets {
-                                    if is_deaf {
-                                        continue;
-                                    }
-                                    if let Some(sender) = edge_state.client_manager.get_sender(target_session).await {
-                                        sender.send_raw((*data).clone()).await;
-                                    }
-                                }
-
-                                // Remote users (other edges) in any linked channel
-                                let local_edge_id = edge_state.get_edge_id();
-                                let remote_users = edge_state.channel_manager
-                                    .get_remote_users_in_channels(&linked_channels)
-                                    .await;
-                                let mut by_edge: std::collections::HashMap<u32, bool> = std::collections::HashMap::new();
-                                for ru in &remote_users {
-                                    if !ru.deaf && !ru.self_deaf {
-                                        if local_edge_id != 0 && ru.edge_id == local_edge_id { continue; }
-                                        by_edge.insert(ru.edge_id, true);
-                                    }
-                                }
-                                for target_edge_id in by_edge.into_keys() {
-                                    debug!("edge={:?} TCP voice: relaying broadcast from session {} to edge {}", local_edge_id, sid, target_edge_id);
-                                    // Relay format: standard Mumble server-to-client packet
-                                    // [header][session_varint][seq][voice_data]
-                                    // Relay broadcast: context=0 (normal speech)
-                                    let relay_payload = inject_session_into_voice(&frame.payload, sid, 0);
-                                    if edge_state.enable_hub_tcp_fallback {
-                                        hub_client.relay_voice_via_hub(target_edge_id, relay_payload).await;
+                                // Relay to remote edges via Hub TCP fallback.
+                                // The relay payload preserves the original voice_target_id so
+                                // each receiving edge applies its own VoiceTarget config.
+                                if !targets.relay_edge_ids.is_empty() && edge_state.enable_hub_tcp_fallback {
+                                    let relay_payload = inject_session_into_voice(
+                                        &frame.payload, sid, voice_target as u8,
+                                    );
+                                    for &target_edge_id in &targets.relay_edge_ids {
+                                        hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
                                     }
                                 }
                             }
@@ -1508,10 +1449,19 @@ async fn handle_client_connection(
                                 use crate::state::{VoiceTargetChannelConfig, VoiceTargetConfig, resolve_voice_target_channels};
                                 use std::collections::HashMap;
                                 if vt.targets.is_empty() {
-                                    let mut vt_cache = edge_state.voice_targets.write().await;
-                                    if let Some(session_vts) = vt_cache.get_mut(&sid) {
-                                        session_vts.remove(&(target_id as u32));
-                                    }
+                                    let hot_map_opt = {
+                                        let mut vt_cache = edge_state.voice_targets.write().await;
+                                        if let Some(session_vts) = vt_cache.get_mut(&sid) {
+                                            session_vts.remove(&(target_id as u32));
+                                            if session_vts.is_empty() { None }
+                                            else {
+                                                Some(build_hot_vt_map(session_vts))
+                                            }
+                                        } else { None }
+                                    };
+                                    crate::hot_slot::get_hot_slot(sid).voice_targets.store(
+                                        std::sync::Arc::new(hot_map_opt.map(std::sync::Arc::new)),
+                                    );
                                 } else {
                                     let mut vt_sessions = Vec::new();
                                     let mut vt_channels = Vec::new();
@@ -1530,13 +1480,19 @@ async fn handle_client_connection(
                                     }
                                     // Pre-compute expanded channel set outside the write lock
                                     let resolved = resolve_voice_target_channels(&vt_channels, &edge_state.channel_manager).await;
-                                    let mut vt_cache = edge_state.voice_targets.write().await;
-                                    let session_vts = vt_cache.entry(sid).or_insert_with(HashMap::new);
-                                    session_vts.insert(target_id as u32, VoiceTargetConfig {
-                                        sessions: vt_sessions,
-                                        channels: vt_channels,
-                                        resolved_channels: resolved,
-                                    });
+                                    let hot_map = {
+                                        let mut vt_cache = edge_state.voice_targets.write().await;
+                                        let session_vts = vt_cache.entry(sid).or_insert_with(HashMap::new);
+                                        session_vts.insert(target_id as u32, VoiceTargetConfig {
+                                            sessions: vt_sessions.clone(),
+                                            channels: vt_channels,
+                                            resolved_channels: resolved.clone(),
+                                        });
+                                        build_hot_vt_map(session_vts)
+                                    };
+                                    crate::hot_slot::get_hot_slot(sid).voice_targets.store(
+                                        std::sync::Arc::new(Some(std::sync::Arc::new(hot_map))),
+                                    );
                                 }
                             }
 
@@ -1562,10 +1518,8 @@ async fn handle_client_connection(
                             // address and other sensitive fields.  Require WRITE on the root
                             // channel (i.e. server admin) before proceeding.
                             if !is_stats_only && !is_self {
-                                let has_perm = match hub_client.handle_permission_query(requester_sid, 0).await {
-                                    Ok(r) => r.permissions.map(|p| p & perm::WRITE != 0).unwrap_or(false),
-                                    Err(_) => false,
-                                };
+                                let has_perm = get_perm_cached(&hub_client, &edge_state, requester_sid, 0, false).await
+                                    & perm::WRITE != 0;
                                 if !has_perm {
                                     let pd = mumbleproto::PermissionDenied {
                                         r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
@@ -1598,6 +1552,10 @@ async fn handle_client_connection(
                                 // Fetch bandwidth stats: bytes-per-second in the last slot.
                                 let bps_last =
                                     edge_state.client_manager.get_bandwidth_stats(target_session).await;
+                                // Fetch ping stats (stored in per-session Mutex, not in ClientInfo).
+                                let ping_stats = edge_state.client_manager
+                                    .get_ping_stats(target_session).await
+                                    .unwrap_or_default();
 
                                 let response = if is_stats_only {
                                     // stats_only=true: return only mutable stats, no certs/address
@@ -1611,17 +1569,17 @@ async fn handle_client_connection(
                                             resync: Some(resync),
                                         }),
                                         from_server: Some(mumbleproto::user_stats::Stats {
-                                            good: Some(target.remote_good),
-                                            late: Some(target.remote_late),
-                                            lost: Some(target.remote_lost),
-                                            resync: Some(target.remote_resync),
+                                            good: Some(ping_stats.remote_good),
+                                            late: Some(ping_stats.remote_late),
+                                            lost: Some(ping_stats.remote_lost),
+                                            resync: Some(ping_stats.remote_resync),
                                         }),
-                                        udp_packets: Some(target.udp_packets),
-                                        tcp_packets: Some(target.tcp_packets),
-                                        udp_ping_avg: Some(target.udp_ping_avg),
-                                        udp_ping_var: Some(target.udp_ping_var),
-                                        tcp_ping_avg: Some(target.tcp_ping_avg),
-                                        tcp_ping_var: Some(target.tcp_ping_var),
+                                        udp_packets: Some(ping_stats.udp_packets),
+                                        tcp_packets: Some(ping_stats.tcp_packets),
+                                        udp_ping_avg: Some(ping_stats.udp_ping_avg),
+                                        udp_ping_var: Some(ping_stats.udp_ping_var),
+                                        tcp_ping_avg: Some(ping_stats.tcp_ping_avg),
+                                        tcp_ping_var: Some(ping_stats.tcp_ping_var),
                                         onlinesecs: Some(onlinesecs),
                                         idlesecs: Some(idlesecs),
                                         bandwidth: Some(bps_last * 8), // bytes→bits per second
@@ -1638,17 +1596,17 @@ async fn handle_client_connection(
                                             resync: Some(resync),
                                         }),
                                         from_server: Some(mumbleproto::user_stats::Stats {
-                                            good: Some(target.remote_good),
-                                            late: Some(target.remote_late),
-                                            lost: Some(target.remote_lost),
-                                            resync: Some(target.remote_resync),
+                                            good: Some(ping_stats.remote_good),
+                                            late: Some(ping_stats.remote_late),
+                                            lost: Some(ping_stats.remote_lost),
+                                            resync: Some(ping_stats.remote_resync),
                                         }),
-                                        udp_packets: Some(target.udp_packets),
-                                        tcp_packets: Some(target.tcp_packets),
-                                        udp_ping_avg: Some(target.udp_ping_avg),
-                                        udp_ping_var: Some(target.udp_ping_var),
-                                        tcp_ping_avg: Some(target.tcp_ping_avg),
-                                        tcp_ping_var: Some(target.tcp_ping_var),
+                                        udp_packets: Some(ping_stats.udp_packets),
+                                        tcp_packets: Some(ping_stats.tcp_packets),
+                                        udp_ping_avg: Some(ping_stats.udp_ping_avg),
+                                        udp_ping_var: Some(ping_stats.udp_ping_var),
+                                        tcp_ping_avg: Some(ping_stats.tcp_ping_avg),
+                                        tcp_ping_var: Some(ping_stats.tcp_ping_var),
                                         address: Some(addr_bytes),
                                         onlinesecs: Some(onlinesecs),
                                         idlesecs: Some(idlesecs),
@@ -1677,30 +1635,18 @@ async fn handle_client_connection(
                         let channel_id = pq.channel_id.unwrap_or(0);
                         debug!("PermissionQuery from session {} for channel {}", sid, channel_id);
 
-                        // Forward to Hub
+                        // Forward to Hub (with local cache to skip redundant round-trips)
                         let hub = hub_client.clone();
                         let sender = client_sender.clone();
+                        let state_pq = Arc::clone(&edge_state);
                         tokio::spawn(async move {
-                            match hub.handle_permission_query(sid, channel_id).await {
-                                Ok(result) => {
-                                    let response = mumbleproto::PermissionQuery {
-                                        channel_id: Some(channel_id),
-                                        permissions: result.permissions,
-                                        flush: Some(false),
-                                    };
-                                    sender.send_message(MessageType::PermissionQuery, &response).await;
-                                }
-                                Err(e) => {
-                                    debug!("PermissionQuery failed: {}", e);
-                                    // Return default permissions
-                                    let response = mumbleproto::PermissionQuery {
-                                        channel_id: Some(channel_id),
-                                        permissions: Some(0),
-                                        flush: Some(false),
-                                    };
-                                    sender.send_message(MessageType::PermissionQuery, &response).await;
-                                }
-                            }
+                            let perms = get_perm_cached(&hub, &*state_pq, sid, channel_id, true).await;
+                            let response = mumbleproto::PermissionQuery {
+                                channel_id: Some(channel_id),
+                                permissions: Some(perms),
+                                flush: Some(false),
+                            };
+                            sender.send_message(MessageType::PermissionQuery, &response).await;
                         });
                     }
                 }
@@ -1856,17 +1802,12 @@ async fn handle_client_connection(
                     // Permission gate: actor must have Write on the target channel OR on the root
                     // channel (mirrors Murmur's msgACL check — root-Write lets admins manage every
                     // channel even if a sub-channel creator denied them Write there).
-                    let has_ch_write = match hub_client.handle_permission_query(sid, ch_id).await {
-                        Ok(r) => r.permissions.map(|p| p & perm::WRITE != 0).unwrap_or(false),
-                        Err(_) => false,
-                    };
+                    let has_ch_write = get_perm_cached(&hub_client, &edge_state, sid, ch_id, false).await
+                        & perm::WRITE != 0;
                     let has_write = if has_ch_write {
                         true
                     } else {
-                        match hub_client.handle_permission_query(sid, 0).await {
-                            Ok(r) => r.permissions.map(|p| p & perm::WRITE != 0).unwrap_or(false),
-                            Err(_) => false,
-                        }
+                        get_perm_cached(&hub_client, &edge_state, sid, 0, false).await & perm::WRITE != 0
                     };
                     if !has_write {
                         let pq = mumbleproto::PermissionDenied {
@@ -2103,6 +2044,8 @@ async fn handle_client_connection(
         edge_state.free_session_id(sid).await;
         // Clean up voice target cache for this session
         edge_state.voice_targets.write().await.remove(&sid);
+        // Clean up permission cache for this session
+        edge_state.permission_cache.retain(|&(s, _), _| s != sid);
         // Clean up ninja channel permission cache for this session
         edge_state.ninja_visible_to.write().await.remove(&sid);
 
@@ -2148,10 +2091,8 @@ async fn handle_user_state_update(
         if let Some(target_channel_id) = user_state.channel_id {
             if client.channel_id != target_channel_id {
                 // Check Enter permission on target channel via Hub
-                let can_enter = match hub_client.handle_permission_query(session_id, target_channel_id).await {
-                    Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(true),
-                    Err(_) => true, // Fail open if Hub unreachable
-                };
+                let can_enter = get_perm_cached(&hub_client, &edge_state, session_id, target_channel_id, true).await
+                    & perm::ENTER != 0;
                 if can_enter {
                     // Compute the effective user limit for the target channel before
                     // any locks are held, so we only need to pass it to the atomic move.
@@ -2174,10 +2115,8 @@ async fn handle_user_state_update(
 
                     // Check Speak permission before the atomic move so we know the
                     // suppress flag to set without holding any internal locks.
-                    let can_speak = match hub_client.handle_permission_query(session_id, target_channel_id).await {
-                        Ok(r) => r.permissions.map(|p| p & perm::SPEAK != 0).unwrap_or(true),
-                        Err(_) => true,
-                    };
+                    let can_speak = get_perm_cached(&hub_client, &edge_state, session_id, target_channel_id, true).await
+                        & perm::SPEAK != 0;
                     let new_suppress = !can_speak;
 
                     debug!("User {} moving to channel {}", session_id, target_channel_id);
@@ -2292,10 +2231,8 @@ async fn handle_user_state_update(
                 }
 
                 // Check Listen permission (0x800) before the atomic add.
-                let can_listen = match hub_client.handle_permission_query(session_id, ch).await {
-                    Ok(r) => r.permissions.map(|p| p & perm::LISTEN != 0).unwrap_or(true),
-                    Err(_) => true,
-                };
+                let can_listen = get_perm_cached(&hub_client, &edge_state, session_id, ch, true).await
+                    & perm::LISTEN != 0;
                 if !can_listen {
                     debug!("Listen denied for session {} on channel {}", session_id, ch);
                     if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
@@ -2557,10 +2494,8 @@ async fn handle_admin_user_state_update(
             if client.channel_id != target_channel_id {
                 // Check 1: actor needs Move permission in the victim's current channel
                 // (mirrors Murmur: "!hasPermission(uSource, pDstServerUser->cChannel, ChanACL::Move)").
-                let actor_can_move_out = match hub_client.handle_permission_query(actor_session, client.channel_id).await {
-                    Ok(r) => r.permissions.map(|p| p & perm::MOVE != 0).unwrap_or(false),
-                    Err(_) => false,
-                };
+                let actor_can_move_out = get_perm_cached(&hub_client, &edge_state, actor_session, client.channel_id, false).await
+                    & perm::MOVE != 0;
                 if !actor_can_move_out {
                     if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
                         let pq = mumbleproto::PermissionDenied {
@@ -2575,14 +2510,10 @@ async fn handle_admin_user_state_update(
 
                 // Check 2: actor has Move in the target channel OR victim has Enter there
                 // (mirrors Murmur: "!hasPermission(uSource, c, Move) && !hasPermission(pDst, c, Enter)").
-                let actor_can_move_in = match hub_client.handle_permission_query(actor_session, target_channel_id).await {
-                    Ok(r) => r.permissions.map(|p| p & perm::MOVE != 0).unwrap_or(false),
-                    Err(_) => false,
-                };
-                let victim_can_enter = match hub_client.handle_permission_query(target_session, target_channel_id).await {
-                    Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(false),
-                    Err(_) => false,
-                };
+                let actor_can_move_in = get_perm_cached(&hub_client, &edge_state, actor_session, target_channel_id, false).await
+                    & perm::MOVE != 0;
+                let victim_can_enter = get_perm_cached(&hub_client, &edge_state, target_session, target_channel_id, false).await
+                    & perm::ENTER != 0;
                 if !actor_can_move_in && !victim_can_enter {
                     if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
                         let pq = mumbleproto::PermissionDenied {
@@ -2596,10 +2527,8 @@ async fn handle_admin_user_state_update(
                 }
 
                 // Re-check suppress for the new channel
-                let can_speak = match hub_client.handle_permission_query(target_session, target_channel_id).await {
-                    Ok(r) => r.permissions.map(|p| p & perm::SPEAK != 0).unwrap_or(true),
-                    Err(_) => true,
-                };
+                let can_speak = get_perm_cached(&hub_client, &edge_state, target_session, target_channel_id, true).await
+                    & perm::SPEAK != 0;
                 let new_suppress = !can_speak;
                 suppress_changed = new_suppress != client.suppress;
                 client.channel_id = target_channel_id;
@@ -2658,10 +2587,8 @@ async fn handle_admin_user_state_update(
             }
 
             // Permission check 1: actor must have Move in victim's current channel.
-            let actor_can_move_out = match hub_client.handle_permission_query(actor_session, remote.channel_id).await {
-                Ok(r) => r.permissions.map(|p| p & perm::MOVE != 0).unwrap_or(false),
-                Err(_) => false,
-            };
+            let actor_can_move_out = get_perm_cached(&hub_client, &edge_state, actor_session, remote.channel_id, false).await
+                & perm::MOVE != 0;
             if !actor_can_move_out {
                 if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
                     let pq = mumbleproto::PermissionDenied {
@@ -2675,14 +2602,10 @@ async fn handle_admin_user_state_update(
             }
 
             // Permission check 2: actor has Move in target OR victim has Enter there.
-            let actor_can_move_in = match hub_client.handle_permission_query(actor_session, target_channel_id).await {
-                Ok(r) => r.permissions.map(|p| p & perm::MOVE != 0).unwrap_or(false),
-                Err(_) => false,
-            };
-            let victim_can_enter = match hub_client.handle_permission_query(target_session, target_channel_id).await {
-                Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(false),
-                Err(_) => false,
-            };
+            let actor_can_move_in = get_perm_cached(&hub_client, &edge_state, actor_session, target_channel_id, false).await
+                & perm::MOVE != 0;
+            let victim_can_enter = get_perm_cached(&hub_client, &edge_state, target_session, target_channel_id, false).await
+                & perm::ENTER != 0;
             if !actor_can_move_in && !victim_can_enter {
                 if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
                     let pq = mumbleproto::PermissionDenied {
@@ -2828,6 +2751,50 @@ fn decode_mumble_varint(data: &[u8]) -> Option<(u32, usize)> {
 }
 
 /// Inject sender session ID into a voice packet for forwarding.
+/// Convert a `HashMap<u32, VoiceTargetConfig>` to a `HotVoiceTargetMap` for storage in
+/// `HotSlot::voice_targets`.  Called after every VoiceTarget cache write so the routing
+/// hot path can read voice-target configs without holding `EdgeState::voice_targets`.
+fn build_hot_vt_map(
+    session_vts: &std::collections::HashMap<u32, crate::state::VoiceTargetConfig>,
+) -> crate::hot_slot::HotVoiceTargetMap {
+    session_vts
+        .iter()
+        .map(|(&tid, vt)| {
+            (tid, crate::hot_slot::HotVoiceTarget {
+                sessions: vt.sessions.clone(),
+                resolved_channels: vt.resolved_channels.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Query Hub for a permission bitmask with a local DashMap cache.
+///
+/// Returns the cached value if present; otherwise calls `handle_permission_query`
+/// and stores the result.  On Hub error the result is **not cached** so the next
+/// call retries; the caller receives `fail_open` (all bits set for open, 0 for closed).
+async fn get_perm_cached(
+    hub_client: &crate::hub_client::HubClient,
+    edge_state: &crate::state::EdgeState,
+    session: u32,
+    channel: u32,
+    fail_open: bool,
+) -> u32 {
+    if let Some(v) = edge_state.permission_cache.get(&(session, channel)) {
+        return *v;
+    }
+    match hub_client.handle_permission_query(session, channel).await {
+        Ok(r) => {
+            let bitmask = r.permissions.unwrap_or(if fail_open { u32::MAX } else { 0 });
+            edge_state.permission_cache.insert((session, channel), bitmask);
+            bitmask
+        }
+        Err(_) => {
+            if fail_open { u32::MAX } else { 0 }
+        }
+    }
+}
+
 /// Client sends: [header(1B)][sequence_varint][audio_data]
 /// Server forwards: [header(1B)][sender_session_varint][sequence_varint][audio_data]
 /// Build a server-to-client voice payload:
@@ -2945,16 +2912,6 @@ mod tests {
             client_os: String::new(),
             client_os_version: String::new(),
             plugin_context: vec![],
-            udp_packets: 0,
-            tcp_packets: 0,
-            udp_ping_avg: 0.0,
-            udp_ping_var: 0.0,
-            tcp_ping_avg: 0.0,
-            tcp_ping_var: 0.0,
-            remote_good: 0,
-            remote_late: 0,
-            remote_lost: 0,
-            remote_resync: 0,
         }
     }
 
@@ -3769,13 +3726,13 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                                 for ch_id in &linked_channels {
                                     let local_targets = state.client_manager.get_channel_sessions(*ch_id).await;
                                     for target_session in local_targets {
-                                        if let Some(target_client) = state.client_manager.get_client(target_session).await {
-                                            if target_client.deaf || target_client.self_deaf {
-                                                continue;
-                                            }
-                                        }
-                                        if let Some(sender_tx) = state.client_manager.get_sender(target_session).await {
-                                            sender_tx.send_raw(frame.clone()).await;
+                                        let slot = crate::hot_slot::get_hot_slot(target_session);
+                                        if !slot.is_active_for(target_session) { continue; }
+                                        if slot.deaf.load(std::sync::atomic::Ordering::Relaxed)
+                                            || slot.self_deaf.load(std::sync::atomic::Ordering::Relaxed) { continue; }
+                                        let sender_guard = slot.sender.load();
+                                        if let Some(sender) = &**sender_guard {
+                                            sender.try_send(frame.clone()).ok();
                                             delivered += 1;
                                         }
                                     }
@@ -3787,9 +3744,22 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                                 // for sender_session to decide which LOCAL sessions receive the packet.
                                 // The sending edge sent only the raw voice_target_id in the header;
                                 // routing decisions are made independently on each receiving edge.
-                                let vt_config = {
-                                    let cache = state.voice_targets.read().await;
-                                    cache.get(&sender_session).and_then(|m| m.get(&voice_target)).cloned()
+                                let vt_config: Option<crate::hot_slot::HotVoiceTarget> = {
+                                    let slot = crate::hot_slot::get_hot_slot(sender_session);
+                                    if slot.is_active_for(sender_session) {
+                                        let vt_guard = slot.voice_targets.load();
+                                        if let Some(map) = &**vt_guard {
+                                            map.get(&voice_target).cloned()
+                                        } else { None }
+                                    } else {
+                                        // Session is not local; look up from EdgeState
+                                        let cache = state.voice_targets.read().await;
+                                        cache.get(&sender_session).and_then(|m| m.get(&voice_target))
+                                            .map(|vt| crate::hot_slot::HotVoiceTarget {
+                                                sessions: vt.sessions.clone(),
+                                                resolved_channels: vt.resolved_channels.clone(),
+                                            })
+                                    }
                                 };
                                 if let Some(vt) = vt_config {
                                     // Direct (per-session) targets in VoiceTarget.sessions.
@@ -3813,12 +3783,14 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                                     // Deliver to matching local sessions only, preserving the
                                     // original Mumble header byte (voice_target_id in low 5 bits).
                                     let mut delivered = 0usize;
-                                    for target_session in direct_sessions.iter().chain(channel_sessions.iter()) {
-                                        if let Some(target_client) = state.client_manager.get_client(*target_session).await {
-                                            if target_client.deaf || target_client.self_deaf { continue; }
-                                        }
-                                        if let Some(sender_tx) = state.client_manager.get_sender(*target_session).await {
-                                            sender_tx.send_raw(frame.clone()).await;
+                                    for &target_session in direct_sessions.iter().chain(channel_sessions.iter()) {
+                                        let slot = crate::hot_slot::get_hot_slot(target_session);
+                                        if !slot.is_active_for(target_session) { continue; }
+                                        if slot.deaf.load(std::sync::atomic::Ordering::Relaxed)
+                                            || slot.self_deaf.load(std::sync::atomic::Ordering::Relaxed) { continue; }
+                                        let sender_guard = slot.sender.load();
+                                        if let Some(sender) = &**sender_guard {
+                                            sender.try_send(frame.clone()).ok();
                                             delivered += 1;
                                         }
                                     }
@@ -3858,12 +3830,13 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         // client on the affected channel and push a ChannelState update so the
                         // client's lock icon reflects the new permissions immediately.
                         debug!("ACL updated for channel {}, refreshing can_enter for all local sessions", channel_id);
+                        // Invalidate cached permissions for this channel so all queries below
+                        // fetch fresh values from Hub rather than returning stale data.
+                        state.permission_cache.retain(|&(_, ch), _| ch != channel_id);
                         let all_clients = state.client_manager.get_all_clients().await;
                         for client in all_clients {
-                            let can_enter = match hub_client.handle_permission_query(client.session, channel_id).await {
-                                Ok(r) => r.permissions.map(|p| p & perm::ENTER != 0).unwrap_or(true),
-                                Err(_) => true,
-                            };
+                            let can_enter = get_perm_cached(&hub_client, &state, client.session, channel_id, true).await
+                                & perm::ENTER != 0;
                             let ch_state = mumbleproto::ChannelState {
                                 channel_id: Some(channel_id),
                                 is_enter_restricted: Some(!can_enter),
@@ -3876,7 +3849,11 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                 }
             }
             Err(RecvError::Lagged(count)) => {
-                warn!("Event listener lagged behind by {} events", count);
+                warn!(
+                    count,
+                    "Event listener lagged — triggering full re-sync to recover missed events"
+                );
+                hub_client.request_full_sync().await;
             }
             Err(RecvError::Closed) => {
                 info!("Event channel closed");

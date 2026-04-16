@@ -36,3 +36,5 @@ aes = { workspace = true }
 sha1 = { workspace = true }
 hex = { workspace = true }
 flate2 = { workspace = true }
+arc-swap = { workspace = true }
+dashmap = { workspace = true }

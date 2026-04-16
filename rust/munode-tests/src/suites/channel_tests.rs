@@ -161,7 +161,7 @@ async fn test_delete_channel() -> Result<()> {
 
     // Create a channel, then delete it
     let name = format!("Del_{}", chrono_now_ms());
-    let ch_id = client.create_channel(&name, 0).await?;;
+    let ch_id = client.create_channel(&name, 0).await?;
     sleep_ms(300).await;
 
     client.delete_channel(ch_id).await?;

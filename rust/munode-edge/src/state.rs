@@ -643,6 +643,18 @@ pub struct EdgeState {
     /// Monotonic counter for session ID allocation.  Ensures recently freed IDs are not
     /// immediately reused, making it easier to detect stale references in tests and clients.
     pub session_counter: AtomicU32,
+    /// Limits the number of concurrent Hub authentication RPCs.
+    ///
+    /// Prevents a burst of simultaneous client connections (e.g. server restart) from
+    /// overwhelming the Hub auth service.  32 permits = comfortable headroom for a fast
+    /// connection burst while keeping Hub load bounded.
+    pub auth_semaphore: tokio::sync::Semaphore,
+    /// Cache of Hub permission query results: (session_id, channel_id) → permission bitmask.
+    ///
+    /// Eliminates redundant Hub RPC round-trips for repeated permission checks on the same
+    /// (session, channel) pair.  The cache is invalidated on `AclUpdated` events (by channel)
+    /// and cleared per-session on disconnect.
+    pub permission_cache: dashmap::DashMap<(u32, u32), u32>,
 }
 
 impl EdgeState {
@@ -651,7 +663,7 @@ impl EdgeState {
         client_manager: Arc<ClientManager>,
         enable_hub_tcp_fallback: bool,
     ) -> Arc<Self> {
-        let (event_tx, _) = broadcast::channel(256);
+        let (event_tx, _) = broadcast::channel(4096);
         Arc::new(Self {
             edge_id: AtomicU32::new(0),
             cert_required: RwLock::new(false),
@@ -682,6 +694,8 @@ impl EdgeState {
             edge_crypto: None,
             used_session_ids: RwLock::new(HashSet::new()),
             session_counter: AtomicU32::new(0),
+            auth_semaphore: tokio::sync::Semaphore::new(32),
+            permission_cache: dashmap::DashMap::new(),
         })
     }
 
@@ -693,7 +707,7 @@ impl EdgeState {
         listeners_per_user: u32,
         listeners_per_channel: u32,
     ) -> Arc<Self> {
-        let (event_tx, _) = broadcast::channel(256);
+        let (event_tx, _) = broadcast::channel(4096);
         Arc::new(Self {
             edge_id: AtomicU32::new(0),
             cert_required: RwLock::new(false),
@@ -724,6 +738,8 @@ impl EdgeState {
             edge_crypto: None,
             used_session_ids: RwLock::new(HashSet::new()),
             session_counter: AtomicU32::new(0),
+            auth_semaphore: tokio::sync::Semaphore::new(32),
+            permission_cache: dashmap::DashMap::new(),
         })
     }
 
@@ -740,7 +756,7 @@ impl EdgeState {
         hmac_secret: Option<&str>,
         peer_voice_tcp_pool_size: usize,
     ) -> Arc<Self> {
-        let (event_tx, _) = broadcast::channel(256);
+        let (event_tx, _) = broadcast::channel(4096);
         let edge_crypto = hmac_secret
             .and_then(EdgeCrypto::from_secret)
             .map(Arc::new);
@@ -774,6 +790,8 @@ impl EdgeState {
             edge_crypto,
             used_session_ids: RwLock::new(HashSet::new()),
             session_counter: AtomicU32::new(0),
+            auth_semaphore: tokio::sync::Semaphore::new(32),
+            permission_cache: dashmap::DashMap::new(),
         })
     }
 
@@ -842,6 +860,21 @@ impl EdgeState {
             if let Some(vt) = cache.get_mut(&sid).and_then(|m| m.get_mut(&tid)) {
                 vt.resolved_channels = resolved;
             }
+        }
+        // Sync updated configs into each session's HotSlot for lock-free routing.
+        for (&sid, session_vts) in cache.iter() {
+            let hot_map: crate::hot_slot::HotVoiceTargetMap = session_vts
+                .iter()
+                .map(|(&tid, vt)| {
+                    (tid, crate::hot_slot::HotVoiceTarget {
+                        sessions: vt.sessions.clone(),
+                        resolved_channels: vt.resolved_channels.clone(),
+                    })
+                })
+                .collect();
+            crate::hot_slot::get_hot_slot(sid)
+                .voice_targets
+                .store(std::sync::Arc::new(Some(std::sync::Arc::new(hot_map))));
         }
     }
 

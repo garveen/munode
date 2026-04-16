@@ -3056,12 +3056,18 @@ impl RpcHandler {
                 ..Default::default()
             };
             let shutdown_data = shutdown_packet.encode_to_vec();
-            let edges = self.state.edge_connections.read().await;
-            for edge_id in smallest_partition {
-                if let Some(sender) = edges.get(edge_id) {
-                    info!("Sending hub.shutdownRequest to edge {}", edge_id);
-                    let _ = sender.send(shutdown_data.clone()).await;
-                }
+            // Snapshot senders under a brief read lock, then release before any
+            // async sends.  Holding edge_connections.read() across sender.send().await
+            // would block edge registration and cleanup for the full send duration.
+            let senders: Vec<(u32, EdgeSender)> = {
+                let edges = self.state.edge_connections.read().await;
+                smallest_partition.iter()
+                    .filter_map(|id| edges.get(id).map(|s| (*id, s.clone())))
+                    .collect()
+            };
+            for (edge_id, sender) in senders {
+                info!("Sending hub.shutdownRequest to edge {}", edge_id);
+                let _ = sender.send(shutdown_data.clone()).await;
             }
         }
     }

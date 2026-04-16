@@ -6,6 +6,7 @@ use std::fs;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -79,9 +80,25 @@ pub fn find_binary(name: &str) -> Result<PathBuf> {
 
 // ── Port utilities ────────────────────────────────────────────────────────
 
+/// Global port counter — each test environment atomically reserves a block of
+/// PORTS_PER_ENV ports, eliminating the TOCTOU race when tests run in parallel.
+static PORT_COUNTER: AtomicU16 = AtomicU16::new(19000);
+
+/// Number of ports reserved per test environment.
+/// auth(1) + hub_control(1) + hub_web_api(1) + per_edge(client+edge = 2) × max_4_edges = 11.
+/// We reserve 15 to leave headroom.
+const PORTS_PER_ENV: u16 = 15;
+
+/// Atomically reserve the next port block and return the first port in it.
+pub fn alloc_port_block() -> u16 {
+    PORT_COUNTER.fetch_add(PORTS_PER_ENV, Ordering::Relaxed)
+}
+
 /// Find an available TCP port starting from `base`.
+/// With the atomic allocator each call gets a unique range, so conflicts are rare;
+/// however the port might already be in use by the OS, so we still scan.
 pub fn find_free_port(base: u16) -> Result<u16> {
-    for port in base..base + 200 {
+    for port in base..base + PORTS_PER_ENV {
         if std::net::TcpListener::bind(format!("127.0.0.1:{}", port)).is_ok() {
             return Ok(port);
         }
@@ -447,7 +464,10 @@ impl TestEnvBuilder {
         let tmp = tempfile::TempDir::new()?;
         let tmp_path = tmp.path().to_path_buf();
 
-        let mut port = find_free_port(self.port_base)?;
+        // Each call atomically grabs a unique port block, eliminating the TOCTOU
+        // race that causes port conflicts when tests run concurrently.
+        let block_base = alloc_port_block();
+        let mut port = find_free_port(block_base)?;
         macro_rules! next_port {
             () => {{
                 let p = port;
