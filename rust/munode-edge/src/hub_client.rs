@@ -523,7 +523,14 @@ impl HubClient {
 
     /// Connect via a specific WebSocket URL (used for both direct and relay connections).
     async fn try_connect_via_url(self: &Arc<Self>, url: &str, slot: usize) -> Result<()> {
-        *self.state.write().await = HubConnectionState::Connecting;
+        // Only downgrade to Connecting if no other slot is still Registered/Connected.
+        // Avoids clobbering a better state while another slot is alive.
+        {
+            let mut st = self.state.write().await;
+            if matches!(*st, HubConnectionState::Disconnected) {
+                *st = HubConnectionState::Connecting;
+            }
+        }
         info!("Connecting to Hub via {} (slot {})", url, slot);
 
         const CONNECT_TIMEOUT_VIA: Duration = Duration::from_secs(15);
@@ -533,7 +540,12 @@ impl HubClient {
             .with_context(|| format!("Failed to connect to Hub WebSocket via {} (slot {})", url, slot))?;
 
         info!("WebSocket connected via {} (slot {})", url, slot);
-        *self.state.write().await = HubConnectionState::Connected;
+        {
+            let mut st = self.state.write().await;
+            if matches!(*st, HubConnectionState::Disconnected | HubConnectionState::Connecting) {
+                *st = HubConnectionState::Connected;
+            }
+        }
 
         let (mut ws_write, mut ws_read) = ws_stream.split();
 
@@ -737,7 +749,15 @@ impl HubClient {
     /// Attempt a single WebSocket connection on `slot`.
     /// All slots are peer-equal: any slot can perform registration & sync.
     async fn try_connect_slot(self: &Arc<Self>, slot: usize) -> Result<()> {
-        *self.state.write().await = HubConnectionState::Connecting;
+        // Only downgrade to Connecting if no slot is in a better state.
+        // A reconnecting slot must not clobber Registered/Connected when another
+        // slot is still alive.
+        {
+            let mut st = self.state.write().await;
+            if matches!(*st, HubConnectionState::Disconnected) {
+                *st = HubConnectionState::Connecting;
+            }
+        }
 
         let scheme = if self.config.tls { "wss" } else { "ws" };
         let url = format!("{}://{}:{}", scheme, self.config.host, self.config.control_port);
@@ -750,7 +770,12 @@ impl HubClient {
             .with_context(|| format!("Failed to connect to Hub WebSocket (slot {})", slot))?;
 
         info!("WebSocket connected to Hub (slot {})", slot);
-        *self.state.write().await = HubConnectionState::Connected;
+        {
+            let mut st = self.state.write().await;
+            if matches!(*st, HubConnectionState::Disconnected | HubConnectionState::Connecting) {
+                *st = HubConnectionState::Connected;
+            }
+        }
 
         let (mut ws_write, mut ws_read) = ws_stream.split();
 
