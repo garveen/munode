@@ -352,6 +352,9 @@ impl HubClient {
     ///
     /// After `RELAY_FALLBACK_THRESHOLD` consecutive direct-connect failures,
     /// attempts to connect via a known peer Edge's control-relay port.
+    /// After a further `RELAY_FALLBACK_THRESHOLD` consecutive relay failures,
+    /// falls back to direct connections again so the loop doesn't get stuck in
+    /// relay-only mode when no peers are configured or reachable.
     /// Relay candidates are tried in priority order:
     ///   1. Statically configured peers (`hub_server.static_peers` in config)
     ///   2. Dynamically discovered peers (received via `hub.peerJoined` notifications)
@@ -362,6 +365,7 @@ impl HubClient {
     async fn run_single_slot(self: &Arc<Self>, slot: usize) {
         let mut backoff = ExponentialBackoff::new(self.config.reconnect_interval);
         let mut direct_fail_count: u32 = 0;
+        let mut relay_fail_count: u32 = 0;
         const RELAY_FALLBACK_THRESHOLD: u32 = 3;
 
         // Tracks when we first lost the Hub connection.  Set on first failure or
@@ -384,6 +388,7 @@ impl HubClient {
                     info!("Hub connection closed normally");
                     backoff.reset();
                     direct_fail_count = 0;
+                    relay_fail_count = 0;
                     // Connection was alive and has just closed — start the
                     // disconnected timer from this moment.
                     first_failure_at = Some(std::time::Instant::now());
@@ -397,6 +402,7 @@ impl HubClient {
                     }
                     if !use_relay {
                         direct_fail_count += 1;
+                        relay_fail_count = 0;
                         if direct_fail_count == RELAY_FALLBACK_THRESHOLD {
                             info!(
                                 "Direct Hub connection failed {} times — \
@@ -405,7 +411,22 @@ impl HubClient {
                             );
                         }
                     } else {
-                        warn!("Hub relay connection also failed — will keep retrying");
+                        relay_fail_count += 1;
+                        // After RELAY_FALLBACK_THRESHOLD consecutive relay failures,
+                        // fall back to direct connections so we don't get stuck in
+                        // relay-only mode when no peers are reachable (e.g. on first
+                        // startup before any peer has been discovered).
+                        if relay_fail_count >= RELAY_FALLBACK_THRESHOLD {
+                            warn!(
+                                "Hub relay also failed {} consecutive times — \
+                                 falling back to direct connection on next attempt",
+                                relay_fail_count
+                            );
+                            direct_fail_count = 0;
+                            relay_fail_count = 0;
+                        } else {
+                            warn!("Hub relay connection also failed — will keep retrying");
+                        }
                     }
                 }
             }
