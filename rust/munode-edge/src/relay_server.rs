@@ -263,6 +263,11 @@ pub async fn run_edge_ws_server_with_listener(
     }
 }
 
+/// Maximum size (bytes) for a single voice WebSocket frame.
+/// Typical Opus voice frames are under 1 KB; anything above this limit is
+/// either malicious or grossly malformed and should be dropped.
+const MAX_VOICE_FRAME_SIZE: usize = 8192;
+
 /// Handle an incoming `/voice` WebSocket connection from a peer Edge.
 ///
 /// Protocol:
@@ -329,6 +334,17 @@ async fn handle_voice_connection(
         };
 
         if data.is_empty() {
+            continue;
+        }
+
+        // Reject oversized frames to prevent memory exhaustion from a
+        // malicious or buggy peer.
+        if data.len() > MAX_VOICE_FRAME_SIZE {
+            warn!(
+                "Voice conn from peer edge {}: frame too large ({} bytes), dropping",
+                peer_edge_id,
+                data.len()
+            );
             continue;
         }
 

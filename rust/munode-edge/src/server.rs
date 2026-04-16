@@ -1694,37 +1694,86 @@ async fn handle_client_connection(
                     let Ok(ch_state) = mumbleproto::ChannelState::decode(&frame.payload[..]) else { continue; };
                     debug!("ChannelState from {}: channel_id={:?}, name={:?}", peer_addr, ch_state.channel_id, ch_state.name);
 
-                    let hub = hub_client.clone();
-                    let has_links = !ch_state.links_add.is_empty() || !ch_state.links_remove.is_empty();
-                    if has_links {
-                        // Link/unlink request - send via notification
-                        if let Some(ch_id) = ch_state.channel_id {
-                            hub.notify_channel_state(ch_id, ch_state.links_add, ch_state.links_remove).await;
-                        }
-                    } else {
-                        tokio::spawn(async move {
-                            if let Err(e) = hub.save_channel(
-                                ch_state.channel_id,
-                                ch_state.parent,
-                                ch_state.name.as_deref(),
-                                ch_state.description.as_deref(),
-                                ch_state.position,
-                                ch_state.max_users,
-                            ).await {
-                                warn!("Failed to forward ChannelState to Hub: {}", e);
+                    if let Some(sid) = session_id {
+                        let hub = hub_client.clone();
+                        let has_links = !ch_state.links_add.is_empty() || !ch_state.links_remove.is_empty();
+                        if has_links {
+                            // Link/unlink request — requires LINK_CHANNEL on the source channel.
+                            if let Some(ch_id) = ch_state.channel_id {
+                                let has_link = get_perm_cached(&hub_client, &edge_state, sid, ch_id, false).await
+                                    & perm::LINK_CHANNEL != 0;
+                                if !has_link {
+                                    let pq = mumbleproto::PermissionDenied {
+                                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                        channel_id: Some(ch_id),
+                                        ..Default::default()
+                                    };
+                                    client_sender.send_message(MessageType::PermissionDenied, &pq).await;
+                                    continue;
+                                }
+                                hub.notify_channel_state(ch_id, ch_state.links_add, ch_state.links_remove).await;
                             }
-                        });
+                        } else {
+                            let is_new = ch_state.channel_id.is_none();
+                            let target_parent = if is_new {
+                                ch_state.parent.unwrap_or(0)
+                            } else {
+                                // Edit: check WRITE on the channel being edited
+                                ch_state.channel_id.unwrap_or(0)
+                            };
+                            let required_perm = if is_new { perm::MAKE_CHANNEL } else { perm::WRITE };
+                            let has_perm = get_perm_cached(&hub_client, &edge_state, sid, target_parent, false).await
+                                & required_perm != 0;
+                            if !has_perm {
+                                let pq = mumbleproto::PermissionDenied {
+                                    r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                    channel_id: Some(target_parent),
+                                    ..Default::default()
+                                };
+                                client_sender.send_message(MessageType::PermissionDenied, &pq).await;
+                                continue;
+                            }
+                            tokio::spawn(async move {
+                                if let Err(e) = hub.save_channel(
+                                    ch_state.channel_id,
+                                    ch_state.parent,
+                                    ch_state.name.as_deref(),
+                                    ch_state.description.as_deref(),
+                                    ch_state.position,
+                                    ch_state.max_users,
+                                ).await {
+                                    warn!("Failed to forward ChannelState to Hub: {}", e);
+                                }
+                            });
+                        }
                     }
                 }
                 MessageType::ChannelRemove if client_state == ClientState::Ready => {
-                    // Client requesting channel removal - forward to Hub
+                    // Client requesting channel removal - requires WRITE on the channel
                     let Ok(ch_remove) = mumbleproto::ChannelRemove::decode(&frame.payload[..]) else { continue; };
                     debug!("ChannelRemove from {}: channel_id={}", peer_addr, ch_remove.channel_id);
 
-                    let hub = hub_client.clone();
-                    tokio::spawn(async move {
-                        hub.notify_channel_remove(ch_remove.channel_id).await;
-                    });
+                    if let Some(sid) = session_id {
+                        if ch_remove.channel_id == 0 {
+                            // Root channel cannot be removed
+                            continue;
+                        }
+                        let has_write = get_perm_cached(&hub_client, &edge_state, sid, ch_remove.channel_id, false).await
+                            & perm::WRITE != 0;
+                        if !has_write {
+                            let pq = mumbleproto::PermissionDenied {
+                                r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                channel_id: Some(ch_remove.channel_id),
+                                ..Default::default()
+                            };
+                            client_sender.send_message(MessageType::PermissionDenied, &pq).await;
+                            continue;
+                        }
+                        let hub = hub_client.clone();
+                        tokio::spawn(async move {
+                            hub.notify_channel_remove(ch_remove.channel_id).await;
+                        });
+                    }
                 }
                 MessageType::BanList if client_state == ClientState::Ready => {
                     // BanList query/update — forward to Hub which enforces permissions
@@ -1974,17 +2023,31 @@ async fn handle_client_connection(
                 }
                 MessageType::UserList if client_state == ClientState::Ready => {
                     let Ok(msg) = mumbleproto::UserList::decode(&frame.payload[..]) else { continue; };
-                    if msg.users.is_empty() {
-                        // Query: send full registered user list from Hub
-                        if let Some(raw) = hub_client.rpc_get_user_list().await {
-                            if let Ok(user_list) = mumbleproto::UserList::decode(raw.as_slice()) {
-                                client_sender.send_message(MessageType::UserList, &user_list).await;
-                            }
+                    if let Some(sid) = session_id {
+                        // Both query and update require REGISTER permission on root channel.
+                        let has_register = get_perm_cached(&hub_client, &edge_state, sid, 0, false).await
+                            & perm::REGISTER != 0;
+                        if !has_register {
+                            let pq = mumbleproto::PermissionDenied {
+                                r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                channel_id: Some(0),
+                                ..Default::default()
+                            };
+                            client_sender.send_message(MessageType::PermissionDenied, &pq).await;
+                            continue;
                         }
-                    } else {
-                        // Update: forward to Hub (Hub enforces permissions server-side)
-                        use prost::Message as _;
-                        hub_client.rpc_update_user_list(&msg.encode_to_vec()).await;
+                        if msg.users.is_empty() {
+                            // Query: send full registered user list from Hub
+                            if let Some(raw) = hub_client.rpc_get_user_list().await {
+                                if let Ok(user_list) = mumbleproto::UserList::decode(raw.as_slice()) {
+                                    client_sender.send_message(MessageType::UserList, &user_list).await;
+                                }
+                            }
+                        } else {
+                            // Update: forward to Hub (Hub enforces permissions server-side)
+                            use prost::Message as _;
+                            hub_client.rpc_update_user_list(&msg.encode_to_vec()).await;
+                        }
                     }
                 }
                 MessageType::CodecVersion if client_state == ClientState::Ready => {
@@ -2307,7 +2370,23 @@ async fn handle_user_state_update(
 
         // Texture / comment blob updates (upload to Hub and broadcast hash to peers)
         if let Some(texture_data) = &user_state.texture {
-            if !texture_data.is_empty() {
+            // Enforce image_message_length limit on texture uploads
+            let image_limit = edge_state.hub_limits.read().await
+                .as_ref()
+                .and_then(|l| l.image_message_length)
+                .unwrap_or(0);
+            if image_limit > 0 && texture_data.len() as u32 > image_limit {
+                warn!("Session {} texture too large ({} > {} bytes), rejecting",
+                      session_id, texture_data.len(), image_limit);
+                if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(mumbleproto::permission_denied::DenyType::TextTooLong as i32),
+                        reason: Some(format!("Texture too large: {} > {} bytes", texture_data.len(), image_limit)),
+                        ..Default::default()
+                    };
+                    sender.send_message(MessageType::PermissionDenied, &pq).await;
+                }
+            } else if !texture_data.is_empty() {
                 let uid = client.user_id;
                 let data = texture_data.clone();
                 if let Some(hash_hex) = hub_client.blob_set_user_texture(uid, data).await {
@@ -2329,6 +2408,23 @@ async fn handle_user_state_update(
             }
         }
         if let Some(comment) = &user_state.comment {
+            // Enforce image_message_length limit on comment uploads (same limit as Murmur)
+            let image_limit = edge_state.hub_limits.read().await
+                .as_ref()
+                .and_then(|l| l.image_message_length)
+                .unwrap_or(0);
+            if image_limit > 0 && comment.len() as u32 > image_limit {
+                warn!("Session {} comment too large ({} > {} bytes), rejecting",
+                      session_id, comment.len(), image_limit);
+                if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(mumbleproto::permission_denied::DenyType::TextTooLong as i32),
+                        reason: Some(format!("Comment too large: {} > {} bytes", comment.len(), image_limit)),
+                        ..Default::default()
+                    };
+                    sender.send_message(MessageType::PermissionDenied, &pq).await;
+                }
+            } else {
             let uid = client.user_id;
             let data = comment.as_bytes().to_vec();
             let data_len = data.len();
@@ -2362,6 +2458,7 @@ async fn handle_user_state_update(
                 edge_state.client_manager.broadcast(MessageType::UserState, &inline_msg, None).await;
                 hub_client.blob_set_user_comment(uid, data).await;
             }
+            } // end of else (size limit check)
         }
 
         if needs_broadcast {
@@ -2477,14 +2574,29 @@ async fn handle_admin_user_state_update(
     if let Some(mut client) = edge_state.client_manager.get_client(target_session).await {
         let mut needs_broadcast = false;
 
-        // Admin mute/deaf
-        if let Some(mute) = user_state.mute {
-            client.mute = mute;
-            needs_broadcast = true;
-        }
-        if let Some(deaf) = user_state.deaf {
-            client.deaf = deaf;
-            needs_broadcast = true;
+        // Admin mute/deaf — requires MuteDeafen permission on the victim's channel
+        if user_state.mute.is_some() || user_state.deaf.is_some() {
+            let has_mute_deafen = get_perm_cached(&hub_client, &edge_state, actor_session, client.channel_id, false).await
+                & perm::MUTE_DEAFEN != 0;
+            if !has_mute_deafen {
+                if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                        channel_id: Some(client.channel_id),
+                        ..Default::default()
+                    };
+                    sender.send_message(MessageType::PermissionDenied, &pq).await;
+                }
+                return;
+            }
+            if let Some(mute) = user_state.mute {
+                client.mute = mute;
+                needs_broadcast = true;
+            }
+            if let Some(deaf) = user_state.deaf {
+                client.deaf = deaf;
+                needs_broadcast = true;
+            }
         }
 
         // Admin channel move (drag user to another channel)
@@ -3086,6 +3198,9 @@ mod tests {
     async fn test_admin_mute_and_unmute_broadcast_false() {
         let (es, hub) = test_edge_and_hub();
 
+        // Grant admin (session 1) MUTE_DEAFEN permission on channel 0.
+        es.permission_cache.insert((1, 0), perm::MUTE_DEAFEN);
+
         let (tx_admin, mut rx_admin) = mpsc::channel::<Vec<u8>>(16);
         let (tx_target, mut rx_target) = mpsc::channel::<Vec<u8>>(16);
         es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_admin)).await;
@@ -3355,6 +3470,9 @@ mod tests {
     #[tokio::test]
     async fn test_admin_mute_without_move_succeeds_when_hub_unreachable() {
         let (es, hub) = test_edge_and_hub();
+
+        // Grant admin (session 1) MUTE_DEAFEN permission on channel 0.
+        es.permission_cache.insert((1, 0), perm::MUTE_DEAFEN);
 
         let (tx_admin, mut rx_admin) = mpsc::channel::<Vec<u8>>(16);
         let (tx_victim, mut rx_victim) = mpsc::channel::<Vec<u8>>(16);
