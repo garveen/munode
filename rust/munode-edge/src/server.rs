@@ -3903,17 +3903,41 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                                             channel_sessions.insert(s);
                                         }
                                     }
-                                    // Deliver to matching local sessions only, preserving the
-                                    // original Mumble header byte (voice_target_id in low 5 bits).
+                                    // Build separate TCP frames per Mumble AudioContext,
+                                    // mirroring murmur's processMsg() per-receiver context:
+                                    //   WHISPER (2) for direct session targets
+                                    //   SHOUT   (1) for channel-expanded targets
+                                    let make_frame_ctx = |ctx: u8| {
+                                        let mut pkt = voice_packet.clone();
+                                        pkt[0] = (pkt[0] & 0xe0) | (ctx & 0x1f);
+                                        let mut buf = bytes::BytesMut::with_capacity(6 + pkt.len());
+                                        bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
+                                        bytes::BufMut::put_u32(&mut buf, pkt.len() as u32);
+                                        bytes::BufMut::put_slice(&mut buf, &pkt);
+                                        buf.freeze()
+                                    };
+                                    let frame_whisper = make_frame_ctx(2);
+                                    let frame_shout   = make_frame_ctx(1);
                                     let mut delivered = 0usize;
-                                    for &target_session in direct_sessions.iter().chain(channel_sessions.iter()) {
+                                    for &target_session in &direct_sessions {
                                         let slot = crate::hot_slot::get_hot_slot(target_session);
                                         if !slot.is_active_for(target_session) { continue; }
                                         if slot.deaf.load(std::sync::atomic::Ordering::Relaxed)
                                             || slot.self_deaf.load(std::sync::atomic::Ordering::Relaxed) { continue; }
                                         let sender_guard = slot.sender.load();
                                         if let Some(sender) = &**sender_guard {
-                                            sender.try_send(frame.clone()).ok();
+                                            sender.try_send(frame_whisper.clone()).ok();
+                                            delivered += 1;
+                                        }
+                                    }
+                                    for &target_session in &channel_sessions {
+                                        let slot = crate::hot_slot::get_hot_slot(target_session);
+                                        if !slot.is_active_for(target_session) { continue; }
+                                        if slot.deaf.load(std::sync::atomic::Ordering::Relaxed)
+                                            || slot.self_deaf.load(std::sync::atomic::Ordering::Relaxed) { continue; }
+                                        let sender_guard = slot.sender.load();
+                                        if let Some(sender) = &**sender_guard {
+                                            sender.try_send(frame_shout.clone()).ok();
                                             delivered += 1;
                                         }
                                     }

@@ -695,24 +695,24 @@ impl UdpServer {
             return; // loopback or no VoiceTarget config
         };
 
-        // Build the server-to-client payload once (session ID injected into header).
-        let forwarded = inject_session_into_voice(plaintext, sender_session);
-
         // --- Local delivery ------------------------------------------------
         if targets.is_whisper {
-            // Direct-session targets and channel-expanded targets use identical
-            // UDP delivery; the WHISPER/SHOUT context distinction only matters
-            // for TCP-tunnelled packets (server.rs).
-            //
-            // Phase A: encrypt all targets into a batch (synchronous, no await).
+            // Build separate payloads for each Mumble AudioContext, mirroring murmur's
+            // processMsg() which sets audioData.targetOrContext per receiver:
+            //   WHISPER (2) for direct session targets
+            //   SHOUT   (1) for channel-expanded targets
+            let forwarded_whisper = inject_session_into_voice(plaintext, sender_session, 2);
+            let forwarded_shout   = inject_session_into_voice(plaintext, sender_session, 1);
+
+            // Phase A-direct: encrypt WHISPER targets (direct_sessions).
             // Each Mumble session has a unique AES-128 key negotiated during TCP auth,
             // so OCB2 ciphertext differs per recipient — one encrypt call per target
             // is unavoidable. We reuse ENC_BUF to avoid per-target Vec allocation.
-            let mut whisper_batch: Vec<(Vec<u8>, SocketAddr)> =
-                Vec::with_capacity(targets.direct_sessions.len() + targets.channel_sessions.len());
-            let mut whisper_no_udp: Vec<u32> = Vec::new();
+            let mut direct_batch: Vec<(Vec<u8>, SocketAddr)> =
+                Vec::with_capacity(targets.direct_sessions.len());
+            let mut direct_no_udp: Vec<u32> = Vec::new();
 
-            for &target in targets.direct_sessions.iter().chain(targets.channel_sessions.iter()) {
+            for &target in &targets.direct_sessions {
                 let slot = get_hot_slot(target);
                 let addr_opt = self.session_to_addr.get(&target).map(|r| *r.value());
                 if let Some(addr) = addr_opt {
@@ -723,7 +723,7 @@ impl UdpServer {
                             let mut buf = cell.borrow_mut();
                             buf.clear();
                             match cs_arc.lock() {
-                                Ok(mut cs) => { cs.encrypt(&forwarded, &mut buf); }
+                                Ok(mut cs) => { cs.encrypt(&forwarded_whisper, &mut buf); }
                                 Err(e) => {
                                     warn!("CryptState poisoned session {} — dropped: {}", target, e);
                                 }
@@ -731,30 +731,75 @@ impl UdpServer {
                             buf.clone()
                         });
                         if !encrypted.is_empty() {
-                            whisper_batch.push((encrypted, addr));
+                            direct_batch.push((encrypted, addr));
                         }
                     }
                 } else {
-                    whisper_no_udp.push(target);
+                    direct_no_udp.push(target);
                 }
             }
 
-            // Phase B: batch send — all whisper targets → 1 sendmmsg syscall.
-            if !whisper_batch.is_empty() {
+            // Phase A-shout: encrypt SHOUT targets (channel_sessions).
+            let mut shout_batch: Vec<(Vec<u8>, SocketAddr)> =
+                Vec::with_capacity(targets.channel_sessions.len());
+            let mut shout_no_udp: Vec<u32> = Vec::new();
+
+            for &target in &targets.channel_sessions {
+                let slot = get_hot_slot(target);
+                let addr_opt = self.session_to_addr.get(&target).map(|r| *r.value());
+                if let Some(addr) = addr_opt {
+                    let cs_opt: Option<Arc<std::sync::Mutex<crate::crypto::CryptState>>> =
+                        (**slot.crypt_state.load()).clone();
+                    if let Some(cs_arc) = cs_opt {
+                        let encrypted = ENC_BUF.with(|cell| {
+                            let mut buf = cell.borrow_mut();
+                            buf.clear();
+                            match cs_arc.lock() {
+                                Ok(mut cs) => { cs.encrypt(&forwarded_shout, &mut buf); }
+                                Err(e) => {
+                                    warn!("CryptState poisoned session {} — dropped: {}", target, e);
+                                }
+                            }
+                            buf.clone()
+                        });
+                        if !encrypted.is_empty() {
+                            shout_batch.push((encrypted, addr));
+                        }
+                    }
+                } else {
+                    shout_no_udp.push(target);
+                }
+            }
+
+            // Phase B: batch send — WHISPER targets → 1 sendmmsg syscall.
+            if !direct_batch.is_empty() {
                 #[cfg(target_os = "linux")]
-                { batch_sendmmsg(self.socket.as_raw_fd(), &whisper_batch); }
+                { batch_sendmmsg(self.socket.as_raw_fd(), &direct_batch); }
                 #[cfg(not(target_os = "linux"))]
-                { batch_sendmmsg_fallback_seq(&self.socket, &whisper_batch); }
+                { batch_sendmmsg_fallback_seq(&self.socket, &direct_batch); }
+            }
+
+            // Phase B: batch send — SHOUT targets → 1 sendmmsg syscall.
+            if !shout_batch.is_empty() {
+                #[cfg(target_os = "linux")]
+                { batch_sendmmsg(self.socket.as_raw_fd(), &shout_batch); }
+                #[cfg(not(target_os = "linux"))]
+                { batch_sendmmsg_fallback_seq(&self.socket, &shout_batch); }
             }
 
             // Phase C: TCP fallbacks.
-            for target in whisper_no_udp {
-                self.fallback_to_tcp(target, &forwarded).await;
+            for target in direct_no_udp {
+                self.fallback_to_tcp(target, &forwarded_whisper).await;
+            }
+            for target in shout_no_udp {
+                self.fallback_to_tcp(target, &forwarded_shout).await;
             }
         } else {
             // Normal broadcast: local_sessions already deaf-filtered by compute_voice_targets.
             trace!("route_voice: {} local targets", targets.local_sessions.len());
             // Phase A: encrypt all targets into a batch (synchronous, no await).
+            // context=0 → NORMAL speech (PTT), matching murmur's AudioContext::NORMAL.
+            let forwarded = inject_session_into_voice(plaintext, sender_session, 0);
             let mut client_batch: Vec<(Vec<u8>, SocketAddr)> =
                 Vec::with_capacity(targets.local_sessions.len());
             let mut no_udp_targets: Vec<u32> = Vec::new();
@@ -818,9 +863,9 @@ impl UdpServer {
             }
         }
 
-        // relay_payload preserves the original header (voice_target_id in low 5 bits)
-        // for whisper, or has context=0 for broadcast — same bytes as `forwarded`.
-        let relay_payload = forwarded;
+        // relay_payload preserves the original voice_target_id in low 5 bits so remote edges
+        // can look up their own VoiceTarget config and apply correct AudioContext per recipient.
+        let relay_payload = inject_session_into_voice(plaintext, sender_session, voice_target as u8);
         let by_edge: std::collections::HashMap<u32, bool> =
             targets.relay_edge_ids.iter().map(|&e| (e, true)).collect();
 
@@ -1288,8 +1333,9 @@ impl UdpServer {
     async fn deliver_voice_locally(&self, sender_session: u32, voice_data: &[u8]) {
         trace!("deliver_voice_locally: session={}, {} bytes", sender_session, voice_data.len());
         // Build server-to-client format: [header][session_varint][seq][audio]
-        // The voice_target_id in the header low-5 bits is preserved by inject_session_into_voice.
-        let voice_packet = inject_session_into_voice(voice_data, sender_session);
+        // Preserve the original voice_target_id in low-5 bits so the RelayedVoice handler
+        // in server.rs can route by target and set the correct AudioContext per recipient.
+        let voice_packet = inject_session_into_voice(voice_data, sender_session, voice_data.first().copied().unwrap_or(0) & 0x1f);
         if !voice_packet.is_empty() {
             self.edge_state.emit(crate::state::EdgeEvent::RelayedVoice { voice_packet: voice_packet.into() });
         }
@@ -1617,14 +1663,19 @@ pub(crate) fn write_mumble_varint(value: u32, dst: &mut Vec<u8>) {
 /// Client-to-server format: [header(1B)][sequence_varint][audio_data]
 /// Server-to-client format: [header(1B)][sender_session_varint][sequence_varint][audio_data]
 ///
+/// `context` overwrites the lower 5 bits of the header byte:
+///   0 = normal speech (PTT), 1 = SHOUT (channel whisper target), 2 = WHISPER (direct target)
+/// Pass `payload[0] & 0x1f` to preserve the original bits (e.g., for relay paths).
+///
 /// Returns a `bytes::Bytes` so all callers can share the same underlying allocation
 /// without copying — relay paths clone in O(1).
-fn inject_session_into_voice(payload: &[u8], sender_session: u32) -> bytes::Bytes {
+fn inject_session_into_voice(payload: &[u8], sender_session: u32, context: u8) -> bytes::Bytes {
     use bytes::BytesMut;
     if payload.is_empty() {
         return bytes::Bytes::new();
     }
-    let header = payload[0];
+    // Preserve codec type (high 3 bits), overwrite target/context (low 5 bits).
+    let header = (payload[0] & 0xe0) | (context & 0x1f);
     // Worst-case varint length is 5 bytes; over-allocate to avoid realloc.
     let mut result = BytesMut::with_capacity(1 + 5 + payload.len() - 1);
     result.extend_from_slice(&[header]);
