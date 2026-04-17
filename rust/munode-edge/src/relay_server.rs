@@ -441,11 +441,12 @@ pub async fn connect_peer_voice_tcp(
     // Create the pool up-front and publish it so callers (udp.rs) can send
     // immediately once any slot connects.
     let pool = Arc::new(crate::state::PeerVoiceTcpPool::new(pool_size));
-    edge_state
-        .voice_tcp_conns
-        .write()
-        .await
-        .insert(peer_edge_id, pool.clone());
+    {
+        let current = edge_state.voice_tcp_conns.load_full();
+        let mut new_conns = (*current).clone();
+        new_conns.insert(peer_edge_id, pool.clone());
+        edge_state.voice_tcp_conns.store(Arc::new(new_conns));
+    }
 
     // Spawn N independent slot tasks.
     let mut slot_handles = Vec::with_capacity(pool_size);
@@ -477,7 +478,12 @@ pub async fn connect_peer_voice_tcp(
 
     // Final cleanup — no-ops if peerLeft already removed us, but safe to call twice.
     edge_state.voice_tcp_peers.write().await.remove(&peer_edge_id);
-    edge_state.voice_tcp_conns.write().await.remove(&peer_edge_id);
+    {
+        let current = edge_state.voice_tcp_conns.load_full();
+        let mut new_conns = (*current).clone();
+        new_conns.remove(&peer_edge_id);
+        edge_state.voice_tcp_conns.store(Arc::new(new_conns));
+    }
     info!("Voice TCP pool for peer edge {} stopped", peer_edge_id);
 }
 
@@ -694,12 +700,9 @@ fn make_relayed_voice_packet(plaintext: &[u8], sender_session: u32) -> Vec<u8> {
         return Vec::new();
     }
     let header = plaintext[0];
-    // Reuse the shared varint encoder from udp.rs to avoid duplicating the
-    // implementation and risking divergence.
-    let session_bytes = crate::udp::encode_mumble_varint(sender_session);
-    let mut pkt = Vec::with_capacity(1 + session_bytes.len() + plaintext.len() - 1);
+    let mut pkt = Vec::with_capacity(1 + 5 + plaintext.len() - 1);
     pkt.push(header);
-    pkt.extend_from_slice(&session_bytes);
+    crate::udp::write_mumble_varint(sender_session, &mut pkt);
     pkt.extend_from_slice(&plaintext[1..]);
     pkt
 }

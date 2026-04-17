@@ -28,16 +28,16 @@ pub enum ClientState {
 /// A handle for sending messages to a client's TLS connection.
 #[derive(Clone)]
 pub struct ClientSender {
-    tx: mpsc::Sender<Vec<u8>>,
+    tx: mpsc::Sender<bytes::Bytes>,
 }
 
 impl ClientSender {
-    pub fn new(tx: mpsc::Sender<Vec<u8>>) -> Self {
+    pub fn new(tx: mpsc::Sender<bytes::Bytes>) -> Self {
         Self { tx }
     }
 
     /// Send raw bytes to the client.
-    pub async fn send_raw(&self, data: Vec<u8>) -> bool {
+    pub async fn send_raw(&self, data: bytes::Bytes) -> bool {
         self.tx.send(data).await.is_ok()
     }
 
@@ -47,12 +47,12 @@ impl ClientSender {
     /// Use this for broadcast operations where skipping a single slow client is
     /// preferable to blocking the caller's read loop — which would prevent it from
     /// responding to TCP Ping messages and cause Mumble's ping-timeout to fire.
-    pub fn try_send_raw(&self, data: Vec<u8>) -> bool {
+    pub fn try_send_raw(&self, data: bytes::Bytes) -> bool {
         self.tx.try_send(data).is_ok()
     }
 
     /// Clone the inner `mpsc::Sender` for storage in a [`crate::hot_slot::HotSlot`].
-    pub fn clone_sender(&self) -> mpsc::Sender<Vec<u8>> {
+    pub fn clone_sender(&self) -> mpsc::Sender<bytes::Bytes> {
         self.tx.clone()
     }
 
@@ -60,7 +60,7 @@ impl ClientSender {
     pub async fn send_message<M: Message>(&self, msg_type: MessageType, message: &M) -> bool {
         let mut buf = BytesMut::new();
         encode_message(msg_type, message, &mut buf);
-        self.send_raw(buf.to_vec()).await
+        self.send_raw(buf.freeze()).await
     }
 }
 
@@ -237,6 +237,12 @@ impl ClientManager {
 
         let initial_ready = client.state == ClientState::Ready;
         let ready_flag = Arc::new(AtomicBool::new(initial_ready));
+        // Capture groups before `client` is moved into SessionEntry.
+        let client_groups: Arc<Vec<String>> = Arc::new(client.groups.clone());
+
+        // Create bandwidth record before the write lock so we can share the Arc
+        // with HotSlot without holding sessions.write().
+        let bw_arc = Arc::new(Mutex::new(BandwidthRecord::new(0)));
 
         // Insert session entry — one write lock for all per-session state.
         {
@@ -244,7 +250,7 @@ impl ClientManager {
             sess.insert(session, SessionEntry {
                 info: client,
                 crypt_state: None,
-                bandwidth: Arc::new(Mutex::new(BandwidthRecord::new(0))),
+                bandwidth: Arc::clone(&bw_arc),
                 close_signal: None,
                 ping_stats: Arc::new(std::sync::Mutex::new(PingStats::default())),
                 ready: ready_flag.clone(),
@@ -256,8 +262,10 @@ impl ClientManager {
             .insert(session, (sender.clone(), ready_flag));
 
         // Register in HotSlot for lock-free voice-routing reads.
+        // bandwidth is stored before active=true so the hot path always finds it.
         crate::hot_slot::get_hot_slot(session).register(
-            session, channel_id, deaf, self_deaf, suppress, sender.clone_sender(),
+            session, channel_id, deaf, self_deaf, suppress, sender.clone_sender(), bw_arc,
+            client_groups,
         );
 
         // Register in channel membership index.
@@ -287,6 +295,7 @@ impl ClientManager {
         let new_self_deaf = client.self_deaf;
         let new_suppress = client.suppress;
         let new_channel_id = client.channel_id;
+        let client_groups = Arc::new(client.groups.clone());
         let old_listening = {
             let mut sess = self.sessions.write().await;
             let old = sess
@@ -307,6 +316,7 @@ impl ClientManager {
                 slot.self_deaf.store(new_self_deaf, std::sync::atomic::Ordering::Relaxed);
                 slot.suppress.store(new_suppress, std::sync::atomic::Ordering::Relaxed);
                 slot.channel_id.store(new_channel_id, std::sync::atomic::Ordering::Relaxed);
+                slot.groups.store(client_groups);
             }
         }
 
@@ -906,7 +916,7 @@ impl ClientManager {
     pub async fn broadcast<M: Message>(&self, msg_type: MessageType, message: &M, exclude_session: Option<u32>) {
         let mut buf = BytesMut::new();
         encode_message(msg_type, message, &mut buf);
-        let data = buf.to_vec();
+        let data = buf.freeze();
 
         // Sync read lock — acquired and released synchronously, no await.
         // ready.load(Relaxed) is an atomic read; no additional lock needed.
@@ -936,7 +946,7 @@ impl ClientManager {
     ) {
         let mut buf = BytesMut::new();
         encode_message(msg_type, message, &mut buf);
-        let data = buf.to_vec();
+        let data = buf.freeze();
 
         let member_ids = self.get_channel_sessions(channel_id).await;
 
@@ -967,7 +977,7 @@ impl ClientManager {
         let sender = self.sender_registry.read().unwrap()
             .get(&session).map(|(s, _)| s.clone());
         if let Some(s) = sender {
-            s.send_raw(buf.to_vec()).await
+            s.send_raw(buf.freeze()).await
         } else {
             false
         }
@@ -1023,7 +1033,7 @@ impl ClientManager {
         };
         let mut buf = BytesMut::new();
         encode_message(MessageType::Reject, &reject, &mut buf);
-        let data = buf.to_vec();
+        let data = buf.freeze();
 
         // Drain sender_registry synchronously (sync write lock, no await).
         // We send to these handles after releasing all locks.

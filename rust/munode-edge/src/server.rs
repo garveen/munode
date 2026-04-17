@@ -520,7 +520,7 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
             client_sender.send_raw(handler::encode_reject(
                 Some(mumbleproto::reject::RejectType::ServerFull as i32),
                 "Server is full (session pool exhausted)",
-            )).await;
+            ).into()).await;
             return None;
         }
     };
@@ -551,7 +551,7 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
             client_sender.send_raw(handler::encode_reject(
                 Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
                 "Authentication failed",
-            )).await;
+            ).into()).await;
             return None;
         }
     };
@@ -573,7 +573,7 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
                     Some(mumbleproto::reject::RejectType::NoCertificate as i32)
                 } else { None }),
             &reason,
-        )).await;
+        ).into()).await;
         return None;
     }
 
@@ -723,6 +723,8 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
         &user_join_msg,
         Some(sid),
     ).await;
+    // Invalidate BroadcastCaches: a new user joined, routing targets changed.
+    edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
 
     // Restore persisted channel listeners for registered users.
     let user_id = client.user_id;
@@ -782,7 +784,7 @@ async fn handle_client_connection(
     let (mut reader, mut writer) = tokio::io::split(tls_stream);
 
     // Create per-client message sender channel
-    let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(256);
+    let (send_tx, mut send_rx) = mpsc::channel::<bytes::Bytes>(256);
     let client_sender = ClientSender::new(send_tx);
 
     // Writer task: forwards messages from send_rx to TLS socket.
@@ -812,7 +814,7 @@ async fn handle_client_connection(
                 }
             } else {
                 let iov: Vec<std::io::IoSlice<'_>> =
-                    pending.iter().map(|d| std::io::IoSlice::new(d)).collect();
+                    pending.iter().map(|d| std::io::IoSlice::new(d.as_ref())).collect();
                 if let Err(e) = writer.write_vectored(&iov).await {
                     debug!("Write error to client: {}", e);
                     break;
@@ -1056,7 +1058,7 @@ async fn handle_client_connection(
                     let Ok(response) = handler::encode_version_response(&frame.payload, &peer_addr.to_string()) else {
                         continue;
                     };
-                    client_sender.send_raw(response).await;
+                    client_sender.send_raw(response.into()).await;
                 }
                 // Pre-connect UserState: client sends self_deaf/self_mute before Authenticate
                 MessageType::UserState if client_state == ClientState::Connected => {
@@ -1083,7 +1085,7 @@ async fn handle_client_connection(
                         client_sender.send_raw(handler::encode_reject(
                             Some(mumbleproto::reject::RejectType::AuthenticatorFail as i32),
                             "Server not ready, please try again later",
-                        )).await;
+                        ).into()).await;
                         // Drop sender so the writer task drains and flushes before exiting
                         drop(client_sender);
                         writer_handle.await.ok();
@@ -1106,7 +1108,7 @@ async fn handle_client_connection(
                                 client_sender.send_raw(handler::encode_reject(
                                     Some(mumbleproto::reject::RejectType::ServerFull as i32),
                                     &format!("Server is full ({}/{})", local_count, max_users),
-                                )).await;
+                                ).into()).await;
                                 drop(client_sender);
                                 writer_handle.await.ok();
                                 return Ok(());
@@ -1334,11 +1336,11 @@ async fn handle_client_connection(
                             } else if voice_target == 31 {
                                 // Loopback: send back to the sender (inject session ID per protocol)
                                 let forwarded = inject_session_into_voice(&frame.payload, sid, 0);
-                                let mut buf = BytesMut::new();
+                                let mut buf = BytesMut::with_capacity(6 + forwarded.len());
                                 bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
                                 bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
                                 bytes::BufMut::put_slice(&mut buf, &forwarded);
-                                let data = buf.to_vec();
+                                let data = buf.freeze();
                                 if let Some(sender_tx) = edge_state.client_manager.get_sender(sid).await {
                                     sender_tx.send_raw(data).await;
                                 }
@@ -1353,11 +1355,11 @@ async fn handle_client_connection(
                                     //   SHOUT   (context=1) for channel-expanded targets
                                     let mk_frame = |ctx: u8| {
                                         let f = inject_session_into_voice(&frame.payload, sid, ctx);
-                                        let mut buf = BytesMut::new();
+                                        let mut buf = BytesMut::with_capacity(6 + f.len());
                                         bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
                                         bytes::BufMut::put_u32(&mut buf, f.len() as u32);
                                         bytes::BufMut::put_slice(&mut buf, &f);
-                                        std::sync::Arc::new(buf.to_vec())
+                                        buf.freeze()
                                     };
                                     let data_whisper = mk_frame(2);
                                     let data_shout   = mk_frame(1);
@@ -1366,7 +1368,9 @@ async fn handle_client_connection(
                                         if !slot.is_active_for(target_session) { continue; }
                                         let sender_guard = slot.sender.load();
                                         if let Some(sender) = &**sender_guard {
-                                            sender.try_send((*data_whisper).clone()).ok();
+                                            if sender.try_send(data_whisper.clone()).is_err() {
+                                                warn!("TCP whisper drop session {} (channel full)", target_session);
+                                            }
                                         }
                                     }
                                     for &target_session in &targets.channel_sessions {
@@ -1374,23 +1378,27 @@ async fn handle_client_connection(
                                         if !slot.is_active_for(target_session) { continue; }
                                         let sender_guard = slot.sender.load();
                                         if let Some(sender) = &**sender_guard {
-                                            sender.try_send((*data_shout).clone()).ok();
+                                            if sender.try_send(data_shout.clone()).is_err() {
+                                                warn!("TCP shout drop session {} (channel full)", target_session);
+                                            }
                                         }
                                     }
                                 } else {
                                     // Normal broadcast: build single UdpTunnel frame (context=0)
                                     let forwarded = inject_session_into_voice(&frame.payload, sid, 0);
-                                    let mut buf = BytesMut::new();
+                                    let mut buf = BytesMut::with_capacity(6 + forwarded.len());
                                     bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
                                     bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
                                     bytes::BufMut::put_slice(&mut buf, &forwarded);
-                                    let data = std::sync::Arc::new(buf.to_vec());
+                                    let data = buf.freeze();
                                     for &target_session in &targets.local_sessions {
                                         let slot = crate::hot_slot::get_hot_slot(target_session);
                                         if !slot.is_active_for(target_session) { continue; }
                                         let sender_guard = slot.sender.load();
                                         if let Some(sender) = &**sender_guard {
-                                            sender.try_send((*data).clone()).ok();
+                                            if sender.try_send(data.clone()).is_err() {
+                                                warn!("TCP broadcast drop session {} (channel full)", target_session);
+                                            }
                                         }
                                     }
                                 }
@@ -1398,13 +1406,19 @@ async fn handle_client_connection(
                                 // Relay to remote edges via Hub TCP fallback.
                                 // The relay payload preserves the original voice_target_id so
                                 // each receiving edge applies its own VoiceTarget config.
+                                // Spawned as an independent task so the TCP read loop continues
+                                // processing (Ping, UserState, etc.) without waiting for Hub RPC.
                                 if !targets.relay_edge_ids.is_empty() && edge_state.enable_hub_tcp_fallback {
-                                    let relay_payload = inject_session_into_voice(
+                                    let relay_payload: bytes::Bytes = inject_session_into_voice(
                                         &frame.payload, sid, voice_target as u8,
-                                    );
-                                    for &target_edge_id in &targets.relay_edge_ids {
-                                        hub_client.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
-                                    }
+                                    ).into();
+                                    let hub_relay = Arc::clone(&hub_client);
+                                    let relay_ids = targets.relay_edge_ids.clone();
+                                    tokio::spawn(async move {
+                                        for target_edge_id in relay_ids {
+                                            hub_relay.relay_voice_via_hub(target_edge_id, relay_payload.clone()).await;
+                                        }
+                                    });
                                 }
                             }
                         }
@@ -2103,6 +2117,8 @@ async fn handle_client_connection(
         }
 
         edge_state.client_manager.remove_client(sid).await;
+        // Invalidate BroadcastCaches: a user left, routing targets changed.
+        edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
         // Free the session ID back to the local pool
         edge_state.free_session_id(sid).await;
         // Clean up voice target cache for this session
@@ -2518,6 +2534,8 @@ async fn handle_user_state_update(
             }
 
             edge_state.client_manager.broadcast(MessageType::UserState, &broadcast_msg, None).await;
+            // Invalidate BroadcastCaches: channel/deaf/listener state changed.
+            edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
 
             // Notify Hub of the CHANGED fields only so that other edges stay in
             // sync.  Previously we sent the full current state on every update
@@ -2672,6 +2690,8 @@ async fn handle_admin_user_state_update(
             if let Some(v) = user_state.mute  { broadcast_msg.mute  = Some(v); }
             if let Some(v) = user_state.deaf  { broadcast_msg.deaf  = Some(v); }
             edge_state.client_manager.broadcast(MessageType::UserState, &broadcast_msg, None).await;
+            // Invalidate BroadcastCaches: admin changed channel/deaf state.
+            edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
             if channel_moved {
                 hub_client.notify_user_moved(target_session, client.channel_id, actor_session).await;
             } else {
@@ -2824,20 +2844,6 @@ fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
     bytes
 }
 
-/// Encode a u32 as a Mumble varint (NOT protobuf varint).
-/// Mumble varint format: 0x00-0x7F = 1 byte, 0x80-0x3FFF = 2 bytes (10xxxxxx), etc.
-fn encode_mumble_varint(value: u32) -> Vec<u8> {
-    if value < 0x80 {
-        vec![value as u8]
-    } else if value < 0x4000 {
-        vec![((value >> 8) | 0x80) as u8, (value & 0xFF) as u8]
-    } else if value < 0x200000 {
-        vec![((value >> 16) | 0xC0) as u8, ((value >> 8) & 0xFF) as u8, (value & 0xFF) as u8]
-    } else {
-        vec![0xF0, ((value >> 24) & 0xFF) as u8, ((value >> 16) & 0xFF) as u8, ((value >> 8) & 0xFF) as u8, (value & 0xFF) as u8]
-    }
-}
-
 /// Decode a Mumble varint from a byte slice.
 /// Returns (value, bytes_consumed) or None if insufficient data.
 fn decode_mumble_varint(data: &[u8]) -> Option<(u32, usize)> {
@@ -2919,10 +2925,9 @@ fn inject_session_into_voice(payload: &[u8], sender_session: u32, context: u8) -
     }
     // Preserve codec type (high 3 bits), overwrite target/context (low 5 bits)
     let header = (payload[0] & 0xe0) | (context & 0x1f);
-    let session_varint = encode_mumble_varint(sender_session);
-    let mut result = Vec::with_capacity(1 + session_varint.len() + payload.len() - 1);
+    let mut result = Vec::with_capacity(1 + 5 + payload.len() - 1);
     result.push(header);
-    result.extend_from_slice(&session_varint);
+    crate::udp::write_mumble_varint(sender_session, &mut result);
     result.extend_from_slice(&payload[1..]);
     result
 }
@@ -3819,11 +3824,11 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
 
                         // Build TCP UdpTunnel frame (voice_packet is already correctly formatted)
                         let frame = {
-                            let mut buf = bytes::BytesMut::new();
+                            let mut buf = bytes::BytesMut::with_capacity(6 + voice_packet.len());
                             bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
                             bytes::BufMut::put_u32(&mut buf, voice_packet.len() as u32);
                             bytes::BufMut::put_slice(&mut buf, &voice_packet);
-                            buf.to_vec()
+                            buf.freeze()
                         };
 
                         match voice_target {

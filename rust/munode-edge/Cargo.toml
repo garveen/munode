@@ -38,3 +38,6 @@ hex = { workspace = true }
 flate2 = { workspace = true }
 arc-swap = { workspace = true }
 dashmap = { workspace = true }
+nix = { workspace = true }
+smallvec = { workspace = true }
+async-channel = { workspace = true }

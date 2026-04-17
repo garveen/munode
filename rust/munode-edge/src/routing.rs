@@ -7,6 +7,9 @@
 //! mpsc sends (TCP path) — remain in the respective modules.
 
 use std::collections::HashSet;
+use std::sync::{atomic::Ordering, Arc};
+use smallvec::SmallVec;
+use crate::hot_slot::{BroadcastCache, get_hot_slot};
 
 /// Which local sessions and remote edges should receive a voice packet.
 ///
@@ -14,15 +17,15 @@ use std::collections::HashSet;
 pub struct VoiceTargets {
     /// Sessions targeted directly (WHISPER context, byte = 2).
     /// Populated only in whisper mode.
-    pub direct_sessions: Vec<u32>,
+    pub direct_sessions: SmallVec<[u32; 8]>,
     /// Sessions targeted via channel expansion (SHOUT context, byte = 1).
     /// Populated only in whisper mode.
-    pub channel_sessions: Vec<u32>,
+    pub channel_sessions: SmallVec<[u32; 16]>,
     /// Sessions targeted in normal broadcast mode (context byte = 0).
     /// Populated only in broadcast mode.
-    pub local_sessions: Vec<u32>,
+    pub local_sessions: SmallVec<[u32; 32]>,
     /// Remote edge IDs that need a relay copy of this packet.
-    pub relay_edge_ids: Vec<u32>,
+    pub relay_edge_ids: SmallVec<[u32; 8]>,
     /// `true` = whisper/shout targeting; `false` = normal broadcast.
     pub is_whisper: bool,
 }
@@ -84,7 +87,7 @@ pub async fn compute_voice_targets(
         let direct_set: HashSet<u32> = vt.sessions.iter().copied().collect();
 
         // Deaf-filter direct session targets.
-        let direct_sessions: Vec<u32> = direct_set
+        let direct_sessions: SmallVec<[u32; 8]> = direct_set
             .iter()
             .filter(|&&t| {
                 if t == sender_session {
@@ -105,7 +108,7 @@ pub async fn compute_voice_targets(
             .collect();
 
         // Expand channel targets (with optional group filter) and deaf-filter.
-        let mut channel_sessions: Vec<u32> = Vec::new();
+        let mut channel_sessions: SmallVec<[u32; 16]> = SmallVec::new();
         for (&ch_id, group_filter) in &vt.resolved_channels {
             let ch_members = edge_state.client_manager.get_channel_sessions(ch_id).await;
             for target in ch_members {
@@ -122,12 +125,9 @@ pub async fn compute_voice_targets(
                     continue;
                 }
                 if let Some(groups) = group_filter {
-                    let in_group = edge_state
-                        .client_manager
-                        .get_client(target)
-                        .await
-                        .map(|c| c.groups.iter().any(|g| groups.contains(g)))
-                        .unwrap_or(false);
+                    let slot = crate::hot_slot::get_hot_slot(target);
+                    let grps = slot.groups.load();
+                    let in_group = (**grps).iter().any(|g| groups.contains(g));
                     if !in_group {
                         continue;
                     }
@@ -139,7 +139,7 @@ pub async fn compute_voice_targets(
         // Relay whisper to every remote edge — each receiving edge applies its
         // own local VoiceTarget cache to decide which of its users hears it.
         let all_remote = edge_state.channel_manager.get_all_remote_users().await;
-        let relay_edge_ids: Vec<u32> = {
+        let relay_edge_ids: SmallVec<[u32; 8]> = {
             let mut seen = HashSet::new();
             all_remote
                 .iter()
@@ -151,65 +151,91 @@ pub async fn compute_voice_targets(
         Some(VoiceTargets {
             direct_sessions,
             channel_sessions,
-            local_sessions: vec![],
+            local_sessions: SmallVec::new(),
             relay_edge_ids,
             is_whisper: true,
         })
     } else {
         // ── Normal broadcast (voice_target == 0) ─────────────────────────────
-        let linked_channels: Vec<u32> = edge_state
-            .channel_manager
-            .get_all_linked_channels(sender_channel)
-            .await
-            .into_iter()
-            .collect();
+        let current_version = edge_state.topology_version.load(Ordering::Acquire);
 
-        let target_sessions = edge_state
-            .client_manager
-            .get_channel_session_ids_with_listeners(&linked_channels, sender_session)
-            .await;
+        // Check per-sender BroadcastCache for a version match.
+        let cache_hit: Option<Arc<BroadcastCache>> = {
+            let slot = get_hot_slot(sender_session);
+            if slot.broadcast_cache_version.load(Ordering::Acquire) == current_version {
+                let guard = slot.broadcast_cache.load();
+                (**guard).clone()
+            } else {
+                None
+            }
+        };
 
-        // Deaf-filter.
-        let local_sessions: Vec<u32> = target_sessions
+        let (raw_sessions, relay_edge_ids): (Vec<u32>, SmallVec<[u32; 8]>) = if let Some(ref c) = cache_hit {
+            // Cache hit: zero async calls; local_sessions pre-computed, relay_edge_ids ready.
+            (c.local_sessions.to_vec(), c.relay_edge_ids.clone())
+        } else {
+            // Cache miss: full computation.
+            let linked_channels: Vec<u32> = edge_state
+                .channel_manager
+                .get_all_linked_channels(sender_channel)
+                .await
+                .into_iter()
+                .collect();
+
+            let sessions = edge_state
+                .client_manager
+                .get_channel_session_ids_with_listeners(&linked_channels, sender_session)
+                .await;
+
+            let linked_set: HashSet<u32> = linked_channels.iter().copied().collect();
+            let remote_users = edge_state
+                .channel_manager
+                .get_remote_users_in_channels(&linked_set)
+                .await;
+
+            let relay_ids: SmallVec<[u32; 8]> = {
+                let mut seen = HashSet::new();
+                remote_users
+                    .iter()
+                    .filter(|ru| {
+                        !ru.deaf
+                            && !ru.self_deaf
+                            && ru.edge_id != 0
+                            && ru.edge_id != my_edge_id
+                    })
+                    .filter_map(|ru| seen.insert(ru.edge_id).then_some(ru.edge_id))
+                    .collect()
+            };
+
+            // Atomically write cache before returning.
+            let slot = get_hot_slot(sender_session);
+            slot.broadcast_cache.store(Arc::new(Some(Arc::new(BroadcastCache {
+                local_sessions: SmallVec::from_iter(sessions.iter().copied()),
+                relay_edge_ids: relay_ids.clone(),
+            }))));
+            slot.broadcast_cache_version.store(current_version, Ordering::Release);
+
+            (sessions, relay_ids)
+        };
+
+        // Deaf-filter runs on every packet (HotSlot reads are lock-free atomics).
+        let local_sessions: SmallVec<[u32; 32]> = raw_sessions
             .into_iter()
             .filter(|&t| {
-                let slot = crate::hot_slot::get_hot_slot(t);
+                let slot = get_hot_slot(t);
                 if !slot.is_active_for(t) {
                     return false;
                 }
-                if slot.deaf.load(std::sync::atomic::Ordering::Relaxed)
-                    || slot.self_deaf.load(std::sync::atomic::Ordering::Relaxed)
-                {
+                if slot.deaf.load(Ordering::Relaxed) || slot.self_deaf.load(Ordering::Relaxed) {
                     return false;
                 }
                 true
             })
             .collect();
 
-        // Only relay to edges that have at least one non-deaf user in a linked channel.
-        let linked_set: HashSet<u32> = linked_channels.iter().copied().collect();
-        let remote_users = edge_state
-            .channel_manager
-            .get_remote_users_in_channels(&linked_set)
-            .await;
-
-        let relay_edge_ids: Vec<u32> = {
-            let mut seen = HashSet::new();
-            remote_users
-                .iter()
-                .filter(|ru| {
-                    !ru.deaf
-                        && !ru.self_deaf
-                        && ru.edge_id != 0
-                        && ru.edge_id != my_edge_id
-                })
-                .filter_map(|ru| seen.insert(ru.edge_id).then_some(ru.edge_id))
-                .collect()
-        };
-
         Some(VoiceTargets {
-            direct_sessions: vec![],
-            channel_sessions: vec![],
+            direct_sessions: SmallVec::new(),
+            channel_sessions: SmallVec::new(),
             local_sessions,
             relay_edge_ids,
             is_whisper: false,

@@ -122,6 +122,14 @@ impl<'a> LoginHandler<'a> {
         debug!(session_id, "Step 6: sending self UserState");
         self.send_self_user_state(session_id, auth_result).await?;
 
+        // 6. Send PermissionQuery for target channel + parent, matching Murmur's
+        //    userEnterChannel → sendClientPermission() calls.  This lets the client
+        //    immediately cache its permissions in the joined channel without waiting
+        //    for a client-initiated PermissionQuery round-trip.
+        let target_channel = auth_result.channel_id.unwrap_or(self.config.server.default_channel);
+        debug!(session_id, target_channel, "Step 7: sending PermissionQuery for target channel + parent");
+        self.send_channel_permission_queries(target_channel, &perm_map).await?;
+
         // Collect root-channel permissions for the caller to use in ServerSync.
         let root_permissions = perm_map.get(&0).map(|(p, _)| *p).unwrap_or(0);
 
@@ -195,16 +203,15 @@ impl<'a> LoginHandler<'a> {
         // Pass 1: Send all channels with their basic info
         for ch in channels {
             // Compute description_hash (SHA1) when description is non-empty,
-            // so the client can request the full description via BlobGet if needed.
-            let (description, description_hash) = if let Some(ref desc) = ch.description {
-                if !desc.is_empty() {
+            // so the client can request the full description via RequestBlob if needed.
+            // Both None and empty string are treated as "no description" (matching Murmur's
+            // `if (!c->qsDesc.isEmpty())` guard — empty descriptions are never sent).
+            let (description, description_hash) = match ch.description.as_deref() {
+                Some(desc) if !desc.is_empty() => {
                     let hash = Sha1::digest(desc.as_bytes());
                     (None, Some(hash.to_vec()))
-                } else {
-                    (Some(desc.clone()), None)
                 }
-            } else {
-                (None, None)
+                _ => (None, None),
             };
 
             // Derive can_enter and is_enter_restricted from the pre-fetched data.
@@ -364,6 +371,9 @@ impl<'a> LoginHandler<'a> {
     /// Only includes boolean flags (mute, deaf, suppress, etc.) when they are
     /// explicitly `true`. Sending `false` would trigger spurious client-side
     /// notifications such as "recording ended" or "you were unmuted".
+    ///
+    /// Includes the certificate hash when available, matching Murmur's behaviour
+    /// of including `hash` in the sendAll(mpus) broadcast during msgAuthenticate.
     async fn send_self_user_state(
         &self,
         session_id: u32,
@@ -378,6 +388,9 @@ impl<'a> LoginHandler<'a> {
         // Sending user_id=0 would cause Mumble clients to treat the user as a
         // registered account with id=0 rather than as a guest.
         let user_id = auth_result.user_id.filter(|&id| id > 0);
+        // Include cert hash, matching Murmur's `mpus.set_hash(uSource->qsHash)` in msgAuthenticate.
+        let cert_hash = self.edge_state.client_manager.get_client(session_id).await
+            .and_then(|c| c.cert_hash.clone());
         let msg = mumbleproto::UserState {
             session: Some(session_id),
             actor: Some(session_id),
@@ -391,10 +404,50 @@ impl<'a> LoginHandler<'a> {
             self_deaf: auth_result.self_deaf.filter(|&v| v),
             priority_speaker: auth_result.priority_speaker.filter(|&v| v),
             recording: auth_result.recording.filter(|&v| v),
+            hash: cert_hash,
             ..Default::default()
         };
         self.send(MessageType::UserState, &msg).await?;
         debug!("Sent self UserState for session {}", session_id);
+        Ok(())
+    }
+
+    /// Proactively send PermissionQuery messages for the user's destination channel
+    /// and its immediate parent, matching Murmur's `sendClientPermission` calls
+    /// inside `userEnterChannel` during the login sequence.
+    ///
+    /// This lets the Mumble client immediately cache the effective permissions for
+    /// the joined channel (and its parent) without issuing a client-initiated
+    /// PermissionQuery round-trip after ServerSync.
+    async fn send_channel_permission_queries(
+        &self,
+        target_channel_id: u32,
+        perm_map: &std::collections::HashMap<u32, (u32, bool)>,
+    ) -> Result<()> {
+        // Target channel permissions
+        if let Some((perms, _)) = perm_map.get(&target_channel_id) {
+            let pq = mumbleproto::PermissionQuery {
+                channel_id: Some(target_channel_id),
+                permissions: Some(*perms),
+                flush: Some(false),
+            };
+            self.send(MessageType::PermissionQuery, &pq).await?;
+        }
+
+        // Parent channel permissions (Murmur also sends for c->cParent in userEnterChannel)
+        if let Some(ch) = self.edge_state.channel_manager.get_channel(target_channel_id).await {
+            if let Some(parent_id) = ch.parent_id {
+                if let Some((parent_perms, _)) = perm_map.get(&parent_id) {
+                    let pq = mumbleproto::PermissionQuery {
+                        channel_id: Some(parent_id),
+                        permissions: Some(*parent_perms),
+                        flush: Some(false),
+                    };
+                    self.send(MessageType::PermissionQuery, &pq).await?;
+                }
+            }
+        }
+
         Ok(())
     }
 

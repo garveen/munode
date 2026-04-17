@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
+use arc_swap::ArcSwap;
 use tokio::sync::{broadcast, mpsc, RwLock};
 
 use munode_protocol::hubedge::ServerLimitsConfig;
@@ -295,7 +296,7 @@ pub struct PeerEdgeInfo {
 }
 
 /// Registry of known peer Edges, populated from `hub.peerJoined` notifications.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct PeerRegistry {
     peers: HashMap<u32, PeerEdgeInfo>,
     /// Reverse index: UDP address → edge_id, used for O(1) probe-pong lookup.
@@ -562,9 +563,8 @@ pub struct EdgeState {
     /// writes only occur when the client sends a VoiceTarget message (rare).
     pub voice_targets: RwLock<HashMap<u32, HashMap<u32, VoiceTargetConfig>>>,
     /// Registry of peer Edges and their UDP endpoints for direct voice routing.
-    /// Uses RwLock because reads happen on every cross-edge voice packet and
-    /// writes only occur on peerJoined / peerLeft notifications (rare).
-    pub peer_registry: RwLock<PeerRegistry>,
+    /// Lock-free reads via ArcSwap; writes (peerJoined/peerLeft) use clone-modify-store.
+    pub peer_registry: ArcSwap<PeerRegistry>,
     /// Whether Hub-mediated TCP relay is allowed for cross-Edge voice (last resort).
     pub enable_hub_tcp_fallback: bool,
     /// Number of consecutive send failures before skipping a next-hop.
@@ -600,11 +600,12 @@ pub struct EdgeState {
     /// Used for fast ninja visibility checks without Hub round-trips.
     pub ninja_visible_to: RwLock<HashMap<u32, std::collections::HashSet<u32>>>,
     /// Route table from Hub. Maps target_edge_id → ordered list of route candidates (best first).
-    pub route_table: RwLock<std::collections::HashMap<u32, Vec<RouteCandidate>>>,
+    /// Lock-free reads via ArcSwap; written atomically after full rebuild on routeTableUpdate.
+    pub route_table: ArcSwap<std::collections::HashMap<u32, Vec<RouteCandidate>>>,
     /// Outbound TCP voice connection pools to peer Edges.
     /// Maps peer_edge_id → connection pool (N independent WebSocket connections).
-    /// Populated when we successfully connect to a peer's /voice endpoint on peerJoined.
-    pub voice_tcp_conns: RwLock<HashMap<u32, Arc<PeerVoiceTcpPool>>>,
+    /// Populated on peerJoined; lock-free reads via ArcSwap.
+    pub voice_tcp_conns: ArcSwap<HashMap<u32, Arc<PeerVoiceTcpPool>>>,
     /// Set of peer edge IDs for which a voice TCP connection manager task is running.
     /// Inserting an ID before spawning the task prevents duplicate reconnect tasks.
     /// Removing an ID (on hub.peerLeft) causes the reconnect loop to stop.
@@ -655,6 +656,10 @@ pub struct EdgeState {
     /// (session, channel) pair.  The cache is invalidated on `AclUpdated` events (by channel)
     /// and cleared per-session on disconnect.
     pub permission_cache: dashmap::DashMap<(u32, u32), u32>,
+    /// Monotonically increasing topology version counter.
+    /// Incremented on every client join/leave/channel-move/deaf-change event so that
+    /// per-sender `BroadcastCache` entries can detect staleness without holding any lock.
+    pub topology_version: AtomicU64,
 }
 
 impl EdgeState {
@@ -671,7 +676,7 @@ impl EdgeState {
             client_manager,
             event_tx,
             voice_targets: RwLock::new(HashMap::new()),
-            peer_registry: RwLock::new(PeerRegistry::default()),
+            peer_registry: ArcSwap::new(Arc::new(PeerRegistry::default())),
             enable_hub_tcp_fallback,
             consecutive_failure_threshold: 2,
             next_hop_failures: std::sync::RwLock::new(HashMap::new()),
@@ -682,8 +687,8 @@ impl EdgeState {
             rolling_stats_window: AtomicU32::new(120),
             ninja_channels: RwLock::new(vec![]),
             ninja_visible_to: RwLock::new(HashMap::new()),
-            route_table: RwLock::new(std::collections::HashMap::new()),
-            voice_tcp_conns: RwLock::new(HashMap::new()),
+            route_table: ArcSwap::new(Arc::new(std::collections::HashMap::new())),
+            voice_tcp_conns: ArcSwap::new(Arc::new(HashMap::new())),
             voice_tcp_peers: RwLock::new(HashSet::new()),
             peer_voice_tcp_pool_size: 2,
             hub_limits: RwLock::new(None),
@@ -696,6 +701,7 @@ impl EdgeState {
             session_counter: AtomicU32::new(0),
             auth_semaphore: tokio::sync::Semaphore::new(32),
             permission_cache: dashmap::DashMap::new(),
+            topology_version: AtomicU64::new(0),
         })
     }
 
@@ -715,7 +721,7 @@ impl EdgeState {
             client_manager,
             event_tx,
             voice_targets: RwLock::new(HashMap::new()),
-            peer_registry: RwLock::new(PeerRegistry::default()),
+            peer_registry: ArcSwap::new(Arc::new(PeerRegistry::default())),
             enable_hub_tcp_fallback,
             consecutive_failure_threshold: 2,
             next_hop_failures: std::sync::RwLock::new(HashMap::new()),
@@ -726,8 +732,8 @@ impl EdgeState {
             rolling_stats_window: AtomicU32::new(120),
             ninja_channels: RwLock::new(vec![]),
             ninja_visible_to: RwLock::new(HashMap::new()),
-            route_table: RwLock::new(std::collections::HashMap::new()),
-            voice_tcp_conns: RwLock::new(HashMap::new()),
+            route_table: ArcSwap::new(Arc::new(std::collections::HashMap::new())),
+            voice_tcp_conns: ArcSwap::new(Arc::new(HashMap::new())),
             voice_tcp_peers: RwLock::new(HashSet::new()),
             peer_voice_tcp_pool_size: 2,
             hub_limits: RwLock::new(None),
@@ -740,6 +746,7 @@ impl EdgeState {
             session_counter: AtomicU32::new(0),
             auth_semaphore: tokio::sync::Semaphore::new(32),
             permission_cache: dashmap::DashMap::new(),
+            topology_version: AtomicU64::new(0),
         })
     }
 
@@ -767,7 +774,7 @@ impl EdgeState {
             client_manager,
             event_tx,
             voice_targets: RwLock::new(HashMap::new()),
-            peer_registry: RwLock::new(PeerRegistry::default()),
+            peer_registry: ArcSwap::new(Arc::new(PeerRegistry::default())),
             enable_hub_tcp_fallback,
             consecutive_failure_threshold,
             next_hop_failures: std::sync::RwLock::new(HashMap::new()),
@@ -778,8 +785,8 @@ impl EdgeState {
             rolling_stats_window: AtomicU32::new(rolling_stats_window),
             ninja_channels: RwLock::new(vec![]),
             ninja_visible_to: RwLock::new(HashMap::new()),
-            route_table: RwLock::new(std::collections::HashMap::new()),
-            voice_tcp_conns: RwLock::new(HashMap::new()),
+            route_table: ArcSwap::new(Arc::new(std::collections::HashMap::new())),
+            voice_tcp_conns: ArcSwap::new(Arc::new(HashMap::new())),
             voice_tcp_peers: RwLock::new(HashSet::new()),
             peer_voice_tcp_pool_size: peer_voice_tcp_pool_size.max(1),
             hub_limits: RwLock::new(None),
@@ -792,6 +799,7 @@ impl EdgeState {
             session_counter: AtomicU32::new(0),
             auth_semaphore: tokio::sync::Semaphore::new(32),
             permission_cache: dashmap::DashMap::new(),
+            topology_version: AtomicU64::new(0),
         })
     }
 

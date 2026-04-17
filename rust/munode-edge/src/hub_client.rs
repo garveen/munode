@@ -500,7 +500,7 @@ impl HubClient {
         }
 
         // 2. Dynamically discovered peers (from hub.peerJoined notifications)
-        let dynamic_peers = self.edge_state.peer_registry.read().await.relay_peers();
+        let dynamic_peers = self.edge_state.peer_registry.load().relay_peers();
         if dynamic_peers.is_empty() && self.static_relay_peers.is_empty() {
             return Err(anyhow::anyhow!("No relay peers available"));
         }
@@ -1160,7 +1160,8 @@ impl HubClient {
         if let Some(pending) = self.pending.lock().await.remove(&request_id) {
             let _ = pending.tx.send(Ok(response));
         } else {
-            warn!("Received response for unknown request: {}", request_id);
+            // Expected for fire-and-forget requests such as relay_voice_via_hub.
+            debug!("Received response for unregistered request (fire-and-forget): {}", request_id);
         }
     }
 
@@ -1220,6 +1221,8 @@ impl HubClient {
                             channel_id: user.channel_id,
                             is_ninja,
                         });
+                        // Invalidate BroadcastCaches: remote user joined, relay targets may change.
+                        self.edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
                     } else {
                         info!("Local user joined (hub.userJoined echo): {} (session {})", params.username, params.session_id);
                     }
@@ -1250,6 +1253,8 @@ impl HubClient {
                     self.edge_state.emit(EdgeEvent::RemoteUserLeft {
                         session_id: target_session,
                     });
+                    // Invalidate BroadcastCaches: user removed, relay targets may change.
+                    self.edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
                 }
             }
             "hub.userStateBroadcast" => {
@@ -1320,6 +1325,8 @@ impl HubClient {
                         channel_id: params.channel_id,
                         actor_session,
                     });
+                    // Invalidate BroadcastCaches: remote user moved channel, relay targets may change.
+                    self.edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
                 }
             }
             "hub.channelCreated" => {
@@ -1466,12 +1473,17 @@ impl HubClient {
                     info!("Peer edge joined cluster: {} (id {}) at {}:{}", name, peer_edge_id, host, voice_port);
                     if !host.is_empty() && voice_port > 0 {
                         if let Ok(udp_addr) = format!("{}:{}", host, voice_port).parse() {
-                            let mut reg = self.edge_state.peer_registry.write().await;
-                            reg.upsert(peer_edge_id, PeerEdgeInfo {
-                                udp_addr,
-                                host: host.clone(),
-                                relay_port: None,
-                            });
+                            // clone-modify-store: PeerRegistry 实现 Clone，写入串行化
+                            {
+                                let current = self.edge_state.peer_registry.load_full();
+                                let mut new_reg = (*current).clone();
+                                new_reg.upsert(peer_edge_id, PeerEdgeInfo {
+                                    udp_addr,
+                                    host: host.clone(),
+                                    relay_port: None,
+                                });
+                                self.edge_state.peer_registry.store(Arc::new(new_reg));
+                            }
                             info!("Registered direct UDP route to peer edge {} at {}", peer_edge_id, udp_addr);
                         }
                         // Connect TCP voice pool to the new peer, but only if a pool
@@ -1502,6 +1514,8 @@ impl HubClient {
                     }
                     } // end else (not self)
                 }
+                // Invalidate BroadcastCaches: peer edge joined, relay targets changed.
+                self.edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
             }
             "hub.peerLeft" => {
                 // An Edge left the cluster (disconnect arbitration)
@@ -1509,15 +1523,28 @@ impl HubClient {
                     let peer_edge_id = p.edge_id;
                     warn!("Peer edge left cluster: id {}", peer_edge_id);
                     // Remove from peer registry (UDP routing).
-                    self.edge_state.peer_registry.write().await.remove(peer_edge_id);
+                    {
+                        let current = self.edge_state.peer_registry.load_full();
+                        let mut new_reg = (*current).clone();
+                        new_reg.remove(peer_edge_id);
+                        self.edge_state.peer_registry.store(Arc::new(new_reg));
+                    }
                     // Signal all pool slots to stop: close_all() drops every slot sender
                     // so each slot's rx.recv() returns None and the writer loop exits.
                     // Then remove the pool from voice_tcp_conns and peer from voice_tcp_peers.
-                    let pool = self.edge_state.voice_tcp_conns.write().await.remove(&peer_edge_id);
+                    let pool = {
+                        let current = self.edge_state.voice_tcp_conns.load_full();
+                        let mut new_conns = (*current).clone();
+                        let pool = new_conns.remove(&peer_edge_id);
+                        self.edge_state.voice_tcp_conns.store(Arc::new(new_conns));
+                        pool
+                    };
                     if let Some(p) = pool {
                         p.close_all();
                     }
                     self.edge_state.voice_tcp_peers.write().await.remove(&peer_edge_id);
+                    // Invalidate BroadcastCaches: peer edge left, relay targets changed.
+                    self.edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
                 }
             }
             "hub.routeTableUpdate" => {
@@ -1526,8 +1553,9 @@ impl HubClient {
                     use std::sync::atomic::Ordering;
                     let new_max_ttl = params.max_ttl.unwrap_or(4);
                     self.edge_state.max_ttl.store(new_max_ttl, Ordering::Relaxed);
-                    let mut table = self.edge_state.route_table.write().await;
-                    table.clear();
+                    // Build new route table from scratch, then publish atomically.
+                    let mut new_table: std::collections::HashMap<u32, Vec<RouteCandidate>> =
+                        std::collections::HashMap::new();
                     for entry in &params.routes {
                         let decision = match entry.route_type {
                             1 => {
@@ -1542,16 +1570,13 @@ impl HubClient {
                             _ => RouteDecision::DirectUdp,
                         };
                         let candidate = RouteCandidate { decision, cost: entry.cost };
-                        table.entry(entry.target_edge_id).or_insert_with(Vec::new).push(candidate);
+                        new_table.entry(entry.target_edge_id).or_insert_with(Vec::new).push(candidate);
                     }
-                    // Sort each per-target candidate list by ascending cost so
-                    // udp.rs always considers cheaper options first regardless of
-                    // the order in which Hub sent the entries.
-                    for candidates in table.values_mut() {
+                    for candidates in new_table.values_mut() {
                         candidates.sort_unstable_by(|a, b| a.cost.partial_cmp(&b.cost).unwrap_or(std::cmp::Ordering::Equal));
                     }
-                    let count = table.len();
-                    drop(table);
+                    let count = new_table.len();
+                    self.edge_state.route_table.store(Arc::new(new_table));
                     debug!("Route table updated: {} entries, max_ttl={}", count, new_max_ttl);
                 }
             }
@@ -1572,7 +1597,7 @@ impl HubClient {
                         // client cannot stall the notification processor.
                         let mut buf = bytes::BytesMut::new();
                         munode_protocol::transport::encode_message(MessageType::ContextActionModify, msg, &mut buf);
-                        let data = buf.to_vec();
+                        let data = buf.freeze();
                         for &sid in target_sessions {
                             if let Some(sender) = self.edge_state.client_manager.get_sender(sid).await {
                                 if !sender.try_send_raw(data.clone()) {
@@ -1887,6 +1912,8 @@ impl HubClient {
             remote_sessions_owned.len(),
             result.sessions.len(),
         );
+        // Invalidate all BroadcastCaches: full state refresh means routing targets changed.
+        self.edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
         Ok(disappeared)
     }
 
@@ -1982,12 +2009,16 @@ impl HubClient {
             // Register each existing peer's UDP address
             if !peer.host.is_empty() && peer.voice_port > 0 {
                 if let Ok(udp_addr) = format!("{}:{}", peer.host, peer.voice_port).parse() {
-                    let mut reg = self.edge_state.peer_registry.write().await;
-                    reg.upsert(peer.id, PeerEdgeInfo {
-                        udp_addr,
-                        host: peer.host.clone(),
-                        relay_port: None,
-                    });
+                    {
+                        let current = self.edge_state.peer_registry.load_full();
+                        let mut new_reg = (*current).clone();
+                        new_reg.upsert(peer.id, PeerEdgeInfo {
+                            udp_addr,
+                            host: peer.host.clone(),
+                            relay_port: None,
+                        });
+                        self.edge_state.peer_registry.store(Arc::new(new_reg));
+                    }
                     info!("Registered direct UDP route to existing peer edge {} at {}", peer.id, udp_addr);
                 }
                 // Connect TCP voice pool to the existing peer, dedup via voice_tcp_peers.
@@ -2971,25 +3002,35 @@ impl HubClient {
 
     /// Relay a voice packet to a target Edge via Hub TCP tunnel.
     /// Called when a local sender needs to reach a remote user on another edge.
-    pub async fn relay_voice_via_hub(&self, target_edge_id: u32, voice_packet: Vec<u8>) {
+    pub async fn relay_voice_via_hub(&self, target_edge_id: u32, voice_packet: bytes::Bytes) {
         let from_edge_id = self.edge_id();
-        let request_id = self.next_request_id();
 
+        // Voice relay is fire-and-forget: UDP voice is inherently unreliable and does not
+        // require Hub acknowledgment.  Using rpc_call() here would hold a semaphore slot
+        // and a pending-map entry for up to 30 s per packet, which exhausts both under load.
+        // We send the request frame directly and never register a pending entry; the Hub
+        // will still send a response that is silently discarded on the receiving side.
         let request = TypedRpcRequest {
-            request_id,
+            request_id: self.next_request_id(),
             method: "edge.relayVoiceViaTcp".to_string(),
             timeout_ms: Some(5000),
             edge_relay_voice_via_tcp: Some(hubedge::EdgeRelayVoiceViaTcpParams {
                 from_edge_id,
                 target_edge_id,
-                voice_packet,
+                voice_packet: voice_packet.into(),
                 timestamp: current_millis() as i64,
             }),
             ..Default::default()
         };
 
-        if let Err(e) = self.rpc_call(request).await {
-            debug!("relay_voice_via_hub to edge {} failed: {}", target_edge_id, e);
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcRequest as i32,
+            rpc_request: Some(request),
+            ..Default::default()
+        };
+        let data = packet.encode_to_vec();
+        if let Err(e) = self.send_raw(data).await {
+            debug!("relay_voice_via_hub to edge {} failed (send): {}", target_edge_id, e);
         }
     }
 

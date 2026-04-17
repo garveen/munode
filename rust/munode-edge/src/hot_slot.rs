@@ -19,12 +19,15 @@
 
 use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU32, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     Arc, Mutex,
 };
 use arc_swap::ArcSwap;
+use bytes::Bytes;
+use smallvec::SmallVec;
 use tokio::sync::mpsc;
 
+use crate::bandwidth::BandwidthRecord;
 use crate::crypto::CryptState;
 
 /// Number of HotSlot entries in the global static array.
@@ -61,6 +64,21 @@ pub type HotVoiceTargetMap = HashMap<u32, HotVoiceTarget>;
 /// The struct is stored in a global static array indexed by
 /// `session_id % HOT_SLOT_COUNT`.  Every field is either an atomic primitive or
 /// an `ArcSwap`, enabling reads with **zero lock acquisitions**.
+
+/// Broadcast route cache: pre-computed set of local session IDs and remote Edge IDs
+/// that should receive a broadcast voice packet from the owning session.
+///
+/// Stored in `HotSlot::broadcast_cache` and validated against
+/// `EdgeState::topology_version` before use.  Both `local_sessions` and
+/// `relay_edge_ids` are populated atomically in a single store so they are always
+/// mutually consistent.
+pub struct BroadcastCache {
+    /// Local session IDs to deliver the packet to (excluding deaf/self-deaf sessions).
+    pub local_sessions: SmallVec<[u32; 32]>,
+    /// Remote Edge IDs to relay the packet to via Edge-to-Edge transport.
+    pub relay_edge_ids: SmallVec<[u32; 8]>,
+}
+
 #[repr(C, align(64))]
 pub struct HotSlot {
     /// Whether this slot is currently occupied by an active session.
@@ -79,10 +97,21 @@ pub struct HotSlot {
     /// OCB2-AES128 crypto state for UDP voice delivery.  `None` until CryptSetup.
     pub crypt_state: ArcSwap<Option<Arc<Mutex<CryptState>>>>,
     /// TCP sender for delivering frames to this client (UDPTunnel and control).
-    pub sender:     ArcSwap<Option<mpsc::Sender<Vec<u8>>>>,
+    pub sender:     ArcSwap<Option<mpsc::Sender<Bytes>>>,
+    /// Per-session group membership for lock-free group-filter whisper routing.
+    /// Updated whenever the Hub sends a revised session list (same cadence as deaf/suppress).
+    pub groups:     ArcSwap<Vec<String>>,
     /// Per-session VoiceTarget map for lock-free whisper routing.
     /// `None` until the client registers any VoiceTarget.
     pub voice_targets: ArcSwap<Option<Arc<HotVoiceTargetMap>>>,
+    /// Per-session bandwidth record for voice rate limiting. Populated at register time.
+    pub bandwidth: ArcSwap<Option<Arc<Mutex<BandwidthRecord>>>>,
+    /// Broadcast route cache: pre-computed local + relay targets.
+    /// `None` initially; populated on first cache miss in the broadcast path.
+    pub broadcast_cache: ArcSwap<Option<Arc<BroadcastCache>>>,
+    /// `EdgeState::topology_version` value at which `broadcast_cache` was last populated.
+    /// Compare with `topology_version.load(Acquire)` before using the cache.
+    pub broadcast_cache_version: AtomicU64,
 }
 
 impl HotSlot {
@@ -96,7 +125,11 @@ impl HotSlot {
             channel_id:    AtomicU32::new(0),
             crypt_state:   ArcSwap::new(Arc::new(None)),
             sender:        ArcSwap::new(Arc::new(None)),
+            groups:        ArcSwap::new(Arc::new(Vec::new())),
+            bandwidth:     ArcSwap::new(Arc::new(None)),
             voice_targets: ArcSwap::new(Arc::new(None)),
+            broadcast_cache: ArcSwap::new(Arc::new(None)),
+            broadcast_cache_version: AtomicU64::new(0),
         }
     }
 
@@ -112,7 +145,9 @@ impl HotSlot {
         deaf: bool,
         self_deaf: bool,
         suppress: bool,
-        sender: mpsc::Sender<Vec<u8>>,
+        sender: mpsc::Sender<Bytes>,
+        bandwidth: Arc<Mutex<BandwidthRecord>>,
+        groups: Arc<Vec<String>>,
     ) {
         self.session_id.store(session_id, Ordering::Relaxed);
         self.channel_id.store(channel_id, Ordering::Relaxed);
@@ -121,7 +156,11 @@ impl HotSlot {
         self.suppress.store(suppress, Ordering::Relaxed);
         self.crypt_state.store(Arc::new(None));
         self.sender.store(Arc::new(Some(sender)));
+        self.groups.store(groups);
+        self.bandwidth.store(Arc::new(Some(bandwidth)));
         self.voice_targets.store(Arc::new(None));
+        self.broadcast_cache.store(Arc::new(None));
+        self.broadcast_cache_version.store(0, Ordering::Relaxed);
         // LAST: set active so readers never observe partial state.
         self.active.store(true, Ordering::Release);
     }
@@ -134,7 +173,11 @@ impl HotSlot {
         self.active.store(false, Ordering::Release);
         self.crypt_state.store(Arc::new(None));
         self.sender.store(Arc::new(None));
+        self.groups.store(Arc::new(Vec::new()));
+        self.bandwidth.store(Arc::new(None));
         self.voice_targets.store(Arc::new(None));
+        self.broadcast_cache.store(Arc::new(None));
+        self.broadcast_cache_version.store(0, Ordering::Relaxed);
     }
 
     /// Returns `true` if this slot is active and belongs to `expected_session`.
@@ -152,7 +195,8 @@ impl HotSlot {
 //   - AtomicBool / AtomicU32: Send + Sync.
 //   - ArcSwap<T> where T: Send + Sync: Send + Sync.
 //   - Arc<Mutex<CryptState>>: Send + Sync (CryptState: Send).
-//   - mpsc::Sender<Vec<u8>>: Send + Sync.
+//   - Arc<Mutex<BandwidthRecord>>: Send + Sync (BandwidthRecord: Send).
+//   - mpsc::Sender<bytes::Bytes>: Send + Sync.
 //   - HotVoiceTargetMap = HashMap<u32, HotVoiceTarget>: Send + Sync.
 unsafe impl Send for HotSlot {}
 unsafe impl Sync for HotSlot {}
