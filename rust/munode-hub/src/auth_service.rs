@@ -16,6 +16,7 @@
 //! arrives while one is active, the old connection is dropped.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,7 +36,20 @@ const AUTH_TIMEOUT_SECS: u64 = 10;
 /// Channel buffer size for outbound messages to the auth service.
 const OUTBOUND_BUFFER: usize = 256;
 
-type PendingAuthMap = Mutex<HashMap<String, oneshot::Sender<AuthResponse>>>;
+/// State tracked for each in-flight auth request.
+///
+/// Correlation with the incoming `AuthResponse` is done entirely via the
+/// Hub-generated `request_id` (the map key).  The other fields exist purely
+/// for diagnostics — they let timeout / disconnect / stale-response log
+/// lines cross-reference the original Edge RPC so the whole auth flow can
+/// be traced end-to-end without a separate correlation table.
+struct PendingAuth {
+    tx: oneshot::Sender<AuthResponse>,
+    edge_request_id: String,
+    username: String,
+}
+
+type PendingAuthMap = Mutex<HashMap<String, PendingAuth>>;
 
 /// Shared handle to the auth service connection state.
 /// This is cheap to clone (Arc<Mutex<...>> inside).
@@ -45,7 +59,26 @@ pub struct AuthServiceHandle {
 }
 
 struct AuthServiceInner {
-    /// Pending auth requests waiting for a response, keyed by request_id.
+    /// Monotonic counter for generating Hub-local auth request IDs.
+    ///
+    /// We deliberately do NOT reuse the Edge's RPC `request_id` as the
+    /// correlation key here.  Edge-side IDs are only unique within one
+    /// `HubClient` instance — each Edge has its own `AtomicU64` counter,
+    /// independently reset to 0 on Edge restart — so any time two Edges'
+    /// `{millis, counter}` pairs align, they mint the same string.  The
+    /// risk is not limited to Edges that still have `counter == 0`:
+    /// after a cluster cold start every Edge tends to walk the same
+    /// startup RPC sequence (register → full sync → heartbeat) in
+    /// near-lockstep, leaving their counters numerically close to their
+    /// peers' (not necessarily zero), so subsequent auth RPCs on
+    /// different Edges land in the same millisecond with matching
+    /// counter values substantially more often than random traffic
+    /// would.  Since this handle is shared by every Edge,
+    /// `pending.insert` would then silently overwrite the earlier
+    /// waiter and the next response to arrive would be delivered to the
+    /// wrong caller — i.e. auth identities crossed between Edges.
+    next_request_id: AtomicU64,
+    /// Pending auth requests waiting for a response, keyed by a Hub-local ID.
     pending: PendingAuthMap,
     /// Sender to the currently connected auth service WebSocket writer.
     /// None when no service is connected.
@@ -56,10 +89,17 @@ impl AuthServiceHandle {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(AuthServiceInner {
+                next_request_id: AtomicU64::new(0),
                 pending: Mutex::new(HashMap::new()),
                 sender: Mutex::new(None),
             }),
         }
+    }
+
+    /// Mint a fresh, process-unique request ID for one auth exchange.
+    fn next_request_id(&self) -> String {
+        let n = self.inner.next_request_id.fetch_add(1, Ordering::Relaxed);
+        format!("hub-{}", n)
     }
 
     /// Returns true if an auth service is currently connected.
@@ -73,14 +113,36 @@ impl AuthServiceHandle {
     /// - No auth service is connected.
     /// - The response timed out (>10 s).
     /// - The connection was dropped while waiting.
-    pub async fn authenticate(&self, request: AuthRequest) -> Option<AuthResponse> {
-        let request_id = request.request_id.clone();
+    pub async fn authenticate(&self, mut request: AuthRequest) -> Option<AuthResponse> {
+        // Overwrite whatever `request_id` the caller supplied with one minted
+        // here.  The external auth service echoes `request_id` verbatim, so
+        // this becomes the correlation key on both sides of the wire — and
+        // unlike the Edge-supplied value it is guaranteed unique across the
+        // Hub's lifetime, across every connected Edge, and across Edge
+        // restarts.  This closes the race where two Edges could submit
+        // colliding IDs and have responses routed to the wrong waiter.
+        //
+        // The original Edge-supplied request_id is preserved in `PendingAuth`
+        // so diagnostics can still stitch the Edge↔Hub and Hub↔auth-service
+        // sides of the flow together in logs.
+        let request_id = self.next_request_id();
+        let edge_request_id = std::mem::take(&mut request.request_id);
+        let username = request.username.clone();
+        request.request_id = request_id.clone();
 
-        // Register the pending waiter before sending to avoid races.
+        // Register the pending waiter BEFORE sending so the response cannot
+        // arrive and be dropped as "unknown" between send and insert.
         let (resp_tx, resp_rx) = oneshot::channel::<AuthResponse>();
         {
             let mut pending = self.inner.pending.lock().await;
-            pending.insert(request_id.clone(), resp_tx);
+            pending.insert(
+                request_id.clone(),
+                PendingAuth {
+                    tx: resp_tx,
+                    edge_request_id: edge_request_id.clone(),
+                    username: username.clone(),
+                },
+            );
         }
 
         // Encode and send the AuthRequest packet.
@@ -111,11 +173,17 @@ impl AuthServiceHandle {
         match tokio::time::timeout(Duration::from_secs(AUTH_TIMEOUT_SECS), resp_rx).await {
             Ok(Ok(response)) => Some(response),
             Ok(Err(_)) => {
-                warn!("Auth response channel closed for request_id={}", request_id);
+                warn!(
+                    "Auth response channel closed: hub_request_id={} edge_request_id={} user={}",
+                    request_id, edge_request_id, username
+                );
                 None
             }
             Err(_) => {
-                warn!("Auth request timed out: request_id={}", request_id);
+                warn!(
+                    "Auth request timed out: hub_request_id={} edge_request_id={} user={}",
+                    request_id, edge_request_id, username
+                );
                 self.inner.pending.lock().await.remove(&request_id);
                 None
             }
@@ -125,13 +193,18 @@ impl AuthServiceHandle {
     /// Deliver a received AuthResponse to the waiting caller.
     async fn deliver_response(&self, response: AuthResponse) {
         let request_id = response.request_id.clone();
-        if let Some(tx) = self.inner.pending.lock().await.remove(&request_id) {
-            let _ = tx.send(response);
-        } else {
-            warn!(
-                "Received auth response for unknown request_id={}",
-                request_id
-            );
+        let entry = self.inner.pending.lock().await.remove(&request_id);
+        match entry {
+            Some(pending) => {
+                let _ = pending.tx.send(response);
+            }
+            None => {
+                warn!(
+                    "Received auth response for unknown hub_request_id={} \
+                     (expired, duplicate, or from a stale connection)",
+                    request_id
+                );
+            }
         }
     }
 
@@ -142,15 +215,50 @@ impl AuthServiceHandle {
 
     /// Fail all pending requests (called when the connection is lost).
     async fn drain_pending(&self) {
-        let mut pending = self.inner.pending.lock().await;
-        let count = pending.len();
-        pending.drain(); // dropping all oneshot senders signals Err to waiters
-        if count > 0 {
+        /// How many individual pending entries to enumerate in the disconnect
+        /// log line before falling back to an aggregate count.  An Edge
+        /// allows 32 concurrent auth RPCs locally, so a multi-Edge fleet can
+        /// accumulate hundreds of pending entries if the auth service drops;
+        /// enumerating them all would produce an unreadable multi-kilobyte
+        /// warn line.
+        const SUMMARY_CAP: usize = 8;
+
+        let entries: Vec<(String, PendingAuth)> = {
+            let mut pending = self.inner.pending.lock().await;
+            pending.drain().collect()
+        };
+        if entries.is_empty() {
+            return;
+        }
+        let total = entries.len();
+        let shown = total.min(SUMMARY_CAP);
+        let summary = entries
+            .iter()
+            .take(shown)
+            .map(|(hub_id, p)| {
+                format!(
+                    "{{hub_id={} edge_request_id={} user={}}}",
+                    hub_id, p.edge_request_id, p.username
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        if total > shown {
             warn!(
-                "{} pending auth request(s) cancelled due to auth service disconnect",
-                count
+                "{} pending auth request(s) cancelled due to auth service disconnect: \
+                 [{}, … and {} more]",
+                total,
+                summary,
+                total - shown,
+            );
+        } else {
+            warn!(
+                "{} pending auth request(s) cancelled due to auth service disconnect: [{}]",
+                total, summary,
             );
         }
+        // Dropping `entries` drops every `PendingAuth.tx`, which signals Err
+        // to each waiter in `authenticate()`.
     }
 
     /// Handle an active WebSocket connection from an auth service.
