@@ -440,7 +440,7 @@ pub async fn connect_peer_voice_tcp(
 
     // Create the pool up-front and publish it so callers (udp.rs) can send
     // immediately once any slot connects.
-    let pool = Arc::new(crate::state::PeerVoiceTcpPool::new(pool_size));
+    let pool = Arc::new(crate::peer_registry::PeerVoiceTcpPool::new(pool_size));
     {
         let current = edge_state.voice_tcp_conns.load_full();
         let mut new_conns = (*current).clone();
@@ -499,7 +499,7 @@ async fn run_voice_tcp_slot(
     peer_edge_port: u16,
     self_edge_id: u32,
     edge_state: Arc<EdgeState>,
-    pool: Arc<crate::state::PeerVoiceTcpPool>,
+    pool: Arc<crate::peer_registry::PeerVoiceTcpPool>,
     hmac_secret: Option<String>,
 ) {
     let mut retry_ms = VOICE_TCP_MIN_RETRY_MS;
@@ -571,7 +571,7 @@ async fn run_voice_tcp_once_pooled(
     slot_idx: usize,
     url: &str,
     self_edge_id: u32,
-    pool: Arc<crate::state::PeerVoiceTcpPool>,
+    pool: Arc<crate::peer_registry::PeerVoiceTcpPool>,
 ) -> anyhow::Result<()> {
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 

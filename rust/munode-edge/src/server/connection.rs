@@ -1,455 +1,33 @@
+//! Per-client TCP connection handler and associated helpers.
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
-
-use anyhow::{Context, Result, anyhow};
+use anyhow::Result;
 use bytes::BytesMut;
 use prost::Message;
 use tokio::io::AsyncReadExt;
-use tokio::net::TcpListener;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio_rustls::TlsAcceptor;
-use tracing::{debug, error, info, trace, warn};
-
+use tracing::{debug, error, info, warn};
 use munode_common::config::EdgeConfig;
-use munode_common::logging::LogReloadHandle;
 use munode_common::permission as perm;
 use munode_protocol::hubedge;
 use munode_protocol::message_type::MessageType;
 use munode_protocol::mumbleproto;
 use munode_protocol::transport::decode_frame;
-
-use crate::channel_manager::ChannelManager;
-use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
+use crate::client::{ClientInfo, ClientSender, ClientState};
 use crate::handler::{self, LoginHandler, LoginInfo};
 use crate::hub_client::{HubClient, HubConnectionState};
-use crate::state::{EdgeEvent, EdgeState};
-use crate::tls::create_tls_acceptor;
-use crate::udp::UdpServer;
+use crate::state::EdgeState;
 use crate::voice::{deliver_voice_tcp, inject_session_into_voice, wrap_udptunnel};
-
-/// The main Edge server.
-pub struct EdgeServer {
-    config: EdgeConfig,
-    /// Path to the config file, used for hot-reload on SIGHUP.
-    config_path: Option<String>,
-    /// Handle for updating the active log-level filter at runtime.
-    log_reload: Option<LogReloadHandle>,
-}
-
-impl EdgeServer {
-    pub fn new(config: EdgeConfig) -> Self {
-        Self { config, config_path: None, log_reload: None }
-    }
-
-    /// Create a new EdgeServer with the config file path for hot-reload support.
-    pub fn new_with_path(config: EdgeConfig, config_path: String, log_reload: LogReloadHandle) -> Self {
-        Self { config, config_path: Some(config_path), log_reload: Some(log_reload) }
-    }
-
-    /// Run the edge server.
-    pub async fn run(&self) -> Result<()> {
-        // Create shared state
-        let client_manager = ClientManager::new();
-        let channel_manager = ChannelManager::new();
-
-        // Derive voice routing flags from the voice_routing config.
-        let edge_state = EdgeState::new_with_full_config(
-            channel_manager,
-            client_manager,
-            self.config.voice_routing.enable_hub_tcp_fallback,
-            self.config.voice_routing.consecutive_failure_threshold,
-            self.config.server.listeners_per_user,
-            self.config.server.listeners_per_channel,
-            self.config.server.allow_ping,
-            self.config.server.rolling_stats_window,
-            self.config.hub_server.hmac_secret.as_deref(),
-            self.config.voice_routing.peer_voice_tcp_pool_size as usize,
-        );
-
-        // Set up TLS
-        let tls_acceptor = create_tls_acceptor(&self.config.tls)?;
-
-        // Connect to Hub (create client first so UdpServer can reference it)
-        let hub_client = HubClient::new(&self.config, edge_state.clone());
-        let hub_handle = tokio::spawn({
-            let hub_client = hub_client.clone();
-            async move {
-                if let Err(e) = hub_client.connect_and_run().await {
-                    error!("Hub client error: {}", e);
-                }
-            }
-        });
-
-        // Start UDP server (needs hub_client for cross-edge relay)
-        let udp_addr: SocketAddr = format!("{}:{}", self.config.network.host, self.config.network.port)
-            .parse()?;
-        let edge_port = self.config.network.edge_port.unwrap_or(self.config.network.port + 1);
-        let edge_udp_addr: SocketAddr = format!("{}:{}", self.config.network.host, edge_port)
-            .parse()?;
-        let udp_server = Arc::new(UdpServer::new(udp_addr, edge_udp_addr, edge_state.clone(), hub_client.clone()).await?);
-        let udp_handle = tokio::spawn({
-            let udp = Arc::clone(&udp_server);
-            async move {
-                if let Err(e) = udp.run().await {
-                    error!("UDP server error: {}", e);
-                }
-            }
-        });
-
-        // Event listener: broadcast Hub notifications to local clients.
-        // Uses a watch channel so any future task can also observe the shutdown signal.
-        let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
-        let event_handle = tokio::spawn({
-            let state = edge_state.clone();
-            let hub_client_for_events = hub_client.clone();
-            let mut event_rx = edge_state.subscribe_events();
-            let shutdown_tx = shutdown_tx.clone();
-            async move {
-                hub_event_listener(state, &mut event_rx, shutdown_tx, hub_client_for_events).await;
-            }
-        });
-
-        // SIGHUP hot-reload task: reload the config file and apply hot-reloadable fields.
-        #[cfg(unix)]
-        {
-            let config_path = self.config_path.clone();
-            let reload_state = edge_state.clone();
-            let log_reload = self.log_reload.clone();
-            tokio::spawn(async move {
-                use tokio::signal::unix::{signal, SignalKind};
-                let mut sighup = match signal(SignalKind::hangup()) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        warn!("Failed to register SIGHUP handler: {}", e);
-                        return;
-                    }
-                };
-                loop {
-                    sighup.recv().await;
-                    info!("SIGHUP received — attempting config hot-reload");
-                    if let Some(ref path) = config_path {
-                        match munode_common::config::load_edge_config(path) {
-                            Ok(new_cfg) => {
-                                reload_state.apply_hot_config(&new_cfg);
-                                // Update the active log-level filter via the reload handle so
-                                // the change takes effect immediately without re-initialising
-                                // the global subscriber (which would be a no-op).
-                                if let Some(ref lr) = log_reload {
-                                    lr.reload_level(&new_cfg.log_level);
-                                }
-                                info!(
-                                    allow_ping = new_cfg.server.allow_ping,
-                                    rolling_stats_window = new_cfg.server.rolling_stats_window,
-                                    log_level = %new_cfg.log_level,
-                                    "Config hot-reload applied"
-                                );
-                            }
-                            Err(e) => {
-                                warn!("SIGHUP hot-reload failed — could not parse config '{}': {}", path, e);
-                            }
-                        }
-                    } else {
-                        warn!("SIGHUP received but no config path known; skipping hot-reload");
-                    }
-                }
-            });
-        }
-
-        // Always start the edge WebSocket server (relay + voice) on edge_port
-        {
-            let hub_host = self.config.hub_server.host.clone();
-            let hub_port = self.config.hub_server.control_port;
-            let relay_hmac_secret = self.config.hub_server.hmac_secret.clone();
-            let edge_state_clone = edge_state.clone();
-            info!("Starting edge WS server (relay+voice) on port {}", edge_port);
-            tokio::spawn(async move {
-                crate::relay_server::run_edge_ws_server(
-                    edge_port as u16,
-                    hub_host,
-                    hub_port,
-                    relay_hmac_secret,
-                    edge_state_clone,
-                )
-                .await;
-            });
-        }
-
-        // Start TLS server
-        let listen_addr: SocketAddr = format!("{}:{}", self.config.network.host, self.config.network.port)
-            .parse()?;
-        let listener = TcpListener::bind(listen_addr).await?;
-        info!("TLS server listening on {}", listen_addr);
-
-        // Semaphore to limit concurrent TCP connections for DoS protection only.
-        // This is NOT the user-count limit — that is enforced by the Hub via
-        // session_manager.count_sessions() in handle_authenticate_user.
-        // Use a fixed large ceiling so that pre-auth connections (TLS handshake,
-        // version exchange) do not consume slots intended for authenticated users.
-        const MAX_TCP_CONNECTIONS: usize = 65_535;
-        let conn_semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_TCP_CONNECTIONS));
-
-        // Accept loop
-        loop {
-            tokio::select! {
-                result = listener.accept() => {
-                    match result {
-                        Ok((stream, peer_addr)) => {
-                            // Drop connection only under extreme TCP flood (DoS protection).
-                            let permit = match conn_semaphore.clone().try_acquire_owned() {
-                                Ok(permit) => permit,
-                                Err(_) => {
-                                    warn!("Connection from {} dropped: TCP connection limit reached", peer_addr);
-                                    drop(stream);
-                                    continue;
-                                }
-                            };
-                            // Refuse new connections while Hub is unreachable.
-                            if !edge_state.accepting_connections.load(std::sync::atomic::Ordering::Relaxed) {
-                                debug!("Connection from {} refused: Hub is unreachable", peer_addr);
-                                drop(stream);
-                                continue;
-                            }
-                            let acceptor = tls_acceptor.clone();
-                            let config = self.config.clone();
-                            let hub = hub_client.clone();
-                            let state = edge_state.clone();
-                            let proxy_protocol = self.config.network.proxy_protocol;
-                            tokio::spawn(async move {
-                                // Hold the permit for the duration of the connection.
-                                let _permit = permit;
-                                // Resolve the real client address from a PROXY Protocol
-                                // header when the edge is behind nginx/HAProxy.
-                                let mut stream = stream;
-                                let real_addr = if proxy_protocol {
-                                    match read_proxy_protocol_addr(&mut stream).await {
-                                        Ok(Some(addr)) => addr,
-                                        Ok(None) => peer_addr, // UNKNOWN / LOCAL — fall back
-                                        Err(e) => {
-                                            debug!(
-                                                tcp_peer = %peer_addr,
-                                                "PROXY Protocol parse error — dropping connection: {}",
-                                                e
-                                            );
-                                            return;
-                                        }
-                                    }
-                                } else {
-                                    peer_addr
-                                };
-                                if let Err(e) = handle_client_connection(
-                                    stream, real_addr, acceptor, &config, hub, state,
-                                ).await {
-                                    debug!("Client connection error from {}: {}", real_addr, e);
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            error!("Accept error: {}", e);
-                        }
-                    }
-                }
-                _ = shutdown_rx.wait_for(|v| *v) => {
-                    info!("Shutting down edge server");
-                    break;
-                }
-                _ = tokio::signal::ctrl_c() => {
-                    info!("Received shutdown signal");
-                    break;
-                }
-            }
-        }
-
-        // On SIGINT/ctrl-c the ShutdownRequested event path has not fired, so
-        // clients have not yet been notified.  Broadcast a Reject to all
-        // connected clients so they know to reconnect, then give tasks time
-        // to drain their write buffers before we abort them.
-        edge_state.client_manager.close_all_connections("Server shutting down").await;
-
-        // Allow background tasks adequate time to notice the shutdown signal
-        // and flush any in-flight messages before we force-abort them.
-        // 3 seconds is sufficient for disconnect notifications to Hub and any
-        // queued writes to be flushed to clients.
-        tokio::time::sleep(tokio::time::Duration::from_millis(3000)).await;
-        udp_handle.abort();
-        hub_handle.abort();
-        event_handle.abort();
-
-        Ok(())
-    }
-}
 
 /// Idle timeout for client TCP connections. Connections that send no data for
 /// this duration are considered zombie connections and are closed.
 const CLIENT_IDLE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(120);
 
-/// Magic bytes that mark the start of a PROXY Protocol v2 header.
-const PROXY_V2_MAGIC: &[u8; 12] = b"\r\n\r\n\0\r\nQUIT\n";
-
-/// Read and parse a PROXY Protocol header (v1 or v2) from a TCP stream.
-///
-/// Returns `Some(addr)` with the real client address, or `None` when the proxy
-/// header carries `UNKNOWN` / `LOCAL` (fall back to the TCP peer address in
-/// that case).  Returns an error when the stream does not begin with a valid
-/// PROXY Protocol header.
-///
-/// This function reads **exactly** the header bytes from the stream so that
-/// the subsequent TLS handshake sees the original TLS ClientHello immediately
-/// after.
-async fn read_proxy_protocol_addr(stream: &mut tokio::net::TcpStream) -> Result<Option<SocketAddr>> {
-    // Peek at up to 12 bytes (v2 magic length) without consuming the stream,
-    // so that plain TLS connections are completely unaffected.
-    let mut peek_buf = [0u8; 12];
-    let n = stream.peek(&mut peek_buf).await
-        .context("Failed to peek for PROXY Protocol header")?;
-
-    if n >= 6 && &peek_buf[..6] == b"PROXY " {
-        // ── PROXY Protocol v1 (text) ─────────────────────────────────────
-        // Consume the 6 bytes we peeked above.
-        let mut sig = [0u8; 6];
-        stream.read_exact(&mut sig).await?;
-        // Format: "PROXY <proto> <src-ip> <dst-ip> <src-port> <dst-port>\r\n"
-        // Maximum total length: 108 bytes.
-        let mut line: Vec<u8> = b"PROXY ".to_vec();
-        let mut byte = [0u8; 1];
-        loop {
-            stream.read_exact(&mut byte).await
-                .context("Failed to read PROXY Protocol v1 header")?;
-            line.push(byte[0]);
-            if line.ends_with(b"\r\n") {
-                break;
-            }
-            if line.len() > 108 {
-                return Err(anyhow!("PROXY Protocol v1 header exceeds 108 bytes"));
-            }
-        }
-        parse_proxy_v1(&line)
-    } else if n >= 12 && &peek_buf[..12] == PROXY_V2_MAGIC {
-        // ── PROXY Protocol v2 (binary) ────────────────────────────────────
-        // Consume the 12-byte magic we already peeked.
-        let mut magic = [0u8; 12];
-        stream.read_exact(&mut magic).await?;
-        // Read the 4-byte fixed header: ver/cmd + fam/proto + addr_len (u16 BE).
-        let mut fixed = [0u8; 4];
-        stream.read_exact(&mut fixed).await
-            .context("Failed to read PROXY Protocol v2 fixed header")?;
-
-        let ver_cmd   = fixed[0];
-        let fam_proto = fixed[1];
-        let addr_len  = u16::from_be_bytes([fixed[2], fixed[3]]) as usize;
-
-        // PROXY Protocol v2: address payload is at most ~216 bytes for
-        // AF_INET6 (36 bytes) plus the maximum defined TLV extensions.
-        // Cap here to prevent a crafted header from forcing a large heap
-        // allocation before we have read a single byte of address data.
-        if addr_len > 512 {
-            return Err(anyhow!(
-                "PROXY Protocol v2 address payload too large: {} bytes (max 512)",
-                addr_len
-            ));
-        }
-
-        let mut addr_buf = vec![0u8; addr_len];
-        if addr_len > 0 {
-            stream.read_exact(&mut addr_buf).await
-                .context("Failed to read PROXY Protocol v2 address payload")?;
-        }
-
-        parse_proxy_v2(ver_cmd, fam_proto, &addr_buf)
-    } else {
-        // No PROXY Protocol signature detected — this is a direct (non-proxied)
-        // connection.  The peeked bytes remain in the receive buffer so the TLS
-        // handshake will see them unmodified.
-        Ok(None)
-    }
-}
-
-/// Parse a PROXY Protocol v1 header line (including trailing `\r\n`).
-fn parse_proxy_v1(line: &[u8]) -> Result<Option<SocketAddr>> {
-    let s = std::str::from_utf8(line)
-        .context("PROXY Protocol v1 header is not valid UTF-8")?;
-    let s = s.trim_end_matches("\r\n");
-    let parts: Vec<&str> = s.split_ascii_whitespace().collect();
-
-    if parts.len() < 2 || parts[0] != "PROXY" {
-        return Err(anyhow!("Malformed PROXY Protocol v1 header: {:?}", s));
-    }
-
-    // "PROXY UNKNOWN ..." — upstream cannot determine the original address.
-    if parts[1] == "UNKNOWN" {
-        return Ok(None);
-    }
-
-    // "PROXY TCP4 <src-ip> <dst-ip> <src-port> <dst-port>"
-    // "PROXY TCP6 <src-ip> <dst-ip> <src-port> <dst-port>"
-    if parts.len() != 6 {
-        return Err(anyhow!(
-            "PROXY Protocol v1 header has wrong number of fields: {:?}", s
-        ));
-    }
-
-    let src_ip: IpAddr = parts[2].parse()
-        .context("Invalid source IP in PROXY Protocol v1 header")?;
-    let src_port: u16 = parts[4].parse()
-        .context("Invalid source port in PROXY Protocol v1 header")?;
-
-    Ok(Some(SocketAddr::new(src_ip, src_port)))
-}
-
-/// Parse a PROXY Protocol v2 header (after the magic and fixed header bytes).
-fn parse_proxy_v2(ver_cmd: u8, fam_proto: u8, addrs: &[u8]) -> Result<Option<SocketAddr>> {
-    let version = ver_cmd >> 4;
-    let command = ver_cmd & 0x0F;
-
-    if version != 2 {
-        return Err(anyhow!("Unsupported PROXY Protocol version: {}", version));
-    }
-
-    // Command 0 = LOCAL (health-checks, loopback): ignore the address information.
-    if command == 0 {
-        return Ok(None);
-    }
-
-    if command != 1 {
-        return Err(anyhow!("Unsupported PROXY Protocol v2 command: {}", command));
-    }
-
-    let family = fam_proto >> 4; // 1 = IPv4, 2 = IPv6, 3 = Unix
-
-    match family {
-        1 => {
-            // AF_INET: src_addr(4) + dst_addr(4) + src_port(2) + dst_port(2)
-            if addrs.len() < 12 {
-                return Err(anyhow!(
-                    "PROXY Protocol v2 IPv4 address payload too short: {} bytes", addrs.len()
-                ));
-            }
-            let src_ip = Ipv4Addr::new(addrs[0], addrs[1], addrs[2], addrs[3]);
-            let src_port = u16::from_be_bytes([addrs[8], addrs[9]]);
-            Ok(Some(SocketAddr::new(IpAddr::V4(src_ip), src_port)))
-        }
-        2 => {
-            // AF_INET6: src_addr(16) + dst_addr(16) + src_port(2) + dst_port(2)
-            if addrs.len() < 36 {
-                return Err(anyhow!(
-                    "PROXY Protocol v2 IPv6 address payload too short: {} bytes", addrs.len()
-                ));
-            }
-            let src: [u8; 16] = addrs[..16].try_into()
-                .context("Failed to copy IPv6 source address")?;
-            let src_ip = Ipv6Addr::from(src);
-            let src_port = u16::from_be_bytes([addrs[32], addrs[33]]);
-            Ok(Some(SocketAddr::new(IpAddr::V6(src_ip), src_port)))
-        }
-        _ => {
-            // AF_UNSPEC or AF_UNIX: no usable IP address.
-            Ok(None)
-        }
-    }
-}
 
 /// Result returned by the spawned login task on success.
-struct LoginTaskResult {
+pub(super) struct LoginTaskResult {
     session_id: u32,
     /// Data needed by the outer loop to send ServerSync / ServerConfig after
     /// transitioning the client state to `Ready`.
@@ -462,7 +40,7 @@ struct LoginTaskResult {
 }
 
 /// Arguments passed into the spawned login task.
-struct LoginTaskArgs {
+pub(super) struct LoginTaskArgs {
     hub_client: Arc<HubClient>,
     edge_state: Arc<EdgeState>,
     client_sender: ClientSender,
@@ -492,7 +70,7 @@ struct LoginTaskArgs {
 /// Returns `Some(LoginTaskResult)` on success.  On failure the function sends a
 /// Reject to the client, calls `remove_client` / `notify_user_left` if the
 /// session was already registered, and returns `None`.
-async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
+pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
     let LoginTaskArgs {
         hub_client,
         edge_state,
@@ -747,7 +325,7 @@ async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
 }
 
 /// Handle a single Mumble client connection (TLS).
-async fn handle_client_connection(
+pub(super) async fn handle_client_connection(
     stream: tokio::net::TcpStream,
     peer_addr: SocketAddr,
     acceptor: TlsAcceptor,
@@ -2107,7 +1685,7 @@ async fn handle_client_connection(
 }
 
 /// Handle a UserState update from a local client.
-async fn handle_user_state_update(
+pub(super) async fn handle_user_state_update(
     edge_state: &Arc<EdgeState>,
     hub_client: &Arc<HubClient>,
     session_id: u32,
@@ -2534,7 +2112,7 @@ async fn handle_user_state_update(
 
 /// Handle an admin UserState update (one user modifying another user's state).
 /// Currently handles: mute/deaf, channel move (kick to channel).
-async fn handle_admin_user_state_update(
+pub(super) async fn handle_admin_user_state_update(
     edge_state: &Arc<EdgeState>,
     hub_client: &Arc<HubClient>,
     actor_session: u32,
@@ -2798,7 +2376,7 @@ fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
 
 /// Decode a Mumble varint from a byte slice.
 /// Returns (value, bytes_consumed) or None if insufficient data.
-fn decode_mumble_varint(data: &[u8]) -> Option<(u32, usize)> {
+pub(crate) fn decode_mumble_varint(data: &[u8]) -> Option<(u32, usize)> {
     if data.is_empty() { return None; }
     let v = data[0];
     if (v & 0x80) == 0x00 {
@@ -2843,7 +2421,7 @@ fn build_hot_vt_map(
 /// Returns the cached value if present; otherwise calls `handle_permission_query`
 /// and stores the result.  On Hub error the result is **not cached** so the next
 /// call retries; the caller receives `fail_open` (all bits set for open, 0 for closed).
-async fn get_perm_cached(
+pub(crate) async fn get_perm_cached(
     hub_client: &crate::hub_client::HubClient,
     edge_state: &crate::state::EdgeState,
     session: u32,
@@ -2881,6 +2459,7 @@ fn encode_ip_address(addr: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::event_listener::hub_event_listener;
     use crate::channel_manager::ChannelManager;
     use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
     use crate::hub_client::HubClient;
@@ -2993,8 +2572,8 @@ mod tests {
         let (es, hub) = test_edge_and_hub();
 
         // Register two Ready clients.
-        let (tx_a, mut rx_a) = mpsc::channel::<Vec<u8>>(16);
-        let (tx_b, mut rx_b) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
+        let (tx_b, mut rx_b) = mpsc::channel::<bytes::Bytes>(16);
         es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_a)).await;
         es.client_manager.add_client(ready_client(2, 0), ClientSender::new(tx_b)).await;
 
@@ -3026,8 +2605,8 @@ mod tests {
     async fn test_self_unmute_broadcast_carries_false() {
         let (es, hub) = test_edge_and_hub();
 
-        let (tx_a, mut rx_a) = mpsc::channel::<Vec<u8>>(16);
-        let (tx_b, mut rx_b) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
+        let (tx_b, mut rx_b) = mpsc::channel::<bytes::Bytes>(16);
         // Start with user 1 already muted.
         let mut client1 = ready_client(1, 0);
         client1.self_mute = true;
@@ -3060,8 +2639,8 @@ mod tests {
     async fn test_self_deaf_implies_self_mute() {
         let (es, hub) = test_edge_and_hub();
 
-        let (tx_a, mut rx_a) = mpsc::channel::<Vec<u8>>(16);
-        let (tx_b, mut rx_b) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
+        let (tx_b, mut rx_b) = mpsc::channel::<bytes::Bytes>(16);
         es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_a)).await;
         es.client_manager.add_client(ready_client(2, 0), ClientSender::new(tx_b)).await;
 
@@ -3089,7 +2668,7 @@ mod tests {
     async fn test_un_deaf_does_not_clear_self_mute() {
         let (es, hub) = test_edge_and_hub();
 
-        let (tx_a, mut rx_a) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
         // Start with user 1 both muted and deafened.
         let mut c1 = ready_client(1, 0);
         c1.self_mute = true;
@@ -3117,7 +2696,7 @@ mod tests {
     async fn test_recording_flag_false_is_broadcast() {
         let (es, hub) = test_edge_and_hub();
 
-        let (tx_a, mut rx_a) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_a, mut rx_a) = mpsc::channel::<bytes::Bytes>(16);
         let mut c1 = ready_client(1, 0);
         c1.recording = true;
         es.client_manager.add_client(c1, ClientSender::new(tx_a)).await;
@@ -3139,8 +2718,8 @@ mod tests {
         // Grant admin (session 1) MUTE_DEAFEN permission on channel 0.
         es.permission_cache.insert((1, 0), perm::MUTE_DEAFEN);
 
-        let (tx_admin, mut rx_admin) = mpsc::channel::<Vec<u8>>(16);
-        let (tx_target, mut rx_target) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_admin, mut rx_admin) = mpsc::channel::<bytes::Bytes>(16);
+        let (tx_target, mut rx_target) = mpsc::channel::<bytes::Bytes>(16);
         es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_admin)).await;
         let mut target = ready_client(2, 0);
         target.mute = true;
@@ -3216,7 +2795,7 @@ mod tests {
         let (es, _hub) = test_edge_and_hub();
 
         // One local observer.
-        let (tx_obs, mut rx_obs) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_obs, mut rx_obs) = mpsc::channel::<bytes::Bytes>(16);
         es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_obs)).await;
 
         // Remote user (all defaults – nothing true).
@@ -3251,7 +2830,7 @@ mod tests {
     async fn test_remote_user_joined_true_flags_are_included() {
         let (es, _hub) = test_edge_and_hub();
 
-        let (tx_obs, mut rx_obs) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_obs, mut rx_obs) = mpsc::channel::<bytes::Bytes>(16);
         es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_obs)).await;
 
         let mut ru = remote_user(11, 0);
@@ -3284,7 +2863,7 @@ mod tests {
 
         let (es, _hub) = test_edge_and_hub();
 
-        let (tx_obs, mut rx_obs) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_obs, mut rx_obs) = mpsc::channel::<bytes::Bytes>(16);
         es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_obs)).await;
         es.channel_manager.upsert_remote_user(remote_user(12, 0)).await;
         let es = run_event_listener_task(es).await;
@@ -3321,7 +2900,7 @@ mod tests {
 
         let (es, _hub) = test_edge_and_hub();
 
-        let (tx_obs, mut rx_obs) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_obs, mut rx_obs) = mpsc::channel::<bytes::Bytes>(16);
         es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_obs)).await;
         let mut ru = remote_user(13, 0);
         ru.self_mute = false; // now false after update
@@ -3362,8 +2941,8 @@ mod tests {
     async fn test_admin_move_denied_when_hub_unreachable() {
         let (es, hub) = test_edge_and_hub(); // HubClient has no real connection
 
-        let (tx_admin, mut rx_admin) = mpsc::channel::<Vec<u8>>(16);
-        let (tx_victim, _rx_victim) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_admin, mut rx_admin) = mpsc::channel::<bytes::Bytes>(16);
+        let (tx_victim, _rx_victim) = mpsc::channel::<bytes::Bytes>(16);
 
         // Admin in channel 0, victim starts in channel 0.
         es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_admin)).await;
@@ -3379,7 +2958,7 @@ mod tests {
 
         // Admin must receive PermissionDenied (not UserState).
         let raw = rx_admin.recv().await.expect("admin must receive a message");
-        let mut buf = BytesMut::from(raw.as_slice());
+        let mut buf = BytesMut::from(&raw[..]);
         let frame = decode_frame(&mut buf).unwrap().unwrap();
         assert_eq!(
             frame.message_type,
@@ -3412,8 +2991,8 @@ mod tests {
         // Grant admin (session 1) MUTE_DEAFEN permission on channel 0.
         es.permission_cache.insert((1, 0), perm::MUTE_DEAFEN);
 
-        let (tx_admin, mut rx_admin) = mpsc::channel::<Vec<u8>>(16);
-        let (tx_victim, mut rx_victim) = mpsc::channel::<Vec<u8>>(16);
+        let (tx_admin, mut rx_admin) = mpsc::channel::<bytes::Bytes>(16);
+        let (tx_victim, mut rx_victim) = mpsc::channel::<bytes::Bytes>(16);
         es.client_manager.add_client(ready_client(1, 0), ClientSender::new(tx_admin)).await;
         es.client_manager.add_client(ready_client(2, 0), ClientSender::new(tx_victim)).await;
 
@@ -3437,425 +3016,3 @@ mod tests {
     }
 }
 
-/// Listen for events from the Hub and broadcast them to local clients.
-async fn hub_event_listener(    state: Arc<EdgeState>,
-    event_rx: &mut tokio::sync::broadcast::Receiver<EdgeEvent>,
-    shutdown_tx: watch::Sender<bool>,
-    hub_client: Arc<HubClient>,
-) {
-    use tokio::sync::broadcast::error::RecvError;
-
-    loop {
-        match event_rx.recv().await {
-            Ok(event) => {
-                match event {
-                    EdgeEvent::RemoteUserJoined { session_id, username, channel_id, is_ninja } => {
-                        // Only broadcast for REMOTE users (not local clients - handled by main task)
-                        if state.client_manager.get_client(session_id).await.is_none() {
-                            if let Some(user) = state.channel_manager.get_remote_user(session_id).await {
-                                // When announcing a newly-joined user we must NOT include Some(false)
-                                // for boolean fields – the Mumble client interprets every present bool
-                                // field as "this just changed to that value", triggering spurious
-                                // notifications ("user unmuted", "user stopped recording", etc.).
-                                // Only include a field when it is true (non-default).
-                                // Also: only include user_id for registered users (user_id > 0);
-                                // sending user_id=0 wrongly marks the guest as SuperUser.
-                                let msg = mumbleproto::UserState {
-                                    session: Some(user.session_id),
-                                    user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
-                                    name: Some(user.username.clone()),
-                                    channel_id: Some(user.channel_id),
-                                    mute:             if user.mute             { Some(true) } else { None },
-                                    deaf:             if user.deaf             { Some(true) } else { None },
-                                    suppress:         if user.suppress         { Some(true) } else { None },
-                                    self_mute:        if user.self_mute        { Some(true) } else { None },
-                                    self_deaf:        if user.self_deaf        { Some(true) } else { None },
-                                    priority_speaker: if user.priority_speaker { Some(true) } else { None },
-                                    recording:        if user.recording        { Some(true) } else { None },
-                                    hash: user.cert_hash.clone(),
-                                    ..Default::default()
-                                };
-                                if is_ninja {
-                                    // Channel Ninja: only send to clients who have Enter permission
-                                    // Clients lacking both Enter+Listen permission won't see the user
-                                    let local_clients = state.client_manager.get_all_clients().await;
-                                    let visible_cache = state.ninja_visible_to.read().await;
-                                    for client in local_clients {
-                                        let can_see = visible_cache
-                                            .get(&client.session)
-                                            .map(|set| set.contains(&channel_id))
-                                            .unwrap_or(false);
-                                        if can_see {
-                                            state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
-                                        }
-                                    }
-                                } else {
-                                    state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
-                                }
-                            }
-                        }
-                        debug!("Broadcast remote user joined: {} (session {}, channel {}, ninja={})", username, session_id, channel_id, is_ninja);
-                    }
-                    EdgeEvent::RemoteUserLeft { session_id } => {
-                        let msg = handler::build_user_remove_msg(session_id, None);
-                        state.client_manager.broadcast(MessageType::UserRemove, &msg, None).await;
-                        debug!("Broadcast remote user left: session {}", session_id);
-                    }
-                    EdgeEvent::RemoteUserStateChanged { session_id, delta, listening_channel_add, listening_channel_remove } => {
-                        // Only forward fields that ACTUALLY changed (carried by delta).
-                        // Broadcasting the full current state would include Some(false) for
-                        // unchanged default-off fields, triggering spurious client notifications.
-                        let mut msg = mumbleproto::UserState {
-                            session: Some(session_id),
-                            self_mute:        delta.self_mute,
-                            self_deaf:        delta.self_deaf,
-                            mute:             delta.mute,
-                            deaf:             delta.deaf,
-                            suppress:         delta.suppress,
-                            priority_speaker: delta.priority_speaker,
-                            recording:        delta.recording,
-                            ..Default::default()
-                        };
-                        if !listening_channel_add.is_empty() {
-                            msg.listening_channel_add = listening_channel_add;
-                        }
-                        if !listening_channel_remove.is_empty() {
-                            msg.listening_channel_remove = listening_channel_remove;
-                        }
-                        state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
-                        debug!("Broadcast remote user state changed: session {}", session_id);
-                    }
-                    EdgeEvent::RemoteUserMoved { session_id, channel_id, actor_session } => {
-                        let msg = mumbleproto::UserState {
-                            session: Some(session_id),
-                            channel_id: Some(channel_id),
-                            actor: Some(actor_session),
-                            ..Default::default()
-                        };
-                        state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
-                        debug!("Broadcast remote user moved: session {} -> channel {}", session_id, channel_id);
-                    }
-                    EdgeEvent::ChannelCreated { channel_id } => {
-                        if let Some(ch) = state.channel_manager.get_channel(channel_id).await {
-                            let msg = handler::build_channel_state_msg(&ch);
-                            state.client_manager.broadcast(MessageType::ChannelState, &msg, None).await;
-                        }
-                        debug!("Broadcast channel created: {}", channel_id);
-                    }
-                    EdgeEvent::ChannelRemoved { channel_id } => {
-                        let msg = mumbleproto::ChannelRemove { channel_id };
-                        state.client_manager.broadcast(MessageType::ChannelRemove, &msg, None).await;
-                        debug!("Broadcast channel removed: {}", channel_id);
-                    }
-                    EdgeEvent::ChannelUpdated { channel_id, links_add, links_remove } => {
-                        if let Some(ch) = state.channel_manager.get_channel(channel_id).await {
-                            let mut msg = handler::build_channel_state_msg(&ch);
-                            msg.links_add = links_add;
-                            msg.links_remove = links_remove;
-                            state.client_manager.broadcast(MessageType::ChannelState, &msg, None).await;
-                        }
-                        debug!("Broadcast channel updated: {}", channel_id);
-                    }
-                    EdgeEvent::HubRegistered { disappeared_session_ids } => {
-                        // Hub reconnected — resume accepting new client connections.
-                        state.accepting_connections.store(true, std::sync::atomic::Ordering::Relaxed);
-                        // After Hub reconnect / full-sync, resync the local clients' view of the
-                        // world:
-                        //  1. Send UserRemove for sessions that disappeared from Hub's snapshot
-                        //     (protects against zombie users left over from before the reconnect).
-                        //  2. Re-announce every remote user currently in the cache so clients that
-                        //     were already connected during the reconnect see new/updated users.
-                        //  3. Re-broadcast channel states so clients see any channel changes.
-                        let local_clients = state.client_manager.get_all_clients().await;
-                        let authenticated_clients: Vec<_> = local_clients
-                            .iter()
-                            .filter(|c| c.state == crate::client::ClientState::Ready)
-                            .collect();
-
-                        if authenticated_clients.is_empty() {
-                            info!("Hub registered — no authenticated clients to notify");
-                        } else {
-                            // 1. UserRemove for disappeared sessions.
-                            // Guard: never send UserRemove for session S to the client *with* session S.
-                            // A client receiving UserRemove for its own session would interpret it as
-                            // being kicked, showing a "left the channel" state even though the TCP
-                            // connection is still alive.
-                            for &sid in &disappeared_session_ids {
-                                let remove_msg = handler::build_user_remove_msg(sid, None);
-                                for client in &authenticated_clients {
-                                    if client.session == sid { continue; }
-                                    state.client_manager.send_to(client.session, MessageType::UserRemove, &remove_msg).await;
-                                }
-                            }
-                            if !disappeared_session_ids.is_empty() {
-                                info!("Hub registered — sent UserRemove for {} disappeared session(s)", disappeared_session_ids.len());
-                            }
-
-                            // 2. Re-announce all current remote users (only true-booleans to avoid spurious notifications)
-                            let ninja_channels_snap: std::collections::HashSet<u32> = {
-                                state.ninja_channels.read().await.iter().copied().collect()
-                            };
-                            let ninja_visible = state.ninja_visible_to.read().await;
-                            let remote_users = state.channel_manager.get_all_remote_users().await;
-                            let local_session_set: std::collections::HashSet<u32> =
-                                authenticated_clients.iter().map(|c| c.session).collect();
-
-                            for user in &remote_users {
-                                // Skip our own edge's users (tracked via client_manager)
-                                if local_session_set.contains(&user.session_id) { continue; }
-                                // Ninja channel visibility check
-                                if ninja_channels_snap.contains(&user.channel_id) {
-                                    // Only send to clients who can see this channel
-                                    let msg = mumbleproto::UserState {
-                                        session: Some(user.session_id),
-                                        user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
-                                        name: Some(user.username.clone()),
-                                        channel_id: Some(user.channel_id),
-                                        mute:             if user.mute             { Some(true) } else { None },
-                                        deaf:             if user.deaf             { Some(true) } else { None },
-                                        suppress:         if user.suppress         { Some(true) } else { None },
-                                        self_mute:        if user.self_mute        { Some(true) } else { None },
-                                        self_deaf:        if user.self_deaf        { Some(true) } else { None },
-                                        priority_speaker: if user.priority_speaker { Some(true) } else { None },
-                                        recording:        if user.recording        { Some(true) } else { None },
-                                        hash: user.cert_hash.clone(),
-                                        ..Default::default()
-                                    };
-                                    for client in &authenticated_clients {
-                                        let can_see = ninja_visible
-                                            .get(&client.session)
-                                            .map(|set| set.contains(&user.channel_id))
-                                            .unwrap_or(false);
-                                        if can_see {
-                                            state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
-                                        }
-                                    }
-                                } else {
-                                    let msg = mumbleproto::UserState {
-                                        session: Some(user.session_id),
-                                        user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
-                                        name: Some(user.username.clone()),
-                                        channel_id: Some(user.channel_id),
-                                        mute:             if user.mute             { Some(true) } else { None },
-                                        deaf:             if user.deaf             { Some(true) } else { None },
-                                        suppress:         if user.suppress         { Some(true) } else { None },
-                                        self_mute:        if user.self_mute        { Some(true) } else { None },
-                                        self_deaf:        if user.self_deaf        { Some(true) } else { None },
-                                        priority_speaker: if user.priority_speaker { Some(true) } else { None },
-                                        recording:        if user.recording        { Some(true) } else { None },
-                                        hash: user.cert_hash.clone(),
-                                        ..Default::default()
-                                    };
-                                    for client in &authenticated_clients {
-                                        state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
-                                    }
-                                }
-                            }
-                            info!("Hub registered — re-announced {} remote user(s) to {} local client(s)",
-                                remote_users.len(), authenticated_clients.len());
-
-                            // 3. Re-broadcast channel states so clients see any channel changes
-                            let channels = state.channel_manager.get_channels_bfs().await;
-                            for ch in &channels {
-                                let ch_msg = handler::build_channel_state_msg(ch);
-                                for client in &authenticated_clients {
-                                    state.client_manager.send_to(client.session, MessageType::ChannelState, &ch_msg).await;
-                                }
-                            }
-                            debug!("Hub registered — re-broadcast {} channel(s) to local clients", channels.len());
-                        }
-                    }
-                    EdgeEvent::HubDisconnected => {
-                        warn!("Hub disconnected - local clients will continue but some features unavailable");
-                    }
-                    EdgeEvent::HubUnreachable => {
-                        warn!("Hub is unreachable (>30s without connection) — disconnecting all clients and refusing new connections");
-                        state.accepting_connections.store(false, std::sync::atomic::Ordering::Relaxed);
-                        state.client_manager.close_all_connections(
-                            "Server temporarily unavailable, please reconnect later",
-                        ).await;
-                    }
-                    EdgeEvent::TextMessageForward { actor, message, channel_id, tree_id, session } => {
-                        let msg = mumbleproto::TextMessage {
-                            actor: Some(actor),
-                            message,
-                            channel_id,
-                            tree_id,
-                            session,
-                        };
-                        // Send to targeted sessions on this edge, or broadcast to channels
-                        if !msg.session.is_empty() {
-                            for &target_session in &msg.session {
-                                state.client_manager.send_to(target_session, MessageType::TextMessage, &msg).await;
-                            }
-                        } else if !msg.channel_id.is_empty() {
-                            for &ch_id in &msg.channel_id {
-                                state.client_manager.broadcast_to_channel(ch_id, MessageType::TextMessage, &msg, None).await;
-                            }
-                        } else if !msg.tree_id.is_empty() {
-                            // Collect all channels in the tree recursively
-                            let mut all_channel_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
-                            let mut to_visit: std::collections::VecDeque<u32> = msg.tree_id.iter().copied().collect();
-                            while let Some(ch_id) = to_visit.pop_front() {
-                                if all_channel_ids.insert(ch_id) {
-                                    let children = state.channel_manager.get_children(ch_id).await;
-                                    for child in children {
-                                        to_visit.push_back(child);
-                                    }
-                                }
-                            }
-                            for ch_id in all_channel_ids {
-                                state.client_manager.broadcast_to_channel(ch_id, MessageType::TextMessage, &msg, None).await;
-                            }
-                        }
-                        debug!("Forwarded text message from remote actor {}", actor);
-                    }
-                    EdgeEvent::PluginDataBroadcast { sender_session, data_id, data, target_sessions } => {
-                        let msg = mumbleproto::PluginDataTransmission {
-                            sender_session: Some(sender_session),
-                            data_id: Some(data_id.clone()),
-                            data: Some(data),
-                            receiver_sessions: vec![],
-                        };
-                        for &target_session in &target_sessions {
-                            state.client_manager.send_to(
-                                target_session, MessageType::PluginDataTransmission, &msg
-                            ).await;
-                        }
-                        debug!("Forwarded plugin data from session {}: {}", sender_session, data_id);
-                    }
-                    EdgeEvent::RelayedVoice { voice_packet } => {
-                        // Voice relayed from another edge via Hub TCP.
-                        // Standard Mumble server-to-client format:
-                        //   [header(1B)][sender_session_varint][sequence_varint][voice_data]
-                        if voice_packet.len() < 2 {
-                            continue;
-                        }
-                        let raw_target = voice_packet[0] & 0x1F;
-                        if raw_target == 31 {
-                            // Loopback — ignore cross-edge loopback
-                            continue;
-                        }
-                        let sender_session = match decode_mumble_varint(&voice_packet[1..]) {
-                            Some((s, _)) => s,
-                            None => {
-                                debug!("RelayedVoice: failed to parse sender session");
-                                continue;
-                            }
-                        };
-
-                        let my_edge_id = state.get_edge_id();
-                        {
-                            let hex: String = voice_packet.iter().take(16)
-                                .map(|b| format!("{:02X}", b))
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            trace!("edge={} RelayedVoice recv: len={} header=0x{:02X} target={} session={} bytes=[{}]",
-                                my_edge_id, voice_packet.len(), voice_packet[0], raw_target, sender_session, hex);
-                        }
-
-                        // For PTT (target=0), the sender's channel is required by compute_voice_targets.
-                        let sender_channel = if raw_target == 0 {
-                            match state.channel_manager.get_remote_user(sender_session).await {
-                                Some(ru) => ru.channel_id,
-                                None => {
-                                    debug!("edge={} RelayedVoice PTT: unknown remote session {}", my_edge_id, sender_session);
-                                    continue;
-                                }
-                            }
-                        } else {
-                            0 // unused for whisper (target 1..=30)
-                        };
-
-                        // compute_voice_targets handles VoiceTarget lookup, channel + listener
-                        // expansion, and deaf filtering — identical logic to the local TCP path.
-                        // relay_edge_ids is intentionally ignored: the sending edge already
-                        // handled inter-edge relay for this packet.
-                        let Some(targets) = crate::routing::compute_voice_targets(
-                            &voice_packet, sender_session, sender_channel, &state,
-                        ).await else {
-                            debug!("edge={} RelayedVoice: no targets for session {} target {}",
-                                my_edge_id, sender_session, raw_target);
-                            continue;
-                        };
-
-                        if targets.is_whisper {
-                            // voice_packet[0] carries raw voice_target_id in low 5 bits;
-                            // overwrite with AudioContext per Mumble protocol.
-                            let mut pkt = voice_packet.clone();
-                            pkt[0] = (voice_packet[0] & 0xe0) | 2;
-                            let frame_whisper = wrap_udptunnel(&pkt);
-                            pkt[0] = (voice_packet[0] & 0xe0) | 1;
-                            let frame_shout = wrap_udptunnel(&pkt);
-                            let d = deliver_voice_tcp(&targets.direct_sessions, &frame_whisper)
-                                + deliver_voice_tcp(&targets.channel_sessions, &frame_shout);
-                            trace!("edge={} Delivered relayed whisper from session {} to {} targets",
-                                my_edge_id, sender_session, d);
-                        } else {
-                            // voice_packet[0] already has context=0 (set by the sending edge for PTT).
-                            let frame = wrap_udptunnel(&voice_packet);
-                            let d = deliver_voice_tcp(&targets.local_sessions, &frame);
-                            trace!("edge={} Delivered relayed broadcast from session {} to {} local clients",
-                                my_edge_id, sender_session, d);
-                        }
-                    }
-                    EdgeEvent::ShutdownRequested { reason } => {
-                        // Hub requests graceful shutdown due to cluster partition.
-                        // Send ServerReject to all connected clients so they reconnect elsewhere.
-                        warn!("Shutdown requested: {}", reason);
-                        let reject_msg = mumbleproto::Reject {
-                            r#type: Some(mumbleproto::reject::RejectType::None as i32),
-                            reason: Some(format!("Server shutting down: {}", reason)),
-                        };
-                        let authenticated_sessions = state.client_manager.get_authenticated_sessions().await;
-                        for session in authenticated_sessions {
-                            state.client_manager.send_to(
-                                session,
-                                MessageType::Reject,
-                                &reject_msg,
-                            ).await;
-                        }
-                        // Give clients a moment to receive the reject, then exit gracefully
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                        warn!("Exiting due to hub shutdown request (cluster partition)");
-                        // Signal the main accept loop to shut down gracefully.
-                        let _ = shutdown_tx.send(true);
-                        return;
-                    }
-                    EdgeEvent::AclUpdated { channel_id } => {
-                        // An ACL was updated on the Hub; re-evaluate can_enter for every local
-                        // client on the affected channel and push a ChannelState update so the
-                        // client's lock icon reflects the new permissions immediately.
-                        debug!("ACL updated for channel {}, refreshing can_enter for all local sessions", channel_id);
-                        // Invalidate cached permissions for this channel so all queries below
-                        // fetch fresh values from Hub rather than returning stale data.
-                        state.permission_cache.retain(|&(_, ch), _| ch != channel_id);
-                        let all_clients = state.client_manager.get_all_clients().await;
-                        for client in all_clients {
-                            let can_enter = get_perm_cached(&hub_client, &state, client.session, channel_id, true).await
-                                & perm::ENTER != 0;
-                            let ch_state = mumbleproto::ChannelState {
-                                channel_id: Some(channel_id),
-                                is_enter_restricted: Some(!can_enter),
-                                can_enter: Some(can_enter),
-                                ..Default::default()
-                            };
-                            state.client_manager.send_to(client.session, MessageType::ChannelState, &ch_state).await;
-                        }
-                    }
-                }
-            }
-            Err(RecvError::Lagged(count)) => {
-                warn!(
-                    count,
-                    "Event listener lagged — triggering full re-sync to recover missed events"
-                );
-                hub_client.request_full_sync().await;
-            }
-            Err(RecvError::Closed) => {
-                info!("Event channel closed");
-                break;
-            }
-        }
-    }
-}
