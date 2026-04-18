@@ -12,8 +12,25 @@
 //!
 //! # Connection model
 //!
-//! Only ONE auth service connection is active at a time. If a new connection
-//! arrives while one is active, the old connection is dropped.
+//! Only ONE auth service connection is treated as active at a time. A
+//! monotonic generation counter is bumped on each new connection; only the
+//! connection whose generation still matches the counter owns the shared
+//! `sender` slot. Pending auth requests are tagged with the generation they
+//! were sent on, so ownership and cleanup are per-generation:
+//!
+//! - An `authenticate` call snapshots the current `(sender, gen)` pair under
+//!   the sender lock, tags its waiter with that `gen`, then sends outside the
+//!   lock.
+//! - When a connection's read loop exits, its teardown drains waiters tagged
+//!   with its own `gen` (they can no longer complete through this
+//!   now-defunct connection), then clears the `sender` slot only if it's
+//!   still the current connection. A superseded connection's teardown leaves
+//!   the `sender` slot alone — the newer connection owns it.
+//! - A superseded connection whose WebSocket is still alive keeps delivering
+//!   any late `AuthResponse`s it receives via the shared `pending` map,
+//!   routed by `request_id` — so in-flight requests that were sent on it
+//!   before it was superseded still have a chance to complete until their
+//!   connection's own teardown fires.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -43,7 +60,13 @@ const OUTBOUND_BUFFER: usize = 256;
 /// for diagnostics — they let timeout / disconnect / stale-response log
 /// lines cross-reference the original Edge RPC so the whole auth flow can
 /// be traced end-to-end without a separate correlation table.
+///
+/// `generation` tags the connection the request was dispatched on.  Teardown
+/// only cancels waiters whose generation matches the closing connection's own
+/// generation, so a superseded-but-still-alive connection can still deliver
+/// late responses for entries it sent.
 struct PendingAuth {
+    generation: u64,
     tx: oneshot::Sender<AuthResponse>,
     edge_request_id: String,
     username: String,
@@ -59,6 +82,10 @@ pub struct AuthServiceHandle {
 }
 
 struct AuthServiceInner {
+    /// Monotonic generation counter. Incremented on every new connection;
+    /// a connection only owns the sender / pending state while its generation
+    /// still matches. See `handle_connection` for the usage pattern.
+    active_conn_gen: AtomicU64,
     /// Monotonic counter for generating Hub-local auth request IDs.
     ///
     /// We deliberately do NOT reuse the Edge's RPC `request_id` as the
@@ -89,6 +116,7 @@ impl AuthServiceHandle {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(AuthServiceInner {
+                active_conn_gen: AtomicU64::new(0),
                 next_request_id: AtomicU64::new(0),
                 pending: Mutex::new(HashMap::new()),
                 sender: Mutex::new(None),
@@ -130,22 +158,9 @@ impl AuthServiceHandle {
         let username = request.username.clone();
         request.request_id = request_id.clone();
 
-        // Register the pending waiter BEFORE sending so the response cannot
-        // arrive and be dropped as "unknown" between send and insert.
         let (resp_tx, resp_rx) = oneshot::channel::<AuthResponse>();
-        {
-            let mut pending = self.inner.pending.lock().await;
-            pending.insert(
-                request_id.clone(),
-                PendingAuth {
-                    tx: resp_tx,
-                    edge_request_id: edge_request_id.clone(),
-                    username: username.clone(),
-                },
-            );
-        }
 
-        // Encode and send the AuthRequest packet.
+        // Encode the packet before acquiring any lock.
         let packet = AuthServicePacket {
             r#type: AuthServicePacketType::AuthRequest as i32,
             auth_request: Some(request),
@@ -154,17 +169,38 @@ impl AuthServiceHandle {
         };
         let data = packet.encode_to_vec();
 
-        let send_ok = {
-            let sender = self.inner.sender.lock().await;
-            if let Some(tx) = sender.as_ref() {
-                tx.send(data).await.is_ok()
-            } else {
-                false
+        // Under the sender lock, snapshot the current generation and clone the
+        // outbound sender, then register our waiter tagged with that same
+        // generation. Holding the sender lock across the generation load and
+        // the pending insert makes the (gen, sender) pair consistent: teardown
+        // that advances the generation also holds this lock, so it cannot
+        // race us into registering against a stale generation. We release the
+        // sender lock before the `tx.send(...).await` so a slow writer cannot
+        // block connection handover.
+        let tx_clone = {
+            let sender_guard = self.inner.sender.lock().await;
+            let Some(tx) = sender_guard.as_ref() else {
+                return None;
+            };
+            let generation = self.inner.active_conn_gen.load(Ordering::Relaxed);
+            {
+                let mut pending = self.inner.pending.lock().await;
+                pending.insert(
+                    request_id.clone(),
+                    PendingAuth {
+                        generation,
+                        tx: resp_tx,
+                        edge_request_id: edge_request_id.clone(),
+                        username: username.clone(),
+                    },
+                );
             }
+            tx.clone()
         };
 
-        if !send_ok {
-            // Clean up pending waiter and signal "not connected".
+        if tx_clone.send(data).await.is_err() {
+            // Target connection's writer has gone away. Remove our waiter
+            // (if teardown hasn't already) and bail.
             self.inner.pending.lock().await.remove(&request_id);
             return None;
         }
@@ -208,13 +244,12 @@ impl AuthServiceHandle {
         }
     }
 
-    /// Register a new outbound sender (called when a new connection is accepted).
-    async fn set_sender(&self, sender: Option<mpsc::Sender<Vec<u8>>>) {
-        *self.inner.sender.lock().await = sender;
-    }
-
-    /// Fail all pending requests (called when the connection is lost).
-    async fn drain_pending(&self) {
+    /// Fail pending requests belonging to a specific connection generation.
+    ///
+    /// Only entries whose `generation` matches `my_gen` are removed; entries
+    /// for other generations are left untouched — they belong to a superseded
+    /// sibling that is still alive or to a future connection.
+    async fn drain_pending(&self, my_gen: u64) {
         /// How many individual pending entries to enumerate in the disconnect
         /// log line before falling back to an aggregate count.  An Edge
         /// allows 32 concurrent auth RPCs locally, so a multi-Edge fleet can
@@ -225,7 +260,14 @@ impl AuthServiceHandle {
 
         let entries: Vec<(String, PendingAuth)> = {
             let mut pending = self.inner.pending.lock().await;
-            pending.drain().collect()
+            let keys: Vec<String> = pending
+                .iter()
+                .filter(|(_, v)| v.generation == my_gen)
+                .map(|(k, _)| k.clone())
+                .collect();
+            keys.into_iter()
+                .filter_map(|k| pending.remove(&k).map(|v| (k, v)))
+                .collect()
         };
         if entries.is_empty() {
             return;
@@ -245,21 +287,24 @@ impl AuthServiceHandle {
             .join(", ");
         if total > shown {
             warn!(
-                "{} pending auth request(s) cancelled due to auth service disconnect: \
-                 [{}, … and {} more]",
+                "{} pending auth request(s) cancelled due to auth service disconnect \
+                 (gen={}): [{}, \u{2026} and {} more]",
                 total,
+                my_gen,
                 summary,
                 total - shown,
             );
         } else {
             warn!(
-                "{} pending auth request(s) cancelled due to auth service disconnect: [{}]",
-                total, summary,
+                "{} pending auth request(s) cancelled due to auth service disconnect \
+                 (gen={}): [{}]",
+                total, my_gen, summary,
             );
         }
         // Dropping `entries` drops every `PendingAuth.tx`, which signals Err
         // to each waiter in `authenticate()`.
     }
+
 
     /// Handle an active WebSocket connection from an auth service.
     async fn handle_connection(
@@ -267,13 +312,23 @@ impl AuthServiceHandle {
         ws_stream: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
         addr: std::net::SocketAddr,
     ) {
-        info!("Auth service connected from {}", addr);
-
         let (mut ws_tx, mut ws_rx) = ws_stream.split();
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(OUTBOUND_BUFFER);
 
-        // Register this connection's sender.
-        self.set_sender(Some(tx.clone())).await;
+        // Atomic claim: bump the generation counter and install this
+        // connection's sender under one sender-lock critical section.
+        // `authenticate` also reads the generation and clones the sender
+        // under this same lock, so an external observer can never see
+        // `(gen advanced, sender still old)`. `Relaxed` is sufficient because
+        // all accesses to `active_conn_gen` happen inside this mutex — the
+        // mutex itself provides the ordering and visibility guarantees.
+        let my_gen = {
+            let mut sender_guard = self.inner.sender.lock().await;
+            let g = self.inner.active_conn_gen.fetch_add(1, Ordering::Relaxed) + 1;
+            *sender_guard = Some(tx.clone());
+            g
+        };
+        info!("Auth service connected from {} (gen={})", addr, my_gen);
 
         // Spawn writer task.
         let write_task = tokio::spawn(async move {
@@ -299,7 +354,7 @@ impl AuthServiceHandle {
                     }
                 }
                 Ok(WsMessage::Close(_)) => {
-                    info!("Auth service disconnected: {}", addr);
+                    info!("Auth service disconnected: {} (gen={})", addr, my_gen);
                     break;
                 }
                 Ok(WsMessage::Ping(payload)) => {
@@ -317,18 +372,55 @@ impl AuthServiceHandle {
                     let _ = payload; // suppress unused warning
                 }
                 Err(e) => {
-                    error!("Auth service WS error from {}: {}", addr, e);
+                    error!("Auth service WS error from {} (gen={}): {}", addr, my_gen, e);
                     break;
                 }
                 _ => {}
             }
         }
 
-        // Clean up on disconnect.
-        self.set_sender(None).await;
-        self.drain_pending().await;
+        // Teardown step 1 — stop handing our sender to new callers.
+        // Clear the sender slot first (only if we're still the current
+        // connection) so `authenticate()` cannot continue to snapshot our
+        // now-dead `tx`. A newer connection that has already claimed the
+        // slot owns `sender`; leaving it alone is correct for that case.
+        let was_current = {
+            let mut sender_guard = self.inner.sender.lock().await;
+            if self.inner.active_conn_gen.load(Ordering::Relaxed) == my_gen {
+                *sender_guard = None;
+                true
+            } else {
+                false
+            }
+        };
+
+        // Teardown step 2 — sever the writer pipe. Aborting the writer task
+        // drops the `rx` end of the mpsc channel, so any `tx.send(...).await`
+        // from an `authenticate()` that slipped in during the tiny window
+        // between its sender-lock release and our sender-lock acquisition
+        // fails immediately. Combined with step 3, that call's waiter will
+        // be removed too, so it returns `None` rather than quietly queueing
+        // data to a dead peer.
         write_task.abort();
-        info!("Auth service connection closed: {}", addr);
+
+        // Teardown step 3 — cancel waiters tagged with our generation. They
+        // can no longer complete through this connection. Entries tagged
+        // with other generations are left alone: they belong either to a
+        // superseded sibling that's still reading or to a future connection
+        // that hasn't been born yet.
+        self.drain_pending(my_gen).await;
+
+        if was_current {
+            info!(
+                "Auth service connection closed: {} (gen={}, was current)",
+                addr, my_gen
+            );
+        } else {
+            info!(
+                "Auth service connection closed: {} (gen={}, superseded)",
+                addr, my_gen
+            );
+        }
     }
 
     /// Dispatch a decoded packet.
