@@ -535,6 +535,16 @@ impl HubClient {
             limits.max_users.unwrap_or(0),
             std::sync::atomic::Ordering::Relaxed,
         );
+        if let Some(v) = limits.listeners_per_user {
+            if v > 0 {
+                self.edge_state.listeners_per_user.store(v, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        if let Some(v) = limits.listeners_per_channel {
+            if v > 0 {
+                self.edge_state.listeners_per_channel.store(v, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
         *self.edge_state.hub_limits.write().await = Some(limits);
     }
 

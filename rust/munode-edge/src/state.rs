@@ -240,11 +240,11 @@ pub struct EdgeState {
     /// Hub-pushed cluster-level TTL cap for relay packets.
     pub max_ttl: std::sync::atomic::AtomicU32,
     /// Maximum number of channels a single user may listen to simultaneously.
-    /// 0 = unlimited.
-    pub listeners_per_user: u32,
+    /// 0 = unlimited.  Updated atomically when Hub pushes a new `ServerLimitsConfig`.
+    pub listeners_per_user: AtomicU32,
     /// Maximum number of listeners allowed in a single channel.
-    /// 0 = unlimited.
-    pub listeners_per_channel: u32,
+    /// 0 = unlimited.  Updated atomically when Hub pushes a new `ServerLimitsConfig`.
+    pub listeners_per_channel: AtomicU32,
     /// Whether to respond to unauthenticated UDP ping probes from clients.
     /// When false, the server won't echo back ping packets (prevents public listing).
     /// Stored as AtomicBool for lock-free reads in the UDP hot path and hot-reload.
@@ -343,8 +343,8 @@ impl EdgeState {
             consecutive_failure_threshold: 2,
             next_hop_failures: std::sync::RwLock::new(HashMap::new()),
             max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
-            listeners_per_user: 0,
-            listeners_per_channel: 0,
+            listeners_per_user: AtomicU32::new(0),
+            listeners_per_channel: AtomicU32::new(0),
             allow_ping: AtomicBool::new(true),
             rolling_stats_window: AtomicU32::new(120),
             ninja_channels: RwLock::new(vec![]),
@@ -388,8 +388,8 @@ impl EdgeState {
             consecutive_failure_threshold: 2,
             next_hop_failures: std::sync::RwLock::new(HashMap::new()),
             max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
-            listeners_per_user,
-            listeners_per_channel,
+            listeners_per_user: AtomicU32::new(listeners_per_user),
+            listeners_per_channel: AtomicU32::new(listeners_per_channel),
             allow_ping: AtomicBool::new(true),
             rolling_stats_window: AtomicU32::new(120),
             ninja_channels: RwLock::new(vec![]),
@@ -441,8 +441,8 @@ impl EdgeState {
             consecutive_failure_threshold,
             next_hop_failures: std::sync::RwLock::new(HashMap::new()),
             max_ttl: std::sync::atomic::AtomicU32::new(DEFAULT_MAX_TTL),
-            listeners_per_user,
-            listeners_per_channel,
+            listeners_per_user: AtomicU32::new(listeners_per_user),
+            listeners_per_channel: AtomicU32::new(listeners_per_channel),
             allow_ping: AtomicBool::new(allow_ping),
             rolling_stats_window: AtomicU32::new(rolling_stats_window),
             ninja_channels: RwLock::new(vec![]),

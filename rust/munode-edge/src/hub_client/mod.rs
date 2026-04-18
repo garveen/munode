@@ -1279,19 +1279,8 @@ impl HubClient {
 
         // Store server limits received from Hub
         if let Some(limits) = result.server_limits {
-            if let Some(allow_ping) = limits.allow_ping {
-                self.edge_state.allow_ping.store(allow_ping, std::sync::atomic::Ordering::Relaxed);
-            }
-            self.edge_state.max_bandwidth_bps.store(
-                limits.max_bandwidth.unwrap_or(0),
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            self.edge_state.max_users.store(
-                limits.max_users.unwrap_or(0),
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            *self.edge_state.hub_limits.write().await = Some(limits);
             debug!("Stored server limits from Hub registration (challenge)");
+            self.apply_server_limits(limits).await;
         }
 
         Ok(())

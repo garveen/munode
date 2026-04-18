@@ -1821,7 +1821,7 @@ pub(super) async fn handle_user_state_update(
                 // Check per-user listener limit using the local clone's length;
                 // add_listener_checked keeps sessions in sync so the length is accurate
                 // even for channels added earlier in this same loop.
-                let per_user_limit = edge_state.listeners_per_user;
+                let per_user_limit = edge_state.listeners_per_user.load(std::sync::atomic::Ordering::Relaxed);
                 if per_user_limit > 0 && client.listening_channels.len() as u32 >= per_user_limit {
                     debug!("Listener limit ({}) reached for session {}", per_user_limit, session_id);
                     if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
@@ -1859,7 +1859,7 @@ pub(super) async fn handle_user_state_update(
                 // This replaces the previous non-atomic get_listening_count + deferred
                 // update_client pattern, eliminating the TOCTOU race where multiple tasks
                 // could both observe "channel has room" and both complete the add.
-                let per_channel_limit = edge_state.listeners_per_channel;
+                let per_channel_limit = edge_state.listeners_per_channel.load(std::sync::atomic::Ordering::Relaxed);
                 let added = edge_state.client_manager
                     .add_listener_checked(session_id, ch, per_channel_limit)
                     .await;
