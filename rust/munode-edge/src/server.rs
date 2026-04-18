@@ -26,6 +26,7 @@ use crate::hub_client::{HubClient, HubConnectionState};
 use crate::state::{EdgeEvent, EdgeState};
 use crate::tls::create_tls_acceptor;
 use crate::udp::UdpServer;
+use crate::voice::{deliver_voice_tcp, inject_session_into_voice, wrap_udptunnel};
 
 /// The main Edge server.
 pub struct EdgeServer {
@@ -1335,12 +1336,7 @@ async fn handle_client_connection(
                                 // Suppressed users cannot speak — silently drop.
                             } else if voice_target == 31 {
                                 // Loopback: send back to the sender (inject session ID per protocol)
-                                let forwarded = inject_session_into_voice(&frame.payload, sid, 0);
-                                let mut buf = BytesMut::with_capacity(6 + forwarded.len());
-                                bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-                                bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
-                                bytes::BufMut::put_slice(&mut buf, &forwarded);
-                                let data = buf.freeze();
+                                let data = wrap_udptunnel(&inject_session_into_voice(&frame.payload, sid, 0));
                                 if let Some(sender_tx) = edge_state.client_manager.get_sender(sid).await {
                                     sender_tx.send_raw(data).await;
                                 }
@@ -1350,57 +1346,13 @@ async fn handle_client_connection(
                                 // Shared routing: compute_voice_targets handles VoiceTarget
                                 // lookup, channel expansion, and deaf filtering.
                                 if targets.is_whisper {
-                                    // Build two UdpTunnel frames:
-                                    //   WHISPER (context=2) for direct session targets
-                                    //   SHOUT   (context=1) for channel-expanded targets
-                                    let mk_frame = |ctx: u8| {
-                                        let f = inject_session_into_voice(&frame.payload, sid, ctx);
-                                        let mut buf = BytesMut::with_capacity(6 + f.len());
-                                        bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-                                        bytes::BufMut::put_u32(&mut buf, f.len() as u32);
-                                        bytes::BufMut::put_slice(&mut buf, &f);
-                                        buf.freeze()
-                                    };
-                                    let data_whisper = mk_frame(2);
-                                    let data_shout   = mk_frame(1);
-                                    for &target_session in &targets.direct_sessions {
-                                        let slot = crate::hot_slot::get_hot_slot(target_session);
-                                        if !slot.is_active_for(target_session) { continue; }
-                                        let sender_guard = slot.sender.load();
-                                        if let Some(sender) = &**sender_guard {
-                                            if sender.try_send(data_whisper.clone()).is_err() {
-                                                warn!("TCP whisper drop session {} (channel full)", target_session);
-                                            }
-                                        }
-                                    }
-                                    for &target_session in &targets.channel_sessions {
-                                        let slot = crate::hot_slot::get_hot_slot(target_session);
-                                        if !slot.is_active_for(target_session) { continue; }
-                                        let sender_guard = slot.sender.load();
-                                        if let Some(sender) = &**sender_guard {
-                                            if sender.try_send(data_shout.clone()).is_err() {
-                                                warn!("TCP shout drop session {} (channel full)", target_session);
-                                            }
-                                        }
-                                    }
+                                    let data_whisper = wrap_udptunnel(&inject_session_into_voice(&frame.payload, sid, 2));
+                                    let data_shout   = wrap_udptunnel(&inject_session_into_voice(&frame.payload, sid, 1));
+                                    deliver_voice_tcp(&targets.direct_sessions, &data_whisper);
+                                    deliver_voice_tcp(&targets.channel_sessions, &data_shout);
                                 } else {
-                                    // Normal broadcast: build single UdpTunnel frame (context=0)
-                                    let forwarded = inject_session_into_voice(&frame.payload, sid, 0);
-                                    let mut buf = BytesMut::with_capacity(6 + forwarded.len());
-                                    bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-                                    bytes::BufMut::put_u32(&mut buf, forwarded.len() as u32);
-                                    bytes::BufMut::put_slice(&mut buf, &forwarded);
-                                    let data = buf.freeze();
-                                    for &target_session in &targets.local_sessions {
-                                        let slot = crate::hot_slot::get_hot_slot(target_session);
-                                        if !slot.is_active_for(target_session) { continue; }
-                                        let sender_guard = slot.sender.load();
-                                        if let Some(sender) = &**sender_guard {
-                                            if sender.try_send(data.clone()).is_err() {
-                                                warn!("TCP broadcast drop session {} (channel full)", target_session);
-                                            }
-                                        }
-                                    }
+                                    let data = wrap_udptunnel(&inject_session_into_voice(&frame.payload, sid, 0));
+                                    deliver_voice_tcp(&targets.local_sessions, &data);
                                 }
 
                                 // Relay to remote edges via Hub TCP fallback.
@@ -2913,25 +2865,6 @@ async fn get_perm_cached(
     }
 }
 
-/// Client sends: [header(1B)][sequence_varint][audio_data]
-/// Server forwards: [header(1B)][sender_session_varint][sequence_varint][audio_data]
-/// Build a server-to-client voice payload:
-/// - Rewrites the lower 5 bits of the header byte to `context`
-///   (0 = normal speech, 1 = SHOUT/channel target, 2 = WHISPER/direct target)
-/// - Inserts sender_session varint after the header byte (Mumble server-to-client format)
-fn inject_session_into_voice(payload: &[u8], sender_session: u32, context: u8) -> Vec<u8> {
-    if payload.is_empty() {
-        return Vec::new();
-    }
-    // Preserve codec type (high 3 bits), overwrite target/context (low 5 bits)
-    let header = (payload[0] & 0xe0) | (context & 0x1f);
-    let mut result = Vec::with_capacity(1 + 5 + payload.len() - 1);
-    result.push(header);
-    crate::udp::write_mumble_varint(sender_session, &mut result);
-    result.extend_from_slice(&payload[1..]);
-    result
-}
-
 /// Encode an IP address string into bytes (4 bytes for IPv4, 16 bytes for IPv6).
 fn encode_ip_address(addr: &str) -> Vec<u8> {
     if let Ok(ip) = addr.parse::<std::net::IpAddr>() {
@@ -3795,13 +3728,14 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         // Voice relayed from another edge via Hub TCP.
                         // Standard Mumble server-to-client format:
                         //   [header(1B)][sender_session_varint][sequence_varint][voice_data]
-                        // voice_packet already has session injected, so it can be sent directly to clients.
                         if voice_packet.len() < 2 {
                             continue;
                         }
-                        let voice_target = (voice_packet[0] & 0x1F) as u32;
-
-                        // Parse sender_session varint from offset 1
+                        let raw_target = voice_packet[0] & 0x1F;
+                        if raw_target == 31 {
+                            // Loopback — ignore cross-edge loopback
+                            continue;
+                        }
                         let sender_session = match decode_mumble_varint(&voice_packet[1..]) {
                             Some((s, _)) => s,
                             None => {
@@ -3811,142 +3745,58 @@ async fn hub_event_listener(    state: Arc<EdgeState>,
                         };
 
                         let my_edge_id = state.get_edge_id();
-
-                        // Trace: log first 16 bytes of voice_packet to verify format
                         {
                             let hex: String = voice_packet.iter().take(16)
                                 .map(|b| format!("{:02X}", b))
                                 .collect::<Vec<_>>()
                                 .join(" ");
                             trace!("edge={} RelayedVoice recv: len={} header=0x{:02X} target={} session={} bytes=[{}]",
-                                my_edge_id, voice_packet.len(), voice_packet[0], voice_target, sender_session, hex);
+                                my_edge_id, voice_packet.len(), voice_packet[0], raw_target, sender_session, hex);
                         }
 
-                        // Build TCP UdpTunnel frame (voice_packet is already correctly formatted)
-                        let frame = {
-                            let mut buf = bytes::BytesMut::with_capacity(6 + voice_packet.len());
-                            bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-                            bytes::BufMut::put_u32(&mut buf, voice_packet.len() as u32);
-                            bytes::BufMut::put_slice(&mut buf, &voice_packet);
-                            buf.freeze()
-                        };
-
-                        match voice_target {
-                            31 => {
-                                // Loopback — ignore cross-edge loopback
-                                debug!("edge={} Ignoring relayed loopback from session {}", my_edge_id, sender_session);
-                            }
-                            0 => {
-                                // PTT broadcast: deliver to all local clients in sender's linked channels
-                                let sender_channel_id = if let Some(ru) = state.channel_manager.get_remote_user(sender_session).await {
-                                    ru.channel_id
-                                } else {
+                        // For PTT (target=0), the sender's channel is required by compute_voice_targets.
+                        let sender_channel = if raw_target == 0 {
+                            match state.channel_manager.get_remote_user(sender_session).await {
+                                Some(ru) => ru.channel_id,
+                                None => {
                                     debug!("edge={} RelayedVoice PTT: unknown remote session {}", my_edge_id, sender_session);
                                     continue;
-                                };
-                                let linked_channels = state.channel_manager.get_all_linked_channels(sender_channel_id).await;
-                                let mut delivered = 0usize;
-                                for ch_id in &linked_channels {
-                                    let local_targets = state.client_manager.get_channel_sessions(*ch_id).await;
-                                    for target_session in local_targets {
-                                        let slot = crate::hot_slot::get_hot_slot(target_session);
-                                        if !slot.is_active_for(target_session) { continue; }
-                                        if slot.deaf.load(std::sync::atomic::Ordering::Relaxed)
-                                            || slot.self_deaf.load(std::sync::atomic::Ordering::Relaxed) { continue; }
-                                        let sender_guard = slot.sender.load();
-                                        if let Some(sender) = &**sender_guard {
-                                            sender.try_send(frame.clone()).ok();
-                                            delivered += 1;
-                                        }
-                                    }
-                                }
-                                trace!("edge={} Delivered relayed broadcast from session {} to {} local clients in {} linked channels", my_edge_id, sender_session, delivered, linked_channels.len());
-                            }
-                            1..=30 => {
-                                // Whisper/shout: use this edge's locally-synced VoiceTarget config
-                                // for sender_session to decide which LOCAL sessions receive the packet.
-                                // The sending edge sent only the raw voice_target_id in the header;
-                                // routing decisions are made independently on each receiving edge.
-                                let vt_config: Option<crate::hot_slot::HotVoiceTarget> = {
-                                    let slot = crate::hot_slot::get_hot_slot(sender_session);
-                                    if slot.is_active_for(sender_session) {
-                                        let vt_guard = slot.voice_targets.load();
-                                        if let Some(map) = &**vt_guard {
-                                            map.get(&voice_target).cloned()
-                                        } else { None }
-                                    } else {
-                                        // Session is not local; look up from EdgeState
-                                        let cache = state.voice_targets.read().await;
-                                        cache.get(&sender_session).and_then(|m| m.get(&voice_target))
-                                            .map(|vt| crate::hot_slot::HotVoiceTarget {
-                                                sessions: vt.sessions.clone(),
-                                                resolved_channels: vt.resolved_channels.clone(),
-                                            })
-                                    }
-                                };
-                                if let Some(vt) = vt_config {
-                                    // Direct (per-session) targets in VoiceTarget.sessions.
-                                    let direct_sessions: std::collections::HashSet<u32> =
-                                        vt.sessions.iter().copied().collect();
-                                    // Channel targets from pre-computed resolved_channels with optional group filter.
-                                    let mut channel_sessions: std::collections::HashSet<u32> = std::collections::HashSet::new();
-                                    for (ch_id, group_filter) in &vt.resolved_channels {
-                                        let local_sessions = state.client_manager.get_channel_sessions(*ch_id).await;
-                                        for s in local_sessions {
-                                            if s == sender_session || direct_sessions.contains(&s) { continue; }
-                                            if let Some(groups) = group_filter {
-                                                let in_group = state.client_manager.get_client(s).await
-                                                    .map(|c| c.groups.iter().any(|g| groups.contains(g)))
-                                                    .unwrap_or(false);
-                                                if !in_group { continue; }
-                                            }
-                                            channel_sessions.insert(s);
-                                        }
-                                    }
-                                    // Build separate TCP frames per Mumble AudioContext,
-                                    // mirroring murmur's processMsg() per-receiver context:
-                                    //   WHISPER (2) for direct session targets
-                                    //   SHOUT   (1) for channel-expanded targets
-                                    let make_frame_ctx = |ctx: u8| {
-                                        let mut pkt = voice_packet.clone();
-                                        pkt[0] = (pkt[0] & 0xe0) | (ctx & 0x1f);
-                                        let mut buf = bytes::BytesMut::with_capacity(6 + pkt.len());
-                                        bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-                                        bytes::BufMut::put_u32(&mut buf, pkt.len() as u32);
-                                        bytes::BufMut::put_slice(&mut buf, &pkt);
-                                        buf.freeze()
-                                    };
-                                    let frame_whisper = make_frame_ctx(2);
-                                    let frame_shout   = make_frame_ctx(1);
-                                    let mut delivered = 0usize;
-                                    for &target_session in &direct_sessions {
-                                        let slot = crate::hot_slot::get_hot_slot(target_session);
-                                        if !slot.is_active_for(target_session) { continue; }
-                                        if slot.deaf.load(std::sync::atomic::Ordering::Relaxed)
-                                            || slot.self_deaf.load(std::sync::atomic::Ordering::Relaxed) { continue; }
-                                        let sender_guard = slot.sender.load();
-                                        if let Some(sender) = &**sender_guard {
-                                            sender.try_send(frame_whisper.clone()).ok();
-                                            delivered += 1;
-                                        }
-                                    }
-                                    for &target_session in &channel_sessions {
-                                        let slot = crate::hot_slot::get_hot_slot(target_session);
-                                        if !slot.is_active_for(target_session) { continue; }
-                                        if slot.deaf.load(std::sync::atomic::Ordering::Relaxed)
-                                            || slot.self_deaf.load(std::sync::atomic::Ordering::Relaxed) { continue; }
-                                        let sender_guard = slot.sender.load();
-                                        if let Some(sender) = &**sender_guard {
-                                            sender.try_send(frame_shout.clone()).ok();
-                                            delivered += 1;
-                                        }
-                                    }
-                                    trace!("edge={} Delivered relayed whisper from session {} to {}/{} targets", my_edge_id, sender_session, delivered, direct_sessions.len() + channel_sessions.len());
-                                } else {
-                                    debug!("edge={} RelayedVoice whisper: no VoiceTarget config for session {} target {}", my_edge_id, sender_session, voice_target);
                                 }
                             }
-                            _ => {}
+                        } else {
+                            0 // unused for whisper (target 1..=30)
+                        };
+
+                        // compute_voice_targets handles VoiceTarget lookup, channel + listener
+                        // expansion, and deaf filtering — identical logic to the local TCP path.
+                        // relay_edge_ids is intentionally ignored: the sending edge already
+                        // handled inter-edge relay for this packet.
+                        let Some(targets) = crate::routing::compute_voice_targets(
+                            &voice_packet, sender_session, sender_channel, &state,
+                        ).await else {
+                            debug!("edge={} RelayedVoice: no targets for session {} target {}",
+                                my_edge_id, sender_session, raw_target);
+                            continue;
+                        };
+
+                        if targets.is_whisper {
+                            // voice_packet[0] carries raw voice_target_id in low 5 bits;
+                            // overwrite with AudioContext per Mumble protocol.
+                            let mut pkt = voice_packet.clone();
+                            pkt[0] = (voice_packet[0] & 0xe0) | 2;
+                            let frame_whisper = wrap_udptunnel(&pkt);
+                            pkt[0] = (voice_packet[0] & 0xe0) | 1;
+                            let frame_shout = wrap_udptunnel(&pkt);
+                            let d = deliver_voice_tcp(&targets.direct_sessions, &frame_whisper)
+                                + deliver_voice_tcp(&targets.channel_sessions, &frame_shout);
+                            trace!("edge={} Delivered relayed whisper from session {} to {} targets",
+                                my_edge_id, sender_session, d);
+                        } else {
+                            // voice_packet[0] already has context=0 (set by the sending edge for PTT).
+                            let frame = wrap_udptunnel(&voice_packet);
+                            let d = deliver_voice_tcp(&targets.local_sessions, &frame);
+                            trace!("edge={} Delivered relayed broadcast from session {} to {} local clients",
+                                my_edge_id, sender_session, d);
                         }
                     }
                     EdgeEvent::ShutdownRequested { reason } => {
