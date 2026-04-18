@@ -16,14 +16,12 @@ thread_local! {
 }
 
 use anyhow::Result;
-use bytes::BytesMut;
 use dashmap::DashMap;
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn, trace};
 use async_channel;
 
-use munode_protocol::message_type::MessageType;
 use munode_protocol::transport::EDGE_MAGIC;
 
 use crate::hub_client::HubClient;
@@ -701,8 +699,8 @@ impl UdpServer {
             // processMsg() which sets audioData.targetOrContext per receiver:
             //   WHISPER (2) for direct session targets
             //   SHOUT   (1) for channel-expanded targets
-            let forwarded_whisper = inject_session_into_voice(plaintext, sender_session, 2);
-            let forwarded_shout   = inject_session_into_voice(plaintext, sender_session, 1);
+            let forwarded_whisper = crate::voice::inject_session_into_voice(plaintext, sender_session, 2);
+            let forwarded_shout   = crate::voice::inject_session_into_voice(plaintext, sender_session, 1);
 
             // Phase A-direct: encrypt WHISPER targets (direct_sessions).
             // Each Mumble session has a unique AES-128 key negotiated during TCP auth,
@@ -799,7 +797,7 @@ impl UdpServer {
             trace!("route_voice: {} local targets", targets.local_sessions.len());
             // Phase A: encrypt all targets into a batch (synchronous, no await).
             // context=0 → NORMAL speech (PTT), matching murmur's AudioContext::NORMAL.
-            let forwarded = inject_session_into_voice(plaintext, sender_session, 0);
+            let forwarded = crate::voice::inject_session_into_voice(plaintext, sender_session, 0);
             let mut client_batch: Vec<(Vec<u8>, SocketAddr)> =
                 Vec::with_capacity(targets.local_sessions.len());
             let mut no_udp_targets: Vec<u32> = Vec::new();
@@ -865,7 +863,7 @@ impl UdpServer {
 
         // relay_payload preserves the original voice_target_id in low 5 bits so remote edges
         // can look up their own VoiceTarget config and apply correct AudioContext per recipient.
-        let relay_payload = inject_session_into_voice(plaintext, sender_session, voice_target as u8);
+        let relay_payload = crate::voice::inject_session_into_voice(plaintext, sender_session, voice_target as u8);
         let by_edge: std::collections::HashMap<u32, bool> =
             targets.relay_edge_ids.iter().map(|&e| (e, true)).collect();
 
@@ -1115,7 +1113,7 @@ impl UdpServer {
 
     /// Deliver voice via TCP UDPTunnel (no encryption — TLS handles it).
     async fn fallback_to_tcp(&self, session_id: u32, plaintext: &[u8]) {
-        let data = build_udp_tunnel_packet(plaintext);
+        let data = crate::voice::wrap_udptunnel(plaintext);
         let slot = get_hot_slot(session_id);
         if !slot.is_active_for(session_id) { return; }
         let sender_guard = slot.sender.load();
@@ -1335,7 +1333,7 @@ impl UdpServer {
         // Build server-to-client format: [header][session_varint][seq][audio]
         // Preserve the original voice_target_id in low-5 bits so the RelayedVoice handler
         // in server.rs can route by target and set the correct AudioContext per recipient.
-        let voice_packet = inject_session_into_voice(voice_data, sender_session, voice_data.first().copied().unwrap_or(0) & 0x1f);
+        let voice_packet = crate::voice::inject_session_into_voice(voice_data, sender_session, voice_data.first().copied().unwrap_or(0) & 0x1f);
         if !voice_packet.is_empty() {
             self.edge_state.emit(crate::state::EdgeEvent::RelayedVoice { voice_packet: voice_packet.into() });
         }
@@ -1497,14 +1495,7 @@ fn write_pb_varint(out: &mut Vec<u8>, mut value: u64) {
     }
 }
 
-/// Build a TCP UdpTunnel frame from raw (plaintext) voice data.
-fn build_udp_tunnel_packet(data: &[u8]) -> bytes::Bytes {
-    let mut buf = BytesMut::with_capacity(6 + data.len());
-    bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
-    bytes::BufMut::put_u32(&mut buf, data.len() as u32);
-    bytes::BufMut::put_slice(&mut buf, data);
-    buf.freeze()
-}
+
 
 /// Atomically increment the consecutive failure counter for `edge_id`.
 ///
@@ -1625,7 +1616,7 @@ fn probe_current_millis() -> u64 {
 }
 
 /// Encode a u32 value as a Mumble variable-length integer.
-#[allow(dead_code)] // used by tests and by inject_session_into_voice
+#[allow(dead_code)] // used by tests
 pub(crate) fn encode_mumble_varint(value: u32) -> Vec<u8> {
     if value < 0x80 {
         vec![value as u8]
@@ -1659,32 +1650,7 @@ pub(crate) fn write_mumble_varint(value: u32, dst: &mut Vec<u8>) {
     }
 }
 
-/// Inject sender session ID into a voice packet payload before forwarding to clients.
-/// Client-to-server format: [header(1B)][sequence_varint][audio_data]
-/// Server-to-client format: [header(1B)][sender_session_varint][sequence_varint][audio_data]
-///
-/// `context` overwrites the lower 5 bits of the header byte:
-///   0 = normal speech (PTT), 1 = SHOUT (channel whisper target), 2 = WHISPER (direct target)
-/// Pass `payload[0] & 0x1f` to preserve the original bits (e.g., for relay paths).
-///
-/// Returns a `bytes::Bytes` so all callers can share the same underlying allocation
-/// without copying — relay paths clone in O(1).
-fn inject_session_into_voice(payload: &[u8], sender_session: u32, context: u8) -> bytes::Bytes {
-    use bytes::BytesMut;
-    if payload.is_empty() {
-        return bytes::Bytes::new();
-    }
-    // Preserve codec type (high 3 bits), overwrite target/context (low 5 bits).
-    let header = (payload[0] & 0xe0) | (context & 0x1f);
-    // Worst-case varint length is 5 bytes; over-allocate to avoid realloc.
-    let mut result = BytesMut::with_capacity(1 + 5 + payload.len() - 1);
-    result.extend_from_slice(&[header]);
-    let mut tmp = Vec::with_capacity(5);
-    write_mumble_varint(sender_session, &mut tmp);
-    result.extend_from_slice(&tmp);
-    result.extend_from_slice(&payload[1..]);
-    result.freeze()
-}
+
 
 
 

@@ -8,6 +8,7 @@ pub mod hub_client;
 pub mod relay_server;
 pub mod routing;
 pub mod server;
+pub mod voice;
 pub mod state;
 pub mod tls;
 pub mod udp;
