@@ -78,7 +78,7 @@ struct SequencedNotification {
 
 /// Maximum time to wait for a missing (skipped) sequenced notification before
 /// declaring the connection stale and triggering a reconnect + fullsync.
-const NOTIFICATION_GAP_TIMEOUT: Duration = Duration::from_secs(30);
+const NOTIFICATION_GAP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Tracks notification sequence state and reorders out-of-order messages.
 ///
@@ -545,7 +545,7 @@ impl HubClient {
 
         let (mut ws_write, mut ws_read) = ws_stream.split();
 
-        let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(256);
+        let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(4096);
         if let Some(s) = self.pool_senders.get(slot) {
             *s.lock().await = Some(send_tx);
         }
@@ -776,7 +776,7 @@ impl HubClient {
         let (mut ws_write, mut ws_read) = ws_stream.split();
 
         // Channel for sending outgoing messages
-        let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(256);
+        let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(4096);
         if let Some(s) = self.pool_senders.get(slot) {
             *s.lock().await = Some(send_tx);
         }

@@ -363,7 +363,7 @@ pub(super) async fn handle_client_connection(
     let (mut reader, mut writer) = tokio::io::split(tls_stream);
 
     // Create per-client message sender channel
-    let (send_tx, mut send_rx) = mpsc::channel::<bytes::Bytes>(256);
+    let (send_tx, mut send_rx) = mpsc::channel::<bytes::Bytes>(4096);
     let client_sender = ClientSender::new(send_tx);
 
     // Writer task: forwards messages from send_rx to TLS socket.

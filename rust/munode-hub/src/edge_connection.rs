@@ -44,7 +44,7 @@ impl EdgeConnection {
         let (mut ws_write, mut ws_read) = ws_stream.split();
 
         // Channel for sending outgoing messages to this edge
-        let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(256);
+        let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(4096);
         // Graceful-shutdown signal for the writer task.
         let (writer_stop_tx, mut writer_stop_rx) = mpsc::channel::<()>(1);
         // Writer-to-reader failure signal: when the writer encounters a fatal send error
