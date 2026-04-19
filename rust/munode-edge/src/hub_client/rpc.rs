@@ -20,7 +20,7 @@ use munode_protocol::hubedge::{
 
 use crate::state::EdgeEvent;
 
-use super::HubClient;
+use super::{HubClient, PendingControlNotification};
 
 impl HubClient {
     /// Trigger a full-sync with Hub and replay the cluster state into the event bus.
@@ -100,7 +100,11 @@ impl HubClient {
             ..Default::default()
         };
         if let Err(e) = self.send_packet(&packet).await {
-            warn!("Failed to notify Hub of user disconnect: {}", e);
+            warn!("Failed to notify Hub of user disconnect (session={}): {}", session_id, e);
+            self.enqueue_pending_notification(PendingControlNotification::UserLeft {
+                session_id,
+                reason: reason.map(String::from),
+            }).await;
         }
     }
 
@@ -407,6 +411,9 @@ impl HubClient {
         links_remove: Vec<u32>,
     ) {
         let edge_id = self.edge_id();
+        // Clone before the move so we can enqueue on failure without decoding the packet.
+        let links_add_save = links_add.clone();
+        let links_remove_save = links_remove.clone();
         let notification = TypedRpcNotification {
             method: "hub.handleChannelState".to_string(),
             timestamp: Some(current_millis() as i64),
@@ -429,6 +436,11 @@ impl HubClient {
         };
         if let Err(e) = self.send_packet(&packet).await {
             warn!("Failed to notify Hub of channel state: {}", e);
+            self.enqueue_pending_notification(PendingControlNotification::ChannelLinksChanged {
+                channel_id,
+                links_add: links_add_save,
+                links_remove: links_remove_save,
+            }).await;
         }
     }
 
@@ -451,6 +463,9 @@ impl HubClient {
         };
         if let Err(e) = self.send_packet(&packet).await {
             warn!("Failed to notify Hub of channel remove: {}", e);
+            self.enqueue_pending_notification(PendingControlNotification::ChannelRemoved {
+                channel_id,
+            }).await;
         }
     }
 

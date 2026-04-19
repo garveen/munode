@@ -195,6 +195,46 @@ struct PendingRequest {
     slot: usize,
 }
 
+/// A control notification that failed to reach Hub and must be replayed after
+/// the next successful reconnect.
+///
+/// Only notifications representing **persistent cluster state mutations** that
+/// are NOT already recovered by the reconnect sequence belong here.  Specifically:
+///
+/// | Notification              | Why queued?                                                   |
+/// |---------------------------|---------------------------------------------------------------|
+/// | `UserLeft`                | Disconnected users are absent from `do_report_local_users`   |
+/// | `ChannelLinksChanged`     | `do_full_sync` pulls channels FROM Hub — push is not replayed |
+/// | `ChannelRemoved`          | Hub would re-sync the deleted channel back on next FullSync   |
+///
+/// The following are deliberately **excluded** because they are already covered
+/// by the reconnect sequence or are unsafe/meaningless to replay:
+///
+/// * `notify_user_moved` / `notify_user_state_changed` — fully re-reported by
+///   `do_report_local_users` (includes `channel_id`, mute, deaf, etc.)
+/// * `notify_user_remove` — ban replay is unsafe because session IDs may be
+///   reused; use the Hub web API to persist bans independently
+/// * `notify_text_message` / `notify_context_action` / `notify_plugin_data` —
+///   ephemeral; stale delivery after reconnect would be confusing
+#[derive(Debug)]
+enum PendingControlNotification {
+    /// A local user disconnected while Hub was unreachable.
+    UserLeft {
+        session_id: u32,
+        reason: Option<String>,
+    },
+    /// A client modified channel links (add or remove) while Hub was unreachable.
+    ChannelLinksChanged {
+        channel_id: u32,
+        links_add: Vec<u32>,
+        links_remove: Vec<u32>,
+    },
+    /// A client deleted a channel while Hub was unreachable.
+    ChannelRemoved {
+        channel_id: u32,
+    },
+}
+
 /// Client for communicating with the Hub server via WebSocket + protobuf.
 ///
 /// When `pool_size > 1`, multiple parallel WebSocket connections are maintained.
@@ -246,6 +286,11 @@ pub struct HubClient {
     /// this before forwarding notifications to the processor, ensuring the
     /// caches are populated first.
     sync_notify: tokio::sync::Notify,
+    /// Control notifications that failed to reach Hub while the connection was
+    /// down.  Replayed in order after the next successful `do_register()`.
+    /// See [`PendingControlNotification`] for the rationale of which notifications
+    /// are included.
+    pending_notifications: tokio::sync::Mutex<Vec<PendingControlNotification>>,
 }
 
 impl HubClient {
@@ -286,11 +331,53 @@ impl HubClient {
             notification_expected_seq: AtomicU64::new(1),
             sync_done: AtomicBool::new(false),
             sync_notify: tokio::sync::Notify::new(),
+            pending_notifications: tokio::sync::Mutex::new(Vec::new()),
         })
     }
 
     pub async fn state(&self) -> HubConnectionState {
         *self.state.read().await
+    }
+
+    /// Queue a control notification that failed to reach Hub.
+    ///
+    /// Called by the `notify_*` methods when `send_packet` returns an error so
+    /// the notification can be replayed after the next successful reconnect.
+    pub(super) async fn enqueue_pending_notification(&self, n: PendingControlNotification) {
+        self.pending_notifications.lock().await.push(n);
+    }
+
+    /// Drain and replay all queued control notifications.
+    ///
+    /// Called inside the `sync_done` CAS block, **before** `do_full_sync`, so
+    /// that any ghost sessions and structural mutations are visible to the Hub
+    /// before a new snapshot is taken.
+    ///
+    /// Hub handlers are idempotent for unknown/already-removed entities, so
+    /// replaying a notification whose effect was already cleaned up by
+    /// `cleanup_edge` is safe.
+    async fn flush_pending_notifications(&self) {
+        let pending: Vec<PendingControlNotification> = {
+            let mut queue = self.pending_notifications.lock().await;
+            std::mem::take(&mut *queue)
+        };
+        if pending.is_empty() {
+            return;
+        }
+        info!("Replaying {} deferred control notifications after Hub reconnect", pending.len());
+        for n in pending {
+            match n {
+                PendingControlNotification::UserLeft { session_id, ref reason } => {
+                    self.notify_user_left(session_id, reason.as_deref()).await;
+                }
+                PendingControlNotification::ChannelLinksChanged { channel_id, links_add, links_remove } => {
+                    self.notify_channel_state(channel_id, links_add, links_remove).await;
+                }
+                PendingControlNotification::ChannelRemoved { channel_id } => {
+                    self.notify_channel_remove(channel_id).await;
+                }
+            }
+        }
     }
 
     /// Get the current edge ID (our registered ID from Hub, or fallback to server_id).
@@ -695,6 +782,11 @@ impl HubClient {
         // exactly once.  CAS ensures only one slot executes it even if multiple
         // slots connect concurrently.
         if self.sync_done.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            // Replay control notifications that failed while the Hub was unreachable
+            // (UserLeft, ChannelLinksChanged, ChannelRemoved).  Must happen before
+            // do_full_sync so the Hub snapshot excludes ghost sessions and includes
+            // the correct channel tree.
+            self.flush_pending_notifications().await;
             let disappeared = self.do_full_sync().await?;
             self.do_fetch_voice_targets().await;
             self.do_join_cluster().await?;
@@ -917,6 +1009,11 @@ impl HubClient {
 
         // Run sync sequence exactly once via CAS.
         if self.sync_done.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            // Replay control notifications that failed while the Hub was unreachable
+            // (UserLeft, ChannelLinksChanged, ChannelRemoved).  Must happen before
+            // do_full_sync so the Hub snapshot excludes ghost sessions and includes
+            // the correct channel tree.
+            self.flush_pending_notifications().await;
             let disappeared = self.do_full_sync().await?;
             self.do_fetch_voice_targets().await;
             self.do_join_cluster().await?;

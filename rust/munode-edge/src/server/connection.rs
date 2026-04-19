@@ -1672,6 +1672,31 @@ pub(super) async fn handle_client_connection(
         info!("Cleaned up session {} for {}", sid, peer_addr);
     }
 
+    // If the TCP connection closed while a login task was still in flight, abort
+    // the task and recover any session it may have already registered.
+    //
+    // Without this, a task that completes between the TCP-EOF break and the abort
+    // call below would leave a ghost session in both Edge client_manager and Hub
+    // session_manager (the task's oneshot result is discarded once the receiver
+    // is dropped, but the side-effects — add_client + Hub auth — already happened).
+    if let Some(login_recv) = login_rx.take() {
+        if let Some(abort) = login_abort.take() {
+            abort.abort();
+        }
+        // Give the task a brief window to yield its result in case it completed
+        // just before the abort signal was delivered.
+        match tokio::time::timeout(std::time::Duration::from_millis(50), login_recv).await {
+            Ok(Ok(Some(result))) => {
+                let orphan_sid = result.session_id;
+                edge_state.client_manager.remove_client(orphan_sid).await;
+                edge_state.free_session_id(orphan_sid).await;
+                hub_client.notify_user_left(orphan_sid, None).await;
+                info!("Cleaned up orphaned login session {} for {}", orphan_sid, peer_addr);
+            }
+            _ => {}
+        }
+    }
+
     // Gracefully drain any pending outgoing messages (e.g. a Reject sent on auth
     // failure) before the TCP connection is closed.  Dropping the sender closes
     // the channel; the writer task will exit after flushing its queue.
