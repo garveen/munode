@@ -217,7 +217,7 @@ struct PendingRequest {
 /// * `notify_text_message` / `notify_context_action` / `notify_plugin_data` —
 ///   ephemeral; stale delivery after reconnect would be confusing
 #[derive(Debug)]
-enum PendingControlNotification {
+pub(super) enum PendingControlNotification {
     /// A local user disconnected while Hub was unreachable.
     UserLeft {
         session_id: u32,

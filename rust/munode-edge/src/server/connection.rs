@@ -2488,7 +2488,7 @@ mod tests {
     use crate::channel_manager::ChannelManager;
     use crate::client::{ClientInfo, ClientManager, ClientSender, ClientState};
     use crate::hub_client::HubClient;
-    use crate::state::EdgeState;
+    use crate::state::{EdgeEvent, EdgeState};
     use bytes::BytesMut;
     use munode_common::config::{
         EdgeConfig, HubServerConfig, NetworkConfig, ServerConfig, TlsConfig,
