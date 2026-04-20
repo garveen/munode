@@ -3,8 +3,7 @@ services:
     build:
       context: ..
       dockerfile: rust/Dockerfile
-      args:
-        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-0}
+
       cache_from:
         - type=local,src=.build-cache
       cache_to:

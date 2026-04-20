@@ -3,11 +3,7 @@ services:
     build:
       context: ..
       dockerfile: rust/Dockerfile
-      args:
-        # Limit parallel compile jobs on low-memory / low-core machines.
-        # Set e.g. CARGO_BUILD_JOBS=2 in your shell or .env before running
-        # `docker compose build`. 0 (default) = use all available CPUs.
-        CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-0}
+
       # Persistent layer cache stored on the host filesystem.
       # Unlike BuildKit's internal cache (--mount=type=cache), this directory
       # is a plain folder and is NOT cleaned by `docker system prune`.
