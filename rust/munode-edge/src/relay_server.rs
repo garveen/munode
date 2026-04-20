@@ -503,6 +503,11 @@ async fn run_voice_tcp_slot(
     hmac_secret: Option<String>,
 ) {
     let mut retry_ms = VOICE_TCP_MIN_RETRY_MS;
+    // Track whether the previous attempt actually established a connection.
+    // A slot that connected (sender was placed in the pool) and then dropped
+    // is more likely a transient glitch than a slot that never connected at
+    // all — so we grant one immediate retry before starting the backoff.
+    let mut was_connected = false;
 
     loop {
         if !edge_state.voice_tcp_peers.read().await.contains(&peer_edge_id) {
@@ -521,9 +526,12 @@ async fn run_voice_tcp_slot(
 
         // Always clear this slot's sender while reconnecting so the pool's
         // round-robin skips it rather than blocking on a dead channel.
-        if let Ok(mut slot) = pool.senders[slot_idx].lock() {
-            *slot = None;
-        }
+        let did_connect = {
+            let mut slot = pool.senders[slot_idx].lock().ok();
+            let connected = slot.as_ref().map_or(false, |g| g.is_some());
+            if let Some(ref mut g) = slot { **g = None; }
+            connected
+        };
 
         match result {
             Ok(()) => {
@@ -532,7 +540,7 @@ async fn run_voice_tcp_slot(
                     "Voice TCP slot [{}/{}]: connection ended by peer-left signal",
                     peer_edge_id, slot_idx
                 );
-                retry_ms = VOICE_TCP_MIN_RETRY_MS;
+                break;
             }
             Err(e) => {
                 warn!("Voice TCP slot [{}/{}]: {}", peer_edge_id, slot_idx, e);
@@ -543,6 +551,22 @@ async fn run_voice_tcp_slot(
             break;
         }
 
+        // Immediate retry: if the slot was connected before this failure (i.e.
+        // it successfully established a TCP session that then dropped), retry
+        // once without any delay — the failure is likely a transient TCP hiccup.
+        // Only the very first retry after a live connection gets this treatment;
+        // subsequent failures fall through to the normal exponential backoff.
+        if did_connect && !was_connected {
+            was_connected = true;
+            debug!(
+                "Voice TCP slot [{}/{}]: was connected, immediate retry",
+                peer_edge_id, slot_idx
+            );
+            retry_ms = VOICE_TCP_MIN_RETRY_MS; // reset backoff for next failure
+            continue;
+        }
+
+        was_connected = false;
         let delay = Duration::from_millis(retry_ms);
         debug!(
             "Voice TCP slot [{}/{}]: reconnecting in {:?}",

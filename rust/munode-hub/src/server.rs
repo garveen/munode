@@ -18,7 +18,7 @@ use crate::blob_store::BlobStore;
 use crate::channel_store::ChannelStore;
 use crate::database::Database;
 use crate::edge_connection::EdgeConnection;
-use crate::rpc_handler::{EdgeSender, RpcHandler};
+use crate::rpc_handler::{EdgeSenderPool, RpcHandler};
 use crate::session_manager::SessionManager;
 use crate::topology_manager::TopologyManager;
 use crate::auth_service::{AuthServiceHandle, run_auth_service_listener};
@@ -128,7 +128,7 @@ pub struct HubState {
     pub ban_store: BanStore,
     /// Filesystem-backed blob storage.
     pub blob_store: Arc<BlobStore>,
-    pub edge_connections: RwLock<HashMap<u32, EdgeSender>>,
+    pub edge_connections: RwLock<HashMap<u32, EdgeSenderPool>>,
     /// Health records for each connected Edge, keyed by edge server_id.
     pub edge_health: RwLock<HashMap<u32, EdgeHealth>>,
     /// Cluster topology manager.
@@ -459,36 +459,37 @@ impl HubServer {
 /// Broadcast a packet to all connected edges.
 pub async fn broadcast(state: &HubState, data: Vec<u8>) {
     let edges = state.edge_connections.read().await;
-    for (edge_id, sender) in edges.iter() {
-        if let Err(e) = sender.try_send(data.clone()) {
-            tracing::warn!("Failed to broadcast to edge {}: {}", edge_id, e);
+    for (edge_id, pool) in edges.iter() {
+        if !pool.try_send(data.clone()) {
+            tracing::warn!("Failed to broadcast to edge {}: all senders closed or full", edge_id);
         }
     }
 }
 
 /// Broadcast a critical state-sync message to all edges with backpressure.
 ///
-/// Snapshots the sender list before sending so the `edge_connections` read-lock
-/// is held only for the brief map-clone, not during the per-edge `send().await`
+/// Snapshots the pool list before sending so the `edge_connections` read-lock
+/// is held only for the brief map-clone, not during the per-edge `send_async().await`
 /// calls.  Each edge gets up to a 2-second window; all edges are sent
 /// concurrently via `join_all` so a slow edge does not delay the others.
+/// Within each edge's pool, senders are tried in order until one succeeds.
 pub async fn broadcast_critical(state: &HubState, data: Vec<u8>) {
     use futures_util::future::join_all;
     use tokio::time::{timeout, Duration};
 
-    // Snapshot senders under the read-lock (clone is cheap — just Arc bumps).
-    let senders: Vec<(u32, tokio::sync::mpsc::Sender<Vec<u8>>)> = {
+    // Snapshot pools under the read-lock (clone is cheap — Arc bumps only).
+    let pools: Vec<(u32, EdgeSenderPool)> = {
         let edges = state.edge_connections.read().await;
-        edges.iter().map(|(&id, tx)| (id, tx.clone())).collect()
+        edges.iter().map(|(&id, pool)| (id, pool.clone())).collect()
     }; // read-lock released here
 
-    let futures = senders.into_iter().map(|(edge_id, sender)| {
+    let futures = pools.into_iter().map(|(edge_id, pool)| {
         let data = data.clone();
         async move {
-            match timeout(Duration::from_secs(2), sender.send(data)).await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    tracing::warn!("broadcast_critical: edge {} channel closed: {}", edge_id, e);
+            match timeout(Duration::from_secs(2), pool.send_async(data)).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::warn!("broadcast_critical: edge {} all senders closed", edge_id);
                 }
                 Err(_) => {
                     tracing::warn!(
@@ -504,10 +505,13 @@ pub async fn broadcast_critical(state: &HubState, data: Vec<u8>) {
 
 /// Send a packet to a specific edge.
 pub async fn notify(state: &HubState, edge_id: u32, data: Vec<u8>) {
-    let edges = state.edge_connections.read().await;
-    if let Some(sender) = edges.get(&edge_id) {
-        if let Err(e) = sender.try_send(data) {
-            tracing::warn!("Failed to notify edge {}: {}", edge_id, e);
+    let pool = {
+        let edges = state.edge_connections.read().await;
+        edges.get(&edge_id).cloned()
+    };
+    if let Some(pool) = pool {
+        if !pool.try_send(data) {
+            tracing::warn!("Failed to notify edge {}: all senders closed or full", edge_id);
         }
     }
 }
@@ -521,26 +525,25 @@ pub async fn broadcast_critical_excluding(state: &HubState, data: Vec<u8>, exclu
     use futures_util::future::join_all;
     use tokio::time::{timeout, Duration};
 
-    // Snapshot senders under the read-lock, excluding the source edge.
-    let senders: Vec<(u32, tokio::sync::mpsc::Sender<Vec<u8>>)> = {
+    // Snapshot pools under the read-lock, excluding the source edge.
+    let pools: Vec<(u32, EdgeSenderPool)> = {
         let edges = state.edge_connections.read().await;
         edges
             .iter()
             .filter(|&(&id, _)| id != exclude_edge_id)
-            .map(|(&id, tx)| (id, tx.clone()))
+            .map(|(&id, pool)| (id, pool.clone()))
             .collect()
     }; // read-lock released here
 
-    let futures = senders.into_iter().map(|(edge_id, sender)| {
+    let futures = pools.into_iter().map(|(edge_id, pool)| {
         let data = data.clone();
         async move {
-            match timeout(Duration::from_secs(2), sender.send(data)).await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
+            match timeout(Duration::from_secs(2), pool.send_async(data)).await {
+                Ok(true) => {}
+                Ok(false) => {
                     tracing::warn!(
-                        "broadcast_critical_excluding: edge {} channel closed: {}",
-                        edge_id,
-                        e
+                        "broadcast_critical_excluding: edge {} all senders closed",
+                        edge_id
                     );
                 }
                 Err(_) => {
@@ -591,20 +594,20 @@ pub async fn broadcast_critical_sequenced(state: &HubState, data: Vec<u8>) {
     use futures_util::future::join_all;
     use tokio::time::{timeout, Duration};
 
-    let senders: Vec<(u32, tokio::sync::mpsc::Sender<Vec<u8>>)> = {
+    let pools: Vec<(u32, EdgeSenderPool)> = {
         let edges = state.edge_connections.read().await;
-        edges.iter().map(|(&id, tx)| (id, tx.clone())).collect()
+        edges.iter().map(|(&id, pool)| (id, pool.clone())).collect()
     };
 
-    let futures = senders.into_iter().map(|(edge_id, sender)| {
+    let futures = pools.into_iter().map(|(edge_id, pool)| {
         let mut data = data.clone();
         let seq = next_notification_seq(state, edge_id);
         append_notification_seq(&mut data, seq);
         async move {
-            match timeout(Duration::from_secs(2), sender.send(data)).await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    tracing::warn!("broadcast_critical_sequenced: edge {} channel closed: {}", edge_id, e);
+            match timeout(Duration::from_secs(2), pool.send_async(data)).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    tracing::warn!("broadcast_critical_sequenced: edge {} all senders closed", edge_id);
                 }
                 Err(_) => {
                     tracing::warn!(
@@ -623,27 +626,26 @@ pub async fn broadcast_critical_excluding_sequenced(state: &HubState, data: Vec<
     use futures_util::future::join_all;
     use tokio::time::{timeout, Duration};
 
-    let senders: Vec<(u32, tokio::sync::mpsc::Sender<Vec<u8>>)> = {
+    let pools: Vec<(u32, EdgeSenderPool)> = {
         let edges = state.edge_connections.read().await;
         edges
             .iter()
             .filter(|&(&id, _)| id != exclude_edge_id)
-            .map(|(&id, tx)| (id, tx.clone()))
+            .map(|(&id, pool)| (id, pool.clone()))
             .collect()
     };
 
-    let futures = senders.into_iter().map(|(edge_id, sender)| {
+    let futures = pools.into_iter().map(|(edge_id, pool)| {
         let mut data = data.clone();
         let seq = next_notification_seq(state, edge_id);
         append_notification_seq(&mut data, seq);
         async move {
-            match timeout(Duration::from_secs(2), sender.send(data)).await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
+            match timeout(Duration::from_secs(2), pool.send_async(data)).await {
+                Ok(true) => {}
+                Ok(false) => {
                     tracing::warn!(
-                        "broadcast_critical_excluding_sequenced: edge {} channel closed: {}",
-                        edge_id,
-                        e
+                        "broadcast_critical_excluding_sequenced: edge {} all senders closed",
+                        edge_id
                     );
                 }
                 Err(_) => {
@@ -659,14 +661,21 @@ pub async fn broadcast_critical_excluding_sequenced(state: &HubState, data: Vec<
 }
 
 /// Send a sequenced notification to a specific edge.
+///
+/// If the primary connection's sender is closed or full, the pool automatically
+/// falls back to the next available sender so sequenced packets are not lost
+/// due to a single dead WebSocket connection.
 pub async fn notify_sequenced(state: &HubState, edge_id: u32, data: Vec<u8>) {
-    let edges = state.edge_connections.read().await;
-    if let Some(sender) = edges.get(&edge_id) {
+    let pool = {
+        let edges = state.edge_connections.read().await;
+        edges.get(&edge_id).cloned()
+    };
+    if let Some(pool) = pool {
         let mut data = data;
         let seq = next_notification_seq(state, edge_id);
         append_notification_seq(&mut data, seq);
-        if let Err(e) = sender.try_send(data) {
-            tracing::warn!("Failed to notify_sequenced edge {}: {}", edge_id, e);
+        if !pool.try_send(data) {
+            tracing::warn!("Failed to notify_sequenced edge {}: all senders closed or full", edge_id);
         }
     }
 }

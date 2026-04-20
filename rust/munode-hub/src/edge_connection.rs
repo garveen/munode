@@ -10,7 +10,7 @@ use tracing::{debug, error, info, warn};
 
 use munode_protocol::hubedge::*;
 
-use crate::rpc_handler::RpcHandler;
+use crate::rpc_handler::{EdgeSenderPool, RpcHandler};
 use crate::server::{EdgeHealth, HubState};
 
 /// Represents a single connected edge server.
@@ -20,8 +20,8 @@ pub struct EdgeConnection {
     /// The server_id once registered.
     server_id: Option<u32>,
     /// Clone of this connection's outbound sender, set after registration.
-    /// Used to detect if a newer connection has already taken over this server_id
-    /// slot before running disconnect cleanup.
+    /// Used to identify and remove this specific sender from the edge's pool
+    /// on disconnect, without affecting other pool connections.
     own_sender: Option<mpsc::Sender<Vec<u8>>>,
 }
 
@@ -121,22 +121,24 @@ impl EdgeConnection {
         let _ = writer_handle.await;
 
         // Cleanup on disconnect.
-        // Guard against a race condition where the Edge rapidly restarts: if the
-        // new connection has already registered under the same server_id and put
-        // its own sender into `edge_connections`, we must NOT remove that entry
-        // or run cleanup (which would destroy the new connection's sessions).
+        // Remove only this connection's sender from the pool.  Other pool connections
+        // for the same edge remain active.  Cleanup runs only when the last sender
+        // is removed (pool becomes empty), ensuring we don't destroy a healthy edge's
+        // sessions just because one of its WebSocket connections dropped.
         if let Some(server_id) = self.server_id {
             let should_cleanup = if let Some(our_sender) = &self.own_sender {
-                // Atomically check-and-remove: only remove if OUR sender is still stored.
-                let mut connections = self.state.edge_connections.write().await;
-                let is_ours = connections
-                    .get(&server_id)
-                    .map(|s| s.same_channel(our_sender))
-                    .unwrap_or(false);
-                if is_ours {
-                    connections.remove(&server_id);
-                }
-                is_ours
+                let pool_is_empty = {
+                    let mut connections = self.state.edge_connections.write().await;
+                    let empty = connections
+                        .get(&server_id)
+                        .map(|pool| pool.remove(our_sender))
+                        .unwrap_or(false);
+                    if empty {
+                        connections.remove(&server_id);
+                    }
+                    empty
+                };
+                pool_is_empty
             } else {
                 // Never completed registration — nothing to clean up.
                 false
@@ -176,21 +178,22 @@ impl EdgeConnection {
                         if let Some(params) = &request.edge_register {
                             let sid = params.server_id;
                             self.server_id = Some(sid);
+                            // Track this connection's sender for disconnect cleanup.
+                            self.own_sender = Some(send_tx.clone());
                             {
                                 let mut connections = self.state.edge_connections.write().await;
-                                if connections.contains_key(&sid) {
+                                if let Some(pool) = connections.get(&sid) {
                                     // Another pool connection already registered this
-                                    // edge — keep the existing sender for notifications.
-                                    // This connection will still carry RPC traffic.
+                                    // edge — add this sender to the existing pool so
+                                    // Hub can fall back to it if the first sender dies.
+                                    pool.add(send_tx.clone());
                                     debug!(
-                                        "Pool slot for edge {} connected (notification channel already active)",
+                                        "Pool slot for edge {} connected (added to sender pool)",
                                         sid
                                     );
                                 } else {
-                                    // First registration for this edge — this sender
-                                    // becomes the notification channel.
-                                    self.own_sender = Some(send_tx.clone());
-                                    connections.insert(sid, send_tx.clone());
+                                    // First registration for this edge — create the pool.
+                                    connections.insert(sid, EdgeSenderPool::new(send_tx.clone()));
                                 }
                             }
                             // Initialise health record (idempotent)

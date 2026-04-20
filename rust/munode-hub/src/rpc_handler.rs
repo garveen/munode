@@ -58,6 +58,79 @@ struct HttpAuthResponse {
 /// Sender type for pushing serialized packets to a specific edge.
 pub type EdgeSender = mpsc::Sender<Vec<u8>>;
 
+/// A set of outbound senders for a single Edge's connection pool.
+///
+/// Hub may maintain multiple WebSocket connections from the same Edge
+/// (`pool_size > 1`).  When a send fails because a connection has died,
+/// the pool automatically falls back to the next available sender and
+/// prunes the closed sender from the list.
+#[derive(Clone)]
+pub struct EdgeSenderPool {
+    senders: std::sync::Arc<std::sync::Mutex<Vec<EdgeSender>>>,
+}
+
+impl EdgeSenderPool {
+    /// Create a new pool containing a single sender.
+    pub fn new(sender: EdgeSender) -> Self {
+        Self {
+            senders: std::sync::Arc::new(std::sync::Mutex::new(vec![sender])),
+        }
+    }
+
+    /// Add a sender to the pool (called when a new pool connection registers).
+    pub fn add(&self, sender: EdgeSender) {
+        self.senders.lock().unwrap().push(sender);
+    }
+
+    /// Remove a specific sender from the pool (called on connection disconnect).
+    ///
+    /// Returns `true` if the pool is now empty (all connections for this edge gone).
+    pub fn remove(&self, target: &EdgeSender) -> bool {
+        let mut senders = self.senders.lock().unwrap();
+        senders.retain(|s| !s.same_channel(target));
+        senders.is_empty()
+    }
+
+    /// Try to send `data` non-blocking.  Falls back to the next sender if the
+    /// current one is closed or full.  Closed senders are pruned in-place.
+    ///
+    /// Returns `true` if the data was accepted by at least one sender.
+    pub fn try_send(&self, data: Vec<u8>) -> bool {
+        let mut senders = self.senders.lock().unwrap();
+        let mut i = 0;
+        while i < senders.len() {
+            match senders[i].try_send(data.clone()) {
+                Ok(()) => return true,
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    // Connection dead — prune and try next (swap_remove keeps index valid)
+                    senders.swap_remove(i);
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    // Channel full — try next sender
+                    i += 1;
+                }
+            }
+        }
+        false
+    }
+
+    /// Async send with backpressure.  Tries each sender in order, skipping
+    /// closed ones.  Returns `true` if at least one send succeeded.
+    ///
+    /// Must NOT be called while holding the `edge_connections` lock.
+    pub async fn send_async(&self, data: Vec<u8>) -> bool {
+        // Snapshot under lock so the mutex is not held across `.await`.
+        let snapshot: Vec<EdgeSender> = self.senders.lock().unwrap().clone();
+        for sender in snapshot {
+            match sender.send(data.clone()).await {
+                Ok(()) => return true,
+                Err(_) => continue, // closed, try next
+            }
+        }
+        false
+    }
+}
+
 use crate::server::{EdgeRegistration, VoiceTargetEntry};
 
 /// Handles all incoming RPC requests from edges.
@@ -3056,18 +3129,18 @@ impl RpcHandler {
                 ..Default::default()
             };
             let shutdown_data = shutdown_packet.encode_to_vec();
-            // Snapshot senders under a brief read lock, then release before any
-            // async sends.  Holding edge_connections.read() across sender.send().await
+            // Snapshot pools under a brief read lock, then release before any
+            // async sends.  Holding edge_connections.read() across send_async().await
             // would block edge registration and cleanup for the full send duration.
-            let senders: Vec<(u32, EdgeSender)> = {
+            let pools: Vec<(u32, EdgeSenderPool)> = {
                 let edges = self.state.edge_connections.read().await;
                 smallest_partition.iter()
-                    .filter_map(|id| edges.get(id).map(|s| (*id, s.clone())))
+                    .filter_map(|id| edges.get(id).map(|p| (*id, p.clone())))
                     .collect()
             };
-            for (edge_id, sender) in senders {
+            for (edge_id, pool) in pools {
                 info!("Sending hub.shutdownRequest to edge {}", edge_id);
-                let _ = sender.send(shutdown_data.clone()).await;
+                let _ = pool.send_async(shutdown_data.clone()).await;
             }
         }
     }
@@ -3645,27 +3718,27 @@ impl RpcHandler {
         };
         let notify_data = notify_packet.encode_to_vec();
 
-        // Snapshot senders before releasing the read-lock so no await is held
+        // Snapshot pools before releasing the read-lock so no await is held
         // under the lock.  Cluster join is low-frequency but state-critical:
         // use the same join_all+timeout pattern as broadcast_critical so a
         // stalled Edge cannot block the notification to others.
-        let peer_senders: Vec<(u32, mpsc::Sender<Vec<u8>>)> = {
+        let peer_pools: Vec<(u32, EdgeSenderPool)> = {
             let edge_connections = self.state.edge_connections.read().await;
             edge_connections.iter()
                 .filter(|&(&eid, _)| eid != join_edge_id)
-                .map(|(&eid, tx)| (eid, tx.clone()))
+                .map(|(&eid, pool)| (eid, pool.clone()))
                 .collect()
         }; // read-lock released here
 
         {
             use futures_util::future::join_all;
             use tokio::time::{timeout, Duration};
-            let futs = peer_senders.into_iter().map(|(eid, sender)| {
+            let futs = peer_pools.into_iter().map(|(eid, pool)| {
                 let data = notify_data.clone();
                 async move {
-                    match timeout(Duration::from_secs(2), sender.send(data)).await {
-                        Ok(Ok(())) => {}
-                        Ok(Err(e)) => warn!("peerJoined notify: edge {} channel closed: {}", eid, e),
+                    match timeout(Duration::from_secs(2), pool.send_async(data)).await {
+                        Ok(true) => {}
+                        Ok(false) => warn!("peerJoined notify: edge {} all senders closed", eid),
                         Err(_) => warn!("peerJoined notify: edge {} send timeout", eid),
                     }
                 }
@@ -3860,7 +3933,7 @@ impl RpcHandler {
         };
         let data = packet.encode_to_vec();
 
-        // Clone the sender before releasing the read-lock so no await is held
+        // Clone the pool before releasing the read-lock so no await is held
         // under the lock.  relay_voice_via_tcp is on the hot path for Hub-relayed
         // voice; try_send avoids any blocking if the channel is momentarily full,
         // which is acceptable for voice (drop-on-overload semantics).
@@ -3868,7 +3941,7 @@ impl RpcHandler {
             let edges = self.state.edge_connections.read().await;
             edges.get(&target_edge_id).cloned()
         }
-        .map(|sender| sender.try_send(data).is_ok())
+        .map(|pool| pool.try_send(data))
         .unwrap_or(false);
 
         if !sent {

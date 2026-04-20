@@ -35,22 +35,39 @@ impl PeerVoiceTcpPool {
 
     /// Try to send `frame` to one live slot (round-robin).
     ///
+    /// - Uses `TrySendError` to reclaim frame ownership on failure, eliminating
+    ///   any clone in the common case where the first-tried slot is live.
+    /// - `Closed` slots are pruned in-place (set to `None`) so subsequent sends
+    ///   skip them immediately rather than waiting for the slot task to clean up.
+    /// - `Full` slots are skipped and tried next (back-pressure avoidance on the
+    ///   voice hot path).
+    ///
     /// Returns `true` if the frame was accepted by at least one slot.
     pub fn try_send(&self, frame: Vec<u8>) -> bool {
         let n = self.senders.len();
         let start = self.next_rr.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % n;
+        let mut remaining = frame;
         for i in 0..n {
             let idx = (start + i) % n;
-            let sent = self.senders[idx]
-                .lock()
-                .ok()
-                .and_then(|slot| {
-                    slot.as_ref().map(|tx| tx.try_send(frame.clone()).is_ok())
-                })
-                .unwrap_or(false);
-            if sent {
-                return true;
+            if let Ok(mut slot) = self.senders[idx].lock() {
+                if let Some(tx) = slot.as_ref() {
+                    match tx.try_send(remaining) {
+                        Ok(()) => return true,
+                        Err(tokio::sync::mpsc::error::TrySendError::Closed(f)) => {
+                            // Connection dead — prune immediately so future sends skip it
+                            // rather than waiting for the slot reconnect task to clear it.
+                            *slot = None;
+                            remaining = f;
+                        }
+                        Err(tokio::sync::mpsc::error::TrySendError::Full(f)) => {
+                            // Channel buffer full — skip to next slot.
+                            remaining = f;
+                        }
+                    }
+                }
+                // slot is None (reconnecting) — fall through to next slot
             }
+            // mutex poisoned — skip this slot
         }
         false
     }
