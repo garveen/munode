@@ -75,3 +75,5 @@ data/*.json
 
 # 配置示例
 *.example.json
+
+rust/target/

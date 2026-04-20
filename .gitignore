@@ -13,6 +13,10 @@ rust/target/
 rust/*/target/
 rust/doc/
 
+# Docker BuildKit local filesystem cache (docker compose build)
+rust/.build-cache/
+.build-cache/
+
 # Environment
 .env
 .env.local

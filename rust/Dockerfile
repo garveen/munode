@@ -2,15 +2,27 @@
 # Build context must be the repository root (parent of rust/).
 # Use: docker build -f rust/Dockerfile .
 # Or via docker-compose.yml with context: ..
+#
+# Build args:
+#   CARGO_BUILD_JOBS  — limit parallel compile jobs (e.g. --build-arg CARGO_BUILD_JOBS=2)
+#                       useful on low-memory / low-core edge machines to avoid OOM.
+#                       Omit (or set to 0) to use cargo's default (number of CPUs).
 
+# syntax=docker/dockerfile:1
 ARG http_proxy
 ARG https_proxy
 ARG no_proxy
 
 # Stage 1: Build
 FROM rust:alpine3.23 AS builder
+
+# CARGO_BUILD_JOBS: 0 (or unset) = cargo default; positive integer = explicit --jobs N
+ARG CARGO_BUILD_JOBS=0
+
 RUN apk add --no-cache protobuf-dev cmake musl-dev openssl-dev openssl-libs-static pkgconf
-run cargo install cargo-chef --locked
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    cargo install cargo-chef --locked
 WORKDIR /build
 COPY rust/Cargo.toml rust/Cargo.lock ./
 # Strip client/tests from workspace so they are not compiled inside Docker
@@ -25,25 +37,38 @@ RUN touch munode-protocol/src/lib.rs munode-common/src/lib.rs \
            munode-edge/src/lib.rs munode-edge/src/main.rs \
            munode-hub/src/lib.rs munode-hub/src/main.rs
 RUN cargo chef prepare --recipe-path recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
+# Cook dependencies — registry cache avoids re-downloading crates; target cache
+# preserves incremental artefacts so only changed deps are recompiled.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,id=munode-target,target=/build/target \
+    if [ "${CARGO_BUILD_JOBS:-0}" -gt 0 ] 2>/dev/null; then JOBS="--jobs ${CARGO_BUILD_JOBS}"; else JOBS=""; fi && \
+    cargo chef cook --release $JOBS --recipe-path recipe.json
 
 # Proto files only needed at actual build time (build.rs codegen), not during dependency cook
 COPY packages/protocol/proto/ /proto/
 ENV MUNODE_PROTO_DIR=/proto
 
-# Copy full source (overwrites dummy files) and build application
+# Copy full source (overwrites dummy files) and build application.
+# Binaries are copied to /usr/local/bin inside the same RUN so they survive
+# outside the BuildKit target cache mount.
 COPY rust/munode-protocol/ munode-protocol/
 COPY rust/munode-common/ munode-common/
 COPY rust/munode-edge/ munode-edge/
 COPY rust/munode-hub/ munode-hub/
-RUN cargo build --release --bin munode-edge --bin munode-hub
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,id=munode-target,target=/build/target \
+    if [ "${CARGO_BUILD_JOBS:-0}" -gt 0 ] 2>/dev/null; then JOBS="--jobs ${CARGO_BUILD_JOBS}"; else JOBS=""; fi && \
+    cargo build --release $JOBS --bin munode-edge --bin munode-hub \
+    && cp target/release/munode-edge target/release/munode-hub /usr/local/bin/
 
-# Stage 3: Minimal runtime image
+# Stage 2: Minimal runtime image
 FROM alpine:3.23 AS runtime
 RUN apk add --no-cache ca-certificates netcat-openbsd su-exec \
     && mkdir -p /app/config /app/certs /app/data /app/logs
 WORKDIR /app
-COPY --from=builder /build/target/release/munode-edge /build/target/release/munode-hub /app/
+COPY --from=builder /usr/local/bin/munode-edge /usr/local/bin/munode-hub /app/
 COPY rust/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
