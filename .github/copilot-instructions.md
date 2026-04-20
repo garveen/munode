@@ -139,10 +139,30 @@ pub enum FrameError {
 - JSON format available for production log aggregation
 
 ### Protobuf
-- Proto files live in `packages/protocol/proto/` — **do not modify `Mumble.proto`** (external interop)
-- `munode-protocol/build.rs` compiles `.proto` → `src/generated/*.rs`
-- Generated types are re-exported via `munode_protocol::{mumbleproto, hubedge, voiceudp, authservice}`
+
+**Source of truth:** all `.proto` files live in `packages/protocol/proto/`.  
+**Generated output:** `rust/munode-protocol/src/generated/*.rs` — these files are **committed** to the repository so that builds without `protoc` work (e.g., CI, Docker).
+
+#### Rules for working with proto files
+- **Do not modify `Mumble.proto`** — it defines the external Mumble protocol.
+- **Never manually edit files in `src/generated/`** — they are overwritten on every regeneration. Put logic in the `.proto` files instead.
+- When adding a new `.proto` file:
+  1. Create the file in `packages/protocol/proto/`.
+  2. Add it to the `compile_protos` list in `rust/munode-protocol/build.rs`.
+  3. Add the expected output filename to the `expected_files` array in `build.rs`.
+  4. Run `MUNODE_REGEN_PROTO=1 cargo build -p munode-protocol` to regenerate.
+  5. Commit both the `.proto` file and the updated `generated/*.rs` file together.
+- When modifying an existing `.proto` file, regenerate and commit the updated `generated/*.rs`.
+- prost generates `Option<T>` for every `optional message` field — access with `.as_ref()` or `if let Some(...)`.
+- Proto2 has no top-level constants; define Rust-side constants in `munode-protocol/src/lib.rs` inside the relevant module block.
+- Generated types are re-exported via `munode_protocol::{mumbleproto, hubedge, voiceudp, authservice, edgepeersync}`.
 - Wire format: `[type:u16][length:u32][protobuf payload]`
+
+#### Regeneration commands
+```bash
+# Force-regenerate all proto files (requires protoc to be installed)
+cd rust && MUNODE_REGEN_PROTO=1 cargo build -p munode-protocol
+```
 
 ### Configuration
 - All config uses TOML (serde deserialization with smart defaults)
@@ -262,6 +282,7 @@ The following packages under `packages/` are **deprecated** and should not recei
 | Rust unit tests | `cd rust && cargo test` |
 | Rust integration tests | `cd rust && cargo test -p munode-tests` |
 | TS integration tests | `pnpm test:integration <file>` |
+| **Regenerate proto (force)** | `cd rust && MUNODE_REGEN_PROTO=1 cargo build -p munode-protocol` |
 | Edge binary | `rust/target/release/munode-edge` |
 | Hub binary | `rust/target/release/munode-hub` |
 | Edge config | `rust/config/edge.example.toml` |

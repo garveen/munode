@@ -216,6 +216,7 @@ impl RpcHandler {
             "edge.reportQuality" => self.handle_report_quality(&request, &request_id).await,
             "cluster.getStatus" => self.handle_cluster_get_status(&request_id).await,
             "edge.relayVoiceViaTcp" => self.handle_relay_voice_via_tcp(&request, &request_id).await,
+            "edge.getPeers" => self.handle_get_peers(&request, &request_id, edge_server_id).await,
             _ => {
                 warn!("Unknown RPC method: {}", method);
                 Ok(self.make_error_packet(&request_id, -1, &format!("Unknown method: {}", method)))
@@ -280,14 +281,16 @@ impl RpcHandler {
             }
             "hub.contextAction" => {
                 if let Some(ca) = &notification.context_action {
+                    if let Some(act) = ca.action.as_ref() {
                     debug!(
                         edge_id = edge_server_id,
                         session_id = ca.session_id,
-                        action = ca.action.action.as_str(),
-                        actor = ca.action.session.unwrap_or(0),
-                        channel = ca.action.channel_id.unwrap_or(0),
+                        action = act.action.as_str(),
+                        actor = act.session.unwrap_or(0),
+                        channel = act.channel_id.unwrap_or(0),
                         "ContextAction received from edge (no Hub-side processing yet)"
                     );
+                    }
                 }
             }
             _ => {
@@ -1385,7 +1388,8 @@ impl RpcHandler {
     ) -> Result<EdgeHubPacket> {
         let params = request.edge_report_session.as_ref()
             .context("Missing edge_report_session params")?;
-        let s = &params.session;
+        let s = params.session.as_ref()
+            .context("Missing session in EdgeReportSessionParams")?;
 
         let session_info = SessionInfo {
             session_id: s.session_id,
@@ -3682,6 +3686,7 @@ impl RpcHandler {
             capacity: params.capacity,
             joined_at: std::time::Instant::now(),
             connected_peers: std::collections::HashSet::new(),
+            session_sync_port: params.session_sync_port.unwrap_or(0),
         };
 
         let peers_snapshot: Vec<PeerInfoProto> = {
@@ -3695,6 +3700,7 @@ impl RpcHandler {
                     port: p.port,
                     voice_port: p.voice_port,
                     cert_hash: None,
+                    session_sync_port: if p.session_sync_port > 0 { Some(p.session_sync_port) } else { None },
                 })
                 .collect()
         };
@@ -3708,6 +3714,7 @@ impl RpcHandler {
                 name: params.name.clone(),
                 host: params.host.clone(),
                 voice_port: params.voice_port,
+                session_sync_port: params.session_sync_port,
             }),
             ..Default::default()
         };
@@ -3774,6 +3781,41 @@ impl RpcHandler {
 
         Ok(self.make_response_packet(request_id, "edge.joinComplete", |r| {
             r.edge_join_complete = Some(EdgeJoinCompleteResult { success: true, error: None });
+        }))
+    }
+
+    /// edge.getPeers — Edge requests a list of currently active peer Edges with
+    /// session_sync_port, used to bootstrap Edge-to-Edge session sync before
+    /// joining the cluster.
+    async fn handle_get_peers(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+        requesting_edge_id: u32,
+    ) -> Result<EdgeHubPacket> {
+        use munode_protocol::hubedge::{EdgeGetPeersResult, PeerSyncInfo};
+        let edge_id = request
+            .edge_get_peers
+            .as_ref()
+            .and_then(|p| p.requesting_edge_id)
+            .unwrap_or(requesting_edge_id);
+
+        let peers: Vec<PeerSyncInfo> = {
+            let topo = self.state.topology.read().await;
+            topo.get_all_edges()
+                .into_iter()
+                .filter(|e| e.edge_id != edge_id && e.session_sync_port > 0)
+                .map(|e| PeerSyncInfo {
+                    edge_id: e.edge_id,
+                    host: e.host.clone(),
+                    session_sync_port: e.session_sync_port,
+                })
+                .collect()
+        };
+
+        info!("edge.getPeers for edge {}: returning {} peers", edge_id, peers.len());
+        Ok(self.make_response_packet(request_id, "edge.getPeers", |r| {
+            r.edge_get_peers = Some(EdgeGetPeersResult { peers });
         }))
     }
 

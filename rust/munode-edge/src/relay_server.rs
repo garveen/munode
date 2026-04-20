@@ -241,6 +241,10 @@ pub async fn run_edge_ws_server_with_listener(
                             debug!("Edge WS /voice connection from {}", peer_addr);
                             handle_voice_connection(ws, peer_addr, edge_state).await;
                         }
+                        "/session" => {
+                            debug!("Edge WS /session connection from {}", peer_addr);
+                            crate::session_sync::handle_session_sync_plain(ws, edge_state).await;
+                        }
                         _ => {
                             // Default: /relay or any unknown path → Hub proxy
                             debug!("Edge WS /relay connection from {}", peer_addr);

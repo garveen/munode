@@ -511,7 +511,7 @@ impl HubClient {
             context_action: Some(EdgeContextActionParams {
                 edge_id,
                 session_id,
-                action,
+                action: Some(action),
             }),
             ..Default::default()
         };

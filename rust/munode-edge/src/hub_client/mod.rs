@@ -803,6 +803,13 @@ impl HubClient {
             self.flush_pending_notifications().await;
             let disappeared = self.do_full_sync().await?;
             self.do_fetch_voice_targets().await;
+            // Fetch peer list from Hub and sync sessions from each peer before
+            // joining the cluster.  This ensures local clients see complete
+            // session state immediately after the ReadyForClients event.
+            let peers = self.do_get_peers().await.unwrap_or_default();
+            if !peers.is_empty() {
+                self.do_sync_all_peers(&peers).await;
+            }
             self.do_join_cluster().await?;
             if let Err(e) = self.do_report_local_users().await {
                 warn!("Failed to report existing users to Hub: {}", e);
@@ -813,6 +820,8 @@ impl HubClient {
             // Open the gate so the notification processor starts handling events.
             self.sync_notify.notify_waiters();
             *self.state.write().await = HubConnectionState::Registered;
+            // ReadyForClients gates the TCP listener (all peers synced or timed out).
+            self.edge_state.emit(EdgeEvent::ReadyForClients);
             self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
             info!("Edge registered with Hub successfully ({}, slot {})", url, slot);
         } else {
@@ -824,6 +833,7 @@ impl HubClient {
             // accepting_connections permanently false.  Detect that here and recover.
             if !self.edge_state.accepting_connections.load(Ordering::Relaxed) {
                 info!("Slot {} recovering accepting_connections after HubUnreachable (sync held by peer slot)", slot);
+                self.edge_state.emit(EdgeEvent::ReadyForClients);
                 self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: vec![] });
             }
         }
@@ -1364,6 +1374,7 @@ impl HubClient {
             port: self.external_port as u32,
             voice_port: self.edge_port as u32,
             capacity: self.capacity,
+            session_sync_port: Some(self.edge_port as u32),
         };
 
         let request = TypedRpcRequest {
@@ -1400,6 +1411,7 @@ impl HubClient {
                             udp_addr,
                             host: peer.host.clone(),
                             relay_port: None,
+                            session_sync_port: peer.session_sync_port.map(|p| p as u16),
                         });
                         self.edge_state.peer_registry.store(Arc::new(new_reg));
                     }
@@ -1494,7 +1506,7 @@ impl HubClient {
                 request_id,
                 method: "edge.reportSession".to_string(),
                 timeout_ms: Some(10000),
-                edge_report_session: Some(EdgeReportSessionParams { session: session_proto }),
+                edge_report_session: Some(EdgeReportSessionParams { session: Some(session_proto) }),
                 ..Default::default()
             };
             if let Err(e) = self.rpc_call(request).await {
@@ -1612,6 +1624,52 @@ impl HubClient {
                 continue;
             }
             debug!("Heartbeat sent (seq={})", sequence);
+        }
+    }
+
+    /// Ask Hub for the list of currently-active peer Edges (with session_sync_port).
+    /// Used in the startup sequence to bootstrap Edge-to-Edge session sync before
+    /// joining the cluster.
+    async fn do_get_peers(&self) -> Result<Vec<munode_protocol::hubedge::PeerSyncInfo>> {
+        use munode_protocol::hubedge::EdgeGetPeersParams;
+        let request = TypedRpcRequest {
+            request_id: self.next_request_id(),
+            method: "edge.getPeers".to_string(),
+            timeout_ms: Some(10000),
+            edge_get_peers: Some(EdgeGetPeersParams {
+                requesting_edge_id: Some(self.server_id),
+            }),
+            ..Default::default()
+        };
+        let response = self.rpc_call(request).await.context("edge.getPeers RPC failed")?;
+        Ok(response.edge_get_peers.map(|r| r.peers).unwrap_or_default())
+    }
+
+    /// Connect to all given peers and sync their sessions concurrently.
+    /// Returns once all peers have completed (or timed out).
+    /// Uses a 15-second overall timeout to prevent startup from hanging.
+    async fn do_sync_all_peers(&self, peers: &[munode_protocol::hubedge::PeerSyncInfo]) {
+        use tokio::time::timeout;
+        let my_edge_id = self.edge_state.get_edge_id();
+        let mut handles = Vec::new();
+        for peer in peers {
+            let peer_id = peer.edge_id;
+            let peer_host = peer.host.clone();
+            let sync_port = peer.session_sync_port as u16;
+            let state_clone = self.edge_state.clone();
+            handles.push(tokio::spawn(async move {
+                timeout(
+                    std::time::Duration::from_secs(15),
+                    crate::session_sync::sync_sessions_from_peer(
+                        peer_id, peer_host, sync_port, my_edge_id, state_clone,
+                    ),
+                )
+                .await
+                .ok();
+            }));
+        }
+        for h in handles {
+            let _ = h.await;
         }
     }
 

@@ -22,6 +22,9 @@ pub struct TopologyEdge {
     pub joined_at: Instant,
     /// Set of connected peer IDs (confirmed via joinComplete)
     pub connected_peers: HashSet<u32>,
+    /// Port on which this Edge's session sync WebSocket server listens.
+    /// `0` means not yet advertised (old client).
+    pub session_sync_port: u32,
 }
 
 /// Link quality metrics between two Edge servers.

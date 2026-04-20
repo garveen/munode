@@ -319,6 +319,14 @@ impl<'a> LoginHandler<'a> {
                 recording: if user.recording { Some(true) } else { None },
                 hash: user.cert_hash.clone(),
                 listening_channel_add: user.listening_channels.clone(),
+                texture_hash: user.texture_hash.clone(),
+                comment_hash: user.comment_hash.clone(),
+                listening_volume_adjustment: user.listening_volume_adjustments.iter()
+                    .map(|(&ch, &vol)| mumbleproto::user_state::VolumeAdjustment {
+                        listening_channel: Some(ch),
+                        volume_adjustment: Some(vol),
+                    })
+                    .collect(),
                 ..Default::default()
             };
             self.send(MessageType::UserState, &msg).await?;

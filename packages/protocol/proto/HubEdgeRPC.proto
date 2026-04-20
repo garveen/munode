@@ -2,6 +2,8 @@ syntax = "proto2";
 
 package hubedge;
 
+import "Mumble.proto";
+
 // ============================================================================
 // Common Types
 // ============================================================================
@@ -41,6 +43,8 @@ message ServerLimitsConfig {
   optional uint64 suggest_version_v2 = 14;
   // 每频道最大用户数（全局限制）。0 = 无限制。
   optional uint32 max_users_per_channel = 15;
+  // 是否允许客户端发送 UDP ping 包（默认 true）。
+  optional bool allow_ping = 16;
 }
 
 message EdgeInfo {
@@ -164,6 +168,11 @@ message EdgeAuthenticateUserResult {
 message EdgeReportSessionResult {
   required bool success = 1;
   optional string error = 2;
+}
+
+// Edge 向 Hub 上报单个会话（重连后补报）
+message EdgeReportSessionParams {
+  optional GlobalSessionProto session = 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -434,6 +443,8 @@ message EdgeJoinParams {
   required uint32 port = 4;
   required uint32 voice_port = 5;
   required uint32 capacity = 6;
+  // Port on which this Edge serves the /session WebSocket for peer session sync.
+  optional uint32 session_sync_port = 7;
 }
 
 message EdgeJoinResult {
@@ -451,6 +462,8 @@ message PeerInfoProto {
   required uint32 port = 4;
   required uint32 voice_port = 5;
   optional string cert_hash = 6;
+  // Port on which this peer Edge serves the /session WebSocket.
+  optional uint32 session_sync_port = 7;
 }
 
 // ---------------------------------------------------------------------------
@@ -898,6 +911,8 @@ message HubClusterPeerJoinedParams {
   required string name = 2;
   required string host = 3;
   required uint32 voice_port = 4;
+  // Port on which this peer Edge serves the /session WebSocket.
+  optional uint32 session_sync_port = 5;
 }
 
 message HubClusterPeerLeftParams {
@@ -968,6 +983,14 @@ message TypedRPCRequest {
   optional BlobSetUserTextureParams blob_set_user_texture = 36;
   optional BlobSetUserCommentParams blob_set_user_comment = 37;
   optional EdgeBatchPermissionQueryParams edge_batch_permission_query = 40;
+  // edge.reportSession — re-report a live session after reconnect
+  optional EdgeReportSessionParams edge_report_session = 14;
+  // edge.saveChannelListeners
+  optional EdgeSaveChannelListenersParams edge_save_channel_listeners = 38;
+  // edge.loadChannelListeners
+  optional EdgeLoadChannelListenersParams edge_load_channel_listeners = 39;
+  // edge.getPeers — fetch peer Edges for session sync
+  optional EdgeGetPeersParams edge_get_peers = 41;
 }
 
 /**
@@ -1008,6 +1031,12 @@ message TypedRPCResponse {
   optional BlobSetUserTextureResult blob_set_user_texture = 36;
   optional BlobSetUserCommentResult blob_set_user_comment = 37;
   optional EdgeBatchPermissionQueryResult edge_batch_permission_query = 40;
+  // edge.saveChannelListeners
+  optional EdgeSaveChannelListenersResult edge_save_channel_listeners = 38;
+  // edge.loadChannelListeners
+  optional EdgeLoadChannelListenersResult edge_load_channel_listeners = 39;
+  // edge.getPeers
+  optional EdgeGetPeersResult edge_get_peers = 41;
 }
 message HubRouteEntryProto {
   required uint32 target_edge_id = 1;
@@ -1059,7 +1088,76 @@ message TypedRPCNotification {
   optional HubRouteTableUpdateParams route_table_update = 36;
   // Hub → Edge: 热重载后将最新服务器限制配置推送给所有 Edge
   optional ServerLimitsConfig server_config_update = 38;
+  // hub.contextAction — forward a Mumble ContextAction from an Edge
+  optional EdgeContextActionParams context_action = 35;
+  // hub.contextActionModify — Hub pushes ContextActionModify to targeted clients
+  optional HubContextActionModifyParams context_action_modify = 37;
 
   // For unknown notification types, store params as JSON string
   optional string unknown_params_json = 99;
+}
+
+// ---------------------------------------------------------------------------
+// edge.reportSession params (request side)
+// ---------------------------------------------------------------------------
+// (EdgeReportSessionResult is defined near GlobalSessionProto above)
+
+// ---------------------------------------------------------------------------
+// edge.saveChannelListeners
+// ---------------------------------------------------------------------------
+message EdgeSaveChannelListenersParams {
+  required uint32 user_id    = 1;
+  repeated uint32 channel_ids = 2;
+}
+
+message EdgeSaveChannelListenersResult {
+  required bool success = 1;
+  optional string error = 2;
+}
+
+// ---------------------------------------------------------------------------
+// edge.loadChannelListeners
+// ---------------------------------------------------------------------------
+message EdgeLoadChannelListenersParams {
+  required uint32 user_id = 1;
+}
+
+message EdgeLoadChannelListenersResult {
+  required bool   success     = 1;
+  repeated uint32 channel_ids = 2;
+  optional string error       = 3;
+}
+
+// ---------------------------------------------------------------------------
+// hub.contextAction notification params
+// ---------------------------------------------------------------------------
+message EdgeContextActionParams {
+  required uint32                        edge_id    = 1;
+  required uint32                        session_id = 2;
+  optional mumbleproto.ContextAction     action     = 3;
+}
+
+// ---------------------------------------------------------------------------
+// edge.getPeers — query Hub for peer Edges supporting session sync
+// ---------------------------------------------------------------------------
+message EdgeGetPeersParams {
+  optional uint32 requesting_edge_id = 1;
+}
+
+message PeerSyncInfo {
+  required uint32 edge_id           = 1;
+  required string host              = 2;
+  required uint32 session_sync_port = 3;
+}
+
+message EdgeGetPeersResult {
+  repeated PeerSyncInfo peers = 1;
+}
+
+// ---------------------------------------------------------------------------
+// hub.contextActionModify — Hub forwards ContextActionModify to targeted clients
+// ---------------------------------------------------------------------------
+message HubContextActionModifyParams {
+  optional mumbleproto.ContextActionModify action          = 1;
+  repeated uint32                           target_sessions = 2;
 }

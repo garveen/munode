@@ -95,6 +95,10 @@ pub struct PeerEdgeInfo {
     /// forwards WebSocket traffic to Hub on behalf of Edges that cannot reach
     /// Hub directly.  `None` means the relay port was not yet advertised.
     pub relay_port: Option<u16>,
+    /// Port on which the peer's session sync WebSocket server listens.
+    /// Typically the same as `relay_port` (edge_port); path is `/session`.
+    /// `None` if the peer has not yet advertised this capability.
+    pub session_sync_port: Option<u16>,
 }
 
 /// Registry of known peer Edges, populated from `hub.peerJoined` notifications.
