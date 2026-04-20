@@ -514,12 +514,19 @@ impl HubClient {
                 }
             }
 
+            // Clean up this slot first so that any_slot_alive() below reflects
+            // the true post-failure state (otherwise the just-failed slot's sender
+            // is still present and would be counted as alive).
+            self.clear_slot(slot).await;
+            self.cancel_pending_for_slot(slot).await;
+
             // Emit HubUnreachable once the outage has lasted longer than the
-            // configured threshold.  This kicks all local clients and stops
-            // new connections from being accepted.
+            // configured threshold AND no other slot is still connected.
+            // Checking any_slot_alive() prevents a single failing slot from
+            // kicking all clients while other slots remain healthy.
             if !unreachable_emitted {
                 if let Some(since) = first_failure_at {
-                    if since.elapsed() >= UNREACHABLE_TIMEOUT {
+                    if since.elapsed() >= UNREACHABLE_TIMEOUT && !self.any_slot_alive().await {
                         warn!(
                             elapsed_secs = since.elapsed().as_secs(),
                             "Hub unreachable — disconnecting all clients and refusing new connections"
@@ -529,17 +536,20 @@ impl HubClient {
                     }
                 }
             }
-
-            // Clean up state
-            self.clear_slot(slot).await;
-            self.cancel_pending_for_slot(slot).await;
             // Only manage global state transitions and events if no other slot
             // is still connected.  With peer-equal slots, a single slot going
             // down should not affect the whole client while others are alive.
             {
                 let any_alive = self.any_slot_alive().await;
                 if !any_alive {
-                    *self.state.write().await = HubConnectionState::Disconnected;
+                    // Use the state write-lock as a mutex to ensure only one slot
+                    // emits HubDisconnected even if two slots die simultaneously.
+                    let was_connected = {
+                        let mut st = self.state.write().await;
+                        let prev = *st;
+                        *st = HubConnectionState::Disconnected;
+                        prev != HubConnectionState::Disconnected
+                    };
                     self.pending.lock().await.clear();
                     // Drop the notification sender so the processor task exits.
                     // A fresh processor will be created on the next successful connect.
@@ -547,7 +557,9 @@ impl HubClient {
                     // Reset sync_done so the next slot to connect re-runs the
                     // sync sequence (fullSync, joinCluster, etc.).
                     self.sync_done.store(false, Ordering::Release);
-                    self.edge_state.emit(EdgeEvent::HubDisconnected);
+                    if was_connected {
+                        self.edge_state.emit(EdgeEvent::HubDisconnected);
+                    }
                 }
             }
 
@@ -614,15 +626,15 @@ impl HubClient {
                 *st = HubConnectionState::Connecting;
             }
         }
-        info!("Connecting to Hub via {} (slot {})", url, slot);
+        info!("Connecting to Hub at {} (slot {})", url, slot);
 
-        const CONNECT_TIMEOUT_VIA: Duration = Duration::from_secs(15);
-        let (ws_stream, _) = time::timeout(CONNECT_TIMEOUT_VIA, tokio_tungstenite::connect_async(url))
+        const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+        let (ws_stream, _) = time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url))
             .await
-            .with_context(|| format!("Hub WebSocket connect via relay timed out after {:?} (slot {})", CONNECT_TIMEOUT_VIA, slot))?
-            .with_context(|| format!("Failed to connect to Hub WebSocket via {} (slot {})", url, slot))?;
+            .with_context(|| format!("Hub WebSocket connect timed out after {:?} (slot {})", CONNECT_TIMEOUT, slot))?
+            .with_context(|| format!("Failed to connect to Hub WebSocket at {} (slot {})", url, slot))?;
 
-        info!("WebSocket connected via {} (slot {})", url, slot);
+        info!("WebSocket connected to {} (slot {})", url, slot);
         {
             let mut st = self.state.write().await;
             if matches!(*st, HubConnectionState::Disconnected | HubConnectionState::Connecting) {
@@ -718,9 +730,11 @@ impl HubClient {
                             SequenceAction::Buffered | SequenceAction::Duplicate => {}
                         }
                     }
-                    // Clear notification_tx so a fresh processor is created on
-                    // the next connection (handles multi-slot race correctly).
-                    *notif_self.notification_tx.lock().await = None;
+                    // The channel closed because the teardown already dropped the sender
+                    // (notification_tx = None).  Do NOT clear notification_tx here — a
+                    // fast-reconnecting slot may have already stored a new sender there,
+                    // and clearing it unconditionally would kill the new processor.
+                    // The gap-timeout path above handles its own explicit cleanup via `return`.
                     debug!("Notification processor stopped");
                 });
             }
@@ -735,11 +749,11 @@ impl HubClient {
                 tokio::select! {
                     biased;
                     _ = &mut writer_fail => {
-                        debug!("Reader (slot {} via relay): writer failed, breaking read loop", slot);
+                        debug!("Reader (slot {}): writer failed, breaking read loop", slot);
                         break;
                     }
                     _ = gap_disconnect_reader.notified() => {
-                        error!("Reader (slot {} via relay): notification gap timeout — disconnecting", slot);
+                        error!("Reader (slot {}): notification gap timeout — disconnecting", slot);
                         break;
                     }
                     msg = ws_read.next() => {
@@ -800,9 +814,18 @@ impl HubClient {
             self.sync_notify.notify_waiters();
             *self.state.write().await = HubConnectionState::Registered;
             self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
-            info!("Edge registered with Hub successfully (via {}, slot {})", url, slot);
+            info!("Edge registered with Hub successfully ({}, slot {})", url, slot);
         } else {
             debug!("Slot {} connected (sync already done by another slot)", slot);
+            // If Hub was previously declared unreachable (accepting_connections == false),
+            // the slot that wins the sync CAS already re-emits HubRegistered.  But if
+            // another slot was alive during the outage so sync_done was never reset, the
+            // CAS always fails and HubRegistered is never emitted, leaving
+            // accepting_connections permanently false.  Detect that here and recover.
+            if !self.edge_state.accepting_connections.load(Ordering::Relaxed) {
+                info!("Slot {} recovering accepting_connections after HubUnreachable (sync held by peer slot)", slot);
+                self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: vec![] });
+            }
         }
 
         let heartbeat_self = self.clone();
@@ -837,210 +860,9 @@ impl HubClient {
     /// Attempt a single WebSocket connection on `slot`.
     /// All slots are peer-equal: any slot can perform registration & sync.
     async fn try_connect_slot(self: &Arc<Self>, slot: usize) -> Result<()> {
-        // Only downgrade to Connecting if no slot is in a better state.
-        // A reconnecting slot must not clobber Registered/Connected when another
-        // slot is still alive.
-        {
-            let mut st = self.state.write().await;
-            if matches!(*st, HubConnectionState::Disconnected) {
-                *st = HubConnectionState::Connecting;
-            }
-        }
-
         let scheme = if self.config.tls { "wss" } else { "ws" };
         let url = format!("{}://{}:{}", scheme, self.config.host, self.config.control_port);
-        info!("Connecting to Hub at {} (slot {})", url, slot);
-
-        const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-        let (ws_stream, _) = time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(&url))
-            .await
-            .with_context(|| format!("Hub WebSocket connect timed out after {:?} (slot {})", CONNECT_TIMEOUT, slot))?
-            .with_context(|| format!("Failed to connect to Hub WebSocket (slot {})", slot))?;
-
-        info!("WebSocket connected to Hub (slot {})", slot);
-        {
-            let mut st = self.state.write().await;
-            if matches!(*st, HubConnectionState::Disconnected | HubConnectionState::Connecting) {
-                *st = HubConnectionState::Connected;
-            }
-        }
-
-        let (mut ws_write, mut ws_read) = ws_stream.split();
-
-        // Channel for sending outgoing messages
-        let (send_tx, mut send_rx) = mpsc::channel::<Vec<u8>>(4096);
-        if let Some(s) = self.pool_senders.get(slot) {
-            *s.lock().await = Some(send_tx);
-        }
-
-        let (writer_fail_tx, writer_fail_rx) = tokio::sync::oneshot::channel::<()>();
-
-        // Writer task
-        let writer_handle = tokio::spawn(async move {
-            let mut fail_tx = Some(writer_fail_tx);
-            while let Some(data) = send_rx.recv().await {
-                if let Err(e) = ws_write.send(tungstenite::Message::Binary(Bytes::from(data))).await {
-                    error!("WebSocket write error (slot {}): {}", slot, e);
-                    if let Some(tx) = fail_tx.take() { let _ = tx.send(()); }
-                    break;
-                }
-            }
-        });
-
-        // Per-connection gap-disconnect signal.
-        let gap_disconnect = Arc::new(tokio::sync::Notify::new());
-
-        // Ensure a notification processor task exists.
-        {
-            let mut tx_guard = self.notification_tx.lock().await;
-            if tx_guard.is_none() {
-                let (notif_tx, mut notif_rx) = mpsc::unbounded_channel::<SequencedNotification>();
-                *tx_guard = Some(notif_tx);
-                let notif_self = self.clone();
-                let gap_disconnect = gap_disconnect.clone();
-                tokio::spawn(async move {
-                    notif_self.sync_notify.notified().await;
-                    let initial_seq = notif_self.notification_expected_seq.load(Ordering::Acquire);
-                    let mut sequencer = NotificationSequencer::new(initial_seq);
-                    info!(initial_seq, "Notification sequencer started");
-                    loop {
-                        let gap_remaining = sequencer.gap_remaining();
-                        let notif = if let Some(remaining) = gap_remaining {
-                            tokio::select! {
-                                biased;
-                                n = notif_rx.recv() => n,
-                                _ = tokio::time::sleep(remaining) => {
-                                    if sequencer.is_gap_expired() {
-                                        error!(
-                                            expected = sequencer.expected_seq,
-                                            buffered = sequencer.reorder_buffer.len(),
-                                            "Notification gap not resolved in {:?} — triggering reconnect",
-                                            NOTIFICATION_GAP_TIMEOUT,
-                                        );
-                                        gap_disconnect.notify_one();
-                                        // Clear notification_tx so the next connection
-                                        // attempt creates a fresh processor.
-                                        *notif_self.notification_tx.lock().await = None;
-                                        return;
-                                    }
-                                    continue;
-                                }
-                            }
-                        } else {
-                            notif_rx.recv().await
-                        };
-                        let sn = match notif {
-                            Some(sn) => sn,
-                            None => break,
-                        };
-                        match sequencer.feed(sn) {
-                            SequenceAction::ProcessNow(n) => {
-                                notif_self.handle_notification(n).await;
-                            }
-                            SequenceAction::FlushBatch(batch) => {
-                                for n in batch {
-                                    notif_self.handle_notification(n).await;
-                                }
-                            }
-                            SequenceAction::Unsequenced(n) => {
-                                notif_self.handle_notification(n).await;
-                            }
-                            SequenceAction::Buffered | SequenceAction::Duplicate => {}
-                        }
-                    }
-                    // Clear notification_tx so a fresh processor is created on
-                    // the next connection (handles multi-slot race correctly).
-                    *notif_self.notification_tx.lock().await = None;
-                    debug!("Notification processor stopped");
-                });
-            }
-        }
-
-        // Reader task
-        let (reader_done_tx, reader_done_rx) = tokio::sync::oneshot::channel::<()>();
-        let reader_self = self.clone();
-        let gap_disconnect_reader = gap_disconnect.clone();
-        let reader_handle = tokio::spawn(async move {
-            let mut writer_fail = writer_fail_rx;
-            loop {
-                tokio::select! {
-                    biased;
-                    _ = &mut writer_fail => {
-                        debug!("Reader (slot {}): writer failed, breaking read loop", slot);
-                        break;
-                    }
-                    _ = gap_disconnect_reader.notified() => {
-                        error!("Reader (slot {}): notification gap timeout — disconnecting", slot);
-                        break;
-                    }
-                    msg = ws_read.next() => {
-                        match msg {
-                            Some(Ok(tungstenite::Message::Binary(data))) => {
-                                if let Err(e) = reader_self.handle_incoming_slot(&data).await {
-                                    error!("Fatal Hub message error (slot {}), closing connection: {}", slot, e);
-                                    break;
-                                }
-                            }
-                            Some(Ok(tungstenite::Message::Close(_))) => {
-                                info!("Hub sent close frame (slot {})", slot);
-                                break;
-                            }
-                            Some(Ok(tungstenite::Message::Ping(data))) => {
-                                reader_self.send_on_slot(slot, tungstenite::Message::Pong(data).into_data().to_vec()).await.ok();
-                            }
-                            Some(Ok(_)) => {}
-                            Some(Err(e)) => {
-                                error!("WebSocket read error (slot {}): {}", slot, e);
-                                break;
-                            }
-                            None => {
-                                info!("WebSocket stream ended (slot {})", slot);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            let _ = reader_done_tx.send(());
-        });
-
-        // Every slot registers with Hub.
-        self.do_register().await?;
-
-        // Run sync sequence exactly once via CAS.
-        if self.sync_done.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok() {
-            // Replay control notifications that failed while the Hub was unreachable
-            // (UserLeft, ChannelLinksChanged, ChannelRemoved).  Must happen before
-            // do_full_sync so the Hub snapshot excludes ghost sessions and includes
-            // the correct channel tree.
-            self.flush_pending_notifications().await;
-            let disappeared = self.do_full_sync().await?;
-            self.do_fetch_voice_targets().await;
-            self.do_join_cluster().await?;
-            if let Err(e) = self.do_report_local_users().await {
-                warn!("Failed to report existing users to Hub: {}", e);
-            }
-            if let Err(e) = self.do_report_local_voice_targets().await {
-                warn!("Failed to re-upload local VoiceTarget configs to Hub: {}", e);
-            }
-            self.sync_notify.notify_waiters();
-            *self.state.write().await = HubConnectionState::Registered;
-            self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
-            info!("Edge registered with Hub successfully (slot {})", slot);
-        } else {
-            debug!("Slot {} connected (sync already done by another slot)", slot);
-        }
-
-        let heartbeat_self = self.clone();
-        let heartbeat_handle = tokio::spawn(async move {
-            heartbeat_self.heartbeat_loop().await;
-        });
-
-        let _ = reader_done_rx.await;
-        heartbeat_handle.abort();
-        reader_handle.abort();
-        writer_handle.abort();
-        Ok(())
+        self.try_connect_via_url(&url, slot).await
     }
 
     /// Send raw bytes through a specific pool slot.
