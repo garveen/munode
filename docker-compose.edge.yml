@@ -1,7 +1,7 @@
 services:
   edge:
     build:
-      context: ..
+      context: .
       dockerfile: rust/Dockerfile
 
       # Persistent layer cache stored on the host filesystem.

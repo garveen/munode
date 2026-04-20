@@ -1,7 +1,7 @@
 services:
   hub:
     build:
-      context: ..
+      context: .
       dockerfile: rust/Dockerfile
 
       cache_from:
