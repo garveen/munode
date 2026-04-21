@@ -170,3 +170,13 @@ enabled            = true              # Default: true
 # Maximum total relay bandwidth across all streams (kbps, 0 = unlimited)
 max_relay_bandwidth = 0                # Default: 0 (unlimited)
 
+# ---------------------------------------------------------------------------
+# Web API
+# ---------------------------------------------------------------------------
+[web_api]
+# Enable the HTTP Web API for local monitoring (GET /api/clients, GET /api/health).
+# Bind to 127.0.0.1 (or a private interface) — this endpoint has no authentication.
+enabled = false                        # Default: false
+host    = "127.0.0.1"                  # Default: 127.0.0.1
+port    = 8081                         # Default: 8081
+
