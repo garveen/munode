@@ -65,17 +65,11 @@ pub struct EdgeVoiceRelayConfig {
     /// Whether this Edge accepts Hub-mediated relay requests.
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Maximum relay bandwidth in Kbps (0 = unlimited).
-    #[serde(default = "default_relay_bandwidth")]
-    pub max_relay_bandwidth: u32,
 }
 
 impl Default for EdgeVoiceRelayConfig {
     fn default() -> Self {
-        Self {
-            enabled: true,
-            max_relay_bandwidth: default_relay_bandwidth(),
-        }
+        Self { enabled: true }
     }
 }
 
@@ -887,9 +881,6 @@ fn default_edge_web_api_port() -> u16 {
 }
 fn default_blob_store_path() -> String {
     "data/blobs".to_string()
-}
-fn default_relay_bandwidth() -> u32 {
-    0
 }
 fn default_relay_cost_factor() -> f32 {
     1.2

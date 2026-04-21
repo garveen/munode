@@ -226,5 +226,4 @@ consecutive_failure_threshold = 2
 
 [voice_routing.relay]
 enabled             = true
-max_relay_bandwidth = 0
 "#;
