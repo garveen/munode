@@ -937,8 +937,8 @@ pub(super) async fn handle_client_connection(
                                 0
                             };
 
-                            if client.suppress && voice_target != 31 {
-                                // Suppressed users cannot speak — silently drop.
+                            if (client.suppress || client.mute || client.self_mute) && voice_target != 31 {
+                                // Suppressed/muted users cannot speak — silently drop.
                             } else if voice_target == 31 {
                                 // Loopback: send back to the sender (inject session ID per protocol)
                                 let data = wrap_udptunnel(&inject_session_into_voice(&frame.payload, sid, 0));

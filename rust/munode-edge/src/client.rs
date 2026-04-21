@@ -234,6 +234,8 @@ impl ClientManager {
         let deaf = client.deaf;
         let self_deaf = client.self_deaf;
         let suppress = client.suppress;
+        let mute = client.mute;
+        let self_mute = client.self_mute;
 
         let initial_ready = client.state == ClientState::Ready;
         let ready_flag = Arc::new(AtomicBool::new(initial_ready));
@@ -264,7 +266,7 @@ impl ClientManager {
         // Register in HotSlot for lock-free voice-routing reads.
         // bandwidth is stored before active=true so the hot path always finds it.
         crate::hot_slot::get_hot_slot(session).register(
-            session, channel_id, deaf, self_deaf, suppress, sender.clone_sender(), bw_arc,
+            session, channel_id, deaf, self_deaf, suppress, mute, self_mute, sender.clone_sender(), bw_arc,
             client_groups,
         );
 
@@ -294,6 +296,8 @@ impl ClientManager {
         let new_deaf = client.deaf;
         let new_self_deaf = client.self_deaf;
         let new_suppress = client.suppress;
+        let new_mute = client.mute;
+        let new_self_mute = client.self_mute;
         let new_channel_id = client.channel_id;
         let client_groups = Arc::new(client.groups.clone());
         let old_listening = {
@@ -315,6 +319,8 @@ impl ClientManager {
                 slot.deaf.store(new_deaf, std::sync::atomic::Ordering::Relaxed);
                 slot.self_deaf.store(new_self_deaf, std::sync::atomic::Ordering::Relaxed);
                 slot.suppress.store(new_suppress, std::sync::atomic::Ordering::Relaxed);
+                slot.mute.store(new_mute, std::sync::atomic::Ordering::Relaxed);
+                slot.self_mute.store(new_self_mute, std::sync::atomic::Ordering::Relaxed);
                 slot.channel_id.store(new_channel_id, std::sync::atomic::Ordering::Relaxed);
                 slot.groups.store(client_groups);
             }
@@ -792,14 +798,14 @@ impl ClientManager {
     pub async fn get_udp_identification_candidates(
         &self,
         already_mapped: &std::collections::HashSet<u32>,
-    ) -> Vec<(u32, Arc<Mutex<CryptState>>, u32, bool, Arc<Mutex<BandwidthRecord>>)> {
+    ) -> Vec<(u32, Arc<Mutex<CryptState>>, u32, bool, bool, bool, Arc<Mutex<BandwidthRecord>>)> {
         self.sessions
             .read()
             .await
             .iter()
             .filter_map(|(&sid, e)| {
                 if already_mapped.contains(&sid) { return None; }
-                e.crypt_state.as_ref().map(|cs| (sid, Arc::clone(cs), e.info.channel_id, e.info.suppress, e.bandwidth.clone()))
+                e.crypt_state.as_ref().map(|cs| (sid, Arc::clone(cs), e.info.channel_id, e.info.suppress, e.info.mute, e.info.self_mute, e.bandwidth.clone()))
             })
             .collect()
     }

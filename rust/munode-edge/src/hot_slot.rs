@@ -92,6 +92,10 @@ pub struct HotSlot {
     pub self_deaf:  AtomicBool,
     /// Suppress flag: the server has suppressed this user in their current channel.
     pub suppress:   AtomicBool,
+    /// Server-side mute flag.
+    pub mute:       AtomicBool,
+    /// Self-mute flag (set by the client).
+    pub self_mute:  AtomicBool,
     /// Current channel ID.
     pub channel_id: AtomicU32,
     /// OCB2-AES128 crypto state for UDP voice delivery.  `None` until CryptSetup.
@@ -122,6 +126,8 @@ impl HotSlot {
             deaf:          AtomicBool::new(false),
             self_deaf:     AtomicBool::new(false),
             suppress:      AtomicBool::new(false),
+            mute:          AtomicBool::new(false),
+            self_mute:     AtomicBool::new(false),
             channel_id:    AtomicU32::new(0),
             crypt_state:   ArcSwap::new(Arc::new(None)),
             sender:        ArcSwap::new(Arc::new(None)),
@@ -145,6 +151,8 @@ impl HotSlot {
         deaf: bool,
         self_deaf: bool,
         suppress: bool,
+        mute: bool,
+        self_mute: bool,
         sender: mpsc::Sender<Bytes>,
         bandwidth: Arc<Mutex<BandwidthRecord>>,
         groups: Arc<Vec<String>>,
@@ -154,6 +162,8 @@ impl HotSlot {
         self.deaf.store(deaf, Ordering::Relaxed);
         self.self_deaf.store(self_deaf, Ordering::Relaxed);
         self.suppress.store(suppress, Ordering::Relaxed);
+        self.mute.store(mute, Ordering::Relaxed);
+        self.self_mute.store(self_mute, Ordering::Relaxed);
         self.crypt_state.store(Arc::new(None));
         self.sender.store(Arc::new(Some(sender)));
         self.groups.store(groups);

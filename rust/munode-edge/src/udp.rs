@@ -504,6 +504,8 @@ impl UdpServer {
         };
         let sender_channel = slot.channel_id.load(std::sync::atomic::Ordering::Relaxed);
         let suppress = slot.suppress.load(std::sync::atomic::Ordering::Relaxed);
+        let muted = slot.mute.load(std::sync::atomic::Ordering::Relaxed)
+            || slot.self_mute.load(std::sync::atomic::Ordering::Relaxed);
         let bw_arc = match &**slot.bandwidth.load() {
             Some(bw) => Arc::clone(bw),
             None => {
@@ -570,7 +572,7 @@ impl UdpServer {
             }
         } else {
             // Rate check already done above; pass None to skip it in route_voice.
-            self.route_voice(session_id, &plaintext, sender_channel, suppress, None).await;
+            self.route_voice(session_id, &plaintext, sender_channel, suppress, muted, None).await;
         }
     }
 
@@ -595,7 +597,7 @@ impl UdpServer {
             .get_udp_identification_candidates(&already_mapped)
             .await;
 
-        for (session_id, cs_arc, sender_channel, suppress, bw_arc) in candidates {
+        for (session_id, cs_arc, sender_channel, suppress, mute, self_mute, bw_arc) in candidates {
             let mut plain = Vec::new();
             let identified = {
                 let mut cs = match cs_arc.lock() {
@@ -621,7 +623,7 @@ impl UdpServer {
                         self.send_encrypted(session_id, &plain).await;
                     }
                 } else {
-                    self.route_voice(session_id, &plain, sender_channel, suppress, Some(bw_arc)).await;
+                    self.route_voice(session_id, &plain, sender_channel, suppress, mute || self_mute, Some(bw_arc)).await;
                 }
                 return;
             }
@@ -634,10 +636,11 @@ impl UdpServer {
     /// Route decrypted voice to channel members, encrypting per-recipient.
     /// Also relays to remote users (on other edges) via Hub TCP.
     ///
-    /// `sender_channel`, `suppress`, and `bw_arc` are pre-fetched by the caller.
+    /// `sender_channel`, `suppress`, `muted`, and `bw_arc` are pre-fetched by the caller.
+    /// `muted` is `true` when the sender is server-muted or self-muted.
     /// Pass `Some(bw_arc)` to perform the rate-limit check here (identify path).
     /// Pass `None` when the caller has already checked before decrypt (hot path).
-    async fn route_voice(&self, sender_session: u32, plaintext: &[u8], sender_channel: u32, suppress: bool, bw_arc: Option<Arc<std::sync::Mutex<crate::bandwidth::BandwidthRecord>>>) {
+    async fn route_voice(&self, sender_session: u32, plaintext: &[u8], sender_channel: u32, suppress: bool, muted: bool, bw_arc: Option<Arc<std::sync::Mutex<crate::bandwidth::BandwidthRecord>>>) {
         trace!("route_voice: session={} channel={}", sender_session, sender_channel);
 
         // Rate-limit check: only runs when bw_arc is Some (identify path).
@@ -675,9 +678,9 @@ impl UdpServer {
             }
         }
 
-        // Block suppressed users from speaking
+        // Block suppressed or muted users from speaking
         let voice_target = if !plaintext.is_empty() { (plaintext[0] & 0x1F) as u32 } else { 0 };
-        if suppress && voice_target != 31 {
+        if (suppress || muted) && voice_target != 31 {
             return;
         }
 
