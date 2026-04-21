@@ -257,9 +257,9 @@ duration    = 300                      # Default: 300 seconds (5 minutes)
 # ---------------------------------------------------------------------------
 [web_api]
 # Enable the HTTP management API (metrics, ban management, etc.)
-enabled = true                         # Default: true
+enabled = false                         # Default: false
 
-# Bind host for the Web API server
+# Bind host for the Web API server, if it's in docker, must be 0.0.0.0
 host    = "0.0.0.0"                    # Default: 0.0.0.0
 
 # Port for the Web API server
