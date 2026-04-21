@@ -159,11 +159,21 @@ export class MumbleClient extends EventEmitter {
    */
   async createChannel(name: string, parent?: number): Promise<number> {
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
+      let timeout: ReturnType<typeof setTimeout>;
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('channelState', onChannelState);
+        this.removeListener('channelDenied', onChannelDenied);
+      };
+
+      timeout = setTimeout(() => {
+        cleanup();
         reject(new Error('Channel creation timeout'));
       }, 15000); // 15秒超时（集成测试全套运行时服务器启动可能较慢）
 
       // 监听频道状态变化
+
       const onChannelState = (message: mumbleproto.ChannelState) => {
         // 检查是否是我们刚创建的频道 (通过名称匹配)
         // 使用 !== undefined 检查 protobuf optional 字段是否真的设置了值
@@ -171,13 +181,18 @@ export class MumbleClient extends EventEmitter {
         if (message.channel_id !== undefined && message.channel_id > 0 && 
             message.name !== undefined && message.name === name && 
             message.parent !== undefined && message.parent === (parent || 0)) {
-          clearTimeout(timeout);
-          this.removeListener('channelState', onChannelState);
+          cleanup();
           resolve(message.channel_id);
         }
       };
 
+      const onChannelDenied = (message: mumbleproto.PermissionDenied) => {
+        cleanup();
+        reject(new Error(message.reason || 'Channel creation denied'));
+      };
+
       this.on('channelState', onChannelState);
+      this.on('channelDenied', onChannelDenied);
 
       // 发送创建频道消息
       // Note: Do NOT set channel_id to signal "create new channel" to the server
@@ -192,8 +207,7 @@ export class MumbleClient extends EventEmitter {
       const serialized = mumbleproto.ChannelState.encode(channelStateData).finish();
       const wrappedMessage = this.connection.wrapMessage(MessageType.ChannelState, serialized);
       this.connection.sendTCP(wrappedMessage).catch((error) => {
-        clearTimeout(timeout);
-        this.removeListener('channelState', onChannelState);
+        cleanup();
         reject(error);
       });
     });

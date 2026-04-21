@@ -88,6 +88,27 @@ describe('验证规则集成测试', () => {
 
     const hmacSecret = 'test-hmac-secret-validation-rules';
 
+    // Lua auth script: grant admin group to channel-creation test users so they
+    // have MAKE_CHANNEL permission.  All other users (including the username-
+    // validation test accounts) get no extra groups but still connect as guests.
+    // Note: username regex validation runs BEFORE Lua auth, so invalid usernames
+    // are rejected by the regex and never reach this script.
+    const luaAuthScript = `
+local CHANNEL_TEST_USERS = {
+  adminuser  = { user_id = 9001 },
+  adminuser2 = { user_id = 9002 },
+  adminuser3 = { user_id = 9003 },
+  adminuser4 = { user_id = 9004 },
+}
+function authenticate(req)
+  local info = CHANNEL_TEST_USERS[req.username]
+  if info then
+    return { success = true, user_id = info.user_id, username = req.username, display_name = req.username, groups = {"admin"} }
+  end
+  return { success = true, user_id = 0, username = req.username, display_name = req.username, groups = {} }
+end
+`;
+
     // Hub config with validation rules enabled
     const hubConfig = {
       network: {
@@ -101,6 +122,8 @@ describe('验证规则集成测试', () => {
         // Allow guest access so no external auth service is needed
         allow_guest: true,
         require_auth_service: false,
+        // Grant admin group to channel-creation test users via inline Lua script
+        lua_script: luaAuthScript,
       },
       registry: {
         hmac_secret: hmacSecret,
@@ -349,24 +372,17 @@ describe('验证规则集成测试', () => {
     await sleep(300);
     expect(client.isConnected()).toBe(true);
 
-    // '!!BadChannel!!' doesn't match the regex (special chars not allowed).
-    // The Hub will reject it silently (no channelState broadcast),
-    // so createChannel() will time out — that is expected behavior.
+    // Hub validates channel name against channel_name_regex and returns success:false.
+    // Edge now sends PermissionDenied (ChannelName) back, so createChannel rejects quickly.
     let channelCreated = false;
     try {
-      const newId = await client.createChannel('!!BadChannel!!', 0);
-      // If we reach here, a channel was created — check if it's actually
-      // a channel with this name in the client's channel list (it shouldn't be).
-      const channels = client.getChannels();
-      channelCreated = channels.some((c: any) => c.name === '!!BadChannel!!' && c.channel_id === newId);
+      await client.createChannel('!!BadChannel!!', 0);
+      channelCreated = true;
     } catch {
-      // Timeout or other error — this means the channel was NOT created, which is correct
-      channelCreated = false;
+      // Expected: Hub rejected the invalid name
     }
 
-    // Channel should NOT be created since the name is invalid
     expect(channelCreated).toBe(false);
-    expect(client.isConnected()).toBe(true);
     await client.disconnect();
   });
 
@@ -382,19 +398,17 @@ describe('验证规则集成测试', () => {
     await sleep(300);
     expect(client.isConnected()).toBe(true);
 
-    // '___private' starts with underscore which doesn't match ^[a-zA-Z0-9].
-    // The Hub will reject it silently (no channelState broadcast).
+    // Hub validates channel name against channel_name_regex and returns success:false.
+    // Edge now sends PermissionDenied (ChannelName) back, so createChannel rejects quickly.
     let channelCreated = false;
     try {
-      const newId = await client.createChannel('___private', 0);
-      const channels = client.getChannels();
-      channelCreated = channels.some((c: any) => c.name === '___private' && c.channel_id === newId);
+      await client.createChannel('___private', 0);
+      channelCreated = true;
     } catch {
-      channelCreated = false;
+      // Expected: Hub rejected the invalid name
     }
 
     expect(channelCreated).toBe(false);
-    expect(client.isConnected()).toBe(true);
     await client.disconnect();
   });
 

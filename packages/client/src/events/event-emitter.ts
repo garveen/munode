@@ -178,6 +178,8 @@ export interface ClientEventMap {
   // 权限事件
   permissionDenied: (permission: string, reason: string) => void;
   permissionQuery: (channelId: number, permissions: number) => void;
+  /** 频道操作被拒绝（名称不合法等），专供 createChannel 使用 */
+  channelDenied: (message: mumbleproto.PermissionDenied) => void;
 
   // 服务器事件
   serverConfig: (config: mumbleproto.ServerConfig) => void;

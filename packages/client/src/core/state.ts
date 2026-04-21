@@ -265,6 +265,10 @@ export class StateManager {
     // 触发权限拒绝事件，直接传递原始 protobuf 消息
     // 这样监听器可以正确访问 channel_id 等字段
     this.client.emit('permissionDenied', message);
+    // ChannelName (type=3): 频道名被服务端拒绝，专门通知 createChannel
+    if (message.type === 3 /* DenyType.ChannelName */) {
+      this.client.emit('channelDenied', message);
+    }
   }
 
   /**

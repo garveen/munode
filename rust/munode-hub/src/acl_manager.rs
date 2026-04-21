@@ -142,8 +142,9 @@ impl AclManager {
         channel_id: u32,
         groups: &[String],
     ) -> u32 {
-        // Check cache
-        {
+        // Check cache (skip for user_id=0: multiple sessions share id=0 but may
+        // have different dynamic groups from Lua/HTTP auth, causing stale hits).
+        if user_id != 0 {
             let cache = self.cache.read().await;
             if let Some(&cached) = cache.get(&(user_id, channel_id)) {
                 return cached;
@@ -153,7 +154,7 @@ impl AclManager {
         // SuperUser check: admin/superuser group gets all permissions
         if groups.iter().any(|g| g == "admin" || g == "superuser") {
             let result = permission::ALL;
-            self.cache_insert(user_id, channel_id, result).await;
+            if user_id != 0 { self.cache_insert(user_id, channel_id, result).await; }
             return result;
         }
 
@@ -193,8 +194,9 @@ impl AclManager {
         chain: &[u32],
         inherit_flags: &[bool],
     ) -> u32 {
-        // Cache check
-        {
+        // Cache check (skip for user_id=0: multiple sessions share id=0 but may
+        // have different dynamic groups from Lua/HTTP auth, causing stale hits).
+        if user_id != 0 {
             let cache = self.cache.read().await;
             if let Some(&cached) = cache.get(&(user_id, channel_id)) {
                 return cached;
@@ -203,7 +205,7 @@ impl AclManager {
         // SuperUser fast path
         if groups.iter().any(|g| g == "admin" || g == "superuser") {
             let result = permission::ALL;
-            self.cache_insert(user_id, channel_id, result).await;
+            if user_id != 0 { self.cache_insert(user_id, channel_id, result).await; }
             return result;
         }
 
@@ -238,7 +240,7 @@ impl AclManager {
             granted |= permission::ALL & !(permission::SPEAK | permission::WHISPER);
         }
         debug!("Permissions for user {} on channel {}: 0x{:X}", user_id, channel_id, granted);
-        self.cache_insert(user_id, channel_id, granted).await;
+        if user_id != 0 { self.cache_insert(user_id, channel_id, granted).await; }
         granted
     }
 

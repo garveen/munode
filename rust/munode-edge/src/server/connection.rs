@@ -1277,8 +1277,9 @@ pub(super) async fn handle_client_connection(
                                 client_sender.send_message(MessageType::PermissionDenied, &pq).await;
                                 continue;
                             }
+                            let sender_for_spawn = client_sender.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = hub.save_channel(
+                                match hub.save_channel(
                                     ch_state.channel_id,
                                     ch_state.parent,
                                     ch_state.name.as_deref(),
@@ -1286,7 +1287,18 @@ pub(super) async fn handle_client_connection(
                                     ch_state.position,
                                     ch_state.max_users,
                                 ).await {
-                                    warn!("Failed to forward ChannelState to Hub: {}", e);
+                                    Ok(result) if !result.success => {
+                                        let pq = mumbleproto::PermissionDenied {
+                                            r#type: Some(mumbleproto::permission_denied::DenyType::ChannelName as i32),
+                                            reason: result.error,
+                                            ..Default::default()
+                                        };
+                                        sender_for_spawn.send_message(MessageType::PermissionDenied, &pq).await;
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to forward ChannelState to Hub: {}", e);
+                                    }
+                                    _ => {}
                                 }
                             });
                         }
