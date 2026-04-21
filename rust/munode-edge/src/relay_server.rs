@@ -7,24 +7,29 @@
 //! - `/relay` — transparent Hub proxy relay (unchanged behaviour from the old relay server)
 //! - `/voice` — direct Edge-to-Edge voice channel for `DirectTcp` routing
 //!
-//! ## Relay Authentication
+//! ## Relay Authentication (Challenge-Response)
 //!
-//! When the Edge is configured with an `hmac_secret`, incoming `/relay` connections
-//! must prove they know the same secret by including a timestamp-based HMAC token in
-//! the WebSocket URL query string:
+//! When the Edge is configured with an `hmac_secret`, incoming `/relay` and `/voice`
+//! connections must complete a challenge-response handshake immediately after the
+//! WebSocket upgrade.  This replaces the previous timestamp-based token scheme,
+//! eliminating all dependency on clock synchronisation between nodes.
+//!
+//! Protocol (server = Edge-B relay, client = Edge-A connecting):
 //!
 //! ```text
-//!   ws://relay-host:edge_port/relay?ts=<unix_ms>&token=<hex_hmac>
+//!   Server → Client : Binary frame  [0xC1][nonce(32 random bytes)]
+//!   Client → Server : Binary frame  [0xC2][HMAC-SHA256(secret, nonce)(32 bytes)]
 //! ```
 //!
-//! The token is `hex(HMAC-SHA256(hmac_secret, "relay:<ts>"))`.  The relay server
-//! checks that `ts` is within 30 seconds of the current time and that the token
-//! matches, rejecting the connection with HTTP 401 otherwise.  Connections without
-//! a query string are allowed only when no `hmac_secret` is configured.
+//! The server generates a cryptographically random 32-byte nonce per connection,
+//! sends it as the first WebSocket frame, and verifies the client's HMAC response
+//! before relaying any traffic.  The nonce is single-use, providing natural replay
+//! protection without requiring clock agreement.  Connections that fail or time out
+//! during the handshake are closed immediately.
 //!
 //! ```text
 //!   Edge A (cannot reach Hub)
-//!        │ ws://edge-b-host:edge_port/relay?ts=...&token=...
+//!        │ ws://edge-b-host:edge_port/relay  (challenge-response handshake first)
 //!        ▼
 //!   Edge B (relay server)  ───ws://hub-host:hub-port/──►  Hub
 //!
@@ -55,81 +60,115 @@ const RELAY_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 /// Voice TCP connection channel buffer size.
 const VOICE_TCP_CHAN_BUF: usize = 256;
 
-/// Maximum age (ms) of a relay auth token before it is considered expired.
-const RELAY_TOKEN_MAX_AGE_MS: u64 = 30_000;
+/// Length of the auth nonce in bytes (256-bit random value).
+const RELAY_AUTH_NONCE_LEN: usize = 32;
+/// Length of the HMAC-SHA256 output in bytes.
+const RELAY_AUTH_HMAC_LEN: usize = 32;
+/// Magic byte prefixing the server challenge frame.
+const RELAY_CHALLENGE_MAGIC: u8 = 0xC1;
+/// Magic byte prefixing the client response frame.
+const RELAY_RESPONSE_MAGIC: u8 = 0xC2;
+/// Maximum time allowed for the challenge-response handshake to complete.
+const RELAY_AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Compute the HMAC-SHA256 relay token for a given timestamp.
+/// Server-side challenge-response handshake.
 ///
-/// `token = hex(HMAC-SHA256(secret, "relay:<ts_ms>"))`
-///
-/// The key is `secret` (raw bytes of the UTF-8 string); the message is the
-/// ASCII string `"relay:<ts_ms>"` where `<ts_ms>` is the decimal timestamp.
-///
-/// Example (illustrative — not a real key):
-/// ```text
-/// secret  = "my-hmac-secret"
-/// ts_ms   = 1742371200000
-/// message = "relay:1742371200000"
-/// token   = hex(HMAC-SHA256("my-hmac-secret", "relay:1742371200000"))
-/// ```
-fn compute_relay_token(secret: &str, ts_ms: u64) -> String {
-    use ring::hmac;
+/// Sends a random nonce to the client and verifies the HMAC-SHA256 response.
+/// Returns `Ok(())` on success; the caller should close the connection on error.
+pub(crate) async fn relay_auth_server<S>(
+    ws: &mut tokio_tungstenite::WebSocketStream<S>,
+    secret: &str,
+) -> anyhow::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use futures_util::{SinkExt, StreamExt};
+    use ring::{hmac, rand::{self, SecureRandom}};
+
+    // Generate a cryptographically random nonce.
+    let rng = rand::SystemRandom::new();
+    let mut nonce = [0u8; RELAY_AUTH_NONCE_LEN];
+    rng.fill(&mut nonce)
+        .map_err(|_| anyhow::anyhow!("failed to generate auth nonce"))?;
+
+    // Send challenge: [CHALLENGE_MAGIC][nonce(32)]
+    let mut challenge = Vec::with_capacity(1 + RELAY_AUTH_NONCE_LEN);
+    challenge.push(RELAY_CHALLENGE_MAGIC);
+    challenge.extend_from_slice(&nonce);
+    ws.send(WsMessage::Binary(challenge.into()))
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to send auth challenge: {}", e))?;
+
+    // Wait for response with timeout.
+    let msg = timeout(RELAY_AUTH_TIMEOUT, ws.next())
+        .await
+        .map_err(|_| anyhow::anyhow!("auth response timeout"))?
+        .ok_or_else(|| anyhow::anyhow!("connection closed during auth"))?
+        .map_err(|e| anyhow::anyhow!("error reading auth response: {}", e))?;
+
+    let data = match msg {
+        WsMessage::Binary(d) => d,
+        _ => return Err(anyhow::anyhow!("unexpected auth frame type")),
+    };
+    if data.len() != 1 + RELAY_AUTH_HMAC_LEN || data[0] != RELAY_RESPONSE_MAGIC {
+        return Err(anyhow::anyhow!("invalid auth response format"));
+    }
+
+    // Constant-time HMAC verification.
     let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
-    let msg = format!("relay:{}", ts_ms);
-    let sig = hmac::sign(&key, msg.as_bytes());
-    hex::encode(sig.as_ref())
+    let expected = hmac::sign(&key, &nonce);
+    let received = &data[1..];
+    let mismatch = expected
+        .as_ref()
+        .iter()
+        .zip(received.iter())
+        .fold(0u8, |acc, (a, b)| acc | (a ^ b));
+    if mismatch != 0 {
+        return Err(anyhow::anyhow!("auth failed: invalid token"));
+    }
+    Ok(())
 }
 
-/// Verify the relay auth query parameters.
+/// Client-side challenge-response handshake.
 ///
-/// Returns `true` if no `hmac_secret` is configured (unauthenticated relays
-/// are allowed when the secret is absent), or if both the timestamp is fresh
-/// and the token matches.
-fn verify_relay_auth(hmac_secret: &str, query: Option<&str>) -> bool {
-    let query = match query {
-        Some(q) if !q.is_empty() => q,
-        _ => return false, // secret configured but no query params → reject
+/// Reads the server's nonce challenge and sends back the HMAC-SHA256 response.
+/// Returns `Ok(())` on success; the caller should close the connection on error.
+pub(crate) async fn relay_auth_client<S>(
+    ws: &mut tokio_tungstenite::WebSocketStream<S>,
+    secret: &str,
+) -> anyhow::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use futures_util::{SinkExt, StreamExt};
+    use ring::hmac;
+
+    // Receive challenge with timeout.
+    let msg = timeout(RELAY_AUTH_TIMEOUT, ws.next())
+        .await
+        .map_err(|_| anyhow::anyhow!("auth challenge timeout"))?
+        .ok_or_else(|| anyhow::anyhow!("connection closed before challenge"))?
+        .map_err(|e| anyhow::anyhow!("error reading auth challenge: {}", e))?;
+
+    let data = match msg {
+        WsMessage::Binary(d) => d,
+        _ => return Err(anyhow::anyhow!("unexpected challenge frame type")),
     };
-
-    // Parse ts and token from query string
-    let mut ts_ms_opt: Option<u64> = None;
-    let mut token_opt: Option<String> = None;
-    for part in query.split('&') {
-        if let Some(val) = part.strip_prefix("ts=") {
-            ts_ms_opt = val.parse::<u64>().ok();
-        } else if let Some(val) = part.strip_prefix("token=") {
-            token_opt = Some(val.to_string());
-        }
+    if data.len() != 1 + RELAY_AUTH_NONCE_LEN || data[0] != RELAY_CHALLENGE_MAGIC {
+        return Err(anyhow::anyhow!("invalid challenge format"));
     }
+    let nonce = &data[1..];
 
-    let (ts_ms, token) = match (ts_ms_opt, token_opt) {
-        (Some(ts), Some(tok)) => (ts, tok),
-        _ => return false,
-    };
-
-    // Check timestamp freshness using absolute difference to handle skewed clocks.
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-    if now_ms.abs_diff(ts_ms) > RELAY_TOKEN_MAX_AGE_MS {
-        return false;
-    }
-
-    // Constant-time token comparison to prevent timing attacks.
-    // We use a manual XOR-fold instead of ring::constant_time::verify_slices_are_equal
-    // because that function is marked deprecated in ring 0.17 and the workspace uses
-    // aws_lc_rs as the primary provider.  The fold achieves the same O(n) constant-time
-    // property: all byte differences are OR-ed together before the final comparison.
-    let expected = compute_relay_token(hmac_secret, ts_ms);
-    if expected.len() != token.len() {
-        return false;
-    }
-    expected
-        .bytes()
-        .zip(token.bytes())
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-        == 0
+    // Compute and send HMAC response: [RESPONSE_MAGIC][hmac(32)]
+    let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
+    let hmac_bytes = hmac::sign(&key, nonce);
+    let mut response = Vec::with_capacity(1 + RELAY_AUTH_HMAC_LEN);
+    response.push(RELAY_RESPONSE_MAGIC);
+    response.extend_from_slice(hmac_bytes.as_ref());
+    ws.send(WsMessage::Binary(response.into()))
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to send auth response: {}", e))?;
+    Ok(())
 }
 
 /// Start the combined edge WebSocket server (relay + voice) on `edge_port`.
@@ -181,13 +220,12 @@ pub async fn run_edge_ws_server_with_listener(
                 let hmac_secret = hmac_secret.clone();
                 let edge_state = edge_state.clone();
                 tokio::spawn(async move {
-                    // Capture the HTTP upgrade path and query via a header callback.
-                    // When hmac_secret is set, reject /relay connections without a
-                    // valid HMAC token immediately during the HTTP upgrade.
+                    // Capture the HTTP upgrade path via a header callback.
+                    // Authentication is deferred to a challenge-response handshake
+                    // at the WebSocket message level after the upgrade completes.
                     let captured_path: Arc<StdMutex<String>> =
                         Arc::new(StdMutex::new(String::new()));
                     let cp = captured_path.clone();
-                    let secret_for_cb = hmac_secret.clone();
 
                     let ws_result = timeout(
                         Duration::from_secs(30),
@@ -195,28 +233,7 @@ pub async fn run_edge_ws_server_with_listener(
                             stream,
                             move |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
                                   response: tokio_tungstenite::tungstenite::handshake::server::Response| {
-                                let path = req.uri().path().to_string();
-                                *cp.lock().unwrap() = path.clone();
-
-                                // Authenticate ALL incoming connections (/relay and /voice)
-                                // when hmac_secret is configured.  The /voice endpoint is
-                                // equally sensitive — an unauthenticated peer can inject
-                                // arbitrary voice frames claiming any sender session ID.
-                                if let Some(secret) = &secret_for_cb {
-                                    let query = req.uri().query();
-                                    if !verify_relay_auth(secret, query) {
-                                        warn!(
-                                            "Edge WS auth failed for connection from {} to {}",
-                                            peer_addr,
-                                            path,
-                                        );
-                                        // Return an HTTP 401 response to reject the upgrade.
-                                        return Err(tokio_tungstenite::tungstenite::http::Response::builder()
-                                            .status(tokio_tungstenite::tungstenite::http::StatusCode::UNAUTHORIZED)
-                                            .body(Some("edge authentication required".to_string()))
-                                            .unwrap());
-                                    }
-                                }
+                                *cp.lock().unwrap() = req.uri().path().to_string();
                                 Ok(response)
                             },
                         ),
@@ -239,13 +256,25 @@ pub async fn run_edge_ws_server_with_listener(
                     match path.as_str() {
                         "/voice" => {
                             debug!("Edge WS /voice connection from {}", peer_addr);
-                            handle_voice_connection(ws, peer_addr, edge_state).await;
+                            handle_voice_connection(
+                                ws,
+                                peer_addr,
+                                edge_state,
+                                hmac_secret.as_deref(),
+                            )
+                            .await;
                         }
                         _ => {
                             // Default: /relay or any unknown path → Hub proxy
                             debug!("Edge WS /relay connection from {}", peer_addr);
-                            if let Err(e) =
-                                run_relay_for_ws(ws, peer_addr, hub_host, hub_port).await
+                            if let Err(e) = run_relay_for_ws(
+                                ws,
+                                peer_addr,
+                                hub_host,
+                                hub_port,
+                                hmac_secret.as_deref(),
+                            )
+                            .await
                             {
                                 debug!(
                                     "Control relay connection from {} ended: {}",
@@ -276,10 +305,19 @@ const MAX_VOICE_FRAME_SIZE: usize = 8192;
 ///    - `[0x01][session_BE(4)][plaintext...]` → deliver locally via `RelayedVoice`.
 ///    - `[0x02][ttl(1)][target_BE(4)][session_BE(4)][plaintext...]` → relay (dropped for now).
 async fn handle_voice_connection(
-    ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    mut ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     peer_addr: std::net::SocketAddr,
     edge_state: Arc<EdgeState>,
+    hmac_secret: Option<&str>,
 ) {
+    // Challenge-response auth before any voice traffic.
+    if let Some(secret) = hmac_secret {
+        if let Err(e) = relay_auth_server(&mut ws, secret).await {
+            warn!("Voice TCP auth failed for {}: {}", peer_addr, e);
+            return;
+        }
+    }
+
     let (mut _write, mut read) = ws.split();
 
     // Read peer edge_id from the first binary frame
@@ -392,21 +430,12 @@ const VOICE_TCP_KEEPALIVE: Duration = Duration::from_secs(30);
 const VOICE_TCP_MIN_RETRY_MS: u64 = 1_000;
 const VOICE_TCP_MAX_RETRY_MS: u64 = 30_000;
 
-/// Build a voice WebSocket URL, appending HMAC auth params when a secret is configured.
-fn build_voice_url(peer_host: &str, peer_edge_port: u16, hmac_secret: Option<&str>) -> String {
-    if let Some(secret) = hmac_secret {
-        let ts_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        let token = compute_relay_token(secret, ts_ms);
-        format!(
-            "ws://{}:{}/voice?ts={}&token={}",
-            peer_host, peer_edge_port, ts_ms, token
-        )
-    } else {
-        format!("ws://{}:{}/voice", peer_host, peer_edge_port)
-    }
+/// Build a voice WebSocket URL.
+///
+/// Authentication is performed via challenge-response handshake at the WebSocket
+/// message level after the upgrade completes — no query parameters are needed.
+fn build_voice_url(peer_host: &str, peer_edge_port: u16) -> String {
+    format!("ws://{}:{}/voice", peer_host, peer_edge_port)
 }
 
 /// Connect to a peer Edge's `/voice` WebSocket endpoint, establishing a pool of
@@ -518,11 +547,18 @@ async fn run_voice_tcp_slot(
             break;
         }
 
-        let url = build_voice_url(&peer_host, peer_edge_port, hmac_secret.as_deref());
+        let url = build_voice_url(&peer_host, peer_edge_port);
 
         let result =
-            run_voice_tcp_once_pooled(peer_edge_id, slot_idx, &url, self_edge_id, pool.clone())
-                .await;
+            run_voice_tcp_once_pooled(
+                peer_edge_id,
+                slot_idx,
+                &url,
+                self_edge_id,
+                pool.clone(),
+                hmac_secret.as_deref(),
+            )
+            .await;
 
         // Always clear this slot's sender while reconnecting so the pool's
         // round-robin skips it rather than blocking on a dead channel.
@@ -596,10 +632,11 @@ async fn run_voice_tcp_once_pooled(
     url: &str,
     self_edge_id: u32,
     pool: Arc<crate::peer_registry::PeerVoiceTcpPool>,
+    hmac_secret: Option<&str>,
 ) -> anyhow::Result<()> {
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
-    let ws =
+    let mut ws =
         match timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url)).await {
             Ok(Ok((ws, _))) => ws,
             Ok(Err(e)) => {
@@ -609,6 +646,13 @@ async fn run_voice_tcp_once_pooled(
                 return Err(anyhow::anyhow!("connect timed out after {:?}", CONNECT_TIMEOUT));
             }
         };
+
+    // Challenge-response auth before sending any data.
+    if let Some(secret) = hmac_secret {
+        relay_auth_client(&mut ws, secret)
+            .await
+            .map_err(|e| anyhow::anyhow!("voice auth failed: {}", e))?;
+    }
 
     let (mut write, read) = ws.split();
 
@@ -737,11 +781,22 @@ fn make_relayed_voice_packet(plaintext: &[u8], sender_session: u32) -> Vec<u8> {
 /// Opens a new WebSocket connection to the Hub and relays frames bidirectionally
 /// until either side closes or the connection is idle for [`RELAY_IDLE_TIMEOUT`].
 async fn run_relay_for_ws(
-    client_ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    mut client_ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     peer_addr: std::net::SocketAddr,
     hub_host: String,
     hub_port: u16,
+    hmac_secret: Option<&str>,
 ) -> Result<()> {
+    // Challenge-response auth before proxying any traffic.
+    if let Some(secret) = hmac_secret {
+        relay_auth_server(&mut client_ws, secret)
+            .await
+            .map_err(|e| {
+                warn!("Relay auth failed for {}: {}", peer_addr, e);
+                e
+            })?;
+    }
+
     // Connect to Hub as a WebSocket client
     const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
     let hub_url = format!("ws://{}:{}", hub_host, hub_port);
@@ -829,78 +884,72 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    /// Perform a full challenge-response handshake over an in-memory duplex pair.
+    async fn run_handshake(secret: &str) -> (anyhow::Result<()>, anyhow::Result<()>) {
+        let (server_stream, client_stream) = tokio::io::duplex(4096);
 
-    /// A valid token must pass verification.
-    #[test]
-    fn relay_auth_valid_token_accepted() {
-        let secret = "test-secret";
-        let ts_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        let token = compute_relay_token(secret, ts_ms);
-        let query = format!("ts={}&token={}", ts_ms, token);
-        assert!(verify_relay_auth(secret, Some(&query)));
+        let (server_ws, client_ws) = tokio::join!(
+            tokio_tungstenite::WebSocketStream::from_raw_socket(
+                server_stream,
+                tokio_tungstenite::tungstenite::protocol::Role::Server,
+                None,
+            ),
+            tokio_tungstenite::WebSocketStream::from_raw_socket(
+                client_stream,
+                tokio_tungstenite::tungstenite::protocol::Role::Client,
+                None,
+            ),
+        );
+
+        let secret_s = secret.to_string();
+        let secret_c = secret.to_string();
+        let server_fut = async move {
+            let mut ws = server_ws;
+            super::relay_auth_server(&mut ws, &secret_s).await
+        };
+        let client_fut = async move {
+            let mut ws = client_ws;
+            super::relay_auth_client(&mut ws, &secret_c).await
+        };
+        tokio::join!(server_fut, client_fut)
     }
 
-    /// A token with a wrong HMAC must be rejected.
-    #[test]
-    fn relay_auth_wrong_token_rejected() {
-        let ts_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        let query = format!("ts={}&token=deadbeef", ts_ms);
-        assert!(!verify_relay_auth("secret", Some(&query)));
+    /// Correct shared secret: both sides must succeed.
+    #[tokio::test]
+    async fn relay_auth_matching_secret_succeeds() {
+        let (server_res, client_res) = run_handshake("shared-secret").await;
+        assert!(server_res.is_ok(), "server: {:?}", server_res);
+        assert!(client_res.is_ok(), "client: {:?}", client_res);
     }
 
-    /// A token signed with a different secret must be rejected.
-    #[test]
-    fn relay_auth_wrong_secret_rejected() {
-        let ts_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        let token = compute_relay_token("real-secret", ts_ms);
-        let query = format!("ts={}&token={}", ts_ms, token);
-        assert!(!verify_relay_auth("wrong-secret", Some(&query)));
-    }
+    /// Wrong secret on client side: server must reject.
+    #[tokio::test]
+    async fn relay_auth_wrong_secret_rejected() {
+        let (server_stream, client_stream) = tokio::io::duplex(4096);
+        let (server_ws, client_ws) = tokio::join!(
+            tokio_tungstenite::WebSocketStream::from_raw_socket(
+                server_stream,
+                tokio_tungstenite::tungstenite::protocol::Role::Server,
+                None,
+            ),
+            tokio_tungstenite::WebSocketStream::from_raw_socket(
+                client_stream,
+                tokio_tungstenite::tungstenite::protocol::Role::Client,
+                None,
+            ),
+        );
 
-    /// An expired timestamp must be rejected.
-    #[test]
-    fn relay_auth_expired_token_rejected() {
-        let secret = "test-secret";
-        // 60 seconds in the past — well beyond the 30-second window.
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        let old_ts = now_ms.saturating_sub(60_000);
-        let token = compute_relay_token(secret, old_ts);
-        let query = format!("ts={}&token={}", old_ts, token);
-        assert!(!verify_relay_auth(secret, Some(&query)));
-    }
-
-    /// Missing query string must be rejected when a secret is configured.
-    #[test]
-    fn relay_auth_no_query_rejected() {
-        assert!(!verify_relay_auth("secret", None));
-        assert!(!verify_relay_auth("secret", Some("")));
-    }
-
-    /// Token with missing fields must be rejected.
-    #[test]
-    fn relay_auth_incomplete_query_rejected() {
-        let ts_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        // Only ts, no token
-        assert!(!verify_relay_auth("secret", Some(&format!("ts={}", ts_ms))));
-        // Only token, no ts
-        let token = compute_relay_token("secret", ts_ms);
-        assert!(!verify_relay_auth("secret", Some(&format!("token={}", token))));
+        let server_fut = async move {
+            let mut ws = server_ws;
+            super::relay_auth_server(&mut ws, "real-secret").await
+        };
+        let client_fut = async move {
+            let mut ws = client_ws;
+            // Client uses wrong secret → sends wrong HMAC
+            super::relay_auth_client(&mut ws, "wrong-secret").await
+        };
+        let (server_res, _client_res) = tokio::join!(server_fut, client_fut);
+        assert!(server_res.is_err(), "server should reject wrong HMAC");
     }
 }
 

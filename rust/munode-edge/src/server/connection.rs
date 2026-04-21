@@ -2829,10 +2829,6 @@ mod tests {
             priority_speaker: false,
             recording: false,
             listening_channels: vec![],
-            texture_hash: None,
-            comment_hash: None,
-            listening_volume_adjustments: std::collections::HashMap::new(),
-            plugin_context: vec![],
         }
     }
 

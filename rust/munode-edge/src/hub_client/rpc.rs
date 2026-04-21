@@ -824,28 +824,10 @@ impl HubClient {
 
 /// Build a relay WebSocket URL.
 ///
-/// When `hmac_secret` is provided, appends a timestamp-based HMAC token to
-/// authenticate with relay servers that require it:
-///
-/// ```text
-/// ws://host:port/relay?ts=<unix_ms>&token=<hex_hmac>
-/// ```
-///
-/// Without a secret, returns `ws://host:port/relay` — the relay server accepts
-/// connections without authentication when no `hmac_secret` is configured.
-pub(super) fn build_relay_url(host: &str, port: u16, hmac_secret: Option<&str>) -> String {
-    match hmac_secret {
-        Some(secret) => {
-            use ring::hmac;
-            let ts_ms = current_millis();
-            let key = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
-            let msg = format!("relay:{}", ts_ms);
-            let sig = hmac::sign(&key, msg.as_bytes());
-            let token = hex::encode(sig.as_ref());
-            format!("ws://{}:{}/relay?ts={}&token={}", host, port, ts_ms, token)
-        }
-        None => format!("ws://{}:{}/relay", host, port),
-    }
+/// Authentication is performed via challenge-response handshake at the WebSocket
+/// message level after the upgrade — no query parameters are needed.
+pub(super) fn build_relay_url(host: &str, port: u16, _hmac_secret: Option<&str>) -> String {
+    format!("ws://{}:{}/relay", host, port)
 }
 
 /// Build a log-safe relay URL (no authentication query parameters).
@@ -864,12 +846,6 @@ pub(super) fn current_millis() -> u64 {
         .as_millis() as u64
 }
 
-/// Hex encoding helper (no external dependency).
-mod hex {
-    pub fn encode(data: &[u8]) -> String {
-        data.iter().map(|b| format!("{:02x}", b)).collect()
-    }
-}
 
 
 

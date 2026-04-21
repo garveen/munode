@@ -587,7 +587,7 @@ impl HubClient {
             let relay_url = rpc::build_relay_url(host, *relay_port, self.config.hmac_secret.as_deref());
             let safe_url = rpc::safe_relay_url(host, *relay_port);
             info!("Attempting Hub relay via static peer at {}", safe_url);
-            match self.try_connect_via_url(&relay_url, slot).await {
+            match self.try_connect_via_url(&relay_url, slot, self.config.hmac_secret.as_deref()).await {
                 Ok(()) => {
                     info!("Static peer relay connection ({}) closed normally", safe_url);
                     return Ok(());
@@ -607,7 +607,7 @@ impl HubClient {
             let relay_url = rpc::build_relay_url(host, *relay_port, self.config.hmac_secret.as_deref());
             let safe_url = rpc::safe_relay_url(host, *relay_port);
             info!("Attempting Hub relay via peer {} at {}", peer_id, safe_url);
-            match self.try_connect_via_url(&relay_url, slot).await {
+            match self.try_connect_via_url(&relay_url, slot, self.config.hmac_secret.as_deref()).await {
                 Ok(()) => {
                     info!("Dynamic peer relay (peer {}) closed normally", peer_id);
                     return Ok(());
@@ -621,7 +621,7 @@ impl HubClient {
     }
 
     /// Connect via a specific WebSocket URL (used for both direct and relay connections).
-    async fn try_connect_via_url(self: &Arc<Self>, url: &str, slot: usize) -> Result<()> {
+    async fn try_connect_via_url(self: &Arc<Self>, url: &str, slot: usize, hmac_secret: Option<&str>) -> Result<()> {
         // Only downgrade to Connecting if no other slot is still Registered/Connected.
         // Avoids clobbering a better state while another slot is alive.
         {
@@ -633,10 +633,17 @@ impl HubClient {
         info!("Connecting to Hub at {} (slot {})", url, slot);
 
         const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-        let (ws_stream, _) = time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url))
+        let (mut ws_stream, _) = time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url))
             .await
             .with_context(|| format!("Hub WebSocket connect timed out after {:?} (slot {})", CONNECT_TIMEOUT, slot))?
             .with_context(|| format!("Failed to connect to Hub WebSocket at {} (slot {})", url, slot))?;
+
+        // Challenge-response auth handshake for relay connections.
+        if let Some(secret) = hmac_secret {
+            crate::relay_server::relay_auth_client(&mut ws_stream, secret)
+                .await
+                .with_context(|| format!("Relay auth handshake failed for {} (slot {})", url, slot))?;
+        }
 
         info!("WebSocket connected to {} (slot {})", url, slot);
         {
@@ -866,7 +873,7 @@ impl HubClient {
     async fn try_connect_slot(self: &Arc<Self>, slot: usize) -> Result<()> {
         let scheme = if self.config.tls { "wss" } else { "ws" };
         let url = format!("{}://{}:{}", scheme, self.config.host, self.config.control_port);
-        self.try_connect_via_url(&url, slot).await
+        self.try_connect_via_url(&url, slot, None).await
     }
 
     /// Send raw bytes through a specific pool slot.
