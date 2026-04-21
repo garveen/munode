@@ -3,11 +3,11 @@ services:
     build:
       context: .
       dockerfile: rust/Dockerfile
-
       cache_from:
         - type=local,src=.build-cache
       cache_to:
         - type=local,dest=.build-cache,mode=max
+    image: munode:latest
     container_name: munode-hub
     restart: unless-stopped
     command: ["/app/munode-hub", "config/hub.toml"]

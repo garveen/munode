@@ -3,7 +3,6 @@ services:
     build:
       context: .
       dockerfile: rust/Dockerfile
-
       # Persistent layer cache stored on the host filesystem.
       # Unlike BuildKit's internal cache (--mount=type=cache), this directory
       # is a plain folder and is NOT cleaned by `docker system prune`.
@@ -13,6 +12,7 @@ services:
         - type=local,src=.build-cache
       cache_to:
         - type=local,dest=.build-cache,mode=max
+    image: munode:latest
     container_name: munode-edge
     restart: unless-stopped
     ulimits:
