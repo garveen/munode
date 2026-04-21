@@ -12,6 +12,7 @@ services:
       - "${MUMBLE_PORT:-64738}:64738/udp"
       - "${EDGE_PORT:-64739}:64739/tcp"
       - "${EDGE_PORT:-64739}:64739/udp"
+      - "${EDGE_WEB_API_PORT:-8081}:8081"
     volumes:
       - ${EDGE_CONFIG:-./config/edge.toml}:/app/config/edge.toml:ro
       - ${LOG_DIR:-./logs}/edge:/app/logs

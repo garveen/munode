@@ -6,7 +6,7 @@ services:
     command: ["/app/munode-hub", "config/hub.toml"]
     ports:
       - "${HUB_GRPC_PORT:-8443}:8443"
-      - "127.0.0.1:${HUB_WEB_API_PORT:-8080}:8080"
+      - "${HUB_WEB_API_PORT:-8080}:8080"
     volumes:
       - ${HUB_CONFIG:-./config/hub.toml}:/app/config/hub.toml:ro
       - ${DATA_DIR:-./data}:/app/data

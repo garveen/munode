@@ -1,6 +1,30 @@
 use anyhow::Context;
 use serde::Deserialize;
 
+/// Web API configuration for the Edge server.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EdgeWebApiConfig {
+    /// Enable the Web API HTTP server.
+    #[serde(default)]
+    pub enabled: bool,
+    /// HTTP listening port for the Web API.
+    #[serde(default = "default_edge_web_api_port")]
+    pub port: u16,
+    /// HTTP listening host for the Web API.
+    #[serde(default = "default_host")]
+    pub host: String,
+}
+
+impl Default for EdgeWebApiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_edge_web_api_port(),
+            host: default_host(),
+        }
+    }
+}
+
 /// The main Edge server configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct EdgeConfig {
@@ -20,6 +44,9 @@ pub struct EdgeConfig {
     /// Voice routing configuration.
     #[serde(default)]
     pub voice_routing: EdgeVoiceRoutingConfig,
+    /// Web API configuration.
+    #[serde(default)]
+    pub web_api: EdgeWebApiConfig,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -854,6 +881,9 @@ fn default_auto_ban_duration() -> u64 {
 }
 fn default_web_api_port() -> u16 {
     8080
+}
+fn default_edge_web_api_port() -> u16 {
+    8081
 }
 fn default_blob_store_path() -> String {
     "data/blobs".to_string()

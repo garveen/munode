@@ -168,6 +168,18 @@ impl EdgeServer {
             });
         }
 
+        // Optionally start the Edge Web API.
+        if self.config.web_api.enabled {
+            let web_api_host = self.config.web_api.host.clone();
+            let web_api_port = self.config.web_api.port;
+            let web_api_state = edge_state.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::web_api::run_web_api(&web_api_host, web_api_port, web_api_state).await {
+                    error!("Edge Web API error: {}", e);
+                }
+            });
+        }
+
         // Start TLS server
         let listen_addr: SocketAddr = format!("{}:{}", self.config.network.host, self.config.network.port)
             .parse()?;

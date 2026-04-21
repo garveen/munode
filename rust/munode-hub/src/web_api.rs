@@ -7,6 +7,7 @@
 //!   GET /api/stats                          — Hub statistics (sessions, channels, …)
 //!   GET /api/topology                       — Network topology (edges and links)
 //!   GET /api/health                         — Liveness probe (always 200 OK)
+//!   GET /api/clients                        — All active client sessions (Hub-wide view)
 //!   GET /api/bans                           — List active ban records
 //!   DELETE /api/bans/:id                    — Remove a ban record (manual unban)
 //!   GET /api/voice_targets                  — All voice (whisper) targets in the cluster
@@ -206,6 +207,31 @@ pub struct TopologyResponse {
     pub timestamp: u64,
 }
 
+/// A single client entry as returned by the Hub Web API.
+#[derive(Serialize)]
+pub struct HubClientEntry {
+    pub session_id: u32,
+    pub edge_id: u32,
+    pub user_id: u32,
+    pub username: String,
+    pub channel_id: u32,
+    pub mute: bool,
+    pub deaf: bool,
+    pub suppress: bool,
+    pub self_mute: bool,
+    pub self_deaf: bool,
+    pub priority_speaker: bool,
+    pub recording: bool,
+    pub listening_channels: Vec<u32>,
+}
+
+/// Response for the Hub-wide client list endpoint.
+#[derive(Serialize)]
+pub struct HubClientListResponse {
+    pub clients: Vec<HubClientEntry>,
+    pub timestamp: u64,
+}
+
 /// Health check response.
 #[derive(Serialize)]
 pub struct HealthResponse {
@@ -398,6 +424,33 @@ async fn handle_topology(State(state): State<AppState>) -> Json<TopologyResponse
 
 async fn handle_health() -> Json<HealthResponse> {
     Json(HealthResponse { ok: true })
+}
+
+/// `GET /api/clients` — return all active client sessions across all Edges.
+async fn handle_clients(State(state): State<AppState>) -> Json<HubClientListResponse> {
+    let all = state.session_manager.get_all_sessions().await;
+    let clients = all
+        .into_iter()
+        .map(|s| HubClientEntry {
+            session_id: s.session_id,
+            edge_id: s.edge_id,
+            user_id: s.user_id,
+            username: s.username,
+            channel_id: s.channel_id,
+            mute: s.mute,
+            deaf: s.deaf,
+            suppress: s.suppress,
+            self_mute: s.self_mute,
+            self_deaf: s.self_deaf,
+            priority_speaker: s.priority_speaker,
+            recording: s.recording,
+            listening_channels: s.listening_channels,
+        })
+        .collect();
+    Json(HubClientListResponse {
+        clients,
+        timestamp: now_secs(),
+    })
 }
 
 // ── Voice Targets ─────────────────────────────────────────────────────────────
@@ -717,6 +770,7 @@ pub fn build_router(state: Arc<HubState>) -> Router {
         .route("/api/stats", get(handle_stats))
         .route("/api/topology", get(handle_topology))
         .route("/api/health", get(handle_health))
+        .route("/api/clients", get(handle_clients))
         .route("/api/bans", get(handle_bans))
         .route("/api/bans/:id", delete(handle_unban))
         .route("/api/voice_targets", get(handle_voice_targets))

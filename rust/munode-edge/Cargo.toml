@@ -41,3 +41,4 @@ dashmap = { workspace = true }
 nix = { workspace = true }
 smallvec = { workspace = true }
 async-channel = { workspace = true }
+axum = { workspace = true }
