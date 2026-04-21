@@ -1,15 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
-use std::collections::BTreeMap;
 
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 use munode_protocol::hubedge::{ChannelDataProto, ChannelLinkProto, GlobalSessionProto};
-use munode_protocol::edgepeersync::{
-    EdgeSessionDelta, RemoteSessionProto,
-};
 
 /// Information about a channel, stored locally on the Edge.
 #[derive(Debug, Clone)]
@@ -41,9 +36,7 @@ impl From<&ChannelDataProto> for ChannelData {
     }
 }
 
-/// Information about a remote user (on another Edge).
-/// Supports both Hub-synced data (GlobalSessionProto) and
-/// Edge-to-Edge peer-synced data (RemoteSessionProto).
+/// Information about a remote user (on another Edge), synced from Hub.
 #[derive(Debug, Clone)]
 pub struct RemoteUser {
     pub session_id: u32,
@@ -61,11 +54,6 @@ pub struct RemoteUser {
     pub priority_speaker: bool,
     pub recording: bool,
     pub listening_channels: Vec<u32>,
-    // Fields added by Edge Session Mesh (§5.3)
-    pub texture_hash: Option<Vec<u8>>,
-    pub comment_hash: Option<Vec<u8>>,
-    pub listening_volume_adjustments: HashMap<u32, f32>,
-    pub plugin_context: Vec<u8>,
 }
 
 impl From<&GlobalSessionProto> for RemoteUser {
@@ -86,86 +74,9 @@ impl From<&GlobalSessionProto> for RemoteUser {
             priority_speaker: proto.priority_speaker.unwrap_or(false),
             recording: proto.recording.unwrap_or(false),
             listening_channels: proto.listening_channels.clone(),
-            texture_hash: None,
-            comment_hash: None,
-            listening_volume_adjustments: HashMap::new(),
-            plugin_context: Vec::new(),
         }
     }
 }
-
-impl From<&RemoteSessionProto> for RemoteUser {
-    fn from(proto: &RemoteSessionProto) -> Self {
-        let lva: HashMap<u32, f32> = proto.listening_volume_adjustments
-            .iter()
-            .map(|a| (a.channel_id, a.volume_adjustment))
-            .collect();
-        Self {
-            session_id: proto.session_id,
-            edge_id: proto.edge_id,
-            user_id: proto.user_id,
-            username: proto.username.clone(),
-            channel_id: proto.channel_id,
-            cert_hash: proto.cert_hash.clone(),
-            groups: proto.groups.clone(),
-            mute: proto.mute.unwrap_or(false),
-            deaf: proto.deaf.unwrap_or(false),
-            suppress: proto.suppress.unwrap_or(false),
-            self_mute: proto.self_mute.unwrap_or(false),
-            self_deaf: proto.self_deaf.unwrap_or(false),
-            priority_speaker: proto.priority_speaker.unwrap_or(false),
-            recording: proto.recording.unwrap_or(false),
-            listening_channels: proto.listening_channels.clone(),
-            texture_hash: proto.texture_hash.clone(),
-            comment_hash: proto.comment_hash.clone(),
-            listening_volume_adjustments: lva,
-            plugin_context: proto.plugin_context.clone().unwrap_or_default(),
-        }
-    }
-}
-
-/// Type alias for clarity: when used as a peer-synced session.
-pub type RemoteSession = RemoteUser;
-
-/// Synchronization state of a peer's session cache.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PeerSyncState {
-    /// Full snapshot sync in progress (or not yet started).
-    Syncing,
-    /// Full snapshot received; incremental deltas are being applied normally.
-    Ready,
-}
-
-/// Per-peer Edge session cache, maintained by Edge-to-Edge session sync.
-#[derive(Debug)]
-pub struct PeerSessionCache {
-    pub edge_id: u32,
-    /// Next expected delta sequence number from this peer.
-    pub expected_seq: u64,
-    /// Current session snapshot for this peer.
-    pub sessions: HashMap<u32, RemoteUser>,
-    /// Out-of-order delta buffer (seq → delta).
-    pub reorder_buf: BTreeMap<u64, EdgeSessionDelta>,
-    /// When the current gap started (for triggering re-sync after timeout).
-    pub gap_since: Option<Instant>,
-    /// Whether this cache is fully synced and receiving deltas normally.
-    pub sync_state: PeerSyncState,
-}
-
-impl PeerSessionCache {
-    pub fn new(edge_id: u32) -> Self {
-        Self {
-            edge_id,
-            expected_seq: 0,
-            sessions: HashMap::new(),
-            reorder_buf: BTreeMap::new(),
-            gap_since: None,
-            sync_state: PeerSyncState::Syncing,
-        }
-    }
-}
-
-
 
 /// Manages channel hierarchy and remote user state on the Edge.
 /// Channels and remote users are synced from the Hub.
@@ -179,8 +90,6 @@ pub struct ChannelManager {
     /// can run in O(|target_channels| × |sessions_per_channel|) instead of O(N) over
     /// all remote users.  This matters in large clusters where N can be thousands.
     channel_to_sessions: RwLock<HashMap<u32, std::collections::HashSet<u32>>>,
-    /// Per-peer session caches, populated by Edge-to-Edge session sync.
-    pub peer_caches: RwLock<HashMap<u32, PeerSessionCache>>,
 }
 
 impl ChannelManager {
@@ -190,7 +99,6 @@ impl ChannelManager {
             channel_children: RwLock::new(HashMap::new()),
             remote_users: RwLock::new(HashMap::new()),
             channel_to_sessions: RwLock::new(HashMap::new()),
-            peer_caches: RwLock::new(HashMap::new()),
         })
     }
 
@@ -437,199 +345,6 @@ impl ChannelManager {
     /// Get a snapshot of the children map.
     pub async fn get_all_children_map(&self) -> std::collections::HashMap<u32, Vec<u32>> {
         self.channel_children.read().await.clone()
-    }
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // Edge-to-Edge Session Mesh methods
-    // ──────────────────────────────────────────────────────────────────────────
-
-    /// Apply a full session snapshot received from a peer Edge during initial sync.
-    /// Replaces the existing peer cache for `peer_id` and merges into `remote_users`.
-    /// `seq_fence` is the seq number the snapshot was taken at; the caller must drain
-    /// any buffered deltas with seq > seq_fence after calling this method.
-    pub async fn apply_peer_snapshot(
-        &self,
-        peer_id: u32,
-        seq_fence: u64,
-        sessions: &[RemoteSessionProto],
-    ) {
-        // Build new per-peer session map.
-        let new_sessions: HashMap<u32, RemoteUser> = sessions
-            .iter()
-            .map(|p| (p.session_id, RemoteUser::from(p)))
-            .collect();
-
-        // Update peer cache.
-        {
-            let mut caches = self.peer_caches.write().await;
-            let cache = caches.entry(peer_id).or_insert_with(|| PeerSessionCache::new(peer_id));
-            // Remove old sessions for this peer from global remote_users / index.
-            let old_sessions = cache.sessions.keys().cloned().collect::<Vec<_>>();
-            {
-                let mut users = self.remote_users.write().await;
-                let mut index = self.channel_to_sessions.write().await;
-                for sid in old_sessions {
-                    if let Some(old) = users.remove(&sid) {
-                        Self::remove_from_index_inner(&mut index, &old);
-                    }
-                }
-                // Insert new sessions into global maps.
-                for user in new_sessions.values() {
-                    Self::insert_into_index_inner(&mut index, user);
-                    users.insert(user.session_id, user.clone());
-                }
-            }
-            // Update cache.
-            cache.sessions = new_sessions;
-            cache.expected_seq = seq_fence + 1;
-            cache.sync_state = PeerSyncState::Ready;
-            cache.gap_since = None;
-        }
-
-        info!(peer_id, seq_fence, sessions_count = sessions.len(), "Applied peer session snapshot");
-    }
-
-    /// Apply an incremental session delta from a peer Edge.
-    /// Returns `true` if the delta was applied, `false` if it was buffered (out-of-order).
-    ///
-    /// Caller must check `gap_since` after calling to detect stale gaps.
-    pub async fn apply_peer_delta(&self, peer_id: u32, delta: EdgeSessionDelta) -> bool {
-        let mut caches = self.peer_caches.write().await;
-        let cache = caches.entry(peer_id).or_insert_with(|| PeerSessionCache::new(peer_id));
-
-        // If still syncing, buffer all deltas.
-        if cache.sync_state == PeerSyncState::Syncing {
-            cache.reorder_buf.insert(delta.seq, delta);
-            return false;
-        }
-
-        // Out of order: buffer and note gap start.
-        if delta.seq != cache.expected_seq {
-            if delta.seq > cache.expected_seq {
-                debug!(peer_id, expected = cache.expected_seq, got = delta.seq, "Out-of-order delta — buffering");
-                if cache.gap_since.is_none() {
-                    cache.gap_since = Some(Instant::now());
-                }
-                cache.reorder_buf.insert(delta.seq, delta);
-            }
-            // delta.seq < expected → duplicate, discard
-            return false;
-        }
-
-        // In order: apply this delta and any consecutive buffered ones.
-        {
-            let mut users = self.remote_users.write().await;
-            let mut index = self.channel_to_sessions.write().await;
-            Self::apply_delta_inner(cache, &mut users, &mut index, delta);
-            // Drain consecutive buffered deltas.
-            loop {
-                let next_seq = cache.expected_seq;
-                if let Some(buffered) = cache.reorder_buf.remove(&next_seq) {
-                    Self::apply_delta_inner(cache, &mut users, &mut index, buffered);
-                } else {
-                    break;
-                }
-            }
-        }
-
-        cache.gap_since = None;
-        true
-    }
-
-    /// Inner: apply a single delta to the per-peer cache and global maps.
-    /// Must be called while holding write locks on `users` and `index`.
-    fn apply_delta_inner(
-        cache: &mut PeerSessionCache,
-        users: &mut HashMap<u32, RemoteUser>,
-        index: &mut HashMap<u32, std::collections::HashSet<u32>>,
-        delta: EdgeSessionDelta,
-    ) {
-        cache.expected_seq = delta.seq + 1;
-        if let Some(proto) = delta.user_joined {
-            let user = RemoteUser::from(&proto);
-            Self::insert_into_index_inner(index, &user);
-            cache.sessions.insert(user.session_id, user.clone());
-            users.insert(user.session_id, user);
-        } else if let Some(left) = delta.user_left {
-            if let Some(old) = cache.sessions.remove(&left.session_id) {
-                Self::remove_from_index_inner(index, &old);
-                users.remove(&old.session_id);
-            }
-        } else if let Some(proto) = delta.user_state {
-            let user = RemoteUser::from(&proto);
-            if let Some(old) = cache.sessions.get(&user.session_id) {
-                Self::remove_from_index_inner(index, old);
-            }
-            Self::insert_into_index_inner(index, &user);
-            cache.sessions.insert(user.session_id, user.clone());
-            users.insert(user.session_id, user);
-        } else if let Some(moved) = delta.user_moved {
-            if let Some(old) = cache.sessions.get_mut(&moved.session_id) {
-                Self::remove_from_index_inner(index, old);
-                old.channel_id = moved.channel_id;
-                Self::insert_into_index_inner(index, old);
-                if let Some(u) = users.get_mut(&moved.session_id) {
-                    u.channel_id = moved.channel_id;
-                }
-            }
-        }
-    }
-
-    /// Remove all sessions from a peer that left/disconnected.
-    pub async fn remove_peer_sessions(&self, peer_id: u32) {
-        let mut caches = self.peer_caches.write().await;
-        if let Some(cache) = caches.remove(&peer_id) {
-            let mut users = self.remote_users.write().await;
-            let mut index = self.channel_to_sessions.write().await;
-            for (sid, user) in &cache.sessions {
-                Self::remove_from_index_inner(&mut index, user);
-                users.remove(sid);
-            }
-            info!(peer_id, removed = cache.sessions.len(), "Removed peer sessions");
-        }
-    }
-
-    /// Set the sync state of a peer's cache.
-    pub async fn set_peer_sync_state(&self, peer_id: u32, state: PeerSyncState) {
-        let mut caches = self.peer_caches.write().await;
-        let cache = caches.entry(peer_id).or_insert_with(|| PeerSessionCache::new(peer_id));
-        cache.sync_state = state;
-    }
-
-    /// Check whether a peer's gap timer has exceeded the threshold.
-    /// Returns `true` if re-sync should be triggered.
-    pub async fn is_peer_gap_expired(&self, peer_id: u32, timeout: std::time::Duration) -> bool {
-        let caches = self.peer_caches.read().await;
-        caches.get(&peer_id)
-            .and_then(|c| c.gap_since)
-            .map(|t| t.elapsed() >= timeout)
-            .unwrap_or(false)
-    }
-
-    /// Index helper: add a user's entries to the reverse channel-to-sessions index.
-    fn insert_into_index_inner(
-        index: &mut HashMap<u32, std::collections::HashSet<u32>>,
-        user: &RemoteUser,
-    ) {
-        index.entry(user.channel_id).or_default().insert(user.session_id);
-        for &ch in &user.listening_channels {
-            index.entry(ch).or_default().insert(user.session_id);
-        }
-    }
-
-    /// Index helper: remove a user's entries from the reverse channel-to-sessions index.
-    fn remove_from_index_inner(
-        index: &mut HashMap<u32, std::collections::HashSet<u32>>,
-        user: &RemoteUser,
-    ) {
-        if let Some(set) = index.get_mut(&user.channel_id) {
-            set.remove(&user.session_id);
-        }
-        for &ch in &user.listening_channels {
-            if let Some(set) = index.get_mut(&ch) {
-                set.remove(&user.session_id);
-            }
-        }
     }
 }
 

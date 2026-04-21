@@ -23,6 +23,7 @@ fn make_edge(id: u32) -> TopologyEdge {
         host: format!("10.0.0.{id}"),
         port: 64000 + id,
         voice_port: 64001 + id,
+        session_sync_port: 64002 + id,
         capacity: 100,
         joined_at: Instant::now(),
         connected_peers: HashSet::new(),

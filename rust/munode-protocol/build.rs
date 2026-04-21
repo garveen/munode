@@ -5,19 +5,10 @@ fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let out_dir = manifest_dir.join("src/generated");
 
-    // If ALL expected generated files exist AND MUNODE_REGEN_PROTO is not set,
-    // skip regeneration.  This allows building without protoc when generated
-    // files are committed to the repository.
-    // To force regeneration: MUNODE_REGEN_PROTO=1 cargo build -p munode-protocol
-    let force_regen = std::env::var("MUNODE_REGEN_PROTO").is_ok();
-    let expected_files = [
-        "mumbleproto.rs",
-        "hubedge.rs",
-        "authservice.rs",
-        "voiceudp.rs",
-        "edgepeersync.rs",
-    ];
-    if !force_regen && expected_files.iter().all(|f| out_dir.join(f).exists()) {
+    // If generated files already exist, skip regeneration.
+    // This allows building without protoc when generated files are committed.
+    let expected = out_dir.join("mumbleproto.rs");
+    if expected.exists() {
         return Ok(());
     }
 
@@ -57,7 +48,6 @@ fn main() -> Result<()> {
                 proto_dir.join("HubEdgeRPC.proto"),
                 proto_dir.join("AuthService.proto"),
                 proto_dir.join("VoiceUDP.proto"),
-                proto_dir.join("EdgePeerSync.proto"),
             ],
             &[&proto_dir],
         )?;

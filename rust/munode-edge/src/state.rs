@@ -118,10 +118,6 @@ pub struct RemoteUserStateDelta {
 /// Events broadcast within the Edge server.
 #[derive(Debug, Clone)]
 pub enum EdgeEvent {
-    /// Edge is ready to accept Mumble clients: Hub sync is done AND all known
-    /// peer Edges have delivered their session snapshots (or timed out).
-    /// The TCP listener starts gating clients only after this event.
-    ReadyForClients,
     /// Hub registration and full sync completed.
     /// `disappeared_session_ids`: remote session IDs that were in the local
     /// cache *before* the sync but are absent from the fresh Hub snapshot —
@@ -209,12 +205,6 @@ pub struct RouteCandidate {
     pub decision: RouteDecision,
     pub cost: f32,
 }
-
-/// Monotonically increasing sequence counter for locally-owned session deltas.
-/// Incremented on every user join, leave, state-change, or move event that
-/// originates on *this* Edge. Used by the session sync protocol to detect
-/// out-of-order or missing deltas.
-pub static LOCAL_SESSION_SEQ: AtomicU64 = AtomicU64::new(1);
 
 /// Shared state accessible by all components of the Edge server.
 pub struct EdgeState {

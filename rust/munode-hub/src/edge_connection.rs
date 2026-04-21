@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn};
 use munode_protocol::hubedge::*;
 
 use crate::rpc_handler::{EdgeSenderPool, RpcHandler};
-use crate::server::{EdgeHealth, HubState};
+use crate::server::{EdgeHealth, HubState, EdgeNotifEnvelope};
 
 /// Represents a single connected edge server.
 pub struct EdgeConnection {
@@ -154,6 +154,26 @@ impl EdgeConnection {
         Ok(())
     }
 
+    /// Ensure a per-edge inbound notification processor task is running for `edge_id`.
+    ///
+    /// Called every time `edge.register` is received from this edge.  Creates the mpsc
+    /// channel and spawns `run_edge_notif_processor` only when no alive processor exists
+    /// yet, or when the existing channel has been closed (processor exited).
+    /// Idempotent: a live processor is never replaced so buffered notifications are safe.
+    async fn ensure_edge_notif_processor(&self, edge_id: u32) {
+        let needs_new = {
+            let senders = self.state.edge_notif_senders.read().await;
+            senders.get(&edge_id).map_or(true, |tx| tx.is_closed())
+        };
+        if needs_new {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<EdgeNotifEnvelope>();
+            self.state.edge_notif_senders.write().await.insert(edge_id, tx);
+            let rpc_handler = Arc::clone(&self.rpc_handler);
+            tokio::spawn(crate::rpc_handler::run_edge_notif_processor(edge_id, rx, rpc_handler));
+            debug!("Spawned notification processor for edge {}", edge_id);
+        }
+    }
+
     /// Handle an incoming binary message from the edge.
     async fn handle_incoming(
         &mut self,
@@ -203,6 +223,10 @@ impl EdgeConnection {
                                 .await
                                 .entry(sid)
                                 .or_insert_with(EdgeHealth::new);
+                            // Ensure a sequenced inbound notification processor task
+                            // is running for this edge.  Created on first register;
+                            // a dead processor is replaced transparently.
+                            self.ensure_edge_notif_processor(sid).await;
                         }
                     }
 
@@ -248,10 +272,27 @@ impl EdgeConnection {
             Ok(PacketType::RpcNotification) => {
                 if let Some(notification) = packet.rpc_notification {
                     let edge_id = self.server_id.unwrap_or(0);
-                    let rpc_handler = Arc::clone(&self.rpc_handler);
-                    tokio::spawn(async move {
-                        rpc_handler.handle_notification(notification, edge_id).await;
-                    });
+                    let envelope = EdgeNotifEnvelope {
+                        seq: packet.edge_notification_seq,
+                        notification,
+                    };
+                    let senders = self.state.edge_notif_senders.read().await;
+                    if let Some(tx) = senders.get(&edge_id) {
+                        if tx.send(envelope).is_err() {
+                            warn!(
+                                "Notification processor for edge {} died, dropping notification",
+                                edge_id
+                            );
+                        }
+                    } else {
+                        // Edge hasn't registered yet (should not happen in practice
+                        // since edge.register is always the first message).
+                        warn!(
+                            "No notification processor for edge {} (pre-registration), \
+                             dropping notification",
+                            edge_id
+                        );
+                    }
                 }
             }
             Ok(PacketType::Heartbeat) => {

@@ -130,14 +130,9 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                         }
                         debug!("Broadcast channel updated: {}", channel_id);
                     }
-                    EdgeEvent::ReadyForClients => {
-                        // All peer session snapshots received (or timed out) — now safe to
-                        // accept Mumble client connections.  This event is emitted after both
-                        // Hub fullSync and Edge-to-Edge session sync complete.
-                        state.accepting_connections.store(true, std::sync::atomic::Ordering::Relaxed);
-                        info!("Edge is ready — now accepting Mumble client connections");
-                    }
                     EdgeEvent::HubRegistered { disappeared_session_ids } => {
+                        // Hub reconnected — resume accepting new client connections.
+                        state.accepting_connections.store(true, std::sync::atomic::Ordering::Relaxed);
                         // After Hub reconnect / full-sync, resync the local clients' view of the
                         // world:
                         //  1. Send UserRemove for sessions that disappeared from Hub's snapshot

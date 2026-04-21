@@ -54,10 +54,6 @@ impl HubClient {
                             priority_speaker: params.priority_speaker.unwrap_or(false),
                             recording: params.recording.unwrap_or(false),
                             listening_channels: vec![],
-                            texture_hash: None,
-                            comment_hash: None,
-                            listening_volume_adjustments: std::collections::HashMap::new(),
-                            plugin_context: vec![],
                         };
                         info!("Remote user joined: {} (session {})", user.username, user.session_id);
                         let channel_id = user.channel_id;
@@ -331,7 +327,6 @@ impl HubClient {
                                     udp_addr,
                                     host: host.clone(),
                                     relay_port: None,
-                                    session_sync_port: p.session_sync_port.map(|pt| pt as u16),
                                 });
                                 self.edge_state.peer_registry.store(Arc::new(new_reg));
                             }
@@ -358,22 +353,6 @@ impl HubClient {
                                     self_id,
                                     state_clone,
                                     secret,
-                                )
-                                .await;
-                            });
-                        }
-                        // Spawn session sync client if the peer advertised session_sync_port.
-                        if let Some(sync_port) = p.session_sync_port {
-                            let peer_host = host.clone();
-                            let my_edge_id = self.edge_state.get_edge_id();
-                            let state_clone = self.edge_state.clone();
-                            tokio::spawn(async move {
-                                crate::session_sync::sync_sessions_from_peer(
-                                    peer_edge_id,
-                                    peer_host,
-                                    sync_port as u16,
-                                    my_edge_id,
-                                    state_clone,
                                 )
                                 .await;
                             });
@@ -451,7 +430,7 @@ impl HubClient {
                 // Hub pushes a ContextActionModify to specific clients on this Edge.
                 // Forward the ContextActionModify message to each targeted client.
                 if let Some(params) = &notification.context_action_modify {
-                    if let Some(msg) = params.action.as_ref() {
+                    let msg = &params.action;
                     let target_sessions = &params.target_sessions;
                     if target_sessions.is_empty() {
                         // Broadcast to all local clients
@@ -477,7 +456,6 @@ impl HubClient {
                             target_sessions.len(),
                             msg.action.as_str()
                         );
-                    }
                     }
                 }
             }

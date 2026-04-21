@@ -1,6 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
@@ -216,7 +218,6 @@ impl RpcHandler {
             "edge.reportQuality" => self.handle_report_quality(&request, &request_id).await,
             "cluster.getStatus" => self.handle_cluster_get_status(&request_id).await,
             "edge.relayVoiceViaTcp" => self.handle_relay_voice_via_tcp(&request, &request_id).await,
-            "edge.getPeers" => self.handle_get_peers(&request, &request_id, edge_server_id).await,
             _ => {
                 warn!("Unknown RPC method: {}", method);
                 Ok(self.make_error_packet(&request_id, -1, &format!("Unknown method: {}", method)))
@@ -281,16 +282,14 @@ impl RpcHandler {
             }
             "hub.contextAction" => {
                 if let Some(ca) = &notification.context_action {
-                    if let Some(act) = ca.action.as_ref() {
                     debug!(
                         edge_id = edge_server_id,
                         session_id = ca.session_id,
-                        action = act.action.as_str(),
-                        actor = act.session.unwrap_or(0),
-                        channel = act.channel_id.unwrap_or(0),
+                        action = ca.action.action.as_str(),
+                        actor = ca.action.session.unwrap_or(0),
+                        channel = ca.action.channel_id.unwrap_or(0),
                         "ContextAction received from edge (no Hub-side processing yet)"
                     );
-                    }
                 }
             }
             _ => {
@@ -492,6 +491,14 @@ impl RpcHandler {
         let config = &self.state.config;
         let username = &params.username;
         let password = &params.password;
+
+        // Register a cancel flag so `on_user_left` / `cleanup_edge` can abort this
+        // auth task when the client disconnects while auth is in progress.
+        // The flag is checked immediately before each `session_manager.add_session`
+        // call to prevent ghost sessions from being created.
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.state.pending_auths.write().await
+            .insert(params.session_id, (cancel.clone(), edge_server_id));
 
         // ------------------------------------------------------------------
         // Step -1: Validation rules — reject if username doesn't match regex
@@ -727,6 +734,17 @@ impl RpcHandler {
                         listening_channels: vec![],
                     };
                     self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
+                    if cancel.load(Ordering::Relaxed) {
+                        warn!("authenticate_user aborted for session {} (client disconnected during ext-service auth)", params.session_id);
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
+                                success: false,
+                                reason: Some("Client disconnected during authentication".into()),
+                                reject_type: Some(1),
+                                ..Default::default()
+                            });
+                        }));
+                    }
                     self.state.session_manager.add_session(session_info).await;
 
                     info!(
@@ -907,6 +925,17 @@ impl RpcHandler {
                         listening_channels: vec![],
                     };
                     self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
+                    if cancel.load(Ordering::Relaxed) {
+                        warn!("authenticate_user aborted for session {} (client disconnected during Lua auth)", params.session_id);
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
+                                success: false,
+                                reason: Some("Client disconnected during authentication".into()),
+                                reject_type: Some(1),
+                                ..Default::default()
+                            });
+                        }));
+                    }
                     self.state.session_manager.add_session(session_info).await;
 
                     info!(
@@ -1056,6 +1085,17 @@ impl RpcHandler {
                         listening_channels: vec![],
                     };
                     self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
+                    if cancel.load(Ordering::Relaxed) {
+                        warn!("authenticate_user aborted for session {} (client disconnected during HTTP auth)", params.session_id);
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
+                                success: false,
+                                reason: Some("Client disconnected during authentication".into()),
+                                reject_type: Some(1),
+                                ..Default::default()
+                            });
+                        }));
+                    }
                     self.state.session_manager.add_session(session_info).await;
 
                     info!(
@@ -1289,6 +1329,17 @@ impl RpcHandler {
         };
 
         self.kick_excess_sessions_for_user(user_id, config.limits.max_sessions_per_user).await;
+        if cancel.load(Ordering::Relaxed) {
+            warn!("authenticate_user aborted for session {} (client disconnected during local DB auth)", params.session_id);
+            return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                r.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
+                    success: false,
+                    reason: Some("Client disconnected during authentication".into()),
+                    reject_type: Some(1),
+                    ..Default::default()
+                });
+            }));
+        }
         self.state.session_manager.add_session(session_info.clone()).await;
 
         // GeoIP lookup for this user's IP address
@@ -1388,8 +1439,7 @@ impl RpcHandler {
     ) -> Result<EdgeHubPacket> {
         let params = request.edge_report_session.as_ref()
             .context("Missing edge_report_session params")?;
-        let s = params.session.as_ref()
-            .context("Missing session in EdgeReportSessionParams")?;
+        let s = &params.session;
 
         let session_info = SessionInfo {
             session_id: s.session_id,
@@ -2652,6 +2702,17 @@ impl RpcHandler {
             return;
         }
 
+        // Signal cancellation to any in-flight `authenticate_user` task for this
+        // session.  This prevents ghost sessions when the Edge sends `handleUserLeft`
+        // immediately on TCP disconnect (before the Hub auth RPC has completed).
+        {
+            let pending = self.state.pending_auths.read().await;
+            if let Some((flag, _)) = pending.get(&session_id) {
+                flag.store(true, Ordering::Relaxed);
+                debug!("Auth cancel flag set for disconnecting session {}", session_id);
+            }
+        }
+
         // Save last channel before removing session
         self.save_user_last_channel(session_id).await;
 
@@ -3428,6 +3489,17 @@ impl RpcHandler {
 
     /// Remove all sessions for a disconnected edge.
     pub async fn cleanup_edge(&self, server_id: u32) {
+        // Cancel any in-flight `authenticate_user` tasks owned by this edge so
+        // that sessions mid-auth do not ghost after edge-level cleanup.
+        {
+            let pending = self.state.pending_auths.read().await;
+            for (_sid, (flag, eid)) in pending.iter() {
+                if *eid == server_id {
+                    flag.store(true, Ordering::Relaxed);
+                }
+            }
+        }
+
         let sessions = self.state.session_manager.get_sessions_by_edge(server_id).await;
         for session in &sessions {
             self.state.session_manager.remove_session(session.session_id).await;
@@ -3686,7 +3758,6 @@ impl RpcHandler {
             capacity: params.capacity,
             joined_at: std::time::Instant::now(),
             connected_peers: std::collections::HashSet::new(),
-            session_sync_port: params.session_sync_port.unwrap_or(0),
         };
 
         let peers_snapshot: Vec<PeerInfoProto> = {
@@ -3700,7 +3771,6 @@ impl RpcHandler {
                     port: p.port,
                     voice_port: p.voice_port,
                     cert_hash: None,
-                    session_sync_port: if p.session_sync_port > 0 { Some(p.session_sync_port) } else { None },
                 })
                 .collect()
         };
@@ -3714,7 +3784,6 @@ impl RpcHandler {
                 name: params.name.clone(),
                 host: params.host.clone(),
                 voice_port: params.voice_port,
-                session_sync_port: params.session_sync_port,
             }),
             ..Default::default()
         };
@@ -3781,41 +3850,6 @@ impl RpcHandler {
 
         Ok(self.make_response_packet(request_id, "edge.joinComplete", |r| {
             r.edge_join_complete = Some(EdgeJoinCompleteResult { success: true, error: None });
-        }))
-    }
-
-    /// edge.getPeers — Edge requests a list of currently active peer Edges with
-    /// session_sync_port, used to bootstrap Edge-to-Edge session sync before
-    /// joining the cluster.
-    async fn handle_get_peers(
-        &self,
-        request: &TypedRpcRequest,
-        request_id: &str,
-        requesting_edge_id: u32,
-    ) -> Result<EdgeHubPacket> {
-        use munode_protocol::hubedge::{EdgeGetPeersResult, PeerSyncInfo};
-        let edge_id = request
-            .edge_get_peers
-            .as_ref()
-            .and_then(|p| p.requesting_edge_id)
-            .unwrap_or(requesting_edge_id);
-
-        let peers: Vec<PeerSyncInfo> = {
-            let topo = self.state.topology.read().await;
-            topo.get_all_edges()
-                .into_iter()
-                .filter(|e| e.edge_id != edge_id && e.session_sync_port > 0)
-                .map(|e| PeerSyncInfo {
-                    edge_id: e.edge_id,
-                    host: e.host.clone(),
-                    session_sync_port: e.session_sync_port,
-                })
-                .collect()
-        };
-
-        info!("edge.getPeers for edge {}: returning {} peers", edge_id, peers.len());
-        Ok(self.make_response_packet(request_id, "edge.getPeers", |r| {
-            r.edge_get_peers = Some(EdgeGetPeersResult { peers });
         }))
     }
 
@@ -4151,4 +4185,144 @@ pub(crate) fn server_limits_from_config(config: &HubConfig) -> ServerLimitsConfi
         },
         allow_ping: Some(limits.allow_ping),
     }
+}
+
+// ==================== Edge→Hub Inbound Notification Sequencer ====================
+
+/// Gap timeout for the Edge→Hub notification reorder buffer.
+///
+/// If a seq gap persists for longer than this duration (i.e., the missing packet may
+/// have been dropped or reordered across pool slots), the sequencer skips ahead to
+/// the earliest buffered seq rather than blocking indefinitely.
+const EDGE_NOTIF_GAP_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Per-edge sequencer for inbound Edge→Hub control notifications.
+///
+/// Holds out-of-order notifications in a `BTreeMap` reorder buffer until the missing
+/// predecessor arrives (or the gap timeout fires), then flushes them in emission
+/// order.  `expected_seq == 0` means "not yet initialised"—the first received seq
+/// sets the baseline so Hub accepts any starting seq from the Edge.
+struct EdgeInboundSequencer {
+    expected_seq: u64,
+    buffer: BTreeMap<u64, TypedRpcNotification>,
+    gap_since: Option<Instant>,
+}
+
+impl EdgeInboundSequencer {
+    fn new() -> Self {
+        Self { expected_seq: 0, buffer: BTreeMap::new(), gap_since: None }
+    }
+
+    /// Feed one envelope; return any notifications now ready for processing.
+    fn feed(
+        &mut self,
+        seq: Option<u64>,
+        notification: TypedRpcNotification,
+    ) -> Vec<TypedRpcNotification> {
+        let seq = match seq {
+            // Unsequenced (legacy or unsequenced packet): pass through immediately.
+            None => return vec![notification],
+            Some(s) => s,
+        };
+
+        // First ever sequenced notification: initialise expected_seq from it.
+        if self.expected_seq == 0 {
+            self.expected_seq = seq;
+        }
+
+        if seq < self.expected_seq {
+            // Duplicate or stale arrival after a gap skip — discard silently.
+            return vec![];
+        }
+
+        if seq == self.expected_seq {
+            // In-order delivery: emit and flush consecutive buffered entries.
+            let mut out = vec![notification];
+            self.expected_seq += 1;
+            self.gap_since = None;
+            while let Some(n) = self.buffer.remove(&self.expected_seq) {
+                out.push(n);
+                self.expected_seq += 1;
+            }
+            out
+        } else {
+            // Out-of-order: buffer and record gap start time.
+            self.buffer.insert(seq, notification);
+            if self.gap_since.is_none() {
+                self.gap_since = Some(Instant::now());
+            }
+            vec![]
+        }
+    }
+
+    /// Remaining time before the active gap times out, if any gap is active.
+    fn gap_remaining(&self) -> Option<Duration> {
+        self.gap_since.map(|t| EDGE_NOTIF_GAP_TIMEOUT.saturating_sub(t.elapsed()))
+    }
+
+    /// Skip to the earliest buffered seq after a gap timeout and flush from there.
+    fn skip_gap(&mut self) -> Vec<TypedRpcNotification> {
+        if let Some((&next_seq, _)) = self.buffer.iter().next() {
+            warn!(
+                "Edge→Hub sequencer: expected seq {} timed out, skipping to {} (edge notification gap)",
+                self.expected_seq, next_seq
+            );
+            self.expected_seq = next_seq;
+            self.gap_since = None;
+            let mut out = vec![];
+            while let Some(n) = self.buffer.remove(&self.expected_seq) {
+                out.push(n);
+                self.expected_seq += 1;
+            }
+            out
+        } else {
+            self.gap_since = None;
+            vec![]
+        }
+    }
+}
+
+/// Long-running task that processes inbound Edge→Hub notifications for one edge
+/// in strict emission order.
+///
+/// One task is spawned per registered Edge (`EdgeConnection::ensure_edge_notif_processor`).
+/// The task owns an `EdgeInboundSequencer` and processes notifications serially so
+/// Hub’s upper-layer handlers never observe out-of-order events from the same Edge,
+/// regardless of which WebSocket pool slot delivered each message.
+/// The task exits when the sender side of the channel is dropped (edge disconnected).
+pub(crate) async fn run_edge_notif_processor(
+    edge_id: u32,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<crate::server::EdgeNotifEnvelope>,
+    rpc_handler: Arc<RpcHandler>,
+) {
+    let mut seq = EdgeInboundSequencer::new();
+
+    loop {
+        // Choose receive strategy: block normally when no gap is active, or wait
+        // with a deadline when we’re buffering out-of-order notifications.
+        let envelope = if let Some(remaining) = seq.gap_remaining() {
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Some(env)) => env,
+                Ok(None) => break,      // channel closed — edge disconnected
+                Err(_) => {
+                    // Gap timeout: skip missing seq and process whatever is buffered.
+                    for n in seq.skip_gap() {
+                        rpc_handler.handle_notification(n, edge_id).await;
+                    }
+                    continue;
+                }
+            }
+        } else {
+            match rx.recv().await {
+                Some(env) => env,
+                None => break,          // channel closed — edge disconnected
+            }
+        };
+
+        for n in seq.feed(envelope.seq, envelope.notification) {
+            rpc_handler.handle_notification(n, edge_id).await;
+        }
+    }
+
+    debug!("Notification processor for edge {} exited", edge_id);
 }

@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn test_private_ip_skipped() {
-        let svc = GeoIpService::new(""); // No DB needed for this test
+        let _svc = GeoIpService::new(""); // No DB needed for this test
         let private_ip = IpAddr::from_str("192.168.1.1").unwrap();
         assert!(is_private(&private_ip));
         let loopback = IpAddr::from_str("127.0.0.1").unwrap();

@@ -40,6 +40,10 @@ message EdgeHubPacket {
   // 仅在 type = RPC_NOTIFICATION 且为需要有序应用的控制消息时设置。
   // Edge 根据此字段检测重复、乱序和丢失的通知。
   optional uint64 notification_seq = 50;
+
+  // 通知序列号（Edge→Hub 方向）。Edge 为每个控制通知分配单调递增的序列号。
+  // Hub 根据此字段按发送顺序重排通知，消除连接池并发竞争导致的乱序问题。
+  optional uint64 edge_notification_seq = 51;
 }
 
 /**

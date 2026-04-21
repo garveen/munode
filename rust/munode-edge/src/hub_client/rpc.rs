@@ -94,12 +94,7 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        let packet = EdgeHubPacket {
-            r#type: PacketType::RpcNotification as i32,
-            rpc_notification: Some(notification),
-            ..Default::default()
-        };
-        if let Err(e) = self.send_packet(&packet).await {
+        if let Err(e) = self.send_notification(notification).await {
             warn!("Failed to notify Hub of user disconnect (session={}): {}", session_id, e);
             self.enqueue_pending_notification(PendingControlNotification::UserLeft {
                 session_id,
@@ -133,12 +128,7 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        let packet = EdgeHubPacket {
-            r#type: PacketType::RpcNotification as i32,
-            rpc_notification: Some(notification),
-            ..Default::default()
-        };
-        if let Err(e) = self.send_packet(&packet).await {
+        if let Err(e) = self.send_notification(notification).await {
             warn!("Failed to notify Hub of user remove: {}", e);
         }
     }
@@ -157,12 +147,7 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        let packet = EdgeHubPacket {
-            r#type: PacketType::RpcNotification as i32,
-            rpc_notification: Some(notification),
-            ..Default::default()
-        };
-        if let Err(e) = self.send_packet(&packet).await {
+        if let Err(e) = self.send_notification(notification).await {
             warn!("Failed to notify Hub of user move: {}", e);
         }
     }
@@ -200,12 +185,7 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        let packet = EdgeHubPacket {
-            r#type: PacketType::RpcNotification as i32,
-            rpc_notification: Some(notification),
-            ..Default::default()
-        };
-        if let Err(e) = self.send_packet(&packet).await {
+        if let Err(e) = self.send_notification(notification).await {
             warn!("Failed to notify Hub of user state change: {}", e);
         }
     }
@@ -429,12 +409,7 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        let packet = EdgeHubPacket {
-            r#type: PacketType::RpcNotification as i32,
-            rpc_notification: Some(notification),
-            ..Default::default()
-        };
-        if let Err(e) = self.send_packet(&packet).await {
+        if let Err(e) = self.send_notification(notification).await {
             warn!("Failed to notify Hub of channel state: {}", e);
             self.enqueue_pending_notification(PendingControlNotification::ChannelLinksChanged {
                 channel_id,
@@ -456,12 +431,7 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        let packet = EdgeHubPacket {
-            r#type: PacketType::RpcNotification as i32,
-            rpc_notification: Some(notification),
-            ..Default::default()
-        };
-        if let Err(e) = self.send_packet(&packet).await {
+        if let Err(e) = self.send_notification(notification).await {
             warn!("Failed to notify Hub of channel remove: {}", e);
             self.enqueue_pending_notification(PendingControlNotification::ChannelRemoved {
                 channel_id,
@@ -485,12 +455,7 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        let packet = EdgeHubPacket {
-            r#type: PacketType::RpcNotification as i32,
-            rpc_notification: Some(notification),
-            ..Default::default()
-        };
-        if let Err(e) = self.send_packet(&packet).await {
+        if let Err(e) = self.send_notification(notification).await {
             warn!("Failed to forward text message to Hub: {}", e);
         }
     }
@@ -511,16 +476,11 @@ impl HubClient {
             context_action: Some(EdgeContextActionParams {
                 edge_id,
                 session_id,
-                action: Some(action),
+                action,
             }),
             ..Default::default()
         };
-        let packet = EdgeHubPacket {
-            r#type: PacketType::RpcNotification as i32,
-            rpc_notification: Some(notification),
-            ..Default::default()
-        };
-        if let Err(e) = self.send_packet(&packet).await {
+        if let Err(e) = self.send_notification(notification).await {
             warn!("Failed to forward ContextAction to Hub: {}", e);
         }
     }
@@ -707,12 +667,7 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        let packet = EdgeHubPacket {
-            r#type: PacketType::RpcNotification as i32,
-            rpc_notification: Some(notification),
-            ..Default::default()
-        };
-        if let Err(e) = self.send_packet(&packet).await {
+        if let Err(e) = self.send_notification(notification).await {
             warn!("Failed to forward plugin data to Hub: {}", e);
         }
     }

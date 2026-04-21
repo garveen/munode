@@ -41,7 +41,7 @@ async fn test_plugin_data_received_by_same_edge_user() -> Result<()> {
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match rx.recv().await {
-                Ok(ClientEvent::PluginData { sender, plugin_id, data })
+                Ok(ClientEvent::PluginData { sender, plugin_id: _, data: _ })
                     if sender == sender_session =>
                 {
                     break true;

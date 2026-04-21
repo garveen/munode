@@ -25,6 +25,17 @@ use crate::auth_service::{AuthServiceHandle, run_auth_service_listener};
 use crate::lua_auth::LuaAuthEngine;
 use crate::user_store::UserStore;
 
+/// An inbound notification envelope from an Edge, with its Edge-assigned sequence number.
+///
+/// Produced by `EdgeConnection::handle_incoming` for every `RpcNotification` packet and
+/// fed into the per-edge `EdgeInboundSequencer` processor task in `rpc_handler`.
+pub(crate) struct EdgeNotifEnvelope {
+    /// The `edge_notification_seq` stamped by the Edge.  `None` for legacy
+    /// (pre-sequencing) notifications that must be processed immediately.
+    pub seq: Option<u64>,
+    pub notification: TypedRpcNotification,
+}
+
 /// A single whisper-target slot as reported by an Edge via `EdgeSyncVoiceTarget`.
 ///
 /// Stored in `HubState::voice_targets` for cluster-wide visibility (diagnostics,
@@ -162,6 +173,23 @@ pub struct HubState {
     /// registers.  Uses `std::sync::Mutex` (not tokio) because increments are fast
     /// and never yield.
     pub notification_seqs: StdMutex<HashMap<u32, u64>>,
+    /// Per-edge inbound notification processor channels (Edge→Hub direction).
+    ///
+    /// Each entry is the sender half of an unbounded channel feeding the sequenced
+    /// notification processor task for that edge.  The processor applies
+    /// `EdgeInboundSequencer` to re-order out-of-order arrivals and calls
+    /// `RpcHandler::handle_notification` in strict emission order.
+    /// Created on first registration; replaced when the existing channel is closed.
+    pub(crate) edge_notif_senders: RwLock<HashMap<u32, tokio::sync::mpsc::UnboundedSender<EdgeNotifEnvelope>>>,
+    /// In-flight `edge.authenticateUser` cancel flags.
+    ///
+    /// Key = session_id.  Value = (cancel flag, edge_id that owns the session).
+    /// Inserted at the start of `handle_authenticate_user`; the cancel flag is set
+    /// to `true` by `on_user_left` (client TCP disconnect) or `cleanup_edge` (edge
+    /// disconnect) so the auth task aborts before `session_manager.add_session`,
+    /// preventing ghost sessions when `handleUserLeft` is sent immediately on
+    /// TCP disconnect.
+    pub pending_auths: RwLock<HashMap<u32, (std::sync::Arc<std::sync::atomic::AtomicBool>, u32)>>,
 }
 
 /// The main Hub server.
@@ -248,6 +276,8 @@ impl HubServer {
             voice_targets: RwLock::new(HashMap::new()),
             live_limits: RwLock::new(crate::rpc_handler::server_limits_from_config(&self.config)),
             notification_seqs: StdMutex::new(HashMap::new()),
+            edge_notif_senders: RwLock::new(HashMap::new()),
+            pending_auths: RwLock::new(HashMap::new()),
         });
 
         // Load channels from database

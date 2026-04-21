@@ -41,6 +41,10 @@ pub(super) struct LoginTaskResult {
 
 /// Arguments passed into the spawned login task.
 pub(super) struct LoginTaskArgs {
+    /// Session ID pre-allocated by the outer loop before spawning.  The outer
+    /// loop tracks this immediately, so TCP-disconnect cleanup can proceed
+    /// without waiting for the task to return.
+    session_id: u32,
     hub_client: Arc<HubClient>,
     edge_state: Arc<EdgeState>,
     client_sender: ClientSender,
@@ -67,11 +71,19 @@ pub(super) struct LoginTaskArgs {
 /// `handle_client_connection` remains free to respond to TCP Ping messages
 /// while potentially slow Hub RPCs are in flight.
 ///
+/// The session ID is pre-allocated by the caller and passed in via
+/// `LoginTaskArgs::session_id`.  The outer loop tracks it immediately so that
+/// if the TCP connection drops while this task is in flight, the cleanup code
+/// at the bottom of `handle_client_connection` can call `notify_user_left` and
+/// `free_session_id` without waiting for this task.
+///
 /// Returns `Some(LoginTaskResult)` on success.  On failure the function sends a
-/// Reject to the client, calls `remove_client` / `notify_user_left` if the
-/// session was already registered, and returns `None`.
+/// Reject to the client, removes the client from the manager if it was added,
+/// and returns `None`.  `free_session_id` and `notify_user_left` are NOT called
+/// here — the outer loop handles them unconditionally via the cleanup block.
 pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult> {
     let LoginTaskArgs {
+        session_id: sid,
         hub_client,
         edge_state,
         client_sender,
@@ -90,19 +102,6 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
         client_os_version,
         certificate_hash,
     } = args;
-
-    // Allocate session ID from local Edge pool
-    let sid = match edge_state.allocate_session_id().await {
-        Some(sid) => sid,
-        None => {
-            error!("Failed to allocate session ID: pool exhausted or edge not registered");
-            client_sender.send_raw(handler::encode_reject(
-                Some(mumbleproto::reject::RejectType::ServerFull as i32),
-                "Server is full (session pool exhausted)",
-            ).into()).await;
-            return None;
-        }
-    };
 
     // Build client info for Hub (use data from Version message)
     let client_info = hubedge::ClientInfo {
@@ -210,12 +209,13 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
     // Register the close signal so the main loop can force-disconnect on kick/ban.
     edge_state.client_manager.register_close_signal(sid, close_tx).await;
 
-    // Helper: clean up and return None after the session is in the manager.
+    // Helper: remove the client from the manager and return None.
+    // free_session_id and notify_user_left are intentionally NOT called here;
+    // they are handled unconditionally by the outer loop's cleanup block,
+    // which always runs because session_id is pre-allocated and always Some.
     macro_rules! fail {
         () => {{
             edge_state.client_manager.remove_client(sid).await;
-            edge_state.free_session_id(sid).await;
-            hub_client.notify_user_left(sid, None).await;
             return None;
         }};
     }
@@ -494,8 +494,9 @@ pub(super) async fn handle_client_connection(
                     login_abort = None;
                     match result.ok().flatten() {
                         Some(task_result) => {
+                            // session_id was pre-allocated when Authenticate was received;
+                            // task_result.session_id is the same value.
                             let sid = task_result.session_id;
-                            session_id = Some(sid);
 
                             // ── Murmur-aligned ordering ──────────────────────────────────
                             // Transition to Ready FIRST (equivalent to Murmur setting
@@ -539,7 +540,10 @@ pub(super) async fn handle_client_connection(
                             // then the server is already in Ready state.
                         }
                         None => {
-                            // Login failed; the task already cleaned up.
+                            // Login failed.  The task removed the client from the manager
+                            // (if it was added).  The cleanup block at the bottom handles
+                            // free_session_id and notify_user_left via the pre-allocated
+                            // session_id that is already set in the outer loop.
                             break 'outer;
                         }
                     }
@@ -695,14 +699,37 @@ pub(super) async fn handle_client_connection(
                         }
                     }
 
+                    // --- Pre-allocate session ID so the outer loop tracks it immediately ---
+                    //
+                    // Allocating here (before spawning) means that if TCP drops while the
+                    // login task is in flight, the cleanup block at the bottom of this
+                    // function can call notify_user_left / free_session_id without waiting
+                    // for the task, preventing ghost sessions.
+                    let sid = match edge_state.allocate_session_id().await {
+                        Some(s) => s,
+                        None => {
+                            error!("Failed to allocate session ID: pool exhausted or edge not registered");
+                            client_sender.send_raw(handler::encode_reject(
+                                Some(mumbleproto::reject::RejectType::ServerFull as i32),
+                                "Server is full (session pool exhausted)",
+                            ).into()).await;
+                            // No session was allocated; cleanup block won't run (session_id still None).
+                            break 'outer;
+                        }
+                    };
+                    // Track the pre-allocated session ID in the outer loop immediately so
+                    // the cleanup block handles free + notify regardless of how the task ends.
+                    session_id = Some(sid);
+
                     // --- Spawn the slow login work as a separate task ---
                     //
                     // This keeps the read loop alive so the server can continue
                     // responding to TCP Ping messages while Hub RPCs and the
                     // message burst are in flight.  The task sends back the
-                    // allocated session_id (or None on failure) via the oneshot.
+                    // login result (or None on failure) via the oneshot.
                     let (task_tx, task_rx) = tokio::sync::oneshot::channel::<Option<LoginTaskResult>>();
                     let task_args = LoginTaskArgs {
+                        session_id: sid,
                         hub_client: hub_client.clone(),
                         edge_state: edge_state.clone(),
                         client_sender: client_sender.clone(),
@@ -1684,30 +1711,14 @@ pub(super) async fn handle_client_connection(
         info!("Cleaned up session {} for {}", sid, peer_addr);
     }
 
-    // If the TCP connection closed while a login task was still in flight, abort
-    // the task and recover any session it may have already registered.
-    //
-    // Without this, a task that completes between the TCP-EOF break and the abort
-    // call below would leave a ghost session in both Edge client_manager and Hub
-    // session_manager (the task's oneshot result is discarded once the receiver
-    // is dropped, but the side-effects — add_client + Hub auth — already happened).
-    if let Some(login_recv) = login_rx.take() {
-        if let Some(abort) = login_abort.take() {
-            abort.abort();
-        }
-        // Give the task a brief window to yield its result in case it completed
-        // just before the abort signal was delivered.
-        match tokio::time::timeout(std::time::Duration::from_millis(50), login_recv).await {
-            Ok(Ok(Some(result))) => {
-                let orphan_sid = result.session_id;
-                edge_state.client_manager.remove_client(orphan_sid).await;
-                edge_state.free_session_id(orphan_sid).await;
-                hub_client.notify_user_left(orphan_sid, None).await;
-                info!("Cleaned up orphaned login session {} for {}", orphan_sid, peer_addr);
-            }
-            _ => {}
-        }
+    // Abort the login task immediately on TCP disconnect.  Hub prevents ghost
+    // sessions via `pending_auths`: the `handleUserLeft` notification sent in
+    // the cleanup block above sets the cancel flag, and the Hub auth task
+    // checks it before `session_manager.add_session`.
+    if let Some(abort) = login_abort.take() {
+        abort.abort();
     }
+    drop(login_rx.take());
 
     // Gracefully drain any pending outgoing messages (e.g. a Reject sent on auth
     // failure) before the TCP connection is closed.  Dropping the sender closes
@@ -2543,6 +2554,7 @@ mod tests {
             },
             server: ServerConfig::default(),
             voice_routing: munode_common::config::EdgeVoiceRoutingConfig::default(),
+            web_api: munode_common::config::EdgeWebApiConfig::default(),
             log_level: "info".to_string(),
             log_format: "text".to_string(),
         }
@@ -2817,6 +2829,10 @@ mod tests {
             priority_speaker: false,
             recording: false,
             listening_channels: vec![],
+            texture_hash: None,
+            comment_hash: None,
+            listening_volume_adjustments: std::collections::HashMap::new(),
+            plugin_context: vec![],
         }
     }
 
