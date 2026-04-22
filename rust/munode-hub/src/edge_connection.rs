@@ -156,21 +156,33 @@ impl EdgeConnection {
 
     /// Ensure a per-edge inbound notification processor task is running for `edge_id`.
     ///
-    /// Called every time `edge.register` is received from this edge.  Creates the mpsc
-    /// channel and spawns `run_edge_notif_processor` only when no alive processor exists
-    /// yet, or when the existing channel has been closed (processor exited).
-    /// Idempotent: a live processor is never replaced so buffered notifications are safe.
-    async fn ensure_edge_notif_processor(&self, edge_id: u32) {
-        let needs_new = {
+    /// `reset` should be `true` when the Edge is registering for the first time in this
+    /// connection session (i.e. there was no existing pool entry for it, meaning it either
+    /// just started or fully disconnected before reconnecting).  In that case the Edge's
+    /// outbound notification sequence counter has been reset to 0 and the old sequencer's
+    /// `expected_seq` would discard every new notification as a duplicate — so we must
+    /// create a fresh processor with a zeroed sequencer.
+    ///
+    /// When `reset` is `false` (additional pool slot from the same connection session),
+    /// the existing processor is reused so that in-flight notifications already enqueued
+    /// are not lost.  If no processor exists at all a new one is created regardless.
+    async fn ensure_edge_notif_processor(&self, edge_id: u32, reset: bool) {
+        let needs_new = reset || {
             let senders = self.state.edge_notif_senders.read().await;
             senders.get(&edge_id).map_or(true, |tx| tx.is_closed())
         };
         if needs_new {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<EdgeNotifEnvelope>();
+            // Replacing the old sender drops it, which closes the old channel and causes
+            // the previous processor task to exit (rx.recv() returns None).
             self.state.edge_notif_senders.write().await.insert(edge_id, tx);
             let rpc_handler = Arc::clone(&self.rpc_handler);
             tokio::spawn(crate::rpc_handler::run_edge_notif_processor(edge_id, rx, rpc_handler));
-            debug!("Spawned notification processor for edge {}", edge_id);
+            if reset {
+                debug!("Spawned fresh notification processor for edge {} (sequence reset on reconnect)", edge_id);
+            } else {
+                debug!("Spawned notification processor for edge {} (none existed)", edge_id);
+            }
         }
     }
 
@@ -200,6 +212,15 @@ impl EdgeConnection {
                             self.server_id = Some(sid);
                             // Track this connection's sender for disconnect cleanup.
                             self.own_sender = Some(send_tx.clone());
+                            // Determine whether this is the very first pool slot
+                            // for this edge (i.e. fresh connection after a
+                            // disconnect or first-ever startup).  We need this
+                            // flag BEFORE the pool is mutated so we can decide
+                            // whether to reset the inbound notification sequencer.
+                            let is_first_registration = {
+                                let connections = self.state.edge_connections.read().await;
+                                connections.get(&sid).is_none()
+                            };
                             {
                                 let mut connections = self.state.edge_connections.write().await;
                                 if let Some(pool) = connections.get(&sid) {
@@ -223,10 +244,14 @@ impl EdgeConnection {
                                 .await
                                 .entry(sid)
                                 .or_insert_with(EdgeHealth::new);
-                            // Ensure a sequenced inbound notification processor task
-                            // is running for this edge.  Created on first register;
-                            // a dead processor is replaced transparently.
-                            self.ensure_edge_notif_processor(sid).await;
+                            // Reset the inbound notification sequencer only on
+                            // first (fresh) registration.  The Edge resets its
+                            // outbound sequence counter on every restart, so the
+                            // old sequencer's expected_seq would discard all new
+                            // notifications as duplicates.  Additional pool slots
+                            // for an already-registered edge reuse the running
+                            // sequencer so in-flight notifications are not lost.
+                            self.ensure_edge_notif_processor(sid, is_first_registration).await;
                         }
                     }
 
