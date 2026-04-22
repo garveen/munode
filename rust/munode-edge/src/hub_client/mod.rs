@@ -822,7 +822,11 @@ impl HubClient {
                 warn!("Failed to re-upload local VoiceTarget configs to Hub: {}", e);
             }
             // Open the gate so the notification processor starts handling events.
-            self.sync_notify.notify_waiters();
+            // Use notify_one() (not notify_waiters()) so the permit is stored and
+            // the processor task wakes up even if it hasn't reached notified().await
+            // yet when this call fires (notify_waiters() is not stored and would be
+            // silently dropped in that case, permanently blocking the processor).
+            self.sync_notify.notify_one();
             *self.state.write().await = HubConnectionState::Registered;
             self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
             info!("Edge registered with Hub successfully ({}, slot {})", url, slot);
