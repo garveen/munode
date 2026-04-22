@@ -131,7 +131,7 @@ pub enum EdgeEvent {
     /// A remote user joined (from another Edge, synced via Hub).
     RemoteUserJoined { session_id: u32, username: String, channel_id: u32, is_ninja: bool },
     /// A remote user left.
-    RemoteUserLeft { session_id: u32 },
+    RemoteUserLeft { session_id: u32, channel_id: u32 },
     /// A remote user's state changed (mute, deaf, etc.).
     RemoteUserStateChanged {
         session_id: u32,
@@ -140,7 +140,7 @@ pub enum EdgeEvent {
         listening_channel_remove: Vec<u32>,
     },
     /// A remote user moved channels.
-    RemoteUserMoved { session_id: u32, channel_id: u32, actor_session: u32 },
+    RemoteUserMoved { session_id: u32, from_channel_id: u32, channel_id: u32, actor_session: u32 },
     /// A channel was created.
     ChannelCreated { channel_id: u32 },
     /// A channel was removed.

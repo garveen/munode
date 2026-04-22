@@ -70,10 +70,27 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                         }
                         debug!("Broadcast remote user joined: {} (session {}, channel {}, ninja={})", username, session_id, channel_id, is_ninja);
                     }
-                    EdgeEvent::RemoteUserLeft { session_id } => {
+                    EdgeEvent::RemoteUserLeft { session_id, channel_id } => {
                         let msg = handler::build_user_remove_msg(session_id, None);
-                        state.client_manager.broadcast(MessageType::UserRemove, &msg, None).await;
-                        debug!("Broadcast remote user left: session {}", session_id);
+                        // Channel Ninja: only send UserRemove to clients who could see the user.
+                        let ninja_channels_snap: std::collections::HashSet<u32> =
+                            state.ninja_channels.read().await.iter().copied().collect();
+                        if ninja_channels_snap.contains(&channel_id) {
+                            let all_clients = state.client_manager.get_all_clients().await;
+                            let visible_cache = state.ninja_visible_to.read().await;
+                            for client in &all_clients {
+                                let can_see = visible_cache
+                                    .get(&client.session)
+                                    .map(|set| set.contains(&channel_id))
+                                    .unwrap_or(false);
+                                if can_see {
+                                    state.client_manager.send_to(client.session, MessageType::UserRemove, &msg).await;
+                                }
+                            }
+                        } else {
+                            state.client_manager.broadcast(MessageType::UserRemove, &msg, None).await;
+                        }
+                        debug!("Broadcast remote user left: session {} (channel {})", session_id, channel_id);
                     }
                     EdgeEvent::RemoteUserStateChanged { session_id, delta, listening_channel_add, listening_channel_remove } => {
                         // Only forward fields that ACTUALLY changed (carried by delta).
@@ -96,18 +113,107 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                         if !listening_channel_remove.is_empty() {
                             msg.listening_channel_remove = listening_channel_remove;
                         }
-                        state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
-                        debug!("Broadcast remote user state changed: session {}", session_id);
+                        // Channel Ninja: filter state-change notifications for users in ninja channels
+                        let user_channel = state.channel_manager.get_remote_user(session_id).await.map(|u| u.channel_id);
+                        let ninja_channels_snap: std::collections::HashSet<u32> =
+                            state.ninja_channels.read().await.iter().copied().collect();
+                        if let Some(ch) = user_channel {
+                            if ninja_channels_snap.contains(&ch) {
+                                let all_clients = state.client_manager.get_all_clients().await;
+                                let visible_cache = state.ninja_visible_to.read().await;
+                                for client in &all_clients {
+                                    let can_see = visible_cache
+                                        .get(&client.session)
+                                        .map(|set| set.contains(&ch))
+                                        .unwrap_or(false);
+                                    if can_see {
+                                        state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
+                                    }
+                                }
+                                debug!("Broadcast remote user state changed (ninja): session {}", session_id);
+                            } else {
+                                state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                                debug!("Broadcast remote user state changed: session {}", session_id);
+                            }
+                        } else {
+                            state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                            debug!("Broadcast remote user state changed: session {}", session_id);
+                        }
                     }
-                    EdgeEvent::RemoteUserMoved { session_id, channel_id, actor_session } => {
-                        let msg = mumbleproto::UserState {
-                            session: Some(session_id),
-                            channel_id: Some(channel_id),
-                            actor: Some(actor_session),
-                            ..Default::default()
-                        };
-                        state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
-                        debug!("Broadcast remote user moved: session {} -> channel {}", session_id, channel_id);
+                    EdgeEvent::RemoteUserMoved { session_id, from_channel_id, channel_id, actor_session } => {
+                        // Channel Ninja: apply three-way visibility logic per observer.
+                        // was_visible = observer could see user in from_channel
+                        // now_visible = observer can see user in channel
+                        // was && now  → send UserState{channel_id}   (normal move)
+                        // was && !now → send UserRemove               (user "disappears")
+                        // !was && now → send full UserState            (user "appears")
+                        // !was && !was→ nothing
+                        let ninja_channels_snap: std::collections::HashSet<u32> =
+                            state.ninja_channels.read().await.iter().copied().collect();
+                        let from_is_ninja = ninja_channels_snap.contains(&from_channel_id);
+                        let to_is_ninja   = ninja_channels_snap.contains(&channel_id);
+                        if !from_is_ninja && !to_is_ninja {
+                            // Simple case: no ninja channels involved, broadcast normally.
+                            let msg = mumbleproto::UserState {
+                                session: Some(session_id),
+                                channel_id: Some(channel_id),
+                                actor: Some(actor_session),
+                                ..Default::default()
+                            };
+                            state.client_manager.broadcast(MessageType::UserState, &msg, None).await;
+                        } else {
+                            // At least one side is a ninja channel — apply per-observer logic.
+                            let all_clients = state.client_manager.get_all_clients().await;
+                            let visible_cache = state.ninja_visible_to.read().await;
+                            // Build the full UserState for the "appears" case.
+                            let full_msg_opt = state.channel_manager.get_remote_user(session_id).await.map(|user| {
+                                mumbleproto::UserState {
+                                    session: Some(user.session_id),
+                                    user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
+                                    name: Some(user.username.clone()),
+                                    channel_id: Some(user.channel_id),
+                                    mute:             if user.mute             { Some(true) } else { None },
+                                    deaf:             if user.deaf             { Some(true) } else { None },
+                                    suppress:         if user.suppress         { Some(true) } else { None },
+                                    self_mute:        if user.self_mute        { Some(true) } else { None },
+                                    self_deaf:        if user.self_deaf        { Some(true) } else { None },
+                                    priority_speaker: if user.priority_speaker { Some(true) } else { None },
+                                    recording:        if user.recording        { Some(true) } else { None },
+                                    hash: user.cert_hash.clone(),
+                                    ..Default::default()
+                                }
+                            });
+                            let move_msg = mumbleproto::UserState {
+                                session: Some(session_id),
+                                channel_id: Some(channel_id),
+                                actor: Some(actor_session),
+                                ..Default::default()
+                            };
+                            let remove_msg = handler::build_user_remove_msg(session_id, None);
+                            for client in &all_clients {
+                                let was_visible = if from_is_ninja {
+                                    visible_cache.get(&client.session).map(|s| s.contains(&from_channel_id)).unwrap_or(false)
+                                } else { true };
+                                let now_visible = if to_is_ninja {
+                                    visible_cache.get(&client.session).map(|s| s.contains(&channel_id)).unwrap_or(false)
+                                } else { true };
+                                match (was_visible, now_visible) {
+                                    (true, true) => {
+                                        state.client_manager.send_to(client.session, MessageType::UserState, &move_msg).await;
+                                    }
+                                    (true, false) => {
+                                        state.client_manager.send_to(client.session, MessageType::UserRemove, &remove_msg).await;
+                                    }
+                                    (false, true) => {
+                                        if let Some(ref full_msg) = full_msg_opt {
+                                            state.client_manager.send_to(client.session, MessageType::UserState, full_msg).await;
+                                        }
+                                    }
+                                    (false, false) => {}
+                                }
+                            }
+                        }
+                        debug!("Broadcast remote user moved: session {} {} -> channel {}", session_id, from_channel_id, channel_id);
                     }
                     EdgeEvent::ChannelCreated { channel_id } => {
                         if let Some(ch) = state.channel_manager.get_channel(channel_id).await {

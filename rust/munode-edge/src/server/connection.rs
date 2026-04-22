@@ -231,6 +231,23 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
         }
     }
 
+    // Populate ninja channel permission cache for this client BEFORE send_remote_users
+    // so that the initial user list is already filtered correctly.
+    {
+        let ninja_channels = edge_state.ninja_channels.read().await.clone();
+        if !ninja_channels.is_empty() {
+            let mut visible_set = std::collections::HashSet::new();
+            for &ch_id in &ninja_channels {
+                let perms = get_perm_cached(&hub_client, &edge_state, sid, ch_id, false).await;
+                let can_see = perms & (munode_common::permission::ENTER | munode_common::permission::LISTEN) != 0;
+                if can_see {
+                    visible_set.insert(ch_id);
+                }
+            }
+            edge_state.ninja_visible_to.write().await.insert(sid, visible_set);
+        }
+    }
+
     // Execute full login sequence (CryptSetup → CodecVersion → ChannelStates →
     // UserStates → ServerSync → ServerConfig).
     let login = LoginHandler::new(&client_sender, &config, &edge_state, &hub_client);
@@ -250,22 +267,6 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
     // AFTER receiving this LoginTaskResult and BEFORE sending ServerSync.
     // This matches Murmur's ordering: state → Authenticated before ServerSync,
     // so UserState{channel_id} responses from the client are processed correctly.
-
-    // Populate ninja channel permission cache for this client.
-    {
-        let ninja_channels = edge_state.ninja_channels.read().await.clone();
-        if !ninja_channels.is_empty() {
-            let mut visible_set = std::collections::HashSet::new();
-            for &ch_id in &ninja_channels {
-                let can_enter = get_perm_cached(&hub_client, &edge_state, sid, ch_id, false).await
-                    & munode_common::permission::ENTER != 0;
-                if can_enter {
-                    visible_set.insert(ch_id);
-                }
-            }
-            edge_state.ninja_visible_to.write().await.insert(sid, visible_set);
-        }
-    }
 
     // If suppress was set by permission check, notify the client itself.
     if client.suppress && !auth_result.suppress.unwrap_or(false) {
@@ -297,11 +298,30 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
         comment_hash: client.comment_hash.clone(),
         ..Default::default()
     };
-    edge_state.client_manager.broadcast(
-        MessageType::UserState,
-        &user_join_msg,
-        Some(sid),
-    ).await;
+    {
+        let ninja_channels_snap = edge_state.ninja_channels.read().await.clone();
+        if ninja_channels_snap.contains(&client.channel_id) {
+            // Channel Ninja: only send join announcement to observers who can see this channel
+            let all_clients = edge_state.client_manager.get_all_clients().await;
+            let visible_cache = edge_state.ninja_visible_to.read().await;
+            for observer in &all_clients {
+                if observer.session == sid { continue; }
+                let can_see = visible_cache
+                    .get(&observer.session)
+                    .map(|set| set.contains(&client.channel_id))
+                    .unwrap_or(false);
+                if can_see {
+                    edge_state.client_manager.send_to(observer.session, MessageType::UserState, &user_join_msg).await;
+                }
+            }
+        } else {
+            edge_state.client_manager.broadcast(
+                MessageType::UserState,
+                &user_join_msg,
+                Some(sid),
+            ).await;
+        }
+    }
     // Invalidate BroadcastCaches: a new user joined, routing targets changed.
     edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
 
@@ -1694,16 +1714,37 @@ pub(super) async fn handle_client_connection(
         edge_state.voice_targets.write().await.remove(&sid);
         // Clean up permission cache for this session
         edge_state.permission_cache.retain(|&(s, _), _| s != sid);
+        // Get the client's channel before removing the ninja cache, so we can do
+        // ninja-filtered UserRemove below.
+        let disconnected_channel_id = edge_state.client_manager.get_client(sid).await
+            .map(|c| c.channel_id);
         // Clean up ninja channel permission cache for this session
         edge_state.ninja_visible_to.write().await.remove(&sid);
 
-        // Broadcast UserRemove to all remaining clients
+        // Broadcast UserRemove to all remaining clients.
+        // If the user was in a ninja channel, only send to observers who could see them.
         let remove_msg = handler::build_user_remove_msg(sid, None);
-        edge_state.client_manager.broadcast(
-            MessageType::UserRemove,
-            &remove_msg,
-            None,
-        ).await;
+        let ninja_channels_snap = edge_state.ninja_channels.read().await.clone();
+        if let Some(ch) = disconnected_channel_id {
+            if ninja_channels_snap.contains(&ch) {
+                let all_clients = edge_state.client_manager.get_all_clients().await;
+                let visible_cache = edge_state.ninja_visible_to.read().await;
+                for observer in &all_clients {
+                    if observer.session == sid { continue; }
+                    let can_see = visible_cache
+                        .get(&observer.session)
+                        .map(|set| set.contains(&ch))
+                        .unwrap_or(false);
+                    if can_see {
+                        edge_state.client_manager.send_to(observer.session, MessageType::UserRemove, &remove_msg).await;
+                    }
+                }
+            } else {
+                edge_state.client_manager.broadcast(MessageType::UserRemove, &remove_msg, None).await;
+            }
+        } else {
+            edge_state.client_manager.broadcast(MessageType::UserRemove, &remove_msg, None).await;
+        }
 
         // Notify Hub that user disconnected
         hub_client.notify_user_left(sid, None).await;
@@ -1742,11 +1783,13 @@ pub(super) async fn handle_user_state_update(
     let mut needs_broadcast = false;
     let mut channel_moved = false;
     let mut suppress_changed = false;
+    let mut old_channel_id: u32 = 0; // captured before move for ninja visibility logic
 
     if let Some(mut client) = edge_state.client_manager.get_client(session_id).await {
         // 9.1 Channel move with permission check
         if let Some(target_channel_id) = user_state.channel_id {
             if client.channel_id != target_channel_id {
+                old_channel_id = client.channel_id; // capture BEFORE move
                 // Check Enter permission on target channel via Hub
                 let can_enter = get_perm_cached(&hub_client, &edge_state, session_id, target_channel_id, true).await
                     & perm::ENTER != 0;
@@ -2111,7 +2154,71 @@ pub(super) async fn handle_user_state_update(
                 broadcast_msg.listening_volume_adjustment = user_state.listening_volume_adjustment.clone();
             }
 
-            edge_state.client_manager.broadcast(MessageType::UserState, &broadcast_msg, None).await;
+            // Channel Ninja: for channel moves, apply three-way visibility logic.
+            // For non-move state changes, filter if user is in a ninja channel.
+            if channel_moved {
+                let ninja_channels_snap = edge_state.ninja_channels.read().await.clone();
+                let from_is_ninja = ninja_channels_snap.contains(&old_channel_id);
+                let to_is_ninja   = ninja_channels_snap.contains(&client.channel_id);
+                if !from_is_ninja && !to_is_ninja {
+                    // No ninja channels involved — broadcast normally.
+                    edge_state.client_manager.broadcast(MessageType::UserState, &broadcast_msg, None).await;
+                } else {
+                    let all_clients = edge_state.client_manager.get_all_clients().await;
+                    let visible_cache = edge_state.ninja_visible_to.read().await;
+                    // Build full UserState for the "appears" case (observer gains visibility).
+                    let full_appear_msg = mumbleproto::UserState {
+                        session: Some(session_id),
+                        user_id: if client.user_id > 0 { Some(client.user_id) } else { None },
+                        name: Some(client.username.clone()),
+                        channel_id: Some(client.channel_id),
+                        actor: Some(session_id),
+                        mute:             if client.mute             { Some(true) } else { None },
+                        deaf:             if client.deaf             { Some(true) } else { None },
+                        suppress:         if client.suppress         { Some(true) } else { None },
+                        self_mute:        if client.self_mute        { Some(true) } else { None },
+                        self_deaf:        if client.self_deaf        { Some(true) } else { None },
+                        priority_speaker: if client.priority_speaker { Some(true) } else { None },
+                        recording:        if client.recording        { Some(true) } else { None },
+                        hash: client.cert_hash.clone(),
+                        ..Default::default()
+                    };
+                    let remove_msg = handler::build_user_remove_msg(session_id, None);
+                    for observer in &all_clients {
+                        if observer.session == session_id { continue; }
+                        let was_visible = if from_is_ninja {
+                            visible_cache.get(&observer.session).map(|s| s.contains(&old_channel_id)).unwrap_or(false)
+                        } else { true };
+                        let now_visible = if to_is_ninja {
+                            visible_cache.get(&observer.session).map(|s| s.contains(&client.channel_id)).unwrap_or(false)
+                        } else { true };
+                        match (was_visible, now_visible) {
+                            (true, true)  => { edge_state.client_manager.send_to(observer.session, MessageType::UserState, &broadcast_msg).await; }
+                            (true, false) => { edge_state.client_manager.send_to(observer.session, MessageType::UserRemove, &remove_msg).await; }
+                            (false, true) => { edge_state.client_manager.send_to(observer.session, MessageType::UserState, &full_appear_msg).await; }
+                            (false, false) => {}
+                        }
+                    }
+                }
+            } else {
+                // Non-move state change: filter if user is currently in a ninja channel.
+                let ninja_channels_snap = edge_state.ninja_channels.read().await.clone();
+                if ninja_channels_snap.contains(&client.channel_id) {
+                    let all_clients = edge_state.client_manager.get_all_clients().await;
+                    let visible_cache = edge_state.ninja_visible_to.read().await;
+                    for observer in &all_clients {
+                        let can_see = visible_cache
+                            .get(&observer.session)
+                            .map(|set| set.contains(&client.channel_id))
+                            .unwrap_or(false);
+                        if can_see {
+                            edge_state.client_manager.send_to(observer.session, MessageType::UserState, &broadcast_msg).await;
+                        }
+                    }
+                } else {
+                    edge_state.client_manager.broadcast(MessageType::UserState, &broadcast_msg, None).await;
+                }
+            }
             // Invalidate BroadcastCaches: channel/deaf/listener state changed.
             edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
 

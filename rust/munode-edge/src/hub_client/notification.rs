@@ -94,10 +94,15 @@ impl HubClient {
                         self.edge_state.voice_targets.write().await.remove(&target_session);
                         self.edge_state.client_manager.send_close_signal(target_session).await;
                     }
-                    // Remove from remote user tracking and broadcast removal to local clients
+                    // Remove from remote user tracking and broadcast removal to local clients.
+                    // Capture channel_id BEFORE removal so the event listener can filter by it.
+                    let departed_channel_id = self.edge_state.channel_manager.get_remote_user(target_session).await
+                        .map(|u| u.channel_id)
+                        .unwrap_or(0);
                     self.edge_state.channel_manager.remove_remote_user(target_session).await;
                     self.edge_state.emit(EdgeEvent::RemoteUserLeft {
                         session_id: target_session,
+                        channel_id: departed_channel_id,
                     });
                     // Invalidate BroadcastCaches: user removed, relay targets may change.
                     self.edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
@@ -140,6 +145,15 @@ impl HubClient {
             "hub.userMoved" => {
                 if let Some(params) = &notification.user_moved {
                     debug!("Remote user moved: session {} -> channel {}", params.session_id, params.channel_id);
+                    // Capture the channel the user was in BEFORE the move, so the event
+                    // listener can apply correct ninja from→to visibility logic.
+                    let from_channel_id = if let Some(u) = self.edge_state.channel_manager.get_remote_user(params.session_id).await {
+                        u.channel_id
+                    } else if let Some(c) = self.edge_state.client_manager.get_client(params.session_id).await {
+                        c.channel_id
+                    } else {
+                        params.channel_id // fallback: treat as same channel (no-op visibility change)
+                    };
                     // Update remote-user tracking if the mover is tracked as remote on this edge.
                     if let Some(mut user) = self.edge_state.channel_manager.get_remote_user(params.session_id).await {
                         user.channel_id = params.channel_id;
@@ -168,6 +182,7 @@ impl HubClient {
                         .unwrap_or(params.session_id);
                     self.edge_state.emit(EdgeEvent::RemoteUserMoved {
                         session_id: params.session_id,
+                        from_channel_id,
                         channel_id: params.channel_id,
                         actor_session,
                     });

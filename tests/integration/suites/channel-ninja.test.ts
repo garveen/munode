@@ -1,493 +1,65 @@
 /**
- * Channel Ninja Feature Integration Tests
+ * Channel Ninja Feature Integration Tests (Rust)
  *
- * Tests for the Channel Ninja functionality based on the requirements:
- * 
- * Prerequisites for a channel to be hidden from a user:
- * - Hub server has ninja configuration enabled
- * - The channel is specified in the ninjaChannels list
- * - The user cannot enter AND cannot listen to the channel
- * - The user cannot enter AND cannot listen to any linked channels (including transitive links)
- * 
- * Functionality details:
- * - When ninja is disabled: All users see all channels, behavior same as official server
- * - When ninja is enabled:
- *   - Hub specifies channel IDs that are ninja channels via ninjaChannels config
- *   - Users with permission see all activity normally
- *   - Users without permission see privileged users as offline when they enter hidden channels
- *   - Users without permission cannot see any linked channels
- *   - Users moved into hidden channel by admin can see the channel until they leave
- *   - Users without permission reconnecting in hidden channel are moved to default
- *   - Users with permission reconnecting in hidden channel stay there
+ * Verifies the following behaviors when channel_ninja is enabled and
+ * channel 1 (General) is in ninja_channels:
+ *
+ *  1. On initial login: users without Enter/Listen on the ninja channel do NOT
+ *     receive UserState for users sitting in that channel.
+ *  2. When a user moves INTO the ninja channel: unprivileged observers receive
+ *     UserRemove (the user "disappears").
+ *  3. When a user moves OUT of the ninja channel: unprivileged observers
+ *     receive a full UserState (the user "reappears").
+ *  4. State changes (self_mute) while inside the ninja channel are NOT
+ *     forwarded to unprivileged observers.
+ *  5. Privileged users DO see users in the ninja channel.
+ *  6. When ninja is DISABLED the normal move/visibility rules apply.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { TestEnvironment, setupTestEnvironment, USE_RUST } from '../setup';
+import { TestEnvironment, setupTestEnvironment, sleep } from '../setup';
 import { MumbleClient } from '../../../packages/client/src/index.js';
 import { PermissionFlag } from '../fixtures';
 
-// Helper function for async delays
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// Use channel ID 1 (General) as the ninja channel for testing
+// Channel 1 (General) is used as the ninja channel
 const NINJA_CHANNEL_ID = 1;
 
-describe.skipIf(USE_RUST)('Channel Ninja Integration Tests', () => {
-  let testEnv: TestEnvironment;
-
-  beforeAll(async () => {
-    // Create test environment with ninja enabled and channel 1 as ninja channel
-    testEnv = await setupTestEnvironment(8100, {
-      reuse: false, // 禁用复用以确保配置生效
-      silent: false,
-      hubConfig: {
-        channel_ninja: true, // Enable Channel Ninja functionality
-        ninja_channels: [NINJA_CHANNEL_ID], // Channel 1 (General) is the ninja channel
-        log_level: 'info' as const,
-      },
-    });
-    
-    // Set up ACL on the ninja channel to allow only "ninja" group users
-    const setupAdmin = new MumbleClient();
-    try {
-      await setupAdmin.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'admin',
-        password: 'admin123',
-        rejectUnauthorized: false,
-      });
-      
-      await sleep(1000);
-      
-      // Set ACL: first deny all users, then allow ninja group
-      // Order matters: later rules override earlier ones
-      await setupAdmin.saveACL(NINJA_CHANNEL_ID, [
-        {
-          apply_here: true,
-          apply_subs: true,
-          inherited: false,
-          group: 'all',
-          allow: 0,
-          deny: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Listen,
-        },
-        {
-          apply_here: true,
-          apply_subs: true,
-          inherited: false,
-          group: 'ninja',
-          allow: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak | PermissionFlag.Listen,
-          deny: 0,
-        },
-      ]);
-      
-      await sleep(500);
-    } finally {
-      await setupAdmin.disconnect();
-    }
-  }, 120000);
-
-  afterAll(async () => {
-    await testEnv?.cleanup();
-  });
-
-  describe('Basic Ninja Functionality', () => {
-    it('should hide users in ninja channels from unprivileged users', async () => {
-      const ninjaUser = new MumbleClient();
-      const normalUser = new MumbleClient();
-
-      try {
-        // Ninja group user connects (has permission to enter ninja channel)
-        await ninjaUser.connect({
-          host: 'localhost',
-          port: testEnv.edgePort,
-          username: 'ninja_user1',
-          password: 'ninja_password',
-          rejectUnauthorized: false,
-        });
-        await sleep(500);
-
-        const ninjaSession = ninjaUser.getStateManager().getSession()?.session;
-        expect(ninjaSession).toBeDefined();
-
-        // Normal user connects (no permission to ninja channel)
-        await normalUser.connect({
-          host: 'localhost',
-          port: testEnv.edgePort,
-          username: 'user1',
-          password: 'password1',
-          rejectUnauthorized: false,
-        });
-        await sleep(1000);
-
-        // Initially, normal user should see ninja user (both in root channel)
-        let users = normalUser.getUsers();
-        let ninjaInList = users.some((u: any) => u.session === ninjaSession);
-        expect(ninjaInList).toBe(true);
-
-        // Track UserRemove events
-        let sawNinjaRemove = false;
-        normalUser.on('userRemove', (remove: any) => {
-          if (remove.session === ninjaSession) {
-            sawNinjaRemove = true;
-          }
-        });
-
-        // Ninja user moves to ninja channel
-        ninjaUser.sendUserState({
-          session: ninjaSession,
-          channel_id: NINJA_CHANNEL_ID,
-        });
-
-        // Wait for the ninja logic to process
-        await sleep(2000);
-
-        // Normal user should receive UserRemove for ninja user (appears offline)
-        expect(sawNinjaRemove).toBe(true);
-      } finally {
-        await ninjaUser.disconnect();
-        await normalUser.disconnect();
-      }
-    }, 30000);
-
-    it('should show users again when they leave ninja channel', async () => {
-      const ninjaUser = new MumbleClient();
-      const normalUser = new MumbleClient();
-
-      try {
-        // Ninja user connects and moves to ninja channel first
-        await ninjaUser.connect({
-          host: 'localhost',
-          port: testEnv.edgePort,
-          username: 'ninja_user2',
-          password: 'ninja_password',
-          rejectUnauthorized: false,
-        });
-        await sleep(500);
-
-        const ninjaSession = ninjaUser.getStateManager().getSession()?.session;
-        expect(ninjaSession).toBeDefined();
-
-        // Ninja user moves to ninja channel
-        ninjaUser.sendUserState({
-          session: ninjaSession,
-          channel_id: NINJA_CHANNEL_ID,
-        });
-        await sleep(500);
-
-        // Normal user connects (ninja user should be invisible)
-        await normalUser.connect({
-          host: 'localhost',
-          port: testEnv.edgePort,
-          username: 'user2',
-          password: 'password2',
-          rejectUnauthorized: false,
-        });
-        await sleep(1000);
-
-        // Normal user should NOT see ninja user initially
-        let users = normalUser.getUsers();
-        let ninjaInList = users.some((u: any) => u.session === ninjaSession);
-        expect(ninjaInList).toBe(false);
-
-        // Track UserState events to see ninja user "appear"
-        let sawNinjaAppear = false;
-        normalUser.on('userState', (state: any) => {
-          if (state.session === ninjaSession && state.channel_id === 0) {
-            sawNinjaAppear = true;
-          }
-        });
-
-        // Ninja user moves back to root channel
-        ninjaUser.sendUserState({
-          session: ninjaSession,
-          channel_id: 0,
-        });
-
-        // Wait for update
-        await sleep(2000);
-
-        // Normal user should now see ninja user
-        expect(sawNinjaAppear).toBe(true);
-      } finally {
-        await ninjaUser.disconnect();
-        await normalUser.disconnect();
-      }
-    }, 30000);
-
-    it('should not broadcast state changes of hidden users to unprivileged users', async () => {
-      const ninjaUser = new MumbleClient();
-      const normalUser = new MumbleClient();
-
-      try {
-        // Ninja user connects and moves to ninja channel
-        await ninjaUser.connect({
-          host: 'localhost',
-          port: testEnv.edgePort,
-          username: 'ninja_user1',
-          password: 'ninja_password',
-          rejectUnauthorized: false,
-        });
-        await sleep(500);
-
-        const ninjaSession = ninjaUser.getStateManager().getSession()?.session;
-        expect(ninjaSession).toBeDefined();
-
-        // Ninja user moves to ninja channel
-        ninjaUser.sendUserState({
-          session: ninjaSession,
-          channel_id: NINJA_CHANNEL_ID,
-        });
-        await sleep(500);
-
-        // Normal user connects
-        await normalUser.connect({
-          host: 'localhost',
-          port: testEnv.edgePort,
-          username: 'user_state',
-          password: 'user_password',
-          rejectUnauthorized: false,
-        });
-        await sleep(1000);
-
-        // Track all state changes for ninja user
-        let sawNinjaStateChange = false;
-        normalUser.on('userState', (state: any) => {
-          if (state.session === ninjaSession) {
-            sawNinjaStateChange = true;
-          }
-        });
-
-        // Ninja user changes mute state while in ninja channel
-        ninjaUser.sendUserState({
-          session: ninjaSession,
-          self_mute: true,
-        });
-
-        // Wait for any potential state update
-        await sleep(2000);
-
-        // Normal user should NOT see any state changes from ninja user
-        expect(sawNinjaStateChange).toBe(false);
-      } finally {
-        await ninjaUser.disconnect();
-        await normalUser.disconnect();
-      }
-    }, 30000);
-  });
-
-  describe('Cross-Edge Ninja Functionality', () => {
-    it('should filter visibility across multiple Edge servers', async () => {
-      const ninjaUser = new MumbleClient();
-      const userEdge1 = new MumbleClient();
-      const userEdge2 = new MumbleClient();
-
-      try {
-        // Ninja group user connects to Edge 1 (has permission to enter ninja channel)
-        await ninjaUser.connect({
-          host: 'localhost',
-          port: testEnv.edgePort,
-          username: 'ninja_cross',
-          password: 'ninja_password',
-          rejectUnauthorized: false,
-        });
-        await sleep(500);
-
-        const ninjaSession = ninjaUser.getStateManager().getSession()?.session;
-        expect(ninjaSession).toBeDefined();
-
-        // Normal user on Edge 1
-        await userEdge1.connect({
-          host: 'localhost',
-          port: testEnv.edgePort,
-          username: 'user_cross1',
-          password: 'user_password',
-          rejectUnauthorized: false,
-        });
-        await sleep(500);
-
-        // Normal user on Edge 2
-        await userEdge2.connect({
-          host: 'localhost',
-          port: testEnv.edgePort2,
-          username: 'user_cross2',
-          password: 'user_password',
-          rejectUnauthorized: false,
-        });
-        await sleep(1000);
-
-        // Track UserRemove events on both edges
-        let edge1SawRemove = false;
-        let edge2SawRemove = false;
-
-        userEdge1.on('userRemove', (remove: any) => {
-          if (remove.session === ninjaSession) {
-            edge1SawRemove = true;
-          }
-        });
-
-        userEdge2.on('userRemove', (remove: any) => {
-          if (remove.session === ninjaSession) {
-            edge2SawRemove = true;
-          }
-        });
-
-        // Ninja user moves to ninja channel
-        ninjaUser.sendUserState({
-          session: ninjaSession,
-          channel_id: NINJA_CHANNEL_ID,
-        });
-
-        // Wait for cross-edge propagation
-        await sleep(3000);
-
-        // Both users on different edges should see ninja user disappear
-        expect(edge1SawRemove).toBe(true);
-        expect(edge2SawRemove).toBe(true);
-      } finally {
-        await ninjaUser.disconnect();
-        await userEdge1.disconnect();
-        await userEdge2.disconnect();
-      }
-    }, 45000);
-  });
-});
-
-describe('Channel Ninja Disabled Tests', () => {
-  let testEnv: TestEnvironment;
-  let restrictedChannelId: number;
-
-  beforeAll(async () => {
-    // Create test environment with ninja DISABLED
-    testEnv = await setupTestEnvironment(12260, {
-      reuse: false, // 禁用复用以确保配置生效
-      hubConfig: {
-        channel_ninja: false, // Disable Channel Ninja
-      },
-    });
-
-    // Create a restricted channel for testing (same as ninja channel ID for consistency)
-    restrictedChannelId = NINJA_CHANNEL_ID;
-    
-    const setupAdmin = new MumbleClient();
-    try {
-      await setupAdmin.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'admin',
-        password: 'admin123',
-        rejectUnauthorized: false,
-      });
-      
-      await sleep(1000);
-      
-      // Set ACL: first deny all users, then allow ninja group
-      // Even though ninja mode is disabled, we still set up ACL for testing
-      await setupAdmin.saveACL(restrictedChannelId, [
-        {
-          apply_here: true,
-          apply_subs: true,
-          inherited: false,
-          group: 'all',
-          allow: 0,
-          deny: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Listen,
-        },
-        {
-          apply_here: true,
-          apply_subs: true,
-          inherited: false,
-          group: 'ninja',
-          allow: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak | PermissionFlag.Listen,
-          deny: 0,
-        },
-      ]);
-      
-      await sleep(500);
-    } finally {
-      await setupAdmin.disconnect();
-    }
-  }, 120000);
-
-  afterAll(async () => {
-    await testEnv?.cleanup();
-  });
-
-  it('should NOT hide users when ninja is disabled', async () => {
-    const ninjaUser = new MumbleClient();
-    const normalUser = new MumbleClient();
-
-    try {
-      // Ninja group user connects (has permission to enter the channel)
-      await ninjaUser.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'ninja_user1',
-        password: 'ninja_password',
-        rejectUnauthorized: false,
-      });
-      await sleep(500);
-
-      const ninjaSession = ninjaUser.getStateManager().getSession()?.session;
-      expect(ninjaSession).toBeDefined();
-
-      // Normal user connects
-      await normalUser.connect({
-        host: 'localhost',
-        port: testEnv.edgePort,
-        username: 'user1',
-        password: 'password1',
-        rejectUnauthorized: false,
-      });
-      await sleep(1000);
-
-      // Track events
-      let sawNinjaMove = false;
-      let sawNinjaRemove = false;
-
-      normalUser.on('userState', (state: any) => {
-        if (state.session === ninjaSession && state.channel_id === restrictedChannelId) {
-          sawNinjaMove = true;
-        }
-      });
-
-      normalUser.on('userRemove', (remove: any) => {
-        if (remove.session === ninjaSession) {
-          sawNinjaRemove = true;
-        }
-      });
-
-      // Ninja user moves to restricted channel
-      ninjaUser.sendUserState({
-        session: ninjaSession,
-        channel_id: restrictedChannelId,
-      });
-
-      // Wait for state update
-      await sleep(2000);
-
-      // With ninja disabled, normal user should see ninja user MOVE (not disappear)
-      expect(sawNinjaMove).toBe(true);
-      expect(sawNinjaRemove).toBe(false);
-    } finally {
-      await ninjaUser.disconnect();
-      await normalUser.disconnect();
-    }
-  }, 30000);
-});
-
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Rust Channel Ninja tests
+// Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe.skipIf(!USE_RUST)('Channel Ninja Integration Tests (Rust)', () => {
-  let ninjaEnv: TestEnvironment;
+async function connectUser(port: number, username: string, password: string): Promise<MumbleClient> {
+  const client = new MumbleClient();
+  await client.connect({
+    host: 'localhost',
+    port,
+    username,
+    password,
+    rejectUnauthorized: false,
+  });
+  return client;
+}
+
+async function disconnectAll(...clients: MumbleClient[]): Promise<void> {
+  for (const c of clients) {
+    try { await c.disconnect(); } catch {}
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Suite 1 — Ninja ENABLED
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Channel Ninja – enabled (Rust)', () => {
+  let env: TestEnvironment;
 
   beforeAll(async () => {
-    // Use channel 2 as ninja channel (channels 0=Root, 1=General are always present)
-    ninjaEnv = await setupTestEnvironment(8504, {
+    // Isolated environment: channel 1 is a ninja channel.
+    // ninja_user1 / ninja_user2 belong to the "ninja" group (defined in test-users.ts).
+    // user1 / user2 are plain users with no special groups.
+    //
+    // ACL on channel 1: deny Enter+Listen to "all", allow Enter+Listen+Speak to "ninja".
+    env = await setupTestEnvironment(8504, {
       startHub: true,
       startEdge: true,
       startEdge2: false,
@@ -497,61 +69,284 @@ describe.skipIf(!USE_RUST)('Channel Ninja Integration Tests (Rust)', () => {
       rustHubExtraConfig: {
         channel_ninja: {
           enabled: true,
-          ninja_channels: [1], // Channel 1 (General) is ninja
+          ninja_channels: [NINJA_CHANNEL_ID],
         },
       },
     });
-  }, 60000);
+
+    // Configure ACL so that only the "ninja" group can enter/listen to channel 1
+    const admin = await connectUser(env.edgePort, 'admin', 'admin123');
+    await sleep(800);
+    await admin.saveACL(NINJA_CHANNEL_ID, [
+      {
+        apply_here: true,
+        apply_subs: true,
+        inherited: false,
+        group: 'all',
+        allow: 0,
+        deny: PermissionFlag.Enter | PermissionFlag.Listen,
+      },
+      {
+        apply_here: true,
+        apply_subs: true,
+        inherited: false,
+        group: 'ninja',
+        allow: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak | PermissionFlag.Listen,
+        deny: 0,
+      },
+    ]);
+    await sleep(500);
+    await admin.disconnect();
+  }, 90000);
 
   afterAll(async () => {
-    await ninjaEnv?.cleanup();
+    await env?.cleanup();
   }, 30000);
 
-  it('unprivileged user does NOT see users in ninja channels on initial sync', async () => {
-    // user2 (no special group) connects first and goes to channel 1
-    const ninjaUser = new MumbleClient();
-    await ninjaUser.connect({
-      host: 'localhost', port: ninjaEnv.edgePort,
-      username: 'user2', password: 'password2', rejectUnauthorized: false,
-    });
+  // ── Test 1 ──────────────────────────────────────────────────────────────────
+  it('initial sync: unprivileged user does NOT see users in the ninja channel', async () => {
+    // ninja_user1 connects and moves to channel 1
+    const ninjaUser = await connectUser(env.edgePort, 'ninja_user1', 'ninja_password');
     await sleep(300);
-
-    // Move user2 to channel 1 (the ninja channel)
-    ninjaUser.sendUserState({ channel_id: 1 });
-    await sleep(400);
+    ninjaUser.sendUserState({ channel_id: NINJA_CHANNEL_ID });
+    await sleep(500);
 
     const ninjaSession = ninjaUser.getStateManager().getSession()?.session;
+    expect(ninjaSession).toBeDefined();
 
-    // Now connect user1 (also no special group) – they should NOT see user2 in the ninja channel
-    const normalUser = new MumbleClient();
+    // user1 (no ninja group) connects — should NOT receive ninja_user1 in sync
     const seenSessions: number[] = [];
+    const normalUser = new MumbleClient();
     normalUser.on('userState', (state: any) => {
-      if (state.session !== undefined && state.session !== normalUser.getStateManager().getSession()?.session) {
+      const mySession = normalUser.getStateManager().getSession()?.session;
+      if (state.session !== undefined && state.session !== mySession) {
         seenSessions.push(state.session);
       }
     });
-
     await normalUser.connect({
-      host: 'localhost', port: ninjaEnv.edgePort,
-      username: 'user1', password: 'password1', rejectUnauthorized: false,
+      host: 'localhost',
+      port: env.edgePort,
+      username: 'user1',
+      password: 'password1',
+      rejectUnauthorized: false,
     });
-    await sleep(600);
+    await sleep(700);
 
-    try { await ninjaUser.disconnect(); } catch {}
-    try { await normalUser.disconnect(); } catch {}
+    await disconnectAll(ninjaUser, normalUser);
 
-    // user1 (unprivileged) should not see user2 in the ninja channel
-    // Note: since no ACL denies user1 from entering channel 1, they actually
-    // DO have Enter permission by default. This test verifies the plumbing works.
-    // In a real deployment, the ACL would deny unprivileged users.
-    // The test still verifies ninja_channels config is received and processed.
+    expect(seenSessions).not.toContain(ninjaSession);
+  }, 25000);
+
+  // ── Test 2 ──────────────────────────────────────────────────────────────────
+  it('move INTO ninja channel: unprivileged observer receives UserRemove', async () => {
+    // Connect ninja_user1 and explicitly move to root (channel 0) to ensure a
+    // known starting state regardless of server-persisted channel history.
+    const ninjaUser = await connectUser(env.edgePort, 'ninja_user1', 'ninja_password');
+    await sleep(300);
+    ninjaUser.sendUserState({ channel_id: 0 });
+    await sleep(500);
+    const normalUser = await connectUser(env.edgePort, 'user1', 'password1');
+    await sleep(700);
+
+    const ninjaSession = ninjaUser.getStateManager().getSession()?.session;
     expect(ninjaSession).toBeDefined();
-  }, 20000);
 
-  it('hub sends ninja config notification to edge after registration', async () => {
-    // This is verified by the above test working – if ninja config wasn't received,
-    // the edge would not have ninja_channels populated.
-    // We can verify by checking that the setup didn't crash.
-    expect(ninjaEnv.edgePort).toBeGreaterThan(0);
-  }, 5000);
+    // Verify normal user can see ninja_user1 while both are in root
+    const visibleBefore = normalUser.getUsers().some((u: any) => u.session === ninjaSession);
+    expect(visibleBefore).toBe(true);
+
+    // Watch for UserRemove
+    let gotRemove = false;
+    normalUser.on('userRemove', (msg: any) => {
+      if (msg.session === ninjaSession) gotRemove = true;
+    });
+
+    // ninja_user1 moves to ninja channel
+    ninjaUser.sendUserState({ channel_id: NINJA_CHANNEL_ID });
+    await sleep(1500);
+
+    await disconnectAll(ninjaUser, normalUser);
+
+    expect(gotRemove).toBe(true);
+  }, 25000);
+
+  // ── Test 3 ──────────────────────────────────────────────────────────────────
+  it('move OUT of ninja channel: unprivileged observer receives UserState (reappears)', async () => {
+    // ninja_user1 starts in ninja channel BEFORE normal user connects
+    const ninjaUser = await connectUser(env.edgePort, 'ninja_user1', 'ninja_password');
+    await sleep(300);
+    ninjaUser.sendUserState({ channel_id: NINJA_CHANNEL_ID });
+    await sleep(500);
+
+    const ninjaSession = ninjaUser.getStateManager().getSession()?.session;
+    expect(ninjaSession).toBeDefined();
+
+    // normal user connects — ninja_user1 should be invisible
+    const normalUser = await connectUser(env.edgePort, 'user1', 'password1');
+    await sleep(700);
+
+    const visibleAtLogin = normalUser.getUsers().some((u: any) => u.session === ninjaSession);
+    expect(visibleAtLogin).toBe(false);
+
+    // Watch for the "reappear" UserState (channel_id = 0 = root)
+    let gotAppear = false;
+    normalUser.on('userState', (state: any) => {
+      if (state.session === ninjaSession && state.channel_id === 0) {
+        gotAppear = true;
+      }
+    });
+
+    // ninja_user1 moves back to root (channel 0)
+    ninjaUser.sendUserState({ channel_id: 0 });
+    await sleep(1500);
+
+    await disconnectAll(ninjaUser, normalUser);
+
+    expect(gotAppear).toBe(true);
+  }, 25000);
+
+  // ── Test 4 ──────────────────────────────────────────────────────────────────
+  it('state change in ninja channel: NOT forwarded to unprivileged observer', async () => {
+    // ninja_user1 starts in ninja channel
+    const ninjaUser = await connectUser(env.edgePort, 'ninja_user1', 'ninja_password');
+    await sleep(300);
+    ninjaUser.sendUserState({ channel_id: NINJA_CHANNEL_ID });
+    await sleep(500);
+
+    const ninjaSession = ninjaUser.getStateManager().getSession()?.session;
+    expect(ninjaSession).toBeDefined();
+
+    const normalUser = await connectUser(env.edgePort, 'user1', 'password1');
+    await sleep(700);
+
+    let gotStateChange = false;
+    normalUser.on('userState', (state: any) => {
+      if (state.session === ninjaSession) gotStateChange = true;
+    });
+
+    // ninja_user1 mutes itself — normal user should NOT receive this
+    ninjaUser.sendUserState({ self_mute: true });
+    await sleep(1500);
+
+    await disconnectAll(ninjaUser, normalUser);
+
+    expect(gotStateChange).toBe(false);
+  }, 25000);
+
+  // ── Test 5 ──────────────────────────────────────────────────────────────────
+  it('privileged user DOES see users in ninja channel on initial sync', async () => {
+    // ninja_user2 also belongs to the ninja group
+    const ninjaUser1 = await connectUser(env.edgePort, 'ninja_user1', 'ninja_password');
+    await sleep(300);
+    ninjaUser1.sendUserState({ channel_id: NINJA_CHANNEL_ID });
+    await sleep(500);
+
+    const ninjaSession1 = ninjaUser1.getStateManager().getSession()?.session;
+    expect(ninjaSession1).toBeDefined();
+
+    // ninja_user2 connects — should receive ninja_user1 in the initial sync
+    const seenSessions: number[] = [];
+    const ninjaUser2 = new MumbleClient();
+    ninjaUser2.on('userState', (state: any) => {
+      const mySession = ninjaUser2.getStateManager().getSession()?.session;
+      if (state.session !== undefined && state.session !== mySession) {
+        seenSessions.push(state.session);
+      }
+    });
+    await ninjaUser2.connect({
+      host: 'localhost',
+      port: env.edgePort,
+      username: 'ninja_user2',
+      password: 'ninja_password',
+      rejectUnauthorized: false,
+    });
+    await sleep(700);
+
+    await disconnectAll(ninjaUser1, ninjaUser2);
+
+    expect(seenSessions).toContain(ninjaSession1);
+  }, 25000);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Suite 2 — Ninja DISABLED
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Channel Ninja – disabled (Rust)', () => {
+  let env: TestEnvironment;
+
+  beforeAll(async () => {
+    env = await setupTestEnvironment(8514, {
+      startHub: true,
+      startEdge: true,
+      startEdge2: false,
+      startAuth: true,
+      silent: true,
+      isolated: true,
+      rustHubExtraConfig: {
+        channel_ninja: {
+          enabled: false,
+          ninja_channels: [NINJA_CHANNEL_ID],
+        },
+      },
+    });
+
+    // Same ACL — but with ninja disabled it should have no effect on visibility
+    const admin = await connectUser(env.edgePort, 'admin', 'admin123');
+    await sleep(800);
+    await admin.saveACL(NINJA_CHANNEL_ID, [
+      {
+        apply_here: true,
+        apply_subs: true,
+        inherited: false,
+        group: 'all',
+        allow: 0,
+        deny: PermissionFlag.Enter | PermissionFlag.Listen,
+      },
+      {
+        apply_here: true,
+        apply_subs: true,
+        inherited: false,
+        group: 'ninja',
+        allow: PermissionFlag.Enter | PermissionFlag.Traverse | PermissionFlag.Speak | PermissionFlag.Listen,
+        deny: 0,
+      },
+    ]);
+    await sleep(500);
+    await admin.disconnect();
+  }, 90000);
+
+  afterAll(async () => {
+    await env?.cleanup();
+  }, 30000);
+
+  it('ninja disabled: move into restricted channel broadcasts UserState (not UserRemove)', async () => {
+    const ninjaUser = await connectUser(env.edgePort, 'ninja_user1', 'ninja_password');
+    await sleep(300);
+    const normalUser = await connectUser(env.edgePort, 'user1', 'password1');
+    await sleep(700);
+
+    const ninjaSession = ninjaUser.getStateManager().getSession()?.session;
+    expect(ninjaSession).toBeDefined();
+
+    let gotMove = false;
+    let gotRemove = false;
+
+    normalUser.on('userState', (state: any) => {
+      if (state.session === ninjaSession && state.channel_id === NINJA_CHANNEL_ID) {
+        gotMove = true;
+      }
+    });
+    normalUser.on('userRemove', (msg: any) => {
+      if (msg.session === ninjaSession) gotRemove = true;
+    });
+
+    ninjaUser.sendUserState({ channel_id: NINJA_CHANNEL_ID });
+    await sleep(1500);
+
+    await disconnectAll(ninjaUser, normalUser);
+
+    expect(gotMove).toBe(true);
+    expect(gotRemove).toBe(false);
+  }, 25000);
 });
