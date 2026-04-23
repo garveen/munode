@@ -445,7 +445,7 @@ impl HubClient {
                 // Hub pushes a ContextActionModify to specific clients on this Edge.
                 // Forward the ContextActionModify message to each targeted client.
                 if let Some(params) = &notification.context_action_modify {
-                    let msg = &params.action;
+                    let Some(msg) = &params.action else { return; };
                     let target_sessions = &params.target_sessions;
                     if target_sessions.is_empty() {
                         // Broadcast to all local clients

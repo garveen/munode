@@ -968,6 +968,7 @@ pub struct SuggestConfig {
     #[prost(bool, optional, tag = "3")]
     pub push_to_talk: ::core::option::Option<bool>,
     /// Suggested client version in the new format (major<<48 | minor<<32 | patch<<16).
+    /// Necessary since patch level may exceed 255.
     /// New clients prefer this field; old clients use version (field 1) as fallback.
     #[prost(uint64, optional, tag = "4")]
     pub version_v2: ::core::option::Option<u64>,

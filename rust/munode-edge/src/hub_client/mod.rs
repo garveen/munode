@@ -372,13 +372,13 @@ impl HubClient {
         for n in pending {
             match n {
                 PendingControlNotification::UserLeft { session_id, ref reason } => {
-                    self.notify_user_left(session_id, reason.as_deref()).await;
+                    self.rpc_user_left(session_id, reason.as_deref()).await;
                 }
                 PendingControlNotification::ChannelLinksChanged { channel_id, links_add, links_remove } => {
-                    self.notify_channel_state(channel_id, links_add, links_remove).await;
+                    self.rpc_channel_state(channel_id, links_add, links_remove).await;
                 }
                 PendingControlNotification::ChannelRemoved { channel_id } => {
-                    self.notify_channel_remove(channel_id).await;
+                    self.rpc_channel_remove(channel_id).await;
                 }
             }
         }
@@ -1525,7 +1525,7 @@ impl HubClient {
                 request_id,
                 method: "edge.reportSession".to_string(),
                 timeout_ms: Some(10000),
-                edge_report_session: Some(EdgeReportSessionParams { session: session_proto }),
+                edge_report_session: Some(EdgeReportSessionParams { session: Some(session_proto) }),
                 ..Default::default()
             };
             if let Err(e) = self.rpc_call(request).await {

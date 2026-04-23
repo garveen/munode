@@ -515,6 +515,37 @@ message EdgeHandlePermissionQueryResult {
 }
 
 // ---------------------------------------------------------------------------
+// edge.saveChannelListeners - persist user channel listeners on disconnect
+// ---------------------------------------------------------------------------
+message EdgeSaveChannelListenersParams {
+  // The registered user_id whose listening channels should be saved.
+  // 0 means "guest/anonymous" (no-op — guests have no persistent state).
+  required uint32 user_id = 1;
+  // The channel IDs the user was listening to at disconnect.
+  repeated uint32 channel_ids = 2;
+}
+
+message EdgeSaveChannelListenersResult {
+  required bool success = 1;
+  optional string error = 2;
+}
+
+// ---------------------------------------------------------------------------
+// edge.loadChannelListeners - load user channel listeners on connect
+// ---------------------------------------------------------------------------
+message EdgeLoadChannelListenersParams {
+  // The registered user_id whose listening channels should be loaded.
+  required uint32 user_id = 1;
+}
+
+message EdgeLoadChannelListenersResult {
+  required bool success = 1;
+  // The channel IDs the user was listening to at their last disconnect.
+  repeated uint32 channel_ids = 2;
+  optional string error = 3;
+}
+
+// ---------------------------------------------------------------------------
 // edge.batchPermissionQuery - Edge 批量查询多个频道的权限（用于登录序列）
 // ---------------------------------------------------------------------------
 message EdgeBatchPermissionQueryParams {
@@ -821,6 +852,34 @@ message EdgeHandleUserLeftParams {
   optional string reason = 3;
 }
 
+// ---------------------------------------------------------------------------
+// Edge → Hub RPC 结果 (用户/频道状态变更的 RPC 应答)
+// ---------------------------------------------------------------------------
+message EdgeUserLeftResult {
+  required bool success = 1;
+  optional string error = 2;
+}
+message EdgeUserMovedResult {
+  required bool success = 1;
+  optional string error = 2;
+}
+message EdgeUserStateChangedResult {
+  required bool success = 1;
+  optional string error = 2;
+}
+message EdgeChannelStateResult {
+  required bool success = 1;
+  optional string error = 2;
+}
+message EdgeChannelRemoveResult {
+  required bool success = 1;
+  optional string error = 2;
+}
+message EdgeUserRemoveResult {
+  required bool success = 1;
+  optional string error = 2;
+}
+
 message EdgeHandleUserRemoveParams {
   required uint32 edge_id = 1;
   required uint32 actor_session = 2;
@@ -976,9 +1035,23 @@ message TypedRPCRequest {
   optional BlobGetUserCommentParams blob_get_user_comment = 35;
   optional BlobSetUserTextureParams blob_set_user_texture = 36;
   optional BlobSetUserCommentParams blob_set_user_comment = 37;
+  // edge.saveChannelListeners - persist user channel listeners on disconnect
+  optional EdgeSaveChannelListenersParams edge_save_channel_listeners = 38;
+  // edge.loadChannelListeners - load user channel listeners on connect
+  optional EdgeLoadChannelListenersParams edge_load_channel_listeners = 39;
   optional EdgeBatchPermissionQueryParams edge_batch_permission_query = 40;
   // edge.reportSession — re-report a live session after reconnect
   optional EdgeReportSessionParams edge_report_session = 14;
+
+  // ---------------------------------------------------------------------------
+  // State-mutation RPCs (replaces fire-and-forget notifications)
+  // ---------------------------------------------------------------------------
+  optional EdgeHandleUserLeftParams    edge_user_left            = 41;
+  optional EdgeHandleUserMovedParams   edge_user_moved           = 42;
+  optional EdgeHandleUserStateChangedParams edge_user_state_changed = 43;
+  optional EdgeHandleChannelStateParams     edge_channel_state      = 44;
+  optional EdgeHandleChannelRemoveParams    edge_channel_remove     = 45;
+  optional EdgeHandleUserRemoveParams  edge_user_remove          = 46;
 }
 
 /**
@@ -1018,7 +1091,19 @@ message TypedRPCResponse {
   optional BlobGetUserCommentResult blob_get_user_comment = 35;
   optional BlobSetUserTextureResult blob_set_user_texture = 36;
   optional BlobSetUserCommentResult blob_set_user_comment = 37;
+  // edge.saveChannelListeners result
+  optional EdgeSaveChannelListenersResult edge_save_channel_listeners = 38;
+  // edge.loadChannelListeners result
+  optional EdgeLoadChannelListenersResult edge_load_channel_listeners = 39;
   optional EdgeBatchPermissionQueryResult edge_batch_permission_query = 40;
+
+  // State-mutation RPC results
+  optional EdgeUserLeftResult          edge_user_left            = 41;
+  optional EdgeUserMovedResult         edge_user_moved           = 42;
+  optional EdgeUserStateChangedResult  edge_user_state_changed   = 43;
+  optional EdgeChannelStateResult      edge_channel_state        = 44;
+  optional EdgeChannelRemoveResult     edge_channel_remove       = 45;
+  optional EdgeUserRemoveResult        edge_user_remove          = 46;
 }
 message HubRouteEntryProto {
   required uint32 target_edge_id = 1;

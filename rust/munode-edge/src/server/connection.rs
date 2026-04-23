@@ -1269,14 +1269,17 @@ pub(super) async fn handle_client_connection(
                     if let Some(sid) = session_id {
                         if let Some(client) = edge_state.client_manager.get_client(sid).await {
                             debug!("UserRemove from session {} targeting session {}", sid, user_remove.session);
-                            hub_client.notify_user_remove(
-                                sid,
-                                client.user_id,
-                                &client.username,
-                                user_remove.session,
-                                user_remove.reason.as_deref().unwrap_or(""),
-                                user_remove.ban.unwrap_or(false),
-                            ).await;
+                            let hub = hub_client.clone();
+                            let actor_user_id = client.user_id;
+                            let actor_username = client.username.clone();
+                            let target_session = user_remove.session;
+                            let reason = user_remove.reason.clone().unwrap_or_default();
+                            let ban = user_remove.ban.unwrap_or(false);
+                            tokio::spawn(async move {
+                                if let Err(e) = hub.rpc_user_remove(sid, actor_user_id, &actor_username, target_session, &reason, ban).await {
+                                    warn!("rpc_user_remove failed: {:#}", e);
+                                }
+                            });
                         }
                     }
                 }
@@ -1302,7 +1305,7 @@ pub(super) async fn handle_client_connection(
                                     client_sender.send_message(MessageType::PermissionDenied, &pq).await;
                                     continue;
                                 }
-                                hub.notify_channel_state(ch_id, ch_state.links_add, ch_state.links_remove).await;
+                                hub.rpc_channel_state(ch_id, ch_state.links_add, ch_state.links_remove).await;
                             }
                         } else {
                             let is_new = ch_state.channel_id.is_none();
@@ -1374,7 +1377,7 @@ pub(super) async fn handle_client_connection(
                         }
                         let hub = hub_client.clone();
                         tokio::spawn(async move {
-                            hub.notify_channel_remove(ch_remove.channel_id).await;
+                            hub.rpc_channel_remove(ch_remove.channel_id).await;
                         });
                     }
                 }
@@ -1746,8 +1749,8 @@ pub(super) async fn handle_client_connection(
             edge_state.client_manager.broadcast(MessageType::UserRemove, &remove_msg, None).await;
         }
 
-        // Notify Hub that user disconnected
-        hub_client.notify_user_left(sid, None).await;
+        // Notify Hub that user disconnected (RPC: Hub removes session and broadcasts to other edges)
+        hub_client.rpc_user_left(sid, None).await;
 
         info!("Cleaned up session {} for {}", sid, peer_addr);
     }
@@ -2229,7 +2232,9 @@ pub(super) async fn handle_user_state_update(
             // "Server opened mic/speaker" / "Server granted priority speaker"
             // notifications on their local clients.
             if channel_moved {
-                hub_client.notify_user_moved(session_id, client.channel_id, session_id).await;
+                if let Err(e) = hub_client.rpc_user_moved(session_id, client.channel_id, session_id).await {
+                    warn!("rpc_user_moved failed for session {}: {:#}", session_id, e);
+                }
             } else {
                 let listening_channel_add = if !broadcast_msg.listening_channel_add.is_empty() {
                     broadcast_msg.listening_channel_add.clone()
@@ -2247,7 +2252,7 @@ pub(super) async fn handle_user_state_update(
                     || !listening_channel_remove.is_empty()
                     || !broadcast_msg.listening_volume_adjustment.is_empty()
                 {
-                    hub_client.notify_user_state_changed(
+                    if let Err(e) = hub_client.rpc_user_state_changed(
                         session_id,
                         broadcast_msg.self_mute,
                         broadcast_msg.self_deaf,
@@ -2258,7 +2263,9 @@ pub(super) async fn handle_user_state_update(
                         broadcast_msg.recording,
                         listening_channel_add,
                         listening_channel_remove,
-                    ).await;
+                    ).await {
+                        warn!("rpc_user_state_changed failed for session {}: {:#}", session_id, e);
+                    }
                 }
             }
         }
@@ -2378,9 +2385,11 @@ pub(super) async fn handle_admin_user_state_update(
             // Invalidate BroadcastCaches: admin changed channel/deaf state.
             edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
             if channel_moved {
-                hub_client.notify_user_moved(target_session, client.channel_id, actor_session).await;
+                if let Err(e) = hub_client.rpc_user_moved(target_session, client.channel_id, actor_session).await {
+                    warn!("rpc_user_moved failed (admin move, session {}): {:#}", target_session, e);
+                }
             } else {
-                hub_client.notify_user_state_changed(
+                if let Err(e) = hub_client.rpc_user_state_changed(
                     target_session,
                     None,
                     None,
@@ -2391,7 +2400,9 @@ pub(super) async fn handle_admin_user_state_update(
                     None,
                     vec![],
                     vec![],
-                ).await;
+                ).await {
+                    warn!("rpc_user_state_changed failed (admin state, session {}): {:#}", target_session, e);
+                }
             }
         }
     } else if let Some(target_channel_id) = user_state.channel_id {
@@ -2437,7 +2448,9 @@ pub(super) async fn handle_admin_user_state_update(
 
             // Permissions OK: forward to Hub. Hub updates session state and broadcasts
             // hub.userMoved to all edges; the owner edge will apply the actual move.
-            hub_client.notify_user_moved(target_session, target_channel_id, actor_session).await;
+            if let Err(e) = hub_client.rpc_user_moved(target_session, target_channel_id, actor_session).await {
+                warn!("rpc_user_moved failed (remote admin move, session {}): {:#}", target_session, e);
+            }
         }
     }
 }

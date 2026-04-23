@@ -9,7 +9,8 @@ use prost::Message;
 use tracing::{debug, info, warn};
 
 use munode_protocol::hubedge::{
-    self, EdgeAuthenticateUserParams, EdgeHandleAclParams, EdgePluginDataTransmissionParams, EdgeHandleUserLeftParams, EdgeHandleUserRemoveParams,
+    self, EdgeAuthenticateUserParams, EdgeHandleAclParams, EdgePluginDataTransmissionParams,
+    EdgeHandleUserLeftParams, EdgeHandleUserRemoveParams,
     EdgeHandleUserMovedParams, EdgeHandleUserStateChangedParams, EdgeHandleTextMessageParams,
     EdgeHandleChannelStateParams, EdgeHandleChannelRemoveParams,
     EdgeContextActionParams,
@@ -81,21 +82,28 @@ impl HubClient {
             .ok_or_else(|| anyhow::anyhow!("No edge_authenticate_user in response"))
     }
 
-    /// Notify the Hub that a local user has disconnected.
-    pub async fn notify_user_left(&self, session_id: u32, reason: Option<&str>) {
+    /// RPC: notify Hub that a local user disconnected.
+    /// Hub removes session from session_manager, broadcasts UserRemove to other edges, responds.
+    /// The requesting edge has already cleaned up locally (TCP already closed), so Hub
+    /// excludes it from the broadcast.  Falls back to enqueuing a `PendingControlNotification`
+    /// if Hub is unreachable so the disconnect is replayed on next reconnect.
+    pub async fn rpc_user_left(&self, session_id: u32, reason: Option<&str>) {
         let edge_id = self.edge_id();
-        let notification = TypedRpcNotification {
-            method: "hub.handleUserLeft".to_string(),
-            timestamp: Some(current_millis() as i64),
-            handle_user_left: Some(EdgeHandleUserLeftParams {
+        let request_id = self.next_request_id();
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.userLeft".to_string(),
+            timeout_ms: Some(10000),
+            edge_user_left: Some(EdgeHandleUserLeftParams {
                 session_id,
                 edge_id,
                 reason: reason.map(String::from),
             }),
             ..Default::default()
         };
-        if let Err(e) = self.send_notification(notification).await {
-            warn!("Failed to notify Hub of user disconnect (session={}): {}", session_id, e);
+        if let Err(e) = self.rpc_call(request).await {
+            warn!("Failed to report user disconnect to Hub (session={}): {}", session_id, e);
+            // Enqueue so it is replayed after the next successful Hub reconnect.
             self.enqueue_pending_notification(PendingControlNotification::UserLeft {
                 session_id,
                 reason: reason.map(String::from),
@@ -103,8 +111,11 @@ impl HubClient {
         }
     }
 
-    /// Notify the Hub about a user-initiated kick/ban (UserRemove).
-    pub async fn notify_user_remove(
+    /// RPC: kick/ban a user.
+    /// Hub validates permissions, removes session, broadcasts UserRemove to all edges
+    /// (including this edge, so local clients receive the kick message).
+    /// Returns Ok(true) on success, Ok(false) if permission denied, Err on transport failure.
+    pub async fn rpc_user_remove(
         &self,
         actor_session: u32,
         actor_user_id: u32,
@@ -112,12 +123,14 @@ impl HubClient {
         target_session: u32,
         reason: &str,
         ban: bool,
-    ) {
+    ) -> Result<bool> {
         let edge_id = self.edge_id();
-        let notification = TypedRpcNotification {
-            method: "hub.handleUserRemove".to_string(),
-            timestamp: Some(current_millis() as i64),
-            handle_user_remove: Some(EdgeHandleUserRemoveParams {
+        let request_id = self.next_request_id();
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.userRemove".to_string(),
+            timeout_ms: Some(10000),
+            edge_user_remove: Some(EdgeHandleUserRemoveParams {
                 edge_id,
                 actor_session,
                 actor_user_id,
@@ -128,18 +141,24 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        if let Err(e) = self.send_notification(notification).await {
-            warn!("Failed to notify Hub of user remove: {}", e);
-        }
+        let response = self.rpc_call(request).await
+            .context("edge.userRemove RPC failed")?;
+        let result = response.edge_user_remove
+            .ok_or_else(|| anyhow::anyhow!("No edge_user_remove in response"))?;
+        Ok(result.success)
     }
 
-    /// Notify the Hub about a user channel move.
-    pub async fn notify_user_moved(&self, session_id: u32, channel_id: u32, actor_session: u32) {
+    /// RPC: move a user to a different channel.
+    /// Hub updates session_manager, broadcasts hub.userMoved to OTHER edges, responds.
+    /// The requesting edge applies the move locally after confirmation.
+    pub async fn rpc_user_moved(&self, session_id: u32, channel_id: u32, actor_session: u32) -> Result<()> {
         let edge_id = self.edge_id();
-        let notification = TypedRpcNotification {
-            method: "hub.handleUserMoved".to_string(),
-            timestamp: Some(current_millis() as i64),
-            handle_user_moved: Some(EdgeHandleUserMovedParams {
+        let request_id = self.next_request_id();
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.userMoved".to_string(),
+            timeout_ms: Some(10000),
+            edge_user_moved: Some(EdgeHandleUserMovedParams {
                 session_id,
                 edge_id,
                 channel_id,
@@ -147,13 +166,17 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        if let Err(e) = self.send_notification(notification).await {
-            warn!("Failed to notify Hub of user move: {}", e);
-        }
+        let response = self.rpc_call(request).await
+            .context("edge.userMoved RPC failed")?;
+        response.edge_user_moved
+            .ok_or_else(|| anyhow::anyhow!("No edge_user_moved in response"))?;
+        Ok(())
     }
 
-    /// Notify the Hub about a user state change (self-mute/deaf etc).
-    pub async fn notify_user_state_changed(
+    /// RPC: update a user's state (mute/deaf/priority-speaker etc).
+    /// Hub updates session_manager, broadcasts hub.userStateBroadcast to OTHER edges, responds.
+    /// The requesting edge applies the change locally after confirmation.
+    pub async fn rpc_user_state_changed(
         &self,
         session_id: u32,
         self_mute: Option<bool>,
@@ -165,12 +188,14 @@ impl HubClient {
         recording: Option<bool>,
         listening_channel_add: Vec<u32>,
         listening_channel_remove: Vec<u32>,
-    ) {
+    ) -> Result<()> {
         let edge_id = self.edge_id();
-        let notification = TypedRpcNotification {
-            method: "hub.handleUserStateChanged".to_string(),
-            timestamp: Some(current_millis() as i64),
-            handle_user_state_changed: Some(EdgeHandleUserStateChangedParams {
+        let request_id = self.next_request_id();
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.userStateChanged".to_string(),
+            timeout_ms: Some(10000),
+            edge_user_state_changed: Some(EdgeHandleUserStateChangedParams {
                 session_id,
                 edge_id,
                 self_mute,
@@ -185,9 +210,11 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        if let Err(e) = self.send_notification(notification).await {
-            warn!("Failed to notify Hub of user state change: {}", e);
-        }
+        let response = self.rpc_call(request).await
+            .context("edge.userStateChanged RPC failed")?;
+        response.edge_user_state_changed
+            .ok_or_else(|| anyhow::anyhow!("No edge_user_state_changed in response"))?;
+        Ok(())
     }
 
     /// Forward a PermissionQuery to the Hub.
@@ -383,21 +410,24 @@ impl HubClient {
         }
     }
 
-    /// Notify Hub about a channel state change (including links_add/links_remove).
-    pub async fn notify_channel_state(
+    /// RPC: notify Hub of a channel link/state change.
+    /// Hub updates channel store, broadcasts hub.channelUpdated to all edges, responds.
+    /// Falls back to PendingControlNotification queue if Hub unreachable.
+    pub async fn rpc_channel_state(
         &self,
         channel_id: u32,
         links_add: Vec<u32>,
         links_remove: Vec<u32>,
     ) {
         let edge_id = self.edge_id();
-        // Clone before the move so we can enqueue on failure without decoding the packet.
         let links_add_save = links_add.clone();
         let links_remove_save = links_remove.clone();
-        let notification = TypedRpcNotification {
-            method: "hub.handleChannelState".to_string(),
-            timestamp: Some(current_millis() as i64),
-            handle_channel_state: Some(EdgeHandleChannelStateParams {
+        let request_id = self.next_request_id();
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.channelState".to_string(),
+            timeout_ms: Some(10000),
+            edge_channel_state: Some(EdgeHandleChannelStateParams {
                 edge_id,
                 channel_id,
                 links_add,
@@ -409,8 +439,8 @@ impl HubClient {
             }),
             ..Default::default()
         };
-        if let Err(e) = self.send_notification(notification).await {
-            warn!("Failed to notify Hub of channel state: {}", e);
+        if let Err(e) = self.rpc_call(request).await {
+            warn!("Failed to notify Hub of channel state (session={}): {}", channel_id, e);
             self.enqueue_pending_notification(PendingControlNotification::ChannelLinksChanged {
                 channel_id,
                 links_add: links_add_save,
@@ -419,20 +449,24 @@ impl HubClient {
         }
     }
 
-    /// Notify Hub about a channel removal request.
-    pub async fn notify_channel_remove(&self, channel_id: u32) {
+    /// RPC: notify Hub of a channel removal.
+    /// Hub removes channel, broadcasts hub.channelRemoved to all edges, responds.
+    /// Falls back to PendingControlNotification queue if Hub unreachable.
+    pub async fn rpc_channel_remove(&self, channel_id: u32) {
         let edge_id = self.edge_id();
-        let notification = TypedRpcNotification {
-            method: "hub.handleChannelRemove".to_string(),
-            timestamp: Some(current_millis() as i64),
-            handle_channel_remove: Some(EdgeHandleChannelRemoveParams {
+        let request_id = self.next_request_id();
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.channelRemove".to_string(),
+            timeout_ms: Some(10000),
+            edge_channel_remove: Some(EdgeHandleChannelRemoveParams {
                 edge_id,
                 channel_id,
             }),
             ..Default::default()
         };
-        if let Err(e) = self.send_notification(notification).await {
-            warn!("Failed to notify Hub of channel remove: {}", e);
+        if let Err(e) = self.rpc_call(request).await {
+            warn!("Failed to notify Hub of channel remove (channel={}): {}", channel_id, e);
             self.enqueue_pending_notification(PendingControlNotification::ChannelRemoved {
                 channel_id,
             }).await;
@@ -476,7 +510,7 @@ impl HubClient {
             context_action: Some(EdgeContextActionParams {
                 edge_id,
                 session_id,
-                action,
+                action: Some(action),
             }),
             ..Default::default()
         };

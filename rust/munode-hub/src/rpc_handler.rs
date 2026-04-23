@@ -218,6 +218,13 @@ impl RpcHandler {
             "edge.reportQuality" => self.handle_report_quality(&request, &request_id).await,
             "cluster.getStatus" => self.handle_cluster_get_status(&request_id).await,
             "edge.relayVoiceViaTcp" => self.handle_relay_voice_via_tcp(&request, &request_id).await,
+            // State-mutation RPCs (converted from fire-and-forget notifications)
+            "edge.userLeft"           => self.handle_user_left_rpc(&request, &request_id, edge_server_id).await,
+            "edge.userMoved"          => self.handle_user_moved_rpc(&request, &request_id, edge_server_id).await,
+            "edge.userStateChanged"   => self.handle_user_state_changed_rpc(&request, &request_id, edge_server_id).await,
+            "edge.channelState"       => self.handle_channel_state_rpc(&request, &request_id).await,
+            "edge.channelRemove"      => self.handle_channel_remove_rpc(&request, &request_id).await,
+            "edge.userRemove"         => self.handle_user_remove_rpc(&request, &request_id).await,
             _ => {
                 warn!("Unknown RPC method: {}", method);
                 Ok(self.make_error_packet(&request_id, -1, &format!("Unknown method: {}", method)))
@@ -282,14 +289,16 @@ impl RpcHandler {
             }
             "hub.contextAction" => {
                 if let Some(ca) = &notification.context_action {
-                    debug!(
-                        edge_id = edge_server_id,
-                        session_id = ca.session_id,
-                        action = ca.action.action.as_str(),
-                        actor = ca.action.session.unwrap_or(0),
-                        channel = ca.action.channel_id.unwrap_or(0),
-                        "ContextAction received from edge (no Hub-side processing yet)"
-                    );
+                    if let Some(ref action) = ca.action {
+                        debug!(
+                            edge_id = edge_server_id,
+                            session_id = ca.session_id,
+                            action = action.action.as_str(),
+                            actor = action.session.unwrap_or(0),
+                            channel = action.channel_id.unwrap_or(0),
+                            "ContextAction received from edge (no Hub-side processing yet)"
+                        );
+                    }
                 }
             }
             _ => {
@@ -1439,7 +1448,8 @@ impl RpcHandler {
     ) -> Result<EdgeHubPacket> {
         let params = request.edge_report_session.as_ref()
             .context("Missing edge_report_session params")?;
-        let s = &params.session;
+        let s = params.session.as_ref()
+            .context("Missing session in edge_report_session")?;
 
         let session_info = SessionInfo {
             session_id: s.session_id,
@@ -1491,6 +1501,262 @@ impl RpcHandler {
             r.edge_report_session = Some(result);
         }))
     }
+
+    // ==================== State-Mutation RPC Handlers ====================
+    // These replace the old fire-and-forget notification handlers.
+    // The Hub acts as the single source of truth: it updates session state,
+    // broadcasts to OTHER edges (excluding the requesting edge since the
+    // requesting edge will apply the change locally after receiving confirmation),
+    // then responds with success/error so the Edge knows the operation was committed.
+
+    async fn handle_user_left_rpc(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+        edge_server_id: u32,
+    ) -> Result<EdgeHubPacket> {
+        let p = request.edge_user_left.as_ref()
+            .context("Missing edge_user_left params")?;
+        let session_id = p.session_id;
+        let reason = p.reason.clone();
+
+        // Cancel any in-flight auth for this session (prevents ghost sessions)
+        {
+            let pending = self.state.pending_auths.read().await;
+            if let Some((flag, _)) = pending.get(&session_id) {
+                flag.store(true, Ordering::Relaxed);
+                debug!("Auth cancel flag set for disconnecting session {}", session_id);
+            }
+        }
+
+        self.save_user_last_channel(session_id).await;
+
+        if let Some(removed) = self.state.session_manager.remove_session(session_id).await {
+            info!("User left (RPC): {} (session={})", removed.username, session_id);
+
+            self.state.voice_targets.write().await
+                .retain(|&(s, _), _| s != session_id);
+
+            // Broadcast to all OTHER edges (source edge already cleaned up locally)
+            let remove_params = HubUserRemoveBroadcastParams {
+                session: session_id,
+                actor: None,
+                reason,
+                ban: None,
+                target_sessions: vec![],
+            };
+            self.broadcast_notification_excluding("hub.userRemoveBroadcast", edge_server_id, |n| {
+                n.user_remove_broadcast = Some(remove_params);
+            }).await;
+
+            self.maybe_cleanup_temp_channel(removed.channel_id).await;
+        }
+
+        Ok(self.make_response_packet(request_id, "edge.userLeft", |r| {
+            r.edge_user_left = Some(EdgeUserLeftResult { success: true, error: None });
+        }))
+    }
+
+    async fn handle_user_moved_rpc(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+        edge_server_id: u32,
+    ) -> Result<EdgeHubPacket> {
+        let p = request.edge_user_moved.as_ref()
+            .context("Missing edge_user_moved params")?;
+        if p.session_id == 0 {
+            return Ok(self.make_response_packet(request_id, "edge.userMoved", |r| {
+                r.edge_user_moved = Some(EdgeUserMovedResult { success: false, error: Some("invalid session_id".into()) });
+            }));
+        }
+
+        let old_channel_id = self.state.session_manager.get_session(p.session_id).await.map(|s| s.channel_id);
+        self.state.session_manager.move_user_to_channel(p.session_id, p.channel_id).await;
+
+        // Broadcast to OTHER edges only — the requesting edge applies the move locally
+        // after receiving this RPC response.
+        let moved_params = HubUserMovedParams {
+            session_id: p.session_id,
+            edge_id: p.edge_id,
+            channel_id: p.channel_id,
+            actor_session: p.actor_session,
+        };
+        self.broadcast_notification_excluding("hub.userMoved", edge_server_id, |n| {
+            n.user_moved = Some(moved_params);
+        }).await;
+
+        if let Some(old_ch) = old_channel_id {
+            self.maybe_cleanup_temp_channel(old_ch).await;
+        }
+
+        Ok(self.make_response_packet(request_id, "edge.userMoved", |r| {
+            r.edge_user_moved = Some(EdgeUserMovedResult { success: true, error: None });
+        }))
+    }
+
+    async fn handle_user_state_changed_rpc(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+        edge_server_id: u32,
+    ) -> Result<EdgeHubPacket> {
+        let p = request.edge_user_state_changed.as_ref()
+            .context("Missing edge_user_state_changed params")?;
+        if p.session_id == 0 {
+            return Ok(self.make_response_packet(request_id, "edge.userStateChanged", |r| {
+                r.edge_user_state_changed = Some(EdgeUserStateChangedResult { success: false, error: Some("invalid session_id".into()) });
+            }));
+        }
+        let source_edge_id = p.edge_id;
+
+        // Update session state in Hub
+        let sessions = &self.state.session_manager;
+        if let Some(mut session) = sessions.get_session(p.session_id).await {
+            if let Some(v) = p.self_mute  { session.self_mute  = v; }
+            if let Some(v) = p.self_deaf  { session.self_deaf  = v; }
+            if let Some(v) = p.mute       { session.mute       = v; }
+            if let Some(v) = p.deaf       { session.deaf       = v; }
+            if let Some(v) = p.suppress   { session.suppress   = v; }
+            if let Some(v) = p.priority_speaker { session.priority_speaker = v; }
+            if let Some(v) = p.recording  { session.recording  = v; }
+            for &ch in &p.listening_channel_add {
+                if !session.listening_channels.contains(&ch) {
+                    session.listening_channels.push(ch);
+                }
+            }
+            session.listening_channels.retain(|ch| !p.listening_channel_remove.contains(ch));
+            sessions.add_session(session).await;
+        }
+
+        // Broadcast to OTHER edges only — the requesting edge applies locally after confirmation
+        let broadcast = HubUserStateBroadcastParams {
+            session_id: p.session_id,
+            edge_id: source_edge_id,
+            self_mute: p.self_mute,
+            self_deaf: p.self_deaf,
+            mute: p.mute,
+            deaf: p.deaf,
+            suppress: p.suppress,
+            priority_speaker: p.priority_speaker,
+            recording: p.recording,
+            listening_channel_add: p.listening_channel_add.clone(),
+            listening_channel_remove: p.listening_channel_remove.clone(),
+        };
+        let forward = TypedRpcNotification {
+            method: "hub.userStateBroadcast".to_string(),
+            timestamp: Some(current_millis() as i64),
+            user_state_broadcast: Some(broadcast),
+            ..Default::default()
+        };
+        let packet = EdgeHubPacket {
+            r#type: PacketType::RpcNotification as i32,
+            rpc_notification: Some(forward),
+            ..Default::default()
+        };
+        let data = packet.encode_to_vec();
+        crate::server::broadcast_critical_excluding_sequenced(&self.state, data, edge_server_id).await;
+
+        Ok(self.make_response_packet(request_id, "edge.userStateChanged", |r| {
+            r.edge_user_state_changed = Some(EdgeUserStateChangedResult { success: true, error: None });
+        }))
+    }
+
+    async fn handle_channel_state_rpc(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let p = request.edge_channel_state.as_ref()
+            .context("Missing edge_channel_state params")?;
+        // Delegate to the shared notification handler (broadcast is to ALL edges including source,
+        // since channel state is structural and should be consistently applied everywhere)
+        let notif = TypedRpcNotification {
+            handle_channel_state: Some(p.clone()),
+            ..Default::default()
+        };
+        self.on_channel_state(&notif).await;
+        Ok(self.make_response_packet(request_id, "edge.channelState", |r| {
+            r.edge_channel_state = Some(EdgeChannelStateResult { success: true, error: None });
+        }))
+    }
+
+    async fn handle_channel_remove_rpc(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let p = request.edge_channel_remove.as_ref()
+            .context("Missing edge_channel_remove params")?;
+        let notif = TypedRpcNotification {
+            handle_channel_remove: Some(p.clone()),
+            ..Default::default()
+        };
+        self.on_channel_remove(&notif).await;
+        Ok(self.make_response_packet(request_id, "edge.channelRemove", |r| {
+            r.edge_channel_remove = Some(EdgeChannelRemoveResult { success: true, error: None });
+        }))
+    }
+
+    async fn handle_user_remove_rpc(
+        &self,
+        request: &TypedRpcRequest,
+        request_id: &str,
+    ) -> Result<EdgeHubPacket> {
+        let p = request.edge_user_remove.as_ref()
+            .context("Missing edge_user_remove params")?;
+        let target_session = p.target_session;
+        if target_session == 0 {
+            return Ok(self.make_response_packet(request_id, "edge.userRemove", |r| {
+                r.edge_user_remove = Some(EdgeUserRemoveResult { success: false, error: Some("invalid target_session".into()) });
+            }));
+        }
+
+        // Permission check
+        let required_perm = if p.ban { permission::BAN } else { permission::KICK };
+        let (target_channel, actor_groups) = {
+            let target_info = self.state.session_manager.get_session(target_session).await;
+            let actor_info = if p.actor_session != 0 {
+                self.state.session_manager.get_session(p.actor_session).await
+            } else { None };
+            (
+                target_info.map(|s| s.channel_id).unwrap_or(0),
+                actor_info.map(|s| s.groups.clone()).unwrap_or_default(),
+            )
+        };
+        let allowed = self.state.acl_manager
+            .has_permission(p.actor_user_id as i32, target_channel, &actor_groups, required_perm)
+            .await;
+        if !allowed {
+            return Ok(self.make_response_packet(request_id, "edge.userRemove", |r| {
+                r.edge_user_remove = Some(EdgeUserRemoveResult { success: false, error: Some("permission denied".into()) });
+            }));
+        }
+
+        if let Some(removed) = self.state.session_manager.remove_session(target_session).await {
+            info!("User removed (RPC): {} (session={})", removed.username, target_session);
+
+            self.state.voice_targets.write().await
+                .retain(|&(s, _), _| s != target_session);
+
+            let remove_params = HubUserRemoveBroadcastParams {
+                session: target_session,
+                actor: if p.actor_session != 0 { Some(p.actor_session) } else { None },
+                reason: if p.reason.is_empty() { None } else { Some(p.reason.clone()) },
+                ban: Some(p.ban),
+                target_sessions: vec![],
+            };
+            // Broadcast to ALL edges — the target user may be on any edge (including the requesting one)
+            self.broadcast_notification("hub.userRemoveBroadcast", |n| {
+                n.user_remove_broadcast = Some(remove_params);
+            }).await;
+        }
+
+        Ok(self.make_response_packet(request_id, "edge.userRemove", |r| {
+            r.edge_user_remove = Some(EdgeUserRemoveResult { success: true, error: None });
+        }))
+    }
+
     ///
     /// Returns `Ok(Some(response))` on a successful HTTP call (response may indicate failure).
     /// Returns `Ok(None)` on timeout.
