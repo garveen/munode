@@ -785,6 +785,8 @@ message HubUserJoinedParams {
   optional bool self_deaf = 12;
   optional bool priority_speaker = 13;
   optional bool recording = 14;
+  // Listening channels (channel listener feature)
+  repeated uint32 listening_channels = 15;
 }
 
 // ---------------------------------------------------------------------------

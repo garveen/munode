@@ -1278,6 +1278,26 @@ impl HubClient {
         // their *own* session — making the C++ client think it was kicked even though
         // the TCP connection is still alive.
         let my_edge_id = self.edge_id();
+
+        // Defensive check: warn if Hub snapshot contains sessions attributed to this edge.
+        // This should not happen under normal operation (Hub cleans up stale sessions
+        // during re-registration), but if it does it indicates a Hub-side bug or a
+        // configuration error (duplicate server_id).
+        let local_in_snapshot: Vec<_> = result.sessions
+            .iter()
+            .filter(|s| s.edge_id == my_edge_id)
+            .collect();
+        if !local_in_snapshot.is_empty() {
+            warn!(
+                edge_id = my_edge_id,
+                count = local_in_snapshot.len(),
+                "Full sync: Hub snapshot contains {} session(s) attributed to THIS edge (edge_id={}) — \
+                 these will be ignored. Possible causes: Hub did not clean up stale sessions, \
+                 or duplicate server_id in config.",
+                local_in_snapshot.len(), my_edge_id
+            );
+        }
+
         let remote_sessions: Vec<&munode_protocol::hubedge::GlobalSessionProto> = result.sessions
             .iter()
             .filter(|s| s.edge_id != my_edge_id)

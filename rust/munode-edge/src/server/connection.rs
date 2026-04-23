@@ -325,6 +325,22 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
     // Invalidate BroadcastCaches: a new user joined, routing targets changed.
     edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
 
+    // If suppress was determined by the local ACL permission check (not from Hub auth response),
+    // notify Hub and peer Edges about the correct suppress value.  Without this, the Hub session
+    // would keep suppress=false (the auth-time value) and other edges would show this user as
+    // unsuppressed even though they cannot speak.
+    if client.suppress && !auth_result.suppress.unwrap_or(false) {
+        if let Err(e) = hub_client.rpc_user_state_changed(
+            sid,
+            None, None, None, None,
+            Some(true), // suppress
+            None, None,
+            vec![], vec![],
+        ).await {
+            warn!("Failed to report suppress=true to Hub for session {}: {:#}", sid, e);
+        }
+    }
+
     // Restore persisted channel listeners for registered users.
     let user_id = client.user_id;
     if user_id > 0 {
@@ -2234,6 +2250,19 @@ pub(super) async fn handle_user_state_update(
             if channel_moved {
                 if let Err(e) = hub_client.rpc_user_moved(session_id, client.channel_id, session_id).await {
                     warn!("rpc_user_moved failed for session {}: {:#}", session_id, e);
+                }
+                // If suppress changed due to the channel move (ACL re-check), also notify
+                // Hub so other edges update their remote_users suppress state.
+                if suppress_changed {
+                    if let Err(e) = hub_client.rpc_user_state_changed(
+                        session_id,
+                        None, None, None, None,
+                        Some(client.suppress),
+                        None, None,
+                        vec![], vec![],
+                    ).await {
+                        warn!("rpc_user_state_changed (suppress) failed for session {}: {:#}", session_id, e);
+                    }
                 }
             } else {
                 let listening_channel_add = if !broadcast_msg.listening_channel_add.is_empty() {

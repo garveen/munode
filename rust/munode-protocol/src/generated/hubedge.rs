@@ -1813,6 +1813,9 @@ pub struct HubUserJoinedParams {
     pub priority_speaker: ::core::option::Option<bool>,
     #[prost(bool, optional, tag = "14")]
     pub recording: ::core::option::Option<bool>,
+    /// Listening channels (channel listener feature)
+    #[prost(uint32, repeated, tag = "15")]
+    pub listening_channels: ::prost::alloc::vec::Vec<u32>,
 }
 /// ---------------------------------------------------------------------------
 /// hub.userRemoveBroadcast - Hub 通知 Edge 用户移除/离开

@@ -53,7 +53,7 @@ impl HubClient {
                             self_deaf: params.self_deaf.unwrap_or(false),
                             priority_speaker: params.priority_speaker.unwrap_or(false),
                             recording: params.recording.unwrap_or(false),
-                            listening_channels: vec![],
+                            listening_channels: params.listening_channels.clone(),
                         };
                         info!("Remote user joined: {} (session {})", user.username, user.session_id);
                         let channel_id = user.channel_id;

@@ -778,6 +778,7 @@ impl RpcHandler {
                             self_deaf: params.self_deaf,
                             priority_speaker: params.priority_speaker,
                             recording: params.recording,
+                            listening_channels: vec![],
                         });
                     }).await;
 
@@ -968,6 +969,7 @@ impl RpcHandler {
                             self_deaf: params.self_deaf,
                             priority_speaker: params.priority_speaker,
                             recording: params.recording,
+                            listening_channels: vec![],
                         });
                     }).await;
 
@@ -1128,6 +1130,7 @@ impl RpcHandler {
                             self_deaf: params.self_deaf,
                             priority_speaker: params.priority_speaker,
                             recording: params.recording,
+                            listening_channels: vec![],
                         });
                     }).await;
 
@@ -1405,6 +1408,7 @@ impl RpcHandler {
             self_deaf: params.self_deaf,
             priority_speaker: params.priority_speaker,
             recording: params.recording,
+            listening_channels: vec![],
         };
         self.broadcast_notification("hub.userJoined", |n| {
             n.user_joined = Some(joined_params);
@@ -1466,7 +1470,7 @@ impl RpcHandler {
             self_deaf: s.self_deaf.unwrap_or(false),
             priority_speaker: s.priority_speaker.unwrap_or(false),
             recording: s.recording.unwrap_or(false),
-            listening_channels: vec![],
+            listening_channels: s.listening_channels.clone(),
         };
         self.state.session_manager.add_session(session_info).await;
 
@@ -1493,6 +1497,7 @@ impl RpcHandler {
                 self_deaf: s.self_deaf,
                 priority_speaker: s.priority_speaker,
                 recording: s.recording,
+                listening_channels: s.listening_channels.clone(),
             });
         }).await;
 
