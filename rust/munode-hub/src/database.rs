@@ -354,33 +354,97 @@ impl Database {
                 );
                 CREATE INDEX IF NOT EXISTS idx_acl_audit_channel ON acl_audit_log(channel_id);",
             ),
+            (
+                7,
+                "Add details column to acl_audit_log for human-readable change summary",
+                "ALTER TABLE acl_audit_log ADD COLUMN details TEXT;",
+            ),
         ]
     }
 
     // ── ACL audit log ──────────────────────────────────────────────────────
 
+    /// Format a permission bitmask into a human-readable string like `"Write+Traverse+Speak"`.
+    fn format_permissions(bits: u32) -> String {
+        use munode_common::permission as perm;
+        let pairs = [
+            (perm::WRITE,        "Write"),
+            (perm::TRAVERSE,     "Traverse"),
+            (perm::ENTER,        "Enter"),
+            (perm::SPEAK,        "Speak"),
+            (perm::MUTE_DEAFEN,  "MuteDeafen"),
+            (perm::MOVE,         "Move"),
+            (perm::MAKE_CHANNEL, "MakeChannel"),
+            (perm::LINK_CHANNEL, "LinkChannel"),
+            (perm::WHISPER,      "Whisper"),
+            (perm::TEXT_MESSAGE, "TextMessage"),
+            (perm::TEMP_CHANNEL, "TempChannel"),
+            (perm::LISTEN,       "Listen"),
+            (perm::KICK,         "Kick"),
+            (perm::BAN,          "Ban"),
+            (perm::REGISTER,     "Register"),
+            (perm::SELF_REGISTER,"SelfRegister"),
+        ];
+        if bits == 0 {
+            return "None".to_string();
+        }
+        pairs.iter()
+            .filter(|(bit, _)| bits & bit != 0)
+            .map(|(_, name)| *name)
+            .collect::<Vec<_>>()
+            .join("+")
+    }
+
+    /// Build a human-readable summary of an ACL entry list.
+    ///
+    /// Example line: `"user:42 apply_here allow=Write+Speak deny=None"`
+    /// or:           `"group:@admin apply_here+apply_subs allow=Write deny=None"`
+    fn format_acl_details(entries: &[crate::acl_manager::AclEntry]) -> String {
+        if entries.is_empty() {
+            return "(cleared all entries)".to_string();
+        }
+        entries.iter().map(|e| {
+            let subject = match (&e.group_name, e.user_id) {
+                (Some(g), _) if !g.is_empty() => format!("group:{}", g),
+                (_, Some(uid)) => format!("user:{}", uid),
+                _ => "(anonymous)".to_string(),
+            };
+            let scope_parts: Vec<&str> = [
+                if e.apply_here { Some("apply_here") } else { None },
+                if e.apply_subs { Some("apply_subs") } else { None },
+            ].iter().filter_map(|x| *x).collect();
+            let scope = if scope_parts.is_empty() { "(no scope)".to_string() } else { scope_parts.join("+") };
+            format!("{} {} allow={} deny={}",
+                subject, scope,
+                Self::format_permissions(e.allow),
+                Self::format_permissions(e.deny))
+        }).collect::<Vec<_>>().join(" | ")
+    }
+
     /// Write an audit log entry for an ACL change.
     ///
-    /// `action` is a short label such as `"save_acls"` or `"save_channel_groups"`.
     /// `actor_user_id` is `None` when the actor is unknown (e.g., internal calls).
+    /// `entries` is the full list of ACL entries that were saved; a human-readable
+    /// summary is stored in the `details` column.
     /// Silently skips if the `acl_audit_log` table doesn't exist yet (pre-migration 6).
     pub fn log_acl_change(
         &self,
         channel_id: u32,
         actor_user_id: Option<i32>,
-        action: &str,
-        entry_count: usize,
+        entries: &[crate::acl_manager::AclEntry],
     ) -> Result<()> {
         use std::time::{SystemTime, UNIX_EPOCH};
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
+        let entry_count = entries.len() as i64;
+        let details = Self::format_acl_details(entries);
         let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         let result = conn.execute(
-            "INSERT INTO acl_audit_log (channel_id, actor_user_id, action, entry_count, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![channel_id, actor_user_id, action, entry_count as i64, now],
+            "INSERT INTO acl_audit_log (channel_id, actor_user_id, action, entry_count, details, created_at) \
+             VALUES (?1, ?2, 'save_acls', ?3, ?4, ?5)",
+            params![channel_id, actor_user_id, entry_count, details, now],
         );
         match result {
             Ok(_) => Ok(()),

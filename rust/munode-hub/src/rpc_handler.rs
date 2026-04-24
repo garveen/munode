@@ -2605,9 +2605,9 @@ impl RpcHandler {
             let db = self.state.database.clone();
             let log_channel_id = params.channel_id;
             let log_actor = if params.actor_user_id > 0 { Some(params.actor_user_id as i32) } else { None };
-            let log_count = acl_msg.acls.len();
+            let log_entries = entries.clone();
             tokio::task::spawn_blocking(move || {
-                if let Err(e) = db.log_acl_change(log_channel_id, log_actor, "save_acls", log_count) {
+                if let Err(e) = db.log_acl_change(log_channel_id, log_actor, &log_entries) {
                     warn!("Failed to write acl_audit_log: {}", e);
                 }
             });
