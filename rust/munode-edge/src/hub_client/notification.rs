@@ -122,6 +122,7 @@ impl HubClient {
                             if let Some(b) = p.suppress      { user.suppress = b;          delta.suppress = Some(b); }
                             if let Some(b) = p.priority_speaker { user.priority_speaker = b; delta.priority_speaker = Some(b); }
                             if let Some(b) = p.recording     { user.recording = b;         delta.recording = Some(b); }
+                            delta.actor_session = p.actor_session;
                             let listening_add: Vec<u32> = p.listening_channel_add.iter()
                                 .copied()
                                 .filter(|&ch_id| !user.listening_channels.contains(&ch_id))
@@ -137,6 +138,7 @@ impl HubClient {
                                 delta,
                                 listening_channel_add: listening_add,
                                 listening_channel_remove: listening_remove,
+                                actor_session: p.actor_session,
                             });
                         }
                     }

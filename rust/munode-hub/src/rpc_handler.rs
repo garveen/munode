@@ -199,7 +199,6 @@ impl RpcHandler {
             "edge.getVoiceTargets" => self.handle_get_voice_targets(&request_id).await,
             "edge.saveChannel" => self.handle_save_channel(&request, &request_id).await,
             "edge.handleACL" => self.handle_acl(&request, &request_id).await,
-            "edge.saveACL" => self.handle_save_acl(&request, &request_id).await,
             "edge.getBanList" => self.handle_get_ban_list(&request, &request_id).await,
             "edge.updateBanList" => self.handle_update_ban_list(&request, &request_id).await,
             "edge.getUserList" => self.handle_get_user_list(&request_id).await,
@@ -1647,6 +1646,7 @@ impl RpcHandler {
             recording: p.recording,
             listening_channel_add: p.listening_channel_add.clone(),
             listening_channel_remove: p.listening_channel_remove.clone(),
+            actor_session: p.actor_session,
         };
         let forward = TypedRpcNotification {
             method: "hub.userStateBroadcast".to_string(),
@@ -2601,6 +2601,17 @@ impl RpcHandler {
                 }
             }
 
+            // Audit log the ACL change.
+            let db = self.state.database.clone();
+            let log_channel_id = params.channel_id;
+            let log_actor = if params.actor_user_id > 0 { Some(params.actor_user_id as i32) } else { None };
+            let log_count = acl_msg.acls.len();
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = db.log_acl_change(log_channel_id, log_actor, "save_acls", log_count) {
+                    warn!("Failed to write acl_audit_log: {}", e);
+                }
+            });
+
             // Broadcast ACL update notification to all edges
             self.broadcast_notification("hub.aclUpdated", |n| {
                 n.unknown_params_json = Some(
@@ -2619,39 +2630,6 @@ impl RpcHandler {
                 r.edge_handle_acl = Some(result);
             }))
         }
-    }
-
-    async fn handle_save_acl(
-        &self,
-        request: &TypedRpcRequest,
-        request_id: &str,
-    ) -> Result<EdgeHubPacket> {
-        let params = request.edge_save_acl.as_ref()
-            .context("Missing edge_save_acl params")?;
-
-        let channel_id = params.channel_id;
-        let entries: Vec<crate::acl_manager::AclEntry> = params.acls.iter().map(|a| {
-            crate::acl_manager::AclEntry {
-                channel_id,
-                user_id: a.user_id.map(|id| id as i32),
-                group_name: a.group.clone(),
-                apply_here: a.apply_here,
-                apply_subs: a.apply_subs,
-                allow: a.allow,
-                deny: a.deny,
-            }
-        }).collect();
-
-        self.state.acl_manager.save_acls(channel_id, &entries).await?;
-
-        let result = EdgeSaveAclResult {
-            success: true,
-            acl_ids: vec![],
-            error: None,
-        };
-        Ok(self.make_response_packet(request_id, "edge.saveACL", |r| {
-            r.edge_save_acl = Some(result);
-        }))
     }
 
     /// Handle edge.saveChannelListeners — persist a user's listening channels.
@@ -3143,6 +3121,7 @@ impl RpcHandler {
             recording: p.recording,
             listening_channel_add: p.listening_channel_add.clone(),
             listening_channel_remove: p.listening_channel_remove.clone(),
+            actor_session: p.actor_session,
         };
         let forward = TypedRpcNotification {
             method: "hub.userStateBroadcast".to_string(),

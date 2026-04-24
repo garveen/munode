@@ -188,6 +188,7 @@ impl HubClient {
         recording: Option<bool>,
         listening_channel_add: Vec<u32>,
         listening_channel_remove: Vec<u32>,
+        actor_session: Option<u32>,
     ) -> Result<()> {
         let edge_id = self.edge_id();
         let request_id = self.next_request_id();
@@ -207,6 +208,7 @@ impl HubClient {
                 recording,
                 listening_channel_add,
                 listening_channel_remove,
+                actor_session,
             }),
             ..Default::default()
         };

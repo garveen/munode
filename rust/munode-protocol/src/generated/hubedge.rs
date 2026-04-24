@@ -2002,6 +2002,8 @@ pub struct EdgeHandleUserStateChangedParams {
     pub listening_channel_add: ::prost::alloc::vec::Vec<u32>,
     #[prost(uint32, repeated, packed = "false", tag = "11")]
     pub listening_channel_remove: ::prost::alloc::vec::Vec<u32>,
+    #[prost(uint32, optional, tag = "12")]
+    pub actor_session: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeHandleTextMessageParams {
@@ -2071,6 +2073,8 @@ pub struct HubUserStateBroadcastParams {
     pub listening_channel_add: ::prost::alloc::vec::Vec<u32>,
     #[prost(uint32, repeated, packed = "false", tag = "11")]
     pub listening_channel_remove: ::prost::alloc::vec::Vec<u32>,
+    #[prost(uint32, optional, tag = "12")]
+    pub actor_session: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HubTextMessageForwardParams {

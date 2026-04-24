@@ -911,6 +911,7 @@ message EdgeHandleUserStateChangedParams {
   optional bool recording = 9;
   repeated uint32 listening_channel_add = 10;
   repeated uint32 listening_channel_remove = 11;
+  optional uint32 actor_session = 12;
 }
 
 message EdgeHandleTextMessageParams {
@@ -953,6 +954,7 @@ message HubUserStateBroadcastParams {
   optional bool recording = 9;
   repeated uint32 listening_channel_add = 10;
   repeated uint32 listening_channel_remove = 11;
+  optional uint32 actor_session = 12;
 }
 
 message HubTextMessageForwardParams {

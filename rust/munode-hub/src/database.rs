@@ -341,7 +341,53 @@ impl Database {
                     PRIMARY KEY (user_id, channel_id)
                 );",
             ),
+            (
+                6,
+                "Add acl_audit_log table for ACL change history",
+                "CREATE TABLE IF NOT EXISTS acl_audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel_id INTEGER NOT NULL,
+                    actor_user_id INTEGER,
+                    action TEXT NOT NULL,
+                    entry_count INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_acl_audit_channel ON acl_audit_log(channel_id);",
+            ),
         ]
+    }
+
+    // ── ACL audit log ──────────────────────────────────────────────────────
+
+    /// Write an audit log entry for an ACL change.
+    ///
+    /// `action` is a short label such as `"save_acls"` or `"save_channel_groups"`.
+    /// `actor_user_id` is `None` when the actor is unknown (e.g., internal calls).
+    /// Silently skips if the `acl_audit_log` table doesn't exist yet (pre-migration 6).
+    pub fn log_acl_change(
+        &self,
+        channel_id: u32,
+        actor_user_id: Option<i32>,
+        action: &str,
+        entry_count: usize,
+    ) -> Result<()> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let result = conn.execute(
+            "INSERT INTO acl_audit_log (channel_id, actor_user_id, action, entry_count, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![channel_id, actor_user_id, action, entry_count as i64, now],
+        );
+        match result {
+            Ok(_) => Ok(()),
+            // Table may not exist on pre-migration-6 databases; ignore gracefully.
+            Err(e) if e.to_string().contains("no such table") => Ok(()),
+            Err(e) => Err(e.into()),
+        }
     }
 
     // ── Backup support ─────────────────────────────────────────────────────

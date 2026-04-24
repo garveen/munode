@@ -336,6 +336,7 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
             Some(true), // suppress
             None, None,
             vec![], vec![],
+            None, // no actor for server-side suppress
         ).await {
             warn!("Failed to report suppress=true to Hub for session {}: {:#}", sid, e);
         }
@@ -2260,6 +2261,7 @@ pub(super) async fn handle_user_state_update(
                         Some(client.suppress),
                         None, None,
                         vec![], vec![],
+                        None, // suppress changes have no actor
                     ).await {
                         warn!("rpc_user_state_changed (suppress) failed for session {}: {:#}", session_id, e);
                     }
@@ -2292,6 +2294,7 @@ pub(super) async fn handle_user_state_update(
                         broadcast_msg.recording,
                         listening_channel_add,
                         listening_channel_remove,
+                        None, // self-initiated changes have no actor
                     ).await {
                         warn!("rpc_user_state_changed failed for session {}: {:#}", session_id, e);
                     }
@@ -2429,6 +2432,7 @@ pub(super) async fn handle_admin_user_state_update(
                     None,
                     vec![],
                     vec![],
+                    Some(actor_session), // carry actor so other edges can show who muted
                 ).await {
                     warn!("rpc_user_state_changed failed (admin state, session {}): {:#}", target_session, e);
                 }
@@ -3076,6 +3080,7 @@ mod tests {
             delta,
             listening_channel_add: vec![],
             listening_channel_remove: vec![],
+            actor_session: None,
         });
 
         let msg = decode_user_state(&rx_obs.recv().await.unwrap());
@@ -3114,6 +3119,7 @@ mod tests {
             delta,
             listening_channel_add: vec![],
             listening_channel_remove: vec![],
+            actor_session: None,
         });
 
         let msg = decode_user_state(&rx_obs.recv().await.unwrap());

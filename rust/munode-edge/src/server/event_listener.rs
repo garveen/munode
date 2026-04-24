@@ -92,12 +92,13 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                         }
                         debug!("Broadcast remote user left: session {} (channel {})", session_id, channel_id);
                     }
-                    EdgeEvent::RemoteUserStateChanged { session_id, delta, listening_channel_add, listening_channel_remove } => {
+                    EdgeEvent::RemoteUserStateChanged { session_id, delta, listening_channel_add, listening_channel_remove, actor_session } => {
                         // Only forward fields that ACTUALLY changed (carried by delta).
                         // Broadcasting the full current state would include Some(false) for
                         // unchanged default-off fields, triggering spurious client notifications.
                         let mut msg = mumbleproto::UserState {
                             session: Some(session_id),
+                            actor:            delta.actor_session.or(actor_session),
                             self_mute:        delta.self_mute,
                             self_deaf:        delta.self_deaf,
                             mute:             delta.mute,

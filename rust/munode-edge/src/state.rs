@@ -113,6 +113,7 @@ pub struct RemoteUserStateDelta {
     pub suppress: Option<bool>,
     pub priority_speaker: Option<bool>,
     pub recording: Option<bool>,
+    pub actor_session: Option<u32>,
 }
 
 /// Events broadcast within the Edge server.
@@ -138,6 +139,7 @@ pub enum EdgeEvent {
         delta: RemoteUserStateDelta,
         listening_channel_add: Vec<u32>,
         listening_channel_remove: Vec<u32>,
+        actor_session: Option<u32>,
     },
     /// A remote user moved channels.
     RemoteUserMoved { session_id: u32, from_channel_id: u32, channel_id: u32, actor_session: u32 },
