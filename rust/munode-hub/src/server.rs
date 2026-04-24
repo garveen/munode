@@ -219,7 +219,18 @@ impl HubServer {
         // Open database
         let db_path = self.config.database.path.clone();
         let database = Arc::new(
-            tokio::task::spawn_blocking(move || Database::open(&db_path))
+            tokio::task::spawn_blocking(move || {
+                let db = Database::open(&db_path)?;
+                let applied = db.apply_migrations()?;
+                if applied.is_empty() {
+                    info!("Database schema is up to date");
+                } else {
+                    for (v, desc) in &applied {
+                        info!("Applied migration v{}: {}", v, desc);
+                    }
+                }
+                Ok::<_, anyhow::Error>(db)
+            })
                 .await
                 .context("spawn_blocking join error")?
                 .context("Failed to open database")?,
