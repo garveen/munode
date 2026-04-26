@@ -959,6 +959,17 @@ pub(super) async fn handle_client_connection(
                     // Voice packet format: first byte is (voice_type << 5) | target
                     // target: 0 = normal broadcast, 1-30 = voice target (whisper), 31 = loopback
                     if let Some(sid) = session_id {
+                        // Mirror Murmur's `aiUdpFlag = 0`: when the client sends voice
+                        // over TCP, bidirectional UDP is no longer working (e.g. NAT
+                        // mapping expired, asymmetric firewall). Clear any cached UDP
+                        // address so subsequent server→client voice falls back to TCP
+                        // until the client re-establishes UDP by sending a fresh UDP
+                        // voice packet (which `register_client` will re-record).
+                        // Without this, the server keeps sending UDP packets to a
+                        // stale address and the client appears to be able to hear but
+                        // not be heard (or vice-versa).
+                        edge_state.udp_session_to_addr.remove(&sid);
+
                         if !frame.payload.is_empty() {
                             // Reject CELT and Speex — this server is Opus-only.
                             let codec = frame.payload[0] >> 5;
@@ -1734,6 +1745,9 @@ pub(super) async fn handle_client_connection(
         edge_state.voice_targets.write().await.remove(&sid);
         // Clean up permission cache for this session
         edge_state.permission_cache.retain(|&(s, _), _| s != sid);
+        // Clear cached UDP source address so the routing fast-path no longer
+        // sends voice toward a now-dead UDP endpoint.
+        edge_state.udp_session_to_addr.remove(&sid);
         // Get the client's channel before removing the ninja cache, so we can do
         // ninja-filtered UserRemove below.
         let disconnected_channel_id = edge_state.client_manager.get_client(sid).await

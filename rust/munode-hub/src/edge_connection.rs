@@ -213,30 +213,35 @@ impl EdgeConnection {
                             // Track this connection's sender for disconnect cleanup.
                             self.own_sender = Some(send_tx.clone());
                             // Determine whether this is the very first pool slot
-                            // for this edge (i.e. fresh connection after a
-                            // disconnect or first-ever startup).  We need this
-                            // flag BEFORE the pool is mutated so we can decide
-                            // whether to reset the inbound notification sequencer.
+                            // for this edge (fresh connection after a disconnect
+                            // or first-ever startup) **atomically with the pool
+                            // mutation**.  Doing the check under a separate read
+                            // lock creates a TOCTOU race: two slots can both see
+                            // "no pool" and both reset the inbound notification
+                            // sequencer, dropping any notifications that were
+                            // enqueued between the two resets.  See audit C1 in
+                            // docs/edge-hub-consistency-audit.md.
                             let is_first_registration = {
-                                let connections = self.state.edge_connections.read().await;
-                                connections.get(&sid).is_none()
-                            };
-                            {
                                 let mut connections = self.state.edge_connections.write().await;
-                                if let Some(pool) = connections.get(&sid) {
-                                    // Another pool connection already registered this
-                                    // edge — add this sender to the existing pool so
-                                    // Hub can fall back to it if the first sender dies.
-                                    pool.add(send_tx.clone());
-                                    debug!(
-                                        "Pool slot for edge {} connected (added to sender pool)",
-                                        sid
-                                    );
-                                } else {
-                                    // First registration for this edge — create the pool.
-                                    connections.insert(sid, EdgeSenderPool::new(send_tx.clone()));
+                                match connections.get(&sid) {
+                                    Some(pool) => {
+                                        // Another pool connection already registered this
+                                        // edge — add this sender to the existing pool so
+                                        // Hub can fall back to it if the first sender dies.
+                                        pool.add(send_tx.clone());
+                                        debug!(
+                                            "Pool slot for edge {} connected (added to sender pool)",
+                                            sid
+                                        );
+                                        false
+                                    }
+                                    None => {
+                                        // First registration for this edge — create the pool.
+                                        connections.insert(sid, EdgeSenderPool::new(send_tx.clone()));
+                                        true
+                                    }
                                 }
-                            }
+                            };
                             // Initialise health record (idempotent)
                             self.state
                                 .edge_health

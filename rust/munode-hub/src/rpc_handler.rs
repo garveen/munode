@@ -754,6 +754,21 @@ impl RpcHandler {
                         }));
                     }
                     self.state.session_manager.add_session(session_info).await;
+                    // Second cancel check: handles the narrow race where the client disconnected
+                    // after the first check but before add_session completed. If set, remove the
+                    // just-added session to prevent a ghost entry from lingering in Hub.
+                    if cancel.load(Ordering::Relaxed) {
+                        self.state.session_manager.remove_session(params.session_id).await;
+                        warn!("authenticate_user (ext-service): session {} added then immediately reverted (client disconnected)", params.session_id);
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
+                                success: false,
+                                reason: Some("Client disconnected during authentication".into()),
+                                reject_type: Some(1),
+                                ..Default::default()
+                            });
+                        }));
+                    }
 
                     info!(
                         "User authenticated via ext service: {} (session={}, edge={}, channel={})",
@@ -946,6 +961,20 @@ impl RpcHandler {
                         }));
                     }
                     self.state.session_manager.add_session(session_info).await;
+                    // Second cancel check: handles the narrow race where the client disconnected
+                    // after the first check but before add_session completed.
+                    if cancel.load(Ordering::Relaxed) {
+                        self.state.session_manager.remove_session(params.session_id).await;
+                        warn!("authenticate_user (lua): session {} added then immediately reverted (client disconnected)", params.session_id);
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
+                                success: false,
+                                reason: Some("Client disconnected during authentication".into()),
+                                reject_type: Some(1),
+                                ..Default::default()
+                            });
+                        }));
+                    }
 
                     info!(
                         "User authenticated via Lua script: {} (session={}, edge={}, channel={})",
@@ -1107,6 +1136,20 @@ impl RpcHandler {
                         }));
                     }
                     self.state.session_manager.add_session(session_info).await;
+                    // Second cancel check: handles the narrow race where the client disconnected
+                    // after the first check but before add_session completed.
+                    if cancel.load(Ordering::Relaxed) {
+                        self.state.session_manager.remove_session(params.session_id).await;
+                        warn!("authenticate_user (http): session {} added then immediately reverted (client disconnected)", params.session_id);
+                        return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                            r.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
+                                success: false,
+                                reason: Some("Client disconnected during authentication".into()),
+                                reject_type: Some(1),
+                                ..Default::default()
+                            });
+                        }));
+                    }
 
                     info!(
                         "User authenticated via HTTP: {} (session={}, edge={}, channel={})",
@@ -1352,6 +1395,20 @@ impl RpcHandler {
             }));
         }
         self.state.session_manager.add_session(session_info.clone()).await;
+        // Second cancel check: handles the narrow race where the client disconnected
+        // after the first check but before add_session completed.
+        if cancel.load(Ordering::Relaxed) {
+            self.state.session_manager.remove_session(params.session_id).await;
+            warn!("authenticate_user (local db): session {} added then immediately reverted (client disconnected)", params.session_id);
+            return Ok(self.make_response_packet(request_id, "edge.authenticateUser", |r| {
+                r.edge_authenticate_user = Some(EdgeAuthenticateUserResult {
+                    success: false,
+                    reason: Some("Client disconnected during authentication".into()),
+                    reject_type: Some(1),
+                    ..Default::default()
+                });
+            }));
+        }
 
         // GeoIP lookup for this user's IP address
         if self.state.geoip.is_available() && self.state.config.geoip.log_location {
@@ -1471,6 +1528,7 @@ impl RpcHandler {
             recording: s.recording.unwrap_or(false),
             listening_channels: s.listening_channels.clone(),
         };
+
         self.state.session_manager.add_session(session_info).await;
 
         info!(
@@ -1977,6 +2035,12 @@ impl RpcHandler {
             // Edge would be wasteful and create stale-cache invalidation complexity.
             acls: vec![],
             bans: vec![],
+            // Inform the Edge whether the Hub's session table was empty at snapshot time.
+            // An empty snapshot signals a Hub cold-restart: the Edge must not immediately
+            // send UserRemove for every cached remote user, because peer Edges will
+            // re-report their sessions within a few seconds.  See Option B in
+            // docs/edge-hub-consistency-audit.md §O1.
+            hub_was_empty: Some(sessions.is_empty()),
             sessions,
             timestamp: current_millis() as i64,
             sequence: fence_seq,
@@ -3738,6 +3802,19 @@ impl RpcHandler {
     }
 
     /// Remove all sessions for a disconnected edge.
+    ///
+    /// Called from the edge_connection task *after* the last pool slot has been
+    /// removed from `edge_connections`.  Because there is an unavoidable window
+    /// between "pool became empty" and the first line of this function, a fresh
+    /// slot from the same Edge can race in and re-register before we run.  We
+    /// therefore re-check `edge_connections` under a write lock before touching
+    /// authoritative per-edge state (`edge_registry`, `topology`,
+    /// `notification_seqs`, `edge_notif_senders`) and before broadcasting
+    /// `hub.peerLeft`.  Session cleanup is still performed unconditionally so
+    /// pre-reconnect ghosts are purged; the re-registering slot's
+    /// `do_report_local_users` repopulates the authoritative list.
+    ///
+    /// See audit C2 / C5 in `docs/edge-hub-consistency-audit.md`.
     pub async fn cleanup_edge(&self, server_id: u32) {
         // Cancel any in-flight `authenticate_user` tasks owned by this edge so
         // that sessions mid-auth do not ghost after edge-level cleanup.
@@ -3771,10 +3848,42 @@ impl RpcHandler {
             .await;
         }
 
+        // Re-check that no new pool slot from the same edge has taken over
+        // between the disconnect path removing the last sender and this
+        // function running.  If one has, the edge is _not_ actually gone and
+        // tearing down `edge_registry` / `topology` would delete the new
+        // slot's freshly-installed state and cause every other edge to
+        // receive a spurious `hub.peerLeft`.
+        let edge_still_absent = {
+            let connections = self.state.edge_connections.read().await;
+            !connections.contains_key(&server_id)
+        };
+        if !edge_still_absent {
+            debug!(
+                "cleanup_edge({}): edge was re-registered concurrently, skipping registry/topology teardown",
+                server_id
+            );
+            if !sessions.is_empty() {
+                info!(
+                    "Cleaned up {} pre-reconnect session(s) for edge {}",
+                    sessions.len(),
+                    server_id
+                );
+            }
+            return;
+        }
+
         self.state.edge_registry.write().await.remove(&server_id);
 
         // Remove from cluster topology
         self.state.topology.write().await.remove_edge(server_id);
+
+        // Drop the per-edge inbound notification processor and sequence counter
+        // so a later re-registration starts with a fresh state machine.
+        self.state.edge_notif_senders.write().await.remove(&server_id);
+        if let Ok(mut seqs) = self.state.notification_seqs.lock() {
+            seqs.remove(&server_id);
+        }
 
         // Notify remaining edges that this peer has left the cluster so they
         // stop their relay reconnect loops and clean up UDP routing entries.

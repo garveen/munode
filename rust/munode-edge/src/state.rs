@@ -124,6 +124,13 @@ pub enum EdgeEvent {
     /// cache *before* the sync but are absent from the fresh Hub snapshot —
     /// the event loop should send UserRemove for these to all local clients.
     HubRegistered { disappeared_session_ids: Vec<u32> },
+    /// Deferred reconciliation after a Hub cold-restart grace period.
+    ///
+    /// Emitted by the grace-period timer in `hub_client` when `hub_was_empty`
+    /// was set in the fullsync response.  Contains the session IDs that were in
+    /// the pre-restart cache and are **still absent** after waiting for peer
+    /// Edges to re-report.  The event listener sends `UserRemove` for each.
+    HubReconcileDisappeared { session_ids: Vec<u32> },
     /// Hub connection lost.
     HubDisconnected,
     /// Hub is completely unreachable: both direct and relay connections failed.
@@ -324,6 +331,20 @@ pub struct EdgeState {
     /// Incremented on every client join/leave/channel-move/deaf-change event so that
     /// per-sender `BroadcastCache` entries can detect staleness without holding any lock.
     pub topology_version: AtomicU64,
+    /// Shared map session_id → UDP source address.
+    ///
+    /// Authoritative source for the "client supports UDP" decision used by the
+    /// voice send path.  Mirrors Murmur's per-user `aiUdpFlag`:
+    ///
+    /// * Presence  → server sends voice to this client over UDP.
+    /// * Absence   → server falls back to TCP (`UdpTunnel`).
+    ///
+    /// Populated by `UdpServer::register_client` on the first successfully
+    /// decrypted UDP voice packet from the client, and explicitly cleared when
+    /// the client falls back to sending voice over TCP `UdpTunnel` (which
+    /// indicates that bidirectional UDP is no longer working) or on
+    /// disconnect.  `UdpServer` clones this Arc on construction.
+    pub udp_session_to_addr: Arc<dashmap::DashMap<u32, std::net::SocketAddr>>,
 }
 
 impl EdgeState {
@@ -366,6 +387,7 @@ impl EdgeState {
             auth_semaphore: tokio::sync::Semaphore::new(32),
             permission_cache: dashmap::DashMap::new(),
             topology_version: AtomicU64::new(0),
+            udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
         })
     }
 
@@ -411,6 +433,7 @@ impl EdgeState {
             auth_semaphore: tokio::sync::Semaphore::new(32),
             permission_cache: dashmap::DashMap::new(),
             topology_version: AtomicU64::new(0),
+            udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
         })
     }
 
@@ -464,6 +487,7 @@ impl EdgeState {
             auth_semaphore: tokio::sync::Semaphore::new(32),
             permission_cache: dashmap::DashMap::new(),
             topology_version: AtomicU64::new(0),
+            udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
         })
     }
 

@@ -80,6 +80,25 @@ struct SequencedNotification {
 /// declaring the connection stale and triggering a reconnect + fullsync.
 const NOTIFICATION_GAP_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Grace period after a Hub cold-restart before sending `UserRemove` for
+/// sessions that disappeared from the empty fullsync snapshot.
+///
+/// During this window, peer Edges reconnect and re-report their sessions via
+/// `hub.userJoined`.  Sessions that are still absent after the window closes
+/// are considered truly gone and `HubReconcileDisappeared` is emitted.
+const HUB_RESTART_GRACE_SECS: u64 = 10;
+const HUB_RESTART_GRACE_DURATION: Duration = Duration::from_secs(HUB_RESTART_GRACE_SECS);
+
+/// Maximum size of the [`HubClient::pending_notifications`] FIFO queue.
+///
+/// When Hub is unreachable the Edge buffers recoverable control notifications
+/// (`UserLeft`, `ChannelLinksChanged`, `ChannelRemoved`) so the reconnect
+/// handshake can replay them.  A bounded cap prevents OOM on long Hub outages
+/// — every kind queued here is _also_ recovered by the reconnect handshake
+/// itself, so dropping the oldest entries only produces a transient visibility
+/// gap on other edges.
+const MAX_PENDING_NOTIFICATIONS: usize = 4096;
+
 /// Tracks notification sequence state and reorders out-of-order messages.
 ///
 /// When a gap is detected (i.e. the Edge receives seq N+2 before N+1), the
@@ -347,8 +366,26 @@ impl HubClient {
     ///
     /// Called by the `notify_*` methods when `send_packet` returns an error so
     /// the notification can be replayed after the next successful reconnect.
+    ///
+    /// The queue is bounded at [`MAX_PENDING_NOTIFICATIONS`] — the oldest entry
+    /// is evicted FIFO when the cap is reached.  This is safe because every
+    /// kind queued here is also recovered by the reconnect handshake
+    /// (`do_full_sync` + `do_report_local_users` +
+    /// `do_report_local_voice_targets`); the replay is only an optimisation to
+    /// keep peer edges consistent across the reconnect window.
+    /// See audit C3 in `docs/edge-hub-consistency-audit.md`.
     pub(super) async fn enqueue_pending_notification(&self, n: PendingControlNotification) {
-        self.pending_notifications.lock().await.push(n);
+        let mut queue = self.pending_notifications.lock().await;
+        if queue.len() >= MAX_PENDING_NOTIFICATIONS {
+            let dropped = queue.remove(0);
+            warn!(
+                pending_len = queue.len() + 1,
+                max = MAX_PENDING_NOTIFICATIONS,
+                "pending_notifications capacity reached — dropping oldest entry: {:?}",
+                dropped
+            );
+        }
+        queue.push(n);
     }
 
     /// Drain and replay all queued control notifications.
@@ -812,7 +849,7 @@ impl HubClient {
             // do_full_sync so the Hub snapshot excludes ghost sessions and includes
             // the correct channel tree.
             self.flush_pending_notifications().await;
-            let disappeared = self.do_full_sync().await?;
+            let (disappeared, hub_was_empty, old_session_ids) = self.do_full_sync().await?;
             self.do_fetch_voice_targets().await;
             self.do_join_cluster().await?;
             if let Err(e) = self.do_report_local_users().await {
@@ -828,7 +865,65 @@ impl HubClient {
             // silently dropped in that case, permanently blocking the processor).
             self.sync_notify.notify_one();
             *self.state.write().await = HubConnectionState::Registered;
-            self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
+
+            // When Hub restarted cold (`hub_was_empty = true`) and we have stale
+            // cached sessions, do NOT immediately blast UserRemove to local clients.
+            // Instead emit HubRegistered with an empty disappeared list (which
+            // re-enables accepting_connections) and spawn a grace-period task that
+            // waits for peer Edges to re-report before sending UserRemove for any
+            // sessions that genuinely did not come back.
+            //
+            // This eliminates the "all remote users vanish for 1–3 seconds" flash
+            // that otherwise occurs after every Hub cold restart.
+            //
+            // If any peer Edge fails to reconnect within the grace period, its
+            // sessions remain absent from channel_manager and are correctly
+            // included in the deferred disappeared list — so stale sessions are
+            // always cleaned up, just with a short delay.
+            if hub_was_empty && !old_session_ids.is_empty() {
+                info!(
+                    old_count = old_session_ids.len(),
+                    grace_secs = HUB_RESTART_GRACE_SECS,
+                    "Hub cold restart detected — deferring UserRemove for {} cached session(s); \
+                     grace period: {}s",
+                    old_session_ids.len(), HUB_RESTART_GRACE_SECS
+                );
+                // Immediately re-enable accepting_connections.
+                self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: vec![] });
+                // Spawn the grace-period reconciliation task.
+                let state_clone = self.edge_state.clone();
+                let my_edge = self.edge_id();
+                tokio::spawn(async move {
+                    tokio::time::sleep(HUB_RESTART_GRACE_DURATION).await;
+                    // Re-compute disappeared: sessions that were alive before the
+                    // restart and are still absent after the grace period.
+                    let current_remote: std::collections::HashSet<u32> = state_clone
+                        .channel_manager
+                        .get_all_remote_users()
+                        .await
+                        .iter()
+                        .filter(|u| u.edge_id != my_edge)
+                        .map(|u| u.session_id)
+                        .collect();
+                    let reconciled: Vec<u32> = old_session_ids
+                        .into_iter()
+                        .filter(|id| !current_remote.contains(id))
+                        .collect();
+                    if reconciled.is_empty() {
+                        info!("Hub restart grace period elapsed — all {} cached sessions recovered", current_remote.len());
+                    } else {
+                        warn!(
+                            count = reconciled.len(),
+                            "Hub restart grace period elapsed — {} session(s) did not recover; \
+                             sending UserRemove",
+                            reconciled.len()
+                        );
+                        state_clone.emit(EdgeEvent::HubReconcileDisappeared { session_ids: reconciled });
+                    }
+                });
+            } else {
+                self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
+            }
             info!("Edge registered with Hub successfully ({}, slot {})", url, slot);
         } else {
             debug!("Slot {} connected (sync already done by another slot)", slot);
@@ -1238,11 +1333,19 @@ impl HubClient {
 
     /// Request full sync from Hub (channels, users, ACLs).
     ///
-    /// Returns the list of remote-user session IDs that were present in the local
-    /// cache *before* the sync but are absent from the fresh Hub snapshot.
-    /// These "disappeared" sessions should be communicated to connected local clients
-    /// via `UserRemove` so they don't keep stale entries in their user lists.
-    async fn do_full_sync(&self) -> Result<Vec<u32>> {
+    /// Returns a tuple `(disappeared, hub_was_empty, old_session_ids)`:
+    ///
+    /// * `disappeared` – remote-user session IDs present in the local cache
+    ///   *before* the sync but absent from the fresh Hub snapshot.
+    /// * `hub_was_empty` – the Hub's session table was empty at snapshot time
+    ///   (proxy for a Hub cold-restart).  When `true` and the caller has a
+    ///   non-empty `old_session_ids`, the `disappeared` set should be delivered
+    ///   via a deferred grace-period timer rather than immediately, so that peer
+    ///   Edges have time to re-report their sessions.
+    /// * `old_session_ids` – the snapshot of remote session IDs taken *before*
+    ///   the cache was cleared.  Passed back to the caller so the grace timer
+    ///   can perform a post-grace diff against the repopulated cache.
+    async fn do_full_sync(&self) -> Result<(Vec<u32>, bool, std::collections::HashSet<u32>)> {
         let request_id = self.next_request_id();
         let request = TypedRpcRequest {
             request_id,
@@ -1333,12 +1436,23 @@ impl HubClient {
             .map(|s| s.session_id)
             .collect();
         let disappeared: Vec<u32> = old_session_ids
-            .into_iter()
-            .filter(|id| !new_session_ids.contains(id))
+            .iter()
+            .filter(|id| !new_session_ids.contains(*id))
+            .copied()
             .collect();
 
+        let hub_was_empty = result.hub_was_empty.unwrap_or(false);
+
         if !disappeared.is_empty() {
-            info!("Full sync: {} session(s) disappeared from Hub snapshot", disappeared.len());
+            if hub_was_empty {
+                info!(
+                    "Full sync: {} session(s) in pre-restart cache — deferring UserRemove \
+                     blast by grace period (hub_was_empty=true)",
+                    disappeared.len()
+                );
+            } else {
+                info!("Full sync: {} session(s) disappeared from Hub snapshot", disappeared.len());
+            }
         }
 
         info!(
@@ -1349,7 +1463,7 @@ impl HubClient {
         );
         // Invalidate all BroadcastCaches: full state refresh means routing targets changed.
         self.edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
-        Ok(disappeared)
+        Ok((disappeared, hub_was_empty, old_session_ids))
     }
 
     /// Fetch all existing VoiceTarget configs from Hub and populate the local cache.

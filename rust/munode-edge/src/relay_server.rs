@@ -505,13 +505,28 @@ pub async fn connect_peer_voice_tcp(
         let _ = h.await;
     }
 
-    // Final cleanup — no-ops if peerLeft already removed us, but safe to call twice.
-    edge_state.voice_tcp_peers.write().await.remove(&peer_edge_id);
+    // Final cleanup — but only if WE are still the owner of this peer's state.
+    // A rapid peerLeft → peerJoined sequence can spawn a successor manager that
+    // has already inserted a fresh `pool` into `voice_tcp_conns` (and re-inserted
+    // the peer into `voice_tcp_peers`) before we reach this point.  Removing
+    // those entries unconditionally would delete the successor's state and leave
+    // voice routing to this peer silently broken until the next full route refresh.
+    // See audit C4 in `docs/edge-hub-consistency-audit.md`.
     {
         let current = edge_state.voice_tcp_conns.load_full();
-        let mut new_conns = (*current).clone();
-        new_conns.remove(&peer_edge_id);
-        edge_state.voice_tcp_conns.store(Arc::new(new_conns));
+        if current.get(&peer_edge_id).map_or(false, |p| Arc::ptr_eq(p, &pool)) {
+            let mut new_conns = (*current).clone();
+            new_conns.remove(&peer_edge_id);
+            edge_state.voice_tcp_conns.store(Arc::new(new_conns));
+            // Only touch voice_tcp_peers when we were the owner — a successor
+            // manager has already re-inserted itself and we must not evict it.
+            edge_state.voice_tcp_peers.write().await.remove(&peer_edge_id);
+        } else {
+            debug!(
+                "Voice TCP pool for peer edge {} finishing, but a successor is already active — leaving shared state alone",
+                peer_edge_id
+            );
+        }
     }
     info!("Voice TCP pool for peer edge {} stopped", peer_edge_id);
 }

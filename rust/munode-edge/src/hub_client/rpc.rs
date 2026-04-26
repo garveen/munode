@@ -31,7 +31,7 @@ impl HubClient {
     /// all local clients see the current cluster state even after the gap.
     pub async fn request_full_sync(&self) {
         match self.do_full_sync().await {
-            Ok(disappeared) => {
+            Ok((disappeared, _hub_was_empty, _old_session_ids)) => {
                 self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
                 info!("Full-sync triggered after event-bus Lagged");
             }

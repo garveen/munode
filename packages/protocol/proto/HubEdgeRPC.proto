@@ -294,6 +294,14 @@ message EdgeFullSyncResult {
   required int64 timestamp = 6;
   required uint64 sequence = 7;
   repeated EdgeInfoProto edges = 8;
+  // True when the Hub's session table was empty at the time of this sync.
+  // This is a reliable proxy for "Hub just restarted cold" — a client-less
+  // cluster would also set this flag, but in that case old_session_ids is
+  // also empty so no UserRemove fan-out would have happened anyway.
+  // The Edge uses this to defer the UserRemove broadcast by a grace period
+  // so that peer Edges have time to re-register and re-report their sessions,
+  // preventing a spurious "all remote users disappeared" flash after Hub restart.
+  optional bool hub_was_empty = 9;
 }
 
 message ChannelDataProto {

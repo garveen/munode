@@ -1105,6 +1105,9 @@ pub struct EdgeFullSyncResult {
     pub sequence: u64,
     #[prost(message, repeated, tag = "8")]
     pub edges: ::prost::alloc::vec::Vec<EdgeInfoProto>,
+    /// True when the Hub's session table was empty at the time of this sync.
+    #[prost(bool, optional, tag = "9")]
+    pub hub_was_empty: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ChannelDataProto {

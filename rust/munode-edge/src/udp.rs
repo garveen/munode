@@ -140,6 +140,10 @@ pub struct UdpServer {
     /// Maps UDP source address → session ID.
     addr_to_session: Arc<DashMap<SocketAddr, u32>>,
     /// Maps session ID → UDP source address.
+    ///
+    /// Shared with `EdgeState::udp_session_to_addr` so that the TCP read loop
+    /// can clear an entry when the client falls back to `UdpTunnel`, mirroring
+    /// Murmur's `aiUdpFlag = 0` behaviour.
     session_to_addr: Arc<DashMap<u32, SocketAddr>>,
     /// Per-edge quality tracking for UDP probes.
     peer_quality: Arc<Mutex<HashMap<u32, PeerQualityState>>>,
@@ -175,10 +179,10 @@ impl UdpServer {
         Ok(Self {
             socket,
             edge_socket,
+            addr_to_session: Arc::new(DashMap::new()),
+            session_to_addr: Arc::clone(&edge_state.udp_session_to_addr),
             edge_state,
             hub_client,
-            addr_to_session: Arc::new(DashMap::new()),
-            session_to_addr: Arc::new(DashMap::new()),
             peer_quality: Arc::new(Mutex::new(HashMap::new())),
             client_tx,
             client_rx,

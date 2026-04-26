@@ -349,6 +349,29 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                     EdgeEvent::HubDisconnected => {
                         warn!("Hub disconnected - local clients will continue but some features unavailable");
                     }
+                    EdgeEvent::HubReconcileDisappeared { session_ids } => {
+                        // Grace period elapsed after Hub cold restart.
+                        // session_ids are remote sessions that never came back — evict them.
+                        if !session_ids.is_empty() {
+                            let local_clients = state.client_manager.get_all_clients().await;
+                            let authenticated_clients: Vec<_> = local_clients
+                                .iter()
+                                .filter(|c| c.state == crate::client::ClientState::Ready)
+                                .collect();
+                            for &sid in &session_ids {
+                                let remove_msg = handler::build_user_remove_msg(sid, None);
+                                for client in &authenticated_clients {
+                                    if client.session == sid { continue; }
+                                    state.client_manager.send_to(client.session, MessageType::UserRemove, &remove_msg).await;
+                                }
+                            }
+                            info!(
+                                "Hub restart reconciliation: sent UserRemove for {} session(s) \
+                                 that did not recover",
+                                session_ids.len()
+                            );
+                        }
+                    }
                     EdgeEvent::HubUnreachable => {
                         warn!("Hub is unreachable (>30s without connection) — disconnecting all clients and refusing new connections");
                         state.accepting_connections.store(false, std::sync::atomic::Ordering::Relaxed);
