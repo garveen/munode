@@ -108,11 +108,18 @@ pub async fn compute_voice_targets(
             .collect();
 
         // Expand channel targets (with optional group filter) and deaf-filter.
+        // Includes both channel members AND sessions listening to the channel —
+        // a listener of channel X must hear whatever a member of X would hear.
         let mut channel_sessions: SmallVec<[u32; 16]> = SmallVec::new();
+        let mut seen_channel_targets: HashSet<u32> = HashSet::new();
         for (&ch_id, group_filter) in &vt.resolved_channels {
             let ch_members = edge_state.client_manager.get_channel_sessions(ch_id).await;
-            for target in ch_members {
+            let ch_listeners = edge_state.client_manager.get_listening_sessions(ch_id).await;
+            for target in ch_members.into_iter().chain(ch_listeners.into_iter()) {
                 if target == sender_session || direct_set.contains(&target) {
+                    continue;
+                }
+                if !seen_channel_targets.insert(target) {
                     continue;
                 }
                 let slot = crate::hot_slot::get_hot_slot(target);
@@ -160,9 +167,22 @@ pub async fn compute_voice_targets(
         let current_version = edge_state.topology_version.load(Ordering::Acquire);
 
         // Check per-sender BroadcastCache for a version match.
+        //
+        // HotSlot is indexed by `sender_session % HOT_SLOT_COUNT`.  Local session IDs
+        // follow the pattern `edge_id × 10_000 + local_seq`, so within a single Edge
+        // process the index is always unique.  However, relayed voice packets carry a
+        // *remote* Edge's session ID, whose modulo collides with a local session that
+        // happens to share the same `local_seq`.  We guard every cache read *and* write
+        // with `is_active_for(sender_session)` to prevent:
+        //   • reading a different session's stale cache on a collision, and
+        //   • overwriting a different session's valid cache on a write.
+        // Remote-sender packets always miss the cache and compute fresh — acceptable
+        // because relayed packets are far less frequent than local-sender packets.
         let cache_hit: Option<Arc<BroadcastCache>> = {
             let slot = get_hot_slot(sender_session);
-            if slot.broadcast_cache_version.load(Ordering::Acquire) == current_version {
+            if slot.is_active_for(sender_session)
+                && slot.broadcast_cache_version.load(Ordering::Acquire) == current_version
+            {
                 let guard = slot.broadcast_cache.load();
                 (**guard).clone()
             } else {
@@ -207,13 +227,17 @@ pub async fn compute_voice_targets(
                     .collect()
             };
 
-            // Atomically write cache before returning.
+            // Atomically write cache before returning — only when the slot actually
+            // belongs to sender_session (i.e. this is a local sender, not a relayed
+            // packet whose session ID collides with a local session).
             let slot = get_hot_slot(sender_session);
-            slot.broadcast_cache.store(Arc::new(Some(Arc::new(BroadcastCache {
-                local_sessions: SmallVec::from_iter(sessions.iter().copied()),
-                relay_edge_ids: relay_ids.clone(),
-            }))));
-            slot.broadcast_cache_version.store(current_version, Ordering::Release);
+            if slot.is_active_for(sender_session) {
+                slot.broadcast_cache.store(Arc::new(Some(Arc::new(BroadcastCache {
+                    local_sessions: SmallVec::from_iter(sessions.iter().copied()),
+                    relay_edge_ids: relay_ids.clone(),
+                }))));
+                slot.broadcast_cache_version.store(current_version, Ordering::Release);
+            }
 
             (sessions, relay_ids)
         };

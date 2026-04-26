@@ -132,7 +132,20 @@ impl HubClient {
                                 user.listening_channels.push(ch_id);
                             }
                             user.listening_channels.retain(|ch| !listening_remove.contains(ch));
+                            // Invalidate BroadcastCache: a remote user's deaf flag or
+                            // listening_channels changed, which alters the local routing
+                            // target set (deaf filter + listener inclusion) and the relay
+                            // edge set for cross-edge listeners.
+                            let listening_changed =
+                                !listening_add.is_empty() || !listening_remove.is_empty();
+                            let deaf_changed =
+                                delta.deaf.is_some() || delta.self_deaf.is_some();
                             self.edge_state.channel_manager.upsert_remote_user(user).await;
+                            if listening_changed || deaf_changed {
+                                self.edge_state
+                                    .topology_version
+                                    .fetch_add(1, std::sync::atomic::Ordering::Release);
+                            }
                             self.edge_state.emit(EdgeEvent::RemoteUserStateChanged {
                                 session_id,
                                 delta,
@@ -225,9 +238,13 @@ impl HubClient {
                     let links_remove: Vec<u32> = old_links.iter().filter(|l| !new_links.contains(l)).copied().collect();
                     debug!("Channel updated: {} (id {}), links_add={:?}, links_remove={:?}", channel.name, channel_id, links_add, links_remove);
                     self.edge_state.channel_manager.upsert_channel(channel).await;
-                    // If links changed, VoiceTarget channel caches that include this channel may be stale.
+                    // If links changed, VoiceTarget channel caches that include this channel may be stale,
+                    // and the per-sender BroadcastCache (which expands `linked_channels`) is also stale.
                     if !links_add.is_empty() || !links_remove.is_empty() {
                         self.edge_state.recompute_all_vt_channels().await;
+                        self.edge_state
+                            .topology_version
+                            .fetch_add(1, std::sync::atomic::Ordering::Release);
                     }
                     self.edge_state.emit(EdgeEvent::ChannelUpdated { channel_id, links_add, links_remove });
                 }

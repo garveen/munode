@@ -169,3 +169,66 @@ async fn test_add_multiple_listening_channels() -> Result<()> {
     cleanup_clients(clients).await;
     Ok(())
 }
+
+// ── Listener + linked channels ────────────────────────────────────────────
+
+/// A listener of channel L must hear voice from any channel linked to L,
+/// because a regular member of L would hear it.  Regression test for the
+/// "听不到链接频道声音" report.
+#[tokio::test]
+async fn test_listener_receives_voice_from_linked_channel() -> Result<()> {
+    use munode_protocol::mumbleproto;
+
+    let env = single_edge_env().await?;
+    let configs = vec![
+        ClientConfig::new("admin", 1),
+        ClientConfig::new("user1", 1),
+        ClientConfig::new("user2", 1),
+    ];
+    let clients = create_clients(&env, &configs).await?;
+    let (admin, speaker, listener) = (&clients[0], &clients[1], &clients[2]);
+
+    // Create two sibling channels and link them.
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let ch_a = admin.create_channel(&format!("LinkSpeak_{ts}"), 0).await?;
+    let ch_b = admin.create_channel(&format!("LinkListen_{ts}"), 0).await?;
+    sleep_ms(400).await;
+
+    admin.send_channel_state(mumbleproto::ChannelState {
+        channel_id: Some(ch_a),
+        links_add: vec![ch_b],
+        ..Default::default()
+    }).await?;
+    sleep_ms(400).await;
+
+    // Speaker joins ch_a; listener stays in root (ch 0) and listens to ch_b.
+    speaker.join_channel(ch_a).await?;
+    listener.add_listening_channel(ch_b).await?;
+    sleep_ms(400).await;
+
+    let speaker_session = speaker.session_id().unwrap();
+    let mut rx = listener.subscribe_voice();
+
+    let audio = crate::harness::random_voice_data(20);
+    speaker.send_voice(4, 0, 1, &audio).await?;
+
+    let received = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == speaker_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    assert!(received,
+        "Listener of ch_b should hear voice from ch_a because ch_a↔ch_b are linked");
+    cleanup_clients(clients).await;
+    Ok(())
+}
