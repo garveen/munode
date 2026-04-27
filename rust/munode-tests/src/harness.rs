@@ -414,6 +414,11 @@ pub struct TestEnvironment {
     _hub: ServerProcess,
     _edges: Vec<ServerProcess>,
     _temp_dir: tempfile::TempDir,
+    hub_bin: std::path::PathBuf,
+    hub_cfg_path: std::path::PathBuf,
+    verbose: bool,
+    edge_bin: std::path::PathBuf,
+    edge_cfg_paths: Vec<std::path::PathBuf>,
 }
 
 impl TestEnvironment {
@@ -426,6 +431,55 @@ impl TestEnvironment {
     pub fn edge2(&self) -> u16 { self.edge_port(2) }
     pub fn edge3(&self) -> u16 { self.edge_port(3) }
     pub fn edge4(&self) -> u16 { self.edge_port(4) }
+
+    pub async fn restart_hub(&mut self) -> Result<()> {
+        self._hub.stop();
+        // Wait until the control port is free again
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if std::net::TcpListener::bind(("127.0.0.1", self.control_port)).is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let proc = Command::new(&self.hub_bin)
+            .arg(&self.hub_cfg_path)
+            .stdout(if self.verbose { Stdio::inherit() } else { Stdio::null() })
+            .stderr(if self.verbose { Stdio::inherit() } else { Stdio::null() })
+            .spawn()
+            .with_context(|| format!("respawn {}", self.hub_bin.display()))?;
+        self._hub = ServerProcess::new(proc, format!("Hub({})", self.control_port));
+        wait_for_port(self.control_port, Duration::from_secs(15))
+            .context("Hub control port not ready after restart")?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        Ok(())
+    }
+
+    /// Stop and re-spawn Edge `index` (1-based) using the same config.
+    /// Connected clients on that Edge will be disconnected.
+    pub async fn restart_edge(&mut self, index: usize) -> Result<()> {
+        let i = index - 1;
+        self._edges[i].stop();
+        let port = self.edges[i].client_port;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let proc = Command::new(&self.edge_bin)
+            .arg(&self.edge_cfg_paths[i])
+            .stdout(if self.verbose { Stdio::inherit() } else { Stdio::null() })
+            .stderr(if self.verbose { Stdio::inherit() } else { Stdio::null() })
+            .spawn()
+            .with_context(|| format!("respawn edge {}", index))?;
+        self._edges[i] = ServerProcess::new(proc, format!("Edge{}({})", index, port));
+        wait_for_port(port, Duration::from_secs(15))
+            .with_context(|| format!("Edge{} port {} not ready after restart", index, port))?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        Ok(())
+    }
 }
 
 // ── Builder ───────────────────────────────────────────────────────────────
@@ -435,15 +489,50 @@ pub struct TestEnvBuilder {
     edge_count: usize,
     verbose: bool,
     port_base: u16,
+    /// If set, replaces the entire `auth` block in the generated Hub config.
+    hub_auth_override: Option<Value>,
+    /// If set, every top-level key in this object replaces (or inserts) the
+    /// corresponding key in the generated Hub config.
+    hub_config_patch: Option<Value>,
+    /// If set, every top-level key in this object is deep-merged into each
+    /// Edge config (shallow merge of nested objects when both are objects).
+    edge_config_patch: Option<Value>,
 }
 
 impl TestEnvBuilder {
     pub fn new() -> Self {
-        Self { edge_count: 2, verbose: false, port_base: 19000 }
+        Self {
+            edge_count: 2,
+            verbose: false,
+            port_base: 19000,
+            hub_auth_override: None,
+            hub_config_patch: None,
+            edge_config_patch: None,
+        }
     }
 
     pub fn edges(mut self, n: usize) -> Self {
         self.edge_count = n;
+        self
+    }
+
+    /// Replace the entire `auth` block in the Hub config.
+    pub fn hub_auth_override(mut self, value: Value) -> Self {
+        self.hub_auth_override = Some(value);
+        self
+    }
+
+    /// Patch the generated Hub config: every top-level key in `value`
+    /// replaces the corresponding key.
+    pub fn hub_config_patch(mut self, value: Value) -> Self {
+        self.hub_config_patch = Some(value);
+        self
+    }
+
+    /// Patch every Edge config: top-level keys are merged (objects merged
+    /// shallowly, scalars replaced).
+    pub fn edge_config_patch(mut self, value: Value) -> Self {
+        self.edge_config_patch = Some(value);
         self
     }
 
@@ -500,6 +589,19 @@ impl TestEnvBuilder {
             blob_store_path: &blob_store.display().to_string(),
             verbose,
         });
+        let mut hub_cfg = hub_cfg;
+        if let Some(auth_override) = &self.hub_auth_override {
+            if let Some(obj) = hub_cfg.as_object_mut() {
+                obj.insert("auth".to_string(), auth_override.clone());
+            }
+        }
+        if let Some(patch) = &self.hub_config_patch {
+            if let (Some(obj), Some(p)) = (hub_cfg.as_object_mut(), patch.as_object()) {
+                for (k, v) in p {
+                    obj.insert(k.clone(), v.clone());
+                }
+            }
+        }
         let hub_cfg_path = tmp_path.join("hub.json");
         fs::write(&hub_cfg_path, serde_json::to_string_pretty(&hub_cfg)?)?;
 
@@ -521,12 +623,14 @@ impl TestEnvBuilder {
         // ── Edges ──────────────────────────────────────────────────────
         let mut edge_ports = Vec::new();
         let mut edge_processes = Vec::new();
+        let mut edge_cfg_paths: Vec<std::path::PathBuf> = Vec::new();
+        let edge_bin = find_binary("munode-edge")?;
 
         for i in 0..self.edge_count {
             let client_port = next_port!();
             let edge_edge_port = next_port!();
 
-            let edge_cfg = generate_edge_config(&EdgeParams {
+            let mut edge_cfg = generate_edge_config(&EdgeParams {
                 server_id: (i + 1) as u32,
                 name: &format!("Edge{}", i + 1),
                 port: client_port,
@@ -534,10 +638,26 @@ impl TestEnvBuilder {
                 hub_control_port,
                 verbose,
             });
+            if let Some(patch) = &self.edge_config_patch {
+                if let (Some(dst), Some(src)) = (edge_cfg.as_object_mut(), patch.as_object()) {
+                    for (k, v) in src {
+                        match (dst.get_mut(k), v) {
+                            (Some(Value::Object(d)), Value::Object(s)) => {
+                                for (sk, sv) in s {
+                                    d.insert(sk.clone(), sv.clone());
+                                }
+                            }
+                            _ => {
+                                dst.insert(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                }
+            }
             let edge_cfg_path = tmp_path.join(format!("edge{}.json", i + 1));
             fs::write(&edge_cfg_path, serde_json::to_string_pretty(&edge_cfg)?)?;
+            edge_cfg_paths.push(edge_cfg_path.clone());
 
-            let edge_bin = find_binary("munode-edge")?;
             let edge_proc = Command::new(&edge_bin)
                 .arg(&edge_cfg_path)
                 .stdout(if verbose { Stdio::inherit() } else { Stdio::null() })
@@ -571,6 +691,11 @@ impl TestEnvBuilder {
             _hub: hub,
             _edges: edge_processes,
             _temp_dir: tmp,
+            hub_bin,
+            hub_cfg_path,
+            verbose,
+            edge_bin,
+            edge_cfg_paths,
         })
     }
 }
@@ -590,15 +715,21 @@ pub struct ClientConfig<'a> {
     pub edge: usize,
     pub channel_id: Option<u32>,
     pub use_udp_voice: bool,
+    pub pre_connect_state: Option<munode_client::PreConnectState>,
 }
 
 impl<'a> ClientConfig<'a> {
     pub fn new(username: &'a str, edge: usize) -> Self {
-        Self { username, edge, channel_id: None, use_udp_voice: false }
+        Self { username, edge, channel_id: None, use_udp_voice: false, pre_connect_state: None }
     }
 
     pub fn with_channel(mut self, channel_id: u32) -> Self {
         self.channel_id = Some(channel_id);
+        self
+    }
+
+    pub fn with_pre_connect_state(mut self, pcs: munode_client::PreConnectState) -> Self {
+        self.pre_connect_state = Some(pcs);
         self
     }
 }
@@ -624,6 +755,7 @@ pub async fn create_clients(
                 reject_unauthorized: false,
                 force_tcp_voice: !cfg.use_udp_voice,
                 connect_timeout: Duration::from_secs(10),
+                pre_connect_state: cfg.pre_connect_state.clone(),
                 ..Default::default()
             })
             .await
@@ -634,7 +766,7 @@ pub async fn create_clients(
         }
 
         if let Some(channel_id) = cfg.channel_id {
-            client.join_channel(channel_id).await?;
+            client.channel(channel_id).join().await?;
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
 

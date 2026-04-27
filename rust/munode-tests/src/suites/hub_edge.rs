@@ -10,7 +10,7 @@ use munode_client::ClientEvent;
 
 use crate::harness::{
     cleanup_clients, single_edge_env, sleep_ms, standard_env, ClientConfig,
-    create_clients,
+    create_clients, TestEnvBuilder,
 };
 
 // ── Environment & auth server ─────────────────────────────────────────────
@@ -130,7 +130,7 @@ async fn test_join_channel() -> Result<()> {
     let client = &clients[0];
 
     // Join the Lobby channel (id=1)
-    client.join_channel(1).await?;
+    client.channel(1).join().await?;
     sleep_ms(300).await;
 
     let session = client.session();
@@ -147,7 +147,7 @@ async fn test_join_nonexistent_channel_does_not_crash() -> Result<()> {
     let client = &clients[0];
 
     // Should not panic — server may ignore or send PermissionDenied
-    let _ = client.join_channel(9999).await;
+    let _ = client.channel(9999).join().await;
     sleep_ms(200).await;
 
     assert!(client.is_connected(), "Client should still be connected");
@@ -319,6 +319,90 @@ async fn test_users_on_different_edges_see_each_other() -> Result<()> {
     // Each should see at least themselves + the other
     assert!(users1.len() >= 2, "Edge1 user should see cross-edge user");
     assert!(users2.len() >= 2, "Edge2 user should see cross-edge user");
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+// ── Hub connection pool (hub-connection-pool.test.ts) ─────────────────────
+
+/// Edges configured with `hub_server.pool_size = 3` accept Mumble client
+/// connections normally and propagate cross-Edge user visibility.
+#[tokio::test]
+async fn test_pool_size_3_clients_connect_and_see_each_other() -> Result<()> {
+    let env = TestEnvBuilder::new()
+        .edges(2)
+        .edge_config_patch(serde_json::json!({
+            "hub_server": { "pool_size": 3 }
+        }))
+        .start()
+        .await?;
+
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig::new("user_edge1", 1),
+            ClientConfig::new("user_edge2", 2),
+        ],
+    )
+    .await?;
+
+    sleep_ms(800).await;
+
+    let e1_users = clients[0].users();
+    let e2_users = clients[1].users();
+
+    assert!(
+        e1_users.iter().any(|u| u.name == "user_edge2"),
+        "Edge 1 client must see Edge 2 user with pool_size=3"
+    );
+    assert!(
+        e2_users.iter().any(|u| u.name == "user_edge1"),
+        "Edge 2 client must see Edge 1 user with pool_size=3"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+/// Edges configured with `pool_size = 1` keep working (backwards-compat).
+#[tokio::test]
+async fn test_pool_size_1_default_remains_functional() -> Result<()> {
+    let env = TestEnvBuilder::new()
+        .edges(1)
+        .edge_config_patch(serde_json::json!({
+            "hub_server": { "pool_size": 1 }
+        }))
+        .start()
+        .await?;
+
+    let clients =
+        create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
+    assert!(clients[0].is_connected());
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+// ── External port (edge-external-port.test.ts) ────────────────────────────
+
+/// An Edge configured with an explicit `external_port` still accepts client
+/// connections on its real listen port.
+#[tokio::test]
+async fn test_edge_with_explicit_external_port_serves_clients() -> Result<()> {
+    let env = TestEnvBuilder::new()
+        .edges(1)
+        .edge_config_patch(serde_json::json!({
+            "network": { "external_port": 19999 }
+        }))
+        .start()
+        .await?;
+
+    let clients =
+        create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
+    assert!(
+        clients[0].is_connected(),
+        "Client must connect on real listen port despite external_port override"
+    );
 
     cleanup_clients(clients).await;
     Ok(())

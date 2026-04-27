@@ -15,15 +15,18 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use bytes::BytesMut;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{broadcast, mpsc};
 use tokio_rustls::TlsConnector;
 use tracing::{debug, error, warn};
 
+use munode_protocol::message_type::MessageType;
+use munode_protocol::mumbleproto;
 use munode_protocol::transport::{decode_frame, encode_message};
 
+use crate::domain::ServerInformation;
 use crate::events::ClientEvent;
 use crate::state::ClientState;
 
@@ -91,6 +94,7 @@ impl ServerCertVerifier for InsecureCertVerifier {
 pub async fn connect_tls(
     host: &str,
     port: u16,
+    client_cert: Option<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)>,
 ) -> Result<tokio_rustls::client::TlsStream<TcpStream>> {
     let tcp = TcpStream::connect((host, port))
         .await
@@ -99,10 +103,16 @@ pub async fn connect_tls(
     // Always use the insecure verifier for now — the Edge server uses a
     // self-signed certificate.  When production cert support is needed,
     // branch on a `reject_unauthorized` parameter here.
-    let mut tls_config = rustls::ClientConfig::builder()
+    let builder = rustls::ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(InsecureCertVerifier))
-        .with_no_client_auth();
+        .with_custom_certificate_verifier(Arc::new(InsecureCertVerifier));
+
+    let mut tls_config = match client_cert {
+        Some((chain, key)) => builder
+            .with_client_auth_cert(chain, key)
+            .context("invalid client certificate / key")?,
+        None => builder.with_no_client_auth(),
+    };
 
     tls_config.enable_sni = false;
 
@@ -123,6 +133,8 @@ pub async fn tcp_read_loop(
     state: Arc<tokio::sync::RwLock<ClientState>>,
     event_tx: broadcast::Sender<ClientEvent>,
     crypt_tx: tokio::sync::watch::Sender<Option<munode_protocol::crypto::CryptState>>,
+    server_info: Arc<tokio::sync::RwLock<ServerInformation>>,
+    tcp_tx: mpsc::Sender<Vec<u8>>,
 ) {
     let mut buf = BytesMut::with_capacity(8192);
 
@@ -131,7 +143,15 @@ pub async fn tcp_read_loop(
         loop {
             match decode_frame(&mut buf) {
                 Ok(Some(frame)) => {
-                    crate::client::dispatch_frame(frame, &state, &event_tx, &crypt_tx).await;
+                    crate::client::dispatch_frame(
+                        frame,
+                        &state,
+                        &event_tx,
+                        &crypt_tx,
+                        &server_info,
+                        &tcp_tx,
+                    )
+                    .await;
                 }
                 Ok(None) => break,
                 Err(e) => {
@@ -174,14 +194,23 @@ pub async fn tcp_write_loop(
 
 /// Run the UDP read loop, decrypting voice packets and emitting `Voice` events.
 /// Also detects the UDP Ping reply and emits `UdpReady`.
+///
+/// On repeated UDP decryption failures, sends an empty `CryptSetup` over TCP
+/// to request a nonce resync — mirrors the C++ Mumble client's behaviour
+/// (5-second hysteresis to avoid spamming the server).
 pub async fn udp_read_loop(
     socket: Arc<UdpSocket>,
     crypt_rx: tokio::sync::watch::Receiver<Option<munode_protocol::crypto::CryptState>>,
     event_tx: broadcast::Sender<ClientEvent>,
+    tcp_tx: Option<mpsc::Sender<Vec<u8>>>,
 ) {
     let mut local_crypt: Option<munode_protocol::crypto::CryptState> = None;
     let mut buf = vec![0u8; 2048];
     let mut udp_ready_sent = false;
+    let mut last_good = tokio::time::Instant::now();
+    let mut last_resync_request = tokio::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(60))
+        .unwrap_or_else(tokio::time::Instant::now);
 
     loop {
         let n = match socket.recv(&mut buf).await {
@@ -195,6 +224,9 @@ pub async fn udp_read_loop(
         // Pick up any updated CryptState.
         if crypt_rx.has_changed().unwrap_or(false) || local_crypt.is_none() {
             local_crypt = crypt_rx.borrow().as_ref().cloned();
+            // After receiving a fresh CryptSetup, reset the timers so we don't
+            // immediately re-request a resync.
+            last_good = tokio::time::Instant::now();
         }
 
         let data = &buf[..n];
@@ -206,6 +238,7 @@ pub async fn udp_read_loop(
         if let Some(ref mut crypt) = local_crypt {
             let mut plain = Vec::new();
             if crypt.decrypt(data, &mut plain) {
+                last_good = tokio::time::Instant::now();
                 if !plain.is_empty() {
                     let pkt_type = plain[0] >> 5;
                     if pkt_type == 1 {
@@ -222,6 +255,26 @@ pub async fn udp_read_loop(
                 }
             } else {
                 debug!("UDP decryption failed — packet dropped");
+                // Match Mumble C++ behaviour: if the last successful decrypt was
+                // > 5 s ago, ask the server for a nonce resync (and throttle
+                // to at most one request every 5 s).
+                let now = tokio::time::Instant::now();
+                if now.duration_since(last_good) > std::time::Duration::from_secs(5)
+                    && now.duration_since(last_resync_request)
+                        > std::time::Duration::from_secs(5)
+                {
+                    last_resync_request = now;
+                    if let Some(tx) = tcp_tx.as_ref() {
+                        let mut frame = BytesMut::new();
+                        encode_message(
+                            MessageType::CryptSetup,
+                            &mumbleproto::CryptSetup::default(),
+                            &mut frame,
+                        );
+                        let _ = tx.try_send(frame.to_vec());
+                        debug!("requested CryptSetup resync after UDP decrypt failure");
+                    }
+                }
             }
         }
     }

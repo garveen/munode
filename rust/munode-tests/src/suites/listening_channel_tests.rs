@@ -26,7 +26,7 @@ async fn test_add_listening_channel_broadcasts_to_same_edge() -> Result<()> {
     let user1_session = user1.session_id().unwrap();
     let mut rx = observer.subscribe();
 
-    user1.add_listening_channel(1).await?; // Listen to Lobby
+    user1.me().add_listener(1).await?; // Listen to Lobby
 
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -63,7 +63,7 @@ async fn test_add_listening_channel_broadcasts_cross_edge() -> Result<()> {
     let user1_session = user1.session_id().unwrap();
     let mut rx = observer.subscribe();
 
-    user1.add_listening_channel(1).await?;
+    user1.me().add_listener(1).await?;
 
     let got = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
@@ -95,9 +95,9 @@ async fn test_remove_listening_channel() -> Result<()> {
     let client = &clients[0];
 
     // Add then remove
-    client.add_listening_channel(1).await?;
+    client.me().add_listener(1).await?;
     sleep_ms(200).await;
-    client.remove_listening_channel(1).await?;
+    client.me().remove_listener(1).await?;
     sleep_ms(200).await;
 
     // Should not crash and still be connected
@@ -118,18 +118,18 @@ async fn test_listener_receives_voice_from_listened_channel() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (speaker, listener) = (&clients[0], &clients[1]);
 
-    speaker.join_channel(1).await?;   // Lobby
-    listener.join_channel(2).await?;  // General
+    speaker.channel(1).join().await?;   // Lobby
+    listener.channel(2).join().await?;  // General
     sleep_ms(200).await;
 
-    listener.add_listening_channel(1).await?; // Listen to Lobby
+    listener.me().add_listener(1).await?; // Listen to Lobby
     sleep_ms(300).await;
 
     let speaker_session = speaker.session_id().unwrap();
-    let mut rx = listener.subscribe_voice();
+    let mut rx = listener.subscribe();
 
     let audio = crate::harness::random_voice_data(20);
-    speaker.send_voice(4, 0, 1, &audio).await?;
+    speaker.voice().send(4, 0, 1, &audio).await?;
 
     let received = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -156,13 +156,13 @@ async fn test_add_multiple_listening_channels() -> Result<()> {
     let clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
     let client = &clients[0];
 
-    client.join_channel(0).await?; // Root
+    client.channel(0).join().await?; // Root
     sleep_ms(200).await;
 
     // Add multiple listeners
-    client.add_listening_channel(1).await?; // Lobby
-    client.add_listening_channel(2).await?; // General
-    client.add_listening_channel(3).await?; // Private
+    client.me().add_listener(1).await?; // Lobby
+    client.me().add_listener(2).await?; // General
+    client.me().add_listener(3).await?; // Private
     sleep_ms(200).await;
 
     assert!(client.is_connected(), "Should still be connected after adding multiple listeners");
@@ -193,8 +193,8 @@ async fn test_listener_receives_voice_from_linked_channel() -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let ch_a = admin.create_channel(&format!("LinkSpeak_{ts}"), 0).await?;
-    let ch_b = admin.create_channel(&format!("LinkListen_{ts}"), 0).await?;
+    let ch_a = admin.channel(0).create_subchannel(&format!("LinkSpeak_{ts}")).await?;
+    let ch_b = admin.channel(0).create_subchannel(&format!("LinkListen_{ts}")).await?;
     sleep_ms(400).await;
 
     admin.send_channel_state(mumbleproto::ChannelState {
@@ -205,15 +205,15 @@ async fn test_listener_receives_voice_from_linked_channel() -> Result<()> {
     sleep_ms(400).await;
 
     // Speaker joins ch_a; listener stays in root (ch 0) and listens to ch_b.
-    speaker.join_channel(ch_a).await?;
-    listener.add_listening_channel(ch_b).await?;
+    speaker.channel(ch_a).join().await?;
+    listener.me().add_listener(ch_b).await?;
     sleep_ms(400).await;
 
     let speaker_session = speaker.session_id().unwrap();
-    let mut rx = listener.subscribe_voice();
+    let mut rx = listener.subscribe();
 
     let audio = crate::harness::random_voice_data(20);
-    speaker.send_voice(4, 0, 1, &audio).await?;
+    speaker.voice().send(4, 0, 1, &audio).await?;
 
     let received = tokio::time::timeout(Duration::from_secs(5), async {
         loop {

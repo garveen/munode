@@ -16,5 +16,6 @@ serde_json = { workspace = true }
 axum = { workspace = true }
 tempfile = "3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+regex = "1"
 rusqlite = { workspace = true }
 rustls = { workspace = true }

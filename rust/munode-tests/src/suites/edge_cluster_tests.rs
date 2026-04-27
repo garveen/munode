@@ -129,7 +129,7 @@ async fn test_new_channel_propagates_across_edges() -> Result<()> {
     let (creator, observer) = (&clients[0], &clients[1]);
 
     let mut obs_rx = observer.subscribe();
-    let ch_id = creator.create_channel("ClusterSyncChannel", 0).await?;
+    let ch_id = creator.channel(0).create_subchannel("ClusterSyncChannel").await?;
 
     // Observer on Edge 2 should receive ChannelCreated
     let ch_created = tokio::time::timeout(Duration::from_secs(8), async {
@@ -173,7 +173,7 @@ async fn test_user_state_propagates_across_edges() -> Result<()> {
     let e1_session = e1_client.session_id().unwrap();
     let mut e2_rx = e2_client.subscribe();
 
-    e1_client.set_self_mute(true).await?;
+    e1_client.me().set_mute(true).await?;
 
     let state_updated = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
@@ -213,12 +213,12 @@ async fn test_text_message_routes_across_edges() -> Result<()> {
     let (sender, receiver) = (&clients[0], &clients[1]);
 
     // Move both into the same channel
-    sender.join_channel(1).await?;
-    receiver.join_channel(1).await?;
+    sender.channel(1).join().await?;
+    receiver.channel(1).join().await?;
     sleep_ms(400).await;
 
     let mut rx = receiver.subscribe();
-    sender.send_text_to_channel(1, "cluster-text-test").await?;
+    sender.channel(1).send_text("cluster-text-test").await?;
 
     let received = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
@@ -409,3 +409,138 @@ async fn test_late_join_visible_cross_edge() -> Result<()> {
     cleanup_clients(late_clients).await;
     Ok(())
 }
+
+// ── Cross-edge self-state visibility (edge-connection-user-sync) ──────────
+
+/// User A connected to Edge 1 sets self_mute & self_deaf, then User B
+/// connects to Edge 2 — B should see A's correct self-state in the initial
+/// user list, not stale defaults.
+#[tokio::test]
+async fn test_self_mute_deaf_synced_when_observer_joins_later() -> Result<()> {
+    let env = standard_env().await?;
+
+    // User A connects first to Edge 1
+    let a_clients = create_clients(&env, &[ClientConfig::new("user_edge1", 1)]).await?;
+    let a = &a_clients[0];
+    let a_session = a.session_id().unwrap();
+
+    sleep_ms(300).await;
+
+    // User A self-mutes and self-deafens
+    a.me().set_mute(true).await?;
+    sleep_ms(100).await;
+    a.me().set_deaf(true).await?;
+
+    // Wait for state to propagate to Hub
+    sleep_ms(600).await;
+
+    // User B connects to Edge 2 after the state change
+    let b_clients = create_clients(&env, &[ClientConfig::new("user_edge2", 2)]).await?;
+    let b = &b_clients[0];
+
+    sleep_ms(500).await;
+
+    let b_users = b.users();
+    let a_seen_by_b = b_users
+        .iter()
+        .find(|u| u.session == a_session)
+        .expect("user1 should be visible to user2");
+
+    assert!(
+        a_seen_by_b.self_mute,
+        "Observer must see User A's self_mute=true"
+    );
+    assert!(
+        a_seen_by_b.self_deaf,
+        "Observer must see User A's self_deaf=true"
+    );
+
+    cleanup_clients(a_clients).await;
+    cleanup_clients(b_clients).await;
+    Ok(())
+}
+
+// ── Disconnect cleanup (client-disconnect-cleanup) ────────────────────────
+
+/// After a clean disconnect, reconnecting under the same username should
+/// not leave a "zombie" session visible to other clients.
+#[tokio::test]
+async fn test_clean_disconnect_no_zombie_session() -> Result<()> {
+    let env = single_edge_env().await?;
+
+    let first = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
+    let session_a = first[0].session_id().unwrap();
+
+    sleep_ms(400).await;
+    first[0].disconnect().await?;
+    drop(first);
+    sleep_ms(700).await;
+
+    // Reconnect with the same username
+    let second = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
+    let session_b = second[0].session_id().unwrap();
+    assert_ne!(session_b, session_a, "Reconnect should allocate a new session");
+
+    sleep_ms(300).await;
+
+    // Connect an observer
+    let obs_clients = create_clients(&env, &[ClientConfig::new("user2", 1)]).await?;
+    sleep_ms(400).await;
+
+    let user1_instances: Vec<_> = obs_clients[0]
+        .users()
+        .into_iter()
+        .filter(|u| u.name == "user1")
+        .collect();
+
+    assert_eq!(
+        user1_instances.len(),
+        1,
+        "Observer must see exactly one instance of user1 (no zombie)"
+    );
+    assert_eq!(
+        user1_instances[0].session, session_b,
+        "The visible instance must be the new session"
+    );
+
+    cleanup_clients(second).await;
+    cleanup_clients(obs_clients).await;
+    Ok(())
+}
+
+/// Multiple users connect and disconnect, then a fresh observer must NOT
+/// see any of the disconnected users.
+#[tokio::test]
+async fn test_disconnected_users_not_visible_to_new_observer() -> Result<()> {
+    let env = single_edge_env().await?;
+
+    // Connect and disconnect several users in sequence
+    for username in ["user1", "user2"] {
+        let c = create_clients(&env, &[ClientConfig::new(username, 1)]).await?;
+        sleep_ms(200).await;
+        c[0].disconnect().await?;
+        sleep_ms(200).await;
+    }
+
+    sleep_ms(800).await;
+
+    // Fresh observer
+    let obs = create_clients(&env, &[ClientConfig::new("admin", 1)]).await?;
+    sleep_ms(400).await;
+
+    let still_visible: Vec<_> = obs[0]
+        .users()
+        .into_iter()
+        .filter(|u| u.name == "user1" || u.name == "user2")
+        .collect();
+
+    assert!(
+        still_visible.is_empty(),
+        "Disconnected users should not be visible to new observer (saw: {:?})",
+        still_visible.iter().map(|u| &u.name).collect::<Vec<_>>()
+    );
+
+    cleanup_clients(obs).await;
+    Ok(())
+}
+

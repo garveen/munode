@@ -711,12 +711,17 @@ impl RpcHandler {
                             warn!("Failed to persist ext-auth user: {}", e);
                         }
                     }
-                    // Prefer ext auth's channel, fall back to DB last_channel, then default
+                    // Prefer ext auth's channel, fall back to DB last_channel, then default.
+                    // Validate that the chosen channel still exists; fall back to default if not.
                     let channel_id = if let Some(ch) = resp.channel_id {
                         ch
                     } else if user_id > 0 {
                         let last_ch = self.state.user_store.get_last_channel(user_id).await;
-                        if last_ch > 0 { last_ch } else { config.auth.default_channel }
+                        if last_ch > 0 && self.state.channel_store.get_channel(last_ch).await.is_some() {
+                            last_ch
+                        } else {
+                            config.auth.default_channel
+                        }
                     } else {
                         config.auth.default_channel
                     };
@@ -923,7 +928,11 @@ impl RpcHandler {
                     }
                     let channel_id = if user_id > 0 {
                         let last_ch = self.state.user_store.get_last_channel(user_id).await;
-                        if last_ch > 0 { last_ch } else { config.auth.default_channel }
+                        if last_ch > 0 && self.state.channel_store.get_channel(last_ch).await.is_some() {
+                            last_ch
+                        } else {
+                            config.auth.default_channel
+                        }
                     } else {
                         config.auth.default_channel
                     };
@@ -1098,7 +1107,11 @@ impl RpcHandler {
                     // Fetch last_channel from DB for this user
                     let channel_id = if user_id > 0 {
                         let last_ch = self.state.user_store.get_last_channel(user_id).await;
-                        if last_ch > 0 { last_ch } else { config.auth.default_channel }
+                        if last_ch > 0 && self.state.channel_store.get_channel(last_ch).await.is_some() {
+                            last_ch
+                        } else {
+                            config.auth.default_channel
+                        }
                     } else {
                         config.auth.default_channel
                     };
@@ -1357,6 +1370,15 @@ impl RpcHandler {
                 (u.id, u.last_channel)
             }
             None => (0, config.auth.default_channel),
+        };
+
+        // If the restored channel no longer exists, fall back to default.
+        let channel_id = if channel_id > 0
+            && self.state.channel_store.get_channel(channel_id).await.is_none()
+        {
+            config.auth.default_channel
+        } else {
+            channel_id
         };
 
         // Create session

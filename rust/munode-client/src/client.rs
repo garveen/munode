@@ -19,6 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, anyhow, bail};
 use bytes::{BufMut, BytesMut};
 use prost::Message as ProstMessage;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{RwLock, broadcast, mpsc, watch};
 use tokio::time::timeout;
@@ -31,10 +32,26 @@ use munode_protocol::transport::{RawFrame, encode_message};
 
 use crate::connection::{self, send_message};
 use crate::crypto::from_crypt_setup;
+use crate::domain::{ContextActionInfo, DenyReason, RegisteredUser, RejectType, ServerInformation};
 use crate::error::ClientError;
 use crate::events::ClientEvent;
+use crate::handles::{Acl, ChannelRef, Me, Server, UserRef, Voice};
 use crate::state::{Channel, ClientState, ConnectionState, SessionState, User};
 use crate::voice::{build_udp_ping, build_voice_packet};
+
+/// Optional client TLS certificate material to present during the TLS
+/// handshake — required when connecting to Mumble servers configured for
+/// certificate-based authentication.
+#[derive(Debug, Clone)]
+pub enum ClientCertificate {
+    /// Pre-decoded DER certificate chain plus PKCS#8 DER private key.
+    Der {
+        chain: Vec<Vec<u8>>,
+        key_pkcs8_der: Vec<u8>,
+    },
+    /// PEM-encoded certificate chain + key. Decoded inside `connect()`.
+    Pem { chain_pem: Vec<u8>, key_pem: Vec<u8> },
+}
 
 /// Options for connecting to a Mumble server.
 #[derive(Debug, Clone)]
@@ -61,6 +78,20 @@ pub struct ConnectOptions {
     /// connection alive.  Set to `Duration::ZERO` to disable keepalive.
     /// Defaults to 15 seconds.
     pub ping_interval: Duration,
+    /// Optional client certificate (presented during the TLS handshake).
+    pub client_cert: Option<ClientCertificate>,
+    /// Optional state sent in a `UserState` message immediately after
+    /// `Authenticate` (before `ServerSync`). This mirrors the C++ Mumble
+    /// client which transmits the user's self-mute / self-deaf preference
+    /// at connect time so the server broadcasts it as part of the join.
+    pub pre_connect_state: Option<PreConnectState>,
+}
+
+/// State to transmit immediately after `Authenticate` (before `ServerSync`).
+#[derive(Debug, Clone, Default)]
+pub struct PreConnectState {
+    pub self_mute: Option<bool>,
+    pub self_deaf: Option<bool>,
 }
 
 impl Default for ConnectOptions {
@@ -75,6 +106,8 @@ impl Default for ConnectOptions {
             force_tcp_voice: false,
             connect_timeout: Duration::from_secs(10),
             ping_interval: Duration::from_secs(15),
+            client_cert: None,
+            pre_connect_state: None,
         }
     }
 }
@@ -107,6 +140,8 @@ struct ClientInner {
     port: RwLock<u16>,
     /// Whether to route voice via TCP UDPTunnel.
     force_tcp_voice: RwLock<bool>,
+    /// Aggregate server information accumulated from `Version`/`ServerSync`/`ServerConfig`.
+    server_info: Arc<RwLock<ServerInformation>>,
 }
 
 impl MumbleClient {
@@ -126,6 +161,7 @@ impl MumbleClient {
                 host: RwLock::new(String::new()),
                 port: RwLock::new(64738),
                 force_tcp_voice: RwLock::new(false),
+                server_info: Arc::new(RwLock::new(ServerInformation::default())),
             }),
         }
     }
@@ -158,10 +194,28 @@ impl MumbleClient {
         // Mark state as Connecting
         self.inner.state.write().await.connection_state = ConnectionState::Connecting;
 
+        // Decode optional client certificate.
+        let client_cert = match options.client_cert.clone() {
+            None => None,
+            Some(ClientCertificate::Der { chain, key_pkcs8_der }) => {
+                let der_chain: Vec<CertificateDer<'static>> =
+                    chain.into_iter().map(CertificateDer::from).collect();
+                let key = PrivateKeyDer::try_from(key_pkcs8_der)
+                    .map_err(|e| anyhow!("invalid client key DER: {}", e))?;
+                Some((der_chain, key))
+            }
+            Some(ClientCertificate::Pem { chain_pem, key_pem }) => {
+                let mut chain_reader = std::io::BufReader::new(chain_pem.as_slice());
+                let der_chain = pem_certs(&mut chain_reader)?;
+                let key = pem_key(&key_pem)?;
+                Some((der_chain, key))
+            }
+        };
+
         // Establish TLS/TCP
         let tls_stream = timeout(
             options.connect_timeout,
-            connection::connect_tls(&options.host, options.port),
+            connection::connect_tls(&options.host, options.port, client_cert),
         )
         .await
         .map_err(|_| ClientError::Timeout { secs: options.connect_timeout.as_secs() })?
@@ -169,13 +223,13 @@ impl MumbleClient {
 
         let (read_half, mut write_half) = tokio::io::split(tls_stream);
 
-        // Send Version
+        // Send Version (Mumble 1.5.0 — legacy uint32 = MAJOR<<16 | MINOR<<8 | PATCH).
         {
             let version = mumbleproto::Version {
-                version: Some(0x0001_0203),
-                release: Some("MuNode Client".into()),
-                os: Some("linux".into()),
-                os_version: None,
+                version: Some(0x0001_0500),
+                release: Some("MuNode Headless Client".into()),
+                os: Some(std::env::consts::OS.into()),
+                os_version: Some(std::env::consts::FAMILY.into()),
             };
             let mut buf = BytesMut::new();
             encode_message(MessageType::Version, &version, &mut buf);
@@ -199,9 +253,28 @@ impl MumbleClient {
             write_half.write_all(&buf).await.context("send Authenticate")?;
         }
 
+        // Send pre-connect UserState (self_mute / self_deaf) right after
+        // Authenticate, mirroring the C++ Mumble client. The session is not
+        // yet known so the server fills it in from the connection identity.
+        if let Some(pcs) = options.pre_connect_state.as_ref() {
+            if pcs.self_mute.is_some() || pcs.self_deaf.is_some() {
+                let us = mumbleproto::UserState {
+                    self_mute: pcs.self_mute,
+                    self_deaf: pcs.self_deaf,
+                    ..Default::default()
+                };
+                let mut buf = BytesMut::new();
+                encode_message(MessageType::UserState, &us, &mut buf);
+                write_half
+                    .write_all(&buf)
+                    .await
+                    .context("send pre-connect UserState")?;
+            }
+        }
+
         // Set up TCP write channel
         let (tcp_tx, tcp_rx) = mpsc::channel::<Vec<u8>>(512);
-        *self.inner.tcp_tx.write().await = Some(tcp_tx);
+        *self.inner.tcp_tx.write().await = Some(tcp_tx.clone());
 
         // Create cancellation token for this connection's tasks
         let token = CancellationToken::new();
@@ -223,10 +296,14 @@ impl MumbleClient {
             let state = self.inner.state.clone();
             let event_tx = self.inner.event_tx.clone();
             let crypt_tx = self.inner.crypt_tx.clone();
+            let server_info = self.inner.server_info.clone();
+            let tcp_tx_for_reader = tcp_tx.clone();
             let tok = token.clone();
             tokio::spawn(async move {
                 tokio::select! {
-                    _ = connection::tcp_read_loop(read_half, state, event_tx, crypt_tx) => {
+                    _ = connection::tcp_read_loop(
+                        read_half, state, event_tx, crypt_tx, server_info, tcp_tx_for_reader,
+                    ) => {
                         // Server closed the connection — cancel all other tasks so the
                         // writer loop exits and `tcp_tx.is_closed()` returns true.
                         tok.cancel();
@@ -276,7 +353,7 @@ impl MumbleClient {
             .await;
 
         match auth_result {
-            Ok(ClientEvent::AuthenticationFailed { reason }) => {
+            Ok(ClientEvent::AuthenticationFailed { reason, .. }) => {
                 self.do_disconnect().await;
                 Err(ClientError::AuthRejected { reason }.into())
             }
@@ -373,8 +450,9 @@ impl MumbleClient {
             let event_tx = self.inner.event_tx.clone();
             let sock = socket.clone();
             let cancel = self.inner.cancel.read().await.clone();
+            let tcp_tx = self.inner.tcp_tx.read().await.clone();
             tokio::spawn(async move {
-                let read_fut = connection::udp_read_loop(sock, crypt_rx, event_tx);
+                let read_fut = connection::udp_read_loop(sock, crypt_rx, event_tx, tcp_tx);
                 if let Some(tok) = cancel {
                     tokio::select! {
                         _ = read_fut => {}
@@ -835,8 +913,8 @@ impl MumbleClient {
             .unwrap_or_default()
     }
 
-    /// Look up a channel by ID.
-    pub fn channel(&self, channel_id: u32) -> Option<Channel> {
+    /// Look up a channel snapshot by ID.
+    pub fn channel_info(&self, channel_id: u32) -> Option<Channel> {
         self.inner.state.try_read().ok()?.channels.get(&channel_id).cloned()
     }
 
@@ -847,9 +925,46 @@ impl MumbleClient {
             .unwrap_or_default()
     }
 
-    /// Look up a user by session ID.
-    pub fn user(&self, session: u32) -> Option<User> {
+    /// Look up a user snapshot by session ID.
+    pub fn user_info(&self, session: u32) -> Option<User> {
         self.inner.state.try_read().ok()?.users.get(&session).cloned()
+    }
+
+    /// Snapshot of accumulated server information.
+    pub fn server_information(&self) -> ServerInformation {
+        self.server_info_snapshot()
+    }
+
+    // ── Handle entry points (handle-based API) ─────────────────────────────
+
+    /// Operations on the local user.
+    pub fn me(&self) -> Me<'_> {
+        Me { client: self }
+    }
+
+    /// Operations on a remote user identified by session ID.
+    pub fn user(&self, session: u32) -> UserRef<'_> {
+        UserRef { client: self, session }
+    }
+
+    /// Operations on a channel identified by channel ID.
+    pub fn channel(&self, channel_id: u32) -> ChannelRef<'_> {
+        ChannelRef { client: self, channel_id }
+    }
+
+    /// Server-wide / admin operations.
+    pub fn server(&self) -> Server<'_> {
+        Server { client: self }
+    }
+
+    /// Voice-send + whisper-target operations.
+    pub fn voice(&self) -> Voice<'_> {
+        Voice { client: self }
+    }
+
+    /// ACL editor for a single channel.
+    pub fn acl(&self, channel_id: u32) -> Acl<'_> {
+        Acl { client: self, channel_id }
     }
 
     // ── Event subscription ─────────────────────────────────────────────────
@@ -902,7 +1017,7 @@ impl MumbleClient {
     }
 
     /// Encode a protobuf message and queue it for TCP transmission.
-    fn send_proto<M: ProstMessage>(&self, msg_type: MessageType, msg: &M) -> Result<()> {
+    pub(crate) fn send_proto<M: ProstMessage>(&self, msg_type: MessageType, msg: &M) -> Result<()> {
         let guard = self.inner.tcp_tx.try_read()
             .map_err(|_| anyhow!("tcp_tx lock unavailable"))?;
         let tx = guard.as_ref().ok_or(ClientError::NotConnected)?;
@@ -910,7 +1025,7 @@ impl MumbleClient {
     }
 
     /// Frame a raw payload (used for UDPTunnel voice) and queue it.
-    fn send_raw_frame(&self, msg_type: MessageType, payload: &[u8]) -> Result<()> {
+    pub(crate) fn send_raw_frame(&self, msg_type: MessageType, payload: &[u8]) -> Result<()> {
         let mut buf = BytesMut::new();
         buf.put_u16(msg_type as u16);
         buf.put_u32(payload.len() as u32);
@@ -920,6 +1035,88 @@ impl MumbleClient {
         let tx = guard.as_ref().ok_or(ClientError::NotConnected)?;
         connection::send_raw(tx, buf.to_vec())
     }
+
+    // ── Helpers exposed to handle modules ──────────────────────────────────
+
+    /// Send an already-built voice payload — UDP if available, else TCP UDPTunnel.
+    pub(crate) async fn send_voice_payload(&self, packet: &[u8]) -> Result<()> {
+        self.send_voice_packet(packet).await
+    }
+
+    pub(crate) async fn set_force_tcp_voice(&self, force_tcp: bool) {
+        *self.inner.force_tcp_voice.write().await = force_tcp;
+    }
+
+    pub(crate) async fn udp_socket_clone(&self) -> Option<Arc<tokio::net::UdpSocket>> {
+        self.inner.udp_socket.read().await.clone()
+    }
+
+    pub(crate) fn crypt_clone(&self) -> Option<munode_protocol::crypto::CryptState> {
+        self.inner.crypt_rx.borrow().as_ref().cloned()
+    }
+
+    pub(crate) fn crypt_stats(&self) -> CryptStatsSnapshot {
+        let crypt = self.inner.crypt_rx.borrow().as_ref().cloned();
+        let (good, late, lost, resync) = match crypt {
+            Some(c) => (c.good, c.late, c.lost, c.resync),
+            None => (0, 0, 0, 0),
+        };
+        CryptStatsSnapshot {
+            good,
+            late,
+            lost,
+            resync,
+            udp_packets: good,
+            tcp_packets: 0,
+            udp_ping_avg: 0.0,
+            udp_ping_var: 0.0,
+            tcp_ping_avg: 0.0,
+            tcp_ping_var: 0.0,
+        }
+    }
+
+    pub(crate) fn server_info_snapshot(&self) -> ServerInformation {
+        self.inner
+            .server_info
+            .try_read()
+            .map(|s| s.clone())
+            .unwrap_or_default()
+    }
+}
+
+/// Snapshot of OCB2 / link-quality statistics, used by `Me::ping`.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct CryptStatsSnapshot {
+    pub good: u32,
+    pub late: u32,
+    pub lost: u32,
+    pub resync: u32,
+    pub udp_packets: u32,
+    pub tcp_packets: u32,
+    pub udp_ping_avg: f32,
+    pub udp_ping_var: f32,
+    pub tcp_ping_avg: f32,
+    pub tcp_ping_var: f32,
+}
+
+// ── PEM helpers ────────────────────────────────────────────────────────────
+
+fn pem_certs(rd: &mut impl std::io::BufRead) -> Result<Vec<CertificateDer<'static>>> {
+    let mut out = Vec::new();
+    for item in rustls_pemfile::certs(rd) {
+        out.push(item.context("invalid PEM certificate")?);
+    }
+    if out.is_empty() {
+        bail!("no certificates found in PEM input");
+    }
+    Ok(out)
+}
+
+fn pem_key(pem: &[u8]) -> Result<PrivateKeyDer<'static>> {
+    let mut rd = std::io::BufReader::new(pem);
+    rustls_pemfile::private_key(&mut rd)
+        .context("PEM private key")?
+        .ok_or_else(|| anyhow!("no private key found in PEM input"))
 }
 
 impl Default for MumbleClient {
@@ -939,12 +1136,24 @@ pub(crate) async fn dispatch_frame(
     state: &Arc<RwLock<ClientState>>,
     event_tx: &broadcast::Sender<ClientEvent>,
     crypt_tx: &watch::Sender<Option<munode_protocol::crypto::CryptState>>,
+    server_info: &Arc<RwLock<ServerInformation>>,
+    tcp_tx: &mpsc::Sender<Vec<u8>>,
 ) {
     use MessageType::*;
 
     match frame.message_type {
         Version => {
-            debug!("received Version from server");
+            if let Ok(msg) = mumbleproto::Version::decode(&*frame.payload) {
+                {
+                    let mut info = server_info.write().await;
+                    info.version = msg.version.unwrap_or(0);
+                    info.release = msg.release.clone();
+                    info.os = msg.os.clone();
+                    info.os_version = msg.os_version.clone();
+                    let _ = event_tx.send(ClientEvent::ServerInformation(info.clone()));
+                }
+                let _ = event_tx.send(ClientEvent::ServerVersion(msg));
+            }
         }
         CryptSetup => {
             if let Ok(msg) = mumbleproto::CryptSetup::decode(&*frame.payload) {
@@ -957,6 +1166,31 @@ pub(crate) async fn dispatch_frame(
                         let _ = crypt_tx.send(Some(crypt));
                         let _ = event_tx.send(ClientEvent::CryptoReady);
                     }
+                } else if msg.key.is_none()
+                    && msg.client_nonce.is_none()
+                    && msg.server_nonce.is_none()
+                {
+                    // Empty CryptSetup → server is asking us to resync.
+                    if let Some(crypt) = crypt_tx.borrow().as_ref().cloned() {
+                        let reply = mumbleproto::CryptSetup {
+                            key: None,
+                            client_nonce: Some(crypt.encrypt_iv.to_vec()),
+                            server_nonce: None,
+                        };
+                        let mut out = BytesMut::new();
+                        encode_message(MessageType::CryptSetup, &reply, &mut out);
+                        let _ = tcp_tx.try_send(out.to_vec());
+                    }
+                    let _ = event_tx.send(ClientEvent::CryptResyncRequested);
+                } else if let Some(sn) = msg.server_nonce.as_deref() {
+                    // Refreshed server_nonce only.
+                    if let Ok(arr) = <[u8; 16]>::try_from(sn) {
+                        if let Some(mut crypt) = crypt_tx.borrow().as_ref().cloned() {
+                            crypt.decrypt_iv = arr;
+                            crypt.resync = crypt.resync.wrapping_add(1);
+                            let _ = crypt_tx.send(Some(crypt));
+                        }
+                    }
                 }
             }
         }
@@ -964,7 +1198,14 @@ pub(crate) async fn dispatch_frame(
             if let Ok(msg) = mumbleproto::ServerSync::decode(&*frame.payload) {
                 let session = msg.session();
                 let max_bandwidth = msg.max_bandwidth.unwrap_or(0);
+                let welcome = msg.welcome_text.clone();
                 state.write().await.apply_server_sync(&msg);
+                {
+                    let mut info = server_info.write().await;
+                    info.welcome_text = welcome;
+                    info.max_bandwidth = max_bandwidth;
+                    let _ = event_tx.send(ClientEvent::ServerInformation(info.clone()));
+                }
                 let _ = event_tx.send(ClientEvent::Authenticated { session, max_bandwidth });
             }
         }
@@ -1043,15 +1284,20 @@ pub(crate) async fn dispatch_frame(
         Reject => {
             if let Ok(msg) = mumbleproto::Reject::decode(&*frame.payload) {
                 let reason = msg.reason.clone().unwrap_or_else(|| "Unknown".into());
-                let _ = event_tx.send(ClientEvent::AuthenticationFailed { reason });
+                let kind = RejectType::from_proto(msg.r#type.unwrap_or(0));
+                let _ = event_tx.send(ClientEvent::AuthenticationFailed { reason, kind });
             }
         }
         PermissionDenied => {
             if let Ok(msg) = mumbleproto::PermissionDenied::decode(&*frame.payload) {
+                let kind = DenyReason::from_proto(msg.r#type.unwrap_or(0));
                 let _ = event_tx.send(ClientEvent::PermissionDenied {
                     channel_id: msg.channel_id.unwrap_or(0),
                     permission: msg.permission.unwrap_or(0),
                     reason: msg.reason.clone(),
+                    kind,
+                    session: msg.session,
+                    name: msg.name.clone(),
                 });
             }
         }
@@ -1080,7 +1326,21 @@ pub(crate) async fn dispatch_frame(
         }
         ServerConfig => {
             if let Ok(msg) = mumbleproto::ServerConfig::decode(&*frame.payload) {
+                {
+                    let mut info = server_info.write().await;
+                    info.welcome_text = msg.welcome_text.clone();
+                    info.max_bandwidth = msg.max_bandwidth.unwrap_or(info.max_bandwidth);
+                    info.allow_html = msg.allow_html;
+                    info.message_length = msg.message_length;
+                    info.image_message_length = msg.image_message_length;
+                    let _ = event_tx.send(ClientEvent::ServerInformation(info.clone()));
+                }
                 let _ = event_tx.send(ClientEvent::ServerConfig(msg));
+            }
+        }
+        SuggestConfig => {
+            if let Ok(msg) = mumbleproto::SuggestConfig::decode(&*frame.payload) {
+                let _ = event_tx.send(ClientEvent::SuggestConfig(msg));
             }
         }
         PluginDataTransmission => {
@@ -1094,11 +1354,11 @@ pub(crate) async fn dispatch_frame(
         }
         ContextAction => {
             if let Ok(msg) = mumbleproto::ContextAction::decode(&*frame.payload) {
-                let _ = event_tx.send(ClientEvent::ContextAction {
+                let _ = event_tx.send(ClientEvent::ContextAction(ContextActionInfo {
                     action: msg.action.clone(),
                     session: msg.session,
                     channel_id: msg.channel_id,
-                });
+                }));
             }
         }
         QueryUsers => {
@@ -1106,8 +1366,14 @@ pub(crate) async fn dispatch_frame(
                 let _ = event_tx.send(ClientEvent::QueryUsers(msg));
             }
         }
+        UserList => {
+            if let Ok(msg) = mumbleproto::UserList::decode(&*frame.payload) {
+                let users = msg.users.iter().map(RegisteredUser::from_proto).collect();
+                let _ = event_tx.send(ClientEvent::UserList(users));
+            }
+        }
         // Server-initiated messages we intentionally ignore on the client side
-        CodecVersion | SuggestConfig | ContextActionModify | UserList
+        CodecVersion | ContextActionModify
         | VoiceTarget | RequestBlob | Authenticate => {
             debug!(msg_type = ?frame.message_type, "ignored server-sent message");
         }

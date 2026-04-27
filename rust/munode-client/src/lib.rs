@@ -40,13 +40,19 @@
 pub mod client;
 pub mod connection;
 pub mod crypto;
+pub mod domain;
 pub mod error;
 pub mod events;
+pub mod handles;
 pub mod state;
 pub mod voice;
 
-pub use client::{ConnectOptions, MumbleClient};
+pub use client::{ClientCertificate, ConnectOptions, MumbleClient, PreConnectState};
+pub use domain::{
+    Ban, ContextActionInfo, DenyReason, RegisteredUser, RejectType, ServerInformation,
+};
 pub use error::ClientError;
 pub use events::ClientEvent;
+pub use handles::{Acl, ChannelRef, Me, Server, UserRef, Voice};
 pub use state::{Channel, ConnectionState, SessionState, User};
 pub use voice::{VoiceData, build_voice_packet, parse_voice_packet};

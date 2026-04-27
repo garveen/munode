@@ -26,7 +26,7 @@ async fn test_kick_user_disconnects_target() -> Result<()> {
     let target_session = target.session_id().expect("target must have session");
     let mut target_rx = target.subscribe();
 
-    admin.kick_user(target_session, Some("Test kick")).await?;
+    admin.user(target_session).kick(Some("Test kick")).await?;
 
     // Wait for the target to receive Kicked or be disconnected
     let kicked = tokio::time::timeout(Duration::from_secs(5), async {
@@ -65,7 +65,7 @@ async fn test_kick_notify_observer() -> Result<()> {
     let target_session = target.session_id().unwrap();
     let mut obs_rx = observer.subscribe();
 
-    admin.kick_user(target_session, Some("Kick for test")).await?;
+    admin.user(target_session).kick(Some("Kick for test")).await?;
     sleep_ms(800).await;
 
     // Observer should see UserLeft or Kicked event for the target
@@ -102,7 +102,7 @@ async fn test_non_admin_cannot_kick() -> Result<()> {
     let user2_session = user2.session_id().unwrap();
 
     // Non-admin tries to kick — server should deny or ignore
-    user1.kick_user(user2_session, None).await.ok(); // May return error; that's fine
+    user1.user(user2_session).kick(None).await.ok(); // May return error; that's fine
     sleep_ms(500).await;
 
     // user2 should still be connected
@@ -213,7 +213,7 @@ async fn test_ban_user_kicks_and_prevents_rejoin() -> Result<()> {
     let target_session = target.session_id().unwrap();
 
     // Get target's address (127.0.0.1) and ban for 1 second
-    admin.ban_user(target_session, Some("Ban test"), Some(1)).await?;
+    admin.user(target_session).ban(Some("Ban test")).await?;
     sleep_ms(1000).await;
 
     // Target should be disconnected

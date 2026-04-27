@@ -34,6 +34,9 @@ pub const TEST_USERS: &[TestUser] = &[
     TestUser { username: "balance_sender",   password: "pass1",        user_id: 29,  groups: &["user"] },
     TestUser { username: "balance_receiver", password: "pass4",        user_id: 30,  groups: &["user"] },
     TestUser { username: "moderator",        password: "mod123",       user_id: 92,  groups: &["moderator"] },
+    // ACL operations integration tests.
+    TestUser { username: "acl_op_user",      password: "acl_op_pass",  user_id: 750, groups: &["user", "acl_testers"] },
+    TestUser { username: "acl_op_observer",  password: "acl_op_obs_pass", user_id: 751, groups: &["user", "acl_testers"] },
     TestUser { username: "voice_sender",     password: "pass1",        user_id: 101, groups: &["user"] },
     TestUser { username: "voice_recv_e1_same", password: "pass2",      user_id: 102, groups: &["user"] },
     TestUser { username: "voice_recv_e2_same", password: "pass3",      user_id: 103, groups: &["user"] },

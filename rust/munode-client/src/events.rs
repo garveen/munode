@@ -1,5 +1,6 @@
 //! Client event types and the broadcast channel used to distribute them.
 
+use crate::domain::{ContextActionInfo, DenyReason, RejectType, ServerInformation};
 use crate::state::{Channel, User};
 use crate::voice::VoiceData;
 
@@ -13,7 +14,7 @@ pub enum ClientEvent {
     /// Server sent `ServerSync` — authentication is complete.
     Authenticated { session: u32, max_bandwidth: u32 },
     /// Server rejected the authentication (`Reject` message).
-    AuthenticationFailed { reason: String },
+    AuthenticationFailed { reason: String, kind: RejectType },
     /// A new user appeared on the server (initial sync or join).
     UserJoined(User),
     /// A user left the server.
@@ -44,6 +45,12 @@ pub enum ClientEvent {
         channel_id: u32,
         permission: u32,
         reason: Option<String>,
+        /// Typed denial classification.
+        kind: DenyReason,
+        /// Target session, when applicable (e.g. failed move).
+        session: Option<u32>,
+        /// Invalid name, when `kind == UserName`.
+        name: Option<String>,
     },
     /// A `PermissionQuery` response was received.
     PermissionQuery { channel_id: u32, permissions: u32 },
@@ -53,21 +60,27 @@ pub enum ClientEvent {
     BanList(Vec<munode_protocol::mumbleproto::BanList>),
     /// Server configuration received.
     ServerConfig(munode_protocol::mumbleproto::ServerConfig),
+    /// Server `Version` message received from the server during handshake.
+    ServerVersion(munode_protocol::mumbleproto::Version),
+    /// Aggregate server information snapshot — emitted whenever any of
+    /// `Version`, `ServerSync`, or `ServerConfig` is received.
+    ServerInformation(ServerInformation),
+    /// `UserList` (registered users) received from the server.
+    UserList(Vec<crate::domain::RegisteredUser>),
+    /// A `SuggestConfig` was received (administrator-suggested client config).
+    SuggestConfig(munode_protocol::mumbleproto::SuggestConfig),
+    /// A context action was triggered by the server (or relayed from another user).
+    ContextAction(ContextActionInfo),
+    /// Server requested CryptSetup resync (empty CryptSetup notification).
+    CryptResyncRequested,
     /// The current user was kicked from the server.
     Kicked { session: u32, reason: Option<String> },
     /// A ping response was received.
     Ping { timestamp: u64 },
-    /// Plugin data was received.
     PluginData {
         sender: u32,
         plugin_id: String,
         data: Vec<u8>,
-    },
-    /// A context action was triggered.
-    ContextAction {
-        action: String,
-        session: Option<u32>,
-        channel_id: Option<u32>,
     },
     /// ACL data was received.
     Acl(Box<munode_protocol::mumbleproto::Acl>),

@@ -42,7 +42,7 @@ async fn test_user_state_self_mute_broadcast() -> Result<()> {
     let user1_session = user1.session_id().unwrap();
     let mut rx = user2.subscribe();
 
-    user1.set_self_mute(true).await?;
+    user1.me().set_mute(true).await?;
 
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -78,7 +78,7 @@ async fn test_user_state_self_deaf_broadcast() -> Result<()> {
     let user1_session = user1.session_id().unwrap();
     let mut rx = user2.subscribe();
 
-    user1.set_self_deaf(true).await?;
+    user1.me().set_deaf(true).await?;
 
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -115,7 +115,7 @@ async fn test_user_state_cross_edge_broadcast() -> Result<()> {
     let user1_session = user1.session_id().unwrap();
     let mut rx = user2.subscribe();
 
-    user1.set_self_mute(true).await?;
+    user1.me().set_mute(true).await?;
 
     let got = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
@@ -151,14 +151,14 @@ async fn test_text_message_to_channel() -> Result<()> {
     let (sender, receiver) = (&clients[0], &clients[1]);
 
     // Both join the same channel
-    sender.join_channel(1).await?;
-    receiver.join_channel(1).await?;
+    sender.channel(1).join().await?;
+    receiver.channel(1).join().await?;
     sleep_ms(300).await;
 
     let sender_session = sender.session_id().unwrap();
     let mut rx = receiver.subscribe();
 
-    sender.send_text_to_channel(1, "Hello, world!").await?;
+    sender.channel(1).send_text("Hello, world!").await?;
 
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -191,14 +191,14 @@ async fn test_text_message_cross_edge() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (sender, receiver) = (&clients[0], &clients[1]);
 
-    sender.join_channel(1).await?;
-    receiver.join_channel(1).await?;
+    sender.channel(1).join().await?;
+    receiver.channel(1).join().await?;
     sleep_ms(500).await;
 
     let sender_session = sender.session_id().unwrap();
     let mut rx = receiver.subscribe();
 
-    sender.send_text_to_channel(1, "Cross-edge message").await?;
+    sender.channel(1).send_text("Cross-edge message").await?;
 
     let got = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
@@ -235,7 +235,7 @@ async fn test_private_message_to_session() -> Result<()> {
     let sender_session = sender.session_id().unwrap();
     let mut rx = receiver.subscribe();
 
-    sender.send_text_to_session(receiver_session, "Private hello").await?;
+    sender.user(receiver_session).send_text("Private hello").await?;
 
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -273,7 +273,7 @@ async fn test_set_and_receive_comment() -> Result<()> {
     let user1_session = user1.session_id().unwrap();
     let mut rx = user2.subscribe();
 
-    user1.set_comment("My test comment").await?;
+    user1.me().set_comment("My test comment").await?;
 
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -304,7 +304,7 @@ async fn test_ping_response() -> Result<()> {
     let client = &clients[0];
 
     let mut rx = client.subscribe();
-    client.send_ping().await?;
+    client.me().ping().await?;
 
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -333,7 +333,7 @@ async fn test_query_users_by_id() -> Result<()> {
 
     // Query admin user (ID=1)
     let mut rx = client.subscribe();
-    client.query_users(vec![1], vec![]).await?;
+    client.server().query_users(vec![1], vec![]).await?;
 
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {

@@ -54,6 +54,13 @@ pub struct User {
     pub hash: Option<String>,
     pub comment: Option<String>,
     pub texture: Option<Vec<u8>>,
+    /// SHA1 hash of the comment if it is large (≥128 bytes). The full
+    /// comment must be retrieved with `RequestBlob`.
+    pub comment_hash: Option<Vec<u8>>,
+    /// SHA1 hash of the avatar texture if it is large (≥128 bytes).
+    pub texture_hash: Option<Vec<u8>>,
+    /// Channels this user is currently listening to.
+    pub listening_channels: Vec<u32>,
 }
 
 /// The current session's local state.
@@ -165,6 +172,20 @@ impl ClientState {
         let is_new = !self.users.contains_key(&session);
         let existing = self.users.get(&session).cloned();
 
+        // Track listening_channels mutations (server reflects add/remove fields back).
+        let mut updated_listeners: Vec<u32> = existing
+            .as_ref()
+            .map(|u| u.listening_channels.clone())
+            .unwrap_or_default();
+        for &ch in &msg.listening_channel_add {
+            if !updated_listeners.contains(&ch) {
+                updated_listeners.push(ch);
+            }
+        }
+        if !msg.listening_channel_remove.is_empty() {
+            updated_listeners.retain(|c| !msg.listening_channel_remove.contains(c));
+        }
+
         let user = User {
             session,
             user_id: msg.user_id,
@@ -204,6 +225,13 @@ impl ClientState {
             texture: msg.texture.clone().or_else(|| {
                 existing.as_ref().and_then(|u| u.texture.clone())
             }),
+            comment_hash: msg.comment_hash.clone().or_else(|| {
+                existing.as_ref().and_then(|u| u.comment_hash.clone())
+            }),
+            texture_hash: msg.texture_hash.clone().or_else(|| {
+                existing.as_ref().and_then(|u| u.texture_hash.clone())
+            }),
+            listening_channels: updated_listeners,
         };
         self.users.insert(session, user.clone());
 
@@ -213,6 +241,7 @@ impl ClientState {
                 sess.channel_id = user.channel_id;
                 sess.self_mute = user.self_mute;
                 sess.self_deaf = user.self_deaf;
+                sess.listening_channels = user.listening_channels.clone();
             }
         }
 

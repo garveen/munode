@@ -31,12 +31,12 @@ async fn test_send_voice_tcp_does_not_panic() -> Result<()> {
     let clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
     let client = &clients[0];
 
-    client.join_channel(1).await?;
+    client.channel(1).join().await?;
     sleep_ms(200).await;
 
     // Send voice packet via TCP tunnel (codec=4 Opus, target=0 normal)
     let audio = random_voice_data(20);
-    client.send_voice(4, 0, 1, &audio).await?;
+    client.voice().send(4, 0, 1, &audio).await?;
 
     cleanup_clients(clients).await;
     Ok(())
@@ -55,15 +55,15 @@ async fn test_voice_received_by_same_channel_user() -> Result<()> {
     let (sender, receiver) = (&clients[0], &clients[1]);
 
     // Both join the same channel
-    sender.join_channel(1).await?;
-    receiver.join_channel(1).await?;
+    sender.channel(1).join().await?;
+    receiver.channel(1).join().await?;
     sleep_ms(300).await;
 
-    let mut rx = receiver.subscribe_voice();
+    let mut rx = receiver.subscribe();
     let sender_session = sender.session_id().unwrap();
 
     let audio = random_voice_data(20);
-    sender.send_voice(4, 0, 1, &audio).await?;
+    sender.voice().send(4, 0, 1, &audio).await?;
 
     let received = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -93,15 +93,15 @@ async fn test_voice_not_received_by_different_channel_user() -> Result<()> {
     let (sender, receiver) = (&clients[0], &clients[1]);
 
     // Sender in Lobby, receiver in General
-    sender.join_channel(1).await?;    // Lobby
-    receiver.join_channel(2).await?;  // General
+    sender.channel(1).join().await?;    // Lobby
+    receiver.channel(2).join().await?;  // General
     sleep_ms(300).await;
 
-    let mut rx = receiver.subscribe_voice();
+    let mut rx = receiver.subscribe();
     let sender_session = sender.session_id().unwrap();
 
     let audio = random_voice_data(20);
-    sender.send_voice(4, 0, 1, &audio).await?;
+    sender.voice().send(4, 0, 1, &audio).await?;
     sleep_ms(500).await;
 
     // Check we did NOT receive voice from sender in that window
@@ -132,15 +132,15 @@ async fn test_voice_received_cross_edge_same_channel() -> Result<()> {
     let (sender, receiver) = (&clients[0], &clients[1]);
 
     // Both join Lobby
-    sender.join_channel(1).await?;
-    receiver.join_channel(1).await?;
+    sender.channel(1).join().await?;
+    receiver.channel(1).join().await?;
     sleep_ms(500).await;
 
-    let mut rx = receiver.subscribe_voice();
+    let mut rx = receiver.subscribe();
     let sender_session = sender.session_id().unwrap();
 
     let audio = random_voice_data(20);
-    sender.send_voice(4, 0, 1, &audio).await?;
+    sender.voice().send(4, 0, 1, &audio).await?;
 
     let received = tokio::time::timeout(Duration::from_secs(8), async {
         loop {
@@ -171,16 +171,16 @@ async fn test_deaf_user_does_not_receive_voice() -> Result<()> {
     let clients = create_clients(&env, &configs).await?;
     let (sender, receiver) = (&clients[0], &clients[1]);
 
-    sender.join_channel(1).await?;
-    receiver.join_channel(1).await?;
-    receiver.set_self_deaf(true).await?;
+    sender.channel(1).join().await?;
+    receiver.channel(1).join().await?;
+    receiver.me().set_deaf(true).await?;
     sleep_ms(300).await;
 
-    let mut rx = receiver.subscribe_voice();
+    let mut rx = receiver.subscribe();
     let sender_session = sender.session_id().unwrap();
 
     let audio = random_voice_data(20);
-    sender.send_voice(4, 0, 1, &audio).await?;
+    sender.voice().send(4, 0, 1, &audio).await?;
     sleep_ms(500).await;
 
     let mut received = false;
@@ -219,8 +219,8 @@ async fn test_voice_routes_through_linked_channels() -> Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let ch_a = admin.create_channel(&format!("VA_{ts}"), 0).await?;
-    let ch_b = admin.create_channel(&format!("VB_{ts}"), 0).await?;
+    let ch_a = admin.channel(0).create_subchannel(&format!("VA_{ts}")).await?;
+    let ch_b = admin.channel(0).create_subchannel(&format!("VB_{ts}")).await?;
     sleep_ms(300).await;
 
     // Link A → B
@@ -232,15 +232,15 @@ async fn test_voice_routes_through_linked_channels() -> Result<()> {
     sleep_ms(600).await;
 
     // user1 in ch_a, user2 in ch_b
-    user1.join_channel(ch_a).await?;
-    user2.join_channel(ch_b).await?;
+    user1.channel(ch_a).join().await?;
+    user2.channel(ch_b).join().await?;
     sleep_ms(300).await;
 
-    let mut rx = user2.subscribe_voice();
+    let mut rx = user2.subscribe();
     let sender_session = user1.session_id().unwrap();
 
     let audio = random_voice_data(20);
-    user1.send_voice(4, 0, 1, &audio).await?;
+    user1.voice().send(4, 0, 1, &audio).await?;
 
     let received = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -273,27 +273,27 @@ async fn test_whisper_to_specific_channel() -> Result<()> {
     let (sender, target, non_target) = (&clients[0], &clients[1], &clients[2]);
 
     // All join Lobby
-    sender.join_channel(1).await?;
-    target.join_channel(1).await?;
-    non_target.join_channel(2).await?; // General — different channel
+    sender.channel(1).join().await?;
+    target.channel(1).join().await?;
+    non_target.channel(2).join().await?; // General — different channel
     sleep_ms(300).await;
 
     let sender_session = sender.session_id().unwrap();
     let target_session = target.session_id().unwrap();
 
     // Set voice target 1 to whisper to target user
-    sender.set_voice_target(1, vec![mumbleproto::voice_target::Target {
+    sender.voice().set_target(1, vec![mumbleproto::voice_target::Target {
         session: vec![target_session],
         ..Default::default()
     }]).await?;
     sleep_ms(200).await;
 
-    let mut target_rx = target.subscribe_voice();
-    let mut non_target_rx = non_target.subscribe_voice();
+    let mut target_rx = target.subscribe();
+    let mut non_target_rx = non_target.subscribe();
 
     let audio = random_voice_data(20);
     // Send with target=1 (whisper)
-    sender.send_voice(4, 1, 1, &audio).await?;
+    sender.voice().send(4, 1, 1, &audio).await?;
     sleep_ms(500).await;
 
     // Target should receive
@@ -336,17 +336,17 @@ async fn test_multiple_senders_in_same_channel() -> Result<()> {
     let (s1, s2, receiver) = (&clients[0], &clients[1], &clients[2]);
 
     for c in clients.iter() {
-        c.join_channel(1).await?;
+        c.channel(1).join().await?;
     }
     sleep_ms(300).await;
 
-    let mut rx = receiver.subscribe_voice();
+    let mut rx = receiver.subscribe();
     let s1_session = s1.session_id().unwrap();
     let s2_session = s2.session_id().unwrap();
 
     let audio = random_voice_data(20);
-    s1.send_voice(4, 0, 1, &audio).await?;
-    s2.send_voice(4, 0, 2, &audio).await?;
+    s1.voice().send(4, 0, 1, &audio).await?;
+    s2.voice().send(4, 0, 2, &audio).await?;
 
     let timeout = Duration::from_secs(5);
     let (mut got1, mut got2) = (false, false);
@@ -370,3 +370,70 @@ async fn test_multiple_senders_in_same_channel() -> Result<()> {
     cleanup_clients(clients).await;
     Ok(())
 }
+
+// ── Voice routing after channel move (voice-channel-move.test.ts) ─────────
+
+/// Sender self-moves to another channel and back. Voice should still route
+/// correctly afterwards (regression test for state being lost on channel move).
+#[tokio::test]
+async fn test_voice_routes_after_self_channel_move_back() -> Result<()> {
+    let env = single_edge_env().await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig::new("user1", 1),
+            ClientConfig::new("user2", 1),
+        ],
+    )
+    .await?;
+    let (sender, receiver) = (&clients[0], &clients[1]);
+
+    sender.channel(1).join().await?;
+    receiver.channel(1).join().await?;
+    sleep_ms(300).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let mut rx = receiver.subscribe();
+    let audio = random_voice_data(20);
+
+    // Phase 1: baseline
+    sender.voice().send(4, 0, 1, &audio).await?;
+    let baseline = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(baseline, "Voice baseline must work before channel move");
+
+    // Phase 2: sender moves to channel 2 then back to channel 1
+    sender.channel(2).join().await?;
+    sleep_ms(400).await;
+    sender.channel(1).join().await?;
+    sleep_ms(400).await;
+
+    // Phase 3: voice should still work after returning
+    let mut rx2 = receiver.subscribe();
+    sender.voice().send(4, 0, 2, &audio).await?;
+    let after = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match rx2.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(after, "Voice must still route after self channel move + return");
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+

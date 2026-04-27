@@ -94,7 +94,7 @@ async fn test_tcp_ping_response() -> Result<()> {
     let client = &clients[0];
 
     let mut rx = client.subscribe();
-    client.send_ping().await?;
+    client.me().ping().await?;
 
     let got = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
