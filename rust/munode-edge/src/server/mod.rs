@@ -227,14 +227,30 @@ impl EdgeServer {
                                 // header when the edge is behind nginx/HAProxy.
                                 let mut stream = stream;
                                 let real_addr = if proxy_protocol {
-                                    match proxy_protocol::read_proxy_protocol_addr(&mut stream).await {
-                                        Ok(Some(addr)) => addr,
-                                        Ok(None) => peer_addr, // UNKNOWN / LOCAL — fall back
-                                        Err(e) => {
+                                    // Bound the PROXY Protocol read so a peer that opens TCP
+                                    // but never sends the PROXY header (slow-loris) cannot
+                                    // hold a connection slot indefinitely.
+                                    const PROXY_READ_TIMEOUT: tokio::time::Duration =
+                                        tokio::time::Duration::from_secs(5);
+                                    let parse_result = tokio::time::timeout(
+                                        PROXY_READ_TIMEOUT,
+                                        proxy_protocol::read_proxy_protocol_addr(&mut stream),
+                                    ).await;
+                                    match parse_result {
+                                        Ok(Ok(Some(addr))) => addr,
+                                        Ok(Ok(None)) => peer_addr, // UNKNOWN / LOCAL — fall back
+                                        Ok(Err(e)) => {
                                             debug!(
                                                 tcp_peer = %peer_addr,
                                                 "PROXY Protocol parse error — dropping connection: {}",
                                                 e
+                                            );
+                                            return;
+                                        }
+                                        Err(_) => {
+                                            debug!(
+                                                tcp_peer = %peer_addr,
+                                                "PROXY Protocol read timed out — dropping connection"
                                             );
                                             return;
                                         }

@@ -25,6 +25,18 @@ use crate::voice::{deliver_voice_tcp, inject_session_into_voice, wrap_udptunnel}
 /// this duration are considered zombie connections and are closed.
 const CLIENT_IDLE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(120);
 
+/// Maximum time allowed for the TLS handshake to complete.  Without this, a
+/// malicious peer that opens a TCP connection but never finishes the TLS
+/// handshake (slow-loris) would hold a connection-semaphore permit and a
+/// tokio task indefinitely.
+const TLS_HANDSHAKE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(15);
+
+/// Maximum time allowed for the writer task to drain and flush its queue
+/// after the read loop exits.  Caps the cleanup time on a wedged TCP socket
+/// (e.g. peer abruptly disappeared without RST) and is also used in early
+/// pre-auth reject paths.
+const WRITER_DRAIN_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(5);
+
 
 /// Result returned by the spawned login task on success.
 pub(super) struct LoginTaskResult {
@@ -373,8 +385,22 @@ pub(super) async fn handle_client_connection(
     // Disable Nagle's algorithm for real-time voice delivery
     stream.set_nodelay(true)?;
 
-    // Only log after TLS handshake succeeds to avoid noise from healthcheck probes (nc -z)
-    let tls_stream = acceptor.accept(stream).await?;
+    // Bound the TLS handshake duration so a peer that opens TCP but never
+    // completes ClientHello cannot hold a connection slot forever (slow-loris).
+    let tls_stream = match tokio::time::timeout(
+        TLS_HANDSHAKE_TIMEOUT,
+        acceptor.accept(stream),
+    ).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
+            debug!("TLS handshake error from {}: {}", peer_addr, e);
+            return Err(e.into());
+        }
+        Err(_) => {
+            debug!("TLS handshake from {} timed out", peer_addr);
+            anyhow::bail!("TLS handshake timeout");
+        }
+    };
 
     info!("New TCP connection from {}", peer_addr);
     
@@ -403,6 +429,12 @@ pub(super) async fn handle_client_connection(
     let (send_tx, mut send_rx) = mpsc::channel::<bytes::Bytes>(4096);
     let client_sender = ClientSender::new(send_tx);
 
+    // Notified when the writer task exits due to a TCP write/flush error (not clean close).
+    // The read loop selects on this so half-open connections are detected promptly instead
+    // of waiting for the 120-second idle timeout.
+    let write_failed = std::sync::Arc::new(tokio::sync::Notify::new());
+    let write_failed_notify = std::sync::Arc::clone(&write_failed);
+
     // Writer task: forwards messages from send_rx to TLS socket.
     // Batches pending messages with write_vectored + single flush to reduce syscalls.
     let writer_handle = tokio::spawn(async move {
@@ -411,7 +443,7 @@ pub(super) async fn handle_client_connection(
             // Wait for the first message.
             let first = match send_rx.recv().await {
                 Some(data) => data,
-                None => break, // channel closed → client disconnected
+                None => break, // channel closed → client disconnected (clean)
             };
 
             let mut pending = vec![first];
@@ -426,6 +458,7 @@ pub(super) async fn handle_client_connection(
                 // Common case: single message — avoid building IoSlice vec.
                 if let Err(e) = writer.write_all(&pending[0]).await {
                     debug!("Write error to client: {}", e);
+                    write_failed_notify.notify_one();
                     break;
                 }
             } else {
@@ -433,12 +466,14 @@ pub(super) async fn handle_client_connection(
                     pending.iter().map(|d| std::io::IoSlice::new(d.as_ref())).collect();
                 if let Err(e) = writer.write_vectored(&iov).await {
                     debug!("Write error to client: {}", e);
+                    write_failed_notify.notify_one();
                     break;
                 }
             }
 
             if let Err(e) = writer.flush().await {
                 debug!("Flush error to client: {}", e);
+                write_failed_notify.notify_one();
                 break;
             }
         }
@@ -523,6 +558,13 @@ pub(super) async fn handle_client_connection(
                 biased;
                 _ = &mut close_rx => {
                     debug!("Client {} force-disconnected (kicked/banned)", peer_addr);
+                    if let Some(ab) = login_abort.take() { ab.abort(); }
+                    break 'outer;
+                }
+                _ = write_failed.notified() => {
+                    // TCP write failed while login was in progress — abort the login task
+                    // and close immediately rather than waiting for the idle timeout.
+                    debug!("Client {} TCP write failed during login, closing connection", peer_addr);
                     if let Some(ab) = login_abort.take() { ab.abort(); }
                     break 'outer;
                 }
@@ -611,6 +653,12 @@ pub(super) async fn handle_client_connection(
                 biased;
                 _ = &mut close_rx => {
                     debug!("Client {} force-disconnected (kicked/banned)", peer_addr);
+                    break 'outer;
+                }
+                _ = write_failed.notified() => {
+                    // TCP write failed — close the connection immediately instead of
+                    // waiting up to 120 s for the idle timeout to fire.
+                    debug!("Client {} TCP write failed, closing connection", peer_addr);
                     break 'outer;
                 }
                 result = tokio::time::timeout(read_timeout, reader.read_buf(&mut buf)) => {
@@ -708,7 +756,7 @@ pub(super) async fn handle_client_connection(
                         ).into()).await;
                         // Drop sender so the writer task drains and flushes before exiting
                         drop(client_sender);
-                        writer_handle.await.ok();
+                        drain_writer(writer_handle).await;
                         return Ok(());
                     }
 
@@ -730,7 +778,7 @@ pub(super) async fn handle_client_connection(
                                     &format!("Server is full ({}/{})", local_count, max_users),
                                 ).into()).await;
                                 drop(client_sender);
-                                writer_handle.await.ok();
+                                drain_writer(writer_handle).await;
                                 return Ok(());
                             }
                         }
@@ -849,14 +897,21 @@ pub(super) async fn handle_client_connection(
                             resync: Some(resync),
                             ..Default::default()
                         };
-                        client_sender.send_message(MessageType::Ping, &response).await;
+                        // Break early on send failure: the writer task has already exited
+                        // (TCP dead). Without this, we would wait for the next read
+                        // error or the 120 s idle timeout before cleaning up.
+                        if !client_sender.send_message(MessageType::Ping, &response).await {
+                            break 'outer;
+                        }
                     } else {
                         // Pre-auth: just echo the timestamp back.
                         let response = mumbleproto::Ping {
                             timestamp: ping.timestamp,
                             ..Default::default()
                         };
-                        client_sender.send_message(MessageType::Ping, &response).await;
+                        if !client_sender.send_message(MessageType::Ping, &response).await {
+                            break 'outer;
+                        }
                     }
                 }
                 MessageType::UserState if client_state == ClientState::Ready => {
@@ -1736,7 +1791,10 @@ pub(super) async fn handle_client_connection(
             }
         }
 
-        edge_state.client_manager.remove_client(sid).await;
+        // remove_client returns the ClientInfo so we can use it for ninja filtering
+        // below WITHOUT a second get_client call (which would always return None since
+        // the session is already removed).
+        let removed_client = edge_state.client_manager.remove_client(sid).await;
         // Invalidate BroadcastCaches: a user left, routing targets changed.
         edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
         // Free the session ID back to the local pool
@@ -1748,10 +1806,11 @@ pub(super) async fn handle_client_connection(
         // Clear cached UDP source address so the routing fast-path no longer
         // sends voice toward a now-dead UDP endpoint.
         edge_state.udp_session_to_addr.remove(&sid);
-        // Get the client's channel before removing the ninja cache, so we can do
-        // ninja-filtered UserRemove below.
-        let disconnected_channel_id = edge_state.client_manager.get_client(sid).await
-            .map(|c| c.channel_id);
+        // Capture the disconnected channel from the removed client record.
+        // Previously this used get_client() AFTER remove_client(), which always
+        // returned None (the session was already gone), causing ninja-channel
+        // filtering to be silently skipped on every disconnect.
+        let disconnected_channel_id = removed_client.as_ref().map(|c| c.channel_id);
         // Clean up ninja channel permission cache for this session
         edge_state.ninja_visible_to.write().await.remove(&sid);
 
@@ -1798,13 +1857,26 @@ pub(super) async fn handle_client_connection(
     // Gracefully drain any pending outgoing messages (e.g. a Reject sent on auth
     // failure) before the TCP connection is closed.  Dropping the sender closes
     // the channel; the writer task will exit after flushing its queue.
-    // A 5-second timeout prevents hanging forever when the socket is already dead.
+    // A bounded timeout + explicit abort prevents hanging forever (or leaking
+    // the writer task) when the socket is already dead.
     drop(client_sender);
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        writer_handle,
-    ).await;
+    drain_writer(writer_handle).await;
     Ok(())
+}
+
+/// Drain the writer task with a bounded timeout, aborting it explicitly if it
+/// does not exit on its own.
+///
+/// `tokio::time::timeout(d, JoinHandle).await` consumes the JoinHandle, and on
+/// timeout drops it without aborting the task (drop is *not* abort in tokio).
+/// Without an explicit `abort()` call, a writer task wedged on a stuck TLS
+/// write would survive after this function returns, leaking a task plus the
+/// TLS writer half of the socket.
+async fn drain_writer(writer_handle: tokio::task::JoinHandle<()>) {
+    let abort_handle = writer_handle.abort_handle();
+    if tokio::time::timeout(WRITER_DRAIN_TIMEOUT, writer_handle).await.is_err() {
+        abort_handle.abort();
+    }
 }
 
 /// Handle a UserState update from a local client.
