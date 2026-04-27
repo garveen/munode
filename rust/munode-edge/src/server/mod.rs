@@ -172,9 +172,12 @@ impl EdgeServer {
         if self.config.web_api.enabled {
             let web_api_host = self.config.web_api.host.clone();
             let web_api_port = self.config.web_api.port;
+            let web_api_token = self.config.web_api.api_token.clone();
             let web_api_state = edge_state.clone();
             tokio::spawn(async move {
-                if let Err(e) = crate::web_api::run_web_api(&web_api_host, web_api_port, web_api_state).await {
+                if let Err(e) = crate::web_api::run_web_api(
+                    &web_api_host, web_api_port, web_api_state, web_api_token,
+                ).await {
                     error!("Edge Web API error: {}", e);
                 }
             });
@@ -193,6 +196,37 @@ impl EdgeServer {
         // version exchange) do not consume slots intended for authenticated users.
         const MAX_TCP_CONNECTIONS: usize = 65_535;
         let conn_semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_TCP_CONNECTIONS));
+
+        // Pre-parse the trusted-proxy allow-list once so the per-connection fast path
+        // does not re-parse CIDR strings on every accept.  `None` means "trust every
+        // peer" (legacy behaviour); `Some(empty)` would mean "trust no peer", which
+        // we interpret the same as the legacy default to avoid breaking existing
+        // configs that simply leave the field unset.
+        let trusted_proxies: Option<Arc<[proxy_protocol::TrustedPeer]>> =
+            if self.config.network.proxy_protocol
+                && !self.config.network.trusted_proxy_ips.is_empty()
+            {
+                match proxy_protocol::parse_trusted_proxy_list(
+                    &self.config.network.trusted_proxy_ips,
+                ) {
+                    Ok(list) => Some(Arc::from(list.into_boxed_slice())),
+                    Err(e) => {
+                        return Err(anyhow::anyhow!(
+                            "Invalid network.trusted_proxy_ips entry: {}",
+                            e
+                        ));
+                    }
+                }
+            } else {
+                if self.config.network.proxy_protocol {
+                    warn!(
+                        "network.proxy_protocol is enabled without network.trusted_proxy_ips; \
+                         every TCP peer can spoof its source IP via a forged PROXY header. \
+                         Configure trusted_proxy_ips to restrict this to your reverse proxy."
+                    );
+                }
+                None
+            };
 
         // Accept loop
         loop {
@@ -220,13 +254,40 @@ impl EdgeServer {
                             let hub = hub_client.clone();
                             let state = edge_state.clone();
                             let proxy_protocol = self.config.network.proxy_protocol;
+                            let trusted_proxies = trusted_proxies.clone();
+                            // When PROXY protocol is enabled with an explicit trusted-list,
+                            // reject TCP peers outside the list before doing any per-connection
+                            // work.  Without this gate a direct client could spoof its source IP
+                            // via a forged PROXY header.
+                            if proxy_protocol
+                                && trusted_proxies.is_some()
+                                && !proxy_protocol::peer_is_trusted_proxy(
+                                    peer_addr.ip(), trusted_proxies.as_deref(),
+                                )
+                            {
+                                debug!(
+                                    "Connection from {} refused: PROXY protocol enabled but peer \
+                                     is not in network.trusted_proxy_ips",
+                                    peer_addr
+                                );
+                                drop(stream);
+                                continue;
+                            }
                             tokio::spawn(async move {
                                 // Hold the permit for the duration of the connection.
                                 let _permit = permit;
                                 // Resolve the real client address from a PROXY Protocol
                                 // header when the edge is behind nginx/HAProxy.
                                 let mut stream = stream;
-                                let real_addr = if proxy_protocol {
+                                // Only honour PROXY headers from peers that match the
+                                // configured trusted-proxy allow-list.  This prevents a
+                                // direct client from spoofing its source IP by simply
+                                // prefixing a forged PROXY header.
+                                let peer_is_trusted = proxy_protocol
+                                    && proxy_protocol::peer_is_trusted_proxy(
+                                        peer_addr.ip(), trusted_proxies.as_deref(),
+                                    );
+                                let real_addr = if peer_is_trusted {
                                     // Bound the PROXY Protocol read so a peer that opens TCP
                                     // but never sends the PROXY header (slow-loris) cannot
                                     // hold a connection slot indefinitely.

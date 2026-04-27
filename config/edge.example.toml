@@ -72,6 +72,14 @@ region = "asia-east"                    # Default: not set (recommended to set f
 #
 # proxy_protocol = false
 
+# Allow-list of TCP peer IPs / CIDRs permitted to send PROXY Protocol headers.
+# When `proxy_protocol = true` and this list is configured, peers outside the
+# list have their connection dropped immediately (so a malicious direct client
+# cannot spoof its source IP via a forged PROXY header).
+# When the list is empty (default), every peer is trusted — only safe when the
+# listening port is firewalled to the upstream proxy.
+# trusted_proxy_ips = ["127.0.0.1", "10.0.0.0/8", "::1", "fd00::/8"]
+
 # ---------------------------------------------------------------------------
 # TLS/SSL
 # ---------------------------------------------------------------------------
@@ -128,6 +136,18 @@ hmac_secret = "change-me-to-match-hub-secret"  # Default: not set
 # Maximum number of concurrent client connections
 capacity       = 1000                   # Default: 1000
 
+# Token-bucket rate limit for control-plane messages (TextMessage,
+# UserState, ChannelState, ContextAction, UserStats).  Mirrors Murmur's
+# `messagelimit` / `messageburst`.  Hub may push override values that take
+# precedence over these.
+# message_rate    = 1.0                # Default: 1.0 msg/s (Murmur default)
+# message_burst   = 5                  # Default: 5
+
+# Token-bucket rate limit for `PluginDataTransmission`.  Mirrors Murmur's
+# `pluginmessagelimit` / `pluginmessageburst`.
+# plugin_message_rate  = 4.0           # Default: 4.0 msg/s
+# plugin_message_burst = 15            # Default: 15
+
 
 
 # Test/debug flag: disable Hub relay for cross-edge voice (use direct UDP only)
@@ -173,9 +193,15 @@ enabled            = true              # Default: true
 # ---------------------------------------------------------------------------
 [web_api]
 # Enable the HTTP Web API for local monitoring (GET /api/clients, GET /api/health).
-# Bind to 127.0.0.1 (or a private interface) — this endpoint has no authentication.
-# Docker requires 0.0.0.0
+# The /api/clients, /api/remote_clients, and /api/all_clients endpoints expose
+# per-session metadata (usernames, IP addresses, channel state).  Always set
+# `api_token` when binding to a non-loopback host, otherwise any remote caller
+# can harvest that data.
+# Docker requires 0.0.0.0 to expose outside the container.
 enabled = false                        # Default: false
-host    = "0.0.0.0"                  # Default: 0.0.0.0
+host    = "127.0.0.1"                  # Default: 0.0.0.0 — switch to 127.0.0.1 unless api_token is set
 port    = 8081                         # Default: 8081
+# Optional bearer token.  When set, every /api/* request (except /api/health)
+# must include `Authorization: Bearer <token>`.
+# api_token = "change-me-to-a-long-random-secret"
 

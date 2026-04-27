@@ -193,10 +193,12 @@ image_message_length = 131072          # Default: 131072 (128 KB)
 # Maximum length of a plugin data message in bytes (0 = unlimited)
 plugin_message_length = 1024           # Default: 1024
 
-# Token-bucket rate limiter: maximum messages per second (sustained)
-message_rate  = 10.0                   # Default: 10.0 msg/s
+# Token-bucket rate limiter for control-plane messages (TextMessage,
+# UserState, ChannelState, ContextAction, UserStats).  Mirrors Murmur's
+# `messagelimit` / `messageburst`.
+message_rate  = 1.0                    # Default: 1.0 msg/s (Murmur default)
 
-# Token-bucket burst size
+# Token-bucket burst size for control-plane messages
 message_burst = 5                      # Default: 5
 
 # Maximum bandwidth per user in bits per second (pushed to clients via ServerConfig)

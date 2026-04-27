@@ -17,8 +17,10 @@ pub enum FrameError {
     DecodeError(#[from] prost::DecodeError),
 }
 
-/// Maximum message size (8 MB, matching Mumble's limit).
-const MAX_MESSAGE_SIZE: usize = 8 * 1024 * 1024;
+/// Maximum message size — matches Murmur's `0x7fffff` (8 MiB − 1) cap in
+/// `c-implement/src/Connection.cpp`.  Murmur drops the connection above this
+/// limit, and the C++ client refuses to encode larger messages.
+const MAX_MESSAGE_SIZE: usize = 0x7fffff;
 
 /// Mumble protocol frame header size: type (2 bytes) + length (4 bytes).
 const HEADER_SIZE: usize = 6;

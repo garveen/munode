@@ -13,6 +13,16 @@ pub struct EdgeWebApiConfig {
     /// HTTP listening host for the Web API.
     #[serde(default = "default_host")]
     pub host: String,
+    /// Optional bearer token required for every Web API request.  When set,
+    /// each request must include `Authorization: Bearer <token>`.  Strongly
+    /// recommended whenever the API listens on a non-loopback address: the
+    /// API exposes per-session metadata (usernames, IPs, channel state) that
+    /// must not leak to anonymous remote callers.
+    ///
+    /// Leaving this unset trusts every caller — appropriate only when `host`
+    /// is bound to `127.0.0.1` / `::1` or to a private management interface.
+    #[serde(default)]
+    pub api_token: Option<String>,
 }
 
 impl Default for EdgeWebApiConfig {
@@ -21,6 +31,7 @@ impl Default for EdgeWebApiConfig {
             enabled: false,
             port: default_edge_web_api_port(),
             host: default_host(),
+            api_token: None,
         }
     }
 }
@@ -138,6 +149,20 @@ pub struct NetworkConfig {
     /// rejected when this is enabled.
     #[serde(default)]
     pub proxy_protocol: bool,
+    /// Allow-list of TCP peer IP addresses that are permitted to send PROXY Protocol
+    /// headers.  Connections from any other peer IP have their PROXY header parsing
+    /// skipped (the TCP peer address is used directly).
+    ///
+    /// Each entry may be either a single IP (`"127.0.0.1"`, `"::1"`) or a CIDR block
+    /// (`"10.0.0.0/8"`, `"fd00::/8"`).  An empty / unset list trusts every peer
+    /// (unchanged behaviour, matching pre-hardening deployments).
+    ///
+    /// Strongly recommended whenever `proxy_protocol = true` and the listening port
+    /// is reachable from networks other than the upstream proxy: without an allow-list
+    /// a malicious direct client can spoof its source IP for logging, geoip, and
+    /// audit-trail purposes by simply prefixing a forged PROXY header.
+    #[serde(default)]
+    pub trusted_proxy_ips: Vec<String>,
 }
 
 /// TLS certificate configuration.
@@ -224,15 +249,26 @@ pub struct ServerConfig {
     /// Maximum image message length in bytes (default: 131072).
     #[serde(default = "default_image_message_length")]
     pub image_message_length: u32,
-    /// Maximum text messages per second per user (token bucket). 0 = unlimited.
+    /// Maximum control messages per second per user (token bucket).  Mirrors
+    /// Murmur's `messagelimit` and applies to TextMessage, UserState,
+    /// ChannelState, ContextAction and UserStats.  0 = unlimited.
     #[serde(default = "default_message_rate")]
     pub message_rate: f32,
-    /// Token bucket burst size for text messages (default: 5).
+    /// Token bucket burst size for control messages (default: 5, matching
+    /// Murmur's `messageburst`).
     #[serde(default = "default_message_burst")]
     pub message_burst: u32,
     /// Maximum plugin data message length in bytes (default: 1024). 0 = unlimited.
     #[serde(default = "default_plugin_message_length")]
     pub plugin_message_length: u32,
+    /// Maximum plugin data messages per second per user (token bucket).
+    /// Mirrors Murmur's `pluginmessagelimit`.  0 = unlimited.
+    #[serde(default = "default_plugin_message_rate")]
+    pub plugin_message_rate: f32,
+    /// Token bucket burst size for plugin data messages (default: 15,
+    /// matching Murmur's `pluginmessageburst`).
+    #[serde(default = "default_plugin_message_burst")]
+    pub plugin_message_burst: u32,
     /// Maximum number of channels a user can listen to simultaneously. 0 = unlimited.
     #[serde(default)]
     pub listeners_per_user: u32,
@@ -279,6 +315,8 @@ impl Default for ServerConfig {
             message_rate: default_message_rate(),
             message_burst: default_message_burst(),
             plugin_message_length: default_plugin_message_length(),
+            plugin_message_rate: default_plugin_message_rate(),
+            plugin_message_burst: default_plugin_message_burst(),
             listeners_per_user: 0,
             listeners_per_channel: 0,
             allow_ping: true,
@@ -856,10 +894,16 @@ fn default_plugin_message_length() -> u32 {
     1024
 }
 fn default_message_rate() -> f32 {
-    10.0
+    1.0
 }
 fn default_message_burst() -> u32 {
     5
+}
+fn default_plugin_message_rate() -> f32 {
+    4.0
+}
+fn default_plugin_message_burst() -> u32 {
+    15
 }
 fn default_max_sessions_per_user() -> u32 {
     1

@@ -7,6 +7,101 @@ use tokio::io::AsyncReadExt;
 /// Magic bytes that mark the start of a PROXY Protocol v2 header.
 const PROXY_V2_MAGIC: &[u8; 12] = b"\r\n\r\n\0\r\nQUIT\n";
 
+/// A trusted-proxy allow-list entry.  Either a single IP address or a CIDR
+/// block (subnet + prefix length, with the prefix bits canonicalised).
+#[derive(Clone, Debug)]
+pub(super) enum TrustedPeer {
+    Ip(IpAddr),
+    Cidr { network: IpAddr, prefix: u8 },
+}
+
+/// Parse a list of allow-list entries (IPs or CIDR blocks like `"10.0.0.0/8"`).
+pub(super) fn parse_trusted_proxy_list(entries: &[String]) -> Result<Vec<TrustedPeer>> {
+    let mut out = Vec::with_capacity(entries.len());
+    for raw in entries {
+        let entry = raw.trim();
+        if entry.is_empty() { continue; }
+        if let Some((addr, prefix)) = entry.split_once('/') {
+            let network: IpAddr = addr.trim().parse()
+                .with_context(|| format!("invalid IP in trusted_proxy_ips entry {:?}", raw))?;
+            let prefix: u8 = prefix.trim().parse()
+                .with_context(|| format!("invalid prefix in trusted_proxy_ips entry {:?}", raw))?;
+            let max = if network.is_ipv4() { 32 } else { 128 };
+            if prefix > max {
+                return Err(anyhow!(
+                    "prefix /{} too large for {} in trusted_proxy_ips entry {:?}",
+                    prefix, network, raw
+                ));
+            }
+            out.push(TrustedPeer::Cidr { network: mask_addr(network, prefix), prefix });
+        } else {
+            let ip: IpAddr = entry.parse()
+                .with_context(|| format!("invalid IP in trusted_proxy_ips entry {:?}", raw))?;
+            out.push(TrustedPeer::Ip(ip));
+        }
+    }
+    Ok(out)
+}
+
+/// Apply a CIDR prefix mask to an address so equality compares only the
+/// network portion.
+fn mask_addr(addr: IpAddr, prefix: u8) -> IpAddr {
+    match addr {
+        IpAddr::V4(v4) => {
+            let bits = u32::from(v4);
+            let mask = if prefix == 0 { 0u32 } else { u32::MAX << (32 - prefix) };
+            IpAddr::V4(Ipv4Addr::from(bits & mask))
+        }
+        IpAddr::V6(v6) => {
+            let bits = u128::from(v6);
+            let mask = if prefix == 0 { 0u128 } else { u128::MAX << (128 - prefix) };
+            IpAddr::V6(Ipv6Addr::from(bits & mask))
+        }
+    }
+}
+
+/// Test whether `peer` is permitted to send PROXY Protocol headers.
+///
+/// `allow_list` of `None` means "no allow-list configured" — keep the
+/// pre-hardening behaviour of trusting every peer.  An empty (`Some(&[])`)
+/// list trusts no peer.
+pub(super) fn peer_is_trusted_proxy(peer: IpAddr, allow_list: Option<&[TrustedPeer]>) -> bool {
+    let list = match allow_list {
+        Some(list) => list,
+        None => return true,
+    };
+    for entry in list {
+        match entry {
+            TrustedPeer::Ip(ip) => {
+                if *ip == peer { return true; }
+                // Also match IPv4 addresses tunnelled through IPv6 (`::ffff:1.2.3.4`).
+                if let (IpAddr::V6(v6), IpAddr::V4(v4)) = (peer, *ip) {
+                    if v6.to_ipv4_mapped() == Some(v4) { return true; }
+                }
+                if let (IpAddr::V6(v6), IpAddr::V4(v4)) = (*ip, peer) {
+                    if v6.to_ipv4_mapped() == Some(v4) { return true; }
+                }
+            }
+            TrustedPeer::Cidr { network, prefix } => {
+                let masked = mask_addr(peer, *prefix);
+                if masked == *network { return true; }
+                if let (IpAddr::V4(v4), IpAddr::V6(_v6)) = (peer, *network) {
+                    // CIDR is IPv6 but peer is plain IPv4 — also test the
+                    // IPv4-mapped form.
+                    let mapped: IpAddr = IpAddr::V6(v4.to_ipv6_mapped());
+                    if mask_addr(mapped, *prefix) == *network { return true; }
+                }
+                if let (IpAddr::V6(v6), IpAddr::V4(_v4)) = (peer, *network) {
+                    if let Some(v4) = v6.to_ipv4_mapped() {
+                        if mask_addr(IpAddr::V4(v4), *prefix) == *network { return true; }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Read and parse a PROXY Protocol header (v1 or v2) from a TCP stream.
 ///
 /// Returns `Some(addr)` with the real client address, or `None` when the proxy

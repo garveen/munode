@@ -37,7 +37,6 @@ const TLS_HANDSHAKE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from
 /// pre-auth reject paths.
 const WRITER_DRAIN_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(5);
 
-
 /// Result returned by the spawned login task on success.
 pub(super) struct LoginTaskResult {
     session_id: u32,
@@ -490,17 +489,32 @@ pub(super) async fn handle_client_connection(
     let mut client_release = String::new();
     let mut client_os = String::new();
     let mut client_os_version = String::new();
-    // Per-client rate limiter for text messages.
-    // Prefer hub-pushed limits over edge-local config (hub limits are set after registration).
+    // Per-client rate limiter for control-plane messages (TextMessage,
+    // UserState, ChannelState, ContextAction, UserStats).  Mirrors Murmur's
+    // single shared `leakyBucket` (see RATELIMIT macro in
+    // c-implement/src/murmur/Messages.cpp).  Prefer hub-pushed limits over
+    // edge-local config (hub limits are set after registration).
     let hub_limits_snapshot = edge_state.hub_limits.read().await.clone();
     let (effective_message_rate, effective_message_burst) = hub_limits_snapshot
         .as_ref()
         .map(|l| (l.message_rate.unwrap_or(0.0), l.message_burst.unwrap_or(0)))
         .unwrap_or((config.server.message_rate, config.server.message_burst));
-    let mut text_rate_limiter = if effective_message_rate > 0.0 {
+    let mut control_rate_limiter = if effective_message_rate > 0.0 {
         Some(munode_common::rate_limiter::TokenBucket::new(
             effective_message_rate,
             effective_message_burst,
+        ))
+    } else {
+        None
+    };
+    // Per-client rate limiter for PluginDataTransmission, mirroring Murmur's
+    // dedicated `m_pluginMessageBucket` (`pluginmessagelimit` /
+    // `pluginmessageburst`).  Plugin messages have a separate bucket because
+    // they have a much larger burst budget than control messages.
+    let mut plugin_rate_limiter = if config.server.plugin_message_rate > 0.0 {
+        Some(munode_common::rate_limiter::TokenBucket::new(
+            config.server.plugin_message_rate,
+            config.server.plugin_message_burst,
         ))
     } else {
         None
@@ -917,6 +931,15 @@ pub(super) async fn handle_client_connection(
                 MessageType::UserState if client_state == ClientState::Ready => {
                     let Ok(user_state) = mumbleproto::UserState::decode(&frame.payload[..]) else { continue; };
                     if let Some(sid) = session_id {
+                        // Apply shared control rate limit (Murmur RATELIMIT).  Silently
+                        // drop excess messages — UserState mutations have no protocol
+                        // ack the client expects, mirroring Murmur's `return`.
+                        if let Some(ref mut rl) = control_rate_limiter {
+                            if !rl.try_consume() {
+                                debug!("Session {} UserState rate limited", sid);
+                                continue;
+                            }
+                        }
                         // Check if this targets another user (admin operation)
                         let target_sid = user_state.session.unwrap_or(sid);
                         if target_sid != sid && (user_state.mute.is_some() || user_state.deaf.is_some() || user_state.channel_id.is_some()) {
@@ -953,8 +976,8 @@ pub(super) async fn handle_client_connection(
                             client_sender.send_message(MessageType::PermissionDenied, &reject).await;
                             continue;
                         }
-                        // Apply rate limiting
-                        if let Some(ref mut rl) = text_rate_limiter {
+                        // Apply rate limiting (shared control bucket)
+                        if let Some(ref mut rl) = control_rate_limiter {
                             if !rl.try_consume() {
                                 warn!("Session {} text message rate limited", sid);
                                 let reject = mumbleproto::PermissionDenied {
@@ -1183,6 +1206,13 @@ pub(super) async fn handle_client_connection(
                 MessageType::UserStats if client_state == ClientState::Ready => {
                     let Ok(stats) = mumbleproto::UserStats::decode(&frame.payload[..]) else { continue; };
                     if let Some(requester_sid) = session_id {
+                        // Apply shared control rate limit (Murmur RATELIMIT).
+                        if let Some(ref mut rl) = control_rate_limiter {
+                            if !rl.try_consume() {
+                                debug!("Session {} UserStats rate limited", requester_sid);
+                                continue;
+                            }
+                        }
                         debug!("UserStats request for session {:?}", stats.session);
                         if let Some(target_session) = stats.session {
                             let is_stats_only = stats.stats_only.unwrap_or(false);
@@ -1372,6 +1402,13 @@ pub(super) async fn handle_client_connection(
                     debug!("ChannelState from {}: channel_id={:?}, name={:?}", peer_addr, ch_state.channel_id, ch_state.name);
 
                     if let Some(sid) = session_id {
+                        // Apply shared control rate limit (Murmur RATELIMIT).
+                        if let Some(ref mut rl) = control_rate_limiter {
+                            if !rl.try_consume() {
+                                debug!("Session {} ChannelState rate limited", sid);
+                                continue;
+                            }
+                        }
                         let hub = hub_client.clone();
                         let has_links = !ch_state.links_add.is_empty() || !ch_state.links_remove.is_empty();
                         if has_links {
@@ -1567,7 +1604,7 @@ pub(super) async fn handle_client_connection(
                 }
                 MessageType::PluginDataTransmission if client_state == ClientState::Ready => {
                     // Plugin data forwarding
-                    let Ok(plugin) = mumbleproto::PluginDataTransmission::decode(&frame.payload[..]) else { continue; };
+                    let Ok(mut plugin) = mumbleproto::PluginDataTransmission::decode(&frame.payload[..]) else { continue; };
                     debug!("PluginData from {}: dataId={:?}", peer_addr, plugin.data_id);
 
                     // Enforce plugin message size limit
@@ -1577,6 +1614,26 @@ pub(super) async fn handle_client_connection(
                         debug!("PluginData from {} exceeds limit ({} > {})", peer_addr, plugin_data_len, plugin_limit);
                         // Silently drop oversized plugin messages (no PermissionDenied per Mumble protocol convention)
                         continue;
+                    }
+
+                    // Per-session plugin-message rate limit (Murmur's
+                    // `m_pluginMessageBucket`).  Silently drop excess messages,
+                    // matching Murmur's behaviour for bucket overflow.
+                    if let Some(ref mut rl) = plugin_rate_limiter {
+                        if !rl.try_consume() {
+                            debug!("PluginData from {} rate limited", peer_addr);
+                            continue;
+                        }
+                    }
+
+                    // Deduplicate the receiver list (mirrors Murmur's
+                    // `uniqueReceivers QSet` in msgPluginDataTransmission).
+                    // A duplicated id otherwise causes redundant per-edge
+                    // forwarding work and a duplicate delivery to the local
+                    // recipient.
+                    if !plugin.receiver_sessions.is_empty() {
+                        let mut seen = std::collections::HashSet::with_capacity(plugin.receiver_sessions.len());
+                        plugin.receiver_sessions.retain(|s| seen.insert(*s));
                     }
 
                     let hub = hub_client.clone();
@@ -1757,6 +1814,13 @@ pub(super) async fn handle_client_connection(
                 MessageType::ContextAction if client_state == ClientState::Ready => {
                     let Ok(ca) = mumbleproto::ContextAction::decode(&frame.payload[..]) else { continue; };
                     if let Some(sid) = session_id {
+                        // Apply shared control rate limit (Murmur RATELIMIT for ContextActionModify).
+                        if let Some(ref mut rl) = control_rate_limiter {
+                            if !rl.try_consume() {
+                                debug!("Session {} ContextAction rate limited", sid);
+                                continue;
+                            }
+                        }
                         debug!(
                             session = sid,
                             action = ca.action.as_str(),
@@ -2774,6 +2838,7 @@ mod tests {
                 external_port: None,
                 region: None,
                 proxy_protocol: false,
+                trusted_proxy_ips: Vec::new(),
             },
             tls: TlsConfig {
                 cert: "test.pem".to_string(),

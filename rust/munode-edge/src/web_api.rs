@@ -11,13 +11,16 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use axum::{
+    body::Body,
     extract::State,
-    response::Json,
+    http::{header, Request, StatusCode},
+    middleware::{self, Next},
+    response::{Json, Response},
     routing::get,
     Router,
 };
 use serde::Serialize;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::state::EdgeState;
 
@@ -267,19 +270,94 @@ async fn handle_all_clients(State(state): State<AppState>) -> Json<AllClientList
 }
 
 /// Build the axum router for the Edge Web API.
-pub fn build_router(state: Arc<EdgeState>) -> Router {
-    Router::new()
+pub fn build_router(state: Arc<EdgeState>, api_token: Option<String>) -> Router {
+    let router = Router::new()
         .route("/api/clients", get(handle_clients))
         .route("/api/remote_clients", get(handle_remote_clients))
         .route("/api/all_clients", get(handle_all_clients))
-        .route("/api/health", get(handle_health))
-        .with_state(state)
+        // Health remains unauthenticated by design — orchestrators / load
+        // balancers must be able to liveness-probe without a credential.
+        .route("/api/health", get(handle_health));
+
+    if let Some(token) = api_token {
+        // Wrap the data-exposing endpoints in a bearer-auth middleware so that
+        // anonymous remote callers cannot harvest user metadata.  The health
+        // route stays open via the second `Router` below.
+        let auth_state = Arc::new(token);
+        let protected = Router::new()
+            .route("/api/clients", get(handle_clients))
+            .route("/api/remote_clients", get(handle_remote_clients))
+            .route("/api/all_clients", get(handle_all_clients))
+            .route_layer(middleware::from_fn_with_state(
+                auth_state.clone(), require_bearer_token,
+            ))
+            .with_state(state.clone());
+        let public = Router::new()
+            .route("/api/health", get(handle_health));
+        return public.merge(protected);
+    }
+
+    router.with_state(state)
+}
+
+/// Bearer-token middleware.  Compares the `Authorization: Bearer …` header
+/// against the configured token using a constant-time check so that timing
+/// observations cannot reveal a prefix of the secret.
+async fn require_bearer_token(
+    State(expected): State<Arc<String>>,
+    req: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let header = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    if !constant_time_eq(header.as_bytes(), expected.as_bytes()) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(next.run(req).await)
+}
+
+/// Constant-time byte comparison used for the Web API bearer token check.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() { return false; }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 /// Start the Edge Web API HTTP server.
-pub async fn run_web_api(host: &str, port: u16, state: Arc<EdgeState>) -> anyhow::Result<()> {
+pub async fn run_web_api(
+    host: &str,
+    port: u16,
+    state: Arc<EdgeState>,
+    api_token: Option<String>,
+) -> anyhow::Result<()> {
     let addr = format!("{}:{}", host, port);
-    let router = build_router(state);
+    // Surface a loud warning when the API exposes user metadata on a
+    // non-loopback address without an auth token configured — this is the
+    // single most-common Mumble-server misconfiguration that leaks
+    // usernames + IPs to arbitrary remote callers.
+    let bound: std::net::IpAddr = host
+        .parse()
+        .unwrap_or_else(|_| std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+    let public_bind = !bound.is_loopback();
+    if public_bind && api_token.as_deref().map_or(true, |t| t.is_empty()) {
+        warn!(
+            "Edge Web API is enabled on a non-loopback address ({}) without \
+             web_api.api_token; per-session metadata (usernames, IPs, channel \
+             state) will be readable by every remote caller. Set \
+             web_api.api_token or bind web_api.host to 127.0.0.1.",
+            addr
+        );
+    }
+    let token = api_token.filter(|t| !t.is_empty());
+    let router = build_router(state, token);
 
     info!("Edge Web API listening on http://{}", addr);
 
