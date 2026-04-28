@@ -663,7 +663,17 @@ pub(super) async fn handle_client_connection(
                             // do_login_task) caused other users to see the
                             // restored listeners while the user themselves did
                             // not.
-                            if !task_result.saved_listeners.is_empty() {
+                            //
+                            // Version gate: only restore when the client is
+                            // >= 1.4.0 — the version that introduced the
+                            // ChannelListener feature.  Pre-1.4.0 clients
+                            // cannot represent listener state in their UI and
+                            // would mishandle the `listening_channel_add`
+                            // field, so we skip restoration for them.
+                            let supports_listeners = client_version
+                                .map(|v| v >= CHANNEL_LISTENER_FEATURE_VERSION)
+                                .unwrap_or(false);
+                            if supports_listeners && !task_result.saved_listeners.is_empty() {
                                 let restore_state = mumbleproto::UserState {
                                     session: Some(sid),
                                     listening_channel_add: task_result.saved_listeners,

@@ -300,10 +300,6 @@ impl HubServer {
         state.acl_manager.load_all().await
             .context("Failed to load ACL entries and channel groups into memory")?;
 
-        // Load users into memory (passwords excluded).
-        state.user_store.load_from_db().await
-            .context("Failed to load users into memory")?;
-
         // Load bans into memory.
         state.ban_store.load_from_db().await
             .context("Failed to load bans into memory")?;

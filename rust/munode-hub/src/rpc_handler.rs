@@ -2769,8 +2769,17 @@ impl RpcHandler {
                 });
             }));
         }
-        let channel_ids = self.state.user_store.get_listeners(params.user_id);
-        debug!("Loaded {} channel listeners for user {}", channel_ids.len(), params.user_id);
+        let channel_ids = match self.state.user_store
+            .consume_listeners(params.user_id, crate::user_store::LISTENER_TTL_SECS)
+            .await
+        {
+            Ok(ids) => ids,
+            Err(e) => {
+                warn!("Failed to consume channel listeners for user {}: {}", params.user_id, e);
+                Vec::new()
+            }
+        };
+        debug!("Consumed {} channel listeners for user {}", channel_ids.len(), params.user_id);
         Ok(self.make_response_packet(request_id, "edge.loadChannelListeners", |r| {
             r.edge_load_channel_listeners = Some(EdgeLoadChannelListenersResult {
                 success: true,

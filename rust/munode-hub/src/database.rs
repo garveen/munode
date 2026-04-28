@@ -359,6 +359,11 @@ impl Database {
                 "Add details column to acl_audit_log for human-readable change summary",
                 "ALTER TABLE acl_audit_log ADD COLUMN details TEXT;",
             ),
+            (
+                8,
+                "Add saved_at column to channel_listeners for TTL-based restoration",
+                "ALTER TABLE channel_listeners ADD COLUMN saved_at INTEGER NOT NULL DEFAULT 0;",
+            ),
         ]
     }
 
@@ -472,35 +477,76 @@ impl Database {
         Ok(())
     }
 
-    /// Load all persisted listening channels for a user.
+    /// Atomically consume a user's persisted channel listeners.
     ///
-    /// Returns the set of channel IDs the user was listening to at their last
-    /// logout.  Returns an empty `Vec` when the user has no saved listeners
-    /// or the `channel_listeners` table doesn't exist yet (pre-migration 5).
-    pub fn load_channel_listeners(&self, user_id: u32) -> Result<Vec<u32>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
-        let mut stmt = match conn.prepare(
-            "SELECT channel_id FROM channel_listeners WHERE user_id = ?1"
-        ) {
-            Ok(s) => s,
-            // "no such table" on databases that haven't had migration 5 applied yet.
-            Err(e) if e.to_string().contains("no such table") => return Ok(vec![]),
-            Err(e) => return Err(e.into()),
+    /// Reads the currently persisted set, **deletes** all rows for that user,
+    /// and returns the channel IDs only when the snapshot was saved within
+    /// `ttl_secs` seconds; otherwise returns an empty `Vec`.
+    ///
+    /// The persisted entry is always removed regardless of TTL — restoration is
+    /// a strict one-shot operation.  This guarantees that a second concurrent
+    /// session for the same user (or a reconnect after the TTL window) does not
+    /// re-restore the same listening channels.  Returns an empty `Vec` when the
+    /// user has no saved listeners or the `channel_listeners` table does not
+    /// exist yet (pre-migration 5).
+    pub fn consume_channel_listeners(&self, user_id: u32, ttl_secs: u64) -> Result<Vec<u32>> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let mut conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
+        let tx = conn.transaction()?;
+
+        // SELECT (channel_id, saved_at) for this user; on missing table return empty.
+        let rows: Vec<(u32, i64)> = {
+            let mut stmt = match tx.prepare(
+                "SELECT channel_id, saved_at FROM channel_listeners WHERE user_id = ?1",
+            ) {
+                Ok(s) => s,
+                Err(e) if e.to_string().contains("no such table") => return Ok(vec![]),
+                Err(e) => return Err(e.into()),
+            };
+            let mapped = stmt.query_map(params![user_id], |row| {
+                Ok((row.get::<_, u32>(0)?, row.get::<_, i64>(1).unwrap_or(0)))
+            })?;
+            mapped.filter_map(|r| r.ok()).collect()
         };
-        let channel_ids: Vec<u32> = stmt
-            .query_map(params![user_id], |row| row.get::<_, u32>(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(channel_ids)
+
+        // DELETE all rows for this user — strict one-shot semantics.
+        tx.execute("DELETE FROM channel_listeners WHERE user_id = ?1", params![user_id])?;
+        tx.commit()?;
+
+        if rows.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // All rows from a save_channel_listeners call share the same saved_at,
+        // but defensively use the most recent one in case the table was populated
+        // by other means.
+        let latest_saved_at = rows.iter().map(|(_, t)| *t).max().unwrap_or(0);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        if latest_saved_at <= 0 || now.saturating_sub(latest_saved_at) > ttl_secs as i64 {
+            // Expired (or legacy row written before migration 8 with default 0).
+            return Ok(vec![]);
+        }
+
+        Ok(rows.into_iter().map(|(ch, _)| ch).collect())
     }
 
     /// Persist the channel listeners for a user (replaces previous state).
     ///
     /// Deletes all previous rows for this user and inserts the new set atomically
-    /// within a transaction.  Passing an empty `channel_ids` slice clears the
-    /// listeners.  Silently succeeds when the `channel_listeners` table doesn't
-    /// exist yet (pre-migration 5 databases).
+    /// within a transaction, stamping each row with the current UNIX time so the
+    /// consume path can apply a TTL.  Passing an empty `channel_ids` slice clears
+    /// the listeners.  Silently succeeds when the `channel_listeners` table
+    /// doesn't exist yet (pre-migration 5 databases).
     pub fn save_channel_listeners(&self, user_id: u32, channel_ids: &[u32]) -> Result<()> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
         let mut conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
         // Wrap delete + insert in a single transaction so the state is always
         // consistent even if the process crashes mid-operation.
@@ -514,8 +560,8 @@ impl Database {
         }
         for &ch_id in channel_ids {
             tx.execute(
-                "INSERT OR IGNORE INTO channel_listeners (user_id, channel_id) VALUES (?1, ?2)",
-                params![user_id, ch_id],
+                "INSERT OR IGNORE INTO channel_listeners (user_id, channel_id, saved_at) VALUES (?1, ?2, ?3)",
+                params![user_id, ch_id, now],
             )?;
         }
         tx.commit()?;
@@ -664,28 +710,6 @@ impl Database {
             |row| row.get(0),
         ).optional()?;
         Ok(hash)
-    }
-
-    /// Load all channel listeners for all users in a single table scan.
-    ///
-    /// Returns a map of `user_id → Vec<channel_id>`.
-    /// Used by [`crate::user_store::UserStore::load_from_db`] at startup.
-    pub fn load_all_channel_listeners(&self) -> Result<HashMap<u32, Vec<u32>>> {
-        let conn = self.conn.lock().map_err(|e| anyhow::anyhow!("Database mutex poisoned: {}", e))?;
-        let mut stmt = match conn.prepare("SELECT user_id, channel_id FROM channel_listeners") {
-            Ok(s) => s,
-            Err(e) if e.to_string().contains("no such table") => return Ok(HashMap::new()),
-            Err(e) => return Err(e.into()),
-        };
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?))
-        })?;
-        let mut map: HashMap<u32, Vec<u32>> = HashMap::new();
-        for row in rows {
-            let (user_id, channel_id) = row?;
-            map.entry(user_id).or_default().push(channel_id);
-        }
-        Ok(map)
     }
 
     /// Find a user by username.
@@ -1325,7 +1349,9 @@ mod tests {
     use super::*;
 
     fn temp_db() -> Database {
-        Database::open(":memory:").unwrap()
+        let db = Database::open(":memory:").unwrap();
+        db.apply_migrations().unwrap();
+        db
     }
 
     #[test]
@@ -1472,5 +1498,45 @@ mod tests {
         db.add_ban(&ban).unwrap();
         let result = db.check_ip_banned(&ip).unwrap();
         assert!(result.is_some(), "Permanent ban should always block");
+    }
+
+    #[test]
+    fn test_consume_channel_listeners_within_ttl_returns_and_clears() {
+        let db = temp_db();
+        db.save_channel_listeners(42, &[7, 9, 11]).unwrap();
+        // Within TTL — full set is returned.
+        let first = db.consume_channel_listeners(42, 1800).unwrap();
+        assert_eq!(first.len(), 3);
+        // Second consume — already cleared (one-shot).
+        let second = db.consume_channel_listeners(42, 1800).unwrap();
+        assert!(second.is_empty(), "consume must be one-shot");
+    }
+
+    #[test]
+    fn test_consume_channel_listeners_expired_returns_empty_and_clears() {
+        let db = temp_db();
+        db.save_channel_listeners(99, &[1, 2]).unwrap();
+        // Backdate the saved_at timestamp so the rows fall outside any TTL.
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE channel_listeners SET saved_at = 1 WHERE user_id = 99",
+                [],
+            ).unwrap();
+        }
+        let result = db.consume_channel_listeners(99, 60).unwrap();
+        assert!(result.is_empty(), "expired listeners must not be restored");
+        // Even though expired, rows are still deleted.
+        let again = db.consume_channel_listeners(99, 1800).unwrap();
+        assert!(again.is_empty(), "rows must have been deleted by the expired consume");
+    }
+
+    #[test]
+    fn test_save_overwrites_previous_state() {
+        let db = temp_db();
+        db.save_channel_listeners(7, &[1, 2, 3]).unwrap();
+        db.save_channel_listeners(7, &[]).unwrap();
+        let result = db.consume_channel_listeners(7, 1800).unwrap();
+        assert!(result.is_empty(), "saving an empty list must clear all rows");
     }
 }

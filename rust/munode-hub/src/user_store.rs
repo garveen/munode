@@ -1,8 +1,6 @@
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tracing::info;
 
 use crate::database::Database;
 
@@ -17,50 +15,23 @@ pub struct UserRecord {
     pub last_channel: u32,
 }
 
-/// User store — holds only the channel-listener map in memory.
+/// User store — thin async wrapper around the [`Database`] for user-related rows.
 ///
-/// Auth is a low-frequency operation (one DB call per new connection), so user
-/// records are fetched directly from the database on demand rather than cached.
-///
-/// The **listener map** (`user_id → channel_ids`) is kept in memory because it
-/// is consulted on every voice-packet routing decision (high-frequency hot path).
-///
-/// Password hashes are never held in memory.
+/// All reads are issued on demand (no in-memory cache): user records are
+/// low-frequency (one DB call per new connection) and channel listeners are
+/// consumed exactly once per login under a TTL, so a cache would only complicate
+/// the consume-on-read semantics.  Password hashes are never held in memory.
 pub struct UserStore {
-    /// user_id → channel IDs the user is listening to.  In-memory hot path.
-    listeners: RwLock<HashMap<u32, Vec<u32>>>,
     db: Arc<Database>,
 }
 
+/// TTL for persisted channel listeners.  Listeners saved more than this many
+/// seconds ago are dropped instead of being restored on the next login.
+pub const LISTENER_TTL_SECS: u64 = 30 * 60;
+
 impl UserStore {
     pub fn new(db: Arc<Database>) -> Self {
-        Self {
-            listeners: RwLock::new(HashMap::new()),
-            db,
-        }
-    }
-
-    /// Load channel listeners from the database into memory.
-    ///
-    /// Must be called once at startup before serving any requests.
-    pub async fn load_from_db(&self) -> Result<()> {
-        let db = self.db.clone();
-        let all_listeners = tokio::task::spawn_blocking(move || {
-            db.load_all_channel_listeners()
-                .context("Failed to load channel listeners from database")
-        })
-        .await
-        .context("spawn_blocking join error")??;
-        *self.listeners.write().unwrap() = all_listeners;
-        info!("Loaded channel listener map from database");
-        Ok(())
-    }
-
-    // ── In-memory hot-path accessor ────────────────────────────────────────
-
-    /// Get the channel listeners for a user.  In-memory, synchronous, zero I/O.
-    pub fn get_listeners(&self, user_id: u32) -> Vec<u32> {
-        self.listeners.read().unwrap().get(&user_id).cloned().unwrap_or_default()
+        Self { db }
     }
 
     // ── Database-direct reads (low-frequency: once per new connection) ──────
@@ -115,7 +86,7 @@ impl UserStore {
         self.db.get_user_password_hash(user_id)
     }
 
-    // ── Write mutations (direct DB, no in-memory state to update) ──────────
+    // ── Write mutations (direct DB) ────────────────────────────────────────
 
     /// Create a new registered user.  Returns the new user ID.
     pub async fn create(&self, username: &str, pw_hash: &str) -> Result<u32> {
@@ -130,13 +101,9 @@ impl UserStore {
     /// Delete a registered user.  Returns `true` if the user existed.
     pub async fn delete(&self, user_id: u32) -> Result<bool> {
         let db = self.db.clone();
-        let found = tokio::task::spawn_blocking(move || db.delete_user(user_id))
+        tokio::task::spawn_blocking(move || db.delete_user(user_id))
             .await
-            .context("spawn_blocking join error")??;
-        if found {
-            self.listeners.write().unwrap().remove(&user_id);
-        }
-        Ok(found)
+            .context("spawn_blocking join error")?
     }
 
     /// Rename a user.  Returns `true` if the user existed.
@@ -165,15 +132,30 @@ impl UserStore {
             .context("spawn_blocking join error")?
     }
 
-    /// Persist channel listeners for a user.  Write-through: DB first, then memory.
+    /// Persist a user's channel listeners (replaces previous state, stamps the
+    /// current time).  Empty `channel_ids` clears the saved listeners.
     pub async fn save_listeners(&self, user_id: u32, channel_ids: &[u32]) -> Result<()> {
         let db = self.db.clone();
         let ids = channel_ids.to_vec();
         tokio::task::spawn_blocking(move || db.save_channel_listeners(user_id, &ids))
             .await
             .context("spawn_blocking join error")??;
-        self.listeners.write().unwrap().insert(user_id, channel_ids.to_vec());
         Ok(())
+    }
+
+    /// Atomically consume the persisted channel listeners for a user.
+    ///
+    /// Reads the current set, deletes it from the database, and returns the
+    /// channel IDs only when they were saved within `ttl_secs` seconds (and
+    /// non-empty).  Restoration is strictly one-shot: the second call for the
+    /// same user — including a concurrent multi-session login — receives an
+    /// empty list, so a user already restored on session A is not restored
+    /// again on session B.
+    pub async fn consume_listeners(&self, user_id: u32, ttl_secs: u64) -> Result<Vec<u32>> {
+        let db = self.db.clone();
+        tokio::task::spawn_blocking(move || db.consume_channel_listeners(user_id, ttl_secs))
+            .await
+            .context("spawn_blocking join error")?
     }
 
     /// Set the blob hash for a user's texture or comment.  Direct DB write.
