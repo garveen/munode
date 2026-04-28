@@ -37,6 +37,21 @@ const TLS_HANDSHAKE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from
 /// pre-auth reject paths.
 const WRITER_DRAIN_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(5);
 
+/// Mumble 1.4.0 — the version that introduced the ChannelListener feature.
+/// Encoded as `(major << 16) | (minor << 8) | patch`, i.e. 0x010400.
+/// Used to send a warning text message to older clients when the server
+/// has the ChannelListener feature enabled (matches Murmur's behaviour in
+/// `c-implement/src/murmur/Messages.cpp`).
+const CHANNEL_LISTENER_FEATURE_VERSION: u32 = (1 << 16) | (4 << 8);
+
+/// Warning message sent to <1.4.0 clients when the ChannelListener feature
+/// is enabled on the server.  Mirrors the text Murmur sends.
+const CHANNEL_LISTENER_OLD_CLIENT_WARNING: &str =
+    "[WARNING]: This server has the ChannelListener feature enabled but your client \
+     version does not support it. This means that users might be listening to what you \
+     are saying in your channel without you noticing! You can solve this issue by \
+     upgrading to Mumble 1.4.0 or newer.";
+
 /// Result returned by the spawned login task on success.
 pub(super) struct LoginTaskResult {
     session_id: u32,
@@ -48,6 +63,10 @@ pub(super) struct LoginTaskResult {
     client_sender: ClientSender,
     /// EdgeConfig clone, needed to compose ServerSync / ServerConfig.
     config: EdgeConfig,
+    /// Persisted channel listeners to restore once the client transitions to
+    /// `Ready`.  Empty when the user is a guest, has no saved listeners, or the
+    /// client version is below `MIN_CHANNEL_LISTENER_VERSION`.
+    saved_listeners: Vec<u32>,
 }
 
 /// Arguments passed into the spawned login task.
@@ -353,23 +372,29 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
         }
     }
 
-    // Restore persisted channel listeners for registered users.
+    // Load persisted channel listeners for registered users.  Restoration is
+    // deferred to the outer loop (after the client transitions to `Ready`) so
+    // the broadcast actually reaches the user's own session — `broadcast`
+    // filters out non-Ready clients, which previously caused others to see
+    // the restored listeners while the user themselves did not.
+    //
+    // Restoration is performed for ALL client versions, matching Murmur's
+    // behaviour (`m_dbWrapper.loadChannelListenersOf` in
+    // c-implement/src/murmur/Messages.cpp): server-side state is restored
+    // regardless of client capability, so other users continue to see the
+    // user as listening to the same channels as before the disconnect.
+    // For pre-1.4.0 clients (which do not understand the field) Murmur sends
+    // an additional TextMessage warning — handled below after the client is
+    // Ready.
     let user_id = client.user_id;
-    if user_id > 0 {
-        let saved_listeners = hub_client.load_channel_listeners(user_id).await;
-        if !saved_listeners.is_empty() {
-            let restore_state = mumbleproto::UserState {
-                session: Some(sid),
-                listening_channel_add: saved_listeners,
-                ..Default::default()
-            };
-            handle_user_state_update(&edge_state, &hub_client, sid, &restore_state).await;
-            debug!("Restored saved channel listeners for user {} (session {})", user_id, sid);
-        }
-    }
+    let saved_listeners = if user_id > 0 {
+        hub_client.load_channel_listeners(user_id).await
+    } else {
+        Vec::new()
+    };
 
     info!("Client {} login task complete, outer loop will finalise (session={})", peer_addr, sid);
-    Some(LoginTaskResult { session_id: sid, login_info, client_sender, config })
+    Some(LoginTaskResult { session_id: sid, login_info, client_sender, config, saved_listeners })
 }
 
 /// Handle a single Mumble client connection (TLS).
@@ -627,6 +652,55 @@ pub(super) async fn handle_client_connection(
                                 };
                                 // Sync to Hub + broadcast to ALL clients (including the new user).
                                 handle_user_state_update(&edge_state, &hub_client, sid, &us).await;
+                            }
+
+                            // Restore persisted channel listeners now that the
+                            // client is `Ready` — `broadcast` filters out
+                            // non-Ready sessions, so deferring this until after
+                            // the Ready transition is what actually delivers
+                            // the restored `listening_channel_add` list to the
+                            // user's own session.  Doing it earlier (inside
+                            // do_login_task) caused other users to see the
+                            // restored listeners while the user themselves did
+                            // not.
+                            if !task_result.saved_listeners.is_empty() {
+                                let restore_state = mumbleproto::UserState {
+                                    session: Some(sid),
+                                    listening_channel_add: task_result.saved_listeners,
+                                    ..Default::default()
+                                };
+                                handle_user_state_update(&edge_state, &hub_client, sid, &restore_state).await;
+                                debug!("Restored saved channel listeners for session {}", sid);
+                            }
+
+                            // ChannelListener feature warning for pre-1.4.0
+                            // clients (matches Murmur's behaviour in
+                            // c-implement/src/murmur/Messages.cpp): when the
+                            // server has the feature enabled (per-channel /
+                            // per-user listener limits both non-zero) but the
+                            // client cannot represent listeners, warn the user
+                            // that other people may be listening to their
+                            // channel without their UI showing it.
+                            let listeners_per_channel = edge_state
+                                .listeners_per_channel
+                                .load(std::sync::atomic::Ordering::Relaxed);
+                            let listeners_per_user = edge_state
+                                .listeners_per_user
+                                .load(std::sync::atomic::Ordering::Relaxed);
+                            let feature_enabled = listeners_per_channel != 0 && listeners_per_user != 0;
+                            if feature_enabled
+                                && client_version.unwrap_or(0) < CHANNEL_LISTENER_FEATURE_VERSION
+                            {
+                                let warn_msg = mumbleproto::TextMessage {
+                                    actor: None,
+                                    session: vec![sid],
+                                    channel_id: vec![],
+                                    tree_id: vec![],
+                                    message: CHANNEL_LISTENER_OLD_CLIENT_WARNING.to_string(),
+                                };
+                                task_result.client_sender
+                                    .send_message(MessageType::TextMessage, &warn_msg)
+                                    .await;
                             }
                             // No channel_id buffering needed: the client sends
                             // UserState{channel_id} after receiving ServerSync, and by
