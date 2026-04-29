@@ -20,8 +20,16 @@ export interface IncomingVoicePacket {
   sequence: number;
   target: number;
   codec: number;
-  /** Codec frame payload bytes (just the Opus frame, with terminator bit stripped). */
+  /**
+   * Raw payload bytes after the sequence varint. For Opus this still includes
+   * the size-varint prefix; consumers that want the bare Opus frame should
+   * use `opusFrame` instead. Kept for backward compatibility with the legacy
+   * client that emitted everything after sequence as `data`.
+   */
   data: Uint8Array;
+  /** Just the Opus frame bytes (codec === 4, terminator bit stripped). */
+  opusFrame?: Uint8Array;
+  /** Opus end-of-talk terminator bit. */
   terminator: boolean;
 }
 
@@ -43,20 +51,20 @@ export function parseIncomingVoicePacket(buf: Uint8Array): IncomingVoicePacket |
 
   let offset = sequence.newOffset;
   let terminator = false;
-  let frame: Uint8Array;
+  const rawRest = buf.slice(offset);
+  let opusFrame: Uint8Array | undefined;
 
   if (codec === 4 /* Opus */) {
     const sizeVar = readVarint(buf, offset);
-    if (!sizeVar) return null;
-    const rawSize = sizeVar.value;
-    const size = rawSize & 0x1fff;
-    terminator = (rawSize & 0x2000) !== 0;
-    offset = sizeVar.newOffset;
-    if (offset + size > buf.length) return null;
-    frame = buf.slice(offset, offset + size);
-  } else {
-    // Legacy CELT/Speex — return remaining bytes verbatim
-    frame = buf.slice(offset);
+    if (sizeVar) {
+      const rawSize = sizeVar.value;
+      const size = rawSize & 0x1fff;
+      terminator = (rawSize & 0x2000) !== 0;
+      const frameStart = sizeVar.newOffset;
+      if (frameStart + size <= buf.length) {
+        opusFrame = buf.slice(frameStart, frameStart + size);
+      }
+    }
   }
 
   return {
@@ -64,7 +72,8 @@ export function parseIncomingVoicePacket(buf: Uint8Array): IncomingVoicePacket |
     sequence: sequence.value,
     target,
     codec,
-    data: frame,
+    data: rawRest,
+    opusFrame,
     terminator,
   };
 }
