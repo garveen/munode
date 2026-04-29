@@ -16,6 +16,12 @@ import type { MumbleClient } from './mumble-client.js';
 import type { ConnectOptions } from '../types/client-types.js';
 import { mumbleproto } from '@munode/protocol';
 import { MessageType } from '@munode/protocol';
+import {
+  FrameAssembler,
+  wrapFrame,
+  parseIncomingVoicePacket,
+  encodeVarint,
+} from '@munode/client-core';
 
 export enum ConnectionState {
   Disconnected = 'disconnected',
@@ -41,7 +47,7 @@ export class ConnectionManager {
   private state: ConnectionState = ConnectionState.Disconnected;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private pingTimer: NodeJS.Timeout | null = null;
-  private receiveBuffer: Buffer = Buffer.alloc(0);
+  private assembler: FrameAssembler = new FrameAssembler();
   private useTcpVoice: boolean = false; // 是否使用TCP传输语音
   private udpFailed: boolean = false; // UDP是否失败
   private serverHost: string = '';
@@ -123,7 +129,7 @@ export class ConnectionManager {
       this.tcpSocket.on('close', () => {
         this.setState(ConnectionState.Disconnected);
         this.tcpSocket = null;
-        this.receiveBuffer = Buffer.alloc(0); // 清空接收缓冲区
+        this.assembler.reset();
       });
     });
   }
@@ -335,32 +341,14 @@ export class ConnectionManager {
   }
 
   /**
-   * 处理接收到的 TCP 消息
+   * Handle incoming TCP bytes.
+   * Frame assembly is delegated to `@munode/client-core` (`FrameAssembler`).
    */
   private handleTCPMessage(data: Buffer): void {
-    // 将新数据追加到接收缓冲区
-    this.receiveBuffer = Buffer.concat([this.receiveBuffer, data]);
-    
-    // 循环处理缓冲区中的所有完整消息
-    while (this.receiveBuffer.length >= 6) {
-      // 读取消息头
-      const type = this.receiveBuffer.readUInt16BE(0);
-      const length = this.receiveBuffer.readUInt32BE(2);
-      
-      // 检查是否有完整的消息
-      if (this.receiveBuffer.length < 6 + length) {
-        // 数据不完整，等待更多数据
-        break;
-      }
-      
-      // 提取消息负载
-      const payload = this.receiveBuffer.subarray(6, 6 + length);
-      
-      // 处理消息
-      this.routeMessage(type, payload);
-      
-      // 从缓冲区移除已处理的消息
-      this.receiveBuffer = this.receiveBuffer.subarray(6 + length);
+    const frames = this.assembler.push(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+    for (const frame of frames) {
+      // Wrap payload back to a Buffer for the existing routeMessage which uses Buffer APIs.
+      this.routeMessage(frame.type, Buffer.from(frame.payload));
     }
   }
 
@@ -667,14 +655,10 @@ export class ConnectionManager {
   }
 
   /**
-   * 包装消息 (添加消息类型和长度头)
+   * 包装消息 (添加消息类型和长度头) — delegates to client-core's `wrapFrame`.
    */
   wrapMessage(type: number, data: Uint8Array): Buffer {
-    const buffer = Buffer.alloc(6 + data.length);
-    buffer.writeUInt16BE(type, 0); // 消息类型 (2字节)
-    buffer.writeUInt32BE(data.length, 2); // 消息长度 (4字节)
-    Buffer.from(data).copy(buffer, 6); // protobuf数据
-    return buffer;
+    return Buffer.from(wrapFrame(type, data));
   }
 
   /**
@@ -735,127 +719,19 @@ export class ConnectionManager {
   }
 
   /**
-   * 解析语音包
+   * 解析语音包 — delegates to `parseIncomingVoicePacket` from `@munode/client-core`.
    */
   private parseVoicePacket(data: Buffer): VoicePacketInfo | null {
-    if (data.length < 1) {
-      return null;
-    }
-
-    let offset = 0;
-
-    // 读取包头 (1字节)
-    const header = data[offset++];
-    const codec = (header >> 5) & 0x07; // bit 7-5: 音频类型
-    const target = header & 0x1F;        // bit 4-0: 目标
-
-    // 读取 Session ID (可变长度)
-    const sessionResult = this.readVarint(data, offset);
-    if (!sessionResult) return null;
-    const sessionId = sessionResult.value;
-    offset = sessionResult.newOffset;
-
-    // 读取 Sequence Number (可变长度)
-    const sequenceResult = this.readVarint(data, offset);
-    if (!sequenceResult) return null;
-    const sequence = sequenceResult.value;
-    offset = sequenceResult.newOffset;
-
-    // 剩余的是音频数据
-    const audioData = data.slice(offset);
-
+    const view = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    const parsed = parseIncomingVoicePacket(view);
+    if (!parsed) return null;
     return {
-      sessionId,
-      sequence,
-      target,
-      codec,
-      audioData
+      sessionId: parsed.sessionId,
+      sequence: parsed.sequence,
+      target: parsed.target,
+      codec: parsed.codec,
+      audioData: Buffer.from(parsed.data),
     };
-  }
-
-  /**
-   * 读取可变长度整数 (Mumble varint, 不是 protobuf varint)
-   * 参照 Go 实现: packetdata/packetdata.go getVarint
-   * 
-   * Mumble 的 varint 编码规则:
-   * - 0x00-0x7F: 单字节（最高位为0）
-   * - 0x80-0xBF: 双字节（最高2位为10，后14位是值）
-   * - 0xC0-0xDF: 3字节（最高3位为110，后21位是值）
-   * - 0xE0-0xEF: 4字节（最高4位为1110，后28位是值）
-   * - 0xF0: 后续4字节完整32位整数
-   * - 0xF4: 后续8字节完整64位整数
-   * - 0xF8: 负数（后续varint取反）
-   * - 0xFC-0xFF: 小负数 -1 到 -4
-   */
-  private readVarint(buffer: Buffer, offset: number): { value: number; newOffset: number } | null {
-    if (offset >= buffer.length) {
-      return null;
-    }
-
-    const v = buffer[offset];
-    offset++;
-
-    if ((v & 0x80) === 0x00) {
-      // 单字节: 0x00-0x7F
-      return { value: v & 0x7f, newOffset: offset };
-    } else if ((v & 0xc0) === 0x80) {
-      // 双字节: 0x80-0xBF
-      if (offset >= buffer.length) return null;
-      const value = ((v & 0x3f) << 8) | buffer[offset];
-      return { value, newOffset: offset + 1 };
-    } else if ((v & 0xf0) === 0xf0) {
-      // 特殊格式
-      switch (v & 0xfc) {
-        case 0xf0: {
-          // 完整32位整数
-          if (offset + 3 >= buffer.length) return null;
-          const value =
-            (buffer[offset] << 24) |
-            (buffer[offset + 1] << 16) |
-            (buffer[offset + 2] << 8) |
-            buffer[offset + 3];
-          return { value: value >>> 0, newOffset: offset + 4 };
-        }
-        case 0xf4: {
-          // 64位整数（我们只支持低32位）
-          if (offset + 7 >= buffer.length) return null;
-          // 跳过高32位，只读取低32位
-          const value =
-            (buffer[offset + 4] << 24) |
-            (buffer[offset + 5] << 16) |
-            (buffer[offset + 6] << 8) |
-            buffer[offset + 7];
-          return { value: value >>> 0, newOffset: offset + 8 };
-        }
-        case 0xf8: {
-          // 负数（反转），递归解码
-          const result = this.readVarint(buffer, offset);
-          if (!result) return null;
-          return { value: ~result.value, newOffset: result.newOffset };
-        }
-        case 0xfc:
-          // 小负数: -1 to -4
-          return { value: ~(v & 0x03), newOffset: offset };
-        default:
-          return null;
-      }
-    } else if ((v & 0xe0) === 0xc0) {
-      // 3字节: 0xC0-0xDF
-      if (offset + 1 >= buffer.length) return null;
-      const value = ((v & 0x1f) << 16) | (buffer[offset] << 8) | buffer[offset + 1];
-      return { value, newOffset: offset + 2 };
-    } else if ((v & 0xf0) === 0xe0) {
-      // 4字节: 0xE0-0xEF
-      if (offset + 2 >= buffer.length) return null;
-      const value =
-        ((v & 0x0f) << 24) |
-        (buffer[offset] << 16) |
-        (buffer[offset + 1] << 8) |
-        buffer[offset + 2];
-      return { value: value >>> 0, newOffset: offset + 3 };
-    }
-
-    return null;
   }
 
   /**
@@ -922,8 +798,8 @@ export class ConnectionManager {
       const header = 0x20; // 001 00000 (type=1, target=0)
       const timestamp = Date.now(); // 毫秒时间戳
       
-      // 编码 timestamp 为 varint
-      const timestampVarint = this.encodeVarint(timestamp);
+      // 编码 timestamp 为 varint (uses client-core's encodeVarint)
+      const timestampVarint = Buffer.from(encodeVarint(timestamp));
       
       // 构建 ping 包: [header] + [varint timestamp]
       const pingPacket = Buffer.alloc(1 + timestampVarint.length);
@@ -940,57 +816,4 @@ export class ConnectionManager {
     }
   }
 
-  /**
-   * 编码整数为 Mumble varint 格式（不是 protobuf varint）
-   * 参照 Go 实现: packetdata/packetdata.go addVarint
-   * 
-   * Mumble 的 varint 编码规则:
-   * - 0x00-0x7F: 单字节（最高位为0）
-   * - 0x80-0x3FFF: 双字节（最高2位为10）
-   * - 0xC0-0x1FFFFF: 3字节（最高3位为110）
-   * - 0xE0-0xFFFFFFF: 4字节（最高4位为1110）
-   * - 0xF0: 4字节完整32位整数前缀
-   * - 0xF4: 8字节完整64位整数前缀
-   */
-  private encodeVarint(value: number): Buffer {
-    const i = value >>> 0; // 确保是无符号32位整数
-    
-    if (i < 0x80) {
-      // 单字节: 0x00-0x7F
-      return Buffer.from([i]);
-    } else if (i < 0x4000) {
-      // 双字节: 0x80-0x3FFF
-      // 最高2位为10，后14位存储值
-      return Buffer.from([
-        (i >> 8) | 0x80,
-        i & 0xff
-      ]);
-    } else if (i < 0x200000) {
-      // 3字节: 0xC0-0x1FFFFF
-      // 最高3位为110，后21位存储值
-      return Buffer.from([
-        (i >> 16) | 0xc0,
-        (i >> 8) & 0xff,
-        i & 0xff
-      ]);
-    } else if (i < 0x10000000) {
-      // 4字节: 0xE0-0xFFFFFFF
-      // 最高4位为1110，后28位存储值
-      return Buffer.from([
-        (i >> 24) | 0xe0,
-        (i >> 16) & 0xff,
-        (i >> 8) & 0xff,
-        i & 0xff
-      ]);
-    } else {
-      // 完整32位整数: 前缀0xF0 + 4字节数据
-      return Buffer.from([
-        0xf0,
-        (i >> 24) & 0xff,
-        (i >> 16) & 0xff,
-        (i >> 8) & 0xff,
-        i & 0xff
-      ]);
-    }
-  }
 }

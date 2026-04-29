@@ -1,0 +1,34 @@
+{
+  "name": "@munode/client-core",
+  "version": "0.1.0",
+  "description": "Platform-neutral Mumble client core (protocol + state + business logic, no EventEmitter, no Node-only deps)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "mumble",
+    "client",
+    "protocol",
+    "isomorphic"
+  ],
+  "author": "MuNode",
+  "license": "MIT",
+  "dependencies": {
+    "@munode/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "vitest": "^1.4.0"
+  }
+}

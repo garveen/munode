@@ -27,3 +27,24 @@ export { startWebSocketServer } from './api/websocket.js';
 export type * from './types/client-types.js';
 export type * from './types/audio-types.js';
 export type * from './types/api-types.js';
+
+// Platform-neutral client core (re-exported for downstream consumers
+// such as @munode/web-client). See `packages/client-core/`.
+export {
+  MumbleClientCore,
+  type ClientOptions as ClientCoreOptions,
+  type AuthOptions,
+  type VoiceFrame,
+  Permission,
+  type PermissionMask,
+  FrameAssembler,
+  wrapFrame,
+  parseIncomingVoicePacket,
+  encodeOutgoingOpusVoicePacket,
+  encodeVarint,
+  readVarint,
+  JitterBuffer,
+  JitterBufferPool,
+  type JitterBufferOptions,
+  type JitterStats,
+} from '@munode/client-core';
