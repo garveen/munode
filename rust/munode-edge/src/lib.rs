@@ -10,6 +10,7 @@ pub mod peer_registry;
 pub mod relay_server;
 pub mod routing;
 pub mod server;
+pub mod transport;
 pub mod voice;
 pub mod state;
 pub mod tls;

@@ -36,6 +36,86 @@ impl Default for EdgeWebApiConfig {
     }
 }
 
+/// WebTransport listener configuration.
+///
+/// When `enabled = true`, the Edge starts a WebTransport (QUIC/HTTP3) listener on
+/// the given host+port.  Browser-based Mumble clients connect via
+/// `https://<external_host>:<external_port>` using the WebTransport API.
+///
+/// WebTransport uses the same Mumble wire format as TCP/TLS (`[type:u16][len:u32][payload]`)
+/// on a single bidirectional QUIC stream.  OCB2-AES128 UDP encryption is **skipped** because
+/// QUIC provides TLS 1.3 AEAD for every datagram; no CryptSetup message is sent.
+///
+/// When `ws_fallback_enabled = true`, an additional plain WebSocket listener is started on
+/// `ws_fallback_port`.  This serves browsers whose WebTransport support is blocked by
+/// enterprise proxies.  The same frame format is used over WebSocket binary messages.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebtransportConfig {
+    /// Enable the WebTransport listener.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Bind address for the WebTransport listener.
+    #[serde(default = "default_host")]
+    pub host: String,
+    /// UDP/QUIC port for WebTransport (default: 64740).
+    #[serde(default = "default_wt_port")]
+    pub port: u16,
+    /// External hostname advertised to connecting clients and reported to Hub.
+    /// When unset, `network.external_host` is used.
+    pub external_host: Option<String>,
+    /// External port (e.g. after DNAT).  When unset, `port` is used.
+    pub external_port: Option<u16>,
+    /// Path to TLS certificate PEM file for WebTransport.
+    /// When unset, the Edge's main TLS certificate (`tls.cert`) is used.
+    /// **Note:** WebTransport requires a publicly-trusted certificate (or a short-lived
+    /// self-signed cert with `serverCertificateHashes` in the browser API call).
+    pub cert: Option<String>,
+    /// Path to TLS private key PEM file for WebTransport.
+    /// When unset, `tls.key` is used.
+    pub key: Option<String>,
+    /// Advertise the WebTransport endpoint in the Mumble `ServerConfig` message.
+    /// Disable this to run a stealth WebTransport endpoint not visible to clients.
+    #[serde(default = "default_true")]
+    pub advertise: bool,
+    /// Maximum bidirectional QUIC streams per connection.
+    /// 4 = 1 control stream + 3 spare blob transfer streams (see §4.2 of the design doc).
+    #[serde(default = "default_wt_max_streams")]
+    pub max_streams: u64,
+    /// How often to check for updated certificate files on disk (seconds).
+    /// 0 = never reload. Default: 86400 (daily).
+    #[serde(default = "default_cert_reload_interval")]
+    pub cert_reload_interval_secs: u64,
+    /// Enable the WebSocket fallback listener for clients blocked by QUIC-unfriendly networks.
+    #[serde(default)]
+    pub ws_fallback_enabled: bool,
+    /// Bind address for the WebSocket fallback listener.
+    #[serde(default = "default_host")]
+    pub ws_fallback_host: String,
+    /// TCP port for the WebSocket fallback listener (default: 8443).
+    #[serde(default = "default_ws_fallback_port")]
+    pub ws_fallback_port: u16,
+}
+
+impl Default for WebtransportConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: default_host(),
+            port: default_wt_port(),
+            external_host: None,
+            external_port: None,
+            cert: None,
+            key: None,
+            advertise: true,
+            max_streams: default_wt_max_streams(),
+            cert_reload_interval_secs: default_cert_reload_interval(),
+            ws_fallback_enabled: false,
+            ws_fallback_host: default_host(),
+            ws_fallback_port: default_ws_fallback_port(),
+        }
+    }
+}
+
 /// The main Edge server configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct EdgeConfig {
@@ -58,6 +138,9 @@ pub struct EdgeConfig {
     /// Web API configuration.
     #[serde(default)]
     pub web_api: EdgeWebApiConfig,
+    /// WebTransport (QUIC/HTTP3) listener configuration.
+    #[serde(default)]
+    pub webtransport: WebtransportConfig,
     /// Logging level.
     #[serde(default = "default_log_level")]
     pub log_level: String,
@@ -995,4 +1078,20 @@ fn default_rolling_stats_window() -> u32 {
 
 fn default_auth_timeout_secs() -> u64 {
     30
+}
+
+fn default_wt_port() -> u16 {
+    64740
+}
+
+fn default_wt_max_streams() -> u64 {
+    4
+}
+
+fn default_cert_reload_interval() -> u64 {
+    86400
+}
+
+fn default_ws_fallback_port() -> u16 {
+    8443
 }

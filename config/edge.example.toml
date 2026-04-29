@@ -205,3 +205,53 @@ port    = 8081                         # Default: 8081
 # must include `Authorization: Bearer <token>`.
 # api_token = "change-me-to-a-long-random-secret"
 
+# ---------------------------------------------------------------------------
+# WebTransport (QUIC/HTTP3) listener — for browser-based Mumble clients
+# ---------------------------------------------------------------------------
+# Requires building with: cargo build --features webtransport
+# Browser connects to: https://<external_host>:<external_port or port>
+# Wire format: same as TCP Mumble [type:u16][len:u32][protobuf], no CryptSetup.
+#
+# IMPORTANT: The certificate MUST be trusted by the browser.
+# Options:
+#   a) Use a publicly-trusted cert (Let's Encrypt, commercial CA).
+#   b) Use a short-lived self-signed cert and pass its SHA-256 fingerprint to
+#      the browser via `serverCertificateHashes` in the WebTransport constructor.
+[webtransport]
+enabled = false                        # Default: false — set to true to enable
+host    = "0.0.0.0"                    # Bind address (default: 0.0.0.0)
+port    = 64740                        # QUIC/UDP port (default: 64740)
+
+# External hostname and port (for clients to connect to; may differ due to NAT).
+# When unset, `network.external_host` and `port` are used.
+# external_host = "edge1.example.com"
+# external_port = 64740
+
+# TLS certificate for WebTransport.
+# When unset, the main `tls.cert` / `tls.key` files are reused.
+# For browsers, use a publicly-trusted certificate (e.g. Let's Encrypt).
+# cert = "/etc/letsencrypt/live/edge1.example.com/fullchain.pem"
+# key  = "/etc/letsencrypt/live/edge1.example.com/privkey.pem"
+
+# Whether to include the WebTransport endpoint in ServerConfig (visible to clients).
+advertise = true                       # Default: true
+
+# Maximum bidirectional QUIC streams per connection.
+# 1 control + 3 spare for blob transfers.  Keep low to avoid memory amplification.
+max_streams = 4                        # Default: 4
+
+# Certificate hot-reload check interval in seconds.  0 = never reload.
+# Lets Let's Encrypt certs renew automatically without restarting the Edge.
+cert_reload_interval_secs = 86400      # Default: 86400 (once per day)
+
+# ---------------------------------------------------------------------------
+# WebSocket fallback — for browsers blocked by QUIC-unfriendly networks
+# ---------------------------------------------------------------------------
+# Requires building with: cargo build --features ws-transport
+# Browser connects to: ws://<host>:<ws_fallback_port>/mumble
+# For TLS (wss://) place a reverse proxy (nginx/Caddy) in front.
+# Wire format: binary WebSocket messages with the standard Mumble framing.
+ws_fallback_enabled = false            # Default: false
+ws_fallback_host    = "0.0.0.0"       # Default: 0.0.0.0
+ws_fallback_port    = 8443             # Default: 8443
+

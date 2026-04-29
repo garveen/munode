@@ -35,7 +35,7 @@ pub struct LoginInfo {
 /// Handles the Mumble protocol login sequence for a client.
 ///
 /// After authentication succeeds, sends in order:
-/// 1. CryptSetup (encryption keys)
+/// 1. CryptSetup (encryption keys) — **skipped** when `skip_crypt_setup = true`
 /// 2. CodecVersion
 /// 3. ChannelState (for all channels, BFS order)
 /// 4. UserState (for all other users)
@@ -49,6 +49,10 @@ pub struct LoginHandler<'a> {
     config: &'a EdgeConfig,
     edge_state: &'a Arc<EdgeState>,
     hub_client: &'a Arc<HubClient>,
+    /// When `true`, the CryptSetup message is omitted from the login sequence.
+    /// Set for WebTransport and WebSocket connections where transport-layer AEAD
+    /// makes OCB2-AES128 redundant.
+    pub skip_crypt_setup: bool,
 }
 
 impl<'a> LoginHandler<'a> {
@@ -58,7 +62,18 @@ impl<'a> LoginHandler<'a> {
         edge_state: &'a Arc<EdgeState>,
         hub_client: &'a Arc<HubClient>,
     ) -> Self {
-        Self { sender, config, edge_state, hub_client }
+        Self { sender, config, edge_state, hub_client, skip_crypt_setup: false }
+    }
+
+    /// Create a `LoginHandler` with `skip_crypt_setup` set.
+    /// Used for WebTransport and WebSocket connections.
+    pub fn new_no_crypt(
+        sender: &'a ClientSender,
+        config: &'a EdgeConfig,
+        edge_state: &'a Arc<EdgeState>,
+        hub_client: &'a Arc<HubClient>,
+    ) -> Self {
+        Self { sender, config, edge_state, hub_client, skip_crypt_setup: true }
     }
 
     /// Execute the pre-ServerSync portion of the login sequence.
@@ -81,8 +96,13 @@ impl<'a> LoginHandler<'a> {
         debug!(session_id, "Login sequence started");
 
         // 1. Send CryptSetup and initialise OCB2 state for this session
-        debug!(session_id, "Step 1: sending CryptSetup");
-        self.send_crypt_setup(session_id).await?;
+        //    Skip for WebTransport / WebSocket: transport-layer AEAD covers encryption.
+        if !self.skip_crypt_setup {
+            debug!(session_id, "Step 1: sending CryptSetup");
+            self.send_crypt_setup(session_id).await?;
+        } else {
+            debug!(session_id, "Step 1: skipping CryptSetup (non-TLS transport)");
+        }
 
         // 2. Send CodecVersion (Opus only)
         debug!(session_id, "Step 2: sending CodecVersion");

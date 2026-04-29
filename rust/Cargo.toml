@@ -33,6 +33,9 @@ webpki-roots = "0.26"
 # WebSocket (for Hub control channel)
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 
+# WebTransport / QUIC (optional — feature "webtransport" in munode-edge)
+wtransport = { version = "0.7" }
+
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

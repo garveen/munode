@@ -19,6 +19,7 @@ use crate::client::{ClientInfo, ClientSender, ClientState};
 use crate::handler::{self, LoginHandler, LoginInfo};
 use crate::hub_client::{HubClient, HubConnectionState};
 use crate::state::EdgeState;
+use crate::transport::TransportKind;
 use crate::voice::{deliver_voice_tcp, inject_session_into_voice, wrap_udptunnel};
 
 /// Idle timeout for client TCP connections. Connections that send no data for
@@ -93,6 +94,10 @@ pub(super) struct LoginTaskArgs {
     client_os: String,
     client_os_version: String,
     certificate_hash: Option<String>,
+    /// When `true`, skip sending `CryptSetup` during the login sequence.
+    /// Set for WebTransport and WebSocket transports that provide their own
+    /// transport-layer encryption (QUIC TLS 1.3 / wss://).
+    skip_crypt_setup: bool,
 }
 
 /// Performs the full authentication and login sequence for a new client.
@@ -131,6 +136,7 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
         client_os,
         client_os_version,
         certificate_hash,
+        skip_crypt_setup,
     } = args;
 
     // Build client info for Hub (use data from Version message)
@@ -280,7 +286,11 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
 
     // Execute full login sequence (CryptSetup → CodecVersion → ChannelStates →
     // UserStates → ServerSync → ServerConfig).
-    let login = LoginHandler::new(&client_sender, &config, &edge_state, &hub_client);
+    let login = if skip_crypt_setup {
+        LoginHandler::new_no_crypt(&client_sender, &config, &edge_state, &hub_client)
+    } else {
+        LoginHandler::new(&client_sender, &config, &edge_state, &hub_client)
+    };
     let login_info = match login.execute_login(sid, &auth_result).await {
         Ok(info) => info,
         Err(e) => {
@@ -447,7 +457,7 @@ pub(super) async fn handle_client_connection(
         info!("Client {} certificate hash: {}...", peer_addr, &hash[..16]);
     }
     
-    let (mut reader, mut writer) = tokio::io::split(tls_stream);
+    let (reader_half, mut writer) = tokio::io::split(tls_stream);
 
     // Create per-client message sender channel
     let (send_tx, mut send_rx) = mpsc::channel::<bytes::Bytes>(4096);
@@ -503,6 +513,49 @@ pub(super) async fn handle_client_connection(
         }
     });
 
+    run_connection_inner(
+        Box::new(reader_half),
+        client_sender,
+        write_failed,
+        writer_handle,
+        peer_addr,
+        certificate_hash,
+        TransportKind::Tls,
+        config,
+        hub_client,
+        edge_state,
+    ).await
+}
+
+/// Transport-agnostic Mumble connection loop.
+///
+/// Called by all transport entry points (TLS, WebTransport, WebSocket) once their
+/// transport-specific setup is complete.
+///
+/// # Arguments
+/// * `reader`           — incoming byte stream (implements `AsyncRead`)
+/// * `client_sender`    — outgoing message channel to the writer task
+/// * `write_failed`     — notified by the writer task on send errors
+/// * `writer_handle`    — writer task handle (used for graceful drain on disconnect)
+/// * `peer_addr`        — remote peer address for logging / rate limiting
+/// * `certificate_hash` — TLS client certificate SHA-1 hash, if available
+/// * `transport_kind`   — which transport is in use (affects CryptSetup)
+/// * `config`           — Edge configuration reference
+/// * `hub_client`       — Hub RPC client
+/// * `edge_state`       — shared Edge state
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_connection_inner(
+    mut reader: Box<dyn tokio::io::AsyncRead + Unpin + Send>,
+    client_sender: ClientSender,
+    write_failed: std::sync::Arc<tokio::sync::Notify>,
+    writer_handle: tokio::task::JoinHandle<()>,
+    peer_addr: SocketAddr,
+    certificate_hash: Option<String>,
+    transport_kind: TransportKind,
+    config: &EdgeConfig,
+    hub_client: Arc<HubClient>,
+    edge_state: Arc<EdgeState>,
+) -> Result<()> {
     let mut buf = BytesMut::with_capacity(8192);
     let mut session_id: Option<u32> = None;
     let mut client_state = ClientState::Connected;
@@ -930,6 +983,7 @@ pub(super) async fn handle_client_connection(
                         client_os: client_os.clone(),
                         client_os_version: client_os_version.clone(),
                         certificate_hash: certificate_hash.clone(),
+                        skip_crypt_setup: transport_kind.skip_crypt_setup(),
                     };
                     let task = tokio::spawn(async move {
                         let result = do_login_task(task_args).await;
@@ -2943,6 +2997,7 @@ mod tests {
             server: ServerConfig::default(),
             voice_routing: munode_common::config::EdgeVoiceRoutingConfig::default(),
             web_api: munode_common::config::EdgeWebApiConfig::default(),
+            webtransport: munode_common::config::WebtransportConfig::default(),
             log_level: "info".to_string(),
             log_format: "text".to_string(),
         }

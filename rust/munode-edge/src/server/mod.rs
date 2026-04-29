@@ -18,7 +18,7 @@ use crate::udp::UdpServer;
 
 /// The main Edge server.
 
-mod connection;
+pub(crate) mod connection;
 mod event_listener;
 mod proxy_protocol;
 
@@ -179,6 +179,36 @@ impl EdgeServer {
                     &web_api_host, web_api_port, web_api_state, web_api_token,
                 ).await {
                     error!("Edge Web API error: {}", e);
+                }
+            });
+        }
+
+        // Optionally start the WebTransport (QUIC/HTTP3) listener for browser clients.
+        #[cfg(feature = "webtransport")]
+        if self.config.webtransport.enabled {
+            let wt_config = std::sync::Arc::new(self.config.clone());
+            let wt_hub = hub_client.clone();
+            let wt_state = edge_state.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::transport::webtransport::run_webtransport_listener(
+                    wt_config, wt_hub, wt_state,
+                ).await {
+                    error!("WebTransport listener error: {}", e);
+                }
+            });
+        }
+
+        // Optionally start the WebSocket fallback listener.
+        #[cfg(feature = "ws-transport")]
+        if self.config.webtransport.ws_fallback_enabled {
+            let ws_config = std::sync::Arc::new(self.config.clone());
+            let ws_hub = hub_client.clone();
+            let ws_state = edge_state.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::transport::ws::run_ws_listener(
+                    ws_config, ws_hub, ws_state,
+                ).await {
+                    error!("WebSocket fallback listener error: {}", e);
                 }
             });
         }

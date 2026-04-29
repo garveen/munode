@@ -13,6 +13,14 @@ path = "src/main.rs"
 ##   cargo test -p munode-edge --features test-utils --test voice_routing
 test-utils = []
 
+## Enables the WebTransport (QUIC/HTTP3) listener.
+## Adds wtransport as a required dependency.
+webtransport = ["dep:wtransport"]
+
+## Enables the plain WebSocket fallback listener (tokio-tungstenite is already a dep,
+## so this feature only controls whether the listener is compiled in).
+ws-transport = []
+
 [dependencies]
 munode-protocol = { workspace = true }
 munode-common = { workspace = true }
@@ -42,3 +50,6 @@ nix = { workspace = true }
 smallvec = { workspace = true }
 async-channel = { workspace = true }
 axum = { workspace = true }
+
+# Optional WebTransport support (feature "webtransport")
+wtransport = { workspace = true, optional = true }
