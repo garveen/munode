@@ -36,6 +36,45 @@ impl Default for EdgeWebApiConfig {
     }
 }
 
+/// TLS mode for the browser WebSocket listener.
+///
+/// Controls whether the WebSocket listener itself terminates TLS, and what URL
+/// scheme it advertises in the `GET /edge-info` discovery response.
+///
+/// | Mode     | Bind transport | Advertised scheme | Typical use |
+/// |----------|----------------|-------------------|-------------|
+/// | `plain`  | plain TCP      | `ws://`            | local dev, internal network |
+/// | `proxy`  | plain TCP      | `wss://`           | behind nginx/Caddy TLS proxy |
+/// | `native` | TLS (Edge terminates) | `wss://`  | direct internet, no proxy |
+#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum WsTlsMode {
+    /// Plain `ws://` — no TLS.  Only safe on loopback or private networks.
+    Plain,
+    /// Plain TCP bind, but advertise `wss://` because a TLS reverse proxy
+    /// (nginx, Caddy, HAProxy, …) sits in front and handles the certificate.
+    Proxy,
+    /// Edge serves TLS directly.  Uses the WebTransport cert/key if set,
+    /// otherwise falls back to the main `tls.cert` / `tls.key` pair.
+    #[default]
+    Native,
+}
+
+impl WsTlsMode {
+    /// Returns `true` when the Edge should terminate TLS on the WS socket.
+    pub fn is_native_tls(&self) -> bool {
+        *self == WsTlsMode::Native
+    }
+
+    /// Returns the URL scheme browsers should use to connect.
+    pub fn ws_scheme(&self) -> &'static str {
+        match self {
+            WsTlsMode::Plain => "ws",
+            WsTlsMode::Proxy | WsTlsMode::Native => "wss",
+        }
+    }
+}
+
 /// WebTransport listener configuration.
 ///
 /// When `enabled = true`, the Edge starts a WebTransport (QUIC/HTTP3) listener on
@@ -55,15 +94,11 @@ pub struct WebtransportConfig {
     #[serde(default)]
     pub enabled: bool,
     /// Bind address for the WebTransport listener.
-    /// Defaults to `::` (dual-stack IPv6/IPv4) so that browsers connecting via
-    /// both `localhost` (which may resolve to `::1` in Chrome) and `127.0.0.1`
-    /// are accepted.  Set to `0.0.0.0` to restrict to IPv4 only.
-    #[serde(default = "default_wt_host")]
+    #[serde(default = "default_host")]
     pub host: String,
-    /// UDP/QUIC port for WebTransport.
-    /// When unset, defaults to `network.port + 2` — the same slot used by the
-    /// WebSocket fallback listener (TCP and UDP namespaces are independent).
-    pub port: Option<u16>,
+    /// UDP/QUIC port for WebTransport (default: 64740).
+    #[serde(default = "default_wt_port")]
+    pub port: u16,
     /// External hostname advertised to connecting clients and reported to Hub.
     /// When unset, `network.external_host` is used.
     pub external_host: Option<String>,
@@ -108,14 +143,24 @@ pub struct WebtransportConfig {
     /// When unset, defaults to `network.port + 2`. The same port number is also
     /// used for the WebTransport UDP/QUIC listener (UDP and TCP share port spaces).
     pub ws_fallback_port: Option<u16>,
+    /// TLS mode for the WebSocket listener.
+    ///
+    /// - `"plain"` (default) — plain `ws://`, no TLS (dev / internal networks)
+    /// - `"proxy"` — plain TCP bind but advertise `wss://` (TLS terminated by
+    ///   an upstream reverse proxy such as nginx or Caddy)
+    /// - `"native"` — Edge terminates TLS directly and serves `wss://`;
+    ///   uses `webtransport.cert`/`key` when set, otherwise falls back to
+    ///   the main `tls.cert`/`tls.key` pair
+    #[serde(default)]
+    pub ws_tls_mode: WsTlsMode,
 }
 
 impl Default for WebtransportConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            host: default_wt_host(),
-            port: None,
+            host: default_host(),
+            port: default_wt_port(),
             external_host: None,
             external_port: None,
             cert: None,
@@ -126,6 +171,7 @@ impl Default for WebtransportConfig {
             ws_fallback_enabled: true,
             ws_fallback_host: default_host(),
             ws_fallback_port: None,
+            ws_tls_mode: WsTlsMode::Native,
         }
     }
 }
@@ -134,20 +180,11 @@ impl WebtransportConfig {
     /// Resolve the effective TCP port for the browser HTTP/WebSocket listener.
     ///
     /// Returns the configured `ws_fallback_port` when set, otherwise falls back
-    /// to `main_port` (the main Mumble TCP port).  Both TLS (Mumble) and plain
-    /// HTTP / WebSocket connections can be served on the same TCP port because
-    /// the main listener peeks the first byte: TLS ClientHello starts with
-    /// `0x16`, while HTTP request lines start with an ASCII uppercase letter.
+    /// to `main_port + 2` so a single Edge instance occupies a contiguous slot
+    /// of three TCP/UDP port numbers (`+0` Mumble, `+1` Edge-to-Edge,
+    /// `+2` browser HTTP/WS and WebTransport UDP).
     pub fn effective_ws_port(&self, main_port: u16) -> u16 {
-        self.ws_fallback_port.unwrap_or(main_port)
-    }
-
-    /// Resolve the effective UDP/QUIC port for the WebTransport listener.
-    ///
-    /// Returns the configured `port` when set, otherwise shares the same port
-    /// number as the WebSocket listener (`network.port + 2`).
-    pub fn effective_wt_port(&self, main_port: u16) -> u16 {
-        self.port
+        self.ws_fallback_port
             .unwrap_or_else(|| main_port.saturating_add(2))
     }
 }
@@ -961,9 +998,6 @@ pub fn load_hub_config(path: &str) -> Result<HubConfig, anyhow::Error> {
     Ok(config)
 }
 
-fn default_wt_host() -> String {
-    "::".to_string()
-}
 fn default_host() -> String {
     "0.0.0.0".to_string()
 }
@@ -1117,6 +1151,10 @@ fn default_rolling_stats_window() -> u32 {
 
 fn default_auth_timeout_secs() -> u64 {
     30
+}
+
+fn default_wt_port() -> u16 {
+    64740
 }
 
 fn default_wt_max_streams() -> u64 {

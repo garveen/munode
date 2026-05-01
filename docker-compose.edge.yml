@@ -13,6 +13,12 @@ services:
       - "${EDGE_PORT:-64739}:64739/tcp"
       - "${EDGE_PORT:-64739}:64739/udp"
       - "${EDGE_WEB_API_PORT:-8081}:8081"
+      # WebTransport (QUIC/HTTP3) — browser clients, requires public TLS cert
+      - "${WT_PORT:-64740}:64740/udp"
+      # WebSocket fallback — shares port number with WT (UDP vs TCP); put behind TLS
+      # reverse proxy for wss:// in production; set ws_fallback_port in edge.toml to
+      # override (defaults to network.port + 2 = 64740)
+      - "${WT_PORT:-64740}:64740/tcp"
     volumes:
       - ${EDGE_CONFIG:-./config/edge.toml}:/app/config/edge.toml:ro
       - ${LOG_DIR:-./logs}/edge:/app/logs

@@ -63,9 +63,8 @@ pub async fn run_webtransport_listener(
         );
     }
 
-    let wt_port = wt_cfg.effective_wt_port(config.network.port);
-    let bind_addr: SocketAddr = crate::server::parse_socket_addr(&wt_cfg.host, wt_port)
-        .with_context(|| format!("Invalid WebTransport bind address '{}:{}'", wt_cfg.host, wt_port))?;
+    let bind_addr: SocketAddr = crate::server::parse_socket_addr(&wt_cfg.host, wt_cfg.port)
+        .with_context(|| format!("Invalid WebTransport bind address '{}:{}'", wt_cfg.host, wt_cfg.port))?;
 
     info!(
         "WebTransport listener starting on {} (cert={} key={})",

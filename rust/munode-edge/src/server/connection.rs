@@ -545,7 +545,7 @@ pub(super) async fn handle_client_connection(
 
     run_connection_inner(
         match sniff_byte {
-            Some(b) => Box::new(crate::transport::ws::PrependedStream::new(
+            Some(b) => Box::new(crate::transport::ws::PrefixedStream::new(
                 bytes::Bytes::from(vec![b]), reader_half,
             )) as Box<dyn AsyncRead + Unpin + Send>,
             None => Box::new(reader_half),

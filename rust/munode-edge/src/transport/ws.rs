@@ -1,13 +1,26 @@
 //! WebSocket fallback transport for browsers that cannot use WebTransport (QUIC).
 //!
-//! The WebSocket listener accepts connections on a plain TCP port.  The browser
-//! connects to `ws://<host>:<port>/mumble` (or `wss://` when behind a TLS-terminating
-//! reverse proxy).  All Mumble control frames and voice frames are exchanged as
-//! binary WebSocket messages with the standard `[type:u16][len:u32][payload]` framing.
+//! The WebSocket listener accepts connections on a plain TCP port (or directly
+//! serves TLS when `ws_tls_mode = "native"`).  The browser connects to
+//! `ws://<host>:<port>` or `wss://<host>:<port>` depending on the configured TLS
+//! mode.  All Mumble control frames and voice frames are exchanged as binary
+//! WebSocket messages with the standard `[type:u16][len:u32][payload]` framing.
 //!
-//! OCB2-AES128 / CryptSetup is skipped for WebSocket connections.  Deployments that
-//! need transport security MUST place the WebSocket port behind a TLS reverse proxy
-//! (e.g. nginx or Caddy with `ws_pass`).
+//! # TLS modes (`ws_tls_mode`)
+//!
+//! | Value    | Bind transport   | Advertised URL scheme | Typical use |
+//! |----------|------------------|-----------------------|-------------|
+//! | `plain`  | plain TCP        | `ws://`               | dev / internal |
+//! | `proxy`  | plain TCP        | `wss://`              | behind nginx/Caddy |
+//! | `native` | TLS (Edge)       | `wss://`              | direct internet |
+//!
+//! For `native` mode the Edge loads the WebTransport cert/key (or falls back
+//! to the main `tls.cert`/`tls.key`) and performs the TLS handshake before
+//! handing off to the HTTP/WebSocket dispatcher.
+//!
+//! OCB2-AES128 / CryptSetup is skipped for all WebSocket connections.  For
+//! `plain` and `proxy` modes, deployments that need transport security MUST
+//! use a TLS-terminating reverse proxy.
 //!
 //! # Wire format inside WebSocket binary messages
 //!
@@ -15,8 +28,6 @@
 //! ```text
 //! [type : u16 BE][length : u32 BE][protobuf payload]
 //! ```
-//! This is the same framing as TCP/TLS Mumble.  The connection loop can therefore
-//! use the same `decode_frame` decoder after re-assembling frames from the WS messages.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -28,24 +39,74 @@ use std::time::Duration;
 use anyhow::{Context as ACtx, Result};
 use bytes::{Bytes, BytesMut};
 use futures_util::{SinkExt, StreamExt, Stream};
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
-use munode_common::config::EdgeConfig;
+use munode_common::config::{EdgeConfig, WsTlsMode};
 
 use crate::client::ClientSender;
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 use crate::transport::TransportKind;
 
-/// Maximum bytes to peek while sniffing the HTTP request line/headers.
+/// Maximum bytes to read while sniffing the HTTP request line/headers.
 const HTTP_PEEK_MAX: usize = 8192;
 /// How long to wait for an incoming HTTP request head before giving up.
 const HTTP_PEEK_TIMEOUT: Duration = Duration::from_secs(5);
+
+// ---------------------------------------------------------------------------
+// PrefixedStream — replays already-consumed bytes before delegating to inner
+// ---------------------------------------------------------------------------
+
+/// Wraps an `AsyncRead + AsyncWrite` stream and prepends a byte buffer that is
+/// drained before any reads hit the underlying stream.  This is used in the
+/// native-TLS path after the HTTP request head has already been read from the
+/// TLS stream, so that `tokio_tungstenite::accept_async` can re-read the same
+/// request bytes from the stream.
+pub(crate) struct PrefixedStream<S> {
+    prefix: Bytes,
+    inner:  S,
+}
+
+impl<S> PrefixedStream<S> {
+    pub(crate) fn new(prefix: Bytes, inner: S) -> Self {
+        Self { prefix, inner }
+    }
+}
+
+impl<S: Unpin> Unpin for PrefixedStream<S> {}
+
+impl<S: AsyncRead + Unpin> AsyncRead for PrefixedStream<S> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if !self.prefix.is_empty() {
+            let n = self.prefix.len().min(buf.remaining());
+            buf.put_slice(&self.prefix[..n]);
+            self.prefix = self.prefix.slice(n..);
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for PrefixedStream<S> {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
 
 /// Run the browser HTTP info + WebSocket listener.
 ///
@@ -55,9 +116,11 @@ const HTTP_PEEK_TIMEOUT: Duration = Duration::from_secs(5);
 ///     address, server name, version, online users, …).
 ///   * WebSocket Upgrade — Mumble frames inside binary WebSocket messages.
 ///
-/// Requests are dispatched by sniffing the HTTP request head with
-/// `TcpStream::peek` so the underlying byte stream is left intact for
-/// `tokio_tungstenite::accept_async` when an Upgrade is requested.
+/// In `native` TLS mode the Edge performs the TLS handshake itself before
+/// dispatching.  In `plain` / `proxy` modes the incoming TCP byte stream is
+/// sniffed with `TcpStream::peek` to determine the request type without
+/// consuming any bytes, allowing `tokio_tungstenite::accept_async` to re-read
+/// the same upgrade headers later.
 pub async fn run_ws_listener(
     config: Arc<EdgeConfig>,
     hub_client: Arc<HubClient>,
@@ -69,9 +132,27 @@ pub async fn run_ws_listener(
         .parse()
         .context("Invalid browser HTTP/WebSocket bind address")?;
 
+    // Load TLS acceptor when running in native-TLS mode.
+    let tls_acceptor: Option<tokio_rustls::TlsAcceptor> = if wt_cfg.ws_tls_mode.is_native_tls() {
+        let cert_path = wt_cfg.cert.as_deref().unwrap_or(&config.tls.cert);
+        let key_path  = wt_cfg.key.as_deref().unwrap_or(&config.tls.key);
+        let tls_config = munode_common::config::TlsConfig {
+            cert: cert_path.to_string(),
+            key:  key_path.to_string(),
+            ca:   None,
+        };
+        let acceptor = crate::tls::create_tls_acceptor(&tls_config)
+            .context("Failed to create TLS acceptor for native-TLS WebSocket listener")?;
+        info!("Browser WebSocket listener (native TLS / wss://) on {}", bind_addr);
+        Some(acceptor)
+    } else {
+        let scheme = wt_cfg.ws_tls_mode.ws_scheme();
+        info!("Browser WebSocket listener ({}://) on {}", scheme, bind_addr);
+        None
+    };
+
     let listener = TcpListener::bind(bind_addr).await
         .context("Failed to bind browser HTTP/WebSocket listener")?;
-    info!("Browser HTTP/WebSocket listener on {}", bind_addr);
 
     loop {
         let (stream, peer_addr) = match listener.accept().await {
@@ -92,27 +173,38 @@ pub async fn run_ws_listener(
         let hub_clone     = Arc::clone(&hub_client);
         let state_clone   = Arc::clone(&edge_state);
 
-        tokio::spawn(async move {
-            if let Err(e) = dispatch_connection(stream, peer_addr, config_clone, hub_clone, state_clone).await {
-                debug!("Browser connection error from {}: {}", peer_addr, e);
+        match &tls_acceptor {
+            Some(acceptor) => {
+                let acceptor_clone = acceptor.clone();
+                tokio::spawn(async move {
+                    match acceptor_clone.accept(stream).await {
+                        Ok(tls_stream) => {
+                            if let Err(e) = dispatch_tls_connection(
+                                tls_stream, peer_addr, config_clone, hub_clone, state_clone,
+                            ).await {
+                                debug!("Browser TLS connection error from {}: {}", peer_addr, e);
+                            }
+                        }
+                        Err(e) => debug!("TLS handshake error from {}: {}", peer_addr, e),
+                    }
+                });
             }
-        });
+            None => {
+                tokio::spawn(async move {
+                    if let Err(e) = dispatch_connection(
+                        stream, peer_addr, config_clone, hub_clone, state_clone,
+                    ).await {
+                        debug!("Browser connection error from {}: {}", peer_addr, e);
+                    }
+                });
+            }
+        }
     }
 }
 
-/// Returns `true` when the byte is consistent with an HTTP request-line
-/// start (ASCII uppercase letter).  TLS ClientHello always starts with
-/// `0x16` (record-type = Handshake), which is not an ASCII letter, so
-/// this simple check cleanly separates the two protocols.
-#[inline]
-pub(crate) fn byte_looks_like_http(b: u8) -> bool {
-    // HTTP/1.x methods: GET POST HEAD PUT DELETE OPTIONS TRACE CONNECT PATCH
-    // All start with an ASCII uppercase letter (0x41–0x5A).
-    b.is_ascii_uppercase()
-}
-
 /// Sniff the request head and dispatch to either the JSON info handler or the
-/// WebSocket upgrade handler.
+/// WebSocket upgrade handler.  Uses `TcpStream::peek` so the byte stream is
+/// not consumed (plain/proxy mode only).
 pub(crate) async fn dispatch_connection(
     mut stream: TcpStream,
     peer_addr: SocketAddr,
@@ -133,15 +225,7 @@ pub(crate) async fn dispatch_connection(
     };
 
     let head_str = std::str::from_utf8(&head).unwrap_or("");
-    let is_websocket_upgrade = head_str
-        .lines()
-        .any(|line| {
-            let line = line.trim();
-            line.eq_ignore_ascii_case("Upgrade: websocket")
-                || line.to_ascii_lowercase() == "upgrade: websocket"
-        });
-
-    if is_websocket_upgrade {
+        if is_ws_upgrade(head_str) {
         let ws_stream = match tokio_tungstenite::accept_async(stream).await {
             Ok(s) => s,
             Err(e) => {
@@ -156,25 +240,125 @@ pub(crate) async fn dispatch_connection(
         return Ok(());
     }
 
-    // Treat as HTTP request — extract method + path from the request line.
+    dispatch_http(&mut stream, head_str, &config).await
+}
+
+/// Dispatch for native-TLS connections from the dedicated WS port.
+/// TLS handshake is performed here, then delegated to `dispatch_tls_stream`.
+async fn dispatch_tls_connection(
+    stream: tokio_rustls::server::TlsStream<TcpStream>,
+    peer_addr: SocketAddr,
+    config: Arc<EdgeConfig>,
+    hub_client: Arc<HubClient>,
+    edge_state: Arc<EdgeState>,
+) -> Result<()> {
+    dispatch_tls_stream(stream, peer_addr, config, hub_client, edge_state).await
+}
+
+/// Dispatch an HTTP/WebSocket connection that arrived on the main TLS port
+/// (when `ws_fallback_port` equals `network.port`).
+///
+/// The TLS handshake is already complete and exactly `first_byte` has already
+/// been read from the stream.  We prepend it back via `PrefixedStream` and
+/// then run the same head-read + dispatch logic as `dispatch_tls_connection`.
+pub(crate) async fn dispatch_tls_http<S>(
+    first_byte: u8,
+    stream: S,
+    peer_addr: SocketAddr,
+    config: Arc<EdgeConfig>,
+    hub_client: Arc<HubClient>,
+    edge_state: Arc<EdgeState>,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let prefixed = PrefixedStream::new(Bytes::from(vec![first_byte]), stream);
+    dispatch_tls_stream(prefixed, peer_addr, config, hub_client, edge_state).await
+}
+
+/// Returns `true` when the given byte is the first byte of an HTTP request
+/// (all HTTP methods start with an ASCII uppercase letter).
+pub(crate) fn byte_looks_like_http(b: u8) -> bool {
+    b.is_ascii_uppercase()
+}
+
+/// Core dispatcher for an already-TLS-wrapped (or similarly opaque) stream.
+/// Reads the HTTP request head, then routes to the WS upgrade or HTTP info handler.
+async fn dispatch_tls_stream<S>(
+    mut stream: S,
+    peer_addr: SocketAddr,
+    config: Arc<EdgeConfig>,
+    hub_client: Arc<HubClient>,
+    edge_state: Arc<EdgeState>,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let mut head_buf = vec![0u8; HTTP_PEEK_MAX];
+    let n = match timeout(HTTP_PEEK_TIMEOUT, read_http_head(&mut stream, &mut head_buf)).await {
+        Ok(Ok(n)) => n,
+        Ok(Err(e)) => {
+            debug!("HTTP head read error (TLS) from {}: {}", peer_addr, e);
+            return Ok(());
+        }
+        Err(_) => {
+            debug!("HTTP head read timeout (TLS) from {}", peer_addr);
+            return Ok(());
+        }
+    };
+    head_buf.truncate(n);
+    let head_str = std::str::from_utf8(&head_buf).unwrap_or("").to_owned();
+
+    if is_ws_upgrade(&head_str) {
+        // Replay the consumed head bytes so tungstenite can re-read the upgrade request.
+        let prefixed = PrefixedStream::new(Bytes::from(head_buf), stream);
+        let ws_stream = match tokio_tungstenite::accept_async(prefixed).await {
+            Ok(s) => s,
+            Err(e) => {
+                debug!("WebSocket upgrade error (TLS stream) from {}: {}", peer_addr, e);
+                return Ok(());
+            }
+        };
+        info!("WebSocket (TLS stream) connection from {}", peer_addr);
+        if let Err(e) = handle_ws_connection(ws_stream, peer_addr, &config, hub_client, edge_state).await {
+            debug!("WebSocket TLS stream session error from {}: {}", peer_addr, e);
+        }
+        return Ok(());
+    }
+
+    dispatch_http(&mut stream, &head_str, &config).await
+}
+
+/// Common HTTP dispatcher: write edge-info JSON or CORS preflight response.
+async fn dispatch_http<W: AsyncWrite + Unpin>(
+    stream: &mut W,
+    head_str: &str,
+    config: &EdgeConfig,
+) -> Result<()> {
     let request_line = head_str.lines().next().unwrap_or("");
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("");
-    let path = parts.next().unwrap_or("");
+    let path   = parts.next().unwrap_or("");
 
     if method.eq_ignore_ascii_case("OPTIONS") {
-        write_cors_preflight(&mut stream).await.ok();
+        write_cors_preflight(stream).await.ok();
     } else if method.eq_ignore_ascii_case("GET")
         && (path == "/" || path.starts_with("/edge-info"))
     {
-        let body = build_edge_info_json(&config);
-        write_json_response(&mut stream, 200, "OK", &body).await.ok();
+        let body = build_edge_info_json(config);
+        write_json_response(stream, 200, "OK", &body).await.ok();
     } else {
         let body = "{\"error\":\"not_found\"}".to_string();
-        write_json_response(&mut stream, 404, "Not Found", &body).await.ok();
+        write_json_response(stream, 404, "Not Found", &body).await.ok();
     }
-
     Ok(())
+}
+
+/// Returns `true` if the HTTP head contains a WebSocket upgrade request.
+fn is_ws_upgrade(head_str: &str) -> bool {
+    head_str
+        .lines()
+        .any(|line| line.trim().to_ascii_lowercase() == "upgrade: websocket")
 }
 
 /// Repeatedly peek the TCP socket until the HTTP header terminator (`\r\n\r\n`)
@@ -199,20 +383,26 @@ async fn peek_http_head(stream: &TcpStream) -> io::Result<Vec<u8>> {
     }
 }
 
-/// Read a PEM file and return the SHA-256 digest of the first DER certificate
-/// as a base64-encoded string (standard alphabet, no padding), or `None` on error.
-fn cert_sha256_base64(cert_path: &str) -> Option<String> {
-    use base64::Engine as _;
-    let pem = std::fs::read(cert_path).ok()?;
-    // Find the first "-----BEGIN CERTIFICATE-----" block.
-    let pem_str = std::str::from_utf8(&pem).ok()?;
-    let start = pem_str.find("-----BEGIN CERTIFICATE-----")?;
-    let rest = &pem_str[start + "-----BEGIN CERTIFICATE-----".len()..];
-    let end = rest.find("-----END CERTIFICATE-----")?;
-    let b64_body: String = rest[..end].chars().filter(|c| !c.is_ascii_whitespace()).collect();
-    let der = base64::engine::general_purpose::STANDARD.decode(&b64_body).ok()?;
-    let digest = ring::digest::digest(&ring::digest::SHA256, &der);
-    Some(base64::engine::general_purpose::STANDARD.encode(digest.as_ref()))
+/// Read bytes from an `AsyncRead` stream into `buf` until the HTTP header
+/// terminator (`\r\n\r\n`) is found or `buf` is full.  Unlike `peek_http_head`,
+/// this *consumes* the bytes.  Used in native-TLS mode where the TLS layer
+/// decrypts data; peeking on the underlying `TcpStream` would return ciphertext.
+async fn read_http_head<R: AsyncRead + Unpin>(stream: &mut R, buf: &mut Vec<u8>) -> io::Result<usize> {
+    let mut total = 0usize;
+    let cap = buf.len();
+    loop {
+        if total == cap {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "HTTP head too large"));
+        }
+        let n = stream.read(&mut buf[total..]).await?;
+        if n == 0 {
+            return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+        }
+        total += n;
+        if buf[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+            return Ok(total);
+        }
+    }
 }
 
 /// Build the EdgeInfo JSON discovery payload.
@@ -229,28 +419,18 @@ fn build_edge_info_json(config: &EdgeConfig) -> String {
                 wt.ws_fallback_host.as_str()
             }
         });
-    // Use wss:// when the WS listener is co-hosted on the main TLS port
-    // (ws_fallback_port is None → shares the TLS port via protocol sniffing).
-    let ws_scheme = if config.webtransport.ws_fallback_port.is_none() { "wss" } else { "ws" };
+    // Use the scheme appropriate for the configured TLS mode.
+    let ws_scheme = wt.ws_tls_mode.ws_scheme();
     let ws_url = format!("{}://{}:{}/mumble", ws_scheme, ws_host, ws_port);
 
-    // The WebTransport entry is present only when enabled and advertised.
-    // cert_hashes includes the SHA-256 of the WebTransport certificate so that
-    // browsers can use serverCertificateHashes for self-signed certs.
+    // The WebTransport entry is reserved for future use — the server may not
+    // be configured for WebTransport yet, in which case the field is null.
     let webtransport_json = if wt.enabled && wt.advertise {
         let wt_host = wt.external_host.as_deref().unwrap_or(ws_host);
-        let wt_port = wt
-            .external_port
-            .unwrap_or_else(|| wt.effective_wt_port(config.network.port));
-        // Prefer the dedicated WT cert; fall back to the main TLS cert.
-        let cert_path = wt.cert.as_deref().unwrap_or(&config.tls.cert);
-        let cert_hashes_json = match cert_sha256_base64(cert_path) {
-            Some(hash) => format!(r#"[{{"algorithm":"sha-256","value":{hash:?}}}]"#),
-            None => "null".to_string(),
-        };
+        let wt_port = wt.external_port.unwrap_or(wt.port);
         format!(
-            r#"{{"url":"https://{}:{}/mumble","cert_hashes":{}}}"#,
-            wt_host, wt_port, cert_hashes_json
+            r#"{{"url":"https://{}:{}/mumble","cert_hashes":null}}"#,
+            wt_host, wt_port
         )
     } else {
         "null".to_string()
@@ -350,7 +530,7 @@ where
 
     // Wrap the WS receive stream as AsyncRead so the connection loop can use
     // the standard decode_frame machinery.
-    let reader: Box<dyn AsyncRead + Unpin + Send> = Box::new(WsReader::<S>::new(ws_source));
+    let reader: Box<dyn AsyncRead + Unpin + Send> = Box::new(WsReader::new(ws_source));
 
     crate::server::connection::run_connection_inner(
         reader,
@@ -374,13 +554,17 @@ where
 /// frame (`[type:u16][len:u32][payload]`).  The `WsReader` buffers incomplete messages
 /// and presents a byte stream to the standard `decode_frame` decoder.
 struct WsReader<S> {
-    source: futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<S>>,
+    source: futures_util::stream::SplitStream<
+        tokio_tungstenite::WebSocketStream<S>,
+    >,
     buf: BytesMut,
 }
 
-impl<S: AsyncRead + AsyncWrite + Unpin> WsReader<S> {
+impl<S> WsReader<S> {
     fn new(
-        source: futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<S>>,
+        source: futures_util::stream::SplitStream<
+            tokio_tungstenite::WebSocketStream<S>,
+        >,
     ) -> Self {
         Self { source, buf: BytesMut::with_capacity(8192) }
     }
@@ -401,7 +585,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for WsReader<S> {
         }
 
         // Poll the next WebSocket message.
-        match Stream::poll_next(Pin::new(&mut self.as_mut().source), cx) {
+        match Stream::poll_next(Pin::new(&mut self.source), cx) {
             Poll::Ready(Some(Ok(WsMessage::Binary(data)))) => {
                 let n = data.len().min(buf.remaining());
                 buf.put_slice(&data[..n]);
@@ -431,161 +615,4 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for WsReader<S> {
             Poll::Pending => Poll::Pending,
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// PrependedStream — put-back buffer for protocol sniffing
-// ---------------------------------------------------------------------------
-
-/// A stream wrapper that prepends buffered bytes before the inner stream's data.
-///
-/// Used to "put back" bytes that were read for protocol sniffing so that
-/// subsequent readers (e.g. `tokio_tungstenite::accept_async`) see a complete
-/// byte stream starting from the very first byte of the connection.
-pub(crate) struct PrependedStream<S> {
-    buf: Bytes,
-    inner: S,
-}
-
-impl<S> PrependedStream<S> {
-    pub(crate) fn new(buf: impl Into<Bytes>, inner: S) -> Self {
-        Self { buf: buf.into(), inner }
-    }
-}
-
-impl<S: AsyncRead + Unpin> AsyncRead for PrependedStream<S> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        if !self.buf.is_empty() {
-            let n = self.buf.len().min(buf.remaining());
-            buf.put_slice(&self.buf[..n]);
-            self.buf = self.buf.slice(n..);
-            return Poll::Ready(Ok(()));
-        }
-        Pin::new(&mut self.inner).poll_read(cx, buf)
-    }
-}
-
-impl<S: AsyncWrite + Unpin> AsyncWrite for PrependedStream<S> {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        data: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_write(cx, data)
-    }
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
-    }
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_shutdown(cx)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// TLS-aware HTTP/WS dispatch
-// ---------------------------------------------------------------------------
-
-/// Read HTTP request headers from a stream that has already consumed `first_byte`.
-/// Returns all header bytes including `first_byte`.  Reads byte-by-byte until
-/// `\r\n\r\n` is found, which is fine for the request-head (≪ 8 KiB).
-async fn read_http_head_consuming<S: AsyncRead + Unpin>(
-    first_byte: u8,
-    stream: &mut S,
-) -> io::Result<Vec<u8>> {
-    use tokio::io::AsyncReadExt;
-    let mut head = Vec::with_capacity(256);
-    head.push(first_byte);
-    let mut byte = [0u8; 1];
-    loop {
-        let n = stream.read(&mut byte).await?;
-        if n == 0 {
-            return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
-        }
-        head.push(byte[0]);
-        if head.ends_with(b"\r\n\r\n") {
-            return Ok(head);
-        }
-        if head.len() > HTTP_PEEK_MAX {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "HTTP head too large"));
-        }
-    }
-}
-
-/// Dispatch an HTTP or WebSocket request that arrived over a TLS stream.
-///
-/// Called from the main TLS accept loop when the first post-handshake byte
-/// looks like an HTTP method (ASCII uppercase letter).  `first_byte` has
-/// already been consumed from `stream`; this function reads the remaining
-/// request head and then either:
-///   * upgrades to a WebSocket connection (the full head bytes are put back
-///     via `PrependedStream` so `tokio_tungstenite` can re-read them), or
-///   * serves a plain HTTP response (GET /edge-info, OPTIONS, 404).
-pub(crate) async fn dispatch_tls_http<S>(
-    first_byte: u8,
-    mut stream: S,
-    peer_addr: SocketAddr,
-    config: Arc<EdgeConfig>,
-    hub_client: Arc<HubClient>,
-    edge_state: Arc<EdgeState>,
-) -> Result<()>
-where
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-{
-    let head = match timeout(
-        HTTP_PEEK_TIMEOUT,
-        read_http_head_consuming(first_byte, &mut stream),
-    ).await {
-        Ok(Ok(h)) => h,
-        Ok(Err(e)) => { debug!("HTTP head read error from {}: {}", peer_addr, e); return Ok(()); }
-        Err(_)    => { debug!("HTTP head read timeout from {}", peer_addr); return Ok(()); }
-    };
-
-    let head_str = std::str::from_utf8(&head).unwrap_or("");
-    let is_ws_upgrade = head_str.lines().any(|l| {
-        l.trim().eq_ignore_ascii_case("Upgrade: websocket")
-    });
-
-    if is_ws_upgrade {
-        // Put back all head bytes so tokio-tungstenite can re-read the full HTTP request.
-        let full_stream = PrependedStream::new(Bytes::from(head), stream);
-        let ws_stream = match tokio_tungstenite::accept_async(full_stream).await {
-            Ok(s) => s,
-            Err(e) => { debug!("WebSocket (TLS) upgrade error from {}: {}", peer_addr, e); return Ok(()); }
-        };
-        info!("WebSocket (TLS) connection from {}", peer_addr);
-        if let Err(e) = handle_ws_connection(ws_stream, peer_addr, &config, hub_client, edge_state).await {
-            debug!("WebSocket (TLS) session error from {}: {}", peer_addr, e);
-        }
-        return Ok(());
-    }
-
-    // Plain HTTP — parse method + path and respond.
-    let request_line = head_str.lines().next().unwrap_or("");
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or("");
-    let path   = parts.next().unwrap_or("");
-
-    if method.eq_ignore_ascii_case("OPTIONS") {
-        write_cors_preflight(&mut stream).await.ok();
-    } else if method.eq_ignore_ascii_case("GET")
-        && (path == "/" || path.starts_with("/edge-info"))
-    {
-        let body = build_edge_info_json(&config);
-        write_json_response(&mut stream, 200, "OK", &body).await.ok();
-    } else {
-        let body = "{\"error\":\"not_found\"}";
-        write_json_response(&mut stream, 404, "Not Found", body).await.ok();
-    }
-
-    Ok(())
 }

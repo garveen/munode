@@ -208,7 +208,7 @@ port    = 8081                         # Default: 8081
 # ---------------------------------------------------------------------------
 # WebTransport (QUIC/HTTP3) listener — for browser-based Mumble clients
 # ---------------------------------------------------------------------------
-# Included in the default build (no extra feature flag needed).
+# Requires building with: cargo build --features webtransport
 # Browser connects to: https://<external_host>:<external_port or port>
 # Wire format: same as TCP Mumble [type:u16][len:u32][protobuf], no CryptSetup.
 #
@@ -219,9 +219,8 @@ port    = 8081                         # Default: 8081
 #      the browser via `serverCertificateHashes` in the WebTransport constructor.
 [webtransport]
 enabled = false                        # Default: false — set to true to enable
-host    = "::"                         # Bind address (default: ::, dual-stack IPv4+IPv6)
-                                       # Use 0.0.0.0 to restrict to IPv4 only.
-# port  = 64740                        # QUIC/UDP port; default: network.port + 2 (shares slot with ws_fallback)
+host    = "0.0.0.0"                    # Bind address (default: 0.0.0.0)
+port    = 64740                        # QUIC/UDP port (default: 64740)
 
 # External hostname and port (for clients to connect to; may differ due to NAT).
 # When unset, `network.external_host` and `port` are used.
@@ -259,10 +258,28 @@ cert_reload_interval_secs = 86400      # Default: 86400 (once per day)
 # Wire format inside the WebSocket: the standard Mumble `[type:u16][len:u32][payload]`.
 ws_fallback_enabled = true             # Default: true
 ws_fallback_host    = "0.0.0.0"        # Default: 0.0.0.0
-# When `ws_fallback_port` is omitted, HTTP/WS connections are served on the
-# same TCP port as the main Mumble TLS listener (network.port).  The Edge
-# distinguishes TLS from HTTP by peeking the first byte: TLS ClientHello
-# starts with 0x16, while HTTP request lines start with an ASCII letter.
-# Set an explicit port only when you need to run the two listeners separately.
-# ws_fallback_port  = 8090             # Optional: separate HTTP/WS port
+# When `ws_fallback_port` is omitted, the Edge binds to `network.port + 2`.
+# This matches the canonical port layout (+0 Mumble TCP/TLS, +1 Edge-to-Edge,
+# +2 browser HTTP/WS — same number used by WebTransport UDP).
+# ws_fallback_port  = 64740            # Default: network.port + 2
 
+# TLS mode for the WebSocket listener.
+#
+#   plain   — plain ws:// (no TLS).  Safe only on loopback or trusted
+#             private networks.  Edge info JSON advertises ws://.
+#             Default when ws_fallback_tls_mode is omitted.
+#
+#   proxy   — plain TCP bind, but Edge info JSON advertises wss://.
+#             Use this when a TLS-terminating reverse proxy (nginx, Caddy,
+#             HAProxy, …) sits in front of the WebSocket port.
+#             Example nginx config:
+#               location /mumble { proxy_pass http://127.0.0.1:64740; ... }
+#
+#   native  — Edge terminates TLS directly and serves wss://.
+#             Uses webtransport.cert / webtransport.key when set,
+#             otherwise falls back to the main tls.cert / tls.key pair.
+#             No reverse proxy required; expose the port directly.
+#
+ws_tls_mode = "native"                 # Default: native
+# ws_tls_mode = "proxy"               # Use when behind nginx/Caddy
+# ws_tls_mode = "plain"               # Use for local dev / internal network (no TLS)
