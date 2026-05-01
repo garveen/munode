@@ -108,6 +108,10 @@ pub struct ClientInfo {
     /// Positional audio context (game plugin context).
     /// When set, voice is only routed to users with the same context.
     pub plugin_context: Vec<u8>,
+    /// Raw DER-encoded client certificate chain, captured from TLS handshake.
+    /// Each entry is one certificate in DER (binary) form.
+    /// Empty for non-TLS (WebSocket) connections and unauthenticated sessions.
+    pub client_cert_chain: Vec<Vec<u8>>,
 }
 
 /// Client-reported ping and statistics, updated on every TCP Ping message.
@@ -558,6 +562,14 @@ impl ClientManager {
     /// Get a client by session ID.
     pub async fn get_client(&self, session: u32) -> Option<ClientInfo> {
         self.sessions.read().await.get(&session).map(|e| e.info.clone())
+    }
+
+    /// Get the plugin_context for a session. Returns empty vec if not found.
+    pub async fn get_plugin_context(&self, session: u32) -> Vec<u8> {
+        self.sessions.read().await
+            .get(&session)
+            .map(|e| e.info.plugin_context.clone())
+            .unwrap_or_default()
     }
 
     /// Get a sender for a specific client.
@@ -1102,6 +1114,7 @@ mod tests {
             client_os: String::new(),
             client_os_version: String::new(),
             plugin_context: vec![],
+            client_cert_chain: vec![],
         }
     }
 

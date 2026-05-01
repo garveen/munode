@@ -743,6 +743,7 @@ mod tests {
             client_os: String::new(),
             client_os_version: String::new(),
             plugin_context: vec![],
+            client_cert_chain: vec![],
         };
 
         let msg = build_user_state_msg(&client);

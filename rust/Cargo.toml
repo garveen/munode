@@ -71,6 +71,7 @@ sha1 = "0.10"
 # SQLite
 rusqlite = { version = "0.33", features = ["bundled"] }
 hex = "0.4"
+base64 = "0.22"
 
 # Compression
 flate2 = "1"

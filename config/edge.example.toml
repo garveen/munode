@@ -208,7 +208,7 @@ port    = 8081                         # Default: 8081
 # ---------------------------------------------------------------------------
 # WebTransport (QUIC/HTTP3) listener — for browser-based Mumble clients
 # ---------------------------------------------------------------------------
-# Requires building with: cargo build --features webtransport
+# Included in the default build (no extra feature flag needed).
 # Browser connects to: https://<external_host>:<external_port or port>
 # Wire format: same as TCP Mumble [type:u16][len:u32][protobuf], no CryptSetup.
 #
@@ -219,8 +219,9 @@ port    = 8081                         # Default: 8081
 #      the browser via `serverCertificateHashes` in the WebTransport constructor.
 [webtransport]
 enabled = false                        # Default: false — set to true to enable
-host    = "0.0.0.0"                    # Bind address (default: 0.0.0.0)
-port    = 64740                        # QUIC/UDP port (default: 64740)
+host    = "::"                         # Bind address (default: ::, dual-stack IPv4+IPv6)
+                                       # Use 0.0.0.0 to restrict to IPv4 only.
+# port  = 64740                        # QUIC/UDP port; default: network.port + 2 (shares slot with ws_fallback)
 
 # External hostname and port (for clients to connect to; may differ due to NAT).
 # When unset, `network.external_host` and `port` are used.
@@ -245,13 +246,23 @@ max_streams = 4                        # Default: 4
 cert_reload_interval_secs = 86400      # Default: 86400 (once per day)
 
 # ---------------------------------------------------------------------------
-# WebSocket fallback — for browsers blocked by QUIC-unfriendly networks
+# Browser HTTP info + WebSocket listener
 # ---------------------------------------------------------------------------
-# Requires building with: cargo build --features ws-transport
-# Browser connects to: ws://<host>:<ws_fallback_port>/mumble
-# For TLS (wss://) place a reverse proxy (nginx/Caddy) in front.
-# Wire format: binary WebSocket messages with the standard Mumble framing.
-ws_fallback_enabled = false            # Default: false
-ws_fallback_host    = "0.0.0.0"       # Default: 0.0.0.0
-ws_fallback_port    = 8443             # Default: 8443
+# Built into the default `cargo build` (feature `ws-transport` is enabled by
+# default). On a single TCP port this listener serves:
+#   * `GET /edge-info` — JSON discovery payload for browser clients
+#       (returns the resolved WebSocket URL, future WebTransport address,
+#        server name, version, …).  Used by the web client during connect.
+#   * WebSocket Upgrade — Mumble frames inside binary WebSocket messages
+#       (no OCB2; transport security expected to come from a reverse
+#        proxy in production).
+# Wire format inside the WebSocket: the standard Mumble `[type:u16][len:u32][payload]`.
+ws_fallback_enabled = true             # Default: true
+ws_fallback_host    = "0.0.0.0"        # Default: 0.0.0.0
+# When `ws_fallback_port` is omitted, HTTP/WS connections are served on the
+# same TCP port as the main Mumble TLS listener (network.port).  The Edge
+# distinguishes TLS from HTTP by peeking the first byte: TLS ClientHello
+# starts with 0x16, while HTTP request lines start with an ASCII letter.
+# Set an explicit port only when you need to run the two listeners separately.
+# ws_fallback_port  = 8090             # Optional: separate HTTP/WS port
 

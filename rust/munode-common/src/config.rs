@@ -55,11 +55,15 @@ pub struct WebtransportConfig {
     #[serde(default)]
     pub enabled: bool,
     /// Bind address for the WebTransport listener.
-    #[serde(default = "default_host")]
+    /// Defaults to `::` (dual-stack IPv6/IPv4) so that browsers connecting via
+    /// both `localhost` (which may resolve to `::1` in Chrome) and `127.0.0.1`
+    /// are accepted.  Set to `0.0.0.0` to restrict to IPv4 only.
+    #[serde(default = "default_wt_host")]
     pub host: String,
-    /// UDP/QUIC port for WebTransport (default: 64740).
-    #[serde(default = "default_wt_port")]
-    pub port: u16,
+    /// UDP/QUIC port for WebTransport.
+    /// When unset, defaults to `network.port + 2` — the same slot used by the
+    /// WebSocket fallback listener (TCP and UDP namespaces are independent).
+    pub port: Option<u16>,
     /// External hostname advertised to connecting clients and reported to Hub.
     /// When unset, `network.external_host` is used.
     pub external_host: Option<String>,
@@ -85,23 +89,33 @@ pub struct WebtransportConfig {
     /// 0 = never reload. Default: 86400 (daily).
     #[serde(default = "default_cert_reload_interval")]
     pub cert_reload_interval_secs: u64,
-    /// Enable the WebSocket fallback listener for clients blocked by QUIC-unfriendly networks.
-    #[serde(default)]
+    /// Enable the browser HTTP info + WebSocket listener.
+    ///
+    /// On a single TCP port this listener serves:
+    ///   * `GET /edge-info` — discovery JSON for browser clients (returns the
+    ///     resolved WebSocket URL, future WebTransport address, server name, …).
+    ///   * WebSocket upgrade (`GET /mumble`) — Mumble frames inside binary
+    ///     WebSocket messages (no OCB2; transport security expected to come
+    ///     from a TLS reverse proxy in production).
+    ///
+    /// Default: `true` — required for browser clients to discover and connect.
+    #[serde(default = "default_true")]
     pub ws_fallback_enabled: bool,
-    /// Bind address for the WebSocket fallback listener.
+    /// Bind address for the browser HTTP/WebSocket listener.
     #[serde(default = "default_host")]
     pub ws_fallback_host: String,
-    /// TCP port for the WebSocket fallback listener (default: 8443).
-    #[serde(default = "default_ws_fallback_port")]
-    pub ws_fallback_port: u16,
+    /// TCP port for the browser HTTP/WebSocket listener.
+    /// When unset, defaults to `network.port + 2`. The same port number is also
+    /// used for the WebTransport UDP/QUIC listener (UDP and TCP share port spaces).
+    pub ws_fallback_port: Option<u16>,
 }
 
 impl Default for WebtransportConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            host: default_host(),
-            port: default_wt_port(),
+            host: default_wt_host(),
+            port: None,
             external_host: None,
             external_port: None,
             cert: None,
@@ -109,10 +123,32 @@ impl Default for WebtransportConfig {
             advertise: true,
             max_streams: default_wt_max_streams(),
             cert_reload_interval_secs: default_cert_reload_interval(),
-            ws_fallback_enabled: false,
+            ws_fallback_enabled: true,
             ws_fallback_host: default_host(),
-            ws_fallback_port: default_ws_fallback_port(),
+            ws_fallback_port: None,
         }
+    }
+}
+
+impl WebtransportConfig {
+    /// Resolve the effective TCP port for the browser HTTP/WebSocket listener.
+    ///
+    /// Returns the configured `ws_fallback_port` when set, otherwise falls back
+    /// to `main_port` (the main Mumble TCP port).  Both TLS (Mumble) and plain
+    /// HTTP / WebSocket connections can be served on the same TCP port because
+    /// the main listener peeks the first byte: TLS ClientHello starts with
+    /// `0x16`, while HTTP request lines start with an ASCII uppercase letter.
+    pub fn effective_ws_port(&self, main_port: u16) -> u16 {
+        self.ws_fallback_port.unwrap_or(main_port)
+    }
+
+    /// Resolve the effective UDP/QUIC port for the WebTransport listener.
+    ///
+    /// Returns the configured `port` when set, otherwise shares the same port
+    /// number as the WebSocket listener (`network.port + 2`).
+    pub fn effective_wt_port(&self, main_port: u16) -> u16 {
+        self.port
+            .unwrap_or_else(|| main_port.saturating_add(2))
     }
 }
 
@@ -925,6 +961,9 @@ pub fn load_hub_config(path: &str) -> Result<HubConfig, anyhow::Error> {
     Ok(config)
 }
 
+fn default_wt_host() -> String {
+    "::".to_string()
+}
 fn default_host() -> String {
     "0.0.0.0".to_string()
 }
@@ -1080,18 +1119,10 @@ fn default_auth_timeout_secs() -> u64 {
     30
 }
 
-fn default_wt_port() -> u16 {
-    64740
-}
-
 fn default_wt_max_streams() -> u64 {
     4
 }
 
 fn default_cert_reload_interval() -> u64 {
     86400
-}
-
-fn default_ws_fallback_port() -> u16 {
-    8443
 }

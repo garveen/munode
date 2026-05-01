@@ -257,6 +257,27 @@ pub async fn compute_voice_targets(
             })
             .collect();
 
+        // Plugin context filter: if the sender has a non-empty plugin_context,
+        // only route to sessions with the same context.  This implements
+        // Murmur's positional audio isolation (game plugin context segregation).
+        let local_sessions: SmallVec<[u32; 32]> = {
+            let sender_ctx = edge_state.client_manager.get_plugin_context(sender_session).await;
+            if sender_ctx.is_empty() {
+                // Sender has no context — no filtering needed.
+                local_sessions
+            } else {
+                // Filter recipients to those sharing the same plugin_context.
+                let mut filtered: SmallVec<[u32; 32]> = SmallVec::new();
+                for sid in local_sessions {
+                    let ctx = edge_state.client_manager.get_plugin_context(sid).await;
+                    if ctx == sender_ctx {
+                        filtered.push(sid);
+                    }
+                }
+                filtered
+            }
+        };
+
         Some(VoiceTargets {
             direct_sessions: SmallVec::new(),
             channel_sessions: SmallVec::new(),

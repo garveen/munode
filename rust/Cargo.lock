@@ -1292,6 +1292,7 @@ dependencies = [
  "arc-swap",
  "async-channel",
  "axum",
+ "base64",
  "bytes",
  "dashmap",
  "flate2",

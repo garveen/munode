@@ -16,6 +16,21 @@ use crate::state::EdgeState;
 use crate::tls::create_tls_acceptor;
 use crate::udp::UdpServer;
 
+/// Parse a host string and port into a `SocketAddr`.
+///
+/// Handles both IPv4 (`0.0.0.0`) and bare IPv6 (`::`) addresses correctly by
+/// wrapping IPv6 in brackets before parsing, e.g. `[::]:8090`.
+pub(crate) fn parse_socket_addr(host: &str, port: u16) -> anyhow::Result<SocketAddr> {
+    // If the host contains a colon but is not already bracketed it is an IPv6
+    // address and must be wrapped: `::` → `[::]:port`.
+    let addr_str = if host.contains(':') && !host.starts_with('[') {
+        format!("[{}]:{}", host, port)
+    } else {
+        format!("{}:{}", host, port)
+    };
+    addr_str.parse::<SocketAddr>().map_err(|e| anyhow::anyhow!("invalid address '{}': {}", addr_str, e))
+}
+
 /// The main Edge server.
 
 pub(crate) mod connection;
@@ -199,18 +214,26 @@ impl EdgeServer {
         }
 
         // Optionally start the WebSocket fallback listener.
+        // Only bind a *separate* port when `ws_fallback_port` is explicitly set to
+        // a different port than the main Mumble port.  By default, HTTP/WebSocket
+        // connections are served on the main port via protocol sniffing in the
+        // accept loop below (TLS ClientHello starts with 0x16; HTTP starts with an
+        // ASCII uppercase letter).
         #[cfg(feature = "ws-transport")]
         if self.config.webtransport.ws_fallback_enabled {
-            let ws_config = std::sync::Arc::new(self.config.clone());
-            let ws_hub = hub_client.clone();
-            let ws_state = edge_state.clone();
-            tokio::spawn(async move {
-                if let Err(e) = crate::transport::ws::run_ws_listener(
-                    ws_config, ws_hub, ws_state,
-                ).await {
-                    error!("WebSocket fallback listener error: {}", e);
-                }
-            });
+            let ws_port = self.config.webtransport.effective_ws_port(self.config.network.port);
+            if ws_port != self.config.network.port {
+                let ws_config = std::sync::Arc::new(self.config.clone());
+                let ws_hub = hub_client.clone();
+                let ws_state = edge_state.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = crate::transport::ws::run_ws_listener(
+                        ws_config, ws_hub, ws_state,
+                    ).await {
+                        error!("WebSocket fallback listener error: {}", e);
+                    }
+                });
+            }
         }
 
         // Start TLS server
@@ -285,6 +308,36 @@ impl EdgeServer {
                             let state = edge_state.clone();
                             let proxy_protocol = self.config.network.proxy_protocol;
                             let trusted_proxies = trusted_proxies.clone();
+
+                            // Protocol sniff: peek the first byte to distinguish
+                            // HTTP (ASCII uppercase first byte) from TLS ClientHello
+                            // (first byte 0x16).  When HTTP is detected and the
+                            // ws-transport feature + ws_fallback_enabled are active,
+                            // dispatch directly to the HTTP/WS handler without TLS.
+                            #[cfg(feature = "ws-transport")]
+                            if config.webtransport.ws_fallback_enabled
+                                && config.webtransport.effective_ws_port(config.network.port)
+                                    == config.network.port
+                            {
+                                let mut peek1 = [0u8; 1];
+                                match stream.peek(&mut peek1).await {
+                                    Ok(1) if crate::transport::ws::byte_looks_like_http(peek1[0]) => {
+                                        let ws_config = std::sync::Arc::new(config.clone());
+                                        let ws_hub = hub.clone();
+                                        let ws_state = state.clone();
+                                        tokio::spawn(async move {
+                                            let _permit = permit;
+                                            if let Err(e) = crate::transport::ws::dispatch_connection(
+                                                stream, peer_addr, ws_config, ws_hub, ws_state,
+                                            ).await {
+                                                debug!("HTTP/WS connection error from {}: {}", peer_addr, e);
+                                            }
+                                        });
+                                        continue;
+                                    }
+                                    _ => {}
+                                }
+                            }
                             // When PROXY protocol is enabled with an explicit trusted-list,
                             // reject TCP peers outside the list before doing any per-connection
                             // work.  Without this gate a direct client could spoof its source IP

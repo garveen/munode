@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use bytes::BytesMut;
 use prost::Message;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::mpsc;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, error, info, warn};
@@ -94,6 +94,8 @@ pub(super) struct LoginTaskArgs {
     client_os: String,
     client_os_version: String,
     certificate_hash: Option<String>,
+    /// Raw DER-encoded client certificate chain from TLS handshake.
+    client_cert_chain: Vec<Vec<u8>>,
     /// When `true`, skip sending `CryptSetup` during the login sequence.
     /// Set for WebTransport and WebSocket transports that provide their own
     /// transport-layer encryption (QUIC TLS 1.3 / wss://).
@@ -136,6 +138,7 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
         client_os,
         client_os_version,
         certificate_hash,
+        client_cert_chain,
         skip_crypt_setup,
     } = args;
 
@@ -238,6 +241,7 @@ pub(super) async fn do_login_task(args: LoginTaskArgs) -> Option<LoginTaskResult
         client_os: client_os.clone(),
         client_os_version: client_os_version.clone(),
         plugin_context: vec![],
+        client_cert_chain,
     };
 
     // Add client to manager first so permission queries can resolve user_id.
@@ -421,7 +425,7 @@ pub(super) async fn handle_client_connection(
 
     // Bound the TLS handshake duration so a peer that opens TCP but never
     // completes ClientHello cannot hold a connection slot forever (slow-loris).
-    let tls_stream = match tokio::time::timeout(
+    let mut tls_stream = match tokio::time::timeout(
         TLS_HANDSHAKE_TIMEOUT,
         acceptor.accept(stream),
     ).await {
@@ -440,23 +444,49 @@ pub(super) async fn handle_client_connection(
     
     // Extract client certificate hash BEFORE splitting the stream
     // Mumble uses SHA-1 hash of the client certificate (not SHA-256)
-    let certificate_hash: Option<String> = tls_stream
+    let peer_cert_chain: Vec<Vec<u8>> = tls_stream
         .get_ref()
         .1 // Get the TLS session (ServerConnection)
         .peer_certificates()
-        .and_then(|certs| certs.first())
-        .map(|cert| {
+        .map(|certs| certs.iter().map(|c| c.as_ref().to_vec()).collect())
+        .unwrap_or_default();
+
+    let certificate_hash: Option<String> = peer_cert_chain
+        .first()
+        .map(|der| {
             use sha1::{Sha1, Digest};
             let mut hasher = Sha1::new();
-            hasher.update(cert.as_ref());
-            let result = hasher.finalize();
-            hex::encode(result)
+            hasher.update(der);
+            hex::encode(hasher.finalize())
         });
     
     if let Some(ref hash) = certificate_hash {
         info!("Client {} certificate hash: {}...", peer_addr, &hash[..16]);
     }
     
+    // Sniff the first post-TLS byte to distinguish HTTP/WS (ASCII uppercase) from
+    // Mumble (\x00 — first byte of the Version message type u16 = 0).
+    // When the WS fallback shares the main TLS port (ws_fallback_port = None), this
+    // lets browsers connect via wss:// without needing a dedicated plain-text port.
+    let mut sniff_byte: Option<u8> = None;
+    #[cfg(feature = "ws-transport")]
+    if config.webtransport.ws_fallback_enabled {
+        let mut b = [0u8; 1];
+        if let Ok(Ok(_)) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            tls_stream.read_exact(&mut b),
+        ).await {
+            if crate::transport::ws::byte_looks_like_http(b[0]) {
+                info!("HTTP/WS over TLS from {}", peer_addr);
+                return crate::transport::ws::dispatch_tls_http(
+                    b[0], tls_stream, peer_addr,
+                    std::sync::Arc::new(config.clone()), hub_client, edge_state,
+                ).await;
+            }
+            sniff_byte = Some(b[0]);
+        }
+    }
+
     let (reader_half, mut writer) = tokio::io::split(tls_stream);
 
     // Create per-client message sender channel
@@ -514,12 +544,18 @@ pub(super) async fn handle_client_connection(
     });
 
     run_connection_inner(
-        Box::new(reader_half),
+        match sniff_byte {
+            Some(b) => Box::new(crate::transport::ws::PrependedStream::new(
+                bytes::Bytes::from(vec![b]), reader_half,
+            )) as Box<dyn AsyncRead + Unpin + Send>,
+            None => Box::new(reader_half),
+        },
         client_sender,
         write_failed,
         writer_handle,
         peer_addr,
         certificate_hash,
+        peer_cert_chain,
         TransportKind::Tls,
         config,
         hub_client,
@@ -539,6 +575,7 @@ pub(super) async fn handle_client_connection(
 /// * `writer_handle`    — writer task handle (used for graceful drain on disconnect)
 /// * `peer_addr`        — remote peer address for logging / rate limiting
 /// * `certificate_hash` — TLS client certificate SHA-1 hash, if available
+/// * `client_cert_chain` — raw DER-encoded TLS client certificates (may be empty)
 /// * `transport_kind`   — which transport is in use (affects CryptSetup)
 /// * `config`           — Edge configuration reference
 /// * `hub_client`       — Hub RPC client
@@ -551,6 +588,7 @@ pub(crate) async fn run_connection_inner(
     writer_handle: tokio::task::JoinHandle<()>,
     peer_addr: SocketAddr,
     certificate_hash: Option<String>,
+    client_cert_chain: Vec<Vec<u8>>,
     transport_kind: TransportKind,
     config: &EdgeConfig,
     hub_client: Arc<HubClient>,
@@ -983,6 +1021,7 @@ pub(crate) async fn run_connection_inner(
                         client_os: client_os.clone(),
                         client_os_version: client_os_version.clone(),
                         certificate_hash: certificate_hash.clone(),
+                        client_cert_chain: client_cert_chain.clone(),
                         skip_crypt_setup: transport_kind.skip_crypt_setup(),
                     };
                     let task = tokio::spawn(async move {
@@ -1462,6 +1501,7 @@ pub(crate) async fn run_connection_inner(
                                             os: if target.client_os.is_empty() { None } else { Some(target.client_os.clone()) },
                                             os_version: if target.client_os_version.is_empty() { None } else { Some(target.client_os_version.clone()) },
                                         }),
+                                        certificates: target.client_cert_chain.clone(),
                                         ..Default::default()
                                     }
                                 };
@@ -3033,6 +3073,7 @@ mod tests {
             client_os: String::new(),
             client_os_version: String::new(),
             plugin_context: vec![],
+            client_cert_chain: vec![],
         }
     }
 
