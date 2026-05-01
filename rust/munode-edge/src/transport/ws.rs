@@ -44,9 +44,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
-use munode_common::config::{EdgeConfig, WsTlsMode};
+use munode_common::config::EdgeConfig;
 
 use crate::client::ClientSender;
 use crate::hub_client::HubClient;
