@@ -3677,30 +3677,169 @@ impl RpcHandler {
         }
     }
 
-    /// Remove a channel from all in-memory stores, persist the deletion to the
-    /// database, and broadcast `hub.channelRemoved` to all connected Edges.
+    /// Remove a channel (and its entire sub-tree) from all in-memory stores, persist the
+    /// deletions to the database, and broadcast the necessary state-change notifications to
+    /// all connected Edges.  Mirrors Murmur's `Server::removeChannel` semantics:
+    ///
+    /// 1. Collect the full sub-tree (depth-first, leaves first).
+    /// 2. Move every session that lives inside any channel of the sub-tree to `dest`
+    ///    (the parent of the top-level deleted channel, or root if it has no parent),
+    ///    broadcasting `hub.userMoved` for each.
+    /// 3. Remove channel-listener state for every session that was listening to any
+    ///    channel in the sub-tree, broadcasting `hub.userStateBroadcast` with
+    ///    `listening_channel_remove` for each affected session.
+    /// 4. For each channel in the sub-tree (children before parents): remove from
+    ///    channel_store + ACL manager, persist to DB, broadcast `hub.channelRemoved`.
     ///
     /// This is the single authoritative call site for channel removal — both
     /// the explicit admin delete path and the automatic temporary-channel
     /// cleanup loop must go through here, so that all stores stay consistent
     /// without the caller having to know about every downstream store.
     async fn remove_channel_coordinated(&self, channel_id: u32) {
-        match self.state.channel_store.remove_and_persist(channel_id).await {
-            Ok(Some(removed)) => {
-                info!("Channel removed: {} (id={})", removed.name, channel_id);
-            }
-            Ok(None) => {
-                // Already gone — still clean up memory and notify edges.
-            }
-            Err(e) => {
-                warn!("Failed to remove channel {} from DB: {}", channel_id, e);
-                // Proceed anyway: keep memory and edges consistent even if DB write failed.
+        if channel_id == 0 {
+            return; // Never delete root channel
+        }
+
+        // --- 1. Collect the full sub-tree, leaves first ---
+        // Build a reverse-BFS list (breadth-first from root, then reverse = leaves first).
+        let all_channels = self.state.channel_store.get_all_channels().await;
+        let mut subtree: Vec<u32> = Vec::new();
+        let mut queue: std::collections::VecDeque<u32> = std::collections::VecDeque::new();
+        queue.push_back(channel_id);
+        while let Some(current) = queue.pop_front() {
+            subtree.push(current);
+            for ch in all_channels.iter().filter(|c| c.parent_id == Some(current)) {
+                queue.push_back(ch.id);
             }
         }
-        self.state.acl_manager.remove_channel(channel_id).await;
-        self.broadcast_notification("hub.channelRemoved", |n| {
-            n.channel_removed = Some(HubChannelRemovedParams { channel_id });
-        }).await;
+        // Reverse so children come before parents (matches Murmur's recursive call order).
+        subtree.reverse();
+
+        let subtree_set: std::collections::HashSet<u32> = subtree.iter().copied().collect();
+
+        // Determine the destination channel for displaced users.
+        let dest = all_channels
+            .iter()
+            .find(|c| c.id == channel_id)
+            .and_then(|c| c.parent_id)
+            .unwrap_or(0);
+
+        // --- 2. Move all sessions in the sub-tree ---
+        // For each displaced user, walk the ancestor chain (starting from `dest`)
+        // to find the closest channel the user is allowed to enter.  This mirrors
+        // Murmur's `Server::removeChannel` logic:
+        //   while (target->cParent && (!hasPermission(…, Enter) || isFull(…)))
+        //       target = target->cParent;
+        // Root (id=0) has no parent, so it is always the unconditional fallback.
+
+        // Pre-build an ancestor chain from `dest` to root (inclusive) once,
+        // so we don't re-traverse the channel store per user.
+        let ancestor_chain: Vec<u32> = {
+            let channels_snap = self.state.channel_store.get_all_channels().await;
+            let parent_map: std::collections::HashMap<u32, Option<u32>> =
+                channels_snap.iter().map(|c| (c.id, c.parent_id)).collect();
+            let mut chain = Vec::new();
+            let mut cur = dest;
+            loop {
+                chain.push(cur);
+                if cur == 0 {
+                    break;
+                }
+                match parent_map.get(&cur).copied().flatten() {
+                    Some(p) => cur = p,
+                    None => { chain.push(0); break; }
+                }
+            }
+            chain
+        };
+
+        let all_sessions = self.state.session_manager.get_all_sessions().await;
+        for session in all_sessions.iter().filter(|s| subtree_set.contains(&s.channel_id)) {
+            // Walk ancestor_chain to find the first channel the user can enter.
+            // Root (last element, id=0) is always accepted regardless of permissions.
+            let mut target_channel = 0u32;
+            for (i, &ch_id) in ancestor_chain.iter().enumerate() {
+                let is_root = ch_id == 0 || i == ancestor_chain.len() - 1;
+                if is_root {
+                    target_channel = ch_id;
+                    break;
+                }
+                if self.state.acl_manager.has_permission(
+                    session.user_id as i32,
+                    ch_id,
+                    &session.groups,
+                    munode_common::permission::ENTER,
+                ).await {
+                    target_channel = ch_id;
+                    break;
+                }
+            }
+
+            self.state.session_manager.move_user_to_channel(session.session_id, target_channel).await;
+            let moved_params = HubUserMovedParams {
+                session_id: session.session_id,
+                edge_id: session.edge_id,
+                channel_id: target_channel,
+                actor_session: None,
+            };
+            self.broadcast_notification("hub.userMoved", |n| {
+                n.user_moved = Some(moved_params.clone());
+            }).await;
+            info!(
+                session_id = session.session_id,
+                from = session.channel_id,
+                to = target_channel,
+                "Channel removal: moved session to target channel"
+            );
+        }
+
+        // --- 3. Remove channel-listener state for the sub-tree ---
+        for session in self.state.session_manager.get_all_sessions().await.iter() {
+            let removed: Vec<u32> = session.listening_channels
+                .iter()
+                .copied()
+                .filter(|ch| subtree_set.contains(ch))
+                .collect();
+            if removed.is_empty() {
+                continue;
+            }
+            // Update the session in-memory.
+            if let Some(mut s) = self.state.session_manager.get_session(session.session_id).await {
+                s.listening_channels.retain(|ch| !subtree_set.contains(ch));
+                self.state.session_manager.add_session(s).await;
+            }
+            // Notify all edges so clients show the listener as removed.
+            let broadcast = HubUserStateBroadcastParams {
+                session_id: session.session_id,
+                edge_id: session.edge_id,
+                listening_channel_remove: removed,
+                actor_session: None,
+                ..Default::default()
+            };
+            self.broadcast_notification("hub.userStateBroadcast", |n| {
+                n.user_state_broadcast = Some(broadcast.clone());
+            }).await;
+        }
+
+        // --- 4. Remove each channel (children first) ---
+        for &ch_id in &subtree {
+            match self.state.channel_store.remove_and_persist(ch_id).await {
+                Ok(Some(removed)) => {
+                    info!("Channel removed: {} (id={})", removed.name, ch_id);
+                }
+                Ok(None) => {
+                    // Already gone — still clean up memory and notify edges.
+                }
+                Err(e) => {
+                    warn!("Failed to remove channel {} from DB: {}", ch_id, e);
+                    // Proceed anyway: keep memory and edges consistent even if DB write failed.
+                }
+            }
+            self.state.acl_manager.remove_channel(ch_id).await;
+            self.broadcast_notification("hub.channelRemoved", |n| {
+                n.channel_removed = Some(HubChannelRemovedParams { channel_id: ch_id });
+            }).await;
+        }
     }
 
     fn make_response_packet<F>(

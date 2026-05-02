@@ -300,6 +300,7 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                                         priority_speaker: if user.priority_speaker { Some(true) } else { None },
                                         recording:        if user.recording        { Some(true) } else { None },
                                         hash: user.cert_hash.clone(),
+                                        listening_channel_add: user.listening_channels.clone(),
                                         ..Default::default()
                                     };
                                     for client in &authenticated_clients {
@@ -325,6 +326,7 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                                         priority_speaker: if user.priority_speaker { Some(true) } else { None },
                                         recording:        if user.recording        { Some(true) } else { None },
                                         hash: user.cert_hash.clone(),
+                                        listening_channel_add: user.listening_channels.clone(),
                                         ..Default::default()
                                     };
                                     for client in &authenticated_clients {
