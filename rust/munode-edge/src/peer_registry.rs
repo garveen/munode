@@ -13,6 +13,16 @@ pub struct PeerVoiceTcpPool {
     pub senders: Vec<std::sync::Mutex<Option<mpsc::Sender<Vec<u8>>>>>,
     /// Round-robin counter.
     pub next_rr: std::sync::atomic::AtomicUsize,
+    /// Unix-millisecond timestamp when all slots went disconnected simultaneously.
+    /// Value `0` means at least one slot is currently connected.
+    /// Written once when the last live slot drops; cleared when any slot reconnects.
+    /// Used by `run_voice_tcp_slot` to detect prolonged full-pool disconnection and
+    /// trigger `edge.reportPeerDisconnect` after `PEER_DISCONNECT_REPORT_AFTER_MS`.
+    pub all_disconnected_since_ms: std::sync::atomic::AtomicU64,
+    /// Set to `true` once `edge.reportPeerDisconnect` has been sent for the current
+    /// disconnection episode.  Reset to `false` when any slot successfully reconnects
+    /// so that a future disconnection can be reported again.
+    pub disconnect_reported: std::sync::atomic::AtomicBool,
 }
 
 impl PeerVoiceTcpPool {
@@ -23,6 +33,32 @@ impl PeerVoiceTcpPool {
         Self {
             senders,
             next_rr: std::sync::atomic::AtomicUsize::new(0),
+            all_disconnected_since_ms: std::sync::atomic::AtomicU64::new(0),
+            disconnect_reported: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Called by a slot immediately after it stores its sender into the pool,
+    /// signalling that at least one connection is live.
+    /// Clears the disconnection-since timestamp and resets the report flag so
+    /// a future full-pool disconnection can trigger a fresh report.
+    pub fn mark_connected(&self) {
+        self.all_disconnected_since_ms.store(0, std::sync::atomic::Ordering::Release);
+        self.disconnect_reported.store(false, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Called by a slot after it clears its own sender.
+    /// If no other slot is currently connected, records the current time as the
+    /// start of the all-disconnected window (only the first caller wins via CAS).
+    pub fn mark_slot_disconnected(&self, now_ms: u64) {
+        if !self.has_live_sender() {
+            // Only the first slot to observe the fully-down state records the timestamp.
+            let _ = self.all_disconnected_since_ms.compare_exchange(
+                0,
+                now_ms,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
     }
 

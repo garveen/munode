@@ -526,6 +526,105 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                         let _ = shutdown_tx.send(true);
                         return;
                     }
+                    EdgeEvent::PeerVoiceTcpFailed { peer_edge_id } => {
+                        // All TCP voice connections to this peer have been down for an
+                        // extended period.  Before reporting to Hub for partition arbitration,
+                        // verify that NO viable path to this peer exists through any means.
+                        //
+                        // Partition arbitration (hub.peerLeft + potential hub.shutdownRequest)
+                        // is a drastic, irreversible action that disconnects clients.  We must
+                        // only trigger it when the peer is truly unreachable through every path:
+                        //   1. DirectTcp: already confirmed down (this event was emitted)
+                        //   2. HubTcp relay: must also be unavailable (Hub unreachable)
+                        //   3. RelayChain: must have no working intermediate-hop routes
+
+                        // Check 1: Hub TCP relay.
+                        // If Hub is still reachable and hub_tcp_fallback is enabled, voice CAN
+                        // still flow via Hub relay → the cluster is degraded but not partitioned.
+                        // In this case the DirectTcp pool will continue retrying silently.
+                        let hub_reachable = state.accepting_connections.load(std::sync::atomic::Ordering::Relaxed);
+                        if hub_reachable && state.enable_hub_tcp_fallback {
+                            debug!(
+                                "Peer edge {} DirectTcp down but Hub TCP relay is available — \
+                                 skipping partition report (voice flows via Hub relay)",
+                                peer_edge_id
+                            );
+                            continue;
+                        }
+
+                        // Check 2: RelayChain and DirectUdp routes.
+                        // Inspect the route table for any candidate whose next-hop has not
+                        // exceeded the consecutive_failure_threshold.  If any such candidate
+                        // exists (and it isn't HubTcp — already checked above — or DirectTcp
+                        // — already known down), voice can still flow via that path.
+                        let has_viable_non_tcp_route = {
+                            use crate::state::RouteDecision;
+                            use std::sync::atomic::Ordering;
+                            let route_guard = state.route_table.load();
+                            let threshold = state.consecutive_failure_threshold;
+                            if let Some(candidates) = route_guard.get(&peer_edge_id) {
+                                let failures_guard = state.next_hop_failures.read();
+                                candidates.iter().any(|candidate| {
+                                    match &candidate.decision {
+                                        RouteDecision::DirectUdp => {
+                                            // Check if direct UDP hop is healthy.
+                                            if let Ok(ref failures) = failures_guard {
+                                                let fail_count = failures
+                                                    .get(&peer_edge_id)
+                                                    .map(|a| a.load(Ordering::Relaxed))
+                                                    .unwrap_or(0);
+                                                threshold == 0 || fail_count < threshold
+                                            } else {
+                                                true // poisoned — assume viable
+                                            }
+                                        }
+                                        RouteDecision::RelayChain { hops, .. } => {
+                                            // Check if the first relay hop is healthy.
+                                            if let Some(&first_hop) = hops.first() {
+                                                if let Ok(ref failures) = failures_guard {
+                                                    let fail_count = failures
+                                                        .get(&first_hop)
+                                                        .map(|a| a.load(Ordering::Relaxed))
+                                                        .unwrap_or(0);
+                                                    threshold == 0 || fail_count < threshold
+                                                } else {
+                                                    true // poisoned — assume viable
+                                                }
+                                            } else {
+                                                false
+                                            }
+                                        }
+                                        // DirectTcp: known down (this event was emitted because it failed).
+                                        // HubTcp: Hub unreachable (already checked above); if we reach
+                                        //         here hub_reachable is false OR fallback is disabled.
+                                        RouteDecision::DirectTcp | RouteDecision::HubTcp => false,
+                                    }
+                                })
+                            } else {
+                                false // no routes at all for this peer
+                            }
+                        };
+
+                        if has_viable_non_tcp_route {
+                            debug!(
+                                "Peer edge {} DirectTcp down but a relay/UDP route is still viable — \
+                                 skipping partition report",
+                                peer_edge_id
+                            );
+                            continue;
+                        }
+
+                        // All paths are confirmed down — report to Hub for partition arbitration.
+                        // Hub waits for both sides to report before acting (arbitrate_disconnect),
+                        // then broadcasts hub.peerLeft and may issue hub.shutdownRequest to the
+                        // smaller partition.
+                        warn!(
+                            "Peer edge {}: all voice paths exhausted (DirectTcp down, Hub unreachable/disabled, \
+                             no viable relay) — reporting partition to Hub",
+                            peer_edge_id,
+                        );
+                        hub_client.do_report_peer_disconnect(peer_edge_id).await;
+                    }
                     EdgeEvent::AclUpdated { channel_id } => {
                         // An ACL was updated on the Hub; re-evaluate can_enter for every local
                         // client on the affected channel and push a ChannelState update so the

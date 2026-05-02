@@ -856,6 +856,42 @@ impl HubClient {
             debug!("report_quality to edge {} failed: {}", target_edge_id, e);
         }
     }
+
+    /// Notify the Hub that our TCP voice connection to `remote_edge_id` has been
+    /// persistently down.  The Hub runs partition-arbitration: if the remote Edge
+    /// also reports the same disconnection, Hub broadcasts `hub.peerLeft` and may
+    /// issue `hub.shutdownRequest` to the smaller partition.
+    pub async fn do_report_peer_disconnect(&self, remote_edge_id: u32) {
+        let local_edge_id = self.edge_id();
+        let local_client_count = self.edge_state.client_manager.client_count().await as u32;
+        let request_id = self.next_request_id();
+        let request = TypedRpcRequest {
+            request_id,
+            method: "edge.reportPeerDisconnect".to_string(),
+            timeout_ms: Some(10_000),
+            edge_report_peer_disconnect: Some(hubedge::EdgeReportPeerDisconnectParams {
+                local_edge_id,
+                remote_edge_id,
+                local_client_count,
+            }),
+            ..Default::default()
+        };
+        match self.rpc_call(request).await {
+            Ok(resp) => {
+                let action = resp.edge_report_peer_disconnect
+                    .as_ref()
+                    .map(|r| r.action.as_str())
+                    .unwrap_or("unknown");
+                info!(
+                    "Reported peer {} disconnect to Hub (action={})",
+                    remote_edge_id, action
+                );
+            }
+            Err(e) => {
+                warn!("Failed to report peer {} disconnect to Hub: {}", remote_edge_id, e);
+            }
+        }
+    }
 }
 
 /// Build a relay WebSocket URL.

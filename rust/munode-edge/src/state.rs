@@ -182,6 +182,11 @@ pub enum EdgeEvent {
     },
     /// Hub ACL was updated for a channel; Edges should re-evaluate can_enter for all clients.
     AclUpdated { channel_id: u32 },
+    /// All TCP voice connections to a peer Edge have been down for an extended period.
+    /// The event listener should call `edge.reportPeerDisconnect` so that the Hub can
+    /// run partition-arbitration logic and — if both sides report — broadcast `hub.peerLeft`
+    /// and optionally shut down the smaller partition.
+    PeerVoiceTcpFailed { peer_edge_id: u32 },
 }
 
 /// Default TTL cap for relay packets when no Hub-provided cap is available.

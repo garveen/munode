@@ -353,6 +353,34 @@ impl HubClient {
                     info!("Peer edge joined cluster: {} (id {}) at {}:{}", name, peer_edge_id, host, voice_port);
                     if !host.is_empty() && voice_port > 0 {
                         if let Ok(udp_addr) = format!("{}:{}", host, voice_port).parse() {
+                            // Detect address change for an already-managed peer.
+                            // If the peer restarted at a new host/port while the Hub was down,
+                            // the running slot loops still hold the stale address — we must
+                            // close the old pool and spawn a fresh manager with the new address.
+                            let already_managed = {
+                                self.edge_state.voice_tcp_peers.read().await.contains(&peer_edge_id)
+                            };
+                            let addr_changed = already_managed && {
+                                let current = self.edge_state.peer_registry.load();
+                                current.get(peer_edge_id).map_or(true, |info| info.udp_addr != udp_addr)
+                            };
+                            if addr_changed {
+                                warn!(
+                                    "Peer edge {} address changed to {}, restarting voice TCP pool",
+                                    peer_edge_id, udp_addr
+                                );
+                                // Close all existing pool slots (slot loops will exit via Ok(())).
+                                let pool_opt = {
+                                    let current = self.edge_state.voice_tcp_conns.load();
+                                    current.get(&peer_edge_id).cloned()
+                                };
+                                if let Some(pool) = pool_opt {
+                                    pool.close_all();
+                                }
+                                // Remove from managed set so the spawn below will create a new manager.
+                                self.edge_state.voice_tcp_peers.write().await.remove(&peer_edge_id);
+                            }
+
                             // clone-modify-store: PeerRegistry 实现 Clone，写入串行化
                             {
                                 let current = self.edge_state.peer_registry.load_full();

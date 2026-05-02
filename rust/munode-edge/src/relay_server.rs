@@ -430,6 +430,13 @@ const VOICE_TCP_KEEPALIVE: Duration = Duration::from_secs(30);
 const VOICE_TCP_MIN_RETRY_MS: u64 = 1_000;
 const VOICE_TCP_MAX_RETRY_MS: u64 = 30_000;
 
+/// How long all voice TCP slots must be simultaneously disconnected before this
+/// Edge reports the peer disconnect to Hub via `edge.reportPeerDisconnect`.
+/// Hub then runs partition-arbitration: if the peer also reports the disconnect,
+/// Hub broadcasts `hub.peerLeft` and may issue `hub.shutdownRequest` to the
+/// smaller partition.
+pub const PEER_DISCONNECT_REPORT_AFTER_MS: u64 = 60_000;
+
 /// Build a voice WebSocket URL.
 ///
 /// Authentication is performed via challenge-response handshake at the WebSocket
@@ -584,6 +591,15 @@ async fn run_voice_tcp_slot(
             connected
         };
 
+        // After clearing our sender, check if the whole pool is now down and
+        // record the timestamp.  Multiple slots race to set this; only the first
+        // wins (CAS), so the timestamp reflects when the *last* live slot went away.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        pool.mark_slot_disconnected(now_ms);
+
         match result {
             Ok(()) => {
                 // rx returned None — the sender was dropped by peerLeft→close_all().
@@ -625,6 +641,39 @@ async fn run_voice_tcp_slot(
         );
         tokio::time::sleep(delay).await;
         retry_ms = (retry_ms.saturating_mul(2)).min(VOICE_TCP_MAX_RETRY_MS);
+
+        // After the backoff sleep, check if the whole pool has been down long
+        // enough to trigger a peer-disconnect report to the Hub.  We use a CAS
+        // on `disconnect_reported` so that exactly one slot (across all pool
+        // slots) sends the event per disconnection episode.
+        let since_ms = pool.all_disconnected_since_ms.load(std::sync::atomic::Ordering::Acquire);
+        if since_ms != 0 {
+            let now_ms2 = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            if now_ms2.saturating_sub(since_ms) >= PEER_DISCONNECT_REPORT_AFTER_MS {
+                // Claim the report slot (exactly-once per episode).
+                if pool.disconnect_reported
+                    .compare_exchange(
+                        false,
+                        true,
+                        std::sync::atomic::Ordering::AcqRel,
+                        std::sync::atomic::Ordering::Relaxed,
+                    )
+                    .is_ok()
+                {
+                    warn!(
+                        "Voice TCP slot [{}/{}]: all slots down for ≥{}s, reporting peer {} disconnect to Hub",
+                        peer_edge_id,
+                        slot_idx,
+                        PEER_DISCONNECT_REPORT_AFTER_MS / 1000,
+                        peer_edge_id,
+                    );
+                    let _ = edge_state.event_tx.send(EdgeEvent::PeerVoiceTcpFailed { peer_edge_id });
+                }
+            }
+        }
     }
 
     debug!("Voice TCP slot [{}/{}]: stopped", peer_edge_id, slot_idx);
@@ -686,6 +735,10 @@ async fn run_voice_tcp_once_pooled(
     } else {
         return Err(anyhow::anyhow!("pool slot {} mutex poisoned", slot_idx));
     }
+    // Signal the pool that at least one slot is now live.  This clears the
+    // all_disconnected_since_ms timestamp and resets the disconnect_reported flag
+    // so that a future full-pool disconnection can trigger a fresh report.
+    pool.mark_connected();
     info!(
         "Voice TCP slot [{}/{}]: connected ({})",
         peer_edge_id, slot_idx, url

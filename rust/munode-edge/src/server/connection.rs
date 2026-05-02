@@ -594,6 +594,10 @@ pub(crate) async fn run_connection_inner(
     hub_client: Arc<HubClient>,
     edge_state: Arc<EdgeState>,
 ) -> Result<()> {
+    // Mumble protocol: server sends Version first (immediately after TLS handshake),
+    // then the client responds with its own Version + Authenticate.
+    client_sender.send_raw(handler::encode_server_version().into()).await;
+
     let mut buf = BytesMut::with_capacity(8192);
     let mut session_id: Option<u32> = None;
     let mut client_state = ClientState::Connected;
@@ -896,7 +900,9 @@ pub(crate) async fn run_connection_inner(
             };
             match frame.message_type {
                 MessageType::Version => {
-                    // Parse client version message and save info
+                    // Parse and log the client's Version.  The server's own Version was
+                    // already sent proactively at connection start (Mumble protocol: server
+                    // speaks first), so no response is needed here.
                     if let Ok(version_msg) = mumbleproto::Version::decode(&frame.payload[..]) {
                         client_version = version_msg.version;
                         // Truncate version strings to prevent log injection and excess memory use.
@@ -912,10 +918,6 @@ pub(crate) async fn run_connection_inner(
                             peer_addr, client_version, client_release, client_os, client_os_version
                         );
                     }
-                    let Ok(response) = handler::encode_version_response(&frame.payload, &peer_addr.to_string()) else {
-                        continue;
-                    };
-                    client_sender.send_raw(response.into()).await;
                 }
                 // Pre-connect UserState: client sends self_deaf/self_mute before Authenticate
                 MessageType::UserState if client_state == ClientState::Connected => {

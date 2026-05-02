@@ -4,7 +4,7 @@ use anyhow::Result;
 use bytes::BytesMut;
 use prost::Message;
 use sha1::{Sha1, Digest as Sha1Digest};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use munode_common::config::EdgeConfig;
 use munode_protocol::message_type::MessageType;
@@ -572,16 +572,8 @@ pub fn encode_ping_response(payload: &[u8]) -> Result<Vec<u8>> {
     Ok(buf.to_vec())
 }
 
-/// Encode a Version response.
-pub fn encode_version_response(payload: &[u8], peer_addr: &str) -> Result<Vec<u8>> {
-    let version = mumbleproto::Version::decode(payload)?;
-    info!(
-        "Client {} version: {:?} release={:?}",
-        peer_addr,
-        version.version,
-        version.release
-    );
-
+/// Encode the server's outgoing Version message (sent proactively right after TLS handshake).
+pub fn encode_server_version() -> Vec<u8> {
     let server_version = mumbleproto::Version {
         version: Some(0x0001_0400), // 1.4.0 — 1.5.0+ triggers protobuf audio; we use legacy format
         release: Some("MuNode-Rust 0.1.0".into()),
@@ -590,7 +582,7 @@ pub fn encode_version_response(payload: &[u8], peer_addr: &str) -> Result<Vec<u8
     };
     let mut buf = BytesMut::new();
     encode_message(MessageType::Version, &server_version, &mut buf);
-    Ok(buf.to_vec())
+    buf.to_vec()
 }
 
 /// Encode a Reject message.
@@ -663,15 +655,8 @@ mod tests {
     use bytes::BytesMut;
 
     #[test]
-    fn test_encode_version_response() {
-        let version = mumbleproto::Version {
-            version: Some(0x0001_0300),
-            release: Some("test-client".into()),
-            os: Some("linux".into()),
-            os_version: Some("6.0".into()),
-        };
-        let payload = version.encode_to_vec();
-        let response = encode_version_response(&payload, "127.0.0.1:12345").unwrap();
+    fn test_encode_server_version() {
+        let response = encode_server_version();
 
         let mut buf = BytesMut::from(&response[..]);
         let frame = decode_frame(&mut buf).unwrap().unwrap();
