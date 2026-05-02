@@ -32,6 +32,10 @@ impl HubClient {
     pub async fn request_full_sync(&self) {
         match self.do_full_sync().await {
             Ok((disappeared, _hub_was_empty, _old_session_ids)) => {
+                // Re-enable accepting_connections eagerly before emitting the event,
+                // so the event-listener async delay doesn't leave a window where
+                // Hub is reachable but new connections are refused.
+                self.edge_state.accepting_connections.store(true, std::sync::atomic::Ordering::Relaxed);
                 self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
                 info!("Full-sync triggered after event-bus Lagged");
             }

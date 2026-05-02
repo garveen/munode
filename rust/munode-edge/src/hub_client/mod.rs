@@ -888,7 +888,12 @@ impl HubClient {
                      grace period: {}s",
                     old_session_ids.len(), HUB_RESTART_GRACE_SECS
                 );
-                // Immediately re-enable accepting_connections.
+                // Re-enable accepting_connections immediately and synchronously here,
+                // before emitting the event.  The event listener sets it too, but it
+                // processes events asynchronously — if the listener is busy there would
+                // be a window where Hub is Registered but new connections are still
+                // refused with only a debug log.
+                self.edge_state.accepting_connections.store(true, Ordering::Relaxed);
                 self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: vec![] });
                 // Spawn the grace-period reconciliation task.
                 let state_clone = self.edge_state.clone();
@@ -922,6 +927,12 @@ impl HubClient {
                     }
                 });
             } else {
+                // Re-enable accepting_connections immediately and synchronously here,
+                // before emitting the event.  The event listener sets it too, but it
+                // processes events asynchronously — if the listener is busy there would
+                // be a window where Hub is Registered but new connections are still
+                // refused with only a debug log.
+                self.edge_state.accepting_connections.store(true, Ordering::Relaxed);
                 self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: disappeared });
             }
             info!("Edge registered with Hub successfully ({}, slot {})", url, slot);
@@ -934,6 +945,8 @@ impl HubClient {
             // accepting_connections permanently false.  Detect that here and recover.
             if !self.edge_state.accepting_connections.load(Ordering::Relaxed) {
                 info!("Slot {} recovering accepting_connections after HubUnreachable (sync held by peer slot)", slot);
+                // Same eager set to avoid the event-listener async delay.
+                self.edge_state.accepting_connections.store(true, Ordering::Relaxed);
                 self.edge_state.emit(EdgeEvent::HubRegistered { disappeared_session_ids: vec![] });
             }
         }

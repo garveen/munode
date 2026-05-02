@@ -2111,15 +2111,33 @@ pub(crate) async fn run_connection_inner(
 /// Drain the writer task with a bounded timeout, aborting it explicitly if it
 /// does not exit on its own.
 ///
-/// `tokio::time::timeout(d, JoinHandle).await` consumes the JoinHandle, and on
-/// timeout drops it without aborting the task (drop is *not* abort in tokio).
-/// Without an explicit `abort()` call, a writer task wedged on a stuck TLS
-/// write would survive after this function returns, leaking a task plus the
-/// TLS writer half of the socket.
-async fn drain_writer(writer_handle: tokio::task::JoinHandle<()>) {
-    let abort_handle = writer_handle.abort_handle();
-    if tokio::time::timeout(WRITER_DRAIN_TIMEOUT, writer_handle).await.is_err() {
-        abort_handle.abort();
+/// The previous implementation passed the JoinHandle as an owned future to
+/// `tokio::time::timeout`, which drops (not aborts) the task on timeout, then
+/// calls `abort_handle.abort()` and returns immediately.  Since Tokio's `abort()`
+/// only *requests* cancellation (the task is cancelled at its next await point),
+/// the writer task could remain alive after this function returned, holding the
+/// TLS write-half FD for as long as the underlying TCP write was stalled (up to
+/// the OS retransmission timeout, typically 2–15 minutes).  With many such
+/// half-open connections accumulating, FDs would be exhausted, causing
+/// `accept()` to fail with EMFILE: new connections would appear ESTABLISHED in
+/// `netstat` (held in the OS listen backlog) but the application would never
+/// log or process them, then the OS or client would eventually time them out.
+///
+/// Fix: pin the JoinHandle, select on completion vs. timeout, and if the timeout
+/// fires call `abort()` and **await** the handle to guarantee the task has
+/// actually exited before returning.
+async fn drain_writer(mut writer_handle: tokio::task::JoinHandle<()>) {
+    tokio::select! {
+        _ = &mut writer_handle => {
+            // Writer exited cleanly within the drain window.
+        }
+        _ = tokio::time::sleep(WRITER_DRAIN_TIMEOUT) => {
+            // Timed out — abort the task and wait for the cancellation to land.
+            // Awaiting after abort() guarantees the task's Drop glue has run
+            // (TLS WriteHalf dropped → FD released) before we return.
+            writer_handle.abort();
+            let _ = writer_handle.await;
+        }
     }
 }
 
