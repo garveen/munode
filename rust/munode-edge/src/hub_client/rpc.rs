@@ -155,6 +155,7 @@ impl HubClient {
     /// RPC: move a user to a different channel.
     /// Hub updates session_manager, broadcasts hub.userMoved to OTHER edges, responds.
     /// The requesting edge applies the move locally after confirmation.
+    /// Returns `Err` if the Hub rejected the move (e.g. channel full).
     pub async fn rpc_user_moved(&self, session_id: u32, channel_id: u32, actor_session: u32) -> Result<()> {
         let edge_id = self.edge_id();
         let request_id = self.next_request_id();
@@ -172,8 +173,11 @@ impl HubClient {
         };
         let response = self.rpc_call(request).await
             .context("edge.userMoved RPC failed")?;
-        response.edge_user_moved
+        let result = response.edge_user_moved
             .ok_or_else(|| anyhow::anyhow!("No edge_user_moved in response"))?;
+        if !result.success {
+            return Err(anyhow::anyhow!("edge.userMoved rejected: {}", result.error.as_deref().unwrap_or("unknown")));
+        }
         Ok(())
     }
 
@@ -330,6 +334,8 @@ impl HubClient {
         description: Option<&str>,
         position: Option<i32>,
         max_users: Option<u32>,
+        temporary: Option<bool>,
+        creator_session: Option<u32>,
     ) -> Result<hubedge::EdgeSaveChannelResult> {
         let request_id = self.next_request_id();
         let request = TypedRpcRequest {
@@ -345,6 +351,8 @@ impl HubClient {
                 position,
                 max_users,
                 inherit_acl: None,
+                temporary,
+                creator_session,
             }),
             ..Default::default()
         };

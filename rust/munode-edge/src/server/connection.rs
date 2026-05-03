@@ -1609,13 +1609,21 @@ pub(crate) async fn run_connection_inner(
                             }
                         } else {
                             let is_new = ch_state.channel_id.is_none();
+                            let is_temp = ch_state.temporary.unwrap_or(false);
                             let target_parent = if is_new {
                                 ch_state.parent.unwrap_or(0)
                             } else {
                                 // Edit: check WRITE on the channel being edited
                                 ch_state.channel_id.unwrap_or(0)
                             };
-                            let required_perm = if is_new { perm::MAKE_CHANNEL } else { perm::WRITE };
+                            // Creating a temporary channel requires TEMP_CHANNEL permission;
+                            // permanent channel creation requires MAKE_CHANNEL.
+                            // Editing an existing channel requires WRITE.
+                            let required_perm = if is_new {
+                                if is_temp { perm::TEMP_CHANNEL } else { perm::MAKE_CHANNEL }
+                            } else {
+                                perm::WRITE
+                            };
                             let has_perm = get_perm_cached(&hub_client, &edge_state, sid, target_parent, false).await
                                 & required_perm != 0;
                             if !has_perm {
@@ -1628,6 +1636,7 @@ pub(crate) async fn run_connection_inner(
                                 continue;
                             }
                             let sender_for_spawn = client_sender.clone();
+                            let creator_session = if is_new { Some(sid) } else { None };
                             tokio::spawn(async move {
                                 match hub.save_channel(
                                     ch_state.channel_id,
@@ -1636,6 +1645,8 @@ pub(crate) async fn run_connection_inner(
                                     ch_state.description.as_deref(),
                                     ch_state.position,
                                     ch_state.max_users,
+                                    if is_new { ch_state.temporary } else { None },
+                                    creator_session,
                                 ).await {
                                     Ok(result) if !result.success => {
                                         let pq = mumbleproto::PermissionDenied {
@@ -2732,14 +2743,50 @@ pub(super) async fn handle_admin_user_state_update(
                 let can_speak = get_perm_cached(&hub_client, &edge_state, target_session, target_channel_id, true).await
                     & perm::SPEAK != 0;
                 let new_suppress = !can_speak;
-                suppress_changed = new_suppress != client.suppress;
-                client.channel_id = target_channel_id;
-                client.suppress = new_suppress;
-                // Move in-place: preserves close-signal, crypt-state, and bandwidth record
-                // so the TCP read loop is not interrupted by the admin-initiated move.
-                edge_state.client_manager.move_client_to_channel(target_session, target_channel_id, new_suppress).await;
-                needs_broadcast = true;
-                channel_moved = true;
+
+                // Compute effective capacity limit for the target channel.
+                let effective_limit = if let Some(ch) = edge_state.channel_manager.get_channel(target_channel_id).await {
+                    if ch.max_users > 0 {
+                        ch.max_users
+                    } else {
+                        let hub_limits = edge_state.hub_limits.read().await;
+                        hub_limits.as_ref().and_then(|l| {
+                            if l.max_users_per_channel.unwrap_or(0) > 0 {
+                                l.max_users_per_channel
+                            } else {
+                                None
+                            }
+                        }).unwrap_or(0)
+                    }
+                } else {
+                    0
+                };
+
+                // Atomically check capacity and move in-place.
+                match edge_state.client_manager.move_client_to_channel_checked(
+                    target_session, target_channel_id, new_suppress, effective_limit,
+                ).await {
+                    Ok(()) => {
+                        suppress_changed = new_suppress != client.suppress;
+                        client.channel_id = target_channel_id;
+                        client.suppress = new_suppress;
+                        needs_broadcast = true;
+                        channel_moved = true;
+                    }
+                    Err(()) => {
+                        // Channel full — send PermissionDenied to the actor.
+                        if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                            let pq = mumbleproto::PermissionDenied {
+                                r#type: Some(mumbleproto::permission_denied::DenyType::ChannelFull as i32),
+                                channel_id: Some(target_channel_id),
+                                reason: Some("Channel is full".to_string()),
+                                ..Default::default()
+                            };
+                            sender.send_message(MessageType::PermissionDenied, &pq).await;
+                        }
+                        return;
+                    }
+                }
             }
         }
 
@@ -2829,7 +2876,22 @@ pub(super) async fn handle_admin_user_state_update(
 
             // Permissions OK: forward to Hub. Hub updates session state and broadcasts
             // hub.userMoved to all edges; the owner edge will apply the actual move.
+            // Hub may reject if the target channel is full — notify actor accordingly.
             if let Err(e) = hub_client.rpc_user_moved(target_session, target_channel_id, actor_session).await {
+                let is_full = e.to_string().contains("Channel is full");
+                if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(if is_full {
+                            mumbleproto::permission_denied::DenyType::ChannelFull as i32
+                        } else {
+                            mumbleproto::permission_denied::DenyType::Permission as i32
+                        }),
+                        channel_id: Some(target_channel_id),
+                        reason: if is_full { Some("Channel is full".to_string()) } else { None },
+                        ..Default::default()
+                    };
+                    sender.send_message(MessageType::PermissionDenied, &pq).await;
+                }
                 warn!("rpc_user_moved failed (remote admin move, session {}): {:#}", target_session, e);
             }
         }

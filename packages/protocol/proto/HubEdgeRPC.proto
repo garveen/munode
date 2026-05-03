@@ -408,6 +408,8 @@ message EdgeSaveChannelParams {
   optional bool inherit_acl = 6;
   optional string description = 7;
   optional string description_blob = 8;
+  optional bool temporary = 9;
+  optional uint32 creator_session = 10;
 }
 
 message EdgeSaveChannelResult {

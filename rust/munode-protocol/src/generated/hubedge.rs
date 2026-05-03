@@ -1275,6 +1275,10 @@ pub struct EdgeSaveChannelParams {
     pub description: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "8")]
     pub description_blob: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bool, optional, tag = "9")]
+    pub temporary: ::core::option::Option<bool>,
+    #[prost(uint32, optional, tag = "10")]
+    pub creator_session: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EdgeSaveChannelResult {

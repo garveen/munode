@@ -1655,6 +1655,26 @@ impl RpcHandler {
             }));
         }
 
+        // Check if the target channel is full before allowing the move.
+        // Mirrors Murmur Messages.cpp:814 — isChannelFull applies even to admin moves.
+        if let Some(target_ch) = self.state.channel_store.get_channel(p.channel_id).await {
+            if target_ch.max_users > 0 {
+                let count = self.state.session_manager
+                    .get_all_sessions().await
+                    .iter()
+                    .filter(|s| s.channel_id == p.channel_id)
+                    .count();
+                if count as u32 >= target_ch.max_users {
+                    return Ok(self.make_response_packet(request_id, "edge.userMoved", |r| {
+                        r.edge_user_moved = Some(EdgeUserMovedResult {
+                            success: false,
+                            error: Some("Channel is full".into()),
+                        });
+                    }));
+                }
+            }
+        }
+
         let old_channel_id = self.state.session_manager.get_session(p.session_id).await.map(|s| s.channel_id);
         self.state.session_manager.move_user_to_channel(p.session_id, p.channel_id).await;
 
@@ -1704,10 +1724,74 @@ impl RpcHandler {
             if let Some(v) = p.suppress   { session.suppress   = v; }
             if let Some(v) = p.priority_speaker { session.priority_speaker = v; }
             if let Some(v) = p.recording  { session.recording  = v; }
+
+            // Hub-side validation for listening_channel_add:
+            //   1. ChanACL::Listen permission
+            //   2. listeners_per_user global limit
+            //   3. listeners_per_channel global limit (counts across all edges)
+            // Channels failing any check are silently dropped, matching Murmur's behaviour.
+            // The Edge has already enforced these for its own clients; Hub re-validates as a
+            // second line of defence (especially important for cross-edge listener counts that
+            // a single Edge cannot observe).
+            let per_user_limit = self.state.config.limits.listeners_per_user;
+            let per_channel_limit = self.state.config.limits.listeners_per_channel;
+            let all_sessions_snapshot = if !p.listening_channel_add.is_empty() {
+                Some(self.state.session_manager.get_all_sessions().await)
+            } else {
+                None
+            };
+            let mut validated_adds: Vec<u32> = Vec::new();
             for &ch in &p.listening_channel_add {
-                if !session.listening_channels.contains(&ch) {
-                    session.listening_channels.push(ch);
+                if session.listening_channels.contains(&ch) || validated_adds.contains(&ch) {
+                    continue; // already listening — allow through
                 }
+                // Per-user limit
+                if per_user_limit > 0
+                    && (session.listening_channels.len() + validated_adds.len()) as u32 >= per_user_limit
+                {
+                    debug!(
+                        session_id = p.session_id,
+                        channel_id = ch,
+                        "Hub: rejected listen add — per-user limit ({}) reached",
+                        per_user_limit
+                    );
+                    continue;
+                }
+                // Per-channel limit (global across all edges)
+                if per_channel_limit > 0 {
+                    let ch_count = all_sessions_snapshot
+                        .as_ref()
+                        .map(|s| s.iter().filter(|x| x.listening_channels.contains(&ch)).count())
+                        .unwrap_or(0);
+                    if ch_count as u32 >= per_channel_limit {
+                        debug!(
+                            session_id = p.session_id,
+                            channel_id = ch,
+                            "Hub: rejected listen add — per-channel limit ({}) reached",
+                            per_channel_limit
+                        );
+                        continue;
+                    }
+                }
+                // Listen permission
+                let can_listen = self.state.acl_manager.has_permission(
+                    session.user_id as i32,
+                    ch,
+                    &session.groups,
+                    munode_common::permission::LISTEN,
+                ).await;
+                if !can_listen {
+                    debug!(
+                        session_id = p.session_id,
+                        channel_id = ch,
+                        "Hub: rejected listen add — no Listen permission"
+                    );
+                    continue;
+                }
+                validated_adds.push(ch);
+            }
+            for &ch in &validated_adds {
+                session.listening_channels.push(ch);
             }
             session.listening_channels.retain(|ch| !p.listening_channel_remove.contains(ch));
             sessions.add_session(session).await;
@@ -2400,14 +2484,32 @@ impl RpcHandler {
             }
 
             // Create new channel
+            let channel_name = params.name.clone().unwrap_or_else(|| "New Channel".to_string());
+
+            // Check for duplicate sibling name (Murmur Messages.cpp:1344).
+            {
+                let all_channels = self.state.channel_store.get_all_channels().await;
+                if all_channels.iter().any(|c| c.parent_id == params.parent_id && c.name == channel_name) {
+                    return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                        r.edge_save_channel = Some(EdgeSaveChannelResult {
+                            success: false,
+                            channel_id: None,
+                            error: Some(format!("A channel named '{}' already exists in this location", channel_name)),
+                        });
+                    }));
+                }
+            }
+
+            let is_temp = params.temporary.unwrap_or(false);
+
             let ch = ChannelRecord {
                 id: 0, // Will be assigned by create_channel
-                name: params.name.clone().unwrap_or_else(|| "New Channel".to_string()),
+                name: channel_name,
                 parent_id: params.parent_id,
                 description: params.description.clone().unwrap_or_default(),
                 position: params.position.unwrap_or(0),
                 max_users: params.max_users.unwrap_or(0),
-                temporary: false,
+                temporary: is_temp,
                 inherit_acl: params.inherit_acl.unwrap_or(true),
                 links: std::collections::HashSet::new(),
             };
@@ -2422,7 +2524,7 @@ impl RpcHandler {
                 description: Some(ch.description.clone()),
                 position: Some(ch.position),
                 max_users: if ch.max_users > 0 { Some(ch.max_users) } else { None },
-                temporary: Some(false),
+                temporary: Some(is_temp),
                 inherit_acl: Some(ch.inherit_acl),
                 links: vec![],
             };
@@ -2431,13 +2533,54 @@ impl RpcHandler {
             })
             .await;
 
+            // Temporary channel: immediately move the creator into it (Murmur Messages.cpp:1433).
+            if is_temp {
+                if let Some(creator_session) = params.creator_session {
+                    if creator_session != 0 {
+                        if let Some(session) = self.state.session_manager.get_session(creator_session).await {
+                            let old_ch = session.channel_id;
+                            self.state.session_manager.move_user_to_channel(creator_session, id).await;
+                            let moved_params = HubUserMovedParams {
+                                session_id: creator_session,
+                                edge_id: session.edge_id,
+                                channel_id: id,
+                                actor_session: Some(creator_session),
+                            };
+                            self.broadcast_notification("hub.userMoved", |n| {
+                                n.user_moved = Some(moved_params);
+                            }).await;
+                            info!(
+                                session_id = creator_session,
+                                channel_id = id,
+                                "Temporary channel created: moved creator into new channel"
+                            );
+                            // Clean up the old channel if it was also temporary and is now empty.
+                            self.maybe_cleanup_temp_channel(old_ch).await;
+                        }
+                    }
+                }
+            }
+
             id
         } else {
             // Update existing channel
             let id = params.id.unwrap();
             if let Some(mut ch) = self.state.channel_store.get_channel(id).await {
                 if let Some(name) = &params.name {
-                    ch.name = name.clone();
+                    // Check for duplicate sibling name (excluding the current channel itself).
+                    let new_name = name.clone();
+                    let effective_parent = params.parent_id.map(Some).unwrap_or(ch.parent_id);
+                    let all_channels = self.state.channel_store.get_all_channels().await;
+                    if all_channels.iter().any(|c| c.parent_id == effective_parent && c.id != id && c.name == new_name) {
+                        return Ok(self.make_response_packet(request_id, "edge.saveChannel", |r| {
+                            r.edge_save_channel = Some(EdgeSaveChannelResult {
+                                success: false,
+                                channel_id: Some(id),
+                                error: Some(format!("A channel named '{}' already exists in this location", new_name)),
+                            });
+                        }));
+                    }
+                    ch.name = new_name;
                 }
                 if let Some(pos) = params.position {
                     ch.position = pos;
@@ -3754,15 +3897,40 @@ impl RpcHandler {
         };
 
         let all_sessions = self.state.session_manager.get_all_sessions().await;
+
+        // Build per-channel max_users map (only channels that have a limit).
+        let channel_max_users: std::collections::HashMap<u32, u32> = all_channels
+            .iter()
+            .filter(|c| c.max_users > 0)
+            .map(|c| (c.id, c.max_users))
+            .collect();
+
+        // Track current occupancy per channel so that as we displace multiple users
+        // we account for users we have already decided to move there in this batch.
+        let mut channel_counts: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+        for s in &all_sessions {
+            *channel_counts.entry(s.channel_id).or_insert(0) += 1;
+        }
+
         for session in all_sessions.iter().filter(|s| subtree_set.contains(&s.channel_id)) {
-            // Walk ancestor_chain to find the first channel the user can enter.
-            // Root (last element, id=0) is always accepted regardless of permissions.
+            // Walk ancestor_chain to find the first channel the user can enter that
+            // is not full.  Root (id=0) is always the unconditional fallback.
+            // Mirrors Murmur: while (target->cParent &&
+            //   (!hasPermission(p, target, Enter) || isChannelFull(target, p)))
+            //       target = target->cParent;
             let mut target_channel = 0u32;
             for (i, &ch_id) in ancestor_chain.iter().enumerate() {
                 let is_root = ch_id == 0 || i == ancestor_chain.len() - 1;
                 if is_root {
                     target_channel = ch_id;
                     break;
+                }
+                // Skip channels that are already at capacity.
+                if let Some(&max) = channel_max_users.get(&ch_id) {
+                    let current = channel_counts.get(&ch_id).copied().unwrap_or(0);
+                    if current >= max as usize {
+                        continue; // full — walk up
+                    }
                 }
                 if self.state.acl_manager.has_permission(
                     session.user_id as i32,
@@ -3774,6 +3942,13 @@ impl RpcHandler {
                     break;
                 }
             }
+
+            // Update the in-batch occupancy counters so subsequent displacees account
+            // for earlier moves in this same removal batch.
+            if let Some(cnt) = channel_counts.get_mut(&session.channel_id) {
+                if *cnt > 0 { *cnt -= 1; }
+            }
+            *channel_counts.entry(target_channel).or_insert(0) += 1;
 
             self.state.session_manager.move_user_to_channel(session.session_id, target_channel).await;
             let moved_params = HubUserMovedParams {
