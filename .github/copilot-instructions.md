@@ -7,6 +7,8 @@ MuNode is a distributed Mumble voice server. The server-side (Hub + Edge) is wri
 - When you have questions that need clarification, call ask-questions tool for further instructions instead of ending the conversation directly. DO NOT guess.
 - When asked to fix one of the integration tests, do not run all tests — you must specify the file or use the `-t` parameter to run only that specific test. Do NOT use "--" for params, it's not needed.
 - This system is still in the pre-0.1 stage. Everything except `Mumble.proto` — including any protocols — may be modified freely.
+- **Do not optimize for minimal diff.** When making any change, choose the globally optimal solution — refactor, rename, restructure, or rewrite whatever is needed to produce the best overall result. Preserving existing code for the sake of a smaller diff is never a goal.
+- **Keep example configs in sync with the schema.** Whenever you modify `rust/munode-common/src/config.rs` (add/remove/rename a field, change a default), update the corresponding `rust/config/edge.example.toml` and/or `rust/config/hub.example.toml` in the same change so the example stays a valid, accurate reference.
 
 ## Tech Stack
 
@@ -83,6 +85,7 @@ munode-tests/                  # Rust integration test crate (starts real Hub+Ed
 │   └── suites/                # Test suites: hub_edge, auth, users, channels, acl, ban, voice, udp, …
 
 packages/client/               # TypeScript Mumble client (ACTIVE — do not deprecate)
+packages/web-client/           # Browser SPA (Vue 3 + Pinia + Vite) — ACTIVE
 packages/{common,protocol,hub-server,edge-server,cli,auth-service}/
                                # ⚠️ DEPRECATED TypeScript server code — do not modify
 ```
@@ -272,6 +275,17 @@ The following packages under `packages/` are **deprecated** and should not recei
 | `packages/cli` | ⛔ Deprecated | CLI now built into Rust binaries |
 | `packages/auth-service` | ⛔ Deprecated | Replaced by `rust/munode-hub/auth_service.rs` |
 | **`packages/client`** | ✅ **Active** | Only Mumble client — actively maintained (TypeScript) |
+| **`packages/web-client`** | ✅ **Active** | Browser SPA (Vue 3 + Pinia + Vite) — actively maintained |
+
+## Web Client i18n Convention
+
+All UI string translations in `packages/web-client/src/i18n/locales/` **must follow the official Mumble C++ client wording**:
+
+- **Source of truth:** `c-implement/src/mumble/mumble_zh_CN.ts` (Simplified Chinese) and `mumble_en.ts` (English).  
+  These are Qt Linguist `.ts` XML files with `<source>` / `<translation>` pairs.
+- When adding or editing a translation key, first look up the corresponding `<source>` string in `mumble_zh_CN.ts` (or `mumble_en.ts`) and reuse the `<translation>` verbatim.
+- Only write new phrasing when no matching `<source>` entry exists (e.g., web-specific features like WebTransport modes, VAD threshold slider). In that case, follow Mumble's tone and terminology (concise, no title-case in Chinese).
+- Event / notification messages (the `events.*` namespace) use the same sentence patterns as Mumble's `Log.cpp` log messages found in `mumble_zh_CN.ts` — e.g. `{name} 关闭了麦克风。` not `{name}已静音`.
 
 ## Quick Reference
 
