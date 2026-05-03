@@ -533,9 +533,14 @@ impl HubClient {
                     if let Some(json_str) = &notification.unknown_params_json {
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
                             if let Some(channel_id) = val.get("channel_id").and_then(|v| v.as_u64()) {
-                                debug!("ACL updated for channel {}", channel_id);
+                                let is_enter_restricted = val
+                                    .get("is_enter_restricted")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                debug!("ACL updated for channel {}, is_enter_restricted={}", channel_id, is_enter_restricted);
                                 self.edge_state.emit(crate::state::EdgeEvent::AclUpdated {
                                     channel_id: channel_id as u32,
+                                    is_enter_restricted,
                                 });
                             }
                         }

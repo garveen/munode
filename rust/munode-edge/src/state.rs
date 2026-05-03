@@ -181,7 +181,9 @@ pub enum EdgeEvent {
         reason: String,
     },
     /// Hub ACL was updated for a channel; Edges should re-evaluate can_enter for all clients.
-    AclUpdated { channel_id: u32 },
+    /// `is_enter_restricted` is pre-computed by the Hub at ACL-save time and embedded in the
+    /// notification so that Edges never need a separate RPC just for this channel-level flag.
+    AclUpdated { channel_id: u32, is_enter_restricted: bool },
     /// All TCP voice connections to a peer Edge have been down for an extended period.
     /// The event listener should call `edge.reportPeerDisconnect` so that the Hub can
     /// run partition-arbitration logic and — if both sides report — broadcast `hub.peerLeft`
@@ -332,6 +334,16 @@ pub struct EdgeState {
     /// (session, channel) pair.  The cache is invalidated on `AclUpdated` events (by channel)
     /// and cleared per-session on disconnect.
     pub permission_cache: dashmap::DashMap<(u32, u32), u32>,
+    /// Cache of channel-level enter-restriction flags: channel_id → is_enter_restricted.
+    ///
+    /// `is_enter_restricted` is a pure channel property (independent of the viewer) that
+    /// indicates whether any ACL entry effectively applied to the channel carries a
+    /// `deny & Enter` bit.  Clients use it to display a lock icon regardless of their own
+    /// permissions.  The value is populated at login time (from the batch permission query)
+    /// and refreshed inline on every `AclUpdated` event from the Hub (which now embeds the
+    /// pre-computed flag), so no separate RPC is ever needed just for this field.
+    /// Entries are removed when a channel is deleted (`ChannelRemoved` event).
+    pub enter_restricted_cache: dashmap::DashMap<u32, bool>,
     /// Monotonically increasing topology version counter.
     /// Incremented on every client join/leave/channel-move/deaf-change event so that
     /// per-sender `BroadcastCache` entries can detect staleness without holding any lock.
@@ -391,6 +403,7 @@ impl EdgeState {
             session_counter: AtomicU32::new(0),
             auth_semaphore: tokio::sync::Semaphore::new(32),
             permission_cache: dashmap::DashMap::new(),
+            enter_restricted_cache: dashmap::DashMap::new(),
             topology_version: AtomicU64::new(0),
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
         })
@@ -437,6 +450,7 @@ impl EdgeState {
             session_counter: AtomicU32::new(0),
             auth_semaphore: tokio::sync::Semaphore::new(32),
             permission_cache: dashmap::DashMap::new(),
+            enter_restricted_cache: dashmap::DashMap::new(),
             topology_version: AtomicU64::new(0),
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
         })
@@ -491,6 +505,7 @@ impl EdgeState {
             session_counter: AtomicU32::new(0),
             auth_semaphore: tokio::sync::Semaphore::new(32),
             permission_cache: dashmap::DashMap::new(),
+            enter_restricted_cache: dashmap::DashMap::new(),
             topology_version: AtomicU64::new(0),
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
         })

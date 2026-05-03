@@ -20,6 +20,7 @@ use munode_protocol::hubedge::*;
 use munode_common::config::HubConfig;
 use munode_common::permission;
 
+use crate::acl_manager::AclManager;
 use crate::channel_store::ChannelRecord;
 use crate::lua_auth::LuaAuthRequest;
 use crate::server::HubState;
@@ -2256,6 +2257,9 @@ impl RpcHandler {
         // [4] Read channel groups from the in-memory store (single sync lock, replaces batch DB queries).
         let groups_snapshot = self.state.acl_manager.channel_groups_snapshot().await;
 
+        // [4b] Snapshot ACL entries once for is_enter_restricted computation.
+        let acl_snapshot = self.state.acl_manager.acl_entries_snapshot().await;
+
         // [5] Compute one entry per requested channel — entirely in-memory.
         let mut entries: Vec<ChannelPermissionEntry> = Vec::with_capacity(params.channel_ids.len());
         for (idx, &channel_id) in params.channel_ids.iter().enumerate() {
@@ -2295,15 +2299,17 @@ impl RpcHandler {
                 )
                 .await;
 
-            // Derive is_enter_restricted from the in-memory ACL entries.
-            let is_enter_restricted = {
-                use munode_common::permission;
-                self.state.acl_manager
-                    .get_channel_acls(channel_id)
-                    .await
-                    .iter()
-                    .any(|a| a.deny & permission::ENTER != 0)
-            };
+            // Derive is_enter_restricted: true when any ACL entry that is
+            // effectively applied to this channel (considering inheritance and the
+            // apply_here / apply_subs flags) carries a deny & ENTER bit.
+            // This mirrors the ACL walk in calculate_permissions_with_chain but
+            // without user/group matching — we want "could *any* user be denied?"
+            let is_enter_restricted = AclManager::is_enter_restricted_with_chain(
+                channel_id,
+                chain,
+                &inherit_flags,
+                &acl_snapshot,
+            );
 
             entries.push(ChannelPermissionEntry {
                 channel_id,
@@ -2841,10 +2847,30 @@ impl RpcHandler {
                 }
             });
 
-            // Broadcast ACL update notification to all edges
+            // Broadcast ACL update notification to all edges, including whether this
+            // channel is now enter-restricted (computed once here to avoid an extra RPC
+            // round-trip per Edge per AclUpdated event).
+            let is_enter_restricted = {
+                let channel_snapshot = self.state.channel_store.get_parent_and_inherit_snapshot().await;
+                let chain = build_ancestor_chain(&channel_snapshot, params.channel_id);
+                let inherit_flags: Vec<bool> = chain
+                    .iter()
+                    .map(|&cid| channel_snapshot.get(&cid).map(|(_, inh)| *inh).unwrap_or(true))
+                    .collect();
+                let acl_snapshot = self.state.acl_manager.acl_entries_snapshot().await;
+                AclManager::is_enter_restricted_with_chain(
+                    params.channel_id,
+                    &chain,
+                    &inherit_flags,
+                    &acl_snapshot,
+                )
+            };
             self.broadcast_notification("hub.aclUpdated", |n| {
                 n.unknown_params_json = Some(
-                    serde_json::json!({ "channel_id": params.channel_id }).to_string()
+                    serde_json::json!({
+                        "channel_id": params.channel_id,
+                        "is_enter_restricted": is_enter_restricted,
+                    }).to_string()
                 );
             }).await;
 

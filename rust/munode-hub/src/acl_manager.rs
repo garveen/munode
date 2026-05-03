@@ -306,6 +306,55 @@ impl AclManager {
         self.acl_entries.read().await.clone()
     }
 
+    /// Determine whether a channel is "enter-restricted" — i.e. whether any ACL
+    /// entry that is **effectively applied** to the channel (directly or via
+    /// inheritance through the ancestor chain) carries a `deny & ENTER` bit.
+    ///
+    /// This mirrors the ACL walk of [`calculate_permissions_with_chain`]: the
+    /// `inherit_acl` flags are respected (a `false` flag on a non-root channel
+    /// resets the effective start of the chain, discarding ancestor entries that
+    /// can no longer propagate), and the `apply_here` / `apply_subs` filters are
+    /// applied.  Unlike the per-user permission check, **no user/group matching
+    /// is performed** — if *any* entry with `deny & ENTER` would apply to this
+    /// channel for any user, the channel is considered enter-restricted.
+    ///
+    /// `acl_snapshot` should be obtained once via [`acl_entries_snapshot`] and
+    /// reused across multiple calls to avoid repeated lock acquisitions.
+    pub fn is_enter_restricted_with_chain(
+        channel_id: u32,
+        chain: &[u32],
+        inherit_flags: &[bool],
+        acl_snapshot: &HashMap<u32, Vec<AclEntry>>,
+    ) -> bool {
+        // Find the effective start index: the last non-root channel with
+        // inherit_acl=false.  Entries from channels before that index are
+        // discarded (identical to the `granted = DEFAULT` reset in the
+        // permission calculation loop).
+        let effective_start = chain
+            .iter()
+            .zip(inherit_flags.iter())
+            .enumerate()
+            .filter(|(_, (cid, inherit))| **cid != 0 && !**inherit)
+            .map(|(idx, _)| idx)
+            .last()
+            .unwrap_or(0);
+
+        for idx in effective_start..chain.len() {
+            let cid = chain[idx];
+            let is_target = cid == channel_id;
+            if let Some(acls) = acl_snapshot.get(&cid) {
+                for acl in acls {
+                    if is_target && !acl.apply_here { continue; }
+                    if !is_target && !acl.apply_subs { continue; }
+                    if acl.deny & permission::ENTER != 0 {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     /// Clone the entire channel-group map for callers that need a snapshot.
     pub async fn channel_groups_snapshot(&self) -> HashMap<u32, Vec<ChannelGroup>> {
         self.channel_groups.read().await.clone()

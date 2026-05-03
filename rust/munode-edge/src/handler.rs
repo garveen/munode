@@ -243,6 +243,8 @@ impl<'a> LoginHandler<'a> {
             } else {
                 let (perms, ch_restricted) = perm_map.get(&ch.id).copied().unwrap_or((0, false));
                 let enter = perms & perm::ENTER != 0;
+                // Populate enter_restricted_cache so AclUpdated events need no extra RPC.
+                self.edge_state.enter_restricted_cache.insert(ch.id, ch_restricted);
                 (Some(enter), Some(ch_restricted))
             };
 

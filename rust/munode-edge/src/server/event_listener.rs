@@ -226,6 +226,8 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                     EdgeEvent::ChannelRemoved { channel_id } => {
                         let msg = mumbleproto::ChannelRemove { channel_id };
                         state.client_manager.broadcast(MessageType::ChannelRemove, &msg, None).await;
+                        // Clean up the enter_restricted_cache for the deleted channel.
+                        state.enter_restricted_cache.remove(&channel_id);
                         debug!("Broadcast channel removed: {}", channel_id);
                     }
                     EdgeEvent::ChannelUpdated { channel_id, links_add, links_remove } => {
@@ -627,21 +629,31 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                         );
                         hub_client.do_report_peer_disconnect(peer_edge_id).await;
                     }
-                    EdgeEvent::AclUpdated { channel_id } => {
-                        // An ACL was updated on the Hub; re-evaluate can_enter for every local
-                        // client on the affected channel and push a ChannelState update so the
-                        // client's lock icon reflects the new permissions immediately.
-                        debug!("ACL updated for channel {}, refreshing can_enter for all local sessions", channel_id);
-                        // Invalidate cached permissions for this channel so all queries below
-                        // fetch fresh values from Hub rather than returning stale data.
+                    EdgeEvent::AclUpdated { channel_id, is_enter_restricted } => {
+                        // An ACL was updated on the Hub; re-evaluate can_enter + is_enter_restricted
+                        // for every local client and push a ChannelState update so the client's lock
+                        // icon reflects the new permissions immediately.
+                        //
+                        // Mirrors Murmur's msgACL handler which, after saving the new ACL, loops over
+                        // all connected users and sends:
+                        //   mpcs.set_is_enter_restricted(isChannelEnterRestricted(c));  // channel-level
+                        //   mpcs.set_can_enter(hasPermission(user, c, ChanACL::Enter)); // per-user
+                        //
+                        // `is_enter_restricted` is pre-computed by the Hub at ACL-save time and
+                        // embedded in the notification — no extra RPC needed here.
+                        debug!("ACL updated for channel {}, is_enter_restricted={}, refreshing enter state for all local sessions", channel_id, is_enter_restricted);
+                        // Update the channel-level cache entry with the authoritative Hub value.
+                        state.enter_restricted_cache.insert(channel_id, is_enter_restricted);
+                        // Invalidate per-(session,channel) permission cache so all permission
+                        // queries below fetch fresh values from Hub rather than stale data.
                         state.permission_cache.retain(|&(_, ch), _| ch != channel_id);
                         let all_clients = state.client_manager.get_all_clients().await;
-                        for client in all_clients {
+                        for client in &all_clients {
                             let can_enter = get_perm_cached(&hub_client, &state, client.session, channel_id, true).await
                                 & perm::ENTER != 0;
                             let ch_state = mumbleproto::ChannelState {
                                 channel_id: Some(channel_id),
-                                is_enter_restricted: Some(!can_enter),
+                                is_enter_restricted: Some(is_enter_restricted),
                                 can_enter: Some(can_enter),
                                 ..Default::default()
                             };
