@@ -171,6 +171,12 @@ capacity       = 1000                   # Default: 1000
 # 0 = accumulate forever (not recommended for long-running servers).
 # rolling_stats_window = 120           # Default: 120
 
+# Idle timeout in seconds for authenticated client connections.
+# Mirrors Murmur's `timeout` setting (default: 30).
+# Connections that send no data for this duration are closed as zombie connections.
+# 0 = no timeout (not recommended for production).
+# idle_timeout_secs = 30               # Default: 30 (matches Murmur default)
+
 # ---------------------------------------------------------------------------
 # Voice Routing
 # ---------------------------------------------------------------------------

@@ -22,9 +22,9 @@ use crate::state::EdgeState;
 use crate::transport::TransportKind;
 use crate::voice::{deliver_voice_tcp, inject_session_into_voice, wrap_udptunnel};
 
-/// Idle timeout for client TCP connections. Connections that send no data for
-/// this duration are considered zombie connections and are closed.
-const CLIENT_IDLE_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(120);
+/// Fallback idle timeout when `server.idle_timeout_secs = 0` (disabled) — effectively no
+/// upper bound, but we still need a finite select! arm.  Set to a large value.
+const CLIENT_IDLE_TIMEOUT_DISABLED: tokio::time::Duration = tokio::time::Duration::from_secs(3600);
 
 /// Maximum time allowed for the TLS handshake to complete.  Without this, a
 /// malicious peer that opens a TCP connection but never finishes the TLS
@@ -640,6 +640,14 @@ pub(crate) async fn run_connection_inner(
         None
     };
 
+    // Idle timeout derived from config.  0 means "disabled" — use the large
+    // sentinel value so the select! arm is always valid.
+    let idle_timeout = if config.server.idle_timeout_secs > 0 {
+        tokio::time::Duration::from_secs(config.server.idle_timeout_secs)
+    } else {
+        CLIENT_IDLE_TIMEOUT_DISABLED
+    };
+
     let auth_deadline = if config.server.auth_timeout_secs > 0 {
         Some(tokio::time::Instant::now() + tokio::time::Duration::from_secs(config.server.auth_timeout_secs))
     } else {
@@ -672,12 +680,12 @@ pub(crate) async fn run_connection_inner(
         let read_timeout = if client_state != ClientState::Ready {
             if let Some(deadline) = auth_deadline {
                 let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-                remaining.min(CLIENT_IDLE_TIMEOUT)
+                remaining.min(idle_timeout)
             } else {
-                CLIENT_IDLE_TIMEOUT
+                idle_timeout
             }
         } else {
-            CLIENT_IDLE_TIMEOUT
+            idle_timeout
         };
 
         // --- Outer select: three branches when a login task is running

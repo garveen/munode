@@ -457,6 +457,11 @@ pub struct ServerConfig {
     /// 0 = no pre-auth timeout (falls back to idle timeout).
     #[serde(default = "default_auth_timeout_secs")]
     pub auth_timeout_secs: u64,
+    /// Idle timeout in seconds for authenticated client connections (default: 30).
+    /// Mirrors Murmur's `timeout` setting.  Connections that send no data for this
+    /// duration are considered zombie connections and are closed.  0 = no timeout.
+    #[serde(default = "default_idle_timeout_secs")]
+    pub idle_timeout_secs: u64,
 }
 
 impl Default for ServerConfig {
@@ -481,6 +486,7 @@ impl Default for ServerConfig {
             recording_allowed: true,
             allow_html: true,
             auth_timeout_secs: default_auth_timeout_secs(),
+            idle_timeout_secs: default_idle_timeout_secs(),
         }
     }
 }
@@ -1150,6 +1156,10 @@ fn default_rolling_stats_window() -> u32 {
 }
 
 fn default_auth_timeout_secs() -> u64 {
+    30
+}
+
+fn default_idle_timeout_secs() -> u64 {
     30
 }
 
