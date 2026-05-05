@@ -1129,7 +1129,7 @@ pub(crate) async fn run_connection_inner(
                         }
                         // Check if this targets another user (admin operation)
                         let target_sid = user_state.session.unwrap_or(sid);
-                        if target_sid != sid && (user_state.mute.is_some() || user_state.deaf.is_some() || user_state.channel_id.is_some()) {
+                        if target_sid != sid && (user_state.mute.is_some() || user_state.deaf.is_some() || user_state.channel_id.is_some() || user_state.comment.is_some() || user_state.suppress.is_some()) {
                             // Admin operation: apply to target session
                             handle_admin_user_state_update(&edge_state, &hub_client, sid, target_sid, &user_state).await;
                         } else {
@@ -1185,6 +1185,24 @@ pub(crate) async fn run_connection_inner(
                         } else {
                             text_msg
                         };
+                        // Tree channels: check TEXT_MESSAGE on each channel and deny on first failure.
+                        // Murmur denies immediately when any tree channel lacks permission.
+                        for &ch_id in &text_msg.tree_id {
+                            let has_perm = get_perm_cached(&hub_client, &edge_state, sid, ch_id, true).await
+                                & perm::TEXT_MESSAGE != 0;
+                            if !has_perm {
+                                let pq = mumbleproto::PermissionDenied {
+                                    r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                    permission: Some(perm::TEXT_MESSAGE),
+                                    channel_id: Some(ch_id),
+                                    session: Some(sid),
+                                    ..Default::default()
+                                };
+                                client_sender.send_message(MessageType::PermissionDenied, &pq).await;
+                                // break out of the TextMessage handling; continue outer message loop
+                                continue 'outer;
+                            }
+                        }
                         // Check TEXT_MESSAGE permission on each target channel and filter
                         // to only the channels where the sender has permission.
                         // PermissionDenied is sent only when ALL channels are denied.
@@ -1204,7 +1222,9 @@ pub(crate) async fn run_connection_inner(
                                 // No permitted channels at all — deny
                                 let pq = mumbleproto::PermissionDenied {
                                     r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                    permission: Some(perm::TEXT_MESSAGE),
                                     channel_id: first_denied,
+                                    session: Some(sid),
                                     ..Default::default()
                                 };
                                 client_sender.send_message(MessageType::PermissionDenied, &pq).await;
@@ -1405,21 +1425,52 @@ pub(crate) async fn run_connection_inner(
                             let is_stats_only = stats.stats_only.unwrap_or(false);
                             let is_self = target_session == requester_sid;
 
-                            // Full stats (stats_only=false) for a *different* user expose the IP
-                            // address and other sensitive fields.  Require WRITE on the root
-                            // channel (i.e. server admin) before proceeding.
-                            if !is_stats_only && !is_self {
-                                let has_perm = get_perm_cached(&hub_client, &edge_state, requester_sid, 0, false).await
-                                    & perm::WRITE != 0;
-                                if !has_perm {
-                                    let pd = mumbleproto::PermissionDenied {
-                                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
-                                        channel_id: Some(0),
-                                        ..Default::default()
-                                    };
-                                    client_sender.send_message(MessageType::PermissionDenied, &pd).await;
-                                    continue;
+                            // Determine whether the requester has "extended" access:
+                            // admins with Register permission on root can view full stats of
+                            // any user.  Self-requests always get extended access.
+                            // (Mirrors Murmur: HasPermission(root, client, ChanACL::Register))
+                            let has_register = if !is_self {
+                                get_perm_cached(&hub_client, &edge_state, requester_sid, 0, false).await
+                                    & perm::REGISTER != 0
+                            } else {
+                                true
+                            };
+                            let is_extended = is_self || has_register;
+
+                            // Non-extended users requesting stats for users in channels they
+                            // cannot enter are denied — even for stats_only=true.
+                            // (Mirrors Murmur: if !extended && !HasPermission(target.Channel(), EnterPermission))
+                            if !is_extended {
+                                if let Some(target) = edge_state.client_manager.get_client(target_session).await {
+                                    let can_enter = get_perm_cached(&hub_client, &edge_state, requester_sid, target.channel_id, true).await
+                                        & perm::ENTER != 0;
+                                    if !can_enter {
+                                        let pd = mumbleproto::PermissionDenied {
+                                            r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                            permission: Some(perm::ENTER),
+                                            channel_id: Some(target.channel_id),
+                                            session: Some(requester_sid),
+                                            ..Default::default()
+                                        };
+                                        client_sender.send_message(MessageType::PermissionDenied, &pd).await;
+                                        continue;
+                                    }
                                 }
+                            }
+
+                            // Full stats (stats_only=false) for a *different* user expose the IP
+                            // address and other sensitive fields.  Require extended access
+                            // (self-request or Register permission on root channel).
+                            if !is_stats_only && !is_extended {
+                                let pd = mumbleproto::PermissionDenied {
+                                    r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                    permission: Some(perm::REGISTER),
+                                    channel_id: Some(0),
+                                    session: Some(requester_sid),
+                                    ..Default::default()
+                                };
+                                client_sender.send_message(MessageType::PermissionDenied, &pd).await;
+                                continue;
                             }
 
                             if let Some(target) = edge_state.client_manager.get_client(target_session).await {
@@ -1607,7 +1658,31 @@ pub(crate) async fn run_connection_inner(
                                 if !has_link {
                                     let pq = mumbleproto::PermissionDenied {
                                         r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                        permission: Some(perm::LINK_CHANNEL),
                                         channel_id: Some(ch_id),
+                                        session: Some(sid),
+                                        ..Default::default()
+                                    };
+                                    client_sender.send_message(MessageType::PermissionDenied, &pq).await;
+                                    continue;
+                                }
+                                // Also require LINK_CHANNEL on each target channel being added
+                                // (mirrors Murmur: for each cid in LinksAdd, check LinkChannelPermission).
+                                let mut denied_target: Option<u32> = None;
+                                for &target_ch_id in &ch_state.links_add {
+                                    let has_target_link = get_perm_cached(&hub_client, &edge_state, sid, target_ch_id, false).await
+                                        & perm::LINK_CHANNEL != 0;
+                                    if !has_target_link {
+                                        denied_target = Some(target_ch_id);
+                                        break;
+                                    }
+                                }
+                                if let Some(denied_ch) = denied_target {
+                                    let pq = mumbleproto::PermissionDenied {
+                                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                        permission: Some(perm::LINK_CHANNEL),
+                                        channel_id: Some(denied_ch),
+                                        session: Some(sid),
                                         ..Default::default()
                                     };
                                     client_sender.send_message(MessageType::PermissionDenied, &pq).await;
@@ -1637,12 +1712,60 @@ pub(crate) async fn run_connection_inner(
                             if !has_perm {
                                 let pq = mumbleproto::PermissionDenied {
                                     r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                    permission: Some(required_perm),
                                     channel_id: Some(target_parent),
+                                    session: Some(sid),
                                     ..Default::default()
                                 };
                                 client_sender.send_message(MessageType::PermissionDenied, &pq).await;
                                 continue;
                             }
+
+                            // For new channel creation: unregistered users without a certificate
+                            // cannot create channels (mirrors Murmur: MissingCertificate check).
+                            if is_new {
+                                let actor_info = edge_state.client_manager.get_client(sid).await;
+                                let is_registered = actor_info.as_ref().map(|c| c.user_id > 0).unwrap_or(false);
+                                let has_cert = actor_info.as_ref().map(|c| c.cert_hash.is_some()).unwrap_or(false);
+                                if !is_registered && !has_cert {
+                                    let pq = mumbleproto::PermissionDenied {
+                                        r#type: Some(mumbleproto::permission_denied::DenyType::MissingCertificate as i32),
+                                        session: Some(sid),
+                                        ..Default::default()
+                                    };
+                                    client_sender.send_message(MessageType::PermissionDenied, &pq).await;
+                                    continue;
+                                }
+                            }
+
+                            // For channel edits with a parent change: detect illegal reparent
+                            // (moving a channel into one of its own descendants creates a cycle).
+                            // Walk up the parent chain of the proposed new parent; if we encounter
+                            // the channel being moved, the reparent would create a loop.
+                            if !is_new {
+                                if let (Some(ch_id), Some(new_parent_id)) = (ch_state.channel_id, ch_state.parent) {
+                                    let mut iter_id = Some(new_parent_id);
+                                    let mut is_cycle = false;
+                                    while let Some(current_id) = iter_id {
+                                        if current_id == ch_id {
+                                            is_cycle = true;
+                                            break;
+                                        }
+                                        iter_id = edge_state.channel_manager.get_channel(current_id).await
+                                            .and_then(|ch| ch.parent_id);
+                                    }
+                                    if is_cycle {
+                                        let pq = mumbleproto::PermissionDenied {
+                                            r#type: Some(mumbleproto::permission_denied::DenyType::Text as i32),
+                                            reason: Some("Illegal channel reparent".to_string()),
+                                            ..Default::default()
+                                        };
+                                        client_sender.send_message(MessageType::PermissionDenied, &pq).await;
+                                        continue;
+                                    }
+                                }
+                            }
+
                             let sender_for_spawn = client_sender.clone();
                             let creator_session = if is_new { Some(sid) } else { None };
                             tokio::spawn(async move {
@@ -1688,7 +1811,9 @@ pub(crate) async fn run_connection_inner(
                         if !has_write {
                             let pq = mumbleproto::PermissionDenied {
                                 r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                permission: Some(perm::WRITE),
                                 channel_id: Some(ch_remove.channel_id),
+                                session: Some(sid),
                                 ..Default::default()
                             };
                             client_sender.send_message(MessageType::PermissionDenied, &pq).await;
@@ -1725,7 +1850,9 @@ pub(crate) async fn run_connection_inner(
                                     // Hub explicitly denied: no WRITE on root channel
                                     let pq = mumbleproto::PermissionDenied {
                                         r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                        permission: Some(perm::WRITE),
                                         channel_id: Some(0),
+                                        session: Some(sid),
                                         ..Default::default()
                                     };
                                     sender.send_message(MessageType::PermissionDenied, &pq).await;
@@ -1746,7 +1873,9 @@ pub(crate) async fn run_connection_inner(
                                     // Hub explicitly denied: no BAN on root channel
                                     let pq = mumbleproto::PermissionDenied {
                                         r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                        permission: Some(perm::BAN),
                                         channel_id: Some(0),
+                                        session: Some(sid),
                                         ..Default::default()
                                     };
                                     sender.send_message(MessageType::PermissionDenied, &pq).await;
@@ -1786,7 +1915,9 @@ pub(crate) async fn run_connection_inner(
                     if !has_write {
                         let pq = mumbleproto::PermissionDenied {
                             r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                            permission: Some(perm::WRITE),
                             channel_id: Some(ch_id),
+                            session: Some(sid),
                             ..Default::default()
                         };
                         client_sender.send_message(MessageType::PermissionDenied, &pq).await;
@@ -1975,7 +2106,9 @@ pub(crate) async fn run_connection_inner(
                         if !has_register {
                             let pq = mumbleproto::PermissionDenied {
                                 r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                                permission: Some(perm::REGISTER),
                                 channel_id: Some(0),
+                                session: Some(sid),
                                 ..Default::default()
                             };
                             client_sender.send_message(MessageType::PermissionDenied, &pq).await;
@@ -2243,7 +2376,9 @@ pub(super) async fn handle_user_state_update(
                     if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
                         let pq = mumbleproto::PermissionDenied {
                             r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                            permission: Some(perm::ENTER),
                             channel_id: Some(target_channel_id),
+                            session: Some(session_id),
                             ..Default::default()
                         };
                         sender.send_message(MessageType::PermissionDenied, &pq).await;
@@ -2279,6 +2414,52 @@ pub(super) async fn handle_user_state_update(
         // handle_admin_user_state_update which carries proper permission checks.
         // Accepting these fields here would let a Mumble client trigger
         // spurious "Server opened mic/speaker" notifications on every connect.
+
+        // 9.2b Registration: client requesting self-registration by setting user_id.
+        // Requires SelfRegister permission on root channel and a valid certificate.
+        // Murmur: if target == actor → SelfRegisterPermission; else → RegisterPermission.
+        if user_state.user_id.is_some() {
+            // Check SelfRegister permission on root channel (channel 0)
+            let has_self_register = get_perm_cached(&hub_client, &edge_state, session_id, 0, false).await
+                & perm::SELF_REGISTER != 0;
+            if !has_self_register || client.user_id > 0 {
+                // Already registered or no SelfRegister permission
+                if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                        permission: Some(perm::SELF_REGISTER),
+                        channel_id: Some(0),
+                        session: Some(session_id),
+                        ..Default::default()
+                    };
+                    sender.send_message(MessageType::PermissionDenied, &pq).await;
+                }
+                return;
+            }
+            // Certificate is required to register
+            if client.cert_hash.is_none() {
+                if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(mumbleproto::permission_denied::DenyType::MissingCertificate as i32),
+                        session: Some(session_id),
+                        ..Default::default()
+                    };
+                    sender.send_message(MessageType::PermissionDenied, &pq).await;
+                }
+                return;
+            }
+            // Registration not yet implemented — deny with a text message.
+            // TODO: implement Hub-side user registration RPC.
+            if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
+                let pq = mumbleproto::PermissionDenied {
+                    r#type: Some(mumbleproto::permission_denied::DenyType::Text as i32),
+                    reason: Some("Self-registration is not yet supported on this server".to_string()),
+                    ..Default::default()
+                };
+                sender.send_message(MessageType::PermissionDenied, &pq).await;
+            }
+            return;
+        }
 
         // 9.3 Recording flag (anyone can mark themselves as recording).
         // Only broadcast when the value actually changed — Murmur only sets
@@ -2325,7 +2506,9 @@ pub(super) async fn handle_user_state_update(
                     if let Some(sender) = edge_state.client_manager.get_sender(session_id).await {
                         let pq = mumbleproto::PermissionDenied {
                             r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                            permission: Some(perm::LISTEN),
                             channel_id: Some(ch),
+                            session: Some(session_id),
                             ..Default::default()
                         };
                         sender.send_message(MessageType::PermissionDenied, &pq).await;
@@ -2691,7 +2874,9 @@ pub(super) async fn handle_admin_user_state_update(
                 if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
                     let pq = mumbleproto::PermissionDenied {
                         r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                        permission: Some(perm::MUTE_DEAFEN),
                         channel_id: Some(client.channel_id),
+                        session: Some(actor_session),
                         ..Default::default()
                     };
                     sender.send_message(MessageType::PermissionDenied, &pq).await;
@@ -2708,6 +2893,115 @@ pub(super) async fn handle_admin_user_state_update(
             }
         }
 
+        // Suppress=true can only be set by the server (based on channel permissions), not by
+        // a client directly.  Reject any attempt by an actor to force-suppress another user.
+        // Murmur: "if (msg.has_suppress() && msg.suppress()) → PermissionDenied MuteDeafen"
+        if user_state.suppress == Some(true) {
+            if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                let pq = mumbleproto::PermissionDenied {
+                    r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                    permission: Some(perm::MUTE_DEAFEN),
+                    channel_id: Some(client.channel_id),
+                    session: Some(actor_session),
+                    ..Default::default()
+                };
+                sender.send_message(MessageType::PermissionDenied, &pq).await;
+            }
+            return;
+        }
+
+        // Admin comment clear — an actor can clear another user's comment (setting it to "")
+        // if they have Move permission on root channel.  Setting a non-empty comment for another
+        // user is not allowed (Murmur: TextTooLong denial for any non-empty comment).
+        if let Some(ref comment) = user_state.comment {
+            // Check Move permission on root channel (channel 0)
+            let has_move_root = get_perm_cached(&hub_client, &edge_state, actor_session, 0, false).await
+                & perm::MOVE != 0;
+            if !has_move_root {
+                if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                        permission: Some(perm::MOVE),
+                        channel_id: Some(0),
+                        session: Some(actor_session),
+                        ..Default::default()
+                    };
+                    sender.send_message(MessageType::PermissionDenied, &pq).await;
+                }
+                return;
+            }
+            // Only allow clearing (empty string) — setting a non-empty comment for someone else is denied
+            if !comment.is_empty() {
+                if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(mumbleproto::permission_denied::DenyType::TextTooLong as i32),
+                        ..Default::default()
+                    };
+                    sender.send_message(MessageType::PermissionDenied, &pq).await;
+                }
+                return;
+            }
+            // Clear the target user's comment
+            let target_uid = client.user_id;
+            hub_client.blob_set_user_comment(target_uid, vec![]).await;
+            let clear_msg = mumbleproto::UserState {
+                session: Some(target_session),
+                actor: Some(actor_session),
+                comment: Some(String::new()),
+                ..Default::default()
+            };
+            edge_state.client_manager.broadcast(MessageType::UserState, &clear_msg, None).await;
+            hub_client.rpc_user_state_changed(
+                target_session, None, None, None, None, None, None,
+                None, vec![], vec![], Some(actor_session),
+            ).await.ok();
+            return;
+        }
+
+        // Admin registration: actor registering another user by setting user_id on their session.
+        // Requires Register permission on root channel; target must have a certificate.
+        if user_state.user_id.is_some() {
+            let has_register = get_perm_cached(&hub_client, &edge_state, actor_session, 0, false).await
+                & perm::REGISTER != 0;
+            // Deny if actor lacks Register perm or target is already registered
+            if !has_register || client.user_id > 0 {
+                if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                        permission: Some(perm::REGISTER),
+                        channel_id: Some(0),
+                        session: Some(actor_session),
+                        ..Default::default()
+                    };
+                    sender.send_message(MessageType::PermissionDenied, &pq).await;
+                }
+                return;
+            }
+            // Target must have a certificate to be registered
+            if client.cert_hash.is_none() {
+                if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                    let pq = mumbleproto::PermissionDenied {
+                        r#type: Some(mumbleproto::permission_denied::DenyType::MissingCertificate as i32),
+                        session: Some(target_session),
+                        ..Default::default()
+                    };
+                    sender.send_message(MessageType::PermissionDenied, &pq).await;
+                }
+                return;
+            }
+            // Registration not yet implemented — deny with a text message.
+            // TODO: implement Hub-side user registration RPC.
+            if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
+                let pq = mumbleproto::PermissionDenied {
+                    r#type: Some(mumbleproto::permission_denied::DenyType::Text as i32),
+                    reason: Some("User registration is not yet supported on this server".to_string()),
+                    ..Default::default()
+                };
+                sender.send_message(MessageType::PermissionDenied, &pq).await;
+            }
+            return;
+        }
+
         // Admin channel move (drag user to another channel)
         let mut channel_moved = false;
         let mut suppress_changed = false;
@@ -2721,7 +3015,9 @@ pub(super) async fn handle_admin_user_state_update(
                     if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
                         let pq = mumbleproto::PermissionDenied {
                             r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                            permission: Some(perm::MOVE),
                             channel_id: Some(client.channel_id),
+                            session: Some(actor_session),
                             ..Default::default()
                         };
                         sender.send_message(MessageType::PermissionDenied, &pq).await;
@@ -2739,7 +3035,9 @@ pub(super) async fn handle_admin_user_state_update(
                     if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
                         let pq = mumbleproto::PermissionDenied {
                             r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                            permission: Some(perm::MOVE),
                             channel_id: Some(target_channel_id),
+                            session: Some(actor_session),
                             ..Default::default()
                         };
                         sender.send_message(MessageType::PermissionDenied, &pq).await;
@@ -2857,7 +3155,9 @@ pub(super) async fn handle_admin_user_state_update(
                 if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
                     let pq = mumbleproto::PermissionDenied {
                         r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                        permission: Some(perm::MOVE),
                         channel_id: Some(remote.channel_id),
+                        session: Some(actor_session),
                         ..Default::default()
                     };
                     sender.send_message(MessageType::PermissionDenied, &pq).await;
@@ -2874,7 +3174,9 @@ pub(super) async fn handle_admin_user_state_update(
                 if let Some(sender) = edge_state.client_manager.get_sender(actor_session).await {
                     let pq = mumbleproto::PermissionDenied {
                         r#type: Some(mumbleproto::permission_denied::DenyType::Permission as i32),
+                        permission: Some(perm::MOVE),
                         channel_id: Some(target_channel_id),
+                        session: Some(actor_session),
                         ..Default::default()
                     };
                     sender.send_message(MessageType::PermissionDenied, &pq).await;
@@ -2894,7 +3196,9 @@ pub(super) async fn handle_admin_user_state_update(
                         } else {
                             mumbleproto::permission_denied::DenyType::Permission as i32
                         }),
+                        permission: if is_full { None } else { Some(perm::MOVE) },
                         channel_id: Some(target_channel_id),
+                        session: if is_full { None } else { Some(actor_session) },
                         reason: if is_full { Some("Channel is full".to_string()) } else { None },
                         ..Default::default()
                     };
