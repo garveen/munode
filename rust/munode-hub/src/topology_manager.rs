@@ -293,6 +293,34 @@ impl TopologyManager {
         }
     }
 
+    /// Remove the direct link between two edges without removing either edge node.
+    ///
+    /// Called when both edges confirm their direct TCP voice connection is broken
+    /// but both are still connected to Hub.  After this call the route table will
+    /// no longer include a direct path between `a` and `b`; they will fall back to
+    /// Hub relay or relay-chain routes.
+    pub fn remove_direct_link(&mut self, a: u32, b: u32) {
+        // Drop link quality data in both directions.
+        self.link_quality.remove(&(a, b));
+        self.link_quality.remove(&(b, a));
+        // Remove each node from the other's connected_peers set.
+        if let Some(edge) = self.edges.get_mut(&a) {
+            edge.connected_peers.remove(&b);
+        }
+        if let Some(edge) = self.edges.get_mut(&b) {
+            edge.connected_peers.remove(&a);
+        }
+        // Clear the now-resolved disconnect reports for this pair so a fresh
+        // TCP reconnection can be reported and re-evaluated correctly.
+        if let Some(reporters) = self.disconnect_reports.get_mut(&a) {
+            reporters.remove(&b);
+        }
+        if let Some(reporters) = self.disconnect_reports.get_mut(&b) {
+            reporters.remove(&a);
+        }
+        debug!("Topology: removed direct link between edges {} and {}", a, b);
+    }
+
     /// Total number of edges in the topology.
     pub fn edge_count(&self) -> usize {
         self.edges.len()

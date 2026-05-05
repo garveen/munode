@@ -395,7 +395,7 @@ async fn handle_voice_connection(
                 // Build RelayedVoice packet: inject session varint into plaintext
                 let voice_packet = make_relayed_voice_packet(plaintext, sender_session);
                 if !voice_packet.is_empty() {
-                    edge_state.emit(EdgeEvent::RelayedVoice { voice_packet });
+                    crate::voice::deliver_relayed_voice(voice_packet, &edge_state).await;
                 }
             }
             0x02 => {

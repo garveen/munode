@@ -2985,29 +2985,7 @@ fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
     bytes
 }
 
-/// Decode a Mumble varint from a byte slice.
-/// Returns (value, bytes_consumed) or None if insufficient data.
-pub(crate) fn decode_mumble_varint(data: &[u8]) -> Option<(u32, usize)> {
-    if data.is_empty() { return None; }
-    let v = data[0];
-    if (v & 0x80) == 0x00 {
-        Some((v as u32, 1))
-    } else if (v & 0xC0) == 0x80 {
-        if data.len() < 2 { return None; }
-        Some((((v & 0x3F) as u32) << 8 | data[1] as u32, 2))
-    } else if (v & 0xE0) == 0xC0 {
-        if data.len() < 3 { return None; }
-        Some((((v & 0x1F) as u32) << 16 | (data[1] as u32) << 8 | data[2] as u32, 3))
-    } else if (v & 0xF0) == 0xF0 {
-        if data.len() < 5 { return None; }
-        Some((
-            ((data[1] as u32) << 24) | ((data[2] as u32) << 16) | ((data[3] as u32) << 8) | data[4] as u32,
-            5,
-        ))
-    } else {
-        None
-    }
-}
+
 
 /// Inject sender session ID into a voice packet for forwarding.
 /// Convert a `HashMap<u32, VoiceTargetConfig>` to a `HotVoiceTargetMap` for storage in

@@ -313,6 +313,14 @@ pub struct HubClient {
     /// Monotonically increasing sequence counter for outbound Edge→Hub notifications.
     /// Hub’s per-edge reorder buffer handles any delivery ordering across pool slots.
     outbound_notif_seq: AtomicU64,
+    /// Dedicated channel for voice relay packets received from Hub.
+    ///
+    /// `hub.relayVoicePacket` notifications are short-circuited here in
+    /// `handle_incoming_slot` before they reach the control notification
+    /// processor or the broadcast channel, preventing high-frequency voice
+    /// frames from causing `Lagged` errors on the event bus.
+    /// Bounded at 512: best-effort delivery, drop on overflow (voice is lossy).
+    voice_relay_tx: mpsc::Sender<Vec<u8>>,
 }
 
 impl HubClient {
@@ -331,6 +339,15 @@ impl HubClient {
             .iter()
             .map(|p| (p.host.clone(), p.relay_port))
             .collect();
+        let (voice_relay_tx, voice_relay_rx) = mpsc::channel::<Vec<u8>>(512);
+        let vr_state = edge_state.clone();
+        tokio::spawn(async move {
+            let mut rx = voice_relay_rx;
+            while let Some(pkt) = rx.recv().await {
+                crate::voice::deliver_relayed_voice(pkt, &vr_state).await;
+            }
+        });
+
         Arc::new(Self {
             config: config.hub_server.clone(),
             server_id: config.server_id,
@@ -355,6 +372,7 @@ impl HubClient {
             sync_notify: tokio::sync::Notify::new(),
             pending_notifications: tokio::sync::Mutex::new(Vec::new()),
             outbound_notif_seq: AtomicU64::new(0),
+            voice_relay_tx,
         })
     }
 
@@ -1183,9 +1201,23 @@ impl HubClient {
                 }
             }
             Ok(PacketType::RpcNotification) => {
-                // Enqueue into the serial processor channel — never blocks the reader task,
-                // and guarantees notifications are handled in arrival order.
                 if let Some(notification) = packet.rpc_notification {
+                    // Fast path: voice relay packets bypass the control notification
+                    // processor and broadcast channel entirely.  High-frequency voice
+                    // frames would saturate the sequencer queue and the broadcast channel
+                    // (causing Lagged errors), so they are delivered on a dedicated
+                    // bounded channel by a separate worker task.
+                    if notification.method == "hub.relayVoicePacket" {
+                        if let Some(params) = notification.relay_voice_packet {
+                            // try_send: drop the packet if the worker is behind.
+                            // Voice is best-effort; dropping the occasional packet is
+                            // far better than blocking the Hub WS reader.
+                            let _ = self.voice_relay_tx.try_send(params.voice_packet);
+                        }
+                        return Ok(());
+                    }
+                    // Control notification: enqueue into the serial processor channel —
+                    // never blocks the reader task, guarantees arrival-order processing.
                     let guard = self.notification_tx.lock().await;
                     if let Some(tx) = guard.as_ref() {
                         let sn = SequencedNotification {

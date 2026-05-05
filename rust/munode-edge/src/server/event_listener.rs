@@ -1,15 +1,107 @@
 //! Hub event broadcast listener.
 use std::sync::Arc;
 use tokio::sync::watch;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, warn};
 use munode_common::permission as perm;
 use munode_protocol::message_type::MessageType;
 use munode_protocol::mumbleproto;
 use crate::handler;
 use crate::hub_client::HubClient;
 use crate::state::{EdgeEvent, EdgeState};
-use crate::voice::{deliver_voice_tcp, wrap_udptunnel};
-use super::connection::{decode_mumble_varint, get_perm_cached};
+use super::connection::get_perm_cached;
+
+/// Process a `HubRegistered` event: push fresh state to all authenticated local clients.
+///
+/// Called both from the normal event loop (`EdgeEvent::HubRegistered`) and directly from
+/// the `Lagged` recovery path (where the event is drained from the channel inline to
+/// break the lag→sync→lag feedback loop).
+async fn handle_hub_registered(
+    disappeared_session_ids: Vec<u32>,
+    state: &Arc<EdgeState>,
+) {
+    // Hub reconnected — resume accepting new client connections.
+    state.accepting_connections.store(true, std::sync::atomic::Ordering::Relaxed);
+
+    let local_clients = state.client_manager.get_all_clients().await;
+    let authenticated_clients: Vec<_> = local_clients
+        .iter()
+        .filter(|c| c.state == crate::client::ClientState::Ready)
+        .collect();
+
+    if authenticated_clients.is_empty() {
+        info!("Hub registered — no authenticated clients to notify");
+        return;
+    }
+
+    // 1. UserRemove for disappeared sessions.
+    // Guard: never send UserRemove for session S to the client *with* session S.
+    for &sid in &disappeared_session_ids {
+        let remove_msg = handler::build_user_remove_msg(sid, None);
+        for client in &authenticated_clients {
+            if client.session == sid { continue; }
+            state.client_manager.send_to(client.session, MessageType::UserRemove, &remove_msg).await;
+        }
+    }
+    if !disappeared_session_ids.is_empty() {
+        info!("Hub registered — sent UserRemove for {} disappeared session(s)", disappeared_session_ids.len());
+    }
+
+    // 2. Re-announce all current remote users.
+    let ninja_channels_snap: std::collections::HashSet<u32> = {
+        state.ninja_channels.read().await.iter().copied().collect()
+    };
+    let ninja_visible = state.ninja_visible_to.read().await;
+    let remote_users = state.channel_manager.get_all_remote_users().await;
+    let local_session_set: std::collections::HashSet<u32> =
+        authenticated_clients.iter().map(|c| c.session).collect();
+
+    for user in &remote_users {
+        if local_session_set.contains(&user.session_id) { continue; }
+        let msg = mumbleproto::UserState {
+            session: Some(user.session_id),
+            user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
+            name: Some(user.username.clone()),
+            channel_id: Some(user.channel_id),
+            mute:             if user.mute             { Some(true) } else { None },
+            deaf:             if user.deaf             { Some(true) } else { None },
+            suppress:         if user.suppress         { Some(true) } else { None },
+            self_mute:        if user.self_mute        { Some(true) } else { None },
+            self_deaf:        if user.self_deaf        { Some(true) } else { None },
+            priority_speaker: if user.priority_speaker { Some(true) } else { None },
+            recording:        if user.recording        { Some(true) } else { None },
+            hash: user.cert_hash.clone(),
+            listening_channel_add: user.listening_channels.clone(),
+            ..Default::default()
+        };
+        if ninja_channels_snap.contains(&user.channel_id) {
+            for client in &authenticated_clients {
+                let can_see = ninja_visible
+                    .get(&client.session)
+                    .map(|set| set.contains(&user.channel_id))
+                    .unwrap_or(false);
+                if can_see {
+                    state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
+                }
+            }
+        } else {
+            for client in &authenticated_clients {
+                state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
+            }
+        }
+    }
+    info!("Hub registered — re-announced {} remote user(s) to {} local client(s)",
+        remote_users.len(), authenticated_clients.len());
+
+    // 3. Re-broadcast channel states.
+    let channels = state.channel_manager.get_channels_bfs().await;
+    for ch in &channels {
+        let ch_msg = handler::build_channel_state_msg(ch);
+        for client in &authenticated_clients {
+            state.client_manager.send_to(client.session, MessageType::ChannelState, &ch_msg).await;
+        }
+    }
+    debug!("Hub registered — re-broadcast {} channel(s) to local clients", channels.len());
+}
 
 /// Listen for events from the Hub and broadcast them to local clients.
 pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
@@ -240,115 +332,7 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                         debug!("Broadcast channel updated: {}", channel_id);
                     }
                     EdgeEvent::HubRegistered { disappeared_session_ids } => {
-                        // Hub reconnected — resume accepting new client connections.
-                        state.accepting_connections.store(true, std::sync::atomic::Ordering::Relaxed);
-                        // After Hub reconnect / full-sync, resync the local clients' view of the
-                        // world:
-                        //  1. Send UserRemove for sessions that disappeared from Hub's snapshot
-                        //     (protects against zombie users left over from before the reconnect).
-                        //  2. Re-announce every remote user currently in the cache so clients that
-                        //     were already connected during the reconnect see new/updated users.
-                        //  3. Re-broadcast channel states so clients see any channel changes.
-                        let local_clients = state.client_manager.get_all_clients().await;
-                        let authenticated_clients: Vec<_> = local_clients
-                            .iter()
-                            .filter(|c| c.state == crate::client::ClientState::Ready)
-                            .collect();
-
-                        if authenticated_clients.is_empty() {
-                            info!("Hub registered — no authenticated clients to notify");
-                        } else {
-                            // 1. UserRemove for disappeared sessions.
-                            // Guard: never send UserRemove for session S to the client *with* session S.
-                            // A client receiving UserRemove for its own session would interpret it as
-                            // being kicked, showing a "left the channel" state even though the TCP
-                            // connection is still alive.
-                            for &sid in &disappeared_session_ids {
-                                let remove_msg = handler::build_user_remove_msg(sid, None);
-                                for client in &authenticated_clients {
-                                    if client.session == sid { continue; }
-                                    state.client_manager.send_to(client.session, MessageType::UserRemove, &remove_msg).await;
-                                }
-                            }
-                            if !disappeared_session_ids.is_empty() {
-                                info!("Hub registered — sent UserRemove for {} disappeared session(s)", disappeared_session_ids.len());
-                            }
-
-                            // 2. Re-announce all current remote users (only true-booleans to avoid spurious notifications)
-                            let ninja_channels_snap: std::collections::HashSet<u32> = {
-                                state.ninja_channels.read().await.iter().copied().collect()
-                            };
-                            let ninja_visible = state.ninja_visible_to.read().await;
-                            let remote_users = state.channel_manager.get_all_remote_users().await;
-                            let local_session_set: std::collections::HashSet<u32> =
-                                authenticated_clients.iter().map(|c| c.session).collect();
-
-                            for user in &remote_users {
-                                // Skip our own edge's users (tracked via client_manager)
-                                if local_session_set.contains(&user.session_id) { continue; }
-                                // Ninja channel visibility check
-                                if ninja_channels_snap.contains(&user.channel_id) {
-                                    // Only send to clients who can see this channel
-                                    let msg = mumbleproto::UserState {
-                                        session: Some(user.session_id),
-                                        user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
-                                        name: Some(user.username.clone()),
-                                        channel_id: Some(user.channel_id),
-                                        mute:             if user.mute             { Some(true) } else { None },
-                                        deaf:             if user.deaf             { Some(true) } else { None },
-                                        suppress:         if user.suppress         { Some(true) } else { None },
-                                        self_mute:        if user.self_mute        { Some(true) } else { None },
-                                        self_deaf:        if user.self_deaf        { Some(true) } else { None },
-                                        priority_speaker: if user.priority_speaker { Some(true) } else { None },
-                                        recording:        if user.recording        { Some(true) } else { None },
-                                        hash: user.cert_hash.clone(),
-                                        listening_channel_add: user.listening_channels.clone(),
-                                        ..Default::default()
-                                    };
-                                    for client in &authenticated_clients {
-                                        let can_see = ninja_visible
-                                            .get(&client.session)
-                                            .map(|set| set.contains(&user.channel_id))
-                                            .unwrap_or(false);
-                                        if can_see {
-                                            state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
-                                        }
-                                    }
-                                } else {
-                                    let msg = mumbleproto::UserState {
-                                        session: Some(user.session_id),
-                                        user_id: if user.user_id > 0 { Some(user.user_id) } else { None },
-                                        name: Some(user.username.clone()),
-                                        channel_id: Some(user.channel_id),
-                                        mute:             if user.mute             { Some(true) } else { None },
-                                        deaf:             if user.deaf             { Some(true) } else { None },
-                                        suppress:         if user.suppress         { Some(true) } else { None },
-                                        self_mute:        if user.self_mute        { Some(true) } else { None },
-                                        self_deaf:        if user.self_deaf        { Some(true) } else { None },
-                                        priority_speaker: if user.priority_speaker { Some(true) } else { None },
-                                        recording:        if user.recording        { Some(true) } else { None },
-                                        hash: user.cert_hash.clone(),
-                                        listening_channel_add: user.listening_channels.clone(),
-                                        ..Default::default()
-                                    };
-                                    for client in &authenticated_clients {
-                                        state.client_manager.send_to(client.session, MessageType::UserState, &msg).await;
-                                    }
-                                }
-                            }
-                            info!("Hub registered — re-announced {} remote user(s) to {} local client(s)",
-                                remote_users.len(), authenticated_clients.len());
-
-                            // 3. Re-broadcast channel states so clients see any channel changes
-                            let channels = state.channel_manager.get_channels_bfs().await;
-                            for ch in &channels {
-                                let ch_msg = handler::build_channel_state_msg(ch);
-                                for client in &authenticated_clients {
-                                    state.client_manager.send_to(client.session, MessageType::ChannelState, &ch_msg).await;
-                                }
-                            }
-                            debug!("Hub registered — re-broadcast {} channel(s) to local clients", channels.len());
-                        }
+                        handle_hub_registered(disappeared_session_ids, &state).await;
                     }
                     EdgeEvent::HubDisconnected => {
                         warn!("Hub disconnected - local clients will continue but some features unavailable");
@@ -431,81 +415,6 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                             ).await;
                         }
                         debug!("Forwarded plugin data from session {}: {}", sender_session, data_id);
-                    }
-                    EdgeEvent::RelayedVoice { voice_packet } => {
-                        // Voice relayed from another edge via Hub TCP.
-                        // Standard Mumble server-to-client format:
-                        //   [header(1B)][sender_session_varint][sequence_varint][voice_data]
-                        if voice_packet.len() < 2 {
-                            continue;
-                        }
-                        let raw_target = voice_packet[0] & 0x1F;
-                        if raw_target == 31 {
-                            // Loopback — ignore cross-edge loopback
-                            continue;
-                        }
-                        let sender_session = match decode_mumble_varint(&voice_packet[1..]) {
-                            Some((s, _)) => s,
-                            None => {
-                                debug!("RelayedVoice: failed to parse sender session");
-                                continue;
-                            }
-                        };
-
-                        let my_edge_id = state.get_edge_id();
-                        {
-                            let hex: String = voice_packet.iter().take(16)
-                                .map(|b| format!("{:02X}", b))
-                                .collect::<Vec<_>>()
-                                .join(" ");
-                            trace!("edge={} RelayedVoice recv: len={} header=0x{:02X} target={} session={} bytes=[{}]",
-                                my_edge_id, voice_packet.len(), voice_packet[0], raw_target, sender_session, hex);
-                        }
-
-                        // For PTT (target=0), the sender's channel is required by compute_voice_targets.
-                        let sender_channel = if raw_target == 0 {
-                            match state.channel_manager.get_remote_user(sender_session).await {
-                                Some(ru) => ru.channel_id,
-                                None => {
-                                    debug!("edge={} RelayedVoice PTT: unknown remote session {}", my_edge_id, sender_session);
-                                    continue;
-                                }
-                            }
-                        } else {
-                            0 // unused for whisper (target 1..=30)
-                        };
-
-                        // compute_voice_targets handles VoiceTarget lookup, channel + listener
-                        // expansion, and deaf filtering — identical logic to the local TCP path.
-                        // relay_edge_ids is intentionally ignored: the sending edge already
-                        // handled inter-edge relay for this packet.
-                        let Some(targets) = crate::routing::compute_voice_targets(
-                            &voice_packet, sender_session, sender_channel, &state,
-                        ).await else {
-                            debug!("edge={} RelayedVoice: no targets for session {} target {}",
-                                my_edge_id, sender_session, raw_target);
-                            continue;
-                        };
-
-                        if targets.is_whisper {
-                            // voice_packet[0] carries raw voice_target_id in low 5 bits;
-                            // overwrite with AudioContext per Mumble protocol.
-                            let mut pkt = voice_packet.clone();
-                            pkt[0] = (voice_packet[0] & 0xe0) | 2;
-                            let frame_whisper = wrap_udptunnel(&pkt);
-                            pkt[0] = (voice_packet[0] & 0xe0) | 1;
-                            let frame_shout = wrap_udptunnel(&pkt);
-                            let d = deliver_voice_tcp(&targets.direct_sessions, &frame_whisper)
-                                + deliver_voice_tcp(&targets.channel_sessions, &frame_shout);
-                            trace!("edge={} Delivered relayed whisper from session {} to {} targets",
-                                my_edge_id, sender_session, d);
-                        } else {
-                            // voice_packet[0] already has context=0 (set by the sending edge for PTT).
-                            let frame = wrap_udptunnel(&voice_packet);
-                            let d = deliver_voice_tcp(&targets.local_sessions, &frame);
-                            trace!("edge={} Delivered relayed broadcast from session {} to {} local clients",
-                                my_edge_id, sender_session, d);
-                        }
                     }
                     EdgeEvent::ShutdownRequested { reason } => {
                         // Hub requests graceful shutdown due to cluster partition.
@@ -668,6 +577,28 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                     "Event listener lagged — triggering full re-sync to recover missed events"
                 );
                 hub_client.request_full_sync().await;
+                // After the sync, the broadcast channel may have accumulated many stale events
+                // (primarily high-frequency RelayedVoice packets) while we were blocked awaiting
+                // the Hub RPC.  Naively calling recv() here would immediately return another
+                // Lagged error, creating an infinite sync loop.  Instead, drain all pending
+                // events now: keep track of the latest HubRegistered (superseding earlier ones),
+                // discard everything else (voice, etc.) since the full sync already gives us
+                // fresh authoritative state.  Then process HubRegistered inline before resuming
+                // normal event consumption.
+                let mut pending_hub_registered: Option<Vec<u32>> = None;
+                loop {
+                    match event_rx.try_recv() {
+                        Ok(EdgeEvent::HubRegistered { disappeared_session_ids }) => {
+                            // Keep only the latest; earlier ones are superseded by the same sync.
+                            pending_hub_registered = Some(disappeared_session_ids);
+                        }
+                        Ok(_) => {} // discard stale events (RelayedVoice, etc.)
+                        Err(_) => break, // channel drained (Empty or Lagged — both mean stop here)
+                    }
+                }
+                if let Some(disappeared) = pending_hub_registered {
+                    handle_hub_registered(disappeared, &state).await;
+                }
             }
             Err(RecvError::Closed) => {
                 info!("Event channel closed");

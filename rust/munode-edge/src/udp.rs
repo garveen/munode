@@ -1331,18 +1331,14 @@ impl UdpServer {
     }
 
     /// Deliver a relayed voice packet to local clients on this Edge.
-    /// The packet is emitted as `EdgeEvent::RelayedVoice` so that the server.rs event
-    /// loop handles it with the same VoiceTarget-aware routing used for Hub TCP relay
-    /// and direct-TCP relay (relay_server.rs).  This keeps all receiving-side routing
-    /// in one place.
     async fn deliver_voice_locally(&self, sender_session: u32, voice_data: &[u8]) {
         trace!("deliver_voice_locally: session={}, {} bytes", sender_session, voice_data.len());
         // Build server-to-client format: [header][session_varint][seq][audio]
-        // Preserve the original voice_target_id in low-5 bits so the RelayedVoice handler
-        // in server.rs can route by target and set the correct AudioContext per recipient.
+        // Preserve the original voice_target_id in low-5 bits so routing can
+        // set the correct AudioContext per recipient.
         let voice_packet = crate::voice::inject_session_into_voice(voice_data, sender_session, voice_data.first().copied().unwrap_or(0) & 0x1f);
         if !voice_packet.is_empty() {
-            self.edge_state.emit(crate::state::EdgeEvent::RelayedVoice { voice_packet: voice_packet.into() });
+            crate::voice::deliver_relayed_voice(voice_packet.into(), &self.edge_state).await;
         }
     }
 

@@ -329,15 +329,6 @@ impl HubClient {
                     }
                 }
             }
-            "hub.relayVoicePacket" => {
-                // Voice packet relayed from another edge via Hub (typed protobuf)
-                if let Some(params) = &notification.relay_voice_packet {
-                    let voice_packet = params.voice_packet.clone();
-                    self.edge_state.emit(EdgeEvent::RelayedVoice { voice_packet });
-                } else {
-                    debug!("hub.relayVoicePacket notification missing relay_voice_packet field");
-                }
-            }
             "hub.peerJoined" => {
                 // Another Edge joined the cluster (from handle_cluster_join broadcast)
                 if let Some(p) = &notification.cluster_peer_joined {

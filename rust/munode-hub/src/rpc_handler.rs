@@ -4599,25 +4599,59 @@ impl RpcHandler {
 
         let action_str = match action {
             ArbitrationResult::BothReported { edge_id } => {
-                warn!("Cluster: edge {} confirmed disconnected by arbitration", edge_id);
-                // Notify all edges about the forced disconnection
-                let notif = TypedRpcNotification {
-                    method: "hub.peerLeft".to_string(),
-                    timestamp: Some(current_millis() as i64),
-                    cluster_peer_left: Some(HubClusterPeerLeftParams { edge_id }),
-                    ..Default::default()
-                };
-                let packet = EdgeHubPacket {
-                    r#type: PacketType::RpcNotification as i32,
-                    rpc_notification: Some(notif),
-                    ..Default::default()
-                };
-                let data = packet.encode_to_vec();
-                // Snapshot senders before awaiting to avoid holding RwLock during send.
-                crate::server::broadcast_critical(&self.state, data).await;
+                // Both edges confirmed their direct TCP voice link is broken.
+                // The `reporter` is params.local_edge_id; `edge_id` is the remote peer.
+                let reporter_id = params.local_edge_id;
 
-                // Detect network partitions and shut down smallest partition
-                self.handle_partition_after_disconnect().await;
+                // Check whether Hub still holds an active WebSocket connection to the
+                // remote edge.  If it does, the edge has NOT left the cluster — it is
+                // merely isolated from its direct peer.  Voice can still flow via Hub
+                // relay (HubTcp), so we must NOT broadcast hub.peerLeft (which would
+                // cause both edges to tear down their relay infrastructure and stop
+                // retrying direct TCP).  Instead:
+                //   1. Remove the broken direct link from the topology so the route-table
+                //      computation stops advertising it as a viable path.
+                //   2. Push fresh route tables — both edges will see HubTcp as the best
+                //      (and only) path and fall back to Hub relay automatically.
+                //   3. Keep running handle_partition_after_disconnect() so that a true
+                //      network partition (Hub itself unreachable on one side) is still
+                //      detected and handled.
+                let edge_still_connected = {
+                    let connections = self.state.edge_connections.read().await;
+                    connections.contains_key(&edge_id)
+                };
+
+                if edge_still_connected {
+                    warn!(
+                        "Cluster: edges {} and {} lost direct TCP but both still connected to Hub \
+                         — breaking direct link, falling back to Hub relay (no hub.peerLeft)",
+                        reporter_id, edge_id
+                    );
+                    {
+                        let mut topo = self.state.topology.write().await;
+                        topo.remove_direct_link(reporter_id, edge_id);
+                    }
+                    self.push_route_tables_to_all().await;
+                    self.handle_partition_after_disconnect().await;
+                } else {
+                    // Edge truly gone from Hub — broadcast hub.peerLeft so remaining edges
+                    // can clean up relay infrastructure for this peer.
+                    warn!("Cluster: edge {} confirmed disconnected by arbitration", edge_id);
+                    let notif = TypedRpcNotification {
+                        method: "hub.peerLeft".to_string(),
+                        timestamp: Some(current_millis() as i64),
+                        cluster_peer_left: Some(HubClusterPeerLeftParams { edge_id }),
+                        ..Default::default()
+                    };
+                    let packet = EdgeHubPacket {
+                        r#type: PacketType::RpcNotification as i32,
+                        rpc_notification: Some(notif),
+                        ..Default::default()
+                    };
+                    let data = packet.encode_to_vec();
+                    crate::server::broadcast_critical(&self.state, data).await;
+                    self.handle_partition_after_disconnect().await;
+                }
 
                 "disconnect_confirmed".to_string()
             }
