@@ -85,9 +85,9 @@ pub fn find_binary(name: &str) -> Result<PathBuf> {
 static PORT_COUNTER: AtomicU16 = AtomicU16::new(19000);
 
 /// Number of ports reserved per test environment.
-/// auth(1) + hub_control(1) + hub_web_api(1) + per_edge(client+edge = 2) × max_4_edges = 11.
-/// We reserve 15 to leave headroom.
-const PORTS_PER_ENV: u16 = 15;
+/// auth(1) + hub_control(1) + hub_web_api(1) + per_edge(client+edge+ws = 3) × max_4_edges = 15.
+/// We reserve 20 to leave headroom.
+const PORTS_PER_ENV: u16 = 20;
 
 /// Atomically reserve the next port block and return the first port in it.
 pub fn alloc_port_block() -> u16 {
@@ -377,6 +377,12 @@ fn generate_edge_config(params: &EdgeParams) -> Value {
             "capacity": 1000,
             "max_bandwidth": 558000,
         },
+        // Give the browser WS listener its own dedicated port so it never
+        // conflicts with the next Edge's Mumble port (which would otherwise
+        // land on main_port + 2 by default).
+        "webtransport": {
+            "ws_fallback_port": params.ws_port,
+        },
         "log_level": if params.verbose { "debug" } else { "error" },
     })
 }
@@ -386,6 +392,9 @@ struct EdgeParams<'a> {
     name: &'a str,
     port: u16,
     edge_port: u16,
+    /// Dedicated port for the browser HTTP/WS fallback listener.
+    /// Kept separate from `port + 2` to avoid conflicts with sibling Edge ports.
+    ws_port: u16,
     hub_control_port: u16,
     verbose: bool,
 }
@@ -629,12 +638,14 @@ impl TestEnvBuilder {
         for i in 0..self.edge_count {
             let client_port = next_port!();
             let edge_edge_port = next_port!();
+            let ws_port = next_port!();
 
             let mut edge_cfg = generate_edge_config(&EdgeParams {
                 server_id: (i + 1) as u32,
                 name: &format!("Edge{}", i + 1),
                 port: client_port,
                 edge_port: edge_edge_port,
+                ws_port,
                 hub_control_port,
                 verbose,
             });
