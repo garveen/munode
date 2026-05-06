@@ -851,7 +851,7 @@ impl RpcHandler {
             }
         } else if config.auth.require_auth_service
             && config.auth.http_url.is_none()
-            && self.state.lua_engine.is_none()
+            && self.state.lua_engine.read().await.is_none()
         {
             // No WS service connected, no HTTP URL configured, no Lua script —
             // but an external auth service is required → reject.
@@ -875,8 +875,10 @@ impl RpcHandler {
         // ------------------------------------------------------------------
         // Step 1.5: Lua script authentication (if configured)
         // ------------------------------------------------------------------
-        if let Some(lua_engine) = self.state.lua_engine.as_ref() {
+        let lua_engine_guard = self.state.lua_engine.read().await;
+        if let Some(lua_engine) = lua_engine_guard.as_ref() {
             let engine = lua_engine.clone();
+            drop(lua_engine_guard);
             let client_info = params.client_info.as_ref();
             let lua_req = LuaAuthRequest {
                 username: username.clone(),

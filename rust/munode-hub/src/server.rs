@@ -149,7 +149,8 @@ pub struct HubState {
     /// External auth service handle.
     pub auth_service: AuthServiceHandle,
     /// Embedded Lua authentication engine (present when `auth.lua_script` is set).
-    pub lua_engine: Option<Arc<LuaAuthEngine>>,
+    /// Wrapped in `RwLock` so SIGHUP hot-reload can swap the engine without restart.
+    pub lua_engine: RwLock<Option<Arc<LuaAuthEngine>>>,
     /// Failed authentication attempt tracker (for auto-ban).
     pub failed_auth_tracker: RwLock<FailedAuthTracker>,
     /// GeoIP lookup service (optional, present when `geoip.database_path` is set).
@@ -280,7 +281,7 @@ impl HubServer {
             topology: RwLock::new(TopologyManager::new()),
             edge_registry: RwLock::new(HashMap::new()),
             auth_service: auth_service.clone(),
-            lua_engine,
+            lua_engine: RwLock::new(lua_engine),
             failed_auth_tracker: RwLock::new(FailedAuthTracker::default()),
             geoip,
             started_at: std::time::Instant::now(),
@@ -344,6 +345,28 @@ impl HubServer {
                                 match tokio::fs::read_to_string(file_path).await {
                                     Ok(text) => { new_limits.welcome_text = Some(text.trim_end().to_string()); }
                                     Err(e) => { warn!("SIGHUP: failed to read welcome_text_file '{}': {}", file_path, e); }
+                                }
+                            }
+                            // Reload Lua auth engine if the script changed.
+                            match &new_cfg.auth.lua_script {
+                                Some(script) => {
+                                    let script_owned = script.clone();
+                                    let engine_result = tokio::task::spawn_blocking(move || LuaAuthEngine::new(&script_owned)).await;
+                                    match engine_result {
+                                        Ok(Ok(new_engine)) => {
+                                            *reload_state.lua_engine.write().await = Some(Arc::new(new_engine));
+                                            info!("SIGHUP: Lua auth engine reloaded");
+                                        }
+                                        Ok(Err(e)) => {
+                                            warn!("SIGHUP: failed to reload Lua auth engine: {}", e);
+                                        }
+                                        Err(e) => {
+                                            warn!("SIGHUP: Lua engine reload task panicked: {}", e);
+                                        }
+                                    }
+                                }
+                                None => {
+                                    *reload_state.lua_engine.write().await = None;
                                 }
                             }
                             // Update the live limits cache.
