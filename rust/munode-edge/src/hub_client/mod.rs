@@ -717,13 +717,43 @@ impl HubClient {
 
         let (writer_fail_tx_via, writer_fail_rx_via) = tokio::sync::oneshot::channel::<()>();
 
+        /// Maximum time allowed for a single WebSocket frame write to complete.
+        ///
+        /// If the underlying TCP connection enters a stuck state (send buffer full,
+        /// remote not reading), `ws_write.send()` blocks indefinitely, preventing
+        /// the writer from draining `send_rx`.  Once the 4096-slot channel fills up,
+        /// every caller of `send_raw` also blocks forever — including auth RPCs, which
+        /// means Hub's Lua auth never receives the request while Hub→Edge notifications
+        /// continue flowing normally through the reader task.
+        ///
+        /// Timing out the write triggers the normal slot-failure path: `writer_fail`
+        /// fires, the reader breaks, the slot is cleaned up, and a fresh connection is
+        /// established (usually within seconds via exponential backoff).
+        const WS_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
         let writer_handle = tokio::spawn(async move {
             let mut fail_tx = Some(writer_fail_tx_via);
             while let Some(data) = send_rx.recv().await {
-                if let Err(e) = ws_write.send(tungstenite::Message::Binary(Bytes::from(data))).await {
-                    error!("WebSocket write error (slot {}): {}", slot, e);
-                    if let Some(tx) = fail_tx.take() { let _ = tx.send(()); }
-                    break;
+                let result = time::timeout(
+                    WS_WRITE_TIMEOUT,
+                    ws_write.send(tungstenite::Message::Binary(Bytes::from(data))),
+                ).await;
+                match result {
+                    Ok(Ok(())) => {} // write succeeded
+                    Ok(Err(e)) => {
+                        error!("WebSocket write error (slot {}): {}", slot, e);
+                        if let Some(tx) = fail_tx.take() { let _ = tx.send(()); }
+                        break;
+                    }
+                    Err(_) => {
+                        error!(
+                            "WebSocket write timed out after {:?} (slot {}) — \
+                             TCP send buffer may be stalled; closing connection",
+                            WS_WRITE_TIMEOUT, slot
+                        );
+                        if let Some(tx) = fail_tx.take() { let _ = tx.send(()); }
+                        break;
+                    }
                 }
             }
         });
@@ -1036,8 +1066,22 @@ impl HubClient {
                 guard.as_ref().map(|s| s.clone())
             };
             if let Some(tx) = sender_opt {
-                if tx.send(data.clone()).await.is_ok() {
-                    return Ok(slot);
+                // Use try_send instead of the blocking send().await to prevent
+                // indefinitely stalling callers when the writer task is backed up
+                // (e.g. TCP send buffer full).  A full channel means this slot's
+                // writer is stalled; skip to the next slot rather than blocking.
+                match tx.try_send(data.clone()) {
+                    Ok(()) => return Ok(slot),
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        warn!(
+                            slot,
+                            "Hub send channel full — writer task may be stalled; skipping slot"
+                        );
+                        // Continue to try next slot.
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        // Receiver dropped (writer exited); continue to next slot.
+                    }
                 }
             }
         }
