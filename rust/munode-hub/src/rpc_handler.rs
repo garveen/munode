@@ -94,6 +94,11 @@ impl EdgeSenderPool {
         senders.is_empty()
     }
 
+    /// Number of active senders currently in the pool.
+    pub fn len(&self) -> usize {
+        self.senders.lock().unwrap().len()
+    }
+
     /// Try to send `data` non-blocking.  Falls back to the next sender if the
     /// current one is closed or full.  Closed senders are pruned in-place.
     ///
@@ -362,33 +367,54 @@ impl RpcHandler {
         // (handles the case where the edge process restarted while Hub was still running).
         // We do NOT clean up sessions when Hub itself restarted, because in that case
         // Hub's session table is already empty.
+        //
+        // IMPORTANT: with the relay-slot pool design, the last pool slot (relay slot)
+        // maintains Hub connectivity during direct-path outages.  When a direct slot
+        // reconnects while the relay slot is still alive, `edge_connections` already
+        // contains the relay slot's sender (pool.len() > 1).  In that case the edge
+        // never truly disconnected — its sessions are still valid and must NOT be
+        // broadcast as `userRemoveBroadcast` to other Edges.
+        let is_additional_pool_slot = self.state.edge_connections.read().await
+            .get(&params.server_id)
+            .map(|pool| pool.len() > 1)
+            .unwrap_or(false);
+
         let stale_sessions = self.state.session_manager
             .get_sessions_by_edge(params.server_id).await;
         if !stale_sessions.is_empty() {
-            warn!(
-                "Edge {} re-registered with {} stale session(s) — cleaning up",
-                params.server_id, stale_sessions.len()
-            );
-            let reconnecting_edge_id = params.server_id;
-            for session in &stale_sessions {
-                self.state.session_manager.remove_session(session.session_id).await;
-                let session_id = session.session_id;
-                // Exclude the re-registering edge from this broadcast: its local users are
-                // still connected and must not be kicked by the stale-session cleanup.
-                // Other edges need the notification so they can remove the ghost sessions
-                // from their own caches.  The re-registering edge will learn the authoritative
-                // state via do_full_sync + do_report_local_users.
-                self.broadcast_notification_excluding("hub.userRemoveBroadcast", reconnecting_edge_id, |n| {
-                    n.user_remove_broadcast = Some(HubUserRemoveBroadcastParams {
-                        session: session_id,
-                        actor: None,
-                        reason: Some("Edge reconnected - session cleanup".to_string()),
-                        ban: None,
-                        target_sessions: vec![],
-                    });
-                }).await;
+            if is_additional_pool_slot {
+                // Another pool slot (typically the relay slot) is already connected.
+                // Sessions are still valid — the Edge is merely adding a new WS slot.
+                debug!(
+                    "Edge {} adding pool slot (pool size > 1): preserving {} existing session(s)",
+                    params.server_id, stale_sessions.len()
+                );
+            } else {
+                warn!(
+                    "Edge {} re-registered with {} stale session(s) — cleaning up",
+                    params.server_id, stale_sessions.len()
+                );
+                let reconnecting_edge_id = params.server_id;
+                for session in &stale_sessions {
+                    self.state.session_manager.remove_session(session.session_id).await;
+                    let session_id = session.session_id;
+                    // Exclude the re-registering edge from this broadcast: its local users are
+                    // still connected and must not be kicked by the stale-session cleanup.
+                    // Other edges need the notification so they can remove the ghost sessions
+                    // from their own caches.  The re-registering edge will learn the authoritative
+                    // state via do_full_sync + do_report_local_users.
+                    self.broadcast_notification_excluding("hub.userRemoveBroadcast", reconnecting_edge_id, |n| {
+                        n.user_remove_broadcast = Some(HubUserRemoveBroadcastParams {
+                            session: session_id,
+                            actor: None,
+                            reason: Some("Edge reconnected - session cleanup".to_string()),
+                            ban: None,
+                            target_sessions: vec![],
+                        });
+                    }).await;
+                }
+                info!("Cleaned up {} stale session(s) for re-registering edge {}", stale_sessions.len(), params.server_id);
             }
-            info!("Cleaned up {} stale session(s) for re-registering edge {}", stale_sessions.len(), params.server_id);
         }
 
         // Register the edge
@@ -1554,34 +1580,54 @@ impl RpcHandler {
             listening_channels: s.listening_channels.clone(),
         };
 
+        // Check BEFORE upserting whether the session was already known.
+        // If this is a quick-reconnect (Edge switched from direct → relay without
+        // restarting), the session is already in session_manager and on other
+        // Edges' channel_manager.  Broadcasting hub.userJoined in that case
+        // would cause peer Edges to emit a spurious "user connected" notification
+        // to their local Mumble clients even though the user never actually left.
+        // We still upsert to refresh state (channel_id, mute flags, etc.) in case
+        // anything changed during the brief Hub connectivity gap.
+        let already_known = self.state.session_manager.get_session(s.session_id).await
+            .map(|existing| existing.edge_id == edge_server_id)
+            .unwrap_or(false);
+
         self.state.session_manager.add_session(session_info).await;
 
-        info!(
-            "Reported existing session: {} (session={}, edge={}, channel={})",
-            s.username, s.session_id, edge_server_id, s.channel_id
-        );
-
-        // Broadcast hub.userJoined to all edges (including the reporting edge,
-        // which ignores it for its own edge_id).
-        self.broadcast_notification("hub.userJoined", |n| {
-            n.user_joined = Some(HubUserJoinedParams {
-                session_id: s.session_id,
-                edge_id: edge_server_id,
-                user_id: s.user_id,
-                username: s.username.clone(),
-                channel_id: s.channel_id,
-                groups: s.groups.clone(),
-                cert_hash: s.cert_hash.clone(),
-                mute: s.mute,
-                deaf: s.deaf,
-                suppress: s.suppress,
-                self_mute: s.self_mute,
-                self_deaf: s.self_deaf,
-                priority_speaker: s.priority_speaker,
-                recording: s.recording,
-                listening_channels: s.listening_channels.clone(),
-            });
-        }).await;
+        if already_known {
+            info!(
+                "Refreshed existing session (no userJoined broadcast): {} (session={}, edge={}, channel={})",
+                s.username, s.session_id, edge_server_id, s.channel_id
+            );
+        } else {
+            info!(
+                "Reported new session: {} (session={}, edge={}, channel={})",
+                s.username, s.session_id, edge_server_id, s.channel_id
+            );
+            // Only broadcast hub.userJoined when the session is genuinely new to Hub.
+            // Peer Edges already have this user in their channel_manager; re-broadcasting
+            // would cause them to send a redundant UserState ("user connected") to their
+            // local Mumble clients.
+            self.broadcast_notification("hub.userJoined", |n| {
+                n.user_joined = Some(HubUserJoinedParams {
+                    session_id: s.session_id,
+                    edge_id: edge_server_id,
+                    user_id: s.user_id,
+                    username: s.username.clone(),
+                    channel_id: s.channel_id,
+                    groups: s.groups.clone(),
+                    cert_hash: s.cert_hash.clone(),
+                    mute: s.mute,
+                    deaf: s.deaf,
+                    suppress: s.suppress,
+                    self_mute: s.self_mute,
+                    self_deaf: s.self_deaf,
+                    priority_speaker: s.priority_speaker,
+                    recording: s.recording,
+                    listening_channels: s.listening_channels.clone(),
+                });
+            }).await;
+        }
 
         let result = EdgeReportSessionResult { success: true, error: None };
         Ok(self.make_response_packet(request_id, "edge.reportSession", |r| {

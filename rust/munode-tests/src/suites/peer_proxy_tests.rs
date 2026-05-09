@@ -116,7 +116,7 @@ fn write_bootstrap_edge_cfg(
             "hmac_secret": HMAC_SECRET,
             "reconnect_interval": reconnect_interval,
             "heartbeat_interval": 1000,
-            "pool_size": 1,
+            "pool_size": 2,
             "static_peers": [
                 {
                     "host": static_peer.0,

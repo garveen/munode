@@ -492,12 +492,15 @@ impl HubClient {
 
     /// Run a single slot's reconnect loop with exponential backoff.
     ///
-    /// Each iteration calls [`run_best_connection`] which probes Hub directly
-    /// first with a short TCP check; if Hub is unreachable it immediately
-    /// falls through to a peer-relay path.  While a relay connection is active,
-    /// a background task probes Hub directly every
-    /// [`RELAY_DIRECT_PROBE_INTERVAL`]; when Hub is reachable again the relay
-    /// is closed and the next iteration reconnects directly.
+    /// The last slot (`pool_size - 1`) is the dedicated **relay slot** when
+    /// `pool_size >= 2`: it exclusively maintains a peer-Edge relay path to Hub
+    /// so that the control channel stays alive even while the direct path is
+    /// disrupted.  All other slots are **direct slots** that only try the
+    /// direct Hub WebSocket address.
+    ///
+    /// Because the relay slot keeps Hub connected during transient direct
+    /// outages, Hub never triggers session cleanup, eliminating the need for
+    /// Hub-side grace periods or quick-reconnect flags.
     ///
     /// If the Hub (including all relay paths) remains unreachable for
     /// `UNREACHABLE_TIMEOUT`, all local clients are disconnected and new
@@ -512,7 +515,35 @@ impl HubClient {
         let mut unreachable_emitted = false;
 
         loop {
-            let connect_result = self.run_best_connection(slot).await;
+            // Relay slot: always prefer relay so Hub connectivity is maintained
+            // even when the direct path is interrupted.  Direct slots only use
+            // the direct Hub address — they never contend for the relay path.
+            //
+            // When the relay slot cannot reach any relay peer (e.g., all peer
+            // Edges are also unreachable), it immediately falls back to a direct
+            // Hub connection attempt.  This prevents the pool from emptying and
+            // triggering Hub-side session cleanup during a relay peer outage,
+            // as long as the direct path is still reachable.  Only when both
+            // relay AND direct are unavailable does the pool genuinely empty.
+            let connect_result = if self.is_relay_slot(slot) {
+                if self.has_relay_peers() {
+                    match self.try_connect_via_relay(slot).await {
+                        Ok(()) => Ok(()),
+                        Err(relay_err) => {
+                            // All relay peers failed — immediately try direct as
+                            // fallback (no backoff delay) before any_slot_alive()
+                            // check so the pool stays non-empty if direct succeeds.
+                            warn!(slot, "All relay peers unreachable ({relay_err}) — \
+                                         falling back to direct Hub connection");
+                            self.try_connect_slot(slot).await
+                        }
+                    }
+                } else {
+                    self.try_connect_slot(slot).await
+                }
+            } else {
+                self.try_connect_slot(slot).await
+            };
 
             match connect_result {
                 Ok(()) => {
@@ -590,104 +621,23 @@ impl HubClient {
         }
     }
 
-    /// Timeout for the quick TCP probe used to check direct Hub reachability.
+    /// Returns `true` if `slot` is the dedicated relay slot.
     ///
-    /// Kept short so that when Hub is unreachable the probe fails fast and the
-    /// slot can fall through to the relay path without significant delay.
-    const DIRECT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
-
-    /// How often (while a relay connection is active) the background task probes
-    /// the direct Hub path.  When the probe succeeds, the relay is closed and the
-    /// main reconnect loop re-establishes a direct connection.
-    const RELAY_DIRECT_PROBE_INTERVAL: Duration = Duration::from_secs(30);
-
-    /// Choose the best available Hub connection for `slot`.
+    /// The last slot index (`pool_size - 1`) is reserved as the relay slot
+    /// when the pool has more than one connection.  It always connects via a
+    /// peer-Edge relay, maintaining Hub connectivity during direct-path outages
+    /// so Hub never needs to clean up sessions for a transiently-unreachable Edge.
     ///
-    /// Strategy:
-    /// 1. Quick TCP probe of the direct Hub address (`DIRECT_PROBE_TIMEOUT`).
-    ///    If Hub is reachable, connect and run the full message loop.  If the
-    ///    connection closes normally, return `Ok(())`.
-    /// 2. If the direct probe fails (or the connection attempt fails) **and**
-    ///    relay peers are configured/known, immediately connect via relay.
-    ///    While the relay is active a background task probes the direct Hub
-    ///    path every `RELAY_DIRECT_PROBE_INTERVAL`; when Hub is reachable
-    ///    again the relay is closed so the outer loop can reconnect directly.
-    /// 3. If no relay peers exist, fall back to a direct connection attempt
-    ///    with the full `CONNECT_TIMEOUT` (Hub may come up while we wait).
-    async fn run_best_connection(self: &Arc<Self>, slot: usize) -> Result<()> {
-        // Step 1 — quick TCP probe.
-        if self.probe_direct_reachable().await {
-            debug!(slot, "Hub directly reachable — attempting full connection");
-            match self.try_connect_slot(slot).await {
-                Ok(()) => return Ok(()),
-                Err(e) => {
-                    warn!(slot, "Direct Hub connection failed after reachability probe: {e} — trying relay");
-                }
-            }
-        } else {
-            debug!(slot, "Hub not directly reachable — checking relay peers");
-        }
-
-        // Step 2 — relay with background direct-recovery probe.
-        if self.has_relay_peers() {
-            return self.run_relay_with_direct_recovery(slot).await;
-        }
-
-        // Step 3 — no relay peers; try direct with full timeout.
-        info!(slot, "No relay peers available — retrying direct Hub connection");
-        self.try_connect_slot(slot).await
+    /// With `pool_size == 1` there is no dedicated relay slot; the single slot
+    /// always connects directly.
+    fn is_relay_slot(&self, slot: usize) -> bool {
+        self.pool_size >= 2 && slot == self.pool_size - 1
     }
 
     /// Returns `true` if at least one relay peer (static or dynamic) is known.
     fn has_relay_peers(&self) -> bool {
         !self.static_relay_peers.is_empty()
             || !self.edge_state.peer_registry.load().relay_peers().is_empty()
-    }
-
-    /// Perform a TCP-level probe to check whether the direct Hub address is
-    /// reachable.  Does not execute any Hub protocol — just opens and
-    /// immediately closes a TCP connection.
-    async fn probe_direct_reachable(&self) -> bool {
-        use tokio::net::TcpStream;
-        let addr = format!("{}:{}", self.config.host, self.config.control_port);
-        matches!(
-            time::timeout(Self::DIRECT_PROBE_TIMEOUT, TcpStream::connect(&addr)).await,
-            Ok(Ok(_))
-        )
-    }
-
-    /// Connect via relay while concurrently probing for direct Hub recovery.
-    ///
-    /// A background task probes the direct Hub address every
-    /// [`RELAY_DIRECT_PROBE_INTERVAL`].  When the probe succeeds, the relay
-    /// is closed (by cancelling via `Notify`) and the outer reconnect loop
-    /// will re-establish a direct connection on its next iteration.
-    async fn run_relay_with_direct_recovery(self: &Arc<Self>, slot: usize) -> Result<()> {
-        let cancel = Arc::new(tokio::sync::Notify::new());
-        let cancel_for_probe = cancel.clone();
-        let me = self.clone();
-
-        let probe = tokio::spawn(async move {
-            loop {
-                time::sleep(Self::RELAY_DIRECT_PROBE_INTERVAL).await;
-                if me.probe_direct_reachable().await {
-                    info!("Direct Hub connection restored — closing relay to switch back");
-                    cancel_for_probe.notify_one();
-                    return;
-                }
-            }
-        });
-
-        let result = tokio::select! {
-            r = self.try_connect_via_relay(slot) => r,
-            _ = cancel.notified() => {
-                info!(slot, "Relay connection closing — direct Hub path is available again");
-                Ok(())
-            }
-        };
-
-        probe.abort();
-        result
     }
 
     /// Try to connect to Hub via a peer Edge's control-relay port.
