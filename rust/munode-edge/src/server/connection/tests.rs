@@ -44,7 +44,6 @@ fn test_config() -> EdgeConfig {
             heartbeat_interval: 10000,
             hmac_secret: None,
             pool_size: 1,
-            relay_port: 0,
             static_peers: vec![],
             tls: false,
         },

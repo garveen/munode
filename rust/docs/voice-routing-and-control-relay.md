@@ -322,26 +322,25 @@ LOOP:
 ```
 
 连接成功后（无论直连还是 relay，完全相同）：
-1. 发送 `edge.register`（携带 `relay_port`）
+1. 发送 `edge.register`
 2. 接收 Hub 响应
 3. 执行 `edge.fullSync` 同步频道树
 4. 发送 `edge.joinComplete`
 5. 进入消息收发循环
 
-### 2.4 relay_port 发现与传播
+### 2.4 relay 端点发现
 
 ```
 Edge 启动
   → hub_client::new()
-       → relay_port = config.hub_server.relay_port 或 edge_port+2
+       → relay listener = network.edge_port
 
-Edge 注册
-  → edge.register { relay_port: <my_relay_port> }
-       → Hub 保存，广播 hub.peerJoined 时携带
+Peer 发现
+  → Hub 广播 peer host + edge_port
 
-收到 hub.peerJoined { id, host, relay_port }
-  → PeerRegistry.upsert(id, PeerEdgeInfo { host, relay_port })
-  → PeerRegistry.relay_peers() 返回有 relay_port 的 peer
+收到 hub.peerJoined / fullSync peer 信息
+  → PeerRegistry.upsert(id, PeerEdgeInfo { host, relay_port: None | Some(...) })
+  → PeerRegistry.relay_peers() 优先使用显式 relay_port，缺失时回退到 peer edge_port
 ```
 
 ---

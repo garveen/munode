@@ -129,6 +129,15 @@ pool_size = 3                           # Default: 1
 # If not set, edge authentication is disabled (Hub must allow unauthenticated edges)
 hmac_secret = "change-me-to-match-hub-secret"  # Default: not set
 
+# Optional seed peers used when this edge cannot reach Hub directly at startup.
+# These are tried before dynamically discovered peers.
+# NOTE: the field name is historical: relay_port here should be the peer edge's
+# actual /relay WebSocket port, which is typically that peer's edge_port.
+# static_peers = [
+#   { host = "edge-seed-1.example.com", relay_port = 64739 },
+#   { host = "edge-seed-2.example.com", relay_port = 64749 },
+# ]
+
 # ---------------------------------------------------------------------------
 # Server Capacity & Behavior
 # ---------------------------------------------------------------------------

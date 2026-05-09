@@ -35,7 +35,7 @@ Hub（看到的是一条普通 WebSocket 连接）
 ```
 
 每个 Edge 的 relay 服务器：
-- 监听 `0.0.0.0:{relay_port}`（默认 `edge_port + 2`，可通过 `hub_server.relay_port` 配置）
+- 监听 `0.0.0.0:{edge_port}`（当前实现将 relay/voice WebSocket 服务复用在 Edge-to-Edge 端口上）
 - 对每个传入连接，向 Hub 开一条新 WebSocket 连接
 - 双向透明转发所有二进制帧
 - 单跳限制：不接受来自其他 relay 的链式转发

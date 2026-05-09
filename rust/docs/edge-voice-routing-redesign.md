@@ -46,15 +46,15 @@ Edge A ←——(良好)———→ Edge C ←——(良好)———→ Edge D
 
 `direct_only` / `tcp_only` / `auto_fallback` 要求管理员能提前知道网络状况——但在多数复杂网络环境（跨数据中心、NAT、云服务商间）中，这是不现实的。
 
-### 1.6 `relay_port` 动态发现是死代码
+### 1.6 `relay_port` 动态发现曾是死代码
 
-每个 Edge 启动时会在 `edge_port + 2`（或 `hub_server.relay_port` 配置值）上运行一个 WebSocket relay server（`relay_server.rs`），用于帮助其他 Edge 中继控制信道连接到 Hub。但 **Hub 的 protobuf 消息（`HubClusterPeerJoinedParams`、`PeerInfoProto`）中不包含 `relay_port` 字段**，导致：
+当前实现已经把 WebSocket relay server（`relay_server.rs`）合并到 `edge_port`，并删除了 `hub_server.relay_port` 配置。但在旧设计中，动态发现曾依赖单独的 `relay_port` 元数据；而 **Hub 的 protobuf 消息（`HubClusterPeerJoinedParams`、`PeerInfoProto`）中并不传播该字段**，导致：
 
 - `hub_client.rs` 在处理 `hub.peerJoined` 和 `edge.join` 时，始终将 `PeerEdgeInfo.relay_port` 设为 `None`
 - `peer_registry.relay_peers()` 永远返回空列表
 - `try_connect_via_relay` 中的动态 Peer 中继分支**永远不执行**
 
-实际能用的控制中继发现方式**只有静态配置**（`hub_server.static_peers`）。
+因此旧设计里，实际能用的控制中继发现方式**只有静态配置**（`hub_server.static_peers`）。
 
 本次重设计的修复方案是**将 relay/voice WebSocket 服务合并至主端口（`edge_port`）**，而非在 protobuf 中新增 `relay_port` 字段。Edge 已通过 Hub 广播 `edge_port`，其他 Edge 无需额外字段即可派生 TCP 通道地址。主端口通过**协议探测**复用：传入连接首字节为 `0x16`（TLS ClientHello）时按 Mumble 客户端连接处理，否则视为明文 HTTP WebSocket 升级握手（relay/voice）。这使得 `PeerEdgeInfo.relay_port` 字段可随之废弃，同时控制中继路径（`/relay`）和语音通道（`/voice`）均由同一端口提供，无需额外开放防火墙规则。详见 Step 14。
 

@@ -29,7 +29,6 @@ interface RustHubServerConfig {
   reconnect_interval?: number;
   heartbeat_interval?: number;
   pool_size?: number;
-  relay_port?: number;
   static_peers?: Array<{ host: string; relay_port: number }>;
 }
 

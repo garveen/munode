@@ -335,13 +335,17 @@ pub struct TlsConfig {
 /// A statically configured peer Edge for control-channel relay bootstrap.
 ///
 /// Used when the local Edge cannot reach Hub at startup.  The peer Edge's
-/// relay port is tried as a transparent WebSocket relay before falling back
-/// to a permanent error.
+/// `/relay` WebSocket endpoint is tried as a transparent Hub relay before
+/// falling back to a permanent error.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StaticPeerConfig {
     /// Hostname or IP of the peer Edge.
     pub host: String,
-    /// Control-relay port of the peer Edge (usually `edge_port + 2`).
+    /// Legacy field name: port of the peer Edge's `/relay` WebSocket listener.
+    ///
+    /// In the current implementation the relay/voice WebSocket server listens
+    /// on the peer's `network.edge_port`, so this value should normally be set
+    /// to the peer Edge's `edge_port`.
     pub relay_port: u16,
 }
 
@@ -366,14 +370,13 @@ pub struct HubServerConfig {
     /// and Hub-to-Edge push notifications are only processed on the primary connection.
     #[serde(default = "default_pool_size")]
     pub pool_size: u32,
-    /// Port on which this Edge listens for control-relay connections from peer Edges.
-    /// `0` (default) means "auto-assign": uses `network.edge_port + 2`.
-    /// The relay server is **always** started; there is no opt-in flag.
-    #[serde(default)]
-    pub relay_port: u16,
     /// Statically configured peer Edges used as relay fallback during Hub-unreachable
-    /// startup.  These are tried **before** dynamically-discovered peers (from
-    /// `hub.peerJoined` notifications).
+    /// startup. These act as seed peers and are tried **before**
+    /// dynamically-discovered peers (from `hub.peerJoined` notifications).
+    ///
+    /// Each entry's `relay_port` should point at the peer Edge's actual
+    /// `/relay` listener port, which in current builds is usually the peer's
+    /// `network.edge_port`.
     #[serde(default)]
     pub static_peers: Vec<StaticPeerConfig>,
     /// Whether to connect to the Hub over TLS (`wss://` instead of `ws://`).

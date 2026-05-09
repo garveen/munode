@@ -335,7 +335,9 @@ pub(crate) async fn hub_event_listener(    state: Arc<EdgeState>,
                         handle_hub_registered(disappeared_session_ids, &state).await;
                     }
                     EdgeEvent::HubDisconnected => {
-                        warn!("Hub disconnected - local clients will continue but some features unavailable");
+                        warn!(
+                            "All Hub control channels are currently down — continuing direct reconnect attempts and peer-relay fallback; local clients stay connected until Hub remains unreachable for 30s"
+                        );
                     }
                     EdgeEvent::HubReconcileDisappeared { session_ids } => {
                         // Grace period elapsed after Hub cold restart.

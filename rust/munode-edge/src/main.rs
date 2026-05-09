@@ -109,14 +109,9 @@ async fn main() -> Result<()> {
         println!("   {:<22} {}", "capacity:", cfg.server.capacity);
         println!("   {:<22} {}", "hub_tcp_fallback:", cfg.voice_routing.enable_hub_tcp_fallback);
         println!("   {:<22} {}", "failure_threshold:", cfg.voice_routing.consecutive_failure_threshold);
-        // Control relay is always active — show effective port
+        // The combined relay/voice WebSocket server always listens on edge_port.
         let edge_port = cfg.network.edge_port.unwrap_or(cfg.network.port + 1);
-        let relay_port = if cfg.hub_server.relay_port > 0 {
-            cfg.hub_server.relay_port
-        } else {
-            edge_port + 2
-        };
-        println!("   {:<22} {} (port {})", "control_relay:", "enabled", relay_port);
+        println!("   {:<22} {} (port {})", "control_relay:", "enabled", edge_port);
         if !cfg.hub_server.static_peers.is_empty() {
             let peers: Vec<String> = cfg.hub_server.static_peers.iter()
                 .map(|p| format!("{}:{}", p.host, p.relay_port))

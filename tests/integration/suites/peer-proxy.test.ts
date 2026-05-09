@@ -2,11 +2,11 @@
  * Peer Edge Control Relay 集成测试（Rust 模式）
  *
  * 测试 Edge 间控制信道中继（always-on relay，无需 allow_peer_proxy 标志）：
- * - 所有 Edge 自动启动 relay server，relay_port = edge_port + 2（或显式配置）
- * - diagnose 命令总是显示 control_relay: enabled 及端口号
+ * - 所有 Edge 自动在 edge_port 上启动 relay server
+ * - diagnose 命令总是显示 control_relay: enabled 及 edge_port
  * - static_peers 配置用于启动前已知的 peer 地址
  * - relay 服务器接受 WebSocket 连接并转发到 Hub
- * - hub.peerJoined 广播 relay_port，动态发现 relay 节点
+ * - 动态发现 peer 时，缺失 relay_port 元数据也会退化到 peer edge_port
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -44,8 +44,8 @@ function run(bin: string, args: string[]): { stdout: string; stderr: string; exi
   };
 }
 
-/** Build a minimal Edge config. relay_port=0 means auto (edge_port+2). */
-function relayEdgeConfig(port: number, relayPort: number, staticPeers?: Array<{host: string; relay_port: number}>) {
+/** Build a minimal Edge config for diagnose / relay tests. */
+function relayEdgeConfig(port: number, staticPeers?: Array<{host: string; relay_port: number}>) {
   return {
     server_id: 1,
     name: 'RelayEdge',
@@ -64,7 +64,6 @@ function relayEdgeConfig(port: number, relayPort: number, staticPeers?: Array<{h
       host: '127.0.0.1',
       control_port: 19300,
       hmac_secret: 'test-secret',
-      ...(relayPort > 0 ? { relay_port: relayPort } : {}),
       ...(staticPeers ? { static_peers: staticPeers } : {}),
     },
   };
@@ -80,29 +79,18 @@ describe.skipIf(!USE_RUST)('Control relay config & diagnose', () => {
     try { fs.rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
-  it('diagnose always shows control_relay enabled with auto port (edge_port+2)', () => {
+  it('diagnose always shows control_relay enabled on edge_port', () => {
     const cfgPath = path.join(TMP, 'relay-auto.json');
-    fs.writeFileSync(cfgPath, JSON.stringify(relayEdgeConfig(19310, 0)));
+    fs.writeFileSync(cfgPath, JSON.stringify(relayEdgeConfig(19310)));
     const { stdout, exitCode } = run(EDGE_BIN(), ['diagnose', cfgPath]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain('control_relay:');
     expect(stdout).toContain('enabled');
-    // Auto port = edge_port + 2 = (19310+1) + 2 = 19313
-    expect(stdout).toContain('19313');
-  });
-
-  it('diagnose shows control_relay enabled with explicit relay_port', () => {
-    const cfgPath = path.join(TMP, 'relay-explicit.json');
-    fs.writeFileSync(cfgPath, JSON.stringify(relayEdgeConfig(19320, 19325)));
-    const { stdout, exitCode } = run(EDGE_BIN(), ['diagnose', cfgPath]);
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain('control_relay:');
-    expect(stdout).toContain('enabled');
-    expect(stdout).toContain('19325');
+    expect(stdout).toContain('19311');
   });
 
   it('diagnose shows static_peers when configured', () => {
-    const cfg = relayEdgeConfig(19330, 0, [
+    const cfg = relayEdgeConfig(19330, [
       { host: '10.0.0.2', relay_port: 19335 },
       { host: '10.0.0.3', relay_port: 19336 },
     ]);
@@ -117,7 +105,7 @@ describe.skipIf(!USE_RUST)('Control relay config & diagnose', () => {
 
   it('diagnose shows no static_peers when not configured', () => {
     const cfgPath = path.join(TMP, 'relay-no-static.json');
-    fs.writeFileSync(cfgPath, JSON.stringify(relayEdgeConfig(19340, 0)));
+    fs.writeFileSync(cfgPath, JSON.stringify(relayEdgeConfig(19340)));
     const { stdout, exitCode } = run(EDGE_BIN(), ['diagnose', cfgPath]);
     expect(exitCode).toBe(0);
     expect(stdout).not.toContain('static_peers:');
@@ -128,19 +116,14 @@ describe.skipIf(!USE_RUST)('Control relay config & diagnose', () => {
 
 describe.skipIf(!USE_RUST)('Relay server accepts connections (always-on)', () => {
   let env: TestEnvironment | null = null;
-  const RELAY_PORT = 19355;
   const BASE_PORT = 19350;
+  const EDGE_PORT = BASE_PORT + 1;
 
   beforeAll(async () => {
     // Start Hub + Edge — relay server is always started, no special config needed
     env = await setupTestEnvironment(BASE_PORT, {
       isolated: true,
       silent: true,
-      rustEdgeExtraConfig: {
-        hub_server: {
-          relay_port: RELAY_PORT,
-        },
-      },
     });
   }, 60_000);
 
@@ -155,10 +138,10 @@ describe.skipIf(!USE_RUST)('Relay server accepts connections (always-on)', () =>
       const socket = new net.Socket();
       const timeout = setTimeout(() => {
         socket.destroy();
-        reject(new Error(`Relay port ${RELAY_PORT} not reachable within timeout`));
+        reject(new Error(`Relay port ${EDGE_PORT} not reachable within timeout`));
       }, 5000);
 
-      socket.connect(RELAY_PORT, '127.0.0.1', () => {
+      socket.connect(EDGE_PORT, '127.0.0.1', () => {
         clearTimeout(timeout);
         socket.destroy();
         resolve();
@@ -174,20 +157,14 @@ describe.skipIf(!USE_RUST)('Relay server accepts connections (always-on)', () =>
 
 // ─── Static peers config test ─────────────────────────────────────────────────
 
-describe.skipIf(!USE_RUST)('Hub broadcasts relay_port in peerJoined', () => {
+describe.skipIf(!USE_RUST)('Cluster starts without hub relay_port config', () => {
   let env: TestEnvironment | null = null;
   const BASE_PORT = 19360;
-  const RELAY_PORT = 19367;
 
   beforeAll(async () => {
     env = await setupTestEnvironment(BASE_PORT, {
       isolated: true,
       silent: true,
-      rustEdgeExtraConfig: {
-        hub_server: {
-          relay_port: RELAY_PORT,
-        },
-      },
     });
   }, 90_000);
 
@@ -195,7 +172,7 @@ describe.skipIf(!USE_RUST)('Hub broadcasts relay_port in peerJoined', () => {
     if (env) await env.cleanup();
   });
 
-  it('cluster starts successfully with relay_port configured', () => {
+  it('cluster starts successfully with default edge_port relay listener', () => {
     expect(env).not.toBeNull();
   });
 });

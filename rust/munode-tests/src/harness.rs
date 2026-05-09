@@ -32,7 +32,7 @@ fn ensure_crypto_provider() {
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
-const HMAC_SECRET: &str = "test-hmac-secret-key-for-integration-tests";
+pub(crate) const HMAC_SECRET: &str = "test-hmac-secret-key-for-integration-tests";
 
 /// Path to the test TLS certificates directory (relative to the workspace root).
 pub fn certs_dir() -> PathBuf {

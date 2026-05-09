@@ -492,23 +492,18 @@ impl HubClient {
 
     /// Run a single slot's reconnect loop with exponential backoff.
     ///
-    /// After `RELAY_FALLBACK_THRESHOLD` consecutive direct-connect failures,
-    /// attempts to connect via a known peer Edge's control-relay port.
-    /// After a further `RELAY_FALLBACK_THRESHOLD` consecutive relay failures,
-    /// falls back to direct connections again so the loop doesn't get stuck in
-    /// relay-only mode when no peers are configured or reachable.
-    /// Relay candidates are tried in priority order:
-    ///   1. Statically configured peers (`hub_server.static_peers` in config)
-    ///   2. Dynamically discovered peers (received via `hub.peerJoined` notifications)
+    /// Each iteration calls [`run_best_connection`] which probes Hub directly
+    /// first with a short TCP check; if Hub is unreachable it immediately
+    /// falls through to a peer-relay path.  While a relay connection is active,
+    /// a background task probes Hub directly every
+    /// [`RELAY_DIRECT_PROBE_INTERVAL`]; when Hub is reachable again the relay
+    /// is closed and the next iteration reconnects directly.
     ///
     /// If the Hub (including all relay paths) remains unreachable for
     /// `UNREACHABLE_TIMEOUT`, all local clients are disconnected and new
     /// connections are refused until registration succeeds again.
     async fn run_single_slot(self: &Arc<Self>, slot: usize) {
         let mut backoff = ExponentialBackoff::new(self.config.reconnect_interval);
-        let mut direct_fail_count: u32 = 0;
-        let mut relay_fail_count: u32 = 0;
-        const RELAY_FALLBACK_THRESHOLD: u32 = 3;
 
         // Tracks when we first lost the Hub connection.  Set on first failure or
         // on normal close; cleared when registration succeeds (HubRegistered).
@@ -517,58 +512,25 @@ impl HubClient {
         let mut unreachable_emitted = false;
 
         loop {
-            // After several consecutive direct failures, try relay via a peer Edge.
-            let use_relay = direct_fail_count >= RELAY_FALLBACK_THRESHOLD;
-            let connect_result = if use_relay {
-                self.try_connect_via_relay(slot).await
-            } else {
-                self.try_connect_slot(slot).await
-            };
+            let connect_result = self.run_best_connection(slot).await;
 
             match connect_result {
                 Ok(()) => {
-                    info!("Hub connection closed normally");
+                    info!(
+                        "Hub control channel closed (slot {}) — continuing reconnect attempts",
+                        slot
+                    );
                     backoff.reset();
-                    direct_fail_count = 0;
-                    relay_fail_count = 0;
                     // Connection was alive and has just closed — start the
                     // disconnected timer from this moment.
                     first_failure_at = Some(std::time::Instant::now());
                     unreachable_emitted = false;
                 }
                 Err(e) => {
-                    error!("Hub connection error: {}", e);
+                    error!(slot, "Hub connection error: {}", e);
                     // Record the start of this outage on the very first failure.
                     if first_failure_at.is_none() {
                         first_failure_at = Some(std::time::Instant::now());
-                    }
-                    if !use_relay {
-                        direct_fail_count += 1;
-                        relay_fail_count = 0;
-                        if direct_fail_count == RELAY_FALLBACK_THRESHOLD {
-                            info!(
-                                "Direct Hub connection failed {} times — \
-                                 will try peer relay on next attempt",
-                                direct_fail_count
-                            );
-                        }
-                    } else {
-                        relay_fail_count += 1;
-                        // After RELAY_FALLBACK_THRESHOLD consecutive relay failures,
-                        // fall back to direct connections so we don't get stuck in
-                        // relay-only mode when no peers are reachable (e.g. on first
-                        // startup before any peer has been discovered).
-                        if relay_fail_count >= RELAY_FALLBACK_THRESHOLD {
-                            warn!(
-                                "Hub relay also failed {} consecutive times — \
-                                 falling back to direct connection on next attempt",
-                                relay_fail_count
-                            );
-                            direct_fail_count = 0;
-                            relay_fail_count = 0;
-                        } else {
-                            warn!("Hub relay connection also failed — will keep retrying");
-                        }
                     }
                 }
             }
@@ -626,6 +588,106 @@ impl HubClient {
             warn!("Slot {} reconnecting to Hub in {:?}", slot, delay);
             time::sleep(delay).await;
         }
+    }
+
+    /// Timeout for the quick TCP probe used to check direct Hub reachability.
+    ///
+    /// Kept short so that when Hub is unreachable the probe fails fast and the
+    /// slot can fall through to the relay path without significant delay.
+    const DIRECT_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// How often (while a relay connection is active) the background task probes
+    /// the direct Hub path.  When the probe succeeds, the relay is closed and the
+    /// main reconnect loop re-establishes a direct connection.
+    const RELAY_DIRECT_PROBE_INTERVAL: Duration = Duration::from_secs(30);
+
+    /// Choose the best available Hub connection for `slot`.
+    ///
+    /// Strategy:
+    /// 1. Quick TCP probe of the direct Hub address (`DIRECT_PROBE_TIMEOUT`).
+    ///    If Hub is reachable, connect and run the full message loop.  If the
+    ///    connection closes normally, return `Ok(())`.
+    /// 2. If the direct probe fails (or the connection attempt fails) **and**
+    ///    relay peers are configured/known, immediately connect via relay.
+    ///    While the relay is active a background task probes the direct Hub
+    ///    path every `RELAY_DIRECT_PROBE_INTERVAL`; when Hub is reachable
+    ///    again the relay is closed so the outer loop can reconnect directly.
+    /// 3. If no relay peers exist, fall back to a direct connection attempt
+    ///    with the full `CONNECT_TIMEOUT` (Hub may come up while we wait).
+    async fn run_best_connection(self: &Arc<Self>, slot: usize) -> Result<()> {
+        // Step 1 — quick TCP probe.
+        if self.probe_direct_reachable().await {
+            debug!(slot, "Hub directly reachable — attempting full connection");
+            match self.try_connect_slot(slot).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    warn!(slot, "Direct Hub connection failed after reachability probe: {e} — trying relay");
+                }
+            }
+        } else {
+            debug!(slot, "Hub not directly reachable — checking relay peers");
+        }
+
+        // Step 2 — relay with background direct-recovery probe.
+        if self.has_relay_peers() {
+            return self.run_relay_with_direct_recovery(slot).await;
+        }
+
+        // Step 3 — no relay peers; try direct with full timeout.
+        info!(slot, "No relay peers available — retrying direct Hub connection");
+        self.try_connect_slot(slot).await
+    }
+
+    /// Returns `true` if at least one relay peer (static or dynamic) is known.
+    fn has_relay_peers(&self) -> bool {
+        !self.static_relay_peers.is_empty()
+            || !self.edge_state.peer_registry.load().relay_peers().is_empty()
+    }
+
+    /// Perform a TCP-level probe to check whether the direct Hub address is
+    /// reachable.  Does not execute any Hub protocol — just opens and
+    /// immediately closes a TCP connection.
+    async fn probe_direct_reachable(&self) -> bool {
+        use tokio::net::TcpStream;
+        let addr = format!("{}:{}", self.config.host, self.config.control_port);
+        matches!(
+            time::timeout(Self::DIRECT_PROBE_TIMEOUT, TcpStream::connect(&addr)).await,
+            Ok(Ok(_))
+        )
+    }
+
+    /// Connect via relay while concurrently probing for direct Hub recovery.
+    ///
+    /// A background task probes the direct Hub address every
+    /// [`RELAY_DIRECT_PROBE_INTERVAL`].  When the probe succeeds, the relay
+    /// is closed (by cancelling via `Notify`) and the outer reconnect loop
+    /// will re-establish a direct connection on its next iteration.
+    async fn run_relay_with_direct_recovery(self: &Arc<Self>, slot: usize) -> Result<()> {
+        let cancel = Arc::new(tokio::sync::Notify::new());
+        let cancel_for_probe = cancel.clone();
+        let me = self.clone();
+
+        let probe = tokio::spawn(async move {
+            loop {
+                time::sleep(Self::RELAY_DIRECT_PROBE_INTERVAL).await;
+                if me.probe_direct_reachable().await {
+                    info!("Direct Hub connection restored — closing relay to switch back");
+                    cancel_for_probe.notify_one();
+                    return;
+                }
+            }
+        });
+
+        let result = tokio::select! {
+            r = self.try_connect_via_relay(slot) => r,
+            _ = cancel.notified() => {
+                info!(slot, "Relay connection closing — direct Hub path is available again");
+                Ok(())
+            }
+        };
+
+        probe.abort();
+        result
     }
 
     /// Try to connect to Hub via a peer Edge's control-relay port.
@@ -1164,7 +1226,27 @@ impl HubClient {
                 Ok(s) => s,
                 Err(e) => {
                     if attempt == 0 {
-                        return Err(e);
+                        // No live slot — this typically means a failover is in
+                        // progress (direct closed, relay not yet established).
+                        // Wait up to 10 s for any slot to reconnect, then retry
+                        // once rather than immediately returning an error.
+                        const WAIT_FOR_SLOT: Duration = Duration::from_secs(10);
+                        const POLL_INTERVAL: Duration = Duration::from_millis(250);
+                        warn!("No Hub slot available for RPC {method} — waiting up to {WAIT_FOR_SLOT:?} for reconnect");
+                        let deadline = time::Instant::now() + WAIT_FOR_SLOT;
+                        loop {
+                            time::sleep(POLL_INTERVAL).await;
+                            if time::Instant::now() >= deadline {
+                                return Err(e.context(
+                                    format!("timed out waiting for Hub slot for RPC {method}"),
+                                ));
+                            }
+                            if self.any_slot_alive().await {
+                                debug!("Hub slot available — retrying RPC {method}");
+                                break;
+                            }
+                        }
+                        continue; // retry with attempt 1
                     } else {
                         return Err(e.context(format!("RPC {} failed after retry", method)));
                     }
