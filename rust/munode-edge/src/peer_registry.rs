@@ -167,14 +167,22 @@ impl PeerRegistry {
         self.addr_to_id.get(&addr).copied()
     }
 
-    /// Collect all peers that have a relay_port advertised.
+    /// Collect all peers that can serve as Hub relay candidates.
+    ///
+    /// The relay/voice WebSocket server now listens on `edge_port`, which is
+    /// also the UDP voice port stored in `udp_addr`. Older metadata may still
+    /// advertise an explicit `relay_port`; when it is absent, fall back to the
+    /// peer's `udp_addr.port()` so dynamic peer relay continues to work after a
+    /// direct Hub disconnect.
+    ///
     /// Returns a snapshot `Vec<(peer_id, host, relay_port)>` so the caller
     /// does not need to hold the lock while iterating.
     pub fn relay_peers(&self) -> Vec<(u32, String, u16)> {
         self.peers
             .iter()
-            .filter_map(|(id, info)| {
-                info.relay_port.map(|p| (*id, info.host.clone(), p))
+            .map(|(id, info)| {
+                let relay_port = info.relay_port.unwrap_or_else(|| info.udp_addr.port());
+                (*id, info.host.clone(), relay_port)
             })
             .collect()
     }
@@ -185,5 +193,38 @@ impl PeerRegistry {
             .iter()
             .map(|(id, info)| (*id, info.udp_addr))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PeerEdgeInfo, PeerRegistry};
+
+    #[test]
+    fn relay_peers_falls_back_to_udp_port_when_metadata_missing() {
+        let mut registry = PeerRegistry::default();
+        registry.upsert(
+            10,
+            PeerEdgeInfo {
+                udp_addr: "10.0.0.4:64002".parse().unwrap(),
+                host: "10.0.0.4".into(),
+                relay_port: Some(9000),
+            },
+        );
+        registry.upsert(
+            11,
+            PeerEdgeInfo {
+                udp_addr: "10.0.0.5:64003".parse().unwrap(),
+                host: "10.0.0.5".into(),
+                relay_port: None,
+            },
+        );
+
+        let mut relay_peers = registry.relay_peers();
+        relay_peers.sort_by_key(|(id, _, _)| *id);
+
+        assert_eq!(relay_peers.len(), 2);
+        assert_eq!(relay_peers[0], (10, "10.0.0.4".into(), 9000));
+        assert_eq!(relay_peers[1], (11, "10.0.0.5".into(), 64003));
     }
 }
