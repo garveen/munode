@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn};
 use munode_protocol::hubedge::*;
 
 use crate::rpc_handler::{EdgeSenderPool, RpcHandler};
-use crate::server::{EdgeHealth, HubState, EdgeNotifEnvelope};
+use crate::server::{EdgeHealth, HubState, EdgeNotifEnvelope, EDGE_DISCONNECT_GRACE};
 
 /// Represents a single connected edge server.
 pub struct EdgeConnection {
@@ -145,8 +145,51 @@ impl EdgeConnection {
             };
 
             if should_cleanup {
+                // Remove health record immediately so the heartbeat loop does not
+                // race with the deferred cleanup task below.
                 self.state.edge_health.write().await.remove(&server_id);
-                self.rpc_handler.cleanup_edge(server_id).await;
+
+                // Schedule a deferred cleanup instead of running immediately.
+                //
+                // The Edge may be reconnecting via peer relay right now; with the
+                // immediate-relay-failover logic on the Edge side the relay
+                // reconnect completes in ≈ 20–25 s.  Waiting EDGE_DISCONNECT_GRACE
+                // before cleaning up prevents spurious `userRemoveBroadcast` /
+                // `peerLeft` notifications to other Edges while the failing Edge
+                // is still alive and merely switching paths.
+                //
+                // The task is stored in `pending_cleanups`; it is aborted when
+                // the Edge re-registers (see the `edge.register` handling below).
+                let state = Arc::clone(&self.state);
+                let rpc_handler = Arc::clone(&self.rpc_handler);
+                let handle = tokio::spawn(async move {
+                    tokio::time::sleep(EDGE_DISCONNECT_GRACE).await;
+                    // Re-check: edge may have reconnected during the grace period.
+                    let still_absent = {
+                        let connections = state.edge_connections.read().await;
+                        !connections.contains_key(&server_id)
+                    };
+                    if still_absent {
+                        warn!(
+                            "Edge {} did not reconnect within grace period — \
+                             cleaning up sessions",
+                            server_id
+                        );
+                        rpc_handler.cleanup_edge(server_id).await;
+                    } else {
+                        debug!(
+                            "Edge {} reconnected during grace period — \
+                             deferred cleanup cancelled",
+                            server_id
+                        );
+                    }
+                    state.pending_cleanups.write().await.remove(&server_id);
+                });
+                // If a previous deferred cleanup is still pending (e.g. rapid
+                // reconnect/disconnect cycle), abort it first.
+                if let Some(old) = self.state.pending_cleanups.write().await.insert(server_id, handle) {
+                    old.abort();
+                }
             }
             info!("Edge {} (server_id={}) disconnected", addr, server_id);
         }
@@ -242,6 +285,21 @@ impl EdgeConnection {
                                     }
                                 }
                             };
+                            // Cancel any pending deferred cleanup for this edge.
+                            //
+                            // A deferred cleanup task is spawned when the last pool
+                            // connection drops (see the disconnect path above).  If
+                            // the Edge reconnects — via relay or directly — before
+                            // the grace period expires, aborting the task prevents
+                            // spurious `userRemoveBroadcast` / `peerLeft` from
+                            // being broadcast to other Edges.
+                            if let Some(pending) = self.state.pending_cleanups.write().await.remove(&sid) {
+                                pending.abort();
+                                info!(
+                                    "Edge {} reconnected within grace period - deferred session cleanup cancelled",
+                                    sid
+                                );
+                            }
                             // Initialise health record (idempotent)
                             self.state
                                 .edge_health

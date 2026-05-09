@@ -559,6 +559,10 @@ async fn test_receiver_does_not_hear_previous_channel_after_move_cross_edge() ->
             }
         }
     }
+    assert!(
+        !leaked,
+        "Cross-edge: mover must NOT hear sender's voice from previous channel after moving"
+    );
     cleanup_clients(clients).await;
     Ok(())
 }

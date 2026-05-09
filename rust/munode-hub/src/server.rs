@@ -191,7 +191,27 @@ pub struct HubState {
     /// preventing ghost sessions when `handleUserLeft` is sent immediately on
     /// TCP disconnect.
     pub pending_auths: RwLock<HashMap<u32, (std::sync::Arc<std::sync::atomic::AtomicBool>, u32)>>,
+    /// Pending deferred `cleanup_edge` tasks, indexed by edge server_id.
+    ///
+    /// When the last pool connection from an Edge drops, rather than immediately
+    /// removing its sessions, a deferred task is spawned that waits for
+    /// [`EDGE_DISCONNECT_GRACE`] before running `cleanup_edge`.  If the Edge
+    /// reconnects (via relay or direct) within that window, the task is aborted
+    /// and no spurious `userRemoveBroadcast` / `peerLeft` notifications are
+    /// emitted to other Edges.
+    pub pending_cleanups: RwLock<HashMap<u32, tokio::task::JoinHandle<()>>>,
 }
+
+/// How long to wait after an Edge's last pool connection drops before treating
+/// the Edge as fully gone and running `cleanup_edge`.
+///
+/// During this window the Edge is expected to reconnect via peer relay (if
+/// available) or retry a direct connection.  On the Edge side the disconnect →
+/// relay-reconnect sequence completes in ≈ 20–25 s (5 s TCP probe +
+/// 15 s relay connect timeout + protocol overhead), so 45 s provides a
+/// comfortable margin without making other Edges wait too long for stale
+/// session removal in a genuine hard-down scenario.
+pub const EDGE_DISCONNECT_GRACE: Duration = Duration::from_secs(45);
 
 /// The main Hub server.
 pub struct HubServer {
@@ -290,6 +310,7 @@ impl HubServer {
             notification_seqs: StdMutex::new(HashMap::new()),
             edge_notif_senders: RwLock::new(HashMap::new()),
             pending_auths: RwLock::new(HashMap::new()),
+            pending_cleanups: RwLock::new(HashMap::new()),
         });
 
         // Load channels from database
