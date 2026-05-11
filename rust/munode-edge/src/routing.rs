@@ -78,7 +78,7 @@ pub async fn compute_voice_targets(
             });
         }
 
-        let vt_config: Option<crate::hot_slot::HotVoiceTarget> = {
+        let vt_config: Option<Arc<crate::hot_slot::HotVoiceTarget>> = {
             let slot = crate::hot_slot::get_hot_slot(sender_session);
             if slot.is_active_for(sender_session) {
                 let vt_guard = slot.voice_targets.load();
@@ -93,10 +93,10 @@ pub async fn compute_voice_targets(
                 cache
                     .get(&sender_session)
                     .and_then(|m| m.get(&voice_target))
-                    .map(|vt| crate::hot_slot::HotVoiceTarget {
+                    .map(|vt| std::sync::Arc::new(crate::hot_slot::HotVoiceTarget {
                         sessions: vt.sessions.clone(),
                         resolved_channels: vt.resolved_channels.clone(),
-                    })
+                    }))
             }
         };
 
@@ -214,10 +214,7 @@ pub async fn compute_voice_targets(
         let relay_edge_ids: SmallVec<[u32; 8]> = edge_state
             .peer_registry
             .load()
-            .all_udp_peers()
-            .into_iter()
-            .filter_map(|(edge_id, _)| (edge_id != my_edge_id).then_some(edge_id))
-            .collect();
+            .udp_peer_ids_except(my_edge_id);
 
         edge_state.store_cached_whisper_route(
             sender_session,
@@ -268,22 +265,19 @@ pub async fn compute_voice_targets(
             (Cow::Borrowed(c.local_sessions.as_slice()), c.relay_edge_ids.clone())
         } else {
             // Cache miss: full computation.
-            let linked_channels: Vec<u32> = edge_state
+            let linked_channels = edge_state
                 .channel_manager
                 .get_all_linked_channels(sender_channel)
-                .await
-                .into_iter()
-                .collect();
+                .await;
 
             let sessions = edge_state
                 .client_manager
-                .get_channel_session_ids_with_listeners(&linked_channels, sender_session)
+                .get_channel_session_ids_with_listeners_in_set(&linked_channels, sender_session)
                 .await;
 
-            let linked_set: HashSet<u32> = linked_channels.iter().copied().collect();
             let remote_users = edge_state
                 .channel_manager
-                .get_remote_users_in_channels(&linked_set)
+                .get_remote_users_in_channels(&linked_channels)
                 .await;
 
             let relay_ids: SmallVec<[u32; 8]> = {

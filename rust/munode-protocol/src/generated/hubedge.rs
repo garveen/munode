@@ -1013,8 +1013,8 @@ pub struct EdgeRelayVoiceViaTcpParams {
     #[prost(uint32, required, tag = "2")]
     pub target_edge_id: u32,
     /// 完整的语音包（包含 header）
-    #[prost(bytes = "vec", required, tag = "3")]
-    pub voice_packet: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", required, tag = "3")]
+    pub voice_packet: ::prost::bytes::Bytes,
     /// 时间戳
     #[prost(int64, required, tag = "4")]
     pub timestamp: i64,
@@ -1106,6 +1106,12 @@ pub struct EdgeFullSyncResult {
     #[prost(message, repeated, tag = "8")]
     pub edges: ::prost::alloc::vec::Vec<EdgeInfoProto>,
     /// True when the Hub's session table was empty at the time of this sync.
+    /// This is a reliable proxy for "Hub just restarted cold" — a client-less
+    /// cluster would also set this flag, but in that case old_session_ids is
+    /// also empty so no UserRemove fan-out would have happened anyway.
+    /// The Edge uses this to defer the UserRemove broadcast by a grace period
+    /// so that peer Edges have time to re-register and re-report their sessions,
+    /// preventing a spurious "all remote users disappeared" flash after Hub restart.
     #[prost(bool, optional, tag = "9")]
     pub hub_was_empty: ::core::option::Option<bool>,
 }
@@ -1781,8 +1787,8 @@ pub struct HubAclResponseParams {
 pub struct HubRelayVoicePacketParams {
     #[prost(uint32, required, tag = "1")]
     pub from_edge_id: u32,
-    #[prost(bytes = "vec", required, tag = "2")]
-    pub voice_packet: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "bytes", required, tag = "2")]
+    pub voice_packet: ::prost::bytes::Bytes,
     #[prost(int64, required, tag = "3")]
     pub timestamp: i64,
 }
@@ -1821,7 +1827,7 @@ pub struct HubUserJoinedParams {
     #[prost(bool, optional, tag = "14")]
     pub recording: ::core::option::Option<bool>,
     /// Listening channels (channel listener feature)
-    #[prost(uint32, repeated, tag = "15")]
+    #[prost(uint32, repeated, packed = "false", tag = "15")]
     pub listening_channels: ::prost::alloc::vec::Vec<u32>,
 }
 /// ---------------------------------------------------------------------------

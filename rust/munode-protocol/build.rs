@@ -4,11 +4,14 @@ use std::path::PathBuf;
 fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let out_dir = manifest_dir.join("src/generated");
+    let force_regen = std::env::var("MUNODE_REGEN_PROTO")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
 
     // If generated files already exist, skip regeneration.
     // This allows building without protoc when generated files are committed.
     let expected = out_dir.join("mumbleproto.rs");
-    if expected.exists() {
+    if expected.exists() && !force_regen {
         return Ok(());
     }
 
@@ -38,8 +41,13 @@ fn main() -> Result<()> {
 
     std::fs::create_dir_all(&out_dir).ok();
 
-    prost_build::Config::new()
+    let mut config = prost_build::Config::new();
+    config
         .out_dir(&out_dir)
+        .bytes([
+            ".hubedge.EdgeRelayVoiceViaTcpParams.voice_packet",
+            ".hubedge.HubRelayVoicePacketParams.voice_packet",
+        ])
         .compile_protos(
             &[
                 proto_dir.join("Mumble.proto"),

@@ -44,6 +44,44 @@ function run(bin: string, args: string[]): { stdout: string; stderr: string; exi
   };
 }
 
+async function waitForTcpReachable(port: number, host: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const reachable = await new Promise<boolean>((resolve) => {
+      const socket = new net.Socket();
+
+      const cleanup = () => {
+        socket.removeAllListeners();
+        socket.destroy();
+      };
+
+      socket.once('connect', () => {
+        cleanup();
+        resolve(true);
+      });
+      socket.once('error', () => {
+        cleanup();
+        resolve(false);
+      });
+      socket.setTimeout(250, () => {
+        cleanup();
+        resolve(false);
+      });
+
+      socket.connect(port, host);
+    });
+
+    if (reachable) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+
+  throw new Error(`Relay port ${port} not reachable within timeout`);
+}
+
 /** Build a minimal Edge config for diagnose / relay tests. */
 function relayEdgeConfig(port: number, staticPeers?: Array<{host: string; relay_port: number}>) {
   return {
@@ -117,7 +155,6 @@ describe.skipIf(!USE_RUST)('Control relay config & diagnose', () => {
 describe.skipIf(!USE_RUST)('Relay server accepts connections (always-on)', () => {
   let env: TestEnvironment | null = null;
   const BASE_PORT = 19350;
-  const EDGE_PORT = BASE_PORT + 1;
 
   beforeAll(async () => {
     // Start Hub + Edge — relay server is always started, no special config needed
@@ -132,26 +169,11 @@ describe.skipIf(!USE_RUST)('Relay server accepts connections (always-on)', () =>
   });
 
   it('Edge relay server port is reachable via TCP after startup', async () => {
-    await new Promise(r => setTimeout(r, 2000));
+    expect(env).not.toBeNull();
+    const relayPort = env!.edgeEdgePort;
+    expect(relayPort).toBeGreaterThan(0);
 
-    await new Promise<void>((resolve, reject) => {
-      const socket = new net.Socket();
-      const timeout = setTimeout(() => {
-        socket.destroy();
-        reject(new Error(`Relay port ${EDGE_PORT} not reachable within timeout`));
-      }, 5000);
-
-      socket.connect(EDGE_PORT, '127.0.0.1', () => {
-        clearTimeout(timeout);
-        socket.destroy();
-        resolve();
-      });
-
-      socket.on('error', (err) => {
-        clearTimeout(timeout);
-        reject(err);
-      });
-    });
+    await waitForTcpReachable(relayPort, '127.0.0.1', 5_000);
   }, 30_000);
 });
 

@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::collections::HashMap;
 
+use smallvec::SmallVec;
 use tokio::sync::mpsc;
 
 /// Outbound TCP voice connection pool for a single peer Edge.
@@ -192,6 +193,18 @@ impl PeerRegistry {
         self.peers
             .iter()
             .map(|(id, info)| (*id, info.udp_addr))
+            .collect()
+    }
+
+    /// Collect all known peer edge IDs except `excluded_edge_id`.
+    ///
+    /// Used on the whisper hot path where only the destination edge IDs are
+    /// needed; avoiding `(edge_id, udp_addr)` tuples skips an intermediate
+    /// allocation and destructuring step.
+    pub fn udp_peer_ids_except(&self, excluded_edge_id: u32) -> SmallVec<[u32; 8]> {
+        self.peers
+            .keys()
+            .filter_map(|&edge_id| (edge_id != excluded_edge_id).then_some(edge_id))
             .collect()
     }
 }

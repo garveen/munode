@@ -346,6 +346,23 @@ impl ChannelManager {
     pub async fn get_all_children_map(&self) -> std::collections::HashMap<u32, Vec<u32>> {
         self.channel_children.read().await.clone()
     }
+
+    /// Snapshot the minimal channel graph needed for VoiceTarget expansion.
+    ///
+    /// Returns `(link_graph, children_map)` so callers that need to resolve many
+    /// VoiceTargets can clone the channel topology once and expand everything in
+    /// memory without repeated async lock hops.
+    pub async fn get_voice_target_resolution_snapshot(
+        &self,
+    ) -> (HashMap<u32, Vec<u32>>, HashMap<u32, Vec<u32>>) {
+        let channels = self.channels.read().await;
+        let children = self.channel_children.read().await;
+        let link_graph = channels
+            .iter()
+            .map(|(&channel_id, channel)| (channel_id, channel.links.clone()))
+            .collect();
+        (link_graph, children.clone())
+    }
 }
 
 #[cfg(test)]

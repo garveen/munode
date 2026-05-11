@@ -128,15 +128,20 @@ impl EdgeCrypto {
     /// (e.g. for relay packets, use `sender_edge_id ++ target_edge_id` as AAD to
     /// prevent an on-path attacker from redirecting the packet to a wrong destination).
     pub fn encrypt(&self, plaintext: &[u8], sender_edge_id: u32, aad: &[u8]) -> (u64, Vec<u8>) {
+        self.encrypt_owned(plaintext.to_vec(), sender_edge_id, aad)
+    }
+
+    /// Same as `encrypt`, but consumes an owned buffer so callers that already
+    /// built a `Vec<u8>` can avoid an extra pre-encryption copy.
+    pub fn encrypt_owned(&self, mut plaintext: Vec<u8>, sender_edge_id: u32, aad: &[u8]) -> (u64, Vec<u8>) {
         let counter = self.counter.fetch_add(1, Ordering::Relaxed);
         let nonce = Self::build_nonce(sender_edge_id, counter);
-        let mut buf = plaintext.to_vec();
         // Appends the 16-byte Poly1305 tag in-place.  Sealing can only fail on an
         // out-of-memory condition or a programming error — treat as unrecoverable.
         self.key
-            .seal_in_place_append_tag(nonce, ring::aead::Aad::from(aad), &mut buf)
+            .seal_in_place_append_tag(nonce, ring::aead::Aad::from(aad), &mut plaintext)
             .expect("EdgeCrypto::encrypt: AEAD sealing failed");
-        (counter, buf)
+        (counter, plaintext)
     }
 
     /// Verify the Poly1305 tag, decrypt `ciphertext_with_tag`, and enforce
@@ -191,10 +196,11 @@ impl EdgeCrypto {
         // ── Step 3: AEAD authentication + decryption ─────────────────────────
         let nonce = Self::build_nonce(sender_edge_id, counter);
         let mut buf = ciphertext.to_vec();
-        let plaintext = self.key
+        let plaintext_len = self.key
             .open_in_place(nonce, ring::aead::Aad::from(aad), &mut buf)
-            .ok()?;
-        let plaintext = plaintext.to_vec();
+            .ok()?
+            .len();
+        buf.truncate(plaintext_len);
 
         // ── Step 4: confirm in replay window (mark as seen or detect duplicate) ─
         let accepted = window_arc.lock()
@@ -204,6 +210,6 @@ impl EdgeCrypto {
             return None; // replay: counter was already used by this sender
         }
 
-        Some(plaintext)
+        Some(buf)
     }
 }

@@ -734,6 +734,36 @@ impl ClientManager {
         result
     }
 
+    /// Same as `get_channel_session_ids_with_listeners`, but consumes a channel-ID set
+    /// directly so callers that already have a `HashSet` avoid set→vec→set churn.
+    pub async fn get_channel_session_ids_with_listeners_in_set(
+        &self,
+        channels: &std::collections::HashSet<u32>,
+        exclude_session: u32,
+    ) -> Vec<u32> {
+        let ch_users = self.channel_users.read().await;
+        let listen_idx = self.listening_index.read().await;
+        let mut seen = std::collections::HashSet::new();
+        let mut result = Vec::new();
+        for &ch in channels {
+            if let Some(members) = ch_users.get(&ch) {
+                for &s in members {
+                    if s != exclude_session && seen.insert(s) {
+                        result.push(s);
+                    }
+                }
+            }
+            if let Some(listeners) = listen_idx.get(&ch) {
+                for &s in listeners {
+                    if s != exclude_session && seen.insert(s) {
+                        result.push(s);
+                    }
+                }
+            }
+        }
+        result
+    }
+
     /// Store a CryptState for a session.
     pub async fn set_crypt_state(&self, session: u32, state: CryptState) {
         let cs = Arc::new(Mutex::new(state));

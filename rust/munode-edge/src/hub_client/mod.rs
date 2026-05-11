@@ -320,7 +320,7 @@ pub struct HubClient {
     /// processor or the broadcast channel, preventing high-frequency voice
     /// frames from causing `Lagged` errors on the event bus.
     /// Bounded at 512: best-effort delivery, drop on overflow (voice is lossy).
-    voice_relay_tx: mpsc::Sender<Vec<u8>>,
+    voice_relay_tx: mpsc::Sender<bytes::Bytes>,
 }
 
 impl HubClient {
@@ -339,7 +339,7 @@ impl HubClient {
             .iter()
             .map(|p| (p.host.clone(), p.relay_port))
             .collect();
-        let (voice_relay_tx, voice_relay_rx) = mpsc::channel::<Vec<u8>>(512);
+        let (voice_relay_tx, voice_relay_rx) = mpsc::channel::<bytes::Bytes>(512);
         let hub = Arc::new(Self {
             config: config.hub_server.clone(),
             server_id: config.server_id,
@@ -1290,7 +1290,7 @@ impl HubClient {
                             // try_send: drop the packet if the worker is behind.
                             // Voice is best-effort; dropping the occasional packet is
                             // far better than blocking the Hub WS reader.
-                            let _ = self.voice_relay_tx.try_send(params.voice_packet);
+                            let _ = self.voice_relay_tx.try_send(params.voice_packet.into());
                         }
                         return Ok(());
                     }

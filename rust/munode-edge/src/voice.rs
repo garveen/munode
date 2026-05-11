@@ -5,6 +5,30 @@ use tracing::{debug, trace};
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 
+#[inline]
+fn write_mumble_varint_stack(value: u32, dst: &mut [u8; 5]) -> usize {
+    if value < 0x80 {
+        dst[0] = value as u8;
+        1
+    } else if value < 0x4000 {
+        dst[0] = ((value >> 8) | 0x80) as u8;
+        dst[1] = (value & 0xFF) as u8;
+        2
+    } else if value < 0x200000 {
+        dst[0] = ((value >> 16) | 0xC0) as u8;
+        dst[1] = ((value >> 8) & 0xFF) as u8;
+        dst[2] = (value & 0xFF) as u8;
+        3
+    } else {
+        dst[0] = 0xF0;
+        dst[1] = ((value >> 24) & 0xFF) as u8;
+        dst[2] = ((value >> 16) & 0xFF) as u8;
+        dst[3] = ((value >> 8) & 0xFF) as u8;
+        dst[4] = (value & 0xFF) as u8;
+        5
+    }
+}
+
 /// Decode a Mumble varint from a byte slice.
 /// Returns `(value, bytes_consumed)` or `None` if insufficient data.
 #[inline]
@@ -35,7 +59,7 @@ fn decode_varint(data: &[u8]) -> Option<(u32, usize)> {
 /// broadcast channel to avoid filling the control-event bus with high-frequency
 /// voice frames.
 pub async fn deliver_relayed_voice(
-    voice_packet: Vec<u8>,
+    voice_packet: bytes::Bytes,
     state: &Arc<EdgeState>,
     hub_client: &Arc<HubClient>,
 ) {
@@ -87,19 +111,17 @@ pub async fn deliver_relayed_voice(
 
     if targets.is_whisper {
         // voice_packet[0] carries raw voice_target_id in low 5 bits;
-        // overwrite with AudioContext per Mumble protocol.
-        let mut pkt = voice_packet.clone();
-        pkt[0] = (voice_packet[0] & 0xe0) | 2;
-        let frame_whisper = wrap_udptunnel(&pkt);
-        pkt[0] = (voice_packet[0] & 0xe0) | 1;
-        let frame_shout = wrap_udptunnel(&pkt);
+        // overwrite with AudioContext per Mumble protocol while writing the
+        // UdpTunnel frame, avoiding an intermediate voice-packet clone.
+        let frame_whisper = wrap_udptunnel_with_context(voice_packet.as_ref(), 2);
+        let frame_shout = wrap_udptunnel_with_context(voice_packet.as_ref(), 1);
         let d = deliver_voice_tcp(&targets.direct_sessions, &frame_whisper)
             + deliver_voice_tcp(&targets.channel_sessions, &frame_shout);
         trace!("edge={} Delivered relayed whisper from session {} to {} targets",
             state.get_edge_id(), sender_session, d);
     } else {
         // voice_packet[0] already has context=0 (set by the sending edge for PTT).
-        let frame = wrap_udptunnel(&voice_packet);
+        let frame = wrap_udptunnel(voice_packet.as_ref());
         let d = deliver_voice_tcp(&targets.local_sessions, &frame);
         trace!("edge={} Delivered relayed broadcast from session {} to {} local clients",
             state.get_edge_id(), sender_session, d);
@@ -136,9 +158,9 @@ pub fn inject_session_into_voice(payload: &[u8], sender_session: u32, context: u
     // Worst-case varint length is 5 bytes; over-allocate to avoid realloc.
     let mut result = BytesMut::with_capacity(1 + 5 + payload.len() - 1);
     result.extend_from_slice(&[header]);
-    let mut tmp = Vec::with_capacity(5);
-    crate::udp::write_mumble_varint(sender_session, &mut tmp);
-    result.extend_from_slice(&tmp);
+    let mut tmp = [0u8; 5];
+    let tmp_len = write_mumble_varint_stack(sender_session, &mut tmp);
+    result.extend_from_slice(&tmp[..tmp_len]);
     result.extend_from_slice(&payload[1..]);
     result.freeze()
 }
@@ -154,6 +176,23 @@ pub fn wrap_udptunnel(data: &[u8]) -> bytes::Bytes {
     bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
     bytes::BufMut::put_u32(&mut buf, data.len() as u32);
     bytes::BufMut::put_slice(&mut buf, data);
+    buf.freeze()
+}
+
+#[inline]
+fn wrap_udptunnel_with_context(data: &[u8], context: u8) -> bytes::Bytes {
+    use bytes::BytesMut;
+    use munode_protocol::message_type::MessageType;
+
+    if data.is_empty() {
+        return bytes::Bytes::new();
+    }
+
+    let mut buf = BytesMut::with_capacity(6 + data.len());
+    bytes::BufMut::put_u16(&mut buf, MessageType::UdpTunnel as u16);
+    bytes::BufMut::put_u32(&mut buf, data.len() as u32);
+    buf.extend_from_slice(&[((data[0] & 0xe0) | (context & 0x1f))]);
+    buf.extend_from_slice(&data[1..]);
     buf.freeze()
 }
 

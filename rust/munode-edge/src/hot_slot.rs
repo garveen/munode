@@ -56,7 +56,7 @@ pub struct HotVoiceTarget {
 
 /// Per-session voice-target map stored in a `HotSlot`.
 /// Maps `target_id` (1..=30) → `HotVoiceTarget`.
-pub type HotVoiceTargetMap = HashMap<u32, HotVoiceTarget>;
+pub type HotVoiceTargetMap = HashMap<u32, Arc<HotVoiceTarget>>;
 
 /// Cache-line-aligned (64-byte) per-session hot data used by the voice routing
 /// hot path.
@@ -213,7 +213,7 @@ impl HotSlot {
 //   - Arc<Mutex<CryptState>>: Send + Sync (CryptState: Send).
 //   - Arc<Mutex<BandwidthRecord>>: Send + Sync (BandwidthRecord: Send).
 //   - mpsc::Sender<bytes::Bytes>: Send + Sync.
-//   - HotVoiceTargetMap = HashMap<u32, HotVoiceTarget>: Send + Sync.
+//   - HotVoiceTargetMap = HashMap<u32, Arc<HotVoiceTarget>>: Send + Sync.
 unsafe impl Send for HotSlot {}
 unsafe impl Sync for HotSlot {}
 

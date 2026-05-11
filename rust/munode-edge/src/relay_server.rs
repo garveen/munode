@@ -398,8 +398,11 @@ async fn handle_voice_connection(
                 let sender_session =
                     u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
                 let plaintext = &data[5..];
-                // Build RelayedVoice packet: inject session varint into plaintext
-                let voice_packet = make_relayed_voice_packet(plaintext, sender_session);
+                let voice_packet = crate::voice::inject_session_into_voice(
+                    plaintext,
+                    sender_session,
+                    plaintext.first().copied().unwrap_or(0) & 0x1f,
+                );
                 if !voice_packet.is_empty() {
                     crate::voice::deliver_relayed_voice(voice_packet, &edge_state, &hub_client).await;
                 }
@@ -830,23 +833,6 @@ async fn run_voice_tcp_once_pooled(
 
     reader_handle.abort();
     result
-}
-
-/// Build a `RelayedVoice`-compatible packet from a raw plaintext voice payload
-/// (client-to-server format) and a sender session ID.
-///
-/// Input `plaintext`: `[header(1B)][sequence_varint][audio_data]`
-/// Output: `[header(1B)][session_varint][sequence_varint][audio_data]`
-fn make_relayed_voice_packet(plaintext: &[u8], sender_session: u32) -> Vec<u8> {
-    if plaintext.is_empty() {
-        return Vec::new();
-    }
-    let header = plaintext[0];
-    let mut pkt = Vec::with_capacity(1 + 5 + plaintext.len() - 1);
-    pkt.push(header);
-    crate::udp::write_mumble_varint(sender_session, &mut pkt);
-    pkt.extend_from_slice(&plaintext[1..]);
-    pkt
 }
 
 /// Handle a single proxy connection: upgrade to WebSocket, connect to Hub,

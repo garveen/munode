@@ -245,7 +245,9 @@ impl HubClient {
                     // If links changed, VoiceTarget channel caches that include this channel may be stale,
                     // and the per-sender BroadcastCache (which expands `linked_channels`) is also stale.
                     if !links_add.is_empty() || !links_remove.is_empty() {
-                        self.edge_state.recompute_all_vt_channels().await;
+                        self.edge_state
+                            .recompute_vt_channels_for_link_change(channel_id, &old_links, &new_links)
+                            .await;
                         self.edge_state
                             .topology_version
                             .fetch_add(1, std::sync::atomic::Ordering::Release);

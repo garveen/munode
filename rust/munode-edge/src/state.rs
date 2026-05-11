@@ -63,10 +63,10 @@ pub fn build_hot_vt_map(
     session_vts
         .iter()
         .map(|(&tid, vt)| {
-            (tid, crate::hot_slot::HotVoiceTarget {
+            (tid, Arc::new(crate::hot_slot::HotVoiceTarget {
                 sessions: vt.sessions.clone(),
                 resolved_channels: vt.resolved_channels.clone(),
-            })
+            }))
         })
         .collect()
 }
@@ -88,6 +88,80 @@ pub fn collect_children_into(
     }
 }
 
+fn collect_linked_channels_into(
+    ch_id: u32,
+    out: &mut HashSet<u32>,
+    link_graph: &HashMap<u32, Vec<u32>>,
+) {
+    let mut queue = std::collections::VecDeque::new();
+    if out.insert(ch_id) {
+        queue.push_back(ch_id);
+    }
+    while let Some(current) = queue.pop_front() {
+        if let Some(links) = link_graph.get(&current) {
+            for &linked in links {
+                if out.insert(linked) {
+                    queue.push_back(linked);
+                }
+            }
+        }
+    }
+}
+
+fn collect_affected_link_channels(
+    channel_id: u32,
+    old_links: &[u32],
+    new_links: &[u32],
+    link_graph: &HashMap<u32, Vec<u32>>,
+) -> HashSet<u32> {
+    let mut affected = HashSet::new();
+    let mut seeds = HashSet::from([channel_id]);
+    seeds.extend(old_links.iter().copied());
+    seeds.extend(new_links.iter().copied());
+    for seed in seeds {
+        collect_linked_channels_into(seed, &mut affected, link_graph);
+    }
+    affected
+}
+
+fn resolve_voice_target_channels_with_snapshot(
+    channels: &[VoiceTargetChannelConfig],
+    link_graph: &HashMap<u32, Vec<u32>>,
+    children_map: &HashMap<u32, Vec<u32>>,
+) -> HashMap<u32, Option<Vec<String>>> {
+    let mut resolved: HashMap<u32, Option<Vec<String>>> = HashMap::new();
+    for ch_cfg in channels {
+        let mut ch_ids = HashSet::new();
+        if ch_cfg.links {
+            collect_linked_channels_into(ch_cfg.channel_id, &mut ch_ids, link_graph);
+        } else {
+            ch_ids.insert(ch_cfg.channel_id);
+        }
+        if ch_cfg.children {
+            let snapshot: Vec<u32> = ch_ids.iter().copied().collect();
+            for ch_id in snapshot {
+                collect_children_into(ch_id, &mut ch_ids, children_map);
+            }
+        }
+        let effective_group: Option<&str> = ch_cfg.group.as_deref().filter(|s| !s.is_empty());
+        for ch_id in ch_ids {
+            resolved
+                .entry(ch_id)
+                .and_modify(|existing| match (effective_group, existing.as_mut()) {
+                    (None, _) => *existing = None,
+                    (Some(_), None) => {}
+                    (Some(g), Some(groups)) => {
+                        if !groups.iter().any(|e| e == g) {
+                            groups.push(g.to_owned());
+                        }
+                    }
+                })
+                .or_insert_with(|| effective_group.map(|g| vec![g.to_owned()]));
+        }
+    }
+    resolved
+}
+
 /// Expand a slice of `VoiceTargetChannelConfig` into a flat map of
 /// `channel_id → group filter` by resolving `links` and `children` flags.
 /// Multiple entries targeting the same channel are merged: a no-filter entry
@@ -103,42 +177,8 @@ pub async fn resolve_voice_target_channels(
     channels: &[VoiceTargetChannelConfig],
     channel_manager: &ChannelManager,
 ) -> HashMap<u32, Option<Vec<String>>> {
-    let mut resolved: HashMap<u32, Option<Vec<String>>> = HashMap::new();
-    for ch_cfg in channels {
-        let mut ch_ids = HashSet::new();
-        ch_ids.insert(ch_cfg.channel_id);
-        if ch_cfg.links {
-            let linked = channel_manager.get_all_linked_channels(ch_cfg.channel_id).await;
-            ch_ids.extend(linked);
-        }
-        if ch_cfg.children {
-            // Apply children expansion to all channels collected so far (base + linked).
-            // This matches the Mumble C++ server which iterates the current set and
-            // adds all recursive sub-channels of each channel in the set.
-            let children_map = channel_manager.get_all_children_map().await;
-            let snapshot: Vec<u32> = ch_ids.iter().copied().collect();
-            for ch_id in snapshot {
-                collect_children_into(ch_id, &mut ch_ids, &children_map);
-            }
-        }
-        // Normalise: empty group string → no filter (same as omitting the group).
-        let effective_group: Option<&str> = ch_cfg.group.as_deref().filter(|s| !s.is_empty());
-        for ch_id in ch_ids {
-            resolved
-                .entry(ch_id)
-                .and_modify(|existing| match (effective_group, existing.as_mut()) {
-                    (None, _) => *existing = None,       // no-group overrides any restriction
-                    (Some(_), None) => {}                // already unrestricted, keep
-                    (Some(g), Some(groups)) => {
-                        if !groups.iter().any(|e| e == g) {
-                            groups.push(g.to_owned());
-                        }
-                    }
-                })
-                .or_insert_with(|| effective_group.map(|g| vec![g.to_owned()]));
-        }
-    }
-    resolved
+    let (link_graph, children_map) = channel_manager.get_voice_target_resolution_snapshot().await;
+    resolve_voice_target_channels_with_snapshot(channels, &link_graph, &children_map)
 }
 
 /// Delta of boolean state fields for a remote user state change.
@@ -648,7 +688,7 @@ impl EdgeState {
     /// Call this whenever the channel link/tree structure changes so that
     /// per-packet routing uses up-to-date expanded channel sets.
     pub async fn recompute_all_vt_channels(&self) {
-        // Snapshot all (session, target, channels) under a read lock.
+        let (link_graph, children_map) = self.channel_manager.get_voice_target_resolution_snapshot().await;
         let snapshots: Vec<(u32, u32, Vec<VoiceTargetChannelConfig>)> = {
             let cache = self.voice_targets.read().await;
             cache
@@ -662,30 +702,77 @@ impl EdgeState {
         if snapshots.is_empty() {
             return;
         }
-        // Re-resolve each config outside the lock (async channel_manager calls).
-        let mut resolved_list = Vec::with_capacity(snapshots.len());
-        for (sid, tid, channels) in &snapshots {
-            let r = resolve_voice_target_channels(channels, &self.channel_manager).await;
-            resolved_list.push((*sid, *tid, r));
-        }
-        // Write all results back under a single write lock.
-        let mut cache = self.voice_targets.write().await;
-        for (sid, tid, resolved) in resolved_list {
-            if let Some(vt) = cache.get_mut(&sid).and_then(|m| m.get_mut(&tid)) {
-                vt.resolved_channels = resolved;
-            }
-        }
-        // Sync updated configs into each session's HotSlot for lock-free routing.
-        for (&sid, session_vts) in cache.iter() {
-            let hot_map: crate::hot_slot::HotVoiceTargetMap = session_vts
+        self.recompute_vt_channels_from_snapshots(snapshots, &link_graph, &children_map).await;
+    }
+
+    /// Recompute only the VoiceTarget entries whose `links=true` roots may be affected
+    /// by a channel link change.
+    pub async fn recompute_vt_channels_for_link_change(
+        &self,
+        channel_id: u32,
+        old_links: &[u32],
+        new_links: &[u32],
+    ) {
+        let (link_graph, children_map) = self.channel_manager.get_voice_target_resolution_snapshot().await;
+        let affected_link_channels = collect_affected_link_channels(channel_id, old_links, new_links, &link_graph);
+        let snapshots: Vec<(u32, u32, Vec<VoiceTargetChannelConfig>)> = {
+            let cache = self.voice_targets.read().await;
+            cache
                 .iter()
-                .map(|(&tid, vt)| {
-                    (tid, crate::hot_slot::HotVoiceTarget {
-                        sessions: vt.sessions.clone(),
-                        resolved_channels: vt.resolved_channels.clone(),
+                .flat_map(|(&sid, vts)| {
+                    let affected_link_channels = &affected_link_channels;
+                    vts.iter().filter_map(move |(&tid, vt)| {
+                        vt.channels
+                            .iter()
+                            .any(|cfg| cfg.links && affected_link_channels.contains(&cfg.channel_id))
+                            .then(|| (sid, tid, vt.channels.clone()))
                     })
                 })
-                .collect();
+                .collect()
+        };
+        if snapshots.is_empty() {
+            return;
+        }
+        self.recompute_vt_channels_from_snapshots(snapshots, &link_graph, &children_map).await;
+    }
+
+    async fn recompute_vt_channels_from_snapshots(
+        &self,
+        snapshots: Vec<(u32, u32, Vec<VoiceTargetChannelConfig>)>,
+        link_graph: &HashMap<u32, Vec<u32>>,
+        children_map: &HashMap<u32, Vec<u32>>,
+    ) {
+        let resolved_list: Vec<(u32, u32, HashMap<u32, Option<Vec<String>>>)> = snapshots
+            .iter()
+            .map(|(sid, tid, channels)| {
+                (
+                    *sid,
+                    *tid,
+                    resolve_voice_target_channels_with_snapshot(channels, link_graph, children_map),
+                )
+            })
+            .collect();
+
+        let mut cache = self.voice_targets.write().await;
+        let mut touched_sessions = HashSet::new();
+        for (sid, tid, resolved) in resolved_list {
+            if let Some(vt) = cache.get_mut(&sid).and_then(|m| m.get_mut(&tid)) {
+                if vt.resolved_channels != resolved {
+                    vt.resolved_channels = resolved;
+                    touched_sessions.insert(sid);
+                }
+            }
+        }
+        if touched_sessions.is_empty() {
+            return;
+        }
+        let hot_map_updates: Vec<(u32, crate::hot_slot::HotVoiceTargetMap)> = touched_sessions
+            .iter()
+            .filter_map(|&sid| cache.get(&sid).map(|session_vts| (sid, build_hot_vt_map(session_vts))))
+            .collect();
+        drop(cache);
+
+        for (sid, hot_map) in hot_map_updates {
             crate::hot_slot::get_hot_slot(sid)
                 .voice_targets
                 .store(std::sync::Arc::new(Some(std::sync::Arc::new(hot_map))));
@@ -740,10 +827,13 @@ impl EdgeState {
 
 #[cfg(test)]
 mod tests {
-    use super::{EdgeState, WhisperRouteCacheEntry};
-    use crate::channel_manager::ChannelManager;
+    use super::{EdgeState, VoiceTargetChannelConfig, VoiceTargetConfig, WhisperRouteCacheEntry, build_hot_vt_map};
+    use crate::channel_manager::{ChannelData, ChannelManager};
     use crate::client::ClientManager;
+    use crate::hot_slot::get_hot_slot;
     use smallvec::smallvec;
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn whisper_cache_returns_only_matching_topology_version() {
@@ -850,6 +940,156 @@ mod tests {
 
         assert!(state.get_cached_whisper_route(10_001, 1, 4).is_none());
         assert!(state.get_cached_whisper_route(10_002, 2, 5).is_none());
+    }
+
+    #[tokio::test]
+    async fn recompute_vt_channels_for_link_change_rebuilds_only_touched_sessions() {
+        let channel_manager = ChannelManager::new();
+        let state = EdgeState::new(channel_manager.clone(), ClientManager::new(), false);
+        let affected_session = 81_002;
+        let untouched_session = 81_010;
+
+        for channel in [
+            ChannelData {
+                id: 1,
+                name: "one".into(),
+                parent_id: None,
+                description: None,
+                position: 0,
+                max_users: 0,
+                temporary: false,
+                inherit_acl: true,
+                links: vec![2],
+            },
+            ChannelData {
+                id: 2,
+                name: "two".into(),
+                parent_id: None,
+                description: None,
+                position: 0,
+                max_users: 0,
+                temporary: false,
+                inherit_acl: true,
+                links: vec![1],
+            },
+            ChannelData {
+                id: 10,
+                name: "ten".into(),
+                parent_id: None,
+                description: None,
+                position: 0,
+                max_users: 0,
+                temporary: false,
+                inherit_acl: true,
+                links: vec![],
+            },
+        ] {
+            channel_manager.upsert_channel(channel).await;
+        }
+
+        {
+            let mut cache = state.voice_targets.write().await;
+            cache.insert(
+                affected_session,
+                HashMap::from([(
+                    1,
+                    VoiceTargetConfig {
+                        sessions: vec![],
+                        channels: vec![VoiceTargetChannelConfig {
+                            channel_id: 2,
+                            links: true,
+                            children: false,
+                            group: None,
+                        }],
+                        resolved_channels: HashMap::from([(1, None), (2, None)]),
+                    },
+                )]),
+            );
+            cache.insert(
+                untouched_session,
+                HashMap::from([(
+                    1,
+                    VoiceTargetConfig {
+                        sessions: vec![],
+                        channels: vec![VoiceTargetChannelConfig {
+                            channel_id: 10,
+                            links: true,
+                            children: false,
+                            group: None,
+                        }],
+                        resolved_channels: HashMap::from([(10, None)]),
+                    },
+                )]),
+            );
+        }
+
+        for session_id in [affected_session, untouched_session] {
+            let hot_map = {
+                let cache = state.voice_targets.read().await;
+                build_hot_vt_map(cache.get(&session_id).expect("session vt cache missing"))
+            };
+            get_hot_slot(session_id)
+                .voice_targets
+                .store(Arc::new(Some(Arc::new(hot_map))));
+        }
+
+        let affected_before = {
+            let guard = get_hot_slot(affected_session).voice_targets.load();
+            (**guard).as_ref().expect("affected hot map missing").clone()
+        };
+        let untouched_before = {
+            let guard = get_hot_slot(untouched_session).voice_targets.load();
+            (**guard).as_ref().expect("untouched hot map missing").clone()
+        };
+
+        channel_manager.upsert_channel(ChannelData {
+            id: 1,
+            name: "one".into(),
+            parent_id: None,
+            description: None,
+            position: 0,
+            max_users: 0,
+            temporary: false,
+            inherit_acl: true,
+            links: vec![],
+        }).await;
+        channel_manager.upsert_channel(ChannelData {
+            id: 2,
+            name: "two".into(),
+            parent_id: None,
+            description: None,
+            position: 0,
+            max_users: 0,
+            temporary: false,
+            inherit_acl: true,
+            links: vec![],
+        }).await;
+
+        state
+            .recompute_vt_channels_for_link_change(1, &[2], &[])
+            .await;
+
+        let affected_after = {
+            let guard = get_hot_slot(affected_session).voice_targets.load();
+            (**guard).as_ref().expect("affected hot map missing after recompute").clone()
+        };
+        let untouched_after = {
+            let guard = get_hot_slot(untouched_session).voice_targets.load();
+            (**guard).as_ref().expect("untouched hot map missing after recompute").clone()
+        };
+
+        let cache = state.voice_targets.read().await;
+        let affected_resolved = &cache[&affected_session][&1].resolved_channels;
+        let untouched_resolved = &cache[&untouched_session][&1].resolved_channels;
+        assert_eq!(affected_resolved.len(), 1);
+        assert!(affected_resolved.contains_key(&2));
+        assert_eq!(untouched_resolved.len(), 1);
+        assert!(untouched_resolved.contains_key(&10));
+        assert!(!Arc::ptr_eq(&affected_before, &affected_after));
+        assert!(Arc::ptr_eq(&untouched_before, &untouched_after));
+
+        get_hot_slot(affected_session).voice_targets.store(Arc::new(None));
+        get_hot_slot(untouched_session).voice_targets.store(Arc::new(None));
     }
 }
 

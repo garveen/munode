@@ -194,7 +194,10 @@ impl RpcHandler {
             debug!("RPC request: {} (id={})", method, request_id);
         }
 
-        let response = match method.as_str() {
+        let response = if method == "edge.relayVoiceViaTcp" {
+            self.handle_relay_voice_via_tcp(request, &request_id).await
+        } else {
+            match method.as_str() {
             "edge.register" => self.handle_register(&request, &request_id).await,
             "edge.authenticateUser" => self.handle_authenticate_user(&request, &request_id, edge_server_id).await,
             "edge.reportSession" => self.handle_report_session(&request, &request_id, edge_server_id).await,
@@ -222,7 +225,6 @@ impl RpcHandler {
             "edge.reportPeerDisconnect" => self.handle_report_peer_disconnect(&request, &request_id).await,
             "edge.reportQuality" => self.handle_report_quality(&request, &request_id).await,
             "cluster.getStatus" => self.handle_cluster_get_status(&request_id).await,
-            "edge.relayVoiceViaTcp" => self.handle_relay_voice_via_tcp(&request, &request_id).await,
             // State-mutation RPCs (converted from fire-and-forget notifications)
             "edge.userLeft"           => self.handle_user_left_rpc(&request, &request_id, edge_server_id).await,
             "edge.userMoved"          => self.handle_user_moved_rpc(&request, &request_id, edge_server_id).await,
@@ -233,6 +235,7 @@ impl RpcHandler {
             _ => {
                 warn!("Unknown RPC method: {}", method);
                 Ok(self.make_error_packet(&request_id, -1, &format!("Unknown method: {}", method)))
+            }
             }
         };
 
@@ -4780,10 +4783,10 @@ impl RpcHandler {
     /// edge.relayVoiceViaTcp — Forward voice packet from source edge to target edge via Hub.
     async fn handle_relay_voice_via_tcp(
         &self,
-        request: &TypedRpcRequest,
+        request: TypedRpcRequest,
         request_id: &str,
     ) -> Result<EdgeHubPacket> {
-        let params = request.edge_relay_voice_via_tcp.as_ref()
+        let params = request.edge_relay_voice_via_tcp
             .context("Missing edge_relay_voice_via_tcp params")?;
 
         // Respect Hub voice routing policy: if relay is disabled, reject immediately.
@@ -4797,9 +4800,6 @@ impl RpcHandler {
         }
 
         let target_edge_id = params.target_edge_id;
-        // params is a shared borrow (&EdgeRelayVoiceViaTcpParams), so a clone of
-        // the voice payload is unavoidable here.  We place it directly into the
-        // outgoing notification struct to keep the number of copies at one.
         let from_edge_id = params.from_edge_id;
         let timestamp = params.timestamp;
 
@@ -4809,7 +4809,7 @@ impl RpcHandler {
             timestamp: Some(current_millis() as i64),
             relay_voice_packet: Some(HubRelayVoicePacketParams {
                 from_edge_id,
-                voice_packet: params.voice_packet.clone(),
+                voice_packet: params.voice_packet,
                 timestamp,
             }),
             ..Default::default()

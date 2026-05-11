@@ -819,6 +819,10 @@ function writeDirectEdgeConfig(params: {
       reconnect_interval: 3000,
       heartbeat_interval: 30000,
     },
+    webtransport: {
+      enabled: false,
+      ws_fallback_enabled: false,
+    },
     server: {
       capacity: 100,
       max_bandwidth: 558000,

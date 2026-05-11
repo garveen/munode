@@ -121,10 +121,10 @@ pub(super) fn build_hot_vt_map(
     session_vts
         .iter()
         .map(|(&tid, vt)| {
-            (tid, crate::hot_slot::HotVoiceTarget {
+            (tid, std::sync::Arc::new(crate::hot_slot::HotVoiceTarget {
                 sessions: vt.sessions.clone(),
                 resolved_channels: vt.resolved_channels.clone(),
-            })
+            }))
         })
         .collect()
 }

@@ -244,6 +244,10 @@ function generateRustEdgeConfig(params: {
       reconnect_interval: 5000,
       heartbeat_interval: 30000,
     },
+    webtransport: {
+      enabled: false,
+      ws_fallback_enabled: false,
+    },
     server: {
       capacity: 1000,
       max_bandwidth: 558000,
