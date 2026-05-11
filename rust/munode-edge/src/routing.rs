@@ -6,9 +6,11 @@
 //! encryption and UDP socket writes (UDP path) or UdpTunnel framing and
 //! mpsc sends (TCP path) — remain in the respective modules.
 
-use std::collections::HashSet;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::sync::{atomic::Ordering, Arc};
 use smallvec::SmallVec;
+use crate::hub_client::HubClient;
 use crate::hot_slot::{BroadcastCache, get_hot_slot};
 
 /// Which local sessions and remote edges should receive a voice packet.
@@ -45,6 +47,7 @@ pub async fn compute_voice_targets(
     sender_session: u32,
     sender_channel: u32,
     edge_state: &crate::state::EdgeState,
+    hub_client: &HubClient,
 ) -> Option<VoiceTargets> {
     if voice_packet.is_empty() {
         return None;
@@ -57,9 +60,24 @@ pub async fn compute_voice_targets(
     }
 
     let my_edge_id = edge_state.get_edge_id();
+    let current_version = edge_state.topology_version.load(Ordering::Acquire);
 
     if voice_target >= 1 && voice_target <= 30 {
         // ── Whisper / shout targeting ────────────────────────────────────────
+        if let Some(cached) = edge_state.get_cached_whisper_route(
+            sender_session,
+            voice_target,
+            current_version,
+        ) {
+            return Some(VoiceTargets {
+                direct_sessions: cached.direct_sessions,
+                channel_sessions: cached.channel_sessions,
+                local_sessions: SmallVec::new(),
+                relay_edge_ids: cached.relay_edge_ids,
+                is_whisper: true,
+            });
+        }
+
         let vt_config: Option<crate::hot_slot::HotVoiceTarget> = {
             let slot = crate::hot_slot::get_hot_slot(sender_session);
             if slot.is_active_for(sender_session) {
@@ -85,27 +103,64 @@ pub async fn compute_voice_targets(
         let vt = vt_config?;
 
         let direct_set: HashSet<u32> = vt.sessions.iter().copied().collect();
+        let mut whisper_perm_cache: HashMap<u32, bool> = HashMap::new();
+
+        async fn can_whisper_to_channel(
+            hub_client: &HubClient,
+            edge_state: &crate::state::EdgeState,
+            sender_session: u32,
+            channel_id: u32,
+            local_cache: &mut HashMap<u32, bool>,
+        ) -> bool {
+            if let Some(&allowed) = local_cache.get(&channel_id) {
+                return allowed;
+            }
+
+            let allowed = crate::server::connection::get_perm_cached(
+                hub_client,
+                edge_state,
+                sender_session,
+                channel_id,
+                false,
+            )
+            .await
+                & munode_common::permission::WHISPER
+                != 0;
+            local_cache.insert(channel_id, allowed);
+            allowed
+        }
 
         // Deaf-filter direct session targets.
-        let direct_sessions: SmallVec<[u32; 8]> = direct_set
-            .iter()
-            .filter(|&&t| {
-                if t == sender_session {
-                    return false;
-                }
-                let slot = crate::hot_slot::get_hot_slot(t);
-                if !slot.is_active_for(t) {
-                    return false;
-                }
-                if slot.deaf.load(std::sync::atomic::Ordering::Relaxed)
-                    || slot.self_deaf.load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    return false;
-                }
-                true
-            })
-            .copied()
-            .collect();
+        let mut direct_sessions: SmallVec<[u32; 8]> = SmallVec::new();
+        for &target in &direct_set {
+            if target == sender_session {
+                continue;
+            }
+            let slot = crate::hot_slot::get_hot_slot(target);
+            if !slot.is_active_for(target) {
+                continue;
+            }
+            if slot.deaf.load(std::sync::atomic::Ordering::Relaxed)
+                || slot.self_deaf.load(std::sync::atomic::Ordering::Relaxed)
+            {
+                continue;
+            }
+
+            let target_channel = slot.channel_id.load(std::sync::atomic::Ordering::Relaxed);
+            if !can_whisper_to_channel(
+                hub_client,
+                edge_state,
+                sender_session,
+                target_channel,
+                &mut whisper_perm_cache,
+            )
+            .await
+            {
+                continue;
+            }
+
+            direct_sessions.push(target);
+        }
 
         // Expand channel targets (with optional group filter) and deaf-filter.
         // Includes both channel members AND sessions listening to the channel —
@@ -113,6 +168,17 @@ pub async fn compute_voice_targets(
         let mut channel_sessions: SmallVec<[u32; 16]> = SmallVec::new();
         let mut seen_channel_targets: HashSet<u32> = HashSet::new();
         for (&ch_id, group_filter) in &vt.resolved_channels {
+            if !can_whisper_to_channel(
+                hub_client,
+                edge_state,
+                sender_session,
+                ch_id,
+                &mut whisper_perm_cache,
+            )
+            .await
+            {
+                continue;
+            }
             let ch_members = edge_state.client_manager.get_channel_sessions(ch_id).await;
             let ch_listeners = edge_state.client_manager.get_listening_sessions(ch_id).await;
             for target in ch_members.into_iter().chain(ch_listeners.into_iter()) {
@@ -143,17 +209,26 @@ pub async fn compute_voice_targets(
             }
         }
 
-        // Relay whisper to every remote edge — each receiving edge applies its
+        // Relay whisper to every peer edge — each receiving edge applies its
         // own local VoiceTarget cache to decide which of its users hears it.
-        let all_remote = edge_state.channel_manager.get_all_remote_users().await;
-        let relay_edge_ids: SmallVec<[u32; 8]> = {
-            let mut seen = HashSet::new();
-            all_remote
-                .iter()
-                .filter(|ru| ru.edge_id != 0 && ru.edge_id != my_edge_id)
-                .filter_map(|ru| seen.insert(ru.edge_id).then_some(ru.edge_id))
-                .collect()
-        };
+        let relay_edge_ids: SmallVec<[u32; 8]> = edge_state
+            .peer_registry
+            .load()
+            .all_udp_peers()
+            .into_iter()
+            .filter_map(|(edge_id, _)| (edge_id != my_edge_id).then_some(edge_id))
+            .collect();
+
+        edge_state.store_cached_whisper_route(
+            sender_session,
+            voice_target,
+            current_version,
+            crate::state::WhisperRouteCacheEntry {
+                direct_sessions: direct_sessions.clone(),
+                channel_sessions: channel_sessions.clone(),
+                relay_edge_ids: relay_edge_ids.clone(),
+            },
+        );
 
         Some(VoiceTargets {
             direct_sessions,
@@ -164,8 +239,6 @@ pub async fn compute_voice_targets(
         })
     } else {
         // ── Normal broadcast (voice_target == 0) ─────────────────────────────
-        let current_version = edge_state.topology_version.load(Ordering::Acquire);
-
         // Check per-sender BroadcastCache for a version match.
         //
         // HotSlot is indexed by `sender_session % HOT_SLOT_COUNT`.  Local session IDs
@@ -190,9 +263,9 @@ pub async fn compute_voice_targets(
             }
         };
 
-        let (raw_sessions, relay_edge_ids): (Vec<u32>, SmallVec<[u32; 8]>) = if let Some(ref c) = cache_hit {
-            // Cache hit: zero async calls; local_sessions pre-computed, relay_edge_ids ready.
-            (c.local_sessions.to_vec(), c.relay_edge_ids.clone())
+        let (raw_sessions, relay_edge_ids): (Cow<'_, [u32]>, SmallVec<[u32; 8]>) = if let Some(ref c) = cache_hit {
+            // Cache hit: borrow the cached session slice directly to avoid a per-packet Vec clone.
+            (Cow::Borrowed(c.local_sessions.as_slice()), c.relay_edge_ids.clone())
         } else {
             // Cache miss: full computation.
             let linked_channels: Vec<u32> = edge_state
@@ -239,12 +312,13 @@ pub async fn compute_voice_targets(
                 slot.broadcast_cache_version.store(current_version, Ordering::Release);
             }
 
-            (sessions, relay_ids)
+            (Cow::Owned(sessions), relay_ids)
         };
 
         // Deaf-filter runs on every packet (HotSlot reads are lock-free atomics).
         let local_sessions: SmallVec<[u32; 32]> = raw_sessions
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|&t| {
                 let slot = get_hot_slot(t);
                 if !slot.is_active_for(t) {
@@ -261,7 +335,14 @@ pub async fn compute_voice_targets(
         // only route to sessions with the same context.  This implements
         // Murmur's positional audio isolation (game plugin context segregation).
         let local_sessions: SmallVec<[u32; 32]> = {
-            let sender_ctx = edge_state.client_manager.get_plugin_context(sender_session).await;
+            let sender_ctx = {
+                let slot = get_hot_slot(sender_session);
+                if slot.is_active_for(sender_session) {
+                    slot.plugin_context.load_full()
+                } else {
+                    Arc::new(edge_state.client_manager.get_plugin_context(sender_session).await)
+                }
+            };
             if sender_ctx.is_empty() {
                 // Sender has no context — no filtering needed.
                 local_sessions
@@ -269,8 +350,9 @@ pub async fn compute_voice_targets(
                 // Filter recipients to those sharing the same plugin_context.
                 let mut filtered: SmallVec<[u32; 32]> = SmallVec::new();
                 for sid in local_sessions {
-                    let ctx = edge_state.client_manager.get_plugin_context(sid).await;
-                    if ctx == sender_ctx {
+                    let slot = get_hot_slot(sid);
+                    let ctx = slot.plugin_context.load();
+                    if ctx.as_slice() == sender_ctx.as_slice() {
                         filtered.push(sid);
                     }
                 }

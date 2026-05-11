@@ -170,6 +170,7 @@ impl EdgeServer {
             let hub_port = self.config.hub_server.control_port;
             let relay_hmac_secret = self.config.hub_server.hmac_secret.clone();
             let edge_state_clone = edge_state.clone();
+            let hub_client_clone = hub_client.clone();
             info!("Starting edge WS server (relay+voice) on port {}", edge_port);
             tokio::spawn(async move {
                 crate::relay_server::run_edge_ws_server(
@@ -178,6 +179,7 @@ impl EdgeServer {
                     hub_port,
                     relay_hmac_secret,
                     edge_state_clone,
+                    hub_client_clone,
                 )
                 .await;
             });

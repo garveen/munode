@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use tracing::{debug, trace};
+use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 
 /// Decode a Mumble varint from a byte slice.
@@ -33,7 +34,11 @@ fn decode_varint(data: &[u8]) -> Option<(u32, usize)> {
 /// voice delivery.  It intentionally bypasses `EdgeEvent::RelayedVoice` and the
 /// broadcast channel to avoid filling the control-event bus with high-frequency
 /// voice frames.
-pub async fn deliver_relayed_voice(voice_packet: Vec<u8>, state: &Arc<EdgeState>) {
+pub async fn deliver_relayed_voice(
+    voice_packet: Vec<u8>,
+    state: &Arc<EdgeState>,
+    hub_client: &Arc<HubClient>,
+) {
     if voice_packet.len() < 2 {
         return;
     }
@@ -73,7 +78,7 @@ pub async fn deliver_relayed_voice(voice_packet: Vec<u8>, state: &Arc<EdgeState>
     // relay_edge_ids is intentionally ignored: the sending edge already handled
     // inter-edge relay for this packet.
     let Some(targets) = crate::routing::compute_voice_targets(
-        &voice_packet, sender_session, sender_channel, state,
+        &voice_packet, sender_session, sender_channel, state, hub_client,
     ).await else {
         debug!("edge={} RelayedVoice: no targets for session {} target {}",
             state.get_edge_id(), sender_session, raw_target);

@@ -695,7 +695,7 @@ impl UdpServer {
         // `compute_voice_targets` handles VoiceTarget lookup, channel expansion,
         // deaf/suppress filtering.  Returns None for loopback (31) → drop.
         let Some(targets) = crate::routing::compute_voice_targets(
-            plaintext, sender_session, sender_channel, &self.edge_state,
+            plaintext, sender_session, sender_channel, &self.edge_state, &self.hub_client,
         ).await else {
             return; // loopback or no VoiceTarget config
         };
@@ -937,8 +937,10 @@ impl UdpServer {
         // UDP packets are collected for a single batch sendmmsg; TCP paths are
         // collected separately and handled after the batch.
         //
-        // (pkt, addr, target_edge_id, next_hop_id_for_failure_tracking)
-        let mut edge_batch: Vec<(Vec<u8>, SocketAddr, u32, u32)> = Vec::new();
+        // Packet bytes and success-tracking metadata are stored in parallel Vecs so
+        // the sendmmsg call can borrow the original packet buffers directly.
+        let mut edge_send_pkts: Vec<(Vec<u8>, SocketAddr)> = Vec::new();
+        let mut edge_meta: Vec<(u32, u32)> = Vec::new();
         // target_edge_ids that must be sent via Hub TCP relay
         let mut hub_tcp_targets: Vec<u32> = Vec::new();
 
@@ -1030,7 +1032,8 @@ impl UdpServer {
                             p.extend_from_slice(plaintext);
                             p
                         };
-                        edge_batch.push((pkt, addr, target_edge_id, next_hop));
+                        edge_send_pkts.push((pkt, addr));
+                        edge_meta.push((target_edge_id, next_hop));
                     } else if self.edge_state.enable_hub_tcp_fallback {
                         hub_tcp_targets.push(target_edge_id);
                     }
@@ -1060,30 +1063,25 @@ impl UdpServer {
         }
 
         // Phase B: batch send all edge UDP packets — N edges → 1 sendmmsg syscall.
-        if !edge_batch.is_empty() {
-            // Collect only (pkt, addr) for the syscall.
-            let send_pkts: Vec<(Vec<u8>, SocketAddr)> = edge_batch.iter()
-                .map(|(pkt, addr, _, _)| (pkt.clone(), *addr))
-                .collect();
-
+        if !edge_send_pkts.is_empty() {
             let sent_count;
             #[cfg(target_os = "linux")]
-            { sent_count = batch_sendmmsg(self.edge_socket.as_raw_fd(), &send_pkts); }
+            { sent_count = batch_sendmmsg(self.edge_socket.as_raw_fd(), &edge_send_pkts); }
             #[cfg(not(target_os = "linux"))]
-            { sent_count = batch_sendmmsg_fallback_seq(&self.edge_socket, &send_pkts); }
+            { sent_count = batch_sendmmsg_fallback_seq(&self.edge_socket, &edge_send_pkts); }
 
             // Update hop-success counters for sent packets.
-            for (_, _, target_id, next_hop) in &edge_batch[..sent_count] {
+            for (target_id, next_hop) in &edge_meta[..sent_count] {
                 reset_hop_failure(&self.edge_state.next_hop_failures, *next_hop, threshold);
                 debug!("Voice dispatched to edge {} (via next-hop {})", target_id, next_hop);
             }
             // Partial failure: fall back unsent packets to Hub TCP.
-            if sent_count < edge_batch.len() && self.edge_state.enable_hub_tcp_fallback {
+            if sent_count < edge_meta.len() && self.edge_state.enable_hub_tcp_fallback {
                 warn!(
                     "edge sendmmsg partial: sent {}/{}, falling back {} to Hub TCP",
-                    sent_count, edge_batch.len(), edge_batch.len() - sent_count
+                    sent_count, edge_meta.len(), edge_meta.len() - sent_count
                 );
-                for (_, _, target_id, next_hop) in &edge_batch[sent_count..] {
+                for (target_id, next_hop) in &edge_meta[sent_count..] {
                     increment_hop_failure(&self.edge_state.next_hop_failures, *next_hop);
                     self.hub_client.relay_voice_via_hub(*target_id, relay_payload.clone()).await;
                 }
@@ -1338,7 +1336,7 @@ impl UdpServer {
         // set the correct AudioContext per recipient.
         let voice_packet = crate::voice::inject_session_into_voice(voice_data, sender_session, voice_data.first().copied().unwrap_or(0) & 0x1f);
         if !voice_packet.is_empty() {
-            crate::voice::deliver_relayed_voice(voice_packet.into(), &self.edge_state).await;
+            crate::voice::deliver_relayed_voice(voice_packet.into(), &self.edge_state, &self.hub_client).await;
         }
     }
 

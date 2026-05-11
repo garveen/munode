@@ -245,6 +245,7 @@ impl ClientManager {
         let ready_flag = Arc::new(AtomicBool::new(initial_ready));
         // Capture groups before `client` is moved into SessionEntry.
         let client_groups: Arc<Vec<String>> = Arc::new(client.groups.clone());
+        let plugin_context: Arc<Vec<u8>> = Arc::new(client.plugin_context.clone());
 
         // Create bandwidth record before the write lock so we can share the Arc
         // with HotSlot without holding sessions.write().
@@ -271,7 +272,7 @@ impl ClientManager {
         // bandwidth is stored before active=true so the hot path always finds it.
         crate::hot_slot::get_hot_slot(session).register(
             session, channel_id, deaf, self_deaf, suppress, mute, self_mute, sender.clone_sender(), bw_arc,
-            client_groups,
+            client_groups, plugin_context,
         );
 
         // Register in channel membership index.
@@ -304,6 +305,7 @@ impl ClientManager {
         let new_self_mute = client.self_mute;
         let new_channel_id = client.channel_id;
         let client_groups = Arc::new(client.groups.clone());
+        let plugin_context = Arc::new(client.plugin_context.clone());
         let old_listening = {
             let mut sess = self.sessions.write().await;
             let old = sess
@@ -327,6 +329,7 @@ impl ClientManager {
                 slot.self_mute.store(new_self_mute, std::sync::atomic::Ordering::Relaxed);
                 slot.channel_id.store(new_channel_id, std::sync::atomic::Ordering::Relaxed);
                 slot.groups.store(client_groups);
+                slot.plugin_context.store(plugin_context);
             }
         }
 

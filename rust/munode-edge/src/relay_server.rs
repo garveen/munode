@@ -48,6 +48,7 @@ use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info, trace, warn};
 
+use crate::hub_client::HubClient;
 use crate::state::{EdgeEvent, EdgeState};
 
 type WsMessage = tokio_tungstenite::tungstenite::Message;
@@ -188,6 +189,7 @@ pub async fn run_edge_ws_server(
     hub_port: u16,
     hmac_secret: Option<String>,
     edge_state: Arc<EdgeState>,
+    hub_client: Arc<HubClient>,
 ) {
     let bind_addr = format!("0.0.0.0:{}", edge_port);
     let listener = match TcpListener::bind(&bind_addr).await {
@@ -200,7 +202,7 @@ pub async fn run_edge_ws_server(
             return;
         }
     };
-    run_edge_ws_server_with_listener(listener, hub_host, hub_port, hmac_secret, edge_state).await;
+    run_edge_ws_server_with_listener(listener, hub_host, hub_port, hmac_secret, edge_state, hub_client).await;
 }
 
 /// Accept-loop variant that takes a pre-bound listener — used in tests to avoid
@@ -211,6 +213,7 @@ pub async fn run_edge_ws_server_with_listener(
     hub_port: u16,
     hmac_secret: Option<String>,
     edge_state: Arc<EdgeState>,
+    hub_client: Arc<HubClient>,
 ) {
     loop {
         match listener.accept().await {
@@ -219,6 +222,7 @@ pub async fn run_edge_ws_server_with_listener(
                 let hub_port = hub_port;
                 let hmac_secret = hmac_secret.clone();
                 let edge_state = edge_state.clone();
+                let hub_client = hub_client.clone();
                 tokio::spawn(async move {
                     // Capture the HTTP upgrade path via a header callback.
                     // Authentication is deferred to a challenge-response handshake
@@ -260,6 +264,7 @@ pub async fn run_edge_ws_server_with_listener(
                                 ws,
                                 peer_addr,
                                 edge_state,
+                                hub_client,
                                 hmac_secret.as_deref(),
                             )
                             .await;
@@ -308,6 +313,7 @@ async fn handle_voice_connection(
     mut ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     peer_addr: std::net::SocketAddr,
     edge_state: Arc<EdgeState>,
+    hub_client: Arc<HubClient>,
     hmac_secret: Option<&str>,
 ) {
     // Challenge-response auth before any voice traffic.
@@ -395,7 +401,7 @@ async fn handle_voice_connection(
                 // Build RelayedVoice packet: inject session varint into plaintext
                 let voice_packet = make_relayed_voice_packet(plaintext, sender_session);
                 if !voice_packet.is_empty() {
-                    crate::voice::deliver_relayed_voice(voice_packet, &edge_state).await;
+                    crate::voice::deliver_relayed_voice(voice_packet, &edge_state, &hub_client).await;
                 }
             }
             0x02 => {

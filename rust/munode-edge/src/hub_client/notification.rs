@@ -92,8 +92,12 @@ impl HubClient {
                         self.edge_state.free_session_id(target_session).await;
                         // Clean up voice target cache for this session
                         self.edge_state.voice_targets.write().await.remove(&target_session);
+                        self.edge_state.clear_cached_whisper_session(target_session);
                         self.edge_state.client_manager.send_close_signal(target_session).await;
                     }
+                    // Clean up cached VoiceTarget state for remote sessions too.
+                    self.edge_state.voice_targets.write().await.remove(&target_session);
+                    self.edge_state.clear_cached_whisper_session(target_session);
                     // Remove from remote user tracking and broadcast removal to local clients.
                     // Capture channel_id BEFORE removal so the event listener can filter by it.
                     let departed_channel_id = self.edge_state.channel_manager.get_remote_user(target_session).await
@@ -296,8 +300,8 @@ impl HubClient {
                 if let Some(params) = &notification.sync_voice_target {
                     let client_session = params.client_session;
                     let target_id = params.target_id;
-                    if let Some(cfg) = &params.config {
-                        use crate::state::{VoiceTargetConfig, VoiceTargetChannelConfig, resolve_voice_target_channels};
+                    let hot_map_opt = if let Some(cfg) = &params.config {
+                        use crate::state::{VoiceTargetConfig, VoiceTargetChannelConfig, build_hot_vt_map, resolve_voice_target_channels};
                         let sessions: Vec<u32> = cfg.sessions.iter().map(|s| s.session).collect();
                         let channels: Vec<VoiceTargetChannelConfig> = cfg.channels.iter().map(|c| {
                             VoiceTargetChannelConfig {
@@ -309,8 +313,17 @@ impl HubClient {
                         }).collect();
                         if sessions.is_empty() && channels.is_empty() {
                             let mut vt_cache = self.edge_state.voice_targets.write().await;
-                            if let Some(session_vts) = vt_cache.get_mut(&client_session) {
+                            let remove_session = if let Some(session_vts) = vt_cache.get_mut(&client_session) {
                                 session_vts.remove(&target_id);
+                                session_vts.is_empty()
+                            } else {
+                                false
+                            };
+                            if remove_session {
+                                vt_cache.remove(&client_session);
+                                None
+                            } else {
+                                vt_cache.get(&client_session).map(build_hot_vt_map)
                             }
                         } else {
                             // Pre-compute expanded channel set before acquiring the write lock.
@@ -318,15 +331,30 @@ impl HubClient {
                             let mut vt_cache = self.edge_state.voice_targets.write().await;
                             let session_vts = vt_cache.entry(client_session).or_default();
                             session_vts.insert(target_id, VoiceTargetConfig { sessions, channels, resolved_channels: resolved });
+                            Some(build_hot_vt_map(session_vts))
                         }
-                        debug!("Synced voice target {} for session {}", target_id, client_session);
                     } else {
                         // No config means clear the target
                         let mut vt_cache = self.edge_state.voice_targets.write().await;
-                        if let Some(session_vts) = vt_cache.get_mut(&client_session) {
+                        let remove_session = if let Some(session_vts) = vt_cache.get_mut(&client_session) {
                             session_vts.remove(&target_id);
+                            session_vts.is_empty()
+                        } else {
+                            false
+                        };
+                        if remove_session {
+                            vt_cache.remove(&client_session);
+                            None
+                        } else {
+                            vt_cache.get(&client_session).map(crate::state::build_hot_vt_map)
                         }
+                    };
+                    let slot = crate::hot_slot::get_hot_slot(client_session);
+                    if slot.is_active_for(client_session) {
+                        slot.voice_targets.store(std::sync::Arc::new(hot_map_opt.map(std::sync::Arc::new)));
                     }
+                    self.edge_state.clear_cached_whisper_target(client_session, target_id);
+                    debug!("Synced voice target {} for session {}", target_id, client_session);
                 }
             }
             "hub.peerJoined" => {
@@ -528,6 +556,10 @@ impl HubClient {
                                     .get("is_enter_restricted")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
+                                self.edge_state
+                                    .permission_cache
+                                    .retain(|&(_, ch), _| ch != channel_id as u32);
+                                self.edge_state.clear_all_cached_whisper_routes();
                                 debug!("ACL updated for channel {}, is_enter_restricted={}", channel_id, is_enter_restricted);
                                 self.edge_state.emit(crate::state::EdgeEvent::AclUpdated {
                                     channel_id: channel_id as u32,

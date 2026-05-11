@@ -340,15 +340,7 @@ impl HubClient {
             .map(|p| (p.host.clone(), p.relay_port))
             .collect();
         let (voice_relay_tx, voice_relay_rx) = mpsc::channel::<Vec<u8>>(512);
-        let vr_state = edge_state.clone();
-        tokio::spawn(async move {
-            let mut rx = voice_relay_rx;
-            while let Some(pkt) = rx.recv().await {
-                crate::voice::deliver_relayed_voice(pkt, &vr_state).await;
-            }
-        });
-
-        Arc::new(Self {
+        let hub = Arc::new(Self {
             config: config.hub_server.clone(),
             server_id: config.server_id,
             server_name: config.name.clone(),
@@ -373,7 +365,17 @@ impl HubClient {
             pending_notifications: tokio::sync::Mutex::new(Vec::new()),
             outbound_notif_seq: AtomicU64::new(0),
             voice_relay_tx,
-        })
+        });
+        let vr_state = hub.edge_state.clone();
+        let vr_hub = hub.clone();
+        tokio::spawn(async move {
+            let mut rx = voice_relay_rx;
+            while let Some(pkt) = rx.recv().await {
+                crate::voice::deliver_relayed_voice(pkt, &vr_state, &vr_hub).await;
+            }
+        });
+
+        hub
     }
 
     pub async fn state(&self) -> HubConnectionState {
@@ -1628,13 +1630,30 @@ impl HubClient {
             let resolved = resolve_voice_target_channels(&channels, &self.edge_state.channel_manager).await;
             resolved_entries.push((entry.client_session, entry.target_id, sessions, channels, resolved));
         }
+        let mut touched_sessions = std::collections::HashSet::new();
         let mut cache = self.edge_state.voice_targets.write().await;
         for (client_session, target_id, sessions, channels, resolved) in resolved_entries {
             if sessions.is_empty() && channels.is_empty() { continue; }
             let session_vts = cache.entry(client_session).or_default();
             session_vts.insert(target_id, VoiceTargetConfig { sessions, channels, resolved_channels: resolved });
+            touched_sessions.insert(client_session);
         }
         let total: usize = cache.values().map(|m| m.len()).sum();
+        let hot_map_updates: Vec<(u32, crate::hot_slot::HotVoiceTargetMap)> = touched_sessions
+            .into_iter()
+            .filter_map(|client_session| {
+                cache.get(&client_session)
+                    .map(|session_vts| (client_session, crate::state::build_hot_vt_map(session_vts)))
+            })
+            .collect();
+        drop(cache);
+        for (client_session, hot_map) in hot_map_updates {
+            let slot = crate::hot_slot::get_hot_slot(client_session);
+            if slot.is_active_for(client_session) {
+                slot.voice_targets.store(std::sync::Arc::new(Some(std::sync::Arc::new(hot_map))));
+            }
+            self.edge_state.clear_cached_whisper_session(client_session);
+        }
         debug!("Fetched {} voice target entries from Hub ({} sessions)", result.voice_targets.len(), total);
     }
 

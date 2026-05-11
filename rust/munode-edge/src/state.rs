@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use arc_swap::ArcSwap;
+use smallvec::SmallVec;
 use tokio::sync::{broadcast, RwLock};
 
 use munode_protocol::hubedge::ServerLimitsConfig;
@@ -30,6 +31,44 @@ pub struct VoiceTargetChannelConfig {
     pub links: bool,
     pub children: bool,
     pub group: Option<String>,
+}
+
+/// Cached local whisper route for one `(sender_session, target_id)` pair.
+///
+/// This is the fully materialized result of expanding a VoiceTarget against the
+/// current local Edge state. It intentionally mirrors the transport-facing split
+/// between direct whisper targets and channel shout targets.
+#[derive(Debug, Clone)]
+pub struct WhisperRouteCacheEntry {
+    pub direct_sessions: SmallVec<[u32; 8]>,
+    pub channel_sessions: SmallVec<[u32; 16]>,
+    pub relay_edge_ids: SmallVec<[u32; 8]>,
+}
+
+/// Per-sender whisper cache state.
+///
+/// `topology_version` is compared against `EdgeState::topology_version` before a
+/// cached target entry may be reused.
+#[derive(Debug, Clone, Default)]
+pub struct SessionWhisperRouteCache {
+    pub topology_version: u64,
+    pub targets: HashMap<u32, WhisperRouteCacheEntry>,
+}
+
+/// Convert a `HashMap<u32, VoiceTargetConfig>` to a `HotVoiceTargetMap` for storage in
+/// `HotSlot::voice_targets`.
+pub fn build_hot_vt_map(
+    session_vts: &std::collections::HashMap<u32, VoiceTargetConfig>,
+) -> crate::hot_slot::HotVoiceTargetMap {
+    session_vts
+        .iter()
+        .map(|(&tid, vt)| {
+            (tid, crate::hot_slot::HotVoiceTarget {
+                sessions: vt.sessions.clone(),
+                resolved_channels: vt.resolved_channels.clone(),
+            })
+        })
+        .collect()
 }
 
 // ── VoiceTarget channel resolution helpers ────────────────────────────────
@@ -344,6 +383,12 @@ pub struct EdgeState {
     /// Incremented on every client join/leave/channel-move/deaf-change event so that
     /// per-sender `BroadcastCache` entries can detect staleness without holding any lock.
     pub topology_version: AtomicU64,
+    /// Per-sender whisper route cache: `sender_session -> SessionWhisperRouteCache`.
+    ///
+    /// Unlike `voice_targets`, this cache stores the fully expanded LOCAL recipient
+    /// sets for whisper traffic. Entries are validated against `topology_version`
+    /// and explicitly removed when a sender rewrites or clears a VoiceTarget.
+    pub whisper_route_cache: std::sync::RwLock<HashMap<u32, SessionWhisperRouteCache>>,
     /// Shared map session_id → UDP source address.
     ///
     /// Authoritative source for the "client supports UDP" decision used by the
@@ -401,6 +446,7 @@ impl EdgeState {
             permission_cache: dashmap::DashMap::new(),
             enter_restricted_cache: dashmap::DashMap::new(),
             topology_version: AtomicU64::new(0),
+            whisper_route_cache: std::sync::RwLock::new(HashMap::new()),
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
         })
     }
@@ -448,6 +494,7 @@ impl EdgeState {
             permission_cache: dashmap::DashMap::new(),
             enter_restricted_cache: dashmap::DashMap::new(),
             topology_version: AtomicU64::new(0),
+            whisper_route_cache: std::sync::RwLock::new(HashMap::new()),
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
         })
     }
@@ -503,6 +550,7 @@ impl EdgeState {
             permission_cache: dashmap::DashMap::new(),
             enter_restricted_cache: dashmap::DashMap::new(),
             topology_version: AtomicU64::new(0),
+            whisper_route_cache: std::sync::RwLock::new(HashMap::new()),
             udp_session_to_addr: Arc::new(dashmap::DashMap::new()),
         })
     }
@@ -535,6 +583,60 @@ impl EdgeState {
     /// Get a receiver for edge events.
     pub fn subscribe_events(&self) -> broadcast::Receiver<EdgeEvent> {
         self.event_tx.subscribe()
+    }
+
+    /// Look up a cached local whisper route for the given sender/target pair.
+    #[inline]
+    pub fn get_cached_whisper_route(
+        &self,
+        sender_session: u32,
+        target_id: u32,
+        topology_version: u64,
+    ) -> Option<WhisperRouteCacheEntry> {
+        let cache = self.whisper_route_cache.read().unwrap();
+        let session_cache = cache.get(&sender_session)?;
+        if session_cache.topology_version != topology_version {
+            return None;
+        }
+        session_cache.targets.get(&target_id).cloned()
+    }
+
+    /// Store or replace a cached local whisper route for one sender/target pair.
+    pub fn store_cached_whisper_route(
+        &self,
+        sender_session: u32,
+        target_id: u32,
+        topology_version: u64,
+        entry: WhisperRouteCacheEntry,
+    ) {
+        let mut cache = self.whisper_route_cache.write().unwrap();
+        let session_cache = cache.entry(sender_session).or_default();
+        if session_cache.topology_version != topology_version {
+            session_cache.topology_version = topology_version;
+            session_cache.targets.clear();
+        }
+        session_cache.targets.insert(target_id, entry);
+    }
+
+    /// Remove one cached whisper route for a sender.
+    pub fn clear_cached_whisper_target(&self, sender_session: u32, target_id: u32) {
+        let mut cache = self.whisper_route_cache.write().unwrap();
+        if let Some(session_cache) = cache.get_mut(&sender_session) {
+            session_cache.targets.remove(&target_id);
+            if session_cache.targets.is_empty() {
+                cache.remove(&sender_session);
+            }
+        }
+    }
+
+    /// Remove all cached whisper routes for a sender.
+    pub fn clear_cached_whisper_session(&self, sender_session: u32) {
+        self.whisper_route_cache.write().unwrap().remove(&sender_session);
+    }
+
+    /// Remove all cached whisper routes.
+    pub fn clear_all_cached_whisper_routes(&self) {
+        self.whisper_route_cache.write().unwrap().clear();
     }
 
     /// Broadcast an event.
@@ -633,6 +735,121 @@ impl EdgeState {
     /// Get the count of currently allocated session IDs.
     pub async fn session_id_count(&self) -> usize {
         self.used_session_ids.read().await.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EdgeState, WhisperRouteCacheEntry};
+    use crate::channel_manager::ChannelManager;
+    use crate::client::ClientManager;
+    use smallvec::smallvec;
+
+    #[test]
+    fn whisper_cache_returns_only_matching_topology_version() {
+        let state = EdgeState::new(ChannelManager::new(), ClientManager::new(), false);
+
+        state.store_cached_whisper_route(
+            10_001,
+            3,
+            7,
+            WhisperRouteCacheEntry {
+                direct_sessions: smallvec![20_001],
+                channel_sessions: smallvec![20_002, 20_003],
+                relay_edge_ids: smallvec![2, 3],
+            },
+        );
+
+        let hit = state
+            .get_cached_whisper_route(10_001, 3, 7)
+            .expect("matching topology version should hit");
+        assert_eq!(hit.direct_sessions.as_slice(), &[20_001]);
+        assert_eq!(hit.channel_sessions.as_slice(), &[20_002, 20_003]);
+        assert_eq!(hit.relay_edge_ids.as_slice(), &[2, 3]);
+
+        assert!(state.get_cached_whisper_route(10_001, 3, 8).is_none());
+    }
+
+    #[test]
+    fn whisper_cache_replaces_old_session_entries_on_version_change() {
+        let state = EdgeState::new(ChannelManager::new(), ClientManager::new(), false);
+
+        state.store_cached_whisper_route(
+            10_001,
+            1,
+            5,
+            WhisperRouteCacheEntry {
+                direct_sessions: smallvec![30_001],
+                channel_sessions: smallvec![30_002],
+                relay_edge_ids: smallvec![4],
+            },
+        );
+        state.store_cached_whisper_route(
+            10_001,
+            2,
+            6,
+            WhisperRouteCacheEntry {
+                direct_sessions: smallvec![31_001],
+                channel_sessions: smallvec![31_002],
+                relay_edge_ids: smallvec![5],
+            },
+        );
+
+        assert!(state.get_cached_whisper_route(10_001, 1, 6).is_none());
+        let hit = state
+            .get_cached_whisper_route(10_001, 2, 6)
+            .expect("latest target should remain after version change");
+        assert_eq!(hit.direct_sessions.as_slice(), &[31_001]);
+        assert_eq!(hit.channel_sessions.as_slice(), &[31_002]);
+        assert_eq!(hit.relay_edge_ids.as_slice(), &[5]);
+    }
+
+    #[test]
+    fn whisper_cache_clears_target_and_session_entries() {
+        let state = EdgeState::new(ChannelManager::new(), ClientManager::new(), false);
+
+        for target_id in [1_u32, 2_u32] {
+            state.store_cached_whisper_route(
+                10_001,
+                target_id,
+                9,
+                WhisperRouteCacheEntry {
+                    direct_sessions: smallvec![40_000 + target_id],
+                    channel_sessions: smallvec![50_000 + target_id],
+                    relay_edge_ids: smallvec![target_id],
+                },
+            );
+        }
+
+        state.clear_cached_whisper_target(10_001, 1);
+        assert!(state.get_cached_whisper_route(10_001, 1, 9).is_none());
+        assert!(state.get_cached_whisper_route(10_001, 2, 9).is_some());
+
+        state.clear_cached_whisper_session(10_001);
+        assert!(state.get_cached_whisper_route(10_001, 2, 9).is_none());
+    }
+
+    #[test]
+    fn whisper_cache_can_be_cleared_globally() {
+        let state = EdgeState::new(ChannelManager::new(), ClientManager::new(), false);
+
+        for (sender_session, target_id, version) in [(10_001_u32, 1_u32, 4_u64), (10_002, 2, 5)] {
+            state.store_cached_whisper_route(
+                sender_session,
+                target_id,
+                version,
+                WhisperRouteCacheEntry {
+                    direct_sessions: smallvec![sender_session + 1],
+                    channel_sessions: smallvec![sender_session + 2],
+                    relay_edge_ids: smallvec![2],
+                },
+            );
+        }
+
+        state.clear_all_cached_whisper_routes();
+
+        assert!(state.get_cached_whisper_route(10_001, 1, 4).is_none());
+        assert!(state.get_cached_whisper_route(10_002, 2, 5).is_none());
     }
 }
 

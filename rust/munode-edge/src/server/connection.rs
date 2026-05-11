@@ -7,7 +7,7 @@ mod tests;
 
 use helpers::{drain_writer, broadcast_text_message, broadcast_codec_version,
               strip_html_tags, build_hot_vt_map, encode_ip_address};
-pub(super) use helpers::get_perm_cached;
+pub(crate) use helpers::get_perm_cached;
 use login::{do_login_task, LoginTaskArgs, LoginTaskResult};
 use user_state::{handle_user_state_update, handle_admin_user_state_update};
 
@@ -926,7 +926,7 @@ pub(crate) async fn run_connection_inner(
                                     sender_tx.send_raw(data).await;
                                 }
                             } else if let Some(targets) = crate::routing::compute_voice_targets(
-                                &frame.payload, sid, client.channel_id, &edge_state,
+                                &frame.payload, sid, client.channel_id, &edge_state, &hub_client,
                             ).await {
                                 // Shared routing: compute_voice_targets handles VoiceTarget
                                 // lookup, channel expansion, and deaf filtering.
@@ -1013,6 +1013,7 @@ pub(crate) async fn run_connection_inner(
                                     crate::hot_slot::get_hot_slot(sid).voice_targets.store(
                                         std::sync::Arc::new(hot_map_opt.map(std::sync::Arc::new)),
                                     );
+                                    edge_state.clear_cached_whisper_target(sid, target_id as u32);
                                 } else {
                                     let mut vt_sessions = Vec::new();
                                     let mut vt_channels = Vec::new();
@@ -1044,6 +1045,7 @@ pub(crate) async fn run_connection_inner(
                                     crate::hot_slot::get_hot_slot(sid).voice_targets.store(
                                         std::sync::Arc::new(Some(std::sync::Arc::new(hot_map))),
                                     );
+                                    edge_state.clear_cached_whisper_target(sid, target_id as u32);
                                 }
                             }
 
@@ -1844,6 +1846,7 @@ pub(crate) async fn run_connection_inner(
         edge_state.free_session_id(sid).await;
         // Clean up voice target cache for this session
         edge_state.voice_targets.write().await.remove(&sid);
+        edge_state.clear_cached_whisper_session(sid);
         // Clean up permission cache for this session
         edge_state.permission_cache.retain(|&(s, _), _| s != sid);
         // Clear cached UDP source address so the routing fast-path no longer

@@ -105,6 +105,8 @@ pub struct HotSlot {
     /// Per-session group membership for lock-free group-filter whisper routing.
     /// Updated whenever the Hub sends a revised session list (same cadence as deaf/suppress).
     pub groups:     ArcSwap<Vec<String>>,
+    /// Positional-audio plugin context mirrored for lock-free broadcast filtering.
+    pub plugin_context: ArcSwap<Vec<u8>>,
     /// Per-session VoiceTarget map for lock-free whisper routing.
     /// `None` until the client registers any VoiceTarget.
     pub voice_targets: ArcSwap<Option<Arc<HotVoiceTargetMap>>>,
@@ -132,6 +134,7 @@ impl HotSlot {
             crypt_state:   ArcSwap::new(Arc::new(None)),
             sender:        ArcSwap::new(Arc::new(None)),
             groups:        ArcSwap::new(Arc::new(Vec::new())),
+            plugin_context: ArcSwap::new(Arc::new(Vec::new())),
             bandwidth:     ArcSwap::new(Arc::new(None)),
             voice_targets: ArcSwap::new(Arc::new(None)),
             broadcast_cache: ArcSwap::new(Arc::new(None)),
@@ -156,6 +159,7 @@ impl HotSlot {
         sender: mpsc::Sender<Bytes>,
         bandwidth: Arc<Mutex<BandwidthRecord>>,
         groups: Arc<Vec<String>>,
+        plugin_context: Arc<Vec<u8>>,
     ) {
         self.session_id.store(session_id, Ordering::Relaxed);
         self.channel_id.store(channel_id, Ordering::Relaxed);
@@ -167,6 +171,7 @@ impl HotSlot {
         self.crypt_state.store(Arc::new(None));
         self.sender.store(Arc::new(Some(sender)));
         self.groups.store(groups);
+        self.plugin_context.store(plugin_context);
         self.bandwidth.store(Arc::new(Some(bandwidth)));
         self.voice_targets.store(Arc::new(None));
         self.broadcast_cache.store(Arc::new(None));
@@ -184,6 +189,7 @@ impl HotSlot {
         self.crypt_state.store(Arc::new(None));
         self.sender.store(Arc::new(None));
         self.groups.store(Arc::new(Vec::new()));
+        self.plugin_context.store(Arc::new(Vec::new()));
         self.bandwidth.store(Arc::new(None));
         self.voice_targets.store(Arc::new(None));
         self.broadcast_cache.store(Arc::new(None));
