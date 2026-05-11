@@ -5,10 +5,11 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use munode_client::ClientEvent;
+use munode_client::{ClientEvent, DenyReason};
 
 use crate::harness::{
-    cleanup_clients, single_edge_env, sleep_ms, standard_env, ClientConfig, create_clients,
+    cleanup_clients, single_edge_env, sleep_ms, standard_env, ClientConfig, TestEnvBuilder,
+    create_clients,
 };
 
 // ── User state broadcasting ───────────────────────────────────────────────
@@ -217,6 +218,113 @@ async fn test_text_message_cross_edge() -> Result<()> {
     .unwrap_or(false);
 
     assert!(got, "Text message should reach cross-edge user in same channel");
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_text_message_within_configured_limit_succeeds() -> Result<()> {
+    let env = TestEnvBuilder::new()
+        .edges(1)
+        .edge_config_patch(serde_json::json!({
+            "server": { "text_message_length": 32 }
+        }))
+        .start()
+        .await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig::new("user1", 1),
+            ClientConfig::new("user2", 1),
+        ],
+    )
+    .await?;
+    let (sender, receiver) = (&clients[0], &clients[1]);
+
+    sender.channel(1).join().await?;
+    receiver.channel(1).join().await?;
+    sleep_ms(300).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let mut text_rx = receiver.subscribe();
+    let mut deny_rx = sender.subscribe();
+    let message = "short-limit-ok";
+
+    sender.send_text_to_channel(1, message).await?;
+
+    let delivered = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match text_rx.recv().await {
+                Ok(ClientEvent::TextMessage { sender, message: got, .. })
+                    if sender == sender_session && got == message =>
+                {
+                    break true;
+                }
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    let denied = tokio::time::timeout(Duration::from_millis(400), async {
+        loop {
+            match deny_rx.recv().await {
+                Ok(ClientEvent::PermissionDenied { kind, .. }) => break Some(kind),
+                Ok(_) => continue,
+                Err(_) => break None,
+            }
+        }
+    })
+    .await
+    .ok()
+    .flatten();
+
+    assert!(delivered, "Short text message should still be delivered");
+    assert_eq!(denied, None, "Short text message should not be denied");
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_oversized_text_message_is_rejected_without_disconnect() -> Result<()> {
+    let env = TestEnvBuilder::new()
+        .edges(1)
+        .edge_config_patch(serde_json::json!({
+            "server": { "text_message_length": 32 }
+        }))
+        .start()
+        .await?;
+    let clients = create_clients(&env, &[ClientConfig::new("user1", 1)]).await?;
+    let client = &clients[0];
+    let mut rx = client.subscribe();
+
+    client.send_text_to_channel(0, &"X".repeat(64)).await?;
+
+    let deny_kind = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match rx.recv().await {
+                Ok(ClientEvent::PermissionDenied { kind, .. }) => break Some(kind),
+                Ok(_) => continue,
+                Err(_) => break None,
+            }
+        }
+    })
+    .await
+    .unwrap_or(None);
+
+    assert_eq!(
+        deny_kind,
+        Some(DenyReason::TextTooLong),
+        "Oversized text message should be rejected as TextTooLong"
+    );
+    assert!(
+        client.is_connected(),
+        "Client should remain connected after oversized text rejection"
+    );
+
     cleanup_clients(clients).await;
     Ok(())
 }

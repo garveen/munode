@@ -273,6 +273,42 @@ impl TopologyManager {
         partitions
     }
 
+    /// Detect partitions and return them sorted by aggregated user count.
+    ///
+    /// The smallest partition is first. Ties are broken deterministically by
+    /// edge count and then by sorted edge IDs.
+    pub fn partitions_by_user_count(
+        &self,
+        users_per_edge: &HashMap<u32, usize>,
+    ) -> Vec<(HashSet<u32>, usize)> {
+        let mut partition_user_counts: Vec<(HashSet<u32>, usize)> = self
+            .detect_partitions()
+            .into_iter()
+            .map(|partition| {
+                let user_count: usize = partition
+                    .iter()
+                    .map(|edge_id| users_per_edge.get(edge_id).copied().unwrap_or(0))
+                    .sum();
+                (partition, user_count)
+            })
+            .collect();
+
+        partition_user_counts.sort_by(|(partition_a, count_a), (partition_b, count_b)| {
+            count_a
+                .cmp(count_b)
+                .then_with(|| partition_a.len().cmp(&partition_b.len()))
+                .then_with(|| {
+                    let mut a_ids: Vec<_> = partition_a.iter().copied().collect();
+                    let mut b_ids: Vec<_> = partition_b.iter().copied().collect();
+                    a_ids.sort_unstable();
+                    b_ids.sort_unstable();
+                    a_ids.cmp(&b_ids)
+                })
+        });
+
+        partition_user_counts
+    }
+
     /// Process a peer-disconnect report and perform arbitration.
     pub fn arbitrate_disconnect(&mut self, reporter: u32, disconnected: u32) -> ArbitrationResult {
         let reporters = self.disconnect_reports.entry(reporter).or_default();

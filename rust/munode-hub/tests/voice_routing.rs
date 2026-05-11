@@ -512,6 +512,39 @@ fn isolated_edge_groups_detected_as_two_partitions() {
     assert_eq!(parts.len(), 2, "two partitions expected; got: {parts:?}");
 }
 
+/// Partition shutdown arbitration must pick the partition with fewer users,
+/// not simply the one with fewer edges.
+#[test]
+fn partitions_are_sorted_by_aggregated_user_count() {
+    let mut topo = TopologyManager::new();
+    topo.add_edge(make_edge(1));
+    topo.add_edge(make_edge(2));
+    topo.add_edge(make_edge(3));
+
+    // Partition A = {1,2} with 1 total user.
+    topo.report_quality(1, 2, make_quality(10.0, 0.0));
+    // Partition B = {3} with 5 total users.
+
+    let users_per_edge = std::collections::HashMap::from([
+        (1, 1usize),
+        (2, 0usize),
+        (3, 5usize),
+    ]);
+
+    let sorted = topo.partitions_by_user_count(&users_per_edge);
+    assert_eq!(sorted.len(), 2, "two sorted partitions expected; got: {sorted:?}");
+
+    let (smallest_partition, smallest_users) = &sorted[0];
+    assert_eq!(*smallest_users, 1, "smallest partition should have 1 user");
+    assert_eq!(smallest_partition.len(), 2, "the chosen partition may still have more edges");
+    assert!(smallest_partition.contains(&1) && smallest_partition.contains(&2));
+
+    let (largest_partition, largest_users) = &sorted[1];
+    assert_eq!(*largest_users, 5);
+    assert_eq!(largest_partition.len(), 1);
+    assert!(largest_partition.contains(&3));
+}
+
 // ── Disconnect arbitration ────────────────────────────────────────────────────
 
 /// When only one side reports a disconnect, the manager awaits confirmation.

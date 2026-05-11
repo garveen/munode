@@ -18,7 +18,7 @@ use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, Server
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio_rustls::TlsConnector;
 use tracing::{debug, error, warn};
 
@@ -133,6 +133,7 @@ pub async fn tcp_read_loop(
     state: Arc<tokio::sync::RwLock<ClientState>>,
     event_tx: broadcast::Sender<ClientEvent>,
     crypt_tx: tokio::sync::watch::Sender<Option<munode_protocol::crypto::CryptState>>,
+    udp_send_crypt: Arc<Mutex<Option<munode_protocol::crypto::CryptState>>>,
     server_info: Arc<tokio::sync::RwLock<ServerInformation>>,
     tcp_tx: mpsc::Sender<Vec<u8>>,
 ) {
@@ -148,6 +149,7 @@ pub async fn tcp_read_loop(
                         &state,
                         &event_tx,
                         &crypt_tx,
+                        &udp_send_crypt,
                         &server_info,
                         &tcp_tx,
                     )

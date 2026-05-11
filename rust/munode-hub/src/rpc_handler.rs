@@ -17,6 +17,7 @@ use tracing::{debug, info, trace, warn};
 
 use munode_protocol::authservice::{AuthRequest as ExtAuthRequest};
 use munode_protocol::hubedge::*;
+use munode_protocol::mumbleproto;
 use munode_common::config::HubConfig;
 use munode_common::permission;
 
@@ -549,7 +550,7 @@ impl RpcHandler {
                     user_id: None, username: None, display_name: None,
                     groups: vec![],
                     reason: Some(format!("Invalid username: '{}' does not meet naming requirements", username)),
-                    reject_type: Some(2), // InvalidUsername
+                    reject_type: Some(mumbleproto::reject::RejectType::InvalidUsername as u32),
                     channel_id: None,
                     mute: None, deaf: None, suppress: None,
                     self_mute: None, self_deaf: None,
@@ -1331,7 +1332,7 @@ impl RpcHandler {
                     display_name: None,
                     groups: vec![],
                     reason: Some("User not found and guest access is disabled".to_string()),
-                    reject_type: Some(1), // InvalidUsername
+                    reject_type: Some(mumbleproto::reject::RejectType::InvalidUsername as u32),
                     channel_id: None,
                     mute: None,
                     deaf: None,
@@ -3722,19 +3723,10 @@ impl RpcHandler {
             *users_per_edge.entry(session.edge_id).or_insert(0) += 1;
         }
 
-        let mut partition_user_counts: Vec<(std::collections::HashSet<u32>, usize)> = partitions
-            .into_iter()
-            .map(|partition| {
-                let user_count: usize = partition
-                    .iter()
-                    .map(|edge_id| users_per_edge.get(edge_id).copied().unwrap_or(0))
-                    .sum();
-                (partition, user_count)
-            })
-            .collect();
-
-        // Sort by user count ascending, so the smallest partition is first
-        partition_user_counts.sort_by_key(|(_, count)| *count);
+        let partition_user_counts = {
+            let topo = self.state.topology.read().await;
+            topo.partitions_by_user_count(&users_per_edge)
+        };
 
         // The smallest partition gets the shutdown request
         if let Some((smallest_partition, count)) = partition_user_counts.first() {

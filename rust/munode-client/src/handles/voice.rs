@@ -66,16 +66,6 @@ impl<'a> Voice<'a> {
         plain.put_u8(0x20); // type=Ping(1)<<5
         plain.extend_from_slice(&munode_protocol::varint::encode_varint(ts));
 
-        let socket = self
-            .client
-            .udp_socket_clone()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("UDP not initialised"))?;
-        let crypt = self.client.crypt_clone();
-        let Some(mut crypt) = crypt else { bail!("CryptState not ready") };
-        let mut enc = Vec::new();
-        crypt.encrypt(&plain, &mut enc);
-        socket.send(&enc).await.context("UDP send")?;
-        Ok(())
+        self.client.send_encrypted_udp_packet(&plain).await
     }
 }

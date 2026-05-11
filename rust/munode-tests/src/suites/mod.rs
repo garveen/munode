@@ -22,4 +22,6 @@ pub mod hub_restart_tests;
 pub mod edge_restart_tests;
 pub mod generate_config_tests;
 pub mod log_format_tests;
+pub mod diagnose_tests;
 pub mod suggest_config_tests;
+pub mod validation_tests;

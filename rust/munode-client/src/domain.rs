@@ -55,13 +55,14 @@ impl DenyReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RejectType {
     None = 0,
-    ServerVersion = 1,
-    UsernameInUse = 2,
+    WrongVersion = 1,
+    InvalidUsername = 2,
     WrongUserPw = 3,
     WrongServerPw = 4,
-    InvalidUsername = 5,
-    AuthenticatorFail = 6,
-    NoNewConnections = 7,
+    UsernameInUse = 5,
+    ServerFull = 6,
+    NoCertificate = 7,
+    AuthenticatorFail = 8,
     Unknown = 0xFF,
 }
 
@@ -69,13 +70,14 @@ impl RejectType {
     pub fn from_proto(t: i32) -> Self {
         match t {
             0 => Self::None,
-            1 => Self::ServerVersion,
-            2 => Self::UsernameInUse,
+            1 => Self::WrongVersion,
+            2 => Self::InvalidUsername,
             3 => Self::WrongUserPw,
             4 => Self::WrongServerPw,
-            5 => Self::InvalidUsername,
-            6 => Self::AuthenticatorFail,
-            7 => Self::NoNewConnections,
+            5 => Self::UsernameInUse,
+            6 => Self::ServerFull,
+            7 => Self::NoCertificate,
+            8 => Self::AuthenticatorFail,
             _ => Self::Unknown,
         }
     }

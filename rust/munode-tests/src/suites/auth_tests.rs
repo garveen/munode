@@ -2,14 +2,207 @@
 //!
 //! Tests auth server HTTP API and Mumble protocol Reject messages.
 
+use bytes::BytesMut;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use munode_client::{ClientEvent, ConnectOptions, MumbleClient};
+use munode_client::connection::connect_tls;
+use munode_protocol::message_type::MessageType;
+use munode_protocol::mumbleproto;
+use munode_protocol::transport::{decode_frame, encode_message};
+use prost::Message;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::harness::{
     cleanup_clients, single_edge_env, sleep_ms, ClientConfig, TestEnvBuilder, create_clients,
 };
+
+struct RawLoginCapture {
+    server_sync: mumbleproto::ServerSync,
+    server_config: mumbleproto::ServerConfig,
+    user_states: Vec<mumbleproto::UserState>,
+}
+
+struct RawUserStateObserver {
+    session_id: u32,
+    rx: mpsc::UnboundedReceiver<mumbleproto::UserState>,
+    task: tokio::task::JoinHandle<Result<()>>,
+}
+
+async fn capture_raw_login_messages(
+    port: u16,
+    username: &str,
+    password: &str,
+) -> Result<RawLoginCapture> {
+    let tls_stream = connect_tls("127.0.0.1", port, None).await?;
+    let (mut reader, mut writer) = tokio::io::split(tls_stream);
+
+    let version = mumbleproto::Version {
+        version: Some(0x0001_0500),
+        release: Some("MuNode Raw Test Client".into()),
+        os: Some(std::env::consts::OS.into()),
+        os_version: Some(std::env::consts::FAMILY.into()),
+    };
+    let mut out = BytesMut::new();
+    encode_message(MessageType::Version, &version, &mut out);
+    writer.write_all(&out).await.context("send Version")?;
+
+    let auth = mumbleproto::Authenticate {
+        username: Some(username.to_string()),
+        password: Some(password.to_string()),
+        tokens: vec![],
+        celt_versions: vec![],
+        opus: Some(true),
+    };
+    out.clear();
+    encode_message(MessageType::Authenticate, &auth, &mut out);
+    writer.write_all(&out).await.context("send Authenticate")?;
+
+    let mut read_buf = BytesMut::with_capacity(8192);
+    let mut server_sync = None;
+    let mut server_config = None;
+    let mut user_states = Vec::new();
+
+    let overall_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+
+    loop {
+        while let Some(frame) = decode_frame(&mut read_buf).context("decode login frame")? {
+            match frame.message_type {
+                MessageType::UserState => {
+                    user_states.push(
+                        mumbleproto::UserState::decode(&*frame.payload)
+                            .context("decode UserState")?,
+                    );
+                }
+                MessageType::ServerSync => {
+                    server_sync = Some(
+                        mumbleproto::ServerSync::decode(&*frame.payload)
+                            .context("decode ServerSync")?,
+                    );
+                }
+                MessageType::ServerConfig => {
+                    server_config = Some(
+                        mumbleproto::ServerConfig::decode(&*frame.payload)
+                            .context("decode ServerConfig")?,
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        if server_sync.is_some() && server_config.is_some() {
+            match tokio::time::timeout(Duration::from_millis(150), reader.read_buf(&mut read_buf)).await {
+                Ok(Ok(0)) | Err(_) => break,
+                Ok(Ok(_)) => continue,
+                Ok(Err(e)) => return Err(e).context("read additional login frames"),
+            }
+        }
+
+        let Some(remaining) = overall_deadline.checked_duration_since(tokio::time::Instant::now()) else {
+            break;
+        };
+        match tokio::time::timeout(remaining, reader.read_buf(&mut read_buf)).await {
+            Ok(Ok(0)) => break,
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => return Err(e).context("read login frame"),
+            Err(_) => break,
+        }
+    }
+
+    Ok(RawLoginCapture {
+        server_sync: server_sync.context("did not receive ServerSync")?,
+        server_config: server_config.context("did not receive ServerConfig")?,
+        user_states,
+    })
+}
+
+async fn spawn_raw_user_state_observer(
+    port: u16,
+    username: &str,
+    password: &str,
+) -> Result<RawUserStateObserver> {
+    let tls_stream = connect_tls("127.0.0.1", port, None).await?;
+    let (mut reader, mut writer) = tokio::io::split(tls_stream);
+
+    let version = mumbleproto::Version {
+        version: Some(0x0001_0500),
+        release: Some("MuNode Raw Observer".into()),
+        os: Some(std::env::consts::OS.into()),
+        os_version: Some(std::env::consts::FAMILY.into()),
+    };
+    let mut out = BytesMut::new();
+    encode_message(MessageType::Version, &version, &mut out);
+    writer.write_all(&out).await.context("send observer Version")?;
+
+    let auth = mumbleproto::Authenticate {
+        username: Some(username.to_string()),
+        password: Some(password.to_string()),
+        tokens: vec![],
+        celt_versions: vec![],
+        opus: Some(true),
+    };
+    out.clear();
+    encode_message(MessageType::Authenticate, &auth, &mut out);
+    writer.write_all(&out).await.context("send observer Authenticate")?;
+
+    let (tx, rx) = mpsc::unbounded_channel();
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let mut read_buf = BytesMut::with_capacity(8192);
+        let overall_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut ready_tx = Some(ready_tx);
+
+        loop {
+            while let Some(frame) = decode_frame(&mut read_buf).context("decode observer frame")? {
+                match frame.message_type {
+                    MessageType::UserState => {
+                        let state = mumbleproto::UserState::decode(&*frame.payload)
+                            .context("decode observer UserState")?;
+                        let _ = tx.send(state);
+                    }
+                    MessageType::ServerSync => {
+                        let sync = mumbleproto::ServerSync::decode(&*frame.payload)
+                            .context("decode observer ServerSync")?;
+                        if let Some(ready_tx) = ready_tx.take() {
+                            let session_id = sync.session.context("observer ServerSync missing session")?;
+                            let _ = ready_tx.send(session_id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if ready_tx.is_some() {
+                let Some(remaining) = overall_deadline.checked_duration_since(tokio::time::Instant::now()) else {
+                    break;
+                };
+                match tokio::time::timeout(remaining, reader.read_buf(&mut read_buf)).await {
+                    Ok(Ok(0)) => break,
+                    Ok(Ok(_)) => continue,
+                    Ok(Err(e)) => return Err(e).context("read observer handshake frame"),
+                    Err(_) => break,
+                }
+            } else {
+                match reader.read_buf(&mut read_buf).await {
+                    Ok(0) => break,
+                    Ok(_) => continue,
+                    Err(e) => return Err(e).context("read observer user state frame"),
+                }
+            }
+        }
+
+        Ok(())
+    });
+
+    let session_id = tokio::time::timeout(Duration::from_secs(5), ready_rx)
+        .await
+        .context("timed out waiting for observer ServerSync")?
+        .context("observer handshake task ended before ServerSync")?;
+
+    Ok(RawUserStateObserver { session_id, rx, task })
+}
 
 // ── HTTP auth server API ──────────────────────────────────────────────────
 
@@ -325,6 +518,114 @@ async fn test_server_sync_provides_max_bandwidth_and_motd() -> Result<()> {
     // welcome_text may or may not be configured; just verify the field is observable
     let _ = info.welcome_text;
     cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_login_self_user_state_omits_spurious_false_booleans() -> Result<()> {
+    let env = single_edge_env().await?;
+    let capture = capture_raw_login_messages(env.edge1(), "admin", "admin123").await?;
+    let session = capture.server_sync.session();
+    let self_state = capture
+        .user_states
+        .iter()
+        .find(|state| state.session() == session)
+        .context("did not receive initial self UserState")?;
+
+    assert!(
+        self_state.mute.is_none(),
+        "initial self UserState must omit mute=false, got {:?}",
+        self_state.mute
+    );
+    assert!(
+        self_state.deaf.is_none(),
+        "initial self UserState must omit deaf=false, got {:?}",
+        self_state.deaf
+    );
+    assert!(
+        self_state.suppress.is_none(),
+        "initial self UserState must omit suppress=false, got {:?}",
+        self_state.suppress
+    );
+    assert!(
+        self_state.priority_speaker.is_none(),
+        "initial self UserState must omit priority_speaker=false, got {:?}",
+        self_state.priority_speaker
+    );
+    assert!(
+        self_state.recording.is_none(),
+        "initial self UserState must omit recording=false, got {:?}",
+        self_state.recording
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_login_server_config_omits_duplicate_welcome_text() -> Result<()> {
+    let env = single_edge_env().await?;
+    let capture = capture_raw_login_messages(env.edge1(), "guest", "guest123").await?;
+
+    assert!(
+        capture.server_sync.max_bandwidth.unwrap_or_default() > 0,
+        "ServerSync max_bandwidth should be positive"
+    );
+    assert!(
+        capture
+            .server_sync
+            .welcome_text
+            .as_deref()
+            .is_some_and(|text| !text.is_empty()),
+        "ServerSync should carry welcome_text"
+    );
+    assert!(
+        capture.server_config.max_bandwidth.unwrap_or_default() > 0,
+        "ServerConfig max_bandwidth should be positive"
+    );
+    assert!(
+        capture.server_config.welcome_text.is_none(),
+        "ServerConfig must omit welcome_text to avoid duplicate MOTD, got {:?}",
+        capture.server_config.welcome_text
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_login_other_user_state_omits_spurious_false_booleans() -> Result<()> {
+    let env = single_edge_env().await?;
+    let mut observer = spawn_raw_user_state_observer(env.edge1(), "user1", "password1").await?;
+
+    let clients = create_clients(&env, &[ClientConfig::new("user2", 1)]).await?;
+    let joining_session = clients[0].session_id().context("user2 missing session id")?;
+
+    let observed_state = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match observer.rx.recv().await {
+                Some(state) if state.session == Some(joining_session) => break Some(state),
+                Some(state) if state.session == Some(observer.session_id) => continue,
+                Some(_) => continue,
+                None => break None,
+            }
+        }
+    })
+    .await
+    .context("timed out waiting for observer to receive other-user UserState")?
+    .context("observer stream ended before other-user UserState arrived")?;
+
+    assert_eq!(observed_state.mute, None, "other-user join UserState should omit mute=false");
+    assert_eq!(observed_state.deaf, None, "other-user join UserState should omit deaf=false");
+    assert_eq!(
+        observed_state.priority_speaker,
+        None,
+        "other-user join UserState should omit priority_speaker=false"
+    );
+    assert_eq!(
+        observed_state.recording,
+        None,
+        "other-user join UserState should omit recording=false"
+    );
+
+    cleanup_clients(clients).await;
+    observer.task.abort();
     Ok(())
 }
 

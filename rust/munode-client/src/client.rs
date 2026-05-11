@@ -21,7 +21,7 @@ use bytes::{BufMut, BytesMut};
 use prost::Message as ProstMessage;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::{RwLock, broadcast, mpsc, watch};
+use tokio::sync::{Mutex, RwLock, broadcast, mpsc, watch};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -131,6 +131,9 @@ struct ClientInner {
     /// Crypto state, updated when `CryptSetup` is received.
     crypt_tx: watch::Sender<Option<munode_protocol::crypto::CryptState>>,
     crypt_rx: watch::Receiver<Option<munode_protocol::crypto::CryptState>>,
+    /// Outbound UDP crypto state; kept separate so send-side nonce progression
+    /// cannot overwrite receive-side decrypt state.
+    udp_send_crypt: Arc<Mutex<Option<munode_protocol::crypto::CryptState>>>,
     /// UDP socket, set after the UDP handshake.
     udp_socket: RwLock<Option<Arc<tokio::net::UdpSocket>>>,
     /// Cancellation token — cancelled by `disconnect()` to stop all tasks.
@@ -149,6 +152,7 @@ impl MumbleClient {
     pub fn new() -> Self {
         let (event_tx, _) = broadcast::channel(512);
         let (crypt_tx, crypt_rx) = watch::channel(None);
+        let udp_send_crypt = Arc::new(Mutex::new(None));
         Self {
             inner: Arc::new(ClientInner {
                 state: Arc::new(RwLock::new(ClientState::new())),
@@ -156,6 +160,7 @@ impl MumbleClient {
                 tcp_tx: RwLock::new(None),
                 crypt_tx,
                 crypt_rx,
+                udp_send_crypt,
                 udp_socket: RwLock::new(None),
                 cancel: RwLock::new(None),
                 host: RwLock::new(String::new()),
@@ -296,13 +301,14 @@ impl MumbleClient {
             let state = self.inner.state.clone();
             let event_tx = self.inner.event_tx.clone();
             let crypt_tx = self.inner.crypt_tx.clone();
+            let udp_send_crypt = self.inner.udp_send_crypt.clone();
             let server_info = self.inner.server_info.clone();
             let tcp_tx_for_reader = tcp_tx.clone();
             let tok = token.clone();
             tokio::spawn(async move {
                 tokio::select! {
                     _ = connection::tcp_read_loop(
-                        read_half, state, event_tx, crypt_tx, server_info, tcp_tx_for_reader,
+                        read_half, state, event_tx, crypt_tx, udp_send_crypt, server_info, tcp_tx_for_reader,
                     ) => {
                         // Server closed the connection — cancel all other tasks so the
                         // writer loop exits and `tcp_tx.is_closed()` returns true.
@@ -386,6 +392,7 @@ impl MumbleClient {
         // Drop the TCP sender — this signals the writer task to exit
         *self.inner.tcp_tx.write().await = None;
         *self.inner.udp_socket.write().await = None;
+        *self.inner.udp_send_crypt.lock().await = None;
         // Reset all state
         *self.inner.state.write().await = ClientState::new(); // → Disconnected
         let _ = self.inner.event_tx.send(ClientEvent::Disconnected);
@@ -472,18 +479,9 @@ impl MumbleClient {
             .unwrap_or_default()
             .as_millis() as u64;
         let ping_plain = build_udp_ping(ts);
-        let encrypted = {
-            let guard = self.inner.crypt_rx.borrow();
-            if let Some(ref crypt) = *guard {
-                let mut c = crypt.clone();
-                let mut enc = Vec::new();
-                c.encrypt(&ping_plain, &mut enc);
-                enc
-            } else {
-                bail!("CryptState not ready");
-            }
-        };
-        socket.send(&encrypted).await.context("UDP ping send")?;
+        self.send_encrypted_udp_packet(&ping_plain)
+            .await
+            .context("UDP ping send")?;
 
         self.wait_for_event(udp_timeout, |ev| matches!(ev, ClientEvent::UdpReady))
             .await
@@ -503,22 +501,10 @@ impl MumbleClient {
         let udp_ready = self.inner.udp_socket.read().await.is_some();
 
         if udp_ready && !force_tcp {
-            let encrypted = {
-                let guard = self.inner.crypt_rx.borrow();
-                if let Some(ref crypt) = *guard {
-                    let mut c = crypt.clone();
-                    let mut enc = Vec::new();
-                    c.encrypt(packet, &mut enc);
-                    enc
-                } else {
-                    bail!("CryptState not ready for UDP");
-                }
-            };
-            let sock_guard = self.inner.udp_socket.read().await;
-            if let Some(sock) = sock_guard.as_ref() {
-                sock.send(&encrypted).await.context("UDP voice send")?;
-                return Ok(());
-            }
+            self.send_encrypted_udp_packet(packet)
+                .await
+                .context("UDP voice send")?;
+            return Ok(());
         }
 
         // TCP UDPTunnel fallback
@@ -1051,8 +1037,27 @@ impl MumbleClient {
         self.inner.udp_socket.read().await.clone()
     }
 
-    pub(crate) fn crypt_clone(&self) -> Option<munode_protocol::crypto::CryptState> {
-        self.inner.crypt_rx.borrow().as_ref().cloned()
+    pub(crate) async fn send_encrypted_udp_packet(&self, packet: &[u8]) -> Result<()> {
+        let encrypted = {
+            let mut guard = self.inner.udp_send_crypt.lock().await;
+            if let Some(ref mut crypt) = *guard {
+                let mut enc = Vec::new();
+                if !crypt.encrypt(packet, &mut enc) {
+                    bail!("UDP encryption failed");
+                }
+                enc
+            } else {
+                bail!("CryptState not ready for UDP");
+            }
+        };
+
+        let sock_guard = self.inner.udp_socket.read().await;
+        if let Some(sock) = sock_guard.as_ref() {
+            sock.send(&encrypted).await.context("UDP send")?;
+            Ok(())
+        } else {
+            bail!("UDP socket not initialised")
+        }
     }
 
     pub(crate) fn crypt_stats(&self) -> CryptStatsSnapshot {
@@ -1136,6 +1141,7 @@ pub(crate) async fn dispatch_frame(
     state: &Arc<RwLock<ClientState>>,
     event_tx: &broadcast::Sender<ClientEvent>,
     crypt_tx: &watch::Sender<Option<munode_protocol::crypto::CryptState>>,
+    udp_send_crypt: &Arc<Mutex<Option<munode_protocol::crypto::CryptState>>>,
     server_info: &Arc<RwLock<ServerInformation>>,
     tcp_tx: &mpsc::Sender<Vec<u8>>,
 ) {
@@ -1163,7 +1169,8 @@ pub(crate) async fn dispatch_frame(
                     msg.server_nonce.as_deref(),
                 ) {
                     if let Some(crypt) = from_crypt_setup(key, cn, sn) {
-                        let _ = crypt_tx.send(Some(crypt));
+                        let _ = crypt_tx.send(Some(crypt.clone()));
+                        *udp_send_crypt.lock().await = Some(crypt);
                         let _ = event_tx.send(ClientEvent::CryptoReady);
                     }
                 } else if msg.key.is_none()
@@ -1171,7 +1178,7 @@ pub(crate) async fn dispatch_frame(
                     && msg.server_nonce.is_none()
                 {
                     // Empty CryptSetup → server is asking us to resync.
-                    if let Some(crypt) = crypt_tx.borrow().as_ref().cloned() {
+                    if let Some(crypt) = udp_send_crypt.lock().await.as_ref().cloned() {
                         let reply = mumbleproto::CryptSetup {
                             key: None,
                             client_nonce: Some(crypt.encrypt_iv.to_vec()),

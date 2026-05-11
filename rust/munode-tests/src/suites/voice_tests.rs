@@ -11,8 +11,86 @@ use munode_client::ClientEvent;
 
 use crate::harness::{
     cleanup_clients, random_voice_data, single_edge_env, sleep_ms, standard_env, ClientConfig,
-    create_clients,
+    TestEnvBuilder, create_clients,
 };
+
+async fn wait_for_voice_from(
+    receiver: &munode_client::MumbleClient,
+    sender_session: u32,
+    timeout: Duration,
+) -> bool {
+    let mut rx = receiver.subscribe();
+    tokio::time::timeout(timeout, async move {
+        loop {
+            match rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
+async fn assert_cross_edge_voice_delivery(
+    env: &crate::harness::TestEnvironment,
+    sender_edge: usize,
+    receiver_edge: usize,
+    use_udp_voice: bool,
+    should_receive: bool,
+    context: &str,
+) -> Result<()> {
+    let clients = create_clients(
+        env,
+        &[
+            ClientConfig {
+                username: "user1",
+                edge: sender_edge,
+                channel_id: None,
+                use_udp_voice,
+                pre_connect_state: None,
+            },
+            ClientConfig {
+                username: "user2",
+                edge: receiver_edge,
+                channel_id: None,
+                use_udp_voice,
+                pre_connect_state: None,
+            },
+        ],
+    )
+    .await?;
+    let (sender, receiver) = (&clients[0], &clients[1]);
+
+    sender.channel(1).join().await?;
+    receiver.channel(1).join().await?;
+    sleep_ms(800).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let audio = random_voice_data(20);
+    let timeout = Duration::from_secs(5);
+    let started = tokio::time::Instant::now();
+    let mut received = false;
+
+    while started.elapsed() < timeout {
+        sender.voice().send(4, 0, 1, &audio).await?;
+        if wait_for_voice_from(receiver, sender_session, Duration::from_millis(400)).await {
+            received = true;
+            break;
+        }
+        sleep_ms(150).await;
+    }
+
+    assert_eq!(
+        received,
+        should_receive,
+        "{context}: expected cross-edge voice received={should_receive}, got {received}"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
 
 // ── TCP voice mode ────────────────────────────────────────────────────────
 
@@ -157,6 +235,106 @@ async fn test_voice_received_cross_edge_same_channel() -> Result<()> {
     assert!(received, "Voice should propagate across edges to same channel");
     cleanup_clients(clients).await;
     Ok(())
+}
+
+/// Current Rust equivalent of the old `direct_only` strategy:
+/// cross-edge voice must keep working through direct peer routes even when
+/// Hub TCP relay and Edge fallback are both disabled. This must use UDP voice,
+/// because TCP-tunneled client voice is Hub-relayed for remote edges by design.
+#[tokio::test]
+async fn test_cross_edge_voice_routes_without_hub_relay_when_direct_path_is_available() -> Result<()> {
+    let env = TestEnvBuilder::new()
+        .edges(2)
+        .hub_config_patch(serde_json::json!({
+            "voice_routing": {
+                "enable_hub_tcp_relay": false,
+            }
+        }))
+        .edge_config_patch(serde_json::json!({
+            "voice_routing": {
+                "enable_hub_tcp_fallback": false,
+            }
+        }))
+        .start()
+        .await?;
+
+    assert_cross_edge_voice_delivery(
+        &env,
+        1,
+        2,
+        true,
+        true,
+        "direct path available with relay/fallback disabled",
+    )
+    .await
+}
+
+/// Current Rust equivalent of `auto_fallback`: if peer metadata is not
+/// resolvable into a direct address, Hub relay should keep cross-edge voice
+/// working.
+#[tokio::test]
+async fn test_cross_edge_voice_falls_back_to_hub_relay_when_direct_path_is_unresolvable() -> Result<()> {
+    let env = TestEnvBuilder::new()
+        .edges(2)
+        .hub_config_patch(serde_json::json!({
+            "voice_routing": {
+                "enable_hub_tcp_relay": true,
+            }
+        }))
+        .edge_config_patch(serde_json::json!({
+            "network": {
+                "external_host": "peer-not-resolvable.invalid",
+            },
+            "voice_routing": {
+                "enable_hub_tcp_fallback": true,
+            }
+        }))
+        .start()
+        .await?;
+
+    assert_cross_edge_voice_delivery(
+        &env,
+        1,
+        2,
+        false,
+        true,
+        "direct path unavailable but hub relay fallback enabled",
+    )
+    .await
+}
+
+/// Current Rust equivalent of `direct_only` under direct-path failure: when
+/// direct peer metadata is unusable and relay/fallback are disabled, cross-edge
+/// voice must not be delivered.
+#[tokio::test]
+async fn test_cross_edge_voice_does_not_fallback_when_direct_path_is_unresolvable_and_relay_is_disabled() -> Result<()> {
+    let env = TestEnvBuilder::new()
+        .edges(2)
+        .hub_config_patch(serde_json::json!({
+            "voice_routing": {
+                "enable_hub_tcp_relay": false,
+            }
+        }))
+        .edge_config_patch(serde_json::json!({
+            "network": {
+                "external_host": "peer-not-resolvable.invalid",
+            },
+            "voice_routing": {
+                "enable_hub_tcp_fallback": false,
+            }
+        }))
+        .start()
+        .await?;
+
+    assert_cross_edge_voice_delivery(
+        &env,
+        1,
+        2,
+        false,
+        false,
+        "direct path unavailable and relay/fallback disabled",
+    )
+    .await
 }
 
 // ── Deaf users don't receive voice ───────────────────────────────────────
