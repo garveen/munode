@@ -9,7 +9,7 @@ use anyhow::Result;
 use serde_json::Value;
 use tempfile::TempDir;
 
-use crate::harness::{alloc_port_block, certs_dir, find_binary, find_free_port};
+use crate::harness::{ReservedPortBlock, certs_dir, find_binary};
 
 /// Spawn `bin args...`, read combined stdout/stderr lines for `dur`, then kill the process.
 fn capture_output(bin: &std::path::Path, args: &[&str], dur: Duration) -> Vec<String> {
@@ -80,9 +80,8 @@ fn parse_and_validate(raw: &str) -> Value {
     v
 }
 
-fn next_port() -> u16 {
-    let base = alloc_port_block();
-    find_free_port(base).expect("free port")
+fn next_port(ports: &mut ReservedPortBlock) -> u16 {
+    ports.next_port().expect("free port")
 }
 
 // ── Hub JSON log format ───────────────────────────────────────────────────
@@ -108,7 +107,8 @@ fn write_hub_config_json(tmp: &TempDir, control_port: u16, web_api_port: u16, lo
 #[test]
 fn test_hub_json_format_emits_valid_json_lines() -> Result<()> {
     let tmp = TempDir::new()?;
-    let cfg = write_hub_config_json(&tmp, next_port(), next_port(), Some("json"));
+    let mut ports = ReservedPortBlock::acquire(19000)?;
+    let cfg = write_hub_config_json(&tmp, next_port(&mut ports), next_port(&mut ports), Some("json"));
     let bin = find_binary("munode-hub")?;
     let lines = capture_output(&bin, &[cfg.to_str().unwrap()], Duration::from_millis(2000));
     assert!(!lines.is_empty(), "no log output captured");
@@ -121,7 +121,8 @@ fn test_hub_json_format_emits_valid_json_lines() -> Result<()> {
 #[test]
 fn test_hub_json_format_startup_message_has_control_port() -> Result<()> {
     let tmp = TempDir::new()?;
-    let cfg = write_hub_config_json(&tmp, next_port(), next_port(), Some("json"));
+    let mut ports = ReservedPortBlock::acquire(19000)?;
+    let cfg = write_hub_config_json(&tmp, next_port(&mut ports), next_port(&mut ports), Some("json"));
     let bin = find_binary("munode-hub")?;
     let lines = capture_output(&bin, &[cfg.to_str().unwrap()], Duration::from_millis(2000));
     let parsed: Vec<Value> = lines.iter().map(|l| parse_and_validate(l)).collect();
@@ -144,7 +145,8 @@ fn test_hub_json_format_startup_message_has_control_port() -> Result<()> {
 #[test]
 fn test_hub_text_format_default_is_not_json() -> Result<()> {
     let tmp = TempDir::new()?;
-    let cfg = write_hub_config_json(&tmp, next_port(), next_port(), None);
+    let mut ports = ReservedPortBlock::acquire(19000)?;
+    let cfg = write_hub_config_json(&tmp, next_port(&mut ports), next_port(&mut ports), None);
     let bin = find_binary("munode-hub")?;
     let lines = capture_output(&bin, &[cfg.to_str().unwrap()], Duration::from_millis(2000));
     assert!(!lines.is_empty());
@@ -155,10 +157,15 @@ fn test_hub_text_format_default_is_not_json() -> Result<()> {
 
 // ── Edge JSON log format ──────────────────────────────────────────────────
 
-fn write_edge_config_json(tmp: &TempDir, server_id: u32, log_format: Option<&str>) -> std::path::PathBuf {
+fn write_edge_config_json(
+    tmp: &TempDir,
+    ports: &mut ReservedPortBlock,
+    server_id: u32,
+    log_format: Option<&str>,
+) -> std::path::PathBuf {
     let cfg_path = tmp.path().join("edge.json");
-    let port = next_port();
-    let edge_port = next_port();
+    let port = next_port(ports);
+    let edge_port = next_port(ports);
     let certs = certs_dir();
     let mut cfg = serde_json::json!({
         "server_id": server_id,
@@ -194,7 +201,8 @@ fn write_edge_config_json(tmp: &TempDir, server_id: u32, log_format: Option<&str
 #[test]
 fn test_edge_json_format_emits_valid_json_lines() -> Result<()> {
     let tmp = TempDir::new()?;
-    let cfg = write_edge_config_json(&tmp, 1, Some("json"));
+    let mut ports = ReservedPortBlock::acquire(19000)?;
+    let cfg = write_edge_config_json(&tmp, &mut ports, 1, Some("json"));
     let bin = find_binary("munode-edge")?;
     let lines = capture_output(&bin, &[cfg.to_str().unwrap()], Duration::from_millis(2000));
     assert!(!lines.is_empty(), "no log output captured from edge");
@@ -207,7 +215,8 @@ fn test_edge_json_format_emits_valid_json_lines() -> Result<()> {
 #[test]
 fn test_edge_json_format_startup_has_server_id() -> Result<()> {
     let tmp = TempDir::new()?;
-    let cfg = write_edge_config_json(&tmp, 42, Some("json"));
+    let mut ports = ReservedPortBlock::acquire(19000)?;
+    let cfg = write_edge_config_json(&tmp, &mut ports, 42, Some("json"));
     let bin = find_binary("munode-edge")?;
     let lines = capture_output(&bin, &[cfg.to_str().unwrap()], Duration::from_millis(2000));
     let parsed: Vec<Value> = lines.iter().map(|l| parse_and_validate(l)).collect();

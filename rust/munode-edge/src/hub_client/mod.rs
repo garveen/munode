@@ -23,6 +23,7 @@ use munode_protocol::hubedge::{
 
 use crate::state::{EdgeEvent, EdgeState};
 use crate::peer_registry::PeerEdgeInfo;
+use crate::voice_target::apply_voice_target_proto_batch;
 
 
 mod notification;
@@ -1594,7 +1595,6 @@ impl HubClient {
     /// on other edges (or before this edge connected) are immediately available.
     async fn do_fetch_voice_targets(&self) {
         use munode_protocol::hubedge::{EdgeGetVoiceTargetsParams};
-        use crate::state::{VoiceTargetConfig, VoiceTargetChannelConfig, resolve_voice_target_channels};
         let request_id = self.next_request_id();
         let request = TypedRpcRequest {
             request_id,
@@ -1613,48 +1613,25 @@ impl HubClient {
         if result.voice_targets.is_empty() {
             return;
         }
-        // Resolve each entry's channels outside the write lock, then batch-write.
-        let mut resolved_entries = Vec::with_capacity(result.voice_targets.len());
-        for entry in &result.voice_targets {
-            let channels: Vec<VoiceTargetChannelConfig> = entry.config.as_ref()
-                .map(|c| c.channels.iter().map(|ch| VoiceTargetChannelConfig {
-                    channel_id: ch.channel_id,
-                    links: ch.links.unwrap_or(false),
-                    children: ch.children.unwrap_or(false),
-                    group: ch.group.clone(),
-                }).collect())
-                .unwrap_or_default();
-            let sessions: Vec<u32> = entry.config.as_ref()
-                .map(|c| c.sessions.iter().map(|s| s.session).collect())
-                .unwrap_or_default();
-            let resolved = resolve_voice_target_channels(&channels, &self.edge_state.channel_manager).await;
-            resolved_entries.push((entry.client_session, entry.target_id, sessions, channels, resolved));
-        }
-        let mut touched_sessions = std::collections::HashSet::new();
-        let mut cache = self.edge_state.voice_targets.write().await;
-        for (client_session, target_id, sessions, channels, resolved) in resolved_entries {
-            if sessions.is_empty() && channels.is_empty() { continue; }
-            let session_vts = cache.entry(client_session).or_default();
-            session_vts.insert(target_id, VoiceTargetConfig { sessions, channels, resolved_channels: resolved });
-            touched_sessions.insert(client_session);
-        }
-        let total: usize = cache.values().map(|m| m.len()).sum();
-        let hot_map_updates: Vec<(u32, crate::hot_slot::HotVoiceTargetMap)> = touched_sessions
-            .into_iter()
-            .filter_map(|client_session| {
-                cache.get(&client_session)
-                    .map(|session_vts| (client_session, crate::state::build_hot_vt_map(session_vts)))
-            })
-            .collect();
-        drop(cache);
-        for (client_session, hot_map) in hot_map_updates {
-            let slot = crate::hot_slot::get_hot_slot(client_session);
-            if slot.is_active_for(client_session) {
-                slot.voice_targets.store(std::sync::Arc::new(Some(std::sync::Arc::new(hot_map))));
-            }
-            self.edge_state.clear_cached_whisper_session(client_session);
-        }
-        debug!("Fetched {} voice target entries from Hub ({} sessions)", result.voice_targets.len(), total);
+        let total_from_hub = result.voice_targets.len();
+        apply_voice_target_proto_batch(
+            &self.edge_state,
+            result
+                .voice_targets
+                .into_iter()
+                .map(|entry| (entry.client_session, entry.target_id, entry.config))
+                .collect(),
+        )
+        .await;
+        let total: usize = self
+            .edge_state
+            .voice_targets
+            .read()
+            .await
+            .values()
+            .map(|session_vts| session_vts.len())
+            .sum();
+        debug!("Fetched {} voice target entries from Hub ({} cached locally)", total_from_hub, total);
     }
 
     /// Join the cluster topology so Hub can broadcast our address to peer Edges.

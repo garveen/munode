@@ -12,6 +12,7 @@ pub mod routing;
 pub mod server;
 pub mod transport;
 pub mod voice;
+pub mod voice_target;
 pub mod state;
 pub mod tls;
 pub mod udp;

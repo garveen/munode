@@ -220,7 +220,7 @@ pub async fn compute_voice_targets(
             sender_session,
             voice_target,
             current_version,
-            crate::state::WhisperRouteCacheEntry {
+            crate::voice_target::WhisperRouteCacheEntry {
                 direct_sessions: direct_sessions.clone(),
                 channel_sessions: channel_sessions.clone(),
                 relay_edge_ids: relay_edge_ids.clone(),

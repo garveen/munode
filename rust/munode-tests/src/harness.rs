@@ -14,7 +14,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use munode_client::{ConnectOptions, MumbleClient};
 use serde_json::{json, Value};
 
-use crate::auth::start_auth_server;
+use crate::auth::{AuthServerHandle, start_auth_server};
 use crate::users::find_user;
 
 // ── Crypto provider initialization ────────────────────────────────────────
@@ -81,13 +81,96 @@ pub fn find_binary(name: &str) -> Result<PathBuf> {
 // ── Port utilities ────────────────────────────────────────────────────────
 
 /// Global port counter — each test environment atomically reserves a block of
-/// PORTS_PER_ENV ports, eliminating the TOCTOU race when tests run in parallel.
+/// PORTS_PER_ENV ports within the current test process.
+/// Cross-process isolation is handled by `PortBlockLease` below.
 static PORT_COUNTER: AtomicU16 = AtomicU16::new(19000);
 
 /// Number of ports reserved per test environment.
 /// auth(1) + hub_control(1) + hub_web_api(1) + per_edge(client+edge+ws = 3) × max_4_edges = 15.
-/// We reserve 20 to leave headroom.
-const PORTS_PER_ENV: u16 = 20;
+/// Reserve extra headroom for transient reuse delays and future listeners.
+const PORTS_PER_ENV: u16 = 32;
+
+/// Filesystem-backed lease for a port block.
+///
+/// Cargo can run different test binaries in parallel, so a process-local atomic
+/// counter is not enough to prevent two binaries from reusing the same block.
+/// We reserve a block by creating a directory under the system temp dir; this is
+/// atomic across processes and released when the environment drops.
+struct PortBlockLease {
+    base: u16,
+    next: u16,
+    path: PathBuf,
+}
+
+impl PortBlockLease {
+    fn acquire(preferred_base: u16) -> Result<Self> {
+        let root = std::env::temp_dir().join("munode-test-port-blocks");
+        fs::create_dir_all(&root)
+            .with_context(|| format!("create port block root {}", root.display()))?;
+
+        let mut base = preferred_base;
+        let max_base = u16::MAX.saturating_sub(PORTS_PER_ENV);
+        while base <= max_base {
+            let path = root.join(base.to_string());
+            match fs::create_dir(&path) {
+                Ok(()) => {
+                    return Ok(Self {
+                        base,
+                        next: base,
+                        path,
+                    });
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    base = base.saturating_add(PORTS_PER_ENV);
+                }
+                Err(err) => {
+                    return Err(err)
+                        .with_context(|| format!("reserve port block starting at {}", base));
+                }
+            }
+        }
+
+        bail!("No free port block found starting from {}", preferred_base)
+    }
+
+    fn next_port(&mut self) -> Result<u16> {
+        let block_end = self.base.saturating_add(PORTS_PER_ENV);
+        for port in self.next..block_end {
+            if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+                self.next = port.saturating_add(1);
+                return Ok(port);
+            }
+        }
+
+        bail!("No free port found in reserved block starting from {}", self.base)
+    }
+}
+
+impl Drop for PortBlockLease {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir(&self.path);
+    }
+}
+
+/// Public scoped wrapper around the filesystem-backed port block lease.
+///
+/// Hold this for as long as the allocated ports must remain unique across
+/// concurrently running test binaries.
+pub struct ReservedPortBlock {
+    lease: PortBlockLease,
+}
+
+impl ReservedPortBlock {
+    pub fn acquire(preferred_base: u16) -> Result<Self> {
+        Ok(Self {
+            lease: PortBlockLease::acquire(preferred_base)?,
+        })
+    }
+
+    pub fn next_port(&mut self) -> Result<u16> {
+        self.lease.next_port()
+    }
+}
 
 /// Atomically reserve the next port block and return the first port in it.
 pub fn alloc_port_block() -> u16 {
@@ -419,10 +502,11 @@ pub struct TestEnvironment {
     pub web_api_port: u16,
     pub edges: Vec<EdgePorts>,
     // Processes (kept alive as long as `TestEnvironment` lives)
-    _auth_handle: tokio::task::JoinHandle<()>,
+    _auth_handle: AuthServerHandle,
     _hub: ServerProcess,
     _edges: Vec<ServerProcess>,
     _temp_dir: tempfile::TempDir,
+    _port_block: ReservedPortBlock,
     hub_bin: std::path::PathBuf,
     hub_cfg_path: std::path::PathBuf,
     verbose: bool,
@@ -562,15 +646,12 @@ impl TestEnvBuilder {
         let tmp = tempfile::TempDir::new()?;
         let tmp_path = tmp.path().to_path_buf();
 
-        // Each call atomically grabs a unique port block, eliminating the TOCTOU
-        // race that causes port conflicts when tests run concurrently.
-        let block_base = alloc_port_block();
-        let mut port = find_free_port(block_base)?;
+        // Reserve a unique port block across all concurrently running test
+        // binaries, then allocate ports strictly within that block.
+        let mut port_block = ReservedPortBlock::acquire(self.port_base)?;
         macro_rules! next_port {
             () => {{
-                let p = port;
-                port = find_free_port(port + 1)?;
-                p
+                port_block.next_port()?
             }};
         }
 
@@ -702,6 +783,7 @@ impl TestEnvBuilder {
             _hub: hub,
             _edges: edge_processes,
             _temp_dir: tmp,
+            _port_block: port_block,
             hub_bin,
             hub_cfg_path,
             verbose,

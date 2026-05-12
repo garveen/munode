@@ -13,6 +13,7 @@ use axum::{
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
+use tokio::task::JoinHandle;
 
 use crate::users::find_user;
 
@@ -78,11 +79,29 @@ async fn health_handler() -> StatusCode {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
+pub struct AuthServerHandle {
+    task: Option<JoinHandle<()>>,
+}
+
+impl AuthServerHandle {
+    fn new(task: JoinHandle<()>) -> Self {
+        Self { task: Some(task) }
+    }
+}
+
+impl Drop for AuthServerHandle {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
 /// Start the test auth server on the given port.
 ///
 /// Returns the `SocketAddr` the server bound to and a handle that shuts it
 /// down when dropped.
-pub async fn start_auth_server(port: u16) -> Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
+pub async fn start_auth_server(port: u16) -> Result<(SocketAddr, AuthServerHandle)> {
     let app = Router::new()
         .route("/auth", post(auth_handler))
         .route("/health", get(health_handler));
@@ -94,5 +113,5 @@ pub async fn start_auth_server(port: u16) -> Result<(SocketAddr, tokio::task::Jo
         axum::serve(listener, app).await.ok();
     });
 
-    Ok((addr, handle))
+    Ok((addr, AuthServerHandle::new(handle)))
 }

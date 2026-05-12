@@ -6,7 +6,7 @@ mod user_state;
 mod tests;
 
 use helpers::{drain_writer, broadcast_text_message, broadcast_codec_version,
-              strip_html_tags, build_hot_vt_map, encode_ip_address};
+              strip_html_tags, encode_ip_address};
 pub(crate) use helpers::{get_perm_cached, prefetch_whisper_permissions};
 use login::{do_login_task, LoginTaskArgs, LoginTaskResult};
 use user_state::{handle_user_state_update, handle_admin_user_state_update};
@@ -32,6 +32,7 @@ use crate::hub_client::{HubClient, HubConnectionState};
 use crate::state::EdgeState;
 use crate::transport::TransportKind;
 use crate::voice::{deliver_voice_tcp, inject_session_into_voice, wrap_udptunnel};
+use crate::voice_target::{apply_voice_target_proto, clear_session_voice_targets};
 
 /// Fallback idle timeout when `server.idle_timeout_secs = 0` (disabled) — effectively no
 /// upper bound, but we still need a finite select! arm.  Set to a large value.
@@ -994,59 +995,13 @@ pub(crate) async fn run_connection_inner(
                                 Some(hubedge::VoiceTargetConfigProto { sessions, channels })
                             };
 
-                            // Cache voice target locally for routing
-                            {
-                                use crate::state::{VoiceTargetChannelConfig, VoiceTargetConfig, resolve_voice_target_channels};
-                                use std::collections::HashMap;
-                                if vt.targets.is_empty() {
-                                    let hot_map_opt = {
-                                        let mut vt_cache = edge_state.voice_targets.write().await;
-                                        if let Some(session_vts) = vt_cache.get_mut(&sid) {
-                                            session_vts.remove(&(target_id as u32));
-                                            if session_vts.is_empty() { None }
-                                            else {
-                                                Some(build_hot_vt_map(session_vts))
-                                            }
-                                        } else { None }
-                                    };
-                                    crate::hot_slot::get_hot_slot(sid).voice_targets.store(
-                                        std::sync::Arc::new(hot_map_opt.map(std::sync::Arc::new)),
-                                    );
-                                    edge_state.clear_cached_whisper_target(sid, target_id as u32);
-                                } else {
-                                    let mut vt_sessions = Vec::new();
-                                    let mut vt_channels = Vec::new();
-                                    for target in &vt.targets {
-                                        for &s in &target.session {
-                                            vt_sessions.push(s);
-                                        }
-                                        if let Some(ch_id) = target.channel_id {
-                                            vt_channels.push(VoiceTargetChannelConfig {
-                                                channel_id: ch_id,
-                                                links: target.links.unwrap_or(false),
-                                                children: target.children.unwrap_or(false),
-                                                group: target.group.clone(),
-                                            });
-                                        }
-                                    }
-                                    // Pre-compute expanded channel set outside the write lock
-                                    let resolved = resolve_voice_target_channels(&vt_channels, &edge_state.channel_manager).await;
-                                    let hot_map = {
-                                        let mut vt_cache = edge_state.voice_targets.write().await;
-                                        let session_vts = vt_cache.entry(sid).or_insert_with(HashMap::new);
-                                        session_vts.insert(target_id as u32, VoiceTargetConfig {
-                                            sessions: vt_sessions.clone(),
-                                            channels: vt_channels,
-                                            resolved_channels: resolved.clone(),
-                                        });
-                                        build_hot_vt_map(session_vts)
-                                    };
-                                    crate::hot_slot::get_hot_slot(sid).voice_targets.store(
-                                        std::sync::Arc::new(Some(std::sync::Arc::new(hot_map))),
-                                    );
-                                    edge_state.clear_cached_whisper_target(sid, target_id as u32);
-                                }
-                            }
+                            apply_voice_target_proto(
+                                &edge_state,
+                                sid,
+                                target_id as u32,
+                                config.clone(),
+                            )
+                            .await;
 
                             // Sync to Hub (fire-and-forget)
                             let hub = hub_client.clone();
@@ -1844,8 +1799,7 @@ pub(crate) async fn run_connection_inner(
         // Free the session ID back to the local pool
         edge_state.free_session_id(sid).await;
         // Clean up voice target cache for this session
-        edge_state.voice_targets.write().await.remove(&sid);
-        edge_state.clear_cached_whisper_session(sid);
+        clear_session_voice_targets(&edge_state, sid).await;
         // Clean up permission cache for this session
         edge_state.permission_cache.retain(|&(s, _), _| s != sid);
         // Clear cached UDP source address so the routing fast-path no longer

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use munode_protocol::message_type::MessageType;
 use munode_protocol::mumbleproto;
 use tracing::debug;
+
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 
@@ -112,23 +113,6 @@ pub(crate) fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
         .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
         .collect();
     bytes
-}
-
-/// Convert a `HashMap<u32, VoiceTargetConfig>` to a `HotVoiceTargetMap` for storage in
-/// `HotSlot::voice_targets`.  Called after every VoiceTarget cache write so the routing
-/// hot path can read voice-target configs without holding `EdgeState::voice_targets`.
-pub(super) fn build_hot_vt_map(
-    session_vts: &std::collections::HashMap<u32, crate::state::VoiceTargetConfig>,
-) -> crate::hot_slot::HotVoiceTargetMap {
-    session_vts
-        .iter()
-        .map(|(&tid, vt)| {
-            (tid, std::sync::Arc::new(crate::hot_slot::HotVoiceTarget {
-                sessions: vt.sessions.clone(),
-                resolved_channels: vt.resolved_channels.clone(),
-            }))
-        })
-        .collect()
 }
 
 /// Query Hub for a permission bitmask with a local DashMap cache.

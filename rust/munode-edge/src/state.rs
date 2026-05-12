@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use arc_swap::ArcSwap;
-use smallvec::SmallVec;
 use tokio::sync::{broadcast, RwLock};
 
 use munode_protocol::hubedge::ServerLimitsConfig;
@@ -12,174 +11,11 @@ use crate::channel_manager::ChannelManager;
 use crate::client::ClientManager;
 use crate::edge_crypto::EdgeCrypto;
 use crate::peer_registry::{PeerRegistry, PeerVoiceTcpPool};
-
-/// A single voice target configuration (whisper/shout destinations).
-#[derive(Debug, Clone)]
-pub struct VoiceTargetConfig {
-    pub sessions: Vec<u32>,
-    pub channels: Vec<VoiceTargetChannelConfig>,
-    /// Pre-computed expanded channel set, built once at config-write time.
-    /// Maps channel_id → group filter (None = no filter, Some = user must be
-    /// in at least one of the named groups). Rebuilt whenever the config
-    /// changes OR when the channel link/tree structure changes.
-    pub resolved_channels: HashMap<u32, Option<Vec<String>>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct VoiceTargetChannelConfig {
-    pub channel_id: u32,
-    pub links: bool,
-    pub children: bool,
-    pub group: Option<String>,
-}
-
-/// Cached local whisper route for one `(sender_session, target_id)` pair.
-///
-/// This is the fully materialized result of expanding a VoiceTarget against the
-/// current local Edge state. It intentionally mirrors the transport-facing split
-/// between direct whisper targets and channel shout targets.
-#[derive(Debug, Clone)]
-pub struct WhisperRouteCacheEntry {
-    pub direct_sessions: SmallVec<[u32; 8]>,
-    pub channel_sessions: SmallVec<[u32; 16]>,
-    pub relay_edge_ids: SmallVec<[u32; 8]>,
-}
-
-/// Per-sender whisper cache state.
-///
-/// `topology_version` is compared against `EdgeState::topology_version` before a
-/// cached target entry may be reused.
-#[derive(Debug, Clone, Default)]
-pub struct SessionWhisperRouteCache {
-    pub topology_version: u64,
-    pub targets: HashMap<u32, WhisperRouteCacheEntry>,
-}
-
-/// Convert a `HashMap<u32, VoiceTargetConfig>` to a `HotVoiceTargetMap` for storage in
-/// `HotSlot::voice_targets`.
-pub fn build_hot_vt_map(
-    session_vts: &std::collections::HashMap<u32, VoiceTargetConfig>,
-) -> crate::hot_slot::HotVoiceTargetMap {
-    session_vts
-        .iter()
-        .map(|(&tid, vt)| {
-            (tid, Arc::new(crate::hot_slot::HotVoiceTarget {
-                sessions: vt.sessions.clone(),
-                resolved_channels: vt.resolved_channels.clone(),
-            }))
-        })
-        .collect()
-}
-
-// ── VoiceTarget channel resolution helpers ────────────────────────────────
-
-/// Recursively collect all descendant channel IDs into `out`.
-pub fn collect_children_into(
-    ch_id: u32,
-    out: &mut HashSet<u32>,
-    children_map: &HashMap<u32, Vec<u32>>,
-) {
-    if let Some(children) = children_map.get(&ch_id) {
-        for &child in children {
-            if out.insert(child) {
-                collect_children_into(child, out, children_map);
-            }
-        }
-    }
-}
-
-fn collect_linked_channels_into(
-    ch_id: u32,
-    out: &mut HashSet<u32>,
-    link_graph: &HashMap<u32, Vec<u32>>,
-) {
-    let mut queue = std::collections::VecDeque::new();
-    if out.insert(ch_id) {
-        queue.push_back(ch_id);
-    }
-    while let Some(current) = queue.pop_front() {
-        if let Some(links) = link_graph.get(&current) {
-            for &linked in links {
-                if out.insert(linked) {
-                    queue.push_back(linked);
-                }
-            }
-        }
-    }
-}
-
-fn collect_affected_link_channels(
-    channel_id: u32,
-    old_links: &[u32],
-    new_links: &[u32],
-    link_graph: &HashMap<u32, Vec<u32>>,
-) -> HashSet<u32> {
-    let mut affected = HashSet::new();
-    let mut seeds = HashSet::from([channel_id]);
-    seeds.extend(old_links.iter().copied());
-    seeds.extend(new_links.iter().copied());
-    for seed in seeds {
-        collect_linked_channels_into(seed, &mut affected, link_graph);
-    }
-    affected
-}
-
-fn resolve_voice_target_channels_with_snapshot(
-    channels: &[VoiceTargetChannelConfig],
-    link_graph: &HashMap<u32, Vec<u32>>,
-    children_map: &HashMap<u32, Vec<u32>>,
-) -> HashMap<u32, Option<Vec<String>>> {
-    let mut resolved: HashMap<u32, Option<Vec<String>>> = HashMap::new();
-    for ch_cfg in channels {
-        let mut ch_ids = HashSet::new();
-        if ch_cfg.links {
-            collect_linked_channels_into(ch_cfg.channel_id, &mut ch_ids, link_graph);
-        } else {
-            ch_ids.insert(ch_cfg.channel_id);
-        }
-        if ch_cfg.children {
-            let snapshot: Vec<u32> = ch_ids.iter().copied().collect();
-            for ch_id in snapshot {
-                collect_children_into(ch_id, &mut ch_ids, children_map);
-            }
-        }
-        let effective_group: Option<&str> = ch_cfg.group.as_deref().filter(|s| !s.is_empty());
-        for ch_id in ch_ids {
-            resolved
-                .entry(ch_id)
-                .and_modify(|existing| match (effective_group, existing.as_mut()) {
-                    (None, _) => *existing = None,
-                    (Some(_), None) => {}
-                    (Some(g), Some(groups)) => {
-                        if !groups.iter().any(|e| e == g) {
-                            groups.push(g.to_owned());
-                        }
-                    }
-                })
-                .or_insert_with(|| effective_group.map(|g| vec![g.to_owned()]));
-        }
-    }
-    resolved
-}
-
-/// Expand a slice of `VoiceTargetChannelConfig` into a flat map of
-/// `channel_id → group filter` by resolving `links` and `children` flags.
-/// Multiple entries targeting the same channel are merged: a no-filter entry
-/// wins over any group restriction (union semantics).
-///
-/// Resolution order (matches Mumble C++ server behaviour):
-///   1. Start with the base channel.
-///   2. If `links=true`, extend with all transitively linked channels.
-///   3. If `children=true`, extend with all recursive sub-channels of EVERY
-///      channel collected so far (base + links), not just the base channel.
-/// An empty-string group is treated the same as no group (no filter).
-pub async fn resolve_voice_target_channels(
-    channels: &[VoiceTargetChannelConfig],
-    channel_manager: &ChannelManager,
-) -> HashMap<u32, Option<Vec<String>>> {
-    let (link_graph, children_map) = channel_manager.get_voice_target_resolution_snapshot().await;
-    resolve_voice_target_channels_with_snapshot(channels, &link_graph, &children_map)
-}
+use crate::voice_target::{
+    SessionWhisperRouteCache,
+    VoiceTargetConfig,
+    WhisperRouteCacheEntry,
+};
 
 /// Delta of boolean state fields for a remote user state change.
 /// Only fields that actually changed carry `Some(value)`; unchanged fields are `None`.
@@ -688,21 +524,7 @@ impl EdgeState {
     /// Call this whenever the channel link/tree structure changes so that
     /// per-packet routing uses up-to-date expanded channel sets.
     pub async fn recompute_all_vt_channels(&self) {
-        let (link_graph, children_map) = self.channel_manager.get_voice_target_resolution_snapshot().await;
-        let snapshots: Vec<(u32, u32, Vec<VoiceTargetChannelConfig>)> = {
-            let cache = self.voice_targets.read().await;
-            cache
-                .iter()
-                .flat_map(|(&sid, vts)| {
-                    vts.iter()
-                        .map(move |(&tid, vt)| (sid, tid, vt.channels.clone()))
-                })
-                .collect()
-        };
-        if snapshots.is_empty() {
-            return;
-        }
-        self.recompute_vt_channels_from_snapshots(snapshots, &link_graph, &children_map).await;
+        crate::voice_target::recompute_all_session_voice_targets(self).await;
     }
 
     /// Recompute only the VoiceTarget entries whose `links=true` roots may be affected
@@ -713,70 +535,7 @@ impl EdgeState {
         old_links: &[u32],
         new_links: &[u32],
     ) {
-        let (link_graph, children_map) = self.channel_manager.get_voice_target_resolution_snapshot().await;
-        let affected_link_channels = collect_affected_link_channels(channel_id, old_links, new_links, &link_graph);
-        let snapshots: Vec<(u32, u32, Vec<VoiceTargetChannelConfig>)> = {
-            let cache = self.voice_targets.read().await;
-            cache
-                .iter()
-                .flat_map(|(&sid, vts)| {
-                    let affected_link_channels = &affected_link_channels;
-                    vts.iter().filter_map(move |(&tid, vt)| {
-                        vt.channels
-                            .iter()
-                            .any(|cfg| cfg.links && affected_link_channels.contains(&cfg.channel_id))
-                            .then(|| (sid, tid, vt.channels.clone()))
-                    })
-                })
-                .collect()
-        };
-        if snapshots.is_empty() {
-            return;
-        }
-        self.recompute_vt_channels_from_snapshots(snapshots, &link_graph, &children_map).await;
-    }
-
-    async fn recompute_vt_channels_from_snapshots(
-        &self,
-        snapshots: Vec<(u32, u32, Vec<VoiceTargetChannelConfig>)>,
-        link_graph: &HashMap<u32, Vec<u32>>,
-        children_map: &HashMap<u32, Vec<u32>>,
-    ) {
-        let resolved_list: Vec<(u32, u32, HashMap<u32, Option<Vec<String>>>)> = snapshots
-            .iter()
-            .map(|(sid, tid, channels)| {
-                (
-                    *sid,
-                    *tid,
-                    resolve_voice_target_channels_with_snapshot(channels, link_graph, children_map),
-                )
-            })
-            .collect();
-
-        let mut cache = self.voice_targets.write().await;
-        let mut touched_sessions = HashSet::new();
-        for (sid, tid, resolved) in resolved_list {
-            if let Some(vt) = cache.get_mut(&sid).and_then(|m| m.get_mut(&tid)) {
-                if vt.resolved_channels != resolved {
-                    vt.resolved_channels = resolved;
-                    touched_sessions.insert(sid);
-                }
-            }
-        }
-        if touched_sessions.is_empty() {
-            return;
-        }
-        let hot_map_updates: Vec<(u32, crate::hot_slot::HotVoiceTargetMap)> = touched_sessions
-            .iter()
-            .filter_map(|&sid| cache.get(&sid).map(|session_vts| (sid, build_hot_vt_map(session_vts))))
-            .collect();
-        drop(cache);
-
-        for (sid, hot_map) in hot_map_updates {
-            crate::hot_slot::get_hot_slot(sid)
-                .voice_targets
-                .store(std::sync::Arc::new(Some(std::sync::Arc::new(hot_map))));
-        }
+        crate::voice_target::recompute_link_affected_voice_targets(self, channel_id, old_links, new_links).await;
     }
 
     /// Allocate a session ID from this Edge's local pool.
@@ -827,10 +586,16 @@ impl EdgeState {
 
 #[cfg(test)]
 mod tests {
-    use super::{EdgeState, VoiceTargetChannelConfig, VoiceTargetConfig, WhisperRouteCacheEntry, build_hot_vt_map};
+    use super::EdgeState;
     use crate::channel_manager::{ChannelData, ChannelManager};
     use crate::client::ClientManager;
     use crate::hot_slot::get_hot_slot;
+    use crate::voice_target::{
+        VoiceTargetChannelConfig,
+        VoiceTargetConfig,
+        WhisperRouteCacheEntry,
+        build_hot_vt_map,
+    };
     use smallvec::smallvec;
     use std::collections::HashMap;
     use std::sync::Arc;
