@@ -4,6 +4,7 @@
 //! `apply_server_limits`, which together translate Hub-pushed JSON notifications
 //! into `EdgeEvent`s on the in-process broadcast channel.
 
+use futures_util::stream::{self, StreamExt};
 use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
@@ -17,6 +18,8 @@ use crate::state::EdgeEvent;
 use crate::peer_registry::PeerEdgeInfo;
 
 use super::HubClient;
+
+const WHISPER_PERMISSION_PREFETCH_CONCURRENCY: usize = 8;
 
 impl HubClient {
     async fn collect_channel_subtree(&self, root_channel_id: u32) -> Vec<u32> {
@@ -44,40 +47,44 @@ impl HubClient {
             voice_targets
                 .iter()
                 .filter_map(|(&session_id, targets)| {
-                    let mut matched_channels = Vec::new();
-                    for &channel_id in &target_channels {
-                        let referenced = targets
-                            .values()
-                            .any(|vt| vt.resolved_channels.contains_key(&channel_id));
-                        if referenced
-                            && self
+                    let mut matched_channels = HashSet::new();
+                    for vt in targets.values() {
+                        for &channel_id in vt.resolved_channels.keys() {
+                            if !target_channels.contains(&channel_id) {
+                                continue;
+                            }
+                            if self
                                 .edge_state
                                 .permission_cache
                                 .get(&(session_id, channel_id))
-                                .is_none()
-                        {
-                            matched_channels.push(channel_id);
+                                .is_some()
+                            {
+                                continue;
+                            }
+                            matched_channels.insert(channel_id);
                         }
                     }
 
                     if matched_channels.is_empty() {
                         None
                     } else {
-                        Some((session_id, matched_channels))
+                        Some((session_id, matched_channels.into_iter().collect()))
                     }
                 })
                 .collect()
         };
 
-        for (session_id, matched_channels) in sessions_to_prefetch {
-            crate::server::connection::prefetch_whisper_permissions(
-                self,
-                &self.edge_state,
-                session_id,
-                &matched_channels,
-            )
+        stream::iter(sessions_to_prefetch)
+            .for_each_concurrent(WHISPER_PERMISSION_PREFETCH_CONCURRENCY, |(session_id, matched_channels)| async move {
+                crate::server::connection::prefetch_whisper_permissions(
+                    self,
+                    &self.edge_state,
+                    session_id,
+                    &matched_channels,
+                )
+                .await;
+            })
             .await;
-        }
     }
 
     /// Handle a notification from the Hub.

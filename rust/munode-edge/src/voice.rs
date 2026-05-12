@@ -1,9 +1,48 @@
 //! Shared voice packet utilities used by both the TCP (server.rs) and UDP (udp.rs) paths.
 
+use smallvec::SmallVec;
 use std::sync::Arc;
 use tracing::{debug, trace};
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
+
+pub const AUDIO_CONTEXT_NORMAL: u8 = 0;
+pub const AUDIO_CONTEXT_SHOUT: u8 = 1;
+pub const AUDIO_CONTEXT_WHISPER: u8 = 2;
+
+pub struct LocalDeliveryGroup<'a> {
+    pub sessions: &'a [u32],
+    pub context: u8,
+}
+
+pub fn local_delivery_groups<'a>(
+    targets: &'a crate::routing::VoiceTargets,
+) -> SmallVec<[LocalDeliveryGroup<'a>; 2]> {
+    let mut groups = SmallVec::new();
+
+    if targets.is_whisper {
+        if !targets.direct_sessions.is_empty() {
+            groups.push(LocalDeliveryGroup {
+                sessions: targets.direct_sessions.as_slice(),
+                context: AUDIO_CONTEXT_WHISPER,
+            });
+        }
+
+        if !targets.channel_sessions.is_empty() {
+            groups.push(LocalDeliveryGroup {
+                sessions: targets.channel_sessions.as_slice(),
+                context: AUDIO_CONTEXT_SHOUT,
+            });
+        }
+    } else if !targets.local_sessions.is_empty() {
+        groups.push(LocalDeliveryGroup {
+            sessions: targets.local_sessions.as_slice(),
+            context: AUDIO_CONTEXT_NORMAL,
+        });
+    }
+
+    groups
+}
 
 #[inline]
 fn write_mumble_varint_stack(value: u32, dst: &mut [u8; 5]) -> usize {
@@ -109,22 +148,25 @@ pub async fn deliver_relayed_voice(
         return;
     };
 
+    let mut delivered = 0;
+    for group in local_delivery_groups(&targets) {
+        let frame = if group.context == AUDIO_CONTEXT_NORMAL {
+            // Relay payloads already preserve the original regular-speech context.
+            wrap_udptunnel(voice_packet.as_ref())
+        } else {
+            // Relayed whisper payloads preserve the original target slot; rewrite to
+            // receiver-facing AudioContext while building the TCP frame.
+            wrap_udptunnel_with_context(voice_packet.as_ref(), group.context)
+        };
+        delivered += deliver_voice_tcp(group.sessions, &frame);
+    }
+
     if targets.is_whisper {
-        // voice_packet[0] carries raw voice_target_id in low 5 bits;
-        // overwrite with AudioContext per Mumble protocol while writing the
-        // UdpTunnel frame, avoiding an intermediate voice-packet clone.
-        let frame_whisper = wrap_udptunnel_with_context(voice_packet.as_ref(), 2);
-        let frame_shout = wrap_udptunnel_with_context(voice_packet.as_ref(), 1);
-        let d = deliver_voice_tcp(&targets.direct_sessions, &frame_whisper)
-            + deliver_voice_tcp(&targets.channel_sessions, &frame_shout);
         trace!("edge={} Delivered relayed whisper from session {} to {} targets",
-            state.get_edge_id(), sender_session, d);
+            state.get_edge_id(), sender_session, delivered);
     } else {
-        // voice_packet[0] already has context=0 (set by the sending edge for PTT).
-        let frame = wrap_udptunnel(voice_packet.as_ref());
-        let d = deliver_voice_tcp(&targets.local_sessions, &frame);
         trace!("edge={} Delivered relayed broadcast from session {} to {} local clients",
-            state.get_edge_id(), sender_session, d);
+            state.get_edge_id(), sender_session, delivered);
     }
 }
 

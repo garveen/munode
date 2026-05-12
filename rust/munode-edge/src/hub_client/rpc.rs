@@ -24,6 +24,18 @@ use crate::state::EdgeEvent;
 use super::{HubClient, PendingControlNotification};
 
 impl HubClient {
+    async fn permission_query_actor_identity(&self, session_id: u32) -> (u32, String) {
+        if let Some(client) = self.edge_state.client_manager.get_client(session_id).await {
+            return (client.user_id, client.username);
+        }
+
+        if let Some(remote_user) = self.edge_state.channel_manager.get_remote_user(session_id).await {
+            return (remote_user.user_id, remote_user.username);
+        }
+
+        (0, String::new())
+    }
+
     /// Trigger a full-sync with Hub and replay the cluster state into the event bus.
     ///
     /// Called when the event listener detects a `Lagged` error, meaning the broadcast
@@ -236,12 +248,7 @@ impl HubClient {
         let request_id = self.next_request_id();
         let edge_id = self.edge_id();
 
-        // Get actor info from client
-        let (user_id, username) = if let Some(client) = self.edge_state.client_manager.get_client(session_id).await {
-            (client.user_id, client.username.clone())
-        } else {
-            (0, String::new())
-        };
+        let (user_id, username) = self.permission_query_actor_identity(session_id).await;
 
         let request = TypedRpcRequest {
             request_id,
@@ -273,11 +280,7 @@ impl HubClient {
         let request_id = self.next_request_id();
         let edge_id = self.edge_id();
 
-        let (user_id, username) = if let Some(client) = self.edge_state.client_manager.get_client(session_id).await {
-            (client.user_id, client.username.clone())
-        } else {
-            (0, String::new())
-        };
+        let (user_id, username) = self.permission_query_actor_identity(session_id).await;
 
         let request = TypedRpcRequest {
             request_id,

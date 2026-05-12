@@ -2,12 +2,14 @@
 use std::sync::Arc;
 use munode_protocol::message_type::MessageType;
 use munode_protocol::mumbleproto;
+use tracing::debug;
 use crate::hub_client::HubClient;
 use crate::state::EdgeState;
 
 /// Maximum time allowed for the writer task to drain and flush its queue
 /// after the read loop exits.
 const WRITER_DRAIN_TIMEOUT: tokio::time::Duration = tokio::time::Duration::from_secs(5);
+const WHISPER_PERMISSION_PREFETCH_BATCH_SIZE: usize = 128;
 
 /// Wait for the writer task to finish, aborting it if it takes too long.
 pub(super) async fn drain_writer(mut writer_handle: tokio::task::JoinHandle<()>) {
@@ -165,14 +167,52 @@ pub(crate) async fn prefetch_whisper_permissions(
     channels: &[u32],
 ) {
     let mut seen = std::collections::HashSet::new();
-    for &channel in channels {
-        if !seen.insert(channel) {
+    let missing_channels: Vec<u32> = channels
+        .iter()
+        .copied()
+        .filter(|channel| seen.insert(*channel))
+        .filter(|channel| edge_state.permission_cache.get(&(session, *channel)).is_none())
+        .collect();
+
+    if missing_channels.is_empty() {
+        return;
+    }
+
+    for chunk in missing_channels.chunks(WHISPER_PERMISSION_PREFETCH_BATCH_SIZE) {
+        let batch_ok = match hub_client.batch_permission_query(session, chunk).await {
+            Ok(result) if result.success => {
+                for entry in result.entries {
+                    edge_state.permission_cache.insert((session, entry.channel_id), entry.permissions);
+                }
+                true
+            }
+            Ok(result) => {
+                debug!(
+                    session,
+                    channel_count = chunk.len(),
+                    error = result.error.as_deref().unwrap_or("unknown batch permission failure"),
+                    "whisper permission batch prefetch failed; falling back to per-channel queries"
+                );
+                false
+            }
+            Err(error) => {
+                debug!(
+                    session,
+                    channel_count = chunk.len(),
+                    %error,
+                    "whisper permission batch prefetch RPC failed; falling back to per-channel queries"
+                );
+                false
+            }
+        };
+
+        if batch_ok {
             continue;
         }
-        if edge_state.permission_cache.get(&(session, channel)).is_some() {
-            continue;
+
+        for &channel in chunk {
+            let _ = get_perm_cached(hub_client, edge_state, session, channel, false).await;
         }
-        let _ = get_perm_cached(hub_client, edge_state, session, channel, false).await;
     }
 }
 

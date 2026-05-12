@@ -714,83 +714,21 @@ impl UdpServer {
         };
 
         // --- Local delivery ------------------------------------------------
-        if targets.is_whisper {
-            // Build separate payloads for each Mumble AudioContext, mirroring murmur's
-            // processMsg() which sets audioData.targetOrContext per receiver:
-            //   WHISPER (2) for direct session targets
-            //   SHOUT   (1) for channel-expanded targets
-            let forwarded_whisper = crate::voice::inject_session_into_voice(plaintext, sender_session, 2);
-            let forwarded_shout   = crate::voice::inject_session_into_voice(plaintext, sender_session, 1);
-
-            // Phase A-direct: encrypt WHISPER targets (direct_sessions).
-            // Each Mumble session has a unique AES-128 key negotiated during TCP auth,
-            // so OCB2 ciphertext differs per recipient — one encrypt call per target
-            // is unavoidable. We reuse ENC_BUF to avoid per-target Vec allocation.
-            let mut direct_batch: Vec<(Vec<u8>, SocketAddr)> =
-                Vec::with_capacity(targets.direct_sessions.len());
-            let mut direct_no_udp: Vec<u32> = Vec::new();
-
-            for &target in &targets.direct_sessions {
-                let addr_opt = self.session_to_addr.get(&target).map(|r| *r.value());
-                if let Some(addr) = addr_opt {
-                    if let Some(packet) = self.encrypt_for_addr(target, addr, &forwarded_whisper) {
-                        direct_batch.push(packet);
-                    }
-                } else {
-                    direct_no_udp.push(target);
-                }
-            }
-
-            // Phase A-shout: encrypt SHOUT targets (channel_sessions).
-            let mut shout_batch: Vec<(Vec<u8>, SocketAddr)> =
-                Vec::with_capacity(targets.channel_sessions.len());
-            let mut shout_no_udp: Vec<u32> = Vec::new();
-
-            for &target in &targets.channel_sessions {
-                let addr_opt = self.session_to_addr.get(&target).map(|r| *r.value());
-                if let Some(addr) = addr_opt {
-                    if let Some(packet) = self.encrypt_for_addr(target, addr, &forwarded_shout) {
-                        shout_batch.push(packet);
-                    }
-                } else {
-                    shout_no_udp.push(target);
-                }
-            }
-
-            // Phase B: batch send — WHISPER targets → 1 sendmmsg syscall.
-            if !direct_batch.is_empty() {
-                #[cfg(target_os = "linux")]
-                { batch_sendmmsg(self.socket.as_raw_fd(), &direct_batch); }
-                #[cfg(not(target_os = "linux"))]
-                { batch_sendmmsg_fallback_seq(&self.socket, &direct_batch); }
-            }
-
-            // Phase B: batch send — SHOUT targets → 1 sendmmsg syscall.
-            if !shout_batch.is_empty() {
-                #[cfg(target_os = "linux")]
-                { batch_sendmmsg(self.socket.as_raw_fd(), &shout_batch); }
-                #[cfg(not(target_os = "linux"))]
-                { batch_sendmmsg_fallback_seq(&self.socket, &shout_batch); }
-            }
-
-            // Phase C: TCP fallbacks.
-            for target in direct_no_udp {
-                self.fallback_to_tcp(target, &forwarded_whisper).await;
-            }
-            for target in shout_no_udp {
-                self.fallback_to_tcp(target, &forwarded_shout).await;
-            }
-        } else {
-            // Normal broadcast: local_sessions already deaf-filtered by compute_voice_targets.
+        if !targets.is_whisper {
             trace!("route_voice: {} local targets", targets.local_sessions.len());
-            // Phase A: encrypt all targets into a batch (synchronous, no await).
-            // context=0 → NORMAL speech (PTT), matching murmur's AudioContext::NORMAL.
-            let forwarded = crate::voice::inject_session_into_voice(plaintext, sender_session, 0);
+        }
+
+        for group in crate::voice::local_delivery_groups(&targets) {
+            let forwarded = crate::voice::inject_session_into_voice(
+                plaintext,
+                sender_session,
+                group.context,
+            );
             let mut client_batch: Vec<(Vec<u8>, SocketAddr)> =
-                Vec::with_capacity(targets.local_sessions.len());
+                Vec::with_capacity(group.sessions.len());
             let mut no_udp_targets: Vec<u32> = Vec::new();
 
-            for &target in &targets.local_sessions {
+            for &target in group.sessions {
                 let addr_opt = self.session_to_addr.get(&target).map(|r| *r.value());
                 if let Some(addr) = addr_opt {
                     if let Some(packet) = self.encrypt_for_addr(target, addr, &forwarded) {
@@ -801,7 +739,6 @@ impl UdpServer {
                 }
             }
 
-            // Phase B: batch send — M local users → 1 sendmmsg syscall.
             #[cfg(target_os = "linux")]
             {
                 let sent = batch_sendmmsg(self.socket.as_raw_fd(), &client_batch);
@@ -810,8 +747,6 @@ impl UdpServer {
                         "sendmmsg partial: sent {}/{} UDP packets to local sessions",
                         sent, client_batch.len()
                     );
-                    // Partial failure: packets [sent..] were not delivered.
-                    // Voice is best-effort UDP; they'll be retried on the next frame.
                 }
             }
             #[cfg(not(target_os = "linux"))]
@@ -822,7 +757,6 @@ impl UdpServer {
                 }
             }
 
-            // Phase C: TCP fallbacks for sessions with no registered UDP address (rare).
             for target in no_udp_targets {
                 self.fallback_to_tcp(target, &forwarded).await;
             }

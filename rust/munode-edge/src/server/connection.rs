@@ -930,14 +930,13 @@ pub(crate) async fn run_connection_inner(
                             ).await {
                                 // Shared routing: compute_voice_targets handles VoiceTarget
                                 // lookup, channel expansion, and deaf filtering.
-                                if targets.is_whisper {
-                                    let data_whisper = wrap_udptunnel(&inject_session_into_voice(&frame.payload, sid, 2));
-                                    let data_shout   = wrap_udptunnel(&inject_session_into_voice(&frame.payload, sid, 1));
-                                    deliver_voice_tcp(&targets.direct_sessions, &data_whisper);
-                                    deliver_voice_tcp(&targets.channel_sessions, &data_shout);
-                                } else {
-                                    let data = wrap_udptunnel(&inject_session_into_voice(&frame.payload, sid, 0));
-                                    deliver_voice_tcp(&targets.local_sessions, &data);
+                                for group in crate::voice::local_delivery_groups(&targets) {
+                                    let data = wrap_udptunnel(&inject_session_into_voice(
+                                        &frame.payload,
+                                        sid,
+                                        group.context,
+                                    ));
+                                    deliver_voice_tcp(group.sessions, &data);
                                 }
 
                                 // Relay to remote edges via Hub TCP fallback.

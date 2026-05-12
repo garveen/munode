@@ -1,6 +1,6 @@
 services:
   edge:
-    image: munode:latest
+    image: ${MUNODE_IMAGE:-munode:latest}
     container_name: munode-edge
     restart: unless-stopped
     ulimits:

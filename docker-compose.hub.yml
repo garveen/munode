@@ -1,6 +1,6 @@
 services:
   hub:
-    image: munode:latest
+    image: ${MUNODE_IMAGE:-munode:latest}
     container_name: munode-hub
     restart: unless-stopped
     command: ["/app/munode-hub", "config/hub.toml"]

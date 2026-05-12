@@ -664,6 +664,97 @@ async fn test_whisper_to_current_channel_members() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_cross_edge_whisper_to_current_channel_members() -> Result<()> {
+    let env = standard_env().await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig::new("user1", 1),
+            ClientConfig::new("user2", 1),
+            ClientConfig::new("user3", 2),
+        ],
+    )
+    .await?;
+    let (sender, same_edge_target, other_edge_target) = (&clients[0], &clients[1], &clients[2]);
+
+    sender.channel(1).join().await?;
+    same_edge_target.channel(1).join().await?;
+    other_edge_target.channel(1).join().await?;
+    sleep_ms(800).await;
+
+    sender
+        .voice()
+        .set_target(
+            8,
+            vec![mumbleproto::voice_target::Target {
+                channel_id: Some(1),
+                links: Some(false),
+                children: Some(false),
+                ..Default::default()
+            }],
+        )
+        .await?;
+    sleep_ms(500).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let audio = random_voice_data(20);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut local_received = false;
+    let mut remote_received = false;
+
+    while tokio::time::Instant::now() < deadline && (!local_received || !remote_received) {
+        let mut local_rx = same_edge_target.subscribe();
+        let mut remote_rx = other_edge_target.subscribe();
+
+        sender.voice().send(4, 8, 1, &audio).await?;
+
+        if !local_received {
+            local_received = tokio::time::timeout(Duration::from_millis(500), async {
+                loop {
+                    match local_rx.recv().await {
+                        Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                        Ok(_) => continue,
+                        Err(_) => break false,
+                    }
+                }
+            })
+            .await
+            .unwrap_or(false);
+        }
+
+        if !remote_received {
+            remote_received = tokio::time::timeout(Duration::from_millis(500), async {
+                loop {
+                    match remote_rx.recv().await {
+                        Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                        Ok(_) => continue,
+                        Err(_) => break false,
+                    }
+                }
+            })
+            .await
+            .unwrap_or(false);
+        }
+
+        if !local_received || !remote_received {
+            sleep_ms(150).await;
+        }
+    }
+
+    assert!(
+        local_received,
+        "current-channel whisper should still reach same-edge users in the sender's channel"
+    );
+    assert!(
+        remote_received,
+        "current-channel whisper should reach users in the same channel on other edges"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_whisper_current_channel_rewrite_updates_same_slot_route() -> Result<()> {
     let env = single_edge_env().await?;
     let clients = create_clients(
