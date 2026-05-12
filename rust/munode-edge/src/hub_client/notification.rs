@@ -4,6 +4,7 @@
 //! `apply_server_limits`, which together translate Hub-pushed JSON notifications
 //! into `EdgeEvent`s on the in-process broadcast channel.
 
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use tracing::{debug, info, trace, warn};
@@ -18,6 +19,67 @@ use crate::peer_registry::PeerEdgeInfo;
 use super::HubClient;
 
 impl HubClient {
+    async fn collect_channel_subtree(&self, root_channel_id: u32) -> Vec<u32> {
+        let mut seen = HashSet::new();
+        let mut queue = VecDeque::from([root_channel_id]);
+        while let Some(channel_id) = queue.pop_front() {
+            if !seen.insert(channel_id) {
+                continue;
+            }
+            for child_id in self.edge_state.channel_manager.get_children(channel_id).await {
+                queue.push_back(child_id);
+            }
+        }
+        seen.into_iter().collect()
+    }
+
+    async fn prefetch_whisper_permissions_for_channels(&self, channel_ids: &[u32]) {
+        if channel_ids.is_empty() {
+            return;
+        }
+
+        let target_channels: HashSet<u32> = channel_ids.iter().copied().collect();
+        let sessions_to_prefetch: Vec<(u32, Vec<u32>)> = {
+            let voice_targets = self.edge_state.voice_targets.read().await;
+            voice_targets
+                .iter()
+                .filter_map(|(&session_id, targets)| {
+                    let mut matched_channels = Vec::new();
+                    for &channel_id in &target_channels {
+                        let referenced = targets
+                            .values()
+                            .any(|vt| vt.resolved_channels.contains_key(&channel_id));
+                        if referenced
+                            && self
+                                .edge_state
+                                .permission_cache
+                                .get(&(session_id, channel_id))
+                                .is_none()
+                        {
+                            matched_channels.push(channel_id);
+                        }
+                    }
+
+                    if matched_channels.is_empty() {
+                        None
+                    } else {
+                        Some((session_id, matched_channels))
+                    }
+                })
+                .collect()
+        };
+
+        for (session_id, matched_channels) in sessions_to_prefetch {
+            crate::server::connection::prefetch_whisper_permissions(
+                self,
+                &self.edge_state,
+                session_id,
+                &matched_channels,
+            )
+            .await;
+        }
+    }
+
     /// Handle a notification from the Hub.
     pub(super) async fn handle_notification(&self, notification: TypedRpcNotification) {
         let method = &notification.method;
@@ -215,6 +277,9 @@ impl HubClient {
                     let channel = ChannelData::from(ch_proto);
                     info!("Channel created: {} (id {})", channel.name, channel.id);
                     self.edge_state.channel_manager.upsert_channel(channel).await;
+                    self.edge_state.recompute_all_vt_channels().await;
+                    self.prefetch_whisper_permissions_for_channels(&[ch_proto.channel_id]).await;
+                    self.edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
                     self.edge_state.emit(EdgeEvent::ChannelCreated { channel_id: ch_proto.channel_id });
                 }
             }
@@ -222,6 +287,8 @@ impl HubClient {
                 if let Some(params) = &notification.channel_removed {
                     info!("Channel removed: {}", params.channel_id);
                     self.edge_state.channel_manager.remove_channel(params.channel_id).await;
+                    self.edge_state.recompute_all_vt_channels().await;
+                    self.edge_state.topology_version.fetch_add(1, std::sync::atomic::Ordering::Release);
                     self.edge_state.emit(EdgeEvent::ChannelRemoved { channel_id: params.channel_id });
                 }
             }
@@ -232,22 +299,41 @@ impl HubClient {
                     let channel_id = ch_proto.channel_id;
                     // Compute link delta so the broadcast to local clients uses
                     // links_add / links_remove (Mumble protocol incremental update).
-                    let old_links = if let Some(old_ch) = self.edge_state.channel_manager.get_channel(channel_id).await {
-                        old_ch.links
-                    } else {
-                        vec![]
-                    };
+                    let old_channel = self.edge_state.channel_manager.get_channel(channel_id).await;
+                    let old_links = old_channel
+                        .as_ref()
+                        .map(|old_ch| old_ch.links.clone())
+                        .unwrap_or_default();
+                    let old_parent_id = old_channel.as_ref().and_then(|old_ch| old_ch.parent_id);
                     let new_links = channel.links.clone();
                     let links_add: Vec<u32> = new_links.iter().filter(|l| !old_links.contains(l)).copied().collect();
                     let links_remove: Vec<u32> = old_links.iter().filter(|l| !new_links.contains(l)).copied().collect();
                     debug!("Channel updated: {} (id {}), links_add={:?}, links_remove={:?}", channel.name, channel_id, links_add, links_remove);
+                    let parent_changed = old_parent_id != channel.parent_id;
                     self.edge_state.channel_manager.upsert_channel(channel).await;
-                    // If links changed, VoiceTarget channel caches that include this channel may be stale,
-                    // and the per-sender BroadcastCache (which expands `linked_channels`) is also stale.
-                    if !links_add.is_empty() || !links_remove.is_empty() {
+                    // A parent change mutates the channel tree used by `children=true` VoiceTargets,
+                    // so it requires a full recompute. Link-only changes can stay on the narrow path.
+                    if parent_changed {
+                        self.edge_state.recompute_all_vt_channels().await;
+                        let subtree_channels = self.collect_channel_subtree(channel_id).await;
+                        self.prefetch_whisper_permissions_for_channels(&subtree_channels).await;
+                        self.edge_state
+                            .topology_version
+                            .fetch_add(1, std::sync::atomic::Ordering::Release);
+                    } else if !links_add.is_empty() || !links_remove.is_empty() {
+                        // If links changed, VoiceTarget channel caches that include this channel may be stale,
+                        // and the per-sender BroadcastCache (which expands `linked_channels`) is also stale.
                         self.edge_state
                             .recompute_vt_channels_for_link_change(channel_id, &old_links, &new_links)
                             .await;
+                        let linked_channels: Vec<u32> = self
+                            .edge_state
+                            .channel_manager
+                            .get_all_linked_channels(channel_id)
+                            .await
+                            .into_iter()
+                            .collect();
+                        self.prefetch_whisper_permissions_for_channels(&linked_channels).await;
                         self.edge_state
                             .topology_version
                             .fetch_add(1, std::sync::atomic::Ordering::Release);

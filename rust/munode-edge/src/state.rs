@@ -1091,5 +1091,114 @@ mod tests {
         get_hot_slot(affected_session).voice_targets.store(Arc::new(None));
         get_hot_slot(untouched_session).voice_targets.store(Arc::new(None));
     }
+
+    #[tokio::test]
+    async fn recompute_all_vt_channels_refreshes_children_targets_after_channel_creation() {
+        let channel_manager = ChannelManager::new();
+        let state = EdgeState::new(channel_manager.clone(), ClientManager::new(), false);
+        let session_id = 82_001;
+
+        for channel in [
+            ChannelData {
+                id: 0,
+                name: "root".into(),
+                parent_id: None,
+                description: None,
+                position: 0,
+                max_users: 0,
+                temporary: false,
+                inherit_acl: true,
+                links: vec![],
+            },
+            ChannelData {
+                id: 1,
+                name: "parent".into(),
+                parent_id: Some(0),
+                description: None,
+                position: 0,
+                max_users: 0,
+                temporary: false,
+                inherit_acl: true,
+                links: vec![],
+            },
+            ChannelData {
+                id: 2,
+                name: "child-a".into(),
+                parent_id: Some(1),
+                description: None,
+                position: 0,
+                max_users: 0,
+                temporary: false,
+                inherit_acl: true,
+                links: vec![],
+            },
+        ] {
+            channel_manager.upsert_channel(channel).await;
+        }
+
+        {
+            let mut cache = state.voice_targets.write().await;
+            cache.insert(
+                session_id,
+                HashMap::from([(
+                    1,
+                    VoiceTargetConfig {
+                        sessions: vec![],
+                        channels: vec![VoiceTargetChannelConfig {
+                            channel_id: 1,
+                            links: false,
+                            children: true,
+                            group: None,
+                        }],
+                        resolved_channels: HashMap::from([(1, None), (2, None)]),
+                    },
+                )]),
+            );
+        }
+
+        let initial_hot_map = {
+            let cache = state.voice_targets.read().await;
+            build_hot_vt_map(cache.get(&session_id).expect("session vt cache missing"))
+        };
+        get_hot_slot(session_id)
+            .voice_targets
+            .store(Arc::new(Some(Arc::new(initial_hot_map))));
+
+        channel_manager
+            .upsert_channel(ChannelData {
+                id: 3,
+                name: "child-b".into(),
+                parent_id: Some(1),
+                description: None,
+                position: 0,
+                max_users: 0,
+                temporary: false,
+                inherit_acl: true,
+                links: vec![],
+            })
+            .await;
+
+        state.recompute_all_vt_channels().await;
+
+        let cache = state.voice_targets.read().await;
+        let resolved = &cache[&session_id][&1].resolved_channels;
+        assert_eq!(resolved.len(), 3);
+        assert!(resolved.contains_key(&1));
+        assert!(resolved.contains_key(&2));
+        assert!(resolved.contains_key(&3));
+        drop(cache);
+
+        let hot_guard = get_hot_slot(session_id).voice_targets.load();
+        let hot_map = (**hot_guard)
+            .as_ref()
+            .expect("hot voice target map missing after recompute");
+        let hot_target = hot_map.get(&1).expect("hot voice target missing after recompute");
+        assert_eq!(hot_target.resolved_channels.len(), 3);
+        assert!(hot_target.resolved_channels.contains_key(&1));
+        assert!(hot_target.resolved_channels.contains_key(&2));
+        assert!(hot_target.resolved_channels.contains_key(&3));
+
+        get_hot_slot(session_id).voice_targets.store(Arc::new(None));
+    }
 }
 

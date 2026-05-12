@@ -500,6 +500,642 @@ async fn test_whisper_to_specific_channel() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_whisper_children_target_tracks_new_subchannel_after_creation() -> Result<()> {
+    let env = single_edge_env().await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig::new("admin", 1),
+            ClientConfig::new("user1", 1),
+            ClientConfig::new("user2", 1),
+        ],
+    )
+    .await?;
+    let (admin, sender, late_target) = (&clients[0], &clients[1], &clients[2]);
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let parent = admin
+        .channel(0)
+        .create_subchannel(&format!("WhisperTree_{ts}"))
+        .await?;
+    let initial_child = admin
+        .channel(parent)
+        .create_subchannel(&format!("WhisperChildA_{ts}"))
+        .await?;
+    sleep_ms(400).await;
+
+    sender.channel(1).join().await?;
+    late_target.channel(initial_child).join().await?;
+    sleep_ms(400).await;
+
+    sender
+        .voice()
+        .set_target(
+            1,
+            vec![mumbleproto::voice_target::Target {
+                channel_id: Some(parent),
+                links: Some(false),
+                children: Some(true),
+                ..Default::default()
+            }],
+        )
+        .await?;
+    sleep_ms(300).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let audio = random_voice_data(20);
+    let mut initial_rx = late_target.subscribe();
+    sender.voice().send(4, 1, 1, &audio).await?;
+    let initial_received = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match initial_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(initial_received, "children whisper baseline must reach existing child members");
+
+    let new_child = admin
+        .channel(parent)
+        .create_subchannel(&format!("WhisperChildB_{ts}"))
+        .await?;
+    sleep_ms(400).await;
+    late_target.channel(new_child).join().await?;
+    sleep_ms(600).await;
+
+    let mut after_create_rx = late_target.subscribe();
+    sender.voice().send(4, 1, 2, &audio).await?;
+    let after_create_received = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match after_create_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        after_create_received,
+        "children whisper should expand to users in subchannels created after target configuration"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_whisper_to_current_channel_members() -> Result<()> {
+    let env = single_edge_env().await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig::new("user1", 1),
+            ClientConfig::new("user2", 1),
+            ClientConfig::new("user3", 1),
+        ],
+    )
+    .await?;
+    let (sender, same_channel_target, other_channel_user) = (&clients[0], &clients[1], &clients[2]);
+
+    sender.channel(1).join().await?;
+    same_channel_target.channel(1).join().await?;
+    other_channel_user.channel(2).join().await?;
+    sleep_ms(300).await;
+
+    sender
+        .voice()
+        .set_target(
+            3,
+            vec![mumbleproto::voice_target::Target {
+                channel_id: Some(1),
+                links: Some(false),
+                children: Some(false),
+                ..Default::default()
+            }],
+        )
+        .await?;
+    sleep_ms(300).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let audio = random_voice_data(20);
+    let mut current_rx = same_channel_target.subscribe();
+    let mut other_rx = other_channel_user.subscribe();
+
+    sender.voice().send(4, 3, 1, &audio).await?;
+
+    let current_received = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match current_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(current_received, "channel whisper should reach other users in the sender's current channel");
+
+    let other_received = tokio::time::timeout(Duration::from_millis(800), async {
+        loop {
+            match other_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(!other_received, "channel whisper to current channel should not leak to other channels");
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_whisper_current_channel_rewrite_updates_same_slot_route() -> Result<()> {
+    let env = single_edge_env().await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig::new("admin", 1),
+            ClientConfig::new("user1", 1),
+            ClientConfig::new("user2", 1),
+            ClientConfig::new("user3", 1),
+            ClientConfig::new("guest", 1),
+        ],
+    )
+    .await?;
+    let (admin, sender, old_channel_member, new_channel_member, outsider) =
+        (&clients[0], &clients[1], &clients[2], &clients[3], &clients[4]);
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let channel_a = admin
+        .channel(0)
+        .create_subchannel(&format!("WhisperCurrentA_{ts}"))
+        .await?;
+    let channel_b = admin
+        .channel(0)
+        .create_subchannel(&format!("WhisperCurrentB_{ts}"))
+        .await?;
+    sleep_ms(400).await;
+
+    sender.channel(channel_a).join().await?;
+    old_channel_member.channel(channel_a).join().await?;
+    new_channel_member.channel(channel_b).join().await?;
+    outsider.channel(0).join().await?;
+    sleep_ms(400).await;
+
+    let target_id = 9;
+    let sender_session = sender.session_id().unwrap();
+
+    sender
+        .voice()
+        .set_target(
+            target_id,
+            vec![mumbleproto::voice_target::Target {
+                channel_id: Some(channel_a),
+                links: Some(false),
+                children: Some(false),
+                ..Default::default()
+            }],
+        )
+        .await?;
+    sleep_ms(300).await;
+
+    let audio_first = random_voice_data(20);
+    let mut first_rx = old_channel_member.subscribe();
+    sender.voice().send(4, target_id as u8, 1, &audio_first).await?;
+
+    let first_received = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match first_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        first_received,
+        "baseline whisper should reach users in the sender's original current channel"
+    );
+
+    sender.channel(channel_b).join().await?;
+    sleep_ms(400).await;
+
+    sender
+        .voice()
+        .set_target(
+            target_id,
+            vec![mumbleproto::voice_target::Target {
+                channel_id: Some(channel_b),
+                links: Some(false),
+                children: Some(false),
+                ..Default::default()
+            }],
+        )
+        .await?;
+    sleep_ms(300).await;
+
+    let audio_second = random_voice_data(20);
+    let mut old_rx = old_channel_member.subscribe();
+    let mut new_rx = new_channel_member.subscribe();
+    let mut outsider_rx = outsider.subscribe();
+
+    sender.voice().send(4, target_id as u8, 2, &audio_second).await?;
+
+    let new_received = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match new_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        new_received,
+        "rewriting the same whisper slot should retarget current-channel whisper to the sender's new channel"
+    );
+
+    let old_received = tokio::time::timeout(Duration::from_millis(800), async {
+        loop {
+            match old_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        !old_received,
+        "rewriting the same whisper slot must evict the old current-channel route cache"
+    );
+
+    let outsider_received = tokio::time::timeout(Duration::from_millis(800), async {
+        loop {
+            match outsider_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        !outsider_received,
+        "rewritten current-channel whisper should not leak outside the sender's new channel"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_whisper_to_root_channel_members() -> Result<()> {
+    let env = single_edge_env().await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig::new("user1", 1),
+            ClientConfig::new("user2", 1),
+            ClientConfig::new("user3", 1),
+        ],
+    )
+    .await?;
+    let (sender, same_channel_target, other_channel_user) = (&clients[0], &clients[1], &clients[2]);
+
+    sender.channel(0).join().await?;
+    same_channel_target.channel(0).join().await?;
+    other_channel_user.channel(1).join().await?;
+    sleep_ms(300).await;
+
+    sender
+        .voice()
+        .set_target(
+            6,
+            vec![mumbleproto::voice_target::Target {
+                channel_id: Some(0),
+                links: Some(false),
+                children: Some(false),
+                ..Default::default()
+            }],
+        )
+        .await?;
+    sleep_ms(300).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let audio = random_voice_data(20);
+    let mut root_rx = same_channel_target.subscribe();
+    let mut other_rx = other_channel_user.subscribe();
+
+    sender.voice().send(4, 6, 1, &audio).await?;
+
+    let root_received = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match root_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(root_received, "channel whisper should reach other users in the root channel");
+
+    let other_received = tokio::time::timeout(Duration::from_millis(800), async {
+        loop {
+            match other_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(!other_received, "channel whisper to the root channel should not leak to other channels");
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_whisper_to_parent_channel_members() -> Result<()> {
+    let env = single_edge_env().await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig::new("admin", 1),
+            ClientConfig::new("user1", 1),
+            ClientConfig::new("user2", 1),
+            ClientConfig::new("user3", 1),
+        ],
+    )
+    .await?;
+    let (admin, sender, parent_member, sibling_member) = (&clients[0], &clients[1], &clients[2], &clients[3]);
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let parent = admin
+        .channel(0)
+        .create_subchannel(&format!("WhisperParent_{ts}"))
+        .await?;
+    let child = admin
+        .channel(parent)
+        .create_subchannel(&format!("WhisperChild_{ts}"))
+        .await?;
+    let sibling = admin
+        .channel(parent)
+        .create_subchannel(&format!("WhisperSibling_{ts}"))
+        .await?;
+    sleep_ms(400).await;
+
+    sender.channel(child).join().await?;
+    parent_member.channel(parent).join().await?;
+    sibling_member.channel(sibling).join().await?;
+    sleep_ms(400).await;
+
+    sender
+        .voice()
+        .set_target(
+            4,
+            vec![mumbleproto::voice_target::Target {
+                channel_id: Some(parent),
+                links: Some(false),
+                children: Some(false),
+                ..Default::default()
+            }],
+        )
+        .await?;
+    sleep_ms(300).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let audio = random_voice_data(20);
+    let mut parent_rx = parent_member.subscribe();
+    let mut sibling_rx = sibling_member.subscribe();
+
+    sender.voice().send(4, 4, 1, &audio).await?;
+
+    let parent_received = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match parent_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(parent_received, "channel whisper to parent channel should reach users in that parent channel");
+
+    let sibling_received = tokio::time::timeout(Duration::from_millis(800), async {
+        loop {
+            match sibling_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        !sibling_received,
+        "channel whisper to parent channel should not implicitly expand to sibling subchannels"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_whisper_to_root_parent_channel_members() -> Result<()> {
+    let env = single_edge_env().await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig::new("user1", 1),
+            ClientConfig::new("user2", 1),
+            ClientConfig::new("user3", 1),
+        ],
+    )
+    .await?;
+    let (sender, root_member, sibling_member) = (&clients[0], &clients[1], &clients[2]);
+
+    sender.channel(1).join().await?;
+    root_member.channel(0).join().await?;
+    sibling_member.channel(2).join().await?;
+    sleep_ms(300).await;
+
+    sender
+        .voice()
+        .set_target(
+            7,
+            vec![mumbleproto::voice_target::Target {
+                channel_id: Some(0),
+                links: Some(false),
+                children: Some(false),
+                ..Default::default()
+            }],
+        )
+        .await?;
+    sleep_ms(300).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let audio = random_voice_data(20);
+    let mut root_rx = root_member.subscribe();
+    let mut sibling_rx = sibling_member.subscribe();
+
+    sender.voice().send(4, 7, 1, &audio).await?;
+
+    let root_received = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match root_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(root_received, "channel whisper to a root parent channel should reach users in root");
+
+    let sibling_received = tokio::time::timeout(Duration::from_millis(800), async {
+        loop {
+            match sibling_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        !sibling_received,
+        "channel whisper to root should not spill into unrelated top-level sibling channels"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_whisper_to_subchannel_members() -> Result<()> {
+    let env = single_edge_env().await?;
+    let clients = create_clients(
+        &env,
+        &[
+            ClientConfig::new("admin", 1),
+            ClientConfig::new("user1", 1),
+            ClientConfig::new("user2", 1),
+            ClientConfig::new("user3", 1),
+        ],
+    )
+    .await?;
+    let (admin, sender, subchannel_member, parent_member) = (&clients[0], &clients[1], &clients[2], &clients[3]);
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let parent = admin
+        .channel(0)
+        .create_subchannel(&format!("WhisperTreeParent_{ts}"))
+        .await?;
+    let child = admin
+        .channel(parent)
+        .create_subchannel(&format!("WhisperTreeChild_{ts}"))
+        .await?;
+    sleep_ms(400).await;
+
+    sender.channel(parent).join().await?;
+    subchannel_member.channel(child).join().await?;
+    parent_member.channel(parent).join().await?;
+    sleep_ms(400).await;
+
+    sender
+        .voice()
+        .set_target(
+            5,
+            vec![mumbleproto::voice_target::Target {
+                channel_id: Some(child),
+                links: Some(false),
+                children: Some(false),
+                ..Default::default()
+            }],
+        )
+        .await?;
+    sleep_ms(300).await;
+
+    let sender_session = sender.session_id().unwrap();
+    let audio = random_voice_data(20);
+    let mut child_rx = subchannel_member.subscribe();
+    let mut parent_rx = parent_member.subscribe();
+
+    sender.voice().send(4, 5, 1, &audio).await?;
+
+    let child_received = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match child_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(child_received, "channel whisper to subchannel should reach users in that subchannel");
+
+    let parent_received = tokio::time::timeout(Duration::from_millis(800), async {
+        loop {
+            match parent_rx.recv().await {
+                Ok(ClientEvent::Voice(v)) if v.session == sender_session => break true,
+                Ok(_) => continue,
+                Err(_) => break false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(
+        !parent_received,
+        "channel whisper to subchannel should not leak back to the parent channel"
+    );
+
+    cleanup_clients(clients).await;
+    Ok(())
+}
+
 // ── Multiple senders ──────────────────────────────────────────────────────
 
 #[tokio::test]

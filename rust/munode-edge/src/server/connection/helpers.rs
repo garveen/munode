@@ -156,6 +156,26 @@ pub(crate) async fn get_perm_cached(
     }
 }
 
+/// Warm the permission cache for whisper routing on the supplied channels.
+/// This keeps the voice packet path off the Hub RPC round-trip after topology changes.
+pub(crate) async fn prefetch_whisper_permissions(
+    hub_client: &HubClient,
+    edge_state: &EdgeState,
+    session: u32,
+    channels: &[u32],
+) {
+    let mut seen = std::collections::HashSet::new();
+    for &channel in channels {
+        if !seen.insert(channel) {
+            continue;
+        }
+        if edge_state.permission_cache.get(&(session, channel)).is_some() {
+            continue;
+        }
+        let _ = get_perm_cached(hub_client, edge_state, session, channel, false).await;
+    }
+}
+
 /// Encode an IP address string into bytes (4 bytes for IPv4, 16 bytes for IPv6).
 pub(super) fn encode_ip_address(addr: &str) -> Vec<u8> {
     if let Ok(ip) = addr.parse::<std::net::IpAddr>() {

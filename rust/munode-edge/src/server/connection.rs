@@ -7,7 +7,7 @@ mod tests;
 
 use helpers::{drain_writer, broadcast_text_message, broadcast_codec_version,
               strip_html_tags, build_hot_vt_map, encode_ip_address};
-pub(crate) use helpers::get_perm_cached;
+pub(crate) use helpers::{get_perm_cached, prefetch_whisper_permissions};
 use login::{do_login_task, LoginTaskArgs, LoginTaskResult};
 use user_state::{handle_user_state_update, handle_admin_user_state_update};
 

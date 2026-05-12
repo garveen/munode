@@ -195,11 +195,22 @@ impl ChannelManager {
     /// Add or update a channel.
     pub async fn upsert_channel(&self, channel: ChannelData) {
         let id = channel.id;
-        let parent_id = channel.parent_id;
-        self.channels.write().await.insert(id, channel);
-        if let Some(pid) = parent_id {
-            let mut children = self.channel_children.write().await;
-            let list = children.entry(pid).or_default();
+        let new_parent_id = channel.parent_id;
+        let old_parent_id = {
+            let mut channels = self.channels.write().await;
+            channels.insert(id, channel).and_then(|old| old.parent_id)
+        };
+
+        let mut children = self.channel_children.write().await;
+        if old_parent_id != new_parent_id {
+            if let Some(old_pid) = old_parent_id {
+                if let Some(list) = children.get_mut(&old_pid) {
+                    list.retain(|&child_id| child_id != id);
+                }
+            }
+        }
+        if let Some(new_pid) = new_parent_id {
+            let list = children.entry(new_pid).or_default();
             if !list.contains(&id) {
                 list.push(id);
             }
@@ -501,5 +512,64 @@ mod tests {
         mgr.remove_channel(1).await;
         assert!(mgr.get_channel(1).await.is_none());
         assert_eq!(mgr.get_children(0).await.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_upsert_channel_reparents_children_index() {
+        let mgr = ChannelManager::new();
+        for channel in [
+            ChannelData {
+                id: 0,
+                name: "Root".to_string(),
+                parent_id: None,
+                description: None,
+                position: 0,
+                max_users: 0,
+                temporary: false,
+                inherit_acl: true,
+                links: vec![],
+            },
+            ChannelData {
+                id: 1,
+                name: "ParentA".to_string(),
+                parent_id: Some(0),
+                description: None,
+                position: 0,
+                max_users: 0,
+                temporary: false,
+                inherit_acl: true,
+                links: vec![],
+            },
+            ChannelData {
+                id: 2,
+                name: "Child".to_string(),
+                parent_id: Some(0),
+                description: None,
+                position: 0,
+                max_users: 0,
+                temporary: false,
+                inherit_acl: true,
+                links: vec![],
+            },
+        ] {
+            mgr.upsert_channel(channel).await;
+        }
+
+        mgr.upsert_channel(ChannelData {
+            id: 2,
+            name: "Child".to_string(),
+            parent_id: Some(1),
+            description: None,
+            position: 0,
+            max_users: 0,
+            temporary: false,
+            inherit_acl: true,
+            links: vec![],
+        }).await;
+
+        let root_children = mgr.get_children(0).await;
+        let parent_children = mgr.get_children(1).await;
+        assert!(!root_children.contains(&2));
+        assert!(parent_children.contains(&2));
     }
 }
