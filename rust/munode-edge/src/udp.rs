@@ -1533,41 +1533,6 @@ fn probe_current_millis() -> u64 {
         .as_millis() as u64
 }
 
-/// Encode a u32 value as a Mumble variable-length integer.
-#[allow(dead_code)] // used by tests
-pub(crate) fn encode_mumble_varint(value: u32) -> Vec<u8> {
-    if value < 0x80 {
-        vec![value as u8]
-    } else if value < 0x4000 {
-        vec![((value >> 8) | 0x80) as u8, (value & 0xFF) as u8]
-    } else if value < 0x200000 {
-        vec![((value >> 16) | 0xC0) as u8, ((value >> 8) & 0xFF) as u8, (value & 0xFF) as u8]
-    } else {
-        vec![0xF0, ((value >> 24) & 0xFF) as u8, ((value >> 16) & 0xFF) as u8, ((value >> 8) & 0xFF) as u8, (value & 0xFF) as u8]
-    }
-}
-
-/// Write a Mumble varint directly into `dst`, avoiding an intermediate Vec allocation.
-#[inline]
-pub(crate) fn write_mumble_varint(value: u32, dst: &mut Vec<u8>) {
-    if value < 0x80 {
-        dst.push(value as u8);
-    } else if value < 0x4000 {
-        dst.push(((value >> 8) | 0x80) as u8);
-        dst.push((value & 0xFF) as u8);
-    } else if value < 0x200000 {
-        dst.push(((value >> 16) | 0xC0) as u8);
-        dst.push(((value >> 8) & 0xFF) as u8);
-        dst.push((value & 0xFF) as u8);
-    } else {
-        dst.push(0xF0);
-        dst.push(((value >> 24) & 0xFF) as u8);
-        dst.push(((value >> 16) & 0xFF) as u8);
-        dst.push(((value >> 8) & 0xFF) as u8);
-        dst.push((value & 0xFF) as u8);
-    }
-}
-
 
 
 

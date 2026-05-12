@@ -1033,10 +1033,6 @@ impl MumbleClient {
         *self.inner.force_tcp_voice.write().await = force_tcp;
     }
 
-    pub(crate) async fn udp_socket_clone(&self) -> Option<Arc<tokio::net::UdpSocket>> {
-        self.inner.udp_socket.read().await.clone()
-    }
-
     pub(crate) async fn send_encrypted_udp_packet(&self, packet: &[u8]) -> Result<()> {
         let encrypted = {
             let mut guard = self.inner.udp_send_crypt.lock().await;

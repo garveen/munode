@@ -1,6 +1,6 @@
 //! Voice transmission and whisper-target operations.
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use bytes::{BufMut, BytesMut};
 use munode_protocol::message_type::MessageType;
 use munode_protocol::mumbleproto;
